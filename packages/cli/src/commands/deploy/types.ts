@@ -119,6 +119,8 @@ interface DeployCommandOptions {
     /** Remote-secret lister for the missing-secret offer; injected in tests. Defaults to `wrangler secret list`. */
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
+    /** Deploy only the app, leaving the `lunora.config` services it binds as they are (`--skip-services`). */
+    skipServices?: boolean;
     spawner?: Spawner;
 
     /**

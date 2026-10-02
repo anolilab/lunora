@@ -1,3 +1,46 @@
+## @lunora/queue [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.83...@lunora/queue@1.0.0-alpha.84) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+
+## @lunora/queue [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.82...@lunora/queue@1.0.0-alpha.83) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+## @lunora/queue [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.81...@lunora/queue@1.0.0-alpha.82) (2026-10-01)
+
+### Features
+
+* **queue:** add pub/sub topics over cloudflare queues ([#916](https://github.com/anolilab/lunora/issues/916)) ([eba0175](https://github.com/anolilab/lunora/commit/eba0175f586e804555d0e0c485a3a93d73f15d1f))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+
+## @lunora/queue [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.80...@lunora/queue@1.0.0-alpha.81) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+
+## @lunora/queue [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.79...@lunora/queue@1.0.0-alpha.80) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.45
+
 ## @lunora/queue [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.78...@lunora/queue@1.0.0-alpha.79) (2026-09-30)
 
 

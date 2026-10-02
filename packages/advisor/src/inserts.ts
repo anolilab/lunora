@@ -15,3 +15,14 @@ export interface AdvisorInsertWrite {
     /** The inserted table; empty when the `insert(...)` argument is not a string literal. */
     table: string;
 }
+
+/**
+ * Any other table write the codegen feeder attributed: a by-id `patch` /
+ * `replace` / `delete` (table read off the id's `Id<"table">` type), a batch
+ * write, or a `ctx.db.<table>.*` facade write. The `cross_module_table_write`
+ * input alongside {@link AdvisorInsertWrite}.
+ */
+export interface AdvisorTableWrite extends AdvisorInsertWrite {
+    /** The writer method called, e.g. `patch`, `deleteMany`, `upsert`. */
+    method: string;
+}

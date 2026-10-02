@@ -108,6 +108,14 @@ options })` layer; a component that needs configuration takes it as a factory
 - **No version negotiation.** A component is an npm dependency and follows its
   own SemVer; there is no runtime capability handshake between it and the app.
 
+## In the architecture view
+
+An installed component shows up as its own [module](/docs/concepts/modules): a
+lane in the Studio's Architecture view that owns its prefixed tables and the
+`lunora/<key>/` folder. App code that inserts straight into one of those tables,
+instead of calling the component's functions, is reported by the
+`cross_module_table_write` advisor lint.
+
 ## Migrations
 
 A component's tables migrate with the app's: they are merged into one schema, so

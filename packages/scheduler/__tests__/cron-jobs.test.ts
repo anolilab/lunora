@@ -189,7 +189,7 @@ describe("cronJobs", () => {
         const crons = cronJobs();
 
         // Shaped like the generated `workflows.<name>` reference object.
-        crons.daily("nightly digest", { hourUTC: 9, minuteUTC: 0 }, { binding: "WORKFLOW_DIGEST", isLunoraWorkflow: true, name: "digest" }, { region: "eu" });
+        crons.daily("nightly digest", { hourUTC: 9, minuteUTC: 0 }, { className: "DigestWorkflow", isLunoraWorkflow: true, name: "digest" }, { region: "eu" });
         crons.interval("anon flow", { minutes: 30 }, { isLunoraWorkflow: true });
 
         expect(crons.jobs()[0]).toEqual({ args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: "digest" });
@@ -202,7 +202,7 @@ describe("cronJobs", () => {
 
         const crons = cronJobs();
         // A generated `workflows.<name>` ref carries the workflow's params in `__params`.
-        const digest: WorkflowReference<{ region: string }> = { binding: "WORKFLOW_DIGEST", isLunoraWorkflow: true, name: "digest" };
+        const digest: WorkflowReference<{ region: string }> = { className: "DigestWorkflow", isLunoraWorkflow: true, name: "digest" };
 
         crons.daily("digest", { hourUTC: 9, minuteUTC: 0 }, digest, { region: "eu" });
         // @ts-expect-error -- `region` must be a string (inferred from the workflow's params)

@@ -50,6 +50,8 @@ export interface RegisteredShape { readonly table: string }
 export interface RegisteredMigration { readonly id: string }
 export interface WorkflowDefinition { readonly run: () => Promise<void> }
 export interface QueueDefinition { readonly handler: () => Promise<void> }
+export interface TopicDefinition { readonly isLunoraTopic: true }
+export interface SubscriptionDefinition extends QueueDefinition { readonly topic: TopicDefinition }
 export interface AgentDefinition { readonly instructions: string }
 export interface ContainerDefinition { readonly image: string }
 export declare const defineMutator: (definition: { args?: unknown; client?: unknown; server: unknown }) => RegisteredMutator;
@@ -57,6 +59,8 @@ export declare const defineShape: (definition: { table: string; where: () => unk
 export declare const defineMigration: (definition: { id: string; table: string; up: (document: unknown) => unknown }) => RegisteredMigration;
 export declare const defineWorkflow: (config: { run: () => Promise<void> }) => WorkflowDefinition;
 export declare const defineQueue: (config: { handler: () => Promise<void> }) => QueueDefinition;
+export declare const defineTopic: () => TopicDefinition;
+export declare const defineSubscription: (topic: TopicDefinition, config: { handler: () => Promise<void> }) => SubscriptionDefinition;
 export declare const defineAgent: (config: { instructions: string; model: string }) => AgentDefinition;
 export declare const defineContainer: (config: { image: string }) => ContainerDefinition;
 `;
@@ -297,6 +301,30 @@ describe("discoverUnregisteredProcedures", () => {
         // The seven healthy ones must stay quiet — a row added before the kind's
         // identity reaches `Registrations` would report every one of them.
         expect(reported.filter((name) => String(name).startsWith("direct"))).toStrictEqual([]);
+    });
+
+    it("reports a factory-produced topic subscription as never wired", () => {
+        expect.assertions(2);
+
+        write("srv.d.ts", SERVER);
+        write(
+            "queues.ts",
+            `import { defineSubscription, defineTopic } from "./srv";
+
+export const signups = defineTopic();
+export const welcome = defineSubscription(signups, { handler: async () => {} });
+
+const make = () => defineSubscription(signups, { handler: async () => {} });
+
+export const viaFactorySubscription = make();
+`,
+        );
+        load("srv.d.ts", "queues.ts");
+
+        const found = run([], { byName: ["welcome"] }).map((entry) => entry.metadata["exportName"]);
+
+        expect(found).toContain("viaFactorySubscription");
+        expect(found).not.toContain("welcome");
     });
 
     it("quotes each kind's own registering call", () => {

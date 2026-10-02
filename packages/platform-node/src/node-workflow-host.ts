@@ -1,6 +1,7 @@
 /**
  * `createNodeWorkflowHost` — the Node implementation of the `@lunora/workflow`
- * binding surface (`WorkflowBindingLike` + the derived `WORKFLOW_*` env), backed
+ * binding surface (`WorkflowBindingLike`, bound on the derived env under each
+ * workflow's export key — its generated class name), backed
  * by the `@visulima/workflow` engine (`createRuntime`).
  *
  * # How the seam maps
@@ -62,6 +63,7 @@
 
 import { LunoraError } from "@lunora/errors";
 import type {
+    WorkflowBatchDeleteResult,
     WorkflowBindingLike,
     WorkflowInstanceLike,
     WorkflowInstanceStatus,
@@ -72,7 +74,7 @@ import type {
     WorkflowStepLike,
     WorkflowStepRollbackOptionsLike,
 } from "@lunora/workflow";
-import { createWorkflowRunContext, isWorkflowDefinition, workflowBindingName, workflowDefaultName } from "@lunora/workflow";
+import { createWorkflowRunContext, isWorkflowDefinition, workflowClassName, workflowDefaultName } from "@lunora/workflow";
 import type { RunContext, RunStatus, WorkflowRuntime, WorkflowStore } from "@visulima/workflow";
 import { createRuntime, defineWorkflow as defineVisulimaWorkflow } from "@visulima/workflow";
 
@@ -83,6 +85,9 @@ import { createRuntime, defineWorkflow as defineVisulimaWorkflow } from "@visuli
  * it — that status, not the absent `wakeAt`, is what keeps it out.
  */
 const TERMINATED_DEFINITION_ID = "@lunora/platform-node:terminated";
+
+/** Cloudflare's per-call cap on `Workflow.deleteBatch`, enforced here so a batch that works locally does not fail on deploy. */
+const MAX_DELETE_BATCH = 100;
 
 /** Millisecond multipliers for every duration unit the parser recognises. */
 const DURATION_MS: Record<string, number> = {
@@ -166,6 +171,9 @@ const toMs = (duration: number | string): number => {
  */
 const ALIAS_DEFINITION_ID = "@lunora/platform-node:alias";
 
+/** The store key of the reverse alias pointer a run carries back to its caller-supplied id. */
+const aliasOfKey = (runId: string): string => `@lunora/platform-node:alias-of:${runId}`;
+
 /** The per-attempt info a `step.do` callback receives. `count` is 1 because the adapter makes exactly one `ctx.step` call per name. */
 const stepContext = (name: string, attempt: number, config: WorkflowStepConfigLike): WorkflowStepContextLike => {
     return {
@@ -214,6 +222,27 @@ const backoffMs = (base: number, backoff: "constant" | "exponential" | "linear" 
             return base;
         }
     }
+};
+
+/**
+ * The pause before attempt `attempt + 1`. A `retries.delay` function computes
+ * the whole wait from the failure, so `backoff` does not scale it — matching
+ * Cloudflare, which hands it the failed attempt's context and error.
+ */
+const retryWaitMs = async (
+    config: WorkflowStepConfigLike,
+    baseDelay: number,
+    attempt: number,
+    context: WorkflowStepContextLike,
+    error: unknown,
+): Promise<number> => {
+    const configuredDelay = config.retries?.delay;
+
+    if (typeof configuredDelay === "function") {
+        return toMs(await configuredDelay({ ctx: context, error: error instanceof Error ? error : new Error(String(error)) }));
+    }
+
+    return backoffMs(baseDelay, config.retries?.backoff, attempt);
 };
 
 /** One registered `rollback`, captured when its step settled. */
@@ -367,7 +396,8 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
             }
 
             const limit = Math.max(1, Math.trunc(declaredLimit));
-            const baseDelay = config.retries?.delay === undefined ? 0 : toMs(config.retries.delay);
+            const configuredDelay = config.retries?.delay;
+            const baseDelay = configuredDelay === undefined || typeof configuredDelay === "function" ? 0 : toMs(configuredDelay);
 
             // The last attempt's context, so a rollback reports the attempt the
             // step actually ran on rather than a freshly minted 1.
@@ -386,7 +416,8 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
                                 throw error;
                             }
 
-                            const wait = backoffMs(baseDelay, config.retries?.backoff, attempt);
+                            // eslint-disable-next-line no-await-in-loop -- see above
+                            const wait = await retryWaitMs(config, baseDelay, attempt, lastContext, error);
 
                             if (wait > 0) {
                                 // eslint-disable-next-line no-await-in-loop -- see above
@@ -455,7 +486,7 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
 
 /** Options for {@link createNodeWorkflowHost}. */
 interface NodeWorkflowHostOptions<Workflows extends Record<string, { isLunoraWorkflow: true }>> {
-    /** Base env merged under the derived `WORKFLOW_*` bindings — surfaced to workflow bodies as `ctx.env` and used to resolve spawned children. */
+    /** Base env merged under the derived workflow bindings — surfaced to workflow bodies as `ctx.env` and used to resolve spawned children. */
     env?: Record<string, unknown>;
     /** How long (ms) the engine holds a cross-process lease while an activation runs, for stores that implement `acquire`. Defaults to 30000. */
     leaseTtlMs?: number;
@@ -471,7 +502,8 @@ interface NodeWorkflowHost<Workflows extends Record<string, { isLunoraWorkflow: 
     readonly bindings: { [K in keyof Workflows]: WorkflowBindingLike };
 
     /**
-     * The caller's `env` plus one `WORKFLOW_&lt;EXPORT>` binding per workflow —
+     * The caller's `env` plus one binding per workflow under its class name
+     * (`OrderPipelineWorkflow`), the key `ctx.exports` would carry on Cloudflare —
      * merge this into a worker env so `ctx.spawn`/`ctx.parallel` resolve
      * children through the same runtime.
      */
@@ -482,7 +514,7 @@ interface NodeWorkflowHost<Workflows extends Record<string, { isLunoraWorkflow: 
 
 /**
  * Create a Node workflow host: compile every declared Lunora workflow onto the
- * visulima engine, derive the `WORKFLOW_*` env, and expose the per-workflow
+ * visulima engine, derive the workflow env, and expose the per-workflow
  * `WorkflowBindingLike` handles.
  */
 const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkflow: true }>>(
@@ -571,8 +603,40 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
 
     const runtime = createRuntime({ leaseTtlMs: options.leaseTtlMs, store: guardedStore, workflows: visulimaWorkflows });
 
+    /**
+     * Drop a run and its stored state. Returns `false` when `id` names no run.
+     * Marked terminated first, like `terminate`, so an activation in flight
+     * cannot write the run back; unlike `terminate` it leaves no tombstone, so
+     * a deleted run reads back as `unknown`.
+     */
+    const deleteRun = async (id: string): Promise<boolean> => {
+        const current = await store.load(id);
+
+        if (current === undefined || current.definitionId === ALIAS_DEFINITION_ID) {
+            return false;
+        }
+
+        terminated.add(id);
+        await store.delete(id);
+
+        // The caller-supplied id is freed with the run, however the run was
+        // reached: a surviving alias would turn a later `create({ id })` into a
+        // "retried create" of the deleted run.
+        const reverse = await store.load(aliasOfKey(id));
+
+        if (reverse !== undefined) {
+            await store.delete(reverse.snapshot as string);
+            await store.delete(aliasOfKey(id));
+        }
+
+        return true;
+    };
+
     const instanceFor = (id: string): WorkflowInstanceLike => {
         return {
+            delete: async () => {
+                await deleteRun(id);
+            },
             id,
             pause: () =>
                 Promise.reject(
@@ -610,6 +674,13 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
 
                 await runtime.signal(id, event.type, event.payload);
             },
+            subscribe: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "NOT_IMPLEMENTED",
+                        `@lunora/platform-node: workflow instance "${id}" cannot be subscribed to — the visulima engine keeps no per-instance event log to replay`,
+                    ),
+                ),
             status: async (): Promise<WorkflowStatusResult> => {
                 // The store read comes first and answers two of the three cases
                 // outright, so the miss path costs one load rather than the two
@@ -712,6 +783,14 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
             status: "failed",
             updatedAt: Date.now(),
         });
+        // The reverse pointer, so deleting the run by either id frees the alias.
+        await store.save({
+            definitionId: ALIAS_DEFINITION_ID,
+            runId: aliasOfKey(result.runId),
+            snapshot: createOptions.id,
+            status: "failed",
+            updatedAt: Date.now(),
+        });
 
         return instanceFor(result.runId);
     };
@@ -733,11 +812,41 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
 
                 return instances;
             },
+            // Sequential for the same reason as `createBatch`: a duplicate id must
+            // find the first entry's delete, so it is reported deleted, not missing.
+            deleteBatch: async (instanceIds) => {
+                if (instanceIds.length > MAX_DELETE_BATCH) {
+                    throw new LunoraError(
+                        "VALIDATION_ERROR",
+                        `@lunora/platform-node: deleteBatch takes at most ${String(MAX_DELETE_BATCH)} instance ids, got ${String(instanceIds.length)}`,
+                    );
+                }
+
+                const result: WorkflowBatchDeleteResult = { deleted: [], errors: [] };
+                // Per input id: a duplicate repeats its first outcome, as Cloudflare does —
+                // re-resolving it would miss, since the first delete freed its alias.
+                const outcomes = new Map<string, boolean>();
+
+                for (const instanceId of instanceIds) {
+                    // eslint-disable-next-line no-await-in-loop -- see above
+                    const deleted = outcomes.get(instanceId) ?? (await deleteRun(await resolveAlias(instanceId)));
+
+                    outcomes.set(instanceId, deleted);
+
+                    if (deleted) {
+                        result.deleted.push({ id: instanceId });
+                    } else {
+                        result.errors.push({ code: 404, id: instanceId, message: `workflow instance "${instanceId}" not found` });
+                    }
+                }
+
+                return result;
+            },
             get: async (instanceId) => instanceFor(await resolveAlias(instanceId)),
         };
 
         bindings[exportName] = binding;
-        env[workflowBindingName(exportName)] = binding;
+        env[workflowClassName(exportName)] = binding;
     }
 
     return { bindings: bindings as NodeWorkflowHost<Workflows>["bindings"], env, runtime };

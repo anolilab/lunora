@@ -44,6 +44,18 @@ batch.
 await ctx.queues.emailQueue.send({ to: user.email });
 ```
 
+For one event with several consumers, declare a topic and subscribe to it.
+Each subscription is its own queue, with its own retries and dead-letter queue:
+
+```ts
+// lunora/queues.ts
+export const signups = defineTopic<{ userId: string }>();
+export const welcomeEmail = defineSubscription(signups, { handler: async (ctx, batch) => {} });
+
+// inside a mutation/action
+await ctx.topics.signups.publish({ userId });
+```
+
 Codegen emits the typed `ctx.queues` producer and the worker `queue()` dispatch;
 `@lunora/config` reconciles the wrangler `queues.producers[]` /
 `queues.consumers[]` entries from the same definition. Scaffold a new queue with

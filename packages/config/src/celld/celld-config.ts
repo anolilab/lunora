@@ -25,10 +25,11 @@
  * ("Wrangler configuration") and `docs/services/containers.md`.
  */
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { findWranglerFile, readWranglerJsonc } from "../cloudflare/wrangler-path";
 import type { ProjectedConfig, ProjectionPurpose } from "../deploy-driver";
+import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
 
 /** The projected config's filename. */
 const CELLD_CONFIG_FILE = ".celld.wrangler.json";
@@ -156,6 +157,29 @@ const projectRules = (rules: unknown, dropped: string[]): unknown => {
 };
 
 /**
+ * Turn workflow exports into bindings. celld has no workflow `exports` (nor
+ * `ctx.exports`), so each `exports.<Class>` workflow becomes a `workflows[]` binding named after the
+ * class — the key the runtime falls back to on `env` (`shared/workflow-binding.ts`).
+ * Only `class_name` and `name` carry over: the deploy settings an export takes
+ * are rated separately for celld (`workflowSchedules`).
+ * @returns the translated bindings, and the remaining non-workflow exports.
+ */
+const projectWorkflowExports = (exports: unknown): { bindings: Config[]; rest: Config } => {
+    const bindings: Config[] = [];
+    const rest: Config = {};
+
+    for (const [className, entry] of Object.entries(isRecord(exports) ? exports : {})) {
+        if (isRecord(entry) && entry["type"] === "workflow") {
+            bindings.push({ binding: className, class_name: className, name: entry["name"] });
+        } else {
+            rest[className] = entry;
+        }
+    }
+
+    return { bindings, rest };
+};
+
+/**
  * Project a parsed wrangler config onto what celld accepts.
  * @param config The parsed wrangler config.
  * @returns the projected config and every key removed from it. A removed key
@@ -165,8 +189,10 @@ const projectRules = (rules: unknown, dropped: string[]): unknown => {
 const projectCelldConfig = (config: Config): { config: Config; dropped: string[] } => {
     const dropped: string[] = [];
     const projected: Config = {};
+    const workflowExports = projectWorkflowExports(config["exports"]);
+    const source: Config = { ...config, exports: workflowExports.rest };
 
-    for (const [key, value] of Object.entries(config)) {
+    for (const [key, value] of Object.entries(source)) {
         if (!ACCEPTED_KEYS.has(key)) {
             if (!isEmpty(value)) {
                 dropped.push(key);
@@ -195,6 +221,12 @@ const projectCelldConfig = (config: Config): { config: Config; dropped: string[]
                 projected[key] = value;
             }
         }
+    }
+
+    if (workflowExports.bindings.length > 0) {
+        const bound: unknown[] = Array.isArray(projected["workflows"]) ? projected["workflows"] : [];
+
+        projected["workflows"] = [...bound, ...workflowExports.bindings];
     }
 
     return { config: projected, dropped };
@@ -312,10 +344,18 @@ const rebaseMigrationDirectories = (config: Config, own: Config, projectRoot: st
                 return database;
             }
 
-            const declared = ownDatabases.find((entry) => entry["binding"] === database["binding"])?.["migrations_dir"];
+            const ownDatabase = ownDatabases.find((entry) => entry["binding"] === database["binding"]);
+            const declared = ownDatabase?.["migrations_dir"];
             const directory = resolve(projectRoot, typeof declared === "string" ? declared : "migrations");
+            const rebased = existsSync(directory) ? { ...database, migrations_dir: relative(root, directory).split(sep).join("/") } : database;
+            // `migrations_pattern` (wrangler's glob for nested layouts) is relative
+            // to the config file too. Path resolution never touches the glob
+            // characters, so it rebases like a path.
+            const pattern = ownDatabase?.["migrations_pattern"];
 
-            return existsSync(directory) ? { ...database, migrations_dir: relative(root, directory).split(sep).join("/") } : database;
+            return typeof pattern === "string"
+                ? { ...rebased, migrations_pattern: relative(root, resolve(projectRoot, pattern)).split(sep).join("/") }
+                : rebased;
         }),
     };
 };
@@ -453,4 +493,51 @@ const planCelldConfig = (projectRoot: string, purpose: ProjectionPurpose): Proje
     };
 };
 
-export { planCelldConfig, projectCelldConfig };
+/**
+ * Project a service Worker's config (plan 457) for `celld dev`, written into
+ * `root` — the directory of the app's own projection — as
+ * `.celld.service.<name>.wrangler.json`.
+ *
+ * celld resolves a service binding from the target Worker's deployment record
+ * in the local store, and `celld dev` keeps that store under the config's
+ * directory. A service booted from a projection beside the app's therefore
+ * records its deployment where the app's `celld dev` looks it up. celld also
+ * requires every path a config names to sit inside its directory, so the
+ * service has to live inside `root`.
+ *
+ * celld reads `.dev.vars` from the projection's directory — the app's — so the
+ * service's own `.dev.vars` is inlined as `vars`; a key the app's `.dev.vars`
+ * also defines still takes the app's value under `celld dev`.
+ */
+const planCelldServiceConfig = (root: string, wranglerPath: string): ProjectedConfig => {
+    const own = readConfig(wranglerPath);
+    const serviceDirectory = dirname(wranglerPath);
+    const { config, dropped } = projectCelldConfig(own);
+    const name = typeof own["name"] === "string" ? own["name"] : "service";
+    const offset = relative(root, serviceDirectory);
+
+    // On Windows a service on another drive comes back absolute, not `..`-prefixed.
+    if (offset === ".." || offset.startsWith(`..${sep}`) || isAbsolute(offset)) {
+        throw new Error(`service ${name} (${serviceDirectory}) must sit inside ${root} — celld dev runs it from a config beside the app's`);
+    }
+
+    const devVariablesPath = join(serviceDirectory, DEV_VARS_FILE);
+    const devVariables = existsSync(devVariablesPath)
+        ? Object.fromEntries(parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).map(({ key, value }) => [key, value]))
+        : {};
+    const rebased = rebaseMigrationDirectories(rebasePaths(config, serviceDirectory, root), own, serviceDirectory, root);
+    const variables = isRecord(rebased["vars"]) ? rebased["vars"] : {};
+    // The Worker name is the service's own config; keep it from steering the file name.
+    const configPath = join(root, `.celld.service.${name.replaceAll(/[^\w.-]/gu, "-")}.wrangler.json`);
+    const contents = `${JSON.stringify(markDevelopment({ ...rebased, vars: { ...variables, ...devVariables } }), undefined, 4)}\n`;
+
+    return {
+        configPath,
+        dropped,
+        write: () => {
+            writeFileSync(configPath, contents);
+        },
+    };
+};
+
+export { planCelldConfig, planCelldServiceConfig, projectCelldConfig };

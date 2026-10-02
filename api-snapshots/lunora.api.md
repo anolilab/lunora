@@ -505,6 +505,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ModuleConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ModuleDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MonthlySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -762,6 +770,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SearchIndexDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceBindingSpec` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceFetcher` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceRpc` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1085,6 +1105,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WorkflowInstanceEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowInstanceStatus` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1165,6 +1189,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `createServices` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `cronJobs` (const)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -1198,6 +1226,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineMigration` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineModule` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -3423,6 +3455,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `setHostSpanAttributes` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `upsertIssueState` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -5351,6 +5387,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ModuleConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ModuleDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MonthlySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -5608,6 +5652,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SearchIndexDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceBindingSpec` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceFetcher` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceRpc` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5931,6 +5987,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WorkflowInstanceEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowInstanceStatus` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6011,6 +6071,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `createServices` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `cronJobs` (const)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -6044,6 +6108,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineMigration` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineModule` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7726,6 +7794,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `WorkflowInstance` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WorkflowInstanceEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

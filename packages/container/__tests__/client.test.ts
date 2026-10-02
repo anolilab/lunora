@@ -352,6 +352,24 @@ describe("ctx.containers.<name>.get() lifecycle controls", () => {
         expect(calls.find((call) => call.method === "setAllowedHosts")!.arg).toStrictEqual(["a.com", "b.com"]);
     });
 
+    it("forwards snapshot() to the DO's lunoraSnapshot RPC and returns its handle", async () => {
+        expect.assertions(2);
+
+        const lunoraSnapshot = vi.fn<(options?: { name?: string }) => Promise<{ id: string; name?: string; size: number }>>(async (options) => {
+            return { id: "snap-1", name: options?.name, size: 9 };
+        });
+        const namespace: ContainerNamespaceLike = {
+            get: () => {
+                return { fetch: async () => new Response("ok"), lunoraSnapshot };
+            },
+            idFromName: (name) => name,
+        };
+        const handle = createContainerContext({ CONTAINER_SANDBOX: namespace }, [{ binding: "CONTAINER_SANDBOX", exportName: "sandbox" }]).sandbox!.get("s1");
+
+        await expect(handle.snapshot({ name: "v1" })).resolves.toStrictEqual({ id: "snap-1", name: "v1", size: 9 });
+        expect(lunoraSnapshot).toHaveBeenCalledWith({ name: "v1" });
+    });
+
     it("routes .port(n) requests with the cf-container-target-port header across get/any/pool", async () => {
         expect.assertions(4);
 

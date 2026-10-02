@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { projectCelldConfig } from "../src/celld/celld-config";
+import { planCelldServiceConfig, projectCelldConfig } from "../src/celld/celld-config";
 import { resolveDeployDriver } from "../src/driver-registry";
 import { toolchainExecArgs } from "../src/package-manager";
 
@@ -76,6 +76,18 @@ describe(toolchainExecArgs, () => {
 });
 
 describe(projectCelldConfig, () => {
+    it("turns an exports workflow into a workflows[] binding named after the class", () => {
+        expect.assertions(2);
+
+        const { config, dropped } = projectCelldConfig({
+            exports: { OrderPipelineWorkflow: { name: "order-pipeline", schedules: ["0 * * * *"], type: "workflow" } },
+            name: "app",
+        });
+
+        expect(config["workflows"]).toStrictEqual([{ binding: "OrderPipelineWorkflow", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }]);
+        expect(dropped).toStrictEqual([]);
+    });
+
     it("keeps what celld accepts and names everything it drops", () => {
         expect.assertions(2);
 
@@ -279,6 +291,35 @@ describe("celld config projection on disk", () => {
         });
     });
 
+    it("points a Vite build's nested D1 migrations_pattern back at the project", () => {
+        expect.assertions(1);
+
+        writeViteBuild();
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            JSON.stringify({
+                d1_databases: [{ binding: "DB", migrations_dir: "drizzle", migrations_pattern: "drizzle/*/migration.sql" }],
+                main: "virtual:lunora/worker",
+                name: "app",
+            }),
+            "utf8",
+        );
+        mkdirSync(join(root, "drizzle"));
+        writeFileSync(
+            join(root, "dist", "server", "wrangler.json"),
+            JSON.stringify({ d1_databases: [{ binding: "DB", database_id: "db", database_name: "db" }], main: "index.js", name: "app" }),
+            "utf8",
+        );
+
+        const projected = resolveDeployDriver("celld").projectConfig?.(root, "deploy");
+
+        projected?.write();
+
+        expect(JSON.parse(readFileSync(String(projected?.configPath), "utf8"))).toMatchObject({
+            d1_databases: [{ binding: "DB", migrations_dir: "../../drizzle", migrations_pattern: "../../drizzle/*/migration.sql" }],
+        });
+    });
+
     it("keeps an .assetsignore that is hiding something, and stops instead", () => {
         expect.assertions(2);
 
@@ -305,5 +346,55 @@ describe("celld config projection on disk", () => {
         writeViteBuild();
 
         expect(() => resolveDeployDriver("celld").projectConfig?.(root, "dev")).toThrow(/`celld dev` rebuilds from a source file/u);
+    });
+});
+
+describe(planCelldServiceConfig, () => {
+    let root: string;
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), "lunora-celld-service-"));
+        mkdirSync(join(root, "services", "parser"), { recursive: true });
+        writeFileSync(join(root, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts", "workers_dev": false }\n`);
+    });
+
+    afterEach(() => {
+        rmSync(root, { force: true, recursive: true });
+    });
+
+    it("projects a service beside the app's config, rebased onto the app root, keys celld refuses dropped", () => {
+        expect.assertions(3);
+
+        const projected = planCelldServiceConfig(root, join(root, "services", "parser", "wrangler.jsonc"));
+
+        projected.write();
+
+        expect(projected.configPath).toBe(join(root, ".celld.service.parser.wrangler.json"));
+        expect(projected.dropped).toStrictEqual(["workers_dev"]);
+        expect(JSON.parse(readFileSync(projected.configPath, "utf8"))).toStrictEqual({
+            main: "services/parser/src/index.ts",
+            name: "parser",
+            vars: { WORKER_ENV: "development" },
+        });
+    });
+
+    it("inlines the service's own .dev.vars, which celld would read from the app's folder instead, and keeps the name out of the path", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "services", "parser", "wrangler.jsonc"), `{ "name": "../parser", "main": "src/index.ts", "vars": { "MODE": "config" } }\n`);
+        writeFileSync(join(root, "services", "parser", ".dev.vars"), `MODE=local\nTOKEN=secret\n`);
+
+        const projected = planCelldServiceConfig(root, join(root, "services", "parser", "wrangler.jsonc"));
+
+        projected.write();
+
+        expect(projected.configPath).toBe(join(root, ".celld.service...-parser.wrangler.json"));
+        expect(JSON.parse(readFileSync(projected.configPath, "utf8")).vars).toStrictEqual({ MODE: "local", TOKEN: "secret", WORKER_ENV: "development" });
+    });
+
+    it("refuses a service outside the app's folder, which celld cannot resolve from there", () => {
+        expect.assertions(1);
+
+        expect(() => planCelldServiceConfig(join(root, "app"), join(root, "services", "parser", "wrangler.jsonc"))).toThrow(/must sit inside/u);
     });
 });

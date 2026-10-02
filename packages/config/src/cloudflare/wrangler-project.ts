@@ -47,6 +47,18 @@ interface WranglerProjectValidationResult {
  */
 const iterableEntries = <T>(value: ReadonlyArray<T> | undefined): ReadonlyArray<T> => (Array.isArray(value) ? (value as ReadonlyArray<T>) : []);
 
+/** A `durable_object` entry's missing named-image Dockerfiles — its local sources, in place of `image`. */
+const namedImageErrors = (entry: WranglerContainerEntry | null | undefined, configDirectory: string, wranglerPath: string): string[] =>
+    Object.entries(entry?.images ?? {}).flatMap(([name, named]) => {
+        const dockerfile = named?.dockerfile;
+
+        if (typeof dockerfile !== "string" || existsSync(dockerfile.startsWith("/") ? dockerfile : join(configDirectory, dockerfile))) {
+            return [];
+        }
+
+        return [`containers images["${name}"] dockerfile "${dockerfile}" does not exist (resolved relative to ${wranglerPath}); create the Dockerfile`];
+    });
+
 /**
  * FS-aware existence check for local-path container images: every `./`, `../`,
  * `/`, or `Dockerfile`-bearing image must resolve to an existing file (wrangler
@@ -61,16 +73,16 @@ const collectContainerImageErrors = (
 
     for (const entry of iterableEntries(containers)) {
         const image = entry?.image;
+        const isLocalPath =
+            typeof image === "string" && (image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile"));
 
-        if (typeof image !== "string" || !(image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile"))) {
-            continue;
-        }
-
-        if (!existsSync(image.startsWith("/") ? image : join(configDirectory, image))) {
+        if (isLocalPath && !existsSync(image.startsWith("/") ? image : join(configDirectory, image))) {
             errors.push(
                 `containers image "${image}" does not exist (resolved relative to ${wranglerPath}); create the Dockerfile or point image at a registry reference`,
             );
         }
+
+        errors.push(...namedImageErrors(entry, configDirectory, wranglerPath));
     }
 
     return errors;
@@ -224,7 +236,8 @@ const remedyFor = (className: string, kind: WorkerEntry["kind"]): string => {
 
 /**
  * Report every `durable_objects.bindings[].class_name` and
- * `workflows[].class_name` the worker entry does not export.
+ * `workflows[].class_name` (and `exports` workflow class) the worker entry does
+ * not export.
  *
  * `.scheduler(...)` and `.workflow(...)` on the generated app builder write the
  * binding and the migration entry but cannot add the `export { SchedulerDO }`
@@ -266,6 +279,14 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, entry: WorkerEnt
         // which that script exports, not this entry.
         if (typeof workflow?.class_name === "string" && workflow.class_name.length > 0 && workflow.script_name === undefined) {
             declared.push({ className: workflow.class_name, label: "workflows" });
+        }
+    }
+
+    // A workflow declared in `exports` is keyed by its class name and is always
+    // this Worker's own — there is no `script_name` form to carve out.
+    for (const [className, exportEntry] of Object.entries(wrangler.exports ?? {})) {
+        if (exportEntry?.type === "workflow") {
+            declared.push({ className, label: "workflows" });
         }
     }
 

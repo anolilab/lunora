@@ -12,7 +12,7 @@ interface EmitAppOptions {
      * `@lunora/agent/inbound`), so received mail starts a durable run. Empty/absent
      * ⇒ no wiring, byte-identical output for email-free (and agent-free) projects.
      */
-    emailAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
+    emailAgents?: ReadonlyArray<{ className: string; exportName: string }>;
     /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
     hasAccess: boolean;
     /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
@@ -122,6 +122,8 @@ interface EmitAppOptions {
      * output for voice-free (and agent-free) projects.
      */
     voiceAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
+    /** An architecture manifest is emitted (`architecture.ts`, the app declares a module) → wire `architecture` into the worker. */
+    wantsArchitecture: boolean;
     /** An OpenAPI spec is emitted (`openapi.ts`) → wire `openApiSpec` into the worker. */
     wantsOpenApi: boolean;
     /** An OpenRPC spec is emitted (`openrpc.ts`) → wire `openRpcSpec` into the worker. */
@@ -326,6 +328,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
                   `import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`,
               ]
             : []),
+        ...(options.wantsArchitecture ? [`import { architecture } from "./architecture.js";`] : []),
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
@@ -1084,6 +1087,7 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     // Cloudflare data-residency region. Emitted only when declared, so apps
     // without it keep the un-pinned global namespace (and unchanged output).
     ...(options.jurisdiction ? [`            jurisdiction: ${JSON.stringify(options.jurisdiction)},`] : []),
+    ...(options.wantsArchitecture ? [`            architecture,`] : []),
     ...(options.wantsOpenApi ? [`            openApiSpec,`] : []),
     ...(options.wantsOpenRpc ? [`            openRpcSpec,`] : []),
     // The push-consumer handler backing the worker's `queue(batch, …)` entry:
@@ -1625,7 +1629,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     const emailAgentsBlock =
         emailAgents.length > 0
             ? `        composed.email = dispatchAgentEmail([
-${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, binding: ${JSON.stringify(agent.bindingName)} },`).join("\n")}
+${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, className: ${JSON.stringify(agent.className)} },`).join("\n")}
         ]);
 
 `
@@ -1791,6 +1795,8 @@ interface LunoraConfig<Env extends object = object> {
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
     /** Opt into remote-binding dev without \`--remote\` or \`LUNORA_REMOTE\` on every run. A literal, for the same reason as \`target\`. */
     remote?: boolean;
+    /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported \`WorkerEntrypoint\` class. Becomes \`ctx.services.<key>\` in actions, a wrangler \`services[]\` entry, one \`lunora dev\` session and a services-first \`lunora deploy\`. Literals, for the same reason as \`target\`. */
+    services?: Record<string, { dir: string; entrypoint?: string }>;
     /** Deploy target id — \`lunora deploy\`/\`verify\` read it when no \`--target\` is passed. Must be a literal: \`runCodegen\` resolves it synchronously by PARSING this file, so a computed value is not seen — \`lunora verify\` reports \`platform_unreadable_target\` rather than defaulting in silence. */
     target?: string;
 }

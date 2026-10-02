@@ -317,7 +317,12 @@ interface FunctionMetricIndexHit {
 ```ts
 interface HostSpanLike {
     readonly isTraced: boolean;
-    setAttribute: (key: string, value: boolean | number | string | undefined) => void;
+    recordException?: (exception: {
+        message: string;
+        name: string;
+    }) => unknown;
+    setAttribute: (key: string, value: boolean | number | string | undefined) => unknown;
+    setAttributes?: (attributes: Record<string, boolean | number | string>) => unknown;
 }
 ```
 
@@ -326,6 +331,7 @@ interface HostSpanLike {
 ```ts
 interface HostTracingLike {
     enterSpan: <T>(name: string, callback: (span: HostSpanLike) => T) => T;
+    getActiveSpan?: () => HostSpanLike | undefined;
 }
 ```
 
@@ -1187,6 +1193,12 @@ const resolveTraceAnchor: (traceparent: string | undefined) => {
     sampled: boolean;
     traceId: string;
 };
+```
+
+### `setHostSpanAttributes` (const)
+
+```ts
+const setHostSpanAttributes: (span: HostSpanLike, attributes: Record<string, LogFields[string]>) => void;
 ```
 
 ### `upsertIssueState` (const)

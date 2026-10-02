@@ -51,6 +51,25 @@ const validateLogpush = (wrangler: WranglerConfig, errors: string[]): void => {
     }
 };
 
+/**
+ * `secrets.required` lists the secret names the Worker needs. Wrangler loads
+ * only those keys from `.dev.vars` and blocks a deploy while one is unset, so a
+ * malformed list is not cosmetic — it changes which secrets the Worker sees.
+ */
+const validateSecretsRequired = (wrangler: WranglerConfig, errors: string[]): void => {
+    const value: unknown = wrangler.secrets;
+
+    if (value === undefined) {
+        return;
+    }
+
+    const required: unknown = typeof value === "object" && value !== null && !Array.isArray(value) ? (value as { required?: unknown }).required : undefined;
+
+    if (!Array.isArray(required) || required.some((name) => typeof name !== "string" || name === "")) {
+        errors.push('secrets must be an object whose "required" is an array of secret names (e.g. { "required": ["API_KEY"] })');
+    }
+};
+
 /** Cloudflare's own ceiling on `limits.cpu_ms`; a value above it is rejected at deploy rather than clamped. */
 const MAX_CPU_MS = 300_000;
 
@@ -422,6 +441,7 @@ export {
     validateObservability,
     validatePlacement,
     validateSchedulerOrigin,
+    validateSecretsRequired,
     validateSendEmail,
     validateTailConsumers,
     withTailConsumer,

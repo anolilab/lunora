@@ -67,6 +67,14 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string;
             note: "A dropped authorizer has no caller to fail — the whisper topics it was meant to gate silently stay open to every socket on the shard.",
         },
     ],
+    [
+        "SubscriptionDefinition",
+        {
+            call: "defineSubscription(topic, { … })",
+            file: "queues",
+            note: "A dropped subscription is never published to — its topic's messages simply never reach it.",
+        },
+    ],
     ["WorkflowDefinition", { call: "defineWorkflow({ … })", file: "workflows" }],
 ]);
 

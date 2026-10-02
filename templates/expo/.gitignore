@@ -42,6 +42,7 @@ lunora/_generated
 # `celld dev` state (holds `.dev.vars` values) and the celld driver's projection of wrangler.jsonc
 .celld/
 .celld.wrangler.json
+.celld.service.*.wrangler.json
 .lunora/
 .lunora-cache
 

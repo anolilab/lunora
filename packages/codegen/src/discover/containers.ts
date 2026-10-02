@@ -1,7 +1,14 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { containerBindingName, containerClassName, normalizeContainerImage } from "@lunora/container";
+import {
+    containerBindingName,
+    containerClassName,
+    DURABLE_OBJECT_POLICY_FORBIDDEN_KEYS,
+    isCloudflareRegistryDigest,
+    isManagedImage,
+    normalizeContainerImage,
+} from "@lunora/container";
 import type {
     CallExpression,
     Expression,
@@ -17,7 +24,7 @@ import type {
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
-import type { ContainerIR } from "../ir";
+import type { ContainerImageIR, ContainerIR, DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } from "../ir";
 import { findObjectProperty, propertyKeyName, stringPropertyFor, symbolConstInitializer } from "./ast";
 
 /** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
@@ -67,7 +74,7 @@ const numberProperty = (expression: Expression, exportName: string, property: st
 };
 
 /** Lift the `image` property into the normalized IR shape. */
-const imageFromExpression = (expression: Expression, exportName: string): ContainerIR["image"] => {
+const imageFromExpression = (expression: Expression, exportName: string): ContainerImageIR => {
     if (Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression)) {
         return normalizeContainerImage(expression.getLiteralValue());
     }
@@ -94,12 +101,13 @@ const imageFromExpression = (expression: Expression, exportName: string): Contai
 };
 
 /**
- * Keys codegen writes into wrangler.jsonc (`image`, `name`, `max_instances`,
- * `instance_type`, `image_vars`, `rollout_*`). Unlike the runtime-only fields
+ * Keys codegen writes into wrangler.jsonc (`image`, `images`, `name`,
+ * `max_instances`, `instance_type`, `image_vars`, `rollout_*`,
+ * `scheduling_policy`). Unlike the runtime-only fields
  * the generated class reads off the imported definition, these exist only if
  * codegen can read them — so one it cannot read is an error, never a skip.
  */
-const WRANGLER_KEYS = new Set(["buildArgs", "image", "instanceType", "maxInstances", "name", "rollout"]);
+const WRANGLER_KEYS = new Set(["buildArgs", "image", "images", "instanceType", "maxInstances", "name", "rollout", "schedulingPolicy"]);
 
 /** The `rollout` keys codegen lifts into wrangler.jsonc. */
 const ROLLOUT_KEYS = new Set(["gracePeriodSeconds", "stepPercentage"]);
@@ -356,7 +364,7 @@ const stringRecordLiteral = (expression: Expression, exportName: string): Record
 };
 
 /** Lift the `rollout` object's `gracePeriodSeconds` / `stepPercentage` (static numbers; other keys are runtime-only). */
-const rolloutLiteral = (expression: Expression, exportName: string): ContainerIR["rollout"] => {
+const rolloutLiteral = (expression: Expression, exportName: string): DefaultScheduledContainerIR["rollout"] => {
     if (!Node.isObjectLiteralExpression(expression)) {
         throw diagnosticAt(
             expression,
@@ -432,6 +440,155 @@ const instanceTypeFromExpression = (expression: Expression, exportName: string):
     throw diagnosticAt(expression, `container "${exportName}": \`instanceType\` must be a static string or { vcpu, memoryMib, diskMb } literal`);
 };
 
+/** Lift `images` — a `durable_object` container's named images, each a static path or `{ registry }` literal. */
+const namedImagesLiteral = (expression: Expression, exportName: string): NonNullable<DurableObjectScheduledContainerIR["images"]> => {
+    if (!Node.isObjectLiteralExpression(expression)) {
+        throw diagnosticAt(expression, `container "${exportName}": \`images\` must be a static object literal — codegen writes it into wrangler.jsonc`);
+    }
+
+    const images: NonNullable<DurableObjectScheduledContainerIR["images"]> = {};
+
+    for (const [name, value] of staticEntries(expression, "every", `container "${exportName}" images`)) {
+        const image = imageFromExpression(value, exportName);
+
+        if (image.kind === "build") {
+            throw diagnosticAt(
+                value,
+                `container "${exportName}": \`images["${name}"]\` cannot be a Railpack { build } source — use a Dockerfile path or a { registry } reference`,
+            );
+        }
+
+        if (image.kind === "registry" && !isCloudflareRegistryDigest(image.reference)) {
+            throw diagnosticAt(
+                value,
+                `container "${exportName}": \`images["${name}"].registry\` must be a digest-pinned (@sha256) reference under registry.cloudflare.com — push other registries' images there first`,
+            );
+        }
+
+        images[name] = image;
+    }
+
+    return images;
+};
+
+/** The `schedulingPolicy` an options object declares — read first, since it decides what `image` means. */
+const schedulingPolicyOf = (entries: ReadonlyArray<[string, Expression]>, exportName: string): ContainerIR["schedulingPolicy"] => {
+    const entry = entries.findLast(([key]) => key === "schedulingPolicy");
+
+    if (entry === undefined) {
+        return undefined;
+    }
+
+    const policy = stringProperty(entry[1], exportName, "schedulingPolicy");
+
+    if (policy !== "default" && policy !== "durable_object") {
+        throw diagnosticAt(entry[1], `container "${exportName}": unknown \`schedulingPolicy\` "${policy}" — use "default" or "durable_object"`);
+    }
+
+    return policy === "durable_object" ? policy : undefined;
+};
+
+/** Refuse a key the declared scheduling policy does not take: default-policy settings under `durable_object`, `images` without it. */
+const assertPolicyAllows = (key: string, initializer: Expression, schedulingPolicy: ContainerIR["schedulingPolicy"], exportName: string): void => {
+    if (schedulingPolicy !== undefined && (DURABLE_OBJECT_POLICY_FORBIDDEN_KEYS as ReadonlyArray<string>).includes(key)) {
+        throw diagnosticAt(initializer, `container "${exportName}": \`${key}\` is not supported with schedulingPolicy "durable_object"`);
+    }
+
+    if (schedulingPolicy === undefined && key === "images") {
+        throw diagnosticAt(initializer, `container "${exportName}": \`images\` needs schedulingPolicy "durable_object"`);
+    }
+};
+
+/** The fields `containerFromCall` lifts before it knows which union member it builds. */
+type ContainerBaseIR = Omit<DefaultScheduledContainerIR, "image" | "maxInstances" | "rollout" | "schedulingPolicy">;
+
+/** The policy-specific fields, assembled into the right union member at the end. */
+interface PolicyFieldsIR {
+    image?: ContainerImageIR;
+    images?: DurableObjectScheduledContainerIR["images"];
+    maxInstances?: number;
+    rollout?: DefaultScheduledContainerIR["rollout"];
+}
+
+/** Lift one static `defineContainer` entry onto the base or policy fields; runtime-only keys are left to the generated class. */
+const liftContainerEntry = (
+    key: string,
+    initializer: Expression,
+    target: { base: ContainerBaseIR; policy: PolicyFieldsIR; scheduled: boolean },
+    exportName: string,
+): void => {
+    const { base, policy } = target;
+
+    switch (key) {
+        case "buildArgs": {
+            base.buildArgs = stringRecordLiteral(initializer, exportName);
+            break;
+        }
+        case "enableInternet": {
+            // Lifted (when literal) for the advisor; the generated class still
+            // reads the live value off the imported definition.
+            base.enableInternet = booleanLiteral(initializer);
+            break;
+        }
+        case "image": {
+            // Under `durable_object`, `image` names a default among `images` (or a
+            // managed image) and is read off the definition at runtime.
+            if (!target.scheduled) {
+                policy.image = imageFromExpression(initializer, exportName);
+            }
+
+            break;
+        }
+        case "images": {
+            policy.images = namedImagesLiteral(initializer, exportName);
+            break;
+        }
+        case "instanceType": {
+            base.instanceType = instanceTypeFromExpression(initializer, exportName);
+            break;
+        }
+        case "maxInstances": {
+            policy.maxInstances = numberProperty(initializer, exportName, "maxInstances");
+            break;
+        }
+        case "name": {
+            base.name = stringProperty(initializer, exportName, "name");
+            break;
+        }
+        case "rollout": {
+            policy.rollout = rolloutLiteral(initializer, exportName);
+            break;
+        }
+        case "sleepAfter": {
+            base.sleepAfter = stringOrNumberLiteral(initializer);
+            break;
+        }
+        default: {
+            // Other runtime-only fields (defaultPort, env, secrets, …) are
+            // evaluated by the generated class at runtime, not by codegen.
+            break;
+        }
+    }
+};
+
+/** Under `durable_object`, a static default `image` must name a declared image or a managed one. */
+const assertDefaultImageDeclared = (entries: ReadonlyArray<[string, Expression]>, images: PolicyFieldsIR["images"], exportName: string): void => {
+    const defaultImage = entries.findLast(([key]) => key === "image")?.[1];
+
+    if (defaultImage === undefined || !(Node.isStringLiteral(defaultImage) || Node.isNoSubstitutionTemplateLiteral(defaultImage))) {
+        return;
+    }
+
+    const name = defaultImage.getLiteralValue();
+
+    if (!Object.hasOwn(images ?? {}, name) && !isManagedImage(name)) {
+        throw diagnosticAt(
+            defaultImage,
+            `container "${exportName}": \`image\` "${name}" must name an entry of \`images\` or a Cloudflare-managed "cloudflare/…" image`,
+        );
+    }
+};
+
 /** Lift one exported `defineContainer({...})` declaration into {@link ContainerIR}. */
 const containerFromCall = (call: CallExpression, exportName: string): ContainerIR => {
     const argument = call.getArguments()[0];
@@ -440,73 +597,37 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
         throw diagnosticAt(call, `container "${exportName}": defineContainer must be passed an inline object literal`);
     }
 
-    const ir: ContainerIR = {
-        bindingName: containerBindingName(exportName),
-        className: containerClassName(exportName),
-        exportName,
-        image: { buildContext: ".", dockerfilePath: "./Dockerfile", kind: "dockerfile" },
+    const entries = staticEntries(argument, WRANGLER_KEYS, `container "${exportName}"`);
+    const schedulingPolicy = schedulingPolicyOf(entries, exportName);
+    const target = {
+        base: { bindingName: containerBindingName(exportName), className: containerClassName(exportName), exportName } as ContainerBaseIR,
+        policy: {} as PolicyFieldsIR,
+        scheduled: schedulingPolicy !== undefined,
     };
 
-    let sawImage = false;
-
-    for (const [key, initializer] of staticEntries(argument, WRANGLER_KEYS, `container "${exportName}"`)) {
-        switch (key) {
-            case "buildArgs": {
-                ir.buildArgs = stringRecordLiteral(initializer, exportName);
-
-                break;
-            }
-            case "enableInternet": {
-                // Lifted (when literal) for the advisor; the generated class
-                // still reads the live value off the imported definition.
-                ir.enableInternet = booleanLiteral(initializer);
-
-                break;
-            }
-            case "image": {
-                ir.image = imageFromExpression(initializer, exportName);
-                sawImage = true;
-
-                break;
-            }
-            case "instanceType": {
-                ir.instanceType = instanceTypeFromExpression(initializer, exportName);
-
-                break;
-            }
-            case "maxInstances": {
-                ir.maxInstances = numberProperty(initializer, exportName, "maxInstances");
-
-                break;
-            }
-            case "name": {
-                ir.name = stringProperty(initializer, exportName, "name");
-
-                break;
-            }
-            case "rollout": {
-                ir.rollout = rolloutLiteral(initializer, exportName);
-
-                break;
-            }
-            case "sleepAfter": {
-                ir.sleepAfter = stringOrNumberLiteral(initializer);
-
-                break;
-            }
-            default: {
-                // Other runtime-only fields (defaultPort, env, secrets, …) are
-                // evaluated by the generated class at runtime, not by codegen.
-                break;
-            }
-        }
+    for (const [key, initializer] of entries) {
+        assertPolicyAllows(key, initializer, schedulingPolicy, exportName);
+        liftContainerEntry(key, initializer, target, exportName);
     }
 
-    if (!sawImage) {
+    const { base, policy } = target;
+
+    if (schedulingPolicy === "durable_object") {
+        assertDefaultImageDeclared(entries, policy.images, exportName);
+
+        return { ...base, ...(policy.images === undefined ? {} : { images: policy.images }), schedulingPolicy };
+    }
+
+    if (policy.image === undefined) {
         throw diagnosticAt(argument, `container "${exportName}": defineContainer requires a static \`image\` property`);
     }
 
-    return ir;
+    return {
+        ...base,
+        image: policy.image,
+        ...(policy.maxInstances === undefined ? {} : { maxInstances: policy.maxInstances }),
+        ...(policy.rollout === undefined ? {} : { rollout: policy.rollout }),
+    };
 };
 
 /** Collect exported `defineContainer` declarations from one source file. */

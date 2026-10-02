@@ -48,6 +48,7 @@ export { default as discoverRlsMetadata } from "./discover/rls-procedures/metada
 export type { SandboxUsage } from "./discover/sandbox";
 export { discoverSandboxUsage } from "./discover/sandbox";
 export { default as discoverSchema } from "./discover/schema";
+export { readServiceBindings, resolveServiceBindings } from "./discover/service-bindings";
 export { discoverShapes, SHAPES_FILENAME } from "./discover/shapes";
 export { default as discoverStorageRulesMetadata } from "./discover/storage-rules";
 export { discoverWorkflows, WORKFLOWS_FILENAME } from "./discover/workflows";
@@ -74,9 +75,13 @@ export { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 export type {
     AgentIR,
     AuthApiCallIR,
+    ContainerImageIR,
     ContainerIR,
+    ContainerNamedImageIR,
     ContextPropertyCallIR,
     CronJobIR,
+    DefaultScheduledContainerIR,
+    DurableObjectScheduledContainerIR,
     FlagsIR,
     FunctionIR,
     HttpRouteIR,
@@ -93,10 +98,12 @@ export type {
     RlsProcedureIR,
     RlsRoleIR,
     SchemaIR,
+    ServiceBindingIR,
     ShapeIR,
     StorageRuleIR,
     StorageRulesMetadataIR,
     TableIR,
+    TopicIR,
     ValidatorIR,
     VectorIndexIR,
     WorkflowIR,
@@ -108,7 +115,7 @@ export type { OpenRpcEmitInput } from "./openrpc";
 export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION } from "./openrpc";
 export type { PlatformDiagnostic } from "./platform-target";
 export { DEFAULT_TARGET, platformMatrixIds, readProjectTarget, resolveCodegenTarget } from "./platform-target";
-export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals } from "./project-config-file";
+export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral } from "./project-config-file";
 export { findProjectConfigFile, loadProjectConfig, PROJECT_CONFIG_FILENAMES, readProjectConfigLiterals } from "./project-config-file";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
 export { createCodegenProject, findTsconfig, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME } from "./run-codegen";

@@ -126,6 +126,7 @@ interface ExecutionContextLike {
             tags?: string[];
         }) => Promise<unknown>;
     };
+    exports?: unknown;
     passThroughOnException?: () => void;
     waitUntil?: (promise: Promise<unknown>) => void;
 }
@@ -282,6 +283,7 @@ interface PlatformCapabilities {
         browser?: Capability;
         commitOrderedTables?: Capability;
         containerEgressPolicy?: Capability;
+        containerRuntimeScheduling?: Capability;
         containers?: Capability;
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
@@ -309,15 +311,18 @@ interface PlatformCapabilities {
         scheduler?: Capability;
         secrets?: Capability;
         serverReactors?: Capability;
+        services?: Capability;
         shardAlarms?: Capability;
         shardedState?: Capability;
         shardPlacement?: Capability;
         shardReadReplicas?: Capability;
+        topics?: Capability;
         vectorStore?: Capability;
         websocketHibernation?: Capability;
         workerLoaders?: Capability;
         workflowRollback?: Capability;
         workflows?: Capability;
+        workflowSchedules?: Capability;
     };
     id: string;
     name: string;

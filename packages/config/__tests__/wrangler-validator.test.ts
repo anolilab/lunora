@@ -2515,6 +2515,47 @@ export const schema = defineSchema({
             expect(report.warnings).toEqual([]);
         });
 
+        it("accepts a durable_object entry with named images and no image or max_instances", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        {
+                            class_name: "TranscoderContainer",
+                            images: { base: { dockerfile: "./container/Dockerfile" }, pinned: { image: "registry.cloudflare.com/a/r@sha256:x" } },
+                            scheduling_policy: "durable_object",
+                        },
+                    ],
+                }),
+            );
+
+            expect(report.errors).toEqual([]);
+            expect(report.warnings).toEqual([]);
+        });
+
+        it("rejects default-policy fields and ambiguous named images on a durable_object entry", () => {
+            expect.assertions(3);
+
+            const errors = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        {
+                            class_name: "TranscoderContainer",
+                            image: "./Dockerfile",
+                            images: { both: { dockerfile: "./Dockerfile", image: "registry.cloudflare.com/a/r@sha256:x" } },
+                            max_instances: 2,
+                            scheduling_policy: "durable_object",
+                        },
+                    ],
+                }),
+            ).errors.join(" ");
+
+            expect(errors).toContain('sets "image", which the durable_object scheduling policy does not take');
+            expect(errors).toContain('sets "max_instances"');
+            expect(errors).toContain('images["both"] must set exactly one of "dockerfile" or "image"');
+        });
+
         it("requires a matching durable_objects binding", () => {
             expect.assertions(1);
 
@@ -2677,6 +2718,87 @@ export const schema = defineSchema({
 
             expect(report.errors.join(" ")).toContain("must be a { name, binding, class_name } object");
         });
+
+        it("accepts well-formed deploy settings on a binding and a matching workflow export", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(
+                baseConfig({
+                    exports: { OrderPipelineWorkflow: { limits: { steps: 25_000 }, name: "order-pipeline", schedules: "0 * * * *", type: "workflow" } },
+                    workflows: [
+                        {
+                            binding: "WORKFLOW_ORDER_PIPELINE",
+                            class_name: "OrderPipelineWorkflow",
+                            default_retention: { success_retention: "3 days" },
+                            name: "order-pipeline",
+                            schedules: ["0 * * * *"],
+                        },
+                    ],
+                }),
+            );
+
+            expect(report.errors).toStrictEqual([]);
+        });
+
+        it("rejects malformed schedules, limits and default_retention", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(
+                baseConfig({
+                    workflows: [
+                        {
+                            binding: "WORKFLOW_ORDER_PIPELINE",
+                            class_name: "OrderPipelineWorkflow",
+                            default_retention: { error_retention: 7 },
+                            limits: { steps: -1 },
+                            name: "order-pipeline",
+                            schedules: "0 * * * *",
+                        },
+                    ],
+                }),
+            );
+
+            expect(report.errors).toStrictEqual([
+                "workflows[0].schedules must be a non-empty array of cron expression strings",
+                "workflows[0].limits.steps must be a positive integer",
+                'workflows[0].default_retention.error_retention must be a duration string (e.g. "7 days")',
+            ]);
+        });
+
+        it("rejects a workflow export without a name", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(baseConfig({ exports: { OtherWorkflow: { type: "workflow" } } }));
+
+            expect(report.errors.join(" ")).toContain('exports["OtherWorkflow"] is a workflow export and must have a non-empty "name"');
+        });
+
+        it("rejects a binding and an export of one workflow that disagree on class or a setting", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(
+                baseConfig({
+                    exports: { RenamedWorkflow: { limits: { steps: 10_000 }, name: "order-pipeline", type: "workflow" } },
+                    workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", limits: { steps: 25_000 }, name: "order-pipeline" }],
+                }),
+            );
+
+            expect(report.errors.join(" ")).toContain("name different classes");
+            expect(report.errors.join(" ")).toContain("set limits.steps to different values");
+        });
+
+        it("rejects a cross-Worker binding that reuses a workflow export's name", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(
+                baseConfig({
+                    exports: { OrderPipelineWorkflow: { name: "order-pipeline", type: "workflow" } },
+                    workflows: [{ binding: "REMOTE", class_name: "OrderPipelineWorkflow", name: "order-pipeline", script_name: "other-worker" }],
+                }),
+            );
+
+            expect(report.errors.join(" ")).toContain("workflow names are unique per account");
+        });
     });
 
     // Cloudflare-coverage bindings + config flags (plans 027-043). A minimal
@@ -2797,6 +2919,44 @@ export const schema = defineSchema({
 
             expect(validateWranglerConfig(validBase({ images: { binding: "IMAGES" } })).valid).toBe(true);
             expect(validateWranglerConfig(validBase({ images: {} })).errors.join(" ")).toContain("images must be an object");
+        });
+
+        it("accepts well-formed media and stream blocks and flags empty ones", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ media: { binding: "MEDIA" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ media: {} })).errors.join(" ")).toContain("media must be an object");
+            expect(validateWranglerConfig(validBase({ stream: { binding: "STREAM" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ stream: {} })).errors.join(" ")).toContain("stream must be an object");
+        });
+
+        it("accepts well-formed vpc_services and artifacts entries and rejects ones missing their target", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ vpc_services: [{ binding: "PRIVATE_API", remote: true, service_id: "svc" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ vpc_services: [{ binding: "PRIVATE_API" }] })).errors.join(" ")).toContain('non-empty "service_id"');
+            expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS", namespace: "default" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS" }] })).errors.join(" ")).toContain('non-empty "namespace"');
+        });
+
+        it("requires exactly one of tunnel_id / network_id on a vpc_networks entry", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ vpc_networks: [{ binding: "MESH", network_id: "cf1:network", remote: true }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ vpc_networks: [{ binding: "TUNNEL", tunnel_id: "uuid" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ vpc_networks: [{ binding: "NET" }] })).errors.join(" ")).toContain("exactly one of");
+            expect(
+                validateWranglerConfig(validBase({ vpc_networks: [{ binding: "NET", network_id: "cf1:network", tunnel_id: "uuid" }] })).errors.join(" "),
+            ).toContain("exactly one of");
+        });
+
+        it("accepts a secrets.required list of names and rejects anything else", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ secrets: { required: ["API_KEY", "DB_PASSWORD"] } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ secrets: { required: "API_KEY" } })).errors.join(" ")).toContain("secrets must be an object");
+            expect(validateWranglerConfig(validBase({ secrets: { required: ["API_KEY", ""] } })).errors.join(" ")).toContain("secrets must be an object");
+            expect(validateWranglerConfig(validBase({ secrets: null })).errors.join(" ")).toContain("secrets must be an object");
         });
 
         it("accepts a well-formed services entry and rejects one missing binding or service", () => {

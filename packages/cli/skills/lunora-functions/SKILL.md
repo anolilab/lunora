@@ -220,6 +220,7 @@ So write the call first, then run `lunora codegen` to surface the typed context:
 | `ctx.ai`                                                                                  | `@lunora/ai` (Workers AI)     |
 | `ctx.flags`                                                                               | `@lunora/flags` (OpenFeature) |
 | `ctx.queues.<name>`                                                                       | `@lunora/queue`               |
+| `ctx.topics.<name>` (pub/sub, see below)                                                  | `@lunora/queue`               |
 | `ctx.workflows` / `ctx.runStep`                                                           | `@lunora/workflow`            |
 | `ctx.containers`                                                                          | `@lunora/container`           |
 | `ctx.browser` (action-only)                                                               | `@lunora/browser`             |
@@ -241,6 +242,96 @@ Two exceptions to the usage scan, and one extra requirement:
 non-deterministic I/O: a query is re-run on every subscription re-evaluation, so
 a non-deterministic read makes reactivity wrong, and a mutation's writes are
 transactional — a rollback cannot un-send a network call.
+
+### Topics: one event, many consumers
+
+A queue has one consumer. To fan one event out to several independent
+consumers, declare a topic and subscribe to it — in `lunora/queues.ts`, next to
+your queues. Each subscription is its own queue with its own retries and
+dead-letter queue.
+
+```ts
+// lunora/queues.ts
+import { defineSubscription, defineTopic } from "@lunora/queue";
+
+import { internal } from "./_generated/api";
+
+export const signups = defineTopic<{ userId: string }>();
+
+export const welcomeEmail = defineSubscription(signups, {
+    handler: async (_ctx, batch) => {
+        for (const message of batch.messages) {
+            await message.run(internal.email.welcome, { userId: message.body.userId });
+            message.ack();
+        }
+    },
+    maxRetries: 5,
+    deadLetterQueue: "welcome-email-dlq",
+});
+
+// in a mutation or action
+await ctx.topics.signups.publish({ userId });
+```
+
+- Delivery is **at-least-once per subscription** and unordered — make handlers
+  idempotent. A failed send rejects `publish`, and a retry re-delivers to the
+  subscriptions that already got it.
+- A subscription is published to only through its topic, never `ctx.queues`.
+  The topic passed to `defineSubscription` must be a `defineTopic` export of the
+  same file.
+- Rate-limit public procedures that publish: one publish is one send per
+  subscription (`privileged_fanout_from_public_procedure` flags it).
+
+## Modules: grouping `lunora/` folders
+
+A folder whose `module.ts` default-exports `defineModule(...)` is a module.
+Modules are metadata — no `api.*` path or runtime change, still one Worker —
+that drive the Studio **Architecture** view, OpenAPI tags, and table ownership:
+
+```ts
+// lunora/billing/module.ts
+import { defineModule } from "@lunora/server";
+
+export default defineModule({ description: "Invoices and payments", tables: ["invoices"] });
+```
+
+- Write `description` and `tables` inline; codegen reads them without running
+  the file. Modules do not nest.
+- `cross_module_table_write` warns when a function outside the owning module
+  writes an owned table (insert, `patch`/`replace`/`delete`, batch or facade).
+  Route the write through a function in the owning module instead.
+- Installed components (`.extend(...)` schema extensions) count as modules that
+  own their prefixed tables: write them through the component's functions, not
+  `ctx.db` directly.
+- Keep ids typed `Id<"table">` — a write through an untyped `string` id cannot
+  be attributed to a table.
+
+## Services: calling sibling Workers
+
+A Worker the app calls (a parser, an LLM gateway) is declared in
+`lunora.config.ts`, not discovered. Each one becomes a typed `ctx.services.<key>`
+on **actions** (not queries/mutations: a cross-Worker call cannot be replayed or
+rolled back; HTTP actions reach it through `ctx.runAction`):
+
+```ts
+// lunora.config.ts
+export default {
+    services: {
+        documentParser: { dir: "services/document-parser" }, // fetch service
+        llmGateway: { dir: "services/llm-gateway", entrypoint: "Gateway" }, // RPC
+    },
+};
+
+// in an action
+const parsed = await ctx.services.documentParser.fetch("https://parser/parse", { body, method: "POST" });
+const text = await ctx.services.llmGateway.complete(prompt); // typed from the Gateway class
+```
+
+- The Worker name and entry come from `<dir>/wrangler.jsonc`; Lunora writes the
+  `services[]` binding (`SERVICE_<KEY>`), runs it in the same `lunora dev` /
+  `vite dev` session, and deploys it before the app.
+- A bound service needs no URL, no `*_URL` var and no HMAC: set
+  `"workers_dev": false` on it (`lunora doctor` warns otherwise).
 
 ## HTTP endpoints
 
@@ -284,4 +375,6 @@ export default app;
 - [ ] `ctx.db` writes only inside mutations; ids typed with `Id<"table">`.
 - [ ] Any `ctx.db.related` walk is narrowed with `edges` / `direction`, and its
       foreign keys are indexed.
+- [ ] Writes to a module- or component-owned table go through the owner's
+      functions (`cross_module_table_write` is clean).
 - [ ] Ran `lunora codegen`; typecheck is clean.

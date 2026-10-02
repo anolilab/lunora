@@ -59,6 +59,12 @@ const reconcileBindingsSafely = async (
             logger.info?.(`${LUNORA_TAG} updated bindings → ${reconciled.updated.join(", ")} (written to ${target})`);
         }
 
+        if (reconciled.devConfig !== undefined) {
+            const { added, path, updated } = reconciled.devConfig;
+
+            logger.info?.(`${LUNORA_TAG} dev sidecar bindings → ${[...added, ...updated].join(", ")} (written to ${path})`);
+        }
+
         for (const warning of reconciled.warnings) {
             logger.warn(`${LUNORA_TAG} ${warning}`);
         }

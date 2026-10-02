@@ -1,3 +1,45 @@
+## @lunora/replica [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.141...@lunora/replica@1.0.0-alpha.142) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.167
+
+## @lunora/replica [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.140...@lunora/replica@1.0.0-alpha.141) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.166
+
+## @lunora/replica [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.139...@lunora/replica@1.0.0-alpha.140) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.165
+
+## @lunora/replica [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.138...@lunora/replica@1.0.0-alpha.139) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.164
+
+## @lunora/replica [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.137...@lunora/replica@1.0.0-alpha.138) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.163
+
+## @lunora/replica [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.136...@lunora/replica@1.0.0-alpha.137) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.162
+
 ## @lunora/replica [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/replica@1.0.0-alpha.135...@lunora/replica@1.0.0-alpha.136) (2026-09-30)
 
 

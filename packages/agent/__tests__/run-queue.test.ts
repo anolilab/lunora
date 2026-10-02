@@ -368,7 +368,7 @@ describe("agent loop — a handoff whose reply was lost", () => {
 
         const options = {
             agent: defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }),
-            env: { AGENT_SUPPORT: binding },
+            env: { SupportAgentWorkflow: binding },
             exportName: "support",
             // One scripted turn for BOTH activations: a replay that re-ran the
             // model instead of reading the journal exhausts it and throws.

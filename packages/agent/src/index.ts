@@ -17,7 +17,7 @@ export { jsCodeTool } from "./js-code-tool";
 export type { McpCallResult, McpClientLike, McpContentPart, McpToolInfo, McpToolsOptions } from "./mcp";
 export { adaptMcpResult, mcpTools } from "./mcp";
 export { buildModelMessages } from "./model-messages";
-export { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "./naming";
+export { agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "./naming";
 export { AGENT_MODULE, DEFAULT_AGENT_FUNCTION_PATHS, SANDBOX_INVOKE_PATH, SANDBOX_MODULE, toFunctionReference } from "./paths";
 export type {
     BrowserRenderResult,

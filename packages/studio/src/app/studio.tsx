@@ -89,6 +89,7 @@ const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-ad
 const AgentsPanel = lazy(() => import("../features/agents/agents-panel"));
 const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
 const ApiTab = lazy(() => import("../features/api/api-tab"));
+const ArchitecturePanel = lazy(() => import("../features/architecture/architecture-panel"));
 const AuthAuditPanel = lazy(() => import("../features/auth/auth-audit-panel"));
 const AuthConfigPanel = lazy(() => import("../features/auth/auth-config-panel"));
 const AuthSessionsPanel = lazy(() => import("../features/auth/auth-sessions-panel"));
@@ -311,6 +312,7 @@ const StudioChromeContext = createContext<StudioChrome | null>(null);
 const TAB_ICONS: Record<StudioTab, ReactNode> = {
     analytics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     api: <path d="m9 8-4 4 4 4m6-8 4 4-4 4M13 5l-2 14" />,
+    architecture: <path d="M4 4h6v5H4V4Zm10 0h6v5h-6V4ZM9 15h6v5H9v-5ZM7 9v3h10V9M12 12v3" />,
     audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
     authAudit: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8h6m-6 3h6" />,
     authConfig: (
@@ -382,7 +384,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
-    { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues"] },
+    { key: "functions", tabs: ["functions", "api", "architecture", "workflows", "agents", "queues"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authAudit", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
     {
@@ -441,6 +443,7 @@ const TABS = exhaustiveRouteTabs([
     "sql",
     "functions",
     "api",
+    "architecture",
     "workflows",
     "agents",
     "queues",
@@ -1056,6 +1059,7 @@ const buildRouter = ({
         agents: <AgentsPanel initialShardKey={initialShardKey} />,
         analytics: <AnalyticsPanel runQuery={analyticsQuery} />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
+        architecture: <ArchitecturePanel />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         authAudit: <AuthAuditPanel />,
         authConfig: <AuthConfigPanel />,

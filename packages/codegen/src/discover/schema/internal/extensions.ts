@@ -137,7 +137,7 @@ const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<st
  * API (they resolve by `{op, field?, where?}`), so there is nothing to rewrite
  * here — unlike the runtime, which additionally rewrites their `on` fields.
  */
-const namespaceExtensionTable = (table: TableIR, key: string, bareNames: ReadonlySet<string>): TableIR => {
+const namespaceExtensionTable = (table: TableIR, key: string, bareNames: ReadonlySet<string>, fromPackage: boolean): TableIR => {
     const ownPrefixed = prefixTableName(key, table.name);
 
     return {
@@ -145,6 +145,9 @@ const namespaceExtensionTable = (table: TableIR, key: string, bareNames: Readonl
         // Provenance for the generated `AppTableName` union — this table came from
         // an add-on, not from the app's own `defineSchema`.
         extensionKey: key,
+        // A package component ships its code in `node_modules`; only a copy-in
+        // (registry item) has code under `lunora/<key>/` for its module to own.
+        ...(fromPackage ? { extensionFromPackage: true as const } : {}),
         name: ownPrefixed,
         relations: table.relations.map((relation) => {
             return { ...relation, table: rewriteReference(relation.table, key, bareNames) };
@@ -398,6 +401,7 @@ const namespaceExtension = (
     bareTables: ReadonlyArray<TableIR>,
     bareVectorIndexes: ReadonlyArray<VectorIndexIR>,
     node: TsNode,
+    fromPackage: boolean,
 ): MergedExtension => {
     // The KEY is checked here because both paths reach the prefixing through
     // here and NEITHER checked it — an unchecked key ends up spliced into a
@@ -409,7 +413,7 @@ const namespaceExtension = (
     assertExtensionKeyAllowed(key, node);
 
     const bareNames = new Set(bareTables.map((table) => table.name));
-    const tables = bareTables.map((table) => namespaceExtensionTable(table, key, bareNames));
+    const tables = bareTables.map((table) => namespaceExtensionTable(table, key, bareNames, fromPackage));
 
     // Standalone vector indexes carry their own bare map key plus a `table`
     // reference; prefix both, matching the runtime merge.
@@ -422,7 +426,13 @@ const namespaceExtension = (
 
 /** Apply runtime namespacing to one AST-resolved `defineSchemaExtension(...)` options object. */
 const mergeExtension = (key: string, keyNode: TsNode, options: ObjectLiteralExpression): MergedExtension =>
-    namespaceExtension(key, parseExtensionTables(options), parseExtensionVectorIndexes(options), keyNode);
+    namespaceExtension(
+        key,
+        parseExtensionTables(options),
+        parseExtensionVectorIndexes(options),
+        keyNode,
+        keyNode.getSourceFile().getFilePath().includes("/node_modules/"),
+    );
 
 /**
  * Resolve + merge one `.extend(...)` call into a {@link MergedExtension}, or
@@ -461,7 +471,7 @@ const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undef
                     assertTableNameAllowed(table.name, extendArgument);
                 }
 
-                return namespaceExtension(fromPackage.key, fromPackage.bareTables, fromPackage.bareVectorIndexes, extendArgument);
+                return namespaceExtension(fromPackage.key, fromPackage.bareTables, fromPackage.bareVectorIndexes, extendArgument, true);
             }
         }
 

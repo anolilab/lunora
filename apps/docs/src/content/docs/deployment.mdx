@@ -425,6 +425,43 @@ bind the namespace:
 
 Both `binding` and `namespace` are required on each entry.
 
+### Media, Stream, Workers VPC, and Artifacts
+
+Lunora has no `ctx.*` surface for these bindings. Read them off `env` in your own
+code. The validator checks their shape, and `lunora build --emit-bindings`
+lists them:
+
+```jsonc
+{
+    // ...
+    "media": { "binding": "MEDIA" },
+    "stream": { "binding": "STREAM" },
+    "vpc_services": [{ "binding": "PRIVATE_API", "service_id": "<service-id>" }],
+    "vpc_networks": [{ "binding": "MESH", "network_id": "cf1:network" }],
+    "artifacts": [{ "binding": "ARTIFACTS", "namespace": "default" }],
+}
+```
+
+A `vpc_networks` entry needs exactly one of `tunnel_id` (a Cloudflare Tunnel)
+or `network_id` (`"cf1:network"` for Cloudflare Mesh). A `vpc_services` entry
+needs a `service_id`, and an `artifacts` entry needs a `namespace`.
+
+### Required secrets
+
+`secrets.required` declares the secret names your Worker needs:
+
+```jsonc
+{
+    // ...
+    "secrets": { "required": ["API_KEY", "LUNORA_ADMIN_TOKEN"] },
+}
+```
+
+Once this list exists, `wrangler dev` loads **only** the listed keys from
+`.dev.vars`, and `wrangler deploy` fails while one of them is unset. So when the
+list leaves out a secret that one of your Lunora packages needs (for example
+`LUNORA_ADMIN_TOKEN` or `AUTH_SECRET`), the dev server warns and names it.
+
 ### Static assets
 
 Lunora deploys as a single Worker, so the conventional way to serve your Vite

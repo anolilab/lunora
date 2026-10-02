@@ -11,6 +11,7 @@ type StudioTab =
     | "agents"
     | "analytics"
     | "api"
+    | "architecture"
     | "audit"
     | "authAudit"
     | "authConfig"

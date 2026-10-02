@@ -665,13 +665,12 @@ interface ReactorsResult {
  * for the studio's Workflows page. Statically discovered by `@lunora/codegen`
  * from `lunora/workflows.ts` (the codegen subclass overrides the base hook);
  * workflows are not Durable Objects and carry no runtime state in the shard, so
- * this is pure declaration metadata. `name` is the deployed `workflows[].name`,
- * `binding` the generated `WORKFLOW_*` env binding, `className` the generated
- * `WorkflowEntrypoint` subclass, and `exportName` the `lunora/workflows.ts`
+ * this is pure declaration metadata. `name` is the deployed workflow name,
+ * `className` the generated `WorkflowEntrypoint` subclass (its `ctx.exports`
+ * key), and `exportName` the `lunora/workflows.ts`
  * export the handle is addressed by (`ctx.workflows.get("exportName")`).
  */
 interface WorkflowMetadata {
-    binding: string;
     className: string;
     exportName: string;
     name: string;
@@ -699,6 +698,8 @@ interface QueueMetadata {
     exportName: string;
     mode: "pull" | "push";
     name: string;
+    /** Set for a `defineSubscription` queue: the topic export it consumes. */
+    topic?: string;
 }
 
 /** Payload of a `__lunora_admin__:listQueues` call: every declared queue, sorted by export name. */

@@ -317,4 +317,4 @@ const superviseWorkers = async (worker: WorkerProcess, sidecar: WorkerProcess | 
 };
 
 export type { Teardown };
-export { defaultWorkerSpawner, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt };
+export { defaultWorkerSpawner, emitChildLine, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt };

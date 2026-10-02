@@ -4,13 +4,14 @@
  * server on the projected wrangler config as the worker.
  */
 import type { DeployDriver } from "@lunora/config";
-import { planToolchainInvocation, targetRunsOwnDevServer } from "@lunora/config";
+import { planToolchainInvocation, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
 
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { DevFlavor } from "./lifecycle";
 import { codegenRequested } from "./lifecycle";
-import type { DevCommandOptions, DevCommandPlan } from "./types";
+import { emitChildLine } from "./supervise";
+import type { DevCommandOptions, DevCommandPlan, WorkerProcess } from "./types";
 
 /**
  * The flavor `lunora dev` actually runs for `target`.
@@ -31,6 +32,44 @@ const resolveTargetFlavor = (target: string, detected: DevFlavor, logger: Logger
     }
 
     return "wrangler";
+};
+
+/**
+ * The worker for `lunora dev --target celld`: a celld dev session
+ * (`@lunora/config`), the same one `@lunora/vite` and `@lunora/rspack/rsbuild`
+ * run. It registers each `lunora.config` service (plan 457) in the local state
+ * before the app, and re-registers a service and restarts the app when a file
+ * under its folder changes. Wrapped as a {@link WorkerProcess} so the dev
+ * supervisor stops it like any other worker.
+ */
+const startCelldWorker = async (inputs: { logger: Logger; port: number; projectRoot: string; start?: typeof startCelldDevSession }): Promise<WorkerProcess> => {
+    const { logger } = inputs;
+    const session = await (inputs.start ?? startCelldDevSession)({
+        log: (line, { stream, tag }) => {
+            emitChildLine(line, tag, stream, logger);
+        },
+        port: inputs.port,
+        projectRoot: inputs.projectRoot,
+    });
+    let settle: (code: number) => void = () => {};
+    const exited = new Promise<number>((resolve) => {
+        settle = resolve;
+    });
+
+    return {
+        // A crash of the app's `celld dev` ends `lunora dev`, as any worker exit does.
+        exited: Promise.race([exited, session.exited]),
+        kill: () => {
+            session
+                .stop()
+                .then(
+                    () => 0,
+                    () => 1,
+                )
+                .then(settle)
+                .catch(() => undefined);
+        },
+    };
 };
 
 /**
@@ -80,6 +119,9 @@ const planOwnDevServer = (inputs: {
         ipv4LoopbackForced: false,
         remote: { bindings: [], cleanup: () => {}, enabled: false },
         runsCodegenWatch: codegenRequested(options),
+        // Run as a dev session (services registered first, restarted on edit);
+        // `wrangler` below then only names the worker in the banner.
+        celldSession: true,
         studioEnabled: options.studio !== false,
         studioPort,
         workerEnabled: options.worker !== false,
@@ -89,4 +131,4 @@ const planOwnDevServer = (inputs: {
     };
 };
 
-export { planOwnDevServer, resolveTargetFlavor };
+export { planOwnDevServer, resolveTargetFlavor, startCelldWorker };

@@ -3,22 +3,21 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "../argument-taint";
 import type { PrivilegedDispatchIR } from "../ir";
-import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, functionReferenceSegments, listLunoraSourceFiles, lunoraRelativePath, RUN_METHODS } from "./ast";
 
 /**
- * The privileged-dispatch handler factories. A `defineQueue` push handler and a
- * `defineWorkflow` handler both run under the **system identity** (RLS
- * disabled) — a `ctx.run`/`context.run` back into a Lunora function from inside
- * one skips every end-user row policy. Matched by callee *name* (the
- * `import`-agnostic, fail-closed convention the other feeders use).
+ * The privileged-dispatch handler factories, mapped to the index of their config
+ * argument. A `defineQueue` / `defineSubscription` push handler and a
+ * `defineWorkflow` handler all run under the **system identity** (RLS disabled) —
+ * a `ctx.run`/`context.run` back into a Lunora function from inside one skips
+ * every end-user row policy. Matched by callee *name* (the `import`-agnostic,
+ * fail-closed convention the other feeders use).
  */
-const HANDLER_FACTORIES = new Set(["defineQueue", "defineWorkflow"]);
-
-/** The dispatch methods on the handler's context param that call back into a Lunora function. */
-const DISPATCH_METHODS = new Set(["run", "runAction", "runMutation", "runQuery"]);
-
-/** The `FunctionReference` root namespaces codegen emits (`api.<file>.<export>` / `internal.<file>.<export>`). */
-const REFERENCE_ROOTS = new Set(["api", "internal"]);
+const HANDLER_FACTORIES = new Map([
+    ["defineQueue", 0],
+    ["defineSubscription", 1],
+    ["defineWorkflow", 0],
+]);
 
 type HandlerFunction = ArrowFunction | FunctionExpression;
 
@@ -36,9 +35,9 @@ const bareCalleeName = (call: CallExpression): string | undefined => {
     return Node.isIdentifier(expression) ? expression.getText() : undefined;
 };
 
-/** The `handler` property's arrow/function expression on a `defineQueue`/`defineWorkflow` config literal, or `undefined`. */
-const handlerFunctionOf = (call: CallExpression): HandlerFunction | undefined => {
-    const config = call.getArguments()[0];
+/** The `handler` property's arrow/function expression on a handler factory's config literal (argument `configIndex`), or `undefined`. */
+const handlerFunctionOf = (call: CallExpression, configIndex: number): HandlerFunction | undefined => {
+    const config = call.getArguments()[configIndex];
 
     if (!config || !Node.isObjectLiteralExpression(config)) {
         return undefined;
@@ -225,25 +224,9 @@ const argumentsReferencePayload = (argsNode: TsNode, payload: { names: Set<strin
  * skipped fail-closed).
  */
 const resolveTarget = (node: TsNode | undefined): { exportName: string; file: string } | undefined => {
-    if (node === undefined || !Node.isPropertyAccessExpression(node)) {
-        return undefined;
-    }
+    const segments = functionReferenceSegments(node);
 
-    const segments: string[] = [];
-    let current: TsNode = node;
-
-    while (Node.isPropertyAccessExpression(current)) {
-        segments.unshift(current.getName());
-        current = current.getExpression();
-    }
-
-    const exportName = segments.at(-1);
-
-    if (exportName === undefined || !Node.isIdentifier(current) || !REFERENCE_ROOTS.has(current.getText()) || segments.length < 2) {
-        return undefined;
-    }
-
-    return { exportName, file: segments.slice(0, -1).join("/") };
+    return segments === undefined ? undefined : { exportName: String(segments.at(-1)), file: segments.slice(0, -1).join("/") };
 };
 
 /** Payload-derived privileged dispatches inside one handler. */
@@ -255,16 +238,18 @@ const dispatchesInHandler = (handler: HandlerFunction, kind: "queue" | "workflow
     }
 
     const payload = collectPayload(handler, kind, contextParameter);
+    // `ctx.run(...)`, plus a queue's `message.run(...)` — the message-pinned form the
+    // docs recommend, dispatching under the same system identity.
+    const receivers = new Set([
+        contextParameter,
+        ...payload.prefixes.filter((prefix) => prefix.endsWith(".body")).map((prefix) => prefix.slice(0, -".body".length)),
+    ]);
     const found: PrivilegedDispatchIR[] = [];
 
     for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
         const receiver = call.getExpression();
 
-        if (
-            !Node.isPropertyAccessExpression(receiver) ||
-            !DISPATCH_METHODS.has(receiver.getName()) ||
-            receiver.getExpression().getText() !== contextParameter
-        ) {
+        if (!Node.isPropertyAccessExpression(receiver) || !RUN_METHODS.has(receiver.getName()) || !receivers.has(receiver.getExpression().getText())) {
             continue;
         }
 
@@ -300,17 +285,20 @@ const dispatchesInSourceFile = (sourceFile: SourceFile, relativePath: string): P
     for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
         const name = bareCalleeName(call);
 
-        if (name === undefined || !HANDLER_FACTORIES.has(name)) {
+        const configIndex = name === undefined ? undefined : HANDLER_FACTORIES.get(name);
+
+        if (configIndex === undefined) {
             continue;
         }
 
-        const handler = handlerFunctionOf(call);
+        const handler = handlerFunctionOf(call, configIndex);
 
         if (handler === undefined) {
             continue;
         }
 
-        found.push(...dispatchesInHandler(handler, name === "defineQueue" ? "queue" : "workflow", relativePath));
+        // A subscription is a queue: same batch-shaped handler, same payload taint.
+        found.push(...dispatchesInHandler(handler, name === "defineWorkflow" ? "workflow" : "queue", relativePath));
     }
 
     return found;

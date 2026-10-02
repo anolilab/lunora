@@ -1,6 +1,7 @@
 import type { QueuesResult, WorkflowsResult } from "@lunora/shard-engine";
 
-import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, WorkflowIR } from "../ir";
+import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
+import { subscriptionsOf } from "../ir";
 import renderJsonData from "../json-data";
 import { emitAiFragments, renderThrowingStub } from "./shard-bindings";
 import { assertIdentifier, GENERATED_HEADER } from "./shared";
@@ -85,7 +86,9 @@ const emitContainerFragments = (
 
     const specEntries = containers
         .map((container) => {
-            const maxInstances = container.maxInstances === undefined ? "" : `, maxInstances: ${String(container.maxInstances)}`;
+            // The `.any()` pool size; a `durable_object` container has no cap to size it by.
+            const maxInstances =
+                container.schedulingPolicy !== undefined || container.maxInstances === undefined ? "" : `, maxInstances: ${String(container.maxInstances)}`;
 
             return `    { binding: "${container.bindingName}", exportName: "${container.exportName}"${maxInstances} },`;
         })
@@ -136,7 +139,7 @@ const emitWorkflows = (workflows: ReadonlyArray<WorkflowIR>): string => {
             assertIdentifier(workflow.exportName, `workflow export "${workflow.exportName}"`);
             assertIdentifier(workflow.className, `workflow class "${workflow.className}"`);
 
-            return `/** WorkflowEntrypoint for the \`${workflow.exportName}\` definition (binding \`${workflow.bindingName}\`). */
+            return `/** WorkflowEntrypoint for the \`${workflow.exportName}\` definition, reached as \`ctx.exports.${workflow.className}\`. */
 export class ${workflow.className} extends LunoraWorkflow<WorkflowParamsOf<typeof ${workflow.exportName}>, WorkflowOutputOf<typeof ${workflow.exportName}>> {
     public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
         super(ctx, env, ${workflow.exportName}, "${workflow.exportName}");
@@ -195,7 +198,7 @@ const emitAgents = (agents: ReadonlyArray<AgentIR>): string => {
             assertIdentifier(agent.exportName, `agent export "${agent.exportName}"`);
             assertIdentifier(agent.className, `agent class "${agent.className}"`);
 
-            const workflowClass = `/** WorkflowEntrypoint for the \`${agent.exportName}\` agent (binding \`${agent.bindingName}\`). */
+            const workflowClass = `/** WorkflowEntrypoint for the \`${agent.exportName}\` agent, reached as \`ctx.exports.${agent.className}\`. */
 export class ${agent.className} extends LunoraWorkflow<AgentRunInput, AgentRunResult> {
     public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
         super(ctx, env, compileAgentWorkflow(${agent.exportName}, "${agent.exportName}"), "${agent.exportName}");
@@ -301,9 +304,9 @@ ${entries}
  * The `ctx.workflows` code fragments woven into the generated ShardDO, or empty
  * strings when the project declares no workflows. Mirrors
  * {@link emitContainerFragments}: the spec list is emitted as a
- * `LUNORA_WORKFLOWS` const and handed to `createWorkflowContext`, which resolves
- * the `WORKFLOW_*` bindings off `env` lazily (a missing binding only throws when
- * the handle is used).
+ * `LUNORA_WORKFLOWS` const and handed to `createWorkflowContext` with the shard
+ * DO's `ctx.exports`, which resolves each workflow by its class name lazily (a
+ * missing one only throws when the handle is used).
  */
 const emitWorkflowFragments = (workflows: ReadonlyArray<WorkflowIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
     if (workflows.length === 0) {
@@ -312,14 +315,14 @@ const emitWorkflowFragments = (workflows: ReadonlyArray<WorkflowIR>): { build: s
 
     for (const workflow of workflows) {
         assertIdentifier(workflow.exportName, `workflow export "${workflow.exportName}"`);
-        assertIdentifier(workflow.bindingName, `workflow binding "${workflow.bindingName}"`);
+        assertIdentifier(workflow.className, `workflow class "${workflow.className}"`);
     }
 
-    const specEntries = workflows.map((workflow) => `    { binding: "${workflow.bindingName}", exportName: "${workflow.exportName}" },`).join("\n");
+    const specEntries = workflows.map((workflow) => `    { className: "${workflow.className}", exportName: "${workflow.exportName}" },`).join("\n");
 
     return {
         build: `
-            const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS);
+            const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS, this.state.exports);
 `,
         contextField: `\n                workflows,`,
         importLines: [`import type { WorkflowBindingSpec } from "@lunora/workflow";`, `import { createWorkflowContext } from "@lunora/workflow";`],
@@ -335,11 +338,12 @@ ${specEntries}
 
 /**
  * The `ctx.queues` producer fragments, mirroring {@link emitWorkflowFragments}.
- * Every declared queue (push or pull) gets a producer binding, so all of them
- * land in `LUNORA_QUEUES` and are resolved off `env` by `createQueueContext`.
- * `ctx.queues` rides Mutation + Action contexts (enqueue is a side effect — the
- * type omits it from QueryCtx), but at runtime it is woven onto the shared ctx
- * literal exactly like `ctx.workflows`.
+ * Every queue passed here (push or pull) gets a producer binding, so all of them
+ * land in `LUNORA_QUEUES` and are resolved off `env` by `createQueueContext`. The
+ * caller passes `plainQueues(queues)`: a topic subscription is published to only
+ * through `ctx.topics` ({@link emitTopicFragments}). `ctx.queues` rides Mutation +
+ * Action contexts (enqueue is a side effect — the type omits it from QueryCtx),
+ * but at runtime it is woven onto the shared ctx literal exactly like `ctx.workflows`.
  */
 const emitQueueFragments = (queues: ReadonlyArray<QueueIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
     if (queues.length === 0) {
@@ -372,8 +376,83 @@ ${specEntries}
 };
 
 /**
+ * The `ctx.topics` publisher fragments, mirroring {@link emitQueueFragments}: one
+ * `LUNORA_TOPICS` spec per topic, listing the binding of every subscription queue
+ * a publish fans out to. Same contexts as `ctx.queues`.
+ */
+const emitTopicFragments = (
+    topics: ReadonlyArray<TopicIR>,
+    queues: ReadonlyArray<QueueIR>,
+): { build: string; contextField: string; importLines: string[]; specs: string } => {
+    if (topics.length === 0) {
+        return { build: "", contextField: "", importLines: [], specs: "" };
+    }
+
+    const specEntries = topics
+        .map((topic) => {
+            assertIdentifier(topic.exportName, `topic export "${topic.exportName}"`);
+
+            const subscriptions = subscriptionsOf(queues, topic.exportName)
+                .map((queue) => `{ binding: "${queue.bindingName}", exportName: "${queue.exportName}" }`)
+                .join(", ");
+
+            return `    { exportName: "${topic.exportName}", subscriptions: [${subscriptions}] },`;
+        })
+        .join("\n");
+
+    return {
+        build: `
+            const topics = createTopicContext(env, LUNORA_TOPICS);
+`,
+        contextField: `\n                topics,`,
+        importLines: [`import type { TopicBindingSpec } from "@lunora/queue";`, `import { createTopicContext } from "@lunora/queue";`],
+        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
+        specs: `
+/** Wiring specs for \`ctx.topics\` (codegen-derived from \`lunora/queues.ts\`): each topic's subscription queues. */
+const LUNORA_TOPICS: ReadonlyArray<TopicBindingSpec> = [
+${specEntries}
+];
+`,
+    };
+};
+
+/**
+ * The `ctx.services` fragments (plan 457): a `LUNORA_SERVICES` spec list and the
+ * `createServices` build, woven onto the action ctx only — a cross-Worker call
+ * is non-deterministic I/O, the same reason `ctx.browser` is action-only.
+ */
+const emitServiceFragments = (services: ReadonlyArray<ServiceBindingIR>, serverSpecifier: string): { build: string; importLines: string[]; specs: string } => {
+    if (services.length === 0) {
+        return { build: "", importLines: [], specs: "" };
+    }
+
+    const specEntries = services
+        .map((service) => {
+            assertIdentifier(service.name, `service "${service.name}"`);
+            assertIdentifier(service.binding, `service binding "${service.binding}"`);
+
+            return `    { binding: "${service.binding}", name: "${service.name}"${service.entrypoint === undefined ? "" : ", rpc: true"} },`;
+        })
+        .join("\n");
+
+    return {
+        build: `
+            const services = createServices(env, LUNORA_SERVICES);
+`,
+        importLines: [`import type { ServiceBindingSpec } from "${serverSpecifier}";`, `import { createServices } from "${serverSpecifier}";`],
+        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
+        specs: `
+/** Wiring specs for \`ctx.services\` (codegen-derived from \`lunora.config\` \`services\`). */
+const LUNORA_SERVICES: ReadonlyArray<ServiceBindingSpec> = [
+${specEntries}
+];
+`,
+    };
+};
+
+/**
  * The `ctx.agents` producer fragments, mirroring {@link emitQueueFragments}.
- * Every declared agent resolves its `AGENT_*` Workflow binding off `env` lazily
+ * Every declared agent resolves off the shard DO's `ctx.exports` lazily
  * (via `createAgentContext`), so a missing binding only throws when that agent
  * is actually started. `ctx.agents` rides Mutation + Action contexts (starting a
  * run is a side effect — the type omits it from QueryCtx), but at runtime it is
@@ -386,16 +465,16 @@ const emitAgentFragments = (agents: ReadonlyArray<AgentIR>): { build: string; co
 
     for (const agent of agents) {
         assertIdentifier(agent.exportName, `agent export "${agent.exportName}"`);
-        assertIdentifier(agent.bindingName, `agent binding "${agent.bindingName}"`);
+        assertIdentifier(agent.className, `agent class "${agent.className}"`);
     }
 
     const specEntries = agents
-        .map((agent) => `    { binding: "${agent.bindingName}", exportName: "${agent.exportName}"${agent.publicRun === true ? ", publicRun: true" : ""} },`)
+        .map((agent) => `    { className: "${agent.className}", exportName: "${agent.exportName}"${agent.publicRun === true ? ", publicRun: true" : ""} },`)
         .join("\n");
 
     return {
         build: `
-            const agents = createAgentContext(env, LUNORA_AGENTS);
+            const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });
 `,
         contextField: `\n                agents,`,
         importLines: [`import { createAgentContext } from "@lunora/agent";`, `import type { AgentBindingSpec } from "@lunora/agent";`],
@@ -444,7 +523,6 @@ const emitWorkflowsMetadataFragments = (workflows: ReadonlyArray<WorkflowIR>): {
     const metadata: WorkflowsResult = {
         workflows: workflows.map((workflow) => {
             return {
-                binding: workflow.bindingName,
                 className: workflow.className,
                 exportName: workflow.exportName,
                 name: workflow.name,
@@ -482,6 +560,7 @@ const emitQueuesMetadataFragments = (queues: ReadonlyArray<QueueIR>): { constant
                 exportName: queue.exportName,
                 mode: queue.mode,
                 name: queue.name,
+                ...(queue.topic === undefined ? {} : { topic: queue.topic }),
             };
         }),
     };
@@ -641,6 +720,8 @@ export {
     emitQueueFragments,
     emitQueues,
     emitQueuesMetadataFragments,
+    emitServiceFragments,
+    emitTopicFragments,
     emitWorkflowFragments,
     emitWorkflows,
     emitWorkflowsMetadataFragments,

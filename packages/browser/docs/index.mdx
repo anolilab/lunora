@@ -1,9 +1,9 @@
 ---
 title: "@lunora/browser"
-description: Cloudflare Browser Rendering for Lunora — ctx.browser (action-only) for headless screenshots, PDFs, HTML scraping, and arbitrary page evaluation.
+description: Cloudflare Browser Run for Lunora — ctx.browser (action-only) for headless screenshots, PDFs, HTML scraping, and arbitrary page evaluation.
 ---
 
-`@lunora/browser` provides a `ctx.browser` helper for Cloudflare Browser Rendering. It is **action-only**: browser navigation is non-deterministic network I/O, so codegen wires it onto `ActionCtx` exclusively, the same class as `ctx.ai` / `ctx.fetch`. A `ctx.browser` call in a query or mutation is a type error.
+`@lunora/browser` provides a `ctx.browser` helper for Cloudflare Browser Run (formerly Browser Rendering). It is **action-only**: browser navigation is non-deterministic network I/O, so codegen wires it onto `ActionCtx` exclusively, the same class as `ctx.ai` / `ctx.fetch`. A `ctx.browser` call in a query or mutation is a type error.
 
 `@cloudflare/playwright` is an optional peer dependency (the chromium-protocol shim). Install both:
 
@@ -75,24 +75,62 @@ const title = await browser.scrape("https://example.com", () => document.title);
 
 ### `createBrowser(options)`
 
-| Option                | Type                 | Notes                                                                                                                                          |
-| --------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `binding`             | `BrowserBindingLike` | `env.BROWSER`, the Browser Rendering binding. Required.                                                                                        |
-| `launch`              | `BrowserLaunchLike`  | `import { launch } from "@cloudflare/playwright"`. Required — YOU pass it; codegen never injects the optional peer.                            |
-| `timeoutMs`           | `number`             | Factory-level navigation timeout (ms). Clamped to 120 000. Default 30 000.                                                                     |
-| `allowPrivateTargets` | `boolean`            | Opt in to navigating private/internal hosts (loopback, RFC1918, link-local). Default false.                                                    |
-| `allowedHosts`        | `string[]`           | Strict host allowlist. When set, a navigation URL is refused unless its hostname exactly matches an entry; `[]` allows nothing. Default unset. |
-| `resolveDns`          | `boolean`            | Best-effort DNS-rebinding re-check over Cloudflare DoH. Defaults to true, or false when `allowedHosts` is set.                                 |
+| Option                | Type                      | Notes                                                                                                                                          |
+| --------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `binding`             | `BrowserBindingLike`      | `env.BROWSER`, the Browser Rendering binding. Required.                                                                                        |
+| `launch`              | `BrowserLaunchLike`       | `import { launch } from "@cloudflare/playwright"`. Required — YOU pass it; codegen never injects the optional peer.                            |
+| `timeoutMs`           | `number`                  | Factory-level navigation timeout (ms). Clamped to 120 000. Default 30 000.                                                                     |
+| `allowPrivateTargets` | `boolean`                 | Opt in to navigating private/internal hosts (loopback, RFC1918, link-local). Default false.                                                    |
+| `allowedHosts`        | `string[]`                | Strict host allowlist. When set, a navigation URL is refused unless its hostname exactly matches an entry; `[]` allows nothing. Default unset. |
+| `resolveDns`          | `boolean`                 | Best-effort DNS-rebinding re-check over Cloudflare DoH. Defaults to true, or false when `allowedHosts` is set.                                 |
+| `connect`, `sessions` | Playwright exports        | `import { connect, sessions } from "@cloudflare/playwright"`. Required only for session reuse.                                                 |
+| `restApi`             | `{ accountId, apiToken }` | Browser Run REST API credentials. Required only for `crawl` / `crawlResult` / `cancelCrawl` (`/crawl` has no binding method).                  |
 
 ### `Browser`
 
-| Method       | Signature                                    | Notes                                                                           |
-| ------------ | -------------------------------------------- | ------------------------------------------------------------------------------- |
-| `screenshot` | `(url, options?) → Promise<Uint8Array>`      | PNG or JPEG. Options: `fullPage`, `type`, `viewport`, `timeoutMs`, `waitUntil`. |
-| `pdf`        | `(url, options?) → Promise<Uint8Array>`      | Options: `format`, `printBackground`, `viewport`, `timeoutMs`, `waitUntil`.     |
-| `content`    | `(url, options?) → Promise<string>`          | Returns the page's serialized HTML.                                             |
-| `scrape`     | `(url, fn, options?) → Promise<T>`           | Evaluates `fn` in page context; result must be serializable.                    |
-| `launch`     | `(fn: (browser) => Promise<T>) → Promise<T>` | Low-level escape hatch: runs `fn` with the raw Playwright browser.              |
+| Method        | Signature                                                   | Notes                                                                           |
+| ------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `screenshot`  | `(url, options?) → Promise<Uint8Array>`                     | PNG or JPEG. Options: `fullPage`, `type`, `viewport`, `timeoutMs`, `waitUntil`. |
+| `pdf`         | `(url, options?) → Promise<Uint8Array>`                     | Options: `format`, `printBackground`, `viewport`, `timeoutMs`, `waitUntil`.     |
+| `content`     | `(url, options?) → Promise<string>`                         | Returns the page's serialized HTML.                                             |
+| `scrape`      | `(url, fn, options?) → Promise<T>`                          | Evaluates `fn` in page context; result must be serializable.                    |
+| `launch`      | `(fn: (browser) => Promise<T>) → Promise<T>`                | Low-level escape hatch: runs `fn` with the raw Playwright browser.              |
+| `connect`     | `(sessionId, fn, { close? }) → Promise<T>`                  | Re-attach to a kept-alive session. Several workers may share one session.       |
+| `sessions`    | `() → Promise<BrowserSession[]>`                            | List live sessions.                                                             |
+| `quickAction` | `(action, url, options?) → Promise<Response>`               | One-request Browser Run Quick Action through the binding.                       |
+| `crawl`       | `(url, options?) → Promise<string>`                         | Start an async crawl; returns the job id. Needs `restApi`.                      |
+| `crawlResult` | `(jobId, { cursor?, limit?, status? }) → Promise<CrawlJob>` | Job status plus one page of records. Needs `restApi`.                           |
+| `cancelCrawl` | `(jobId) → Promise<void>`                                   | Cancel a running crawl. Needs `restApi`.                                        |
+
+### Quick Actions
+
+`quickAction` calls the binding's `quickAction()` (compatibility date `2026-03-24` or later) — no Playwright session, no `launch` needed. Actions: `accessibilityTree`, `content`, `json`, `links`, `markdown`, `pdf`, `scrape`, `screenshot`, `snapshot`. Options are forwarded as-is; the result is Browser Run's `Response` (binary for `screenshot`/`pdf`, JSON otherwise, non-2xx with an error body on failure).
+
+```ts
+const response = await ctx.browser.quickAction("snapshot", url, { formats: ["markdown", "accessibilityTree"] });
+const { result } = await response.json();
+```
+
+The `url` goes through the same guards as a navigation. Inline `html` is refused, since no URL guard could inspect what it loads. Quick Actions have no request interception or guardrails, so redirects and sub-resources are not re-checked.
+
+### Crawling
+
+`/crawl` is REST-only, so pass account credentials (an API token with Browser Rendering edit rights, kept in `.dev.vars` / `wrangler secret`):
+
+```ts
+const browser = createBrowser({ binding: env.BROWSER, launch, restApi: { accountId: env.CF_ACCOUNT_ID, apiToken: env.BROWSER_RUN_TOKEN } });
+
+const jobId = await browser.crawl("https://docs.example.com", { contentUse: "reference", formats: ["markdown"], limit: 50 });
+const job = await browser.crawlResult(jobId, { status: "completed" });
+```
+
+The crawler respects robots.txt and Content Signals; `contentUse` declares the level you need and a stricter site rejects the crawl with a 400 (surfaced as `BROWSER_RUN_ERROR`). The starting URL passes the navigation guards; with `allowedHosts` set, `options.includeExternalLinks` / `options.includeSubdomains` are refused because the crawler would leave the allowlist.
+
+Instead of polling, subscribe a Queue to crawl events (`wrangler queues subscription create <queue> --source browserRun --events crawl.started,crawl.updated,crawl.finished`) and type the consumer's messages as `BrowserRunCrawlEvent`, narrowing on `type` (`cf.browserRun.crawl.finished` carries the final counts). Events carry status only — read pages with `crawlResult`.
+
+### Sharing a session
+
+Browser Run sessions accept several connections at once. Hold a session open with `launch(fn, { keepAlive })`, then `connect(sessionId, fn)` from as many actions as you like. Open a context per caller (`browser.newContext()`) so pages and cookies stay apart, and close it when done. `connect(..., { close: true })` closes the browser for every connected client, so only the flow that owns the session should pass it.
 
 ### URL safety (SSRF guard)
 
@@ -102,3 +140,5 @@ A public hostname that resolves to a private/metadata IP passes the string guard
 
 - `resolveDns` is **on by default when `allowedHosts` is unset**: a DoH re-check that resolves the hostname over Cloudflare DNS and refuses if any A/AAAA record is private. Best-effort (it adds a round-trip and is TOCTOU-imperfect; it falls back to the string guard if the lookup fails). Setting `allowedHosts` turns it off by default, because the allowlist is the stronger guard and may legitimately name an internal host that a resolved-address check would refuse; pass `resolveDns: true` to run both. Set `resolveDns: false` for trusted, non-user-controlled URLs where the round-trip matters.
 - `allowedHosts: [...]` is a strict allowlist that refuses any hostname not exactly on the list (case-insensitive, trailing-dot- and IPv6-bracket-normalized). This is the only guard that _fully_ closes rebinding, so prefer it whenever you can enumerate the destinations. **`allowedHosts: []` allows nothing** — an empty list is a configured allowlist with no members, not an absent one, so every navigation is refused. Omit the option to run without an allowlist.
+
+Every browser the factory launches also receives `allowedHosts` as Browser Run session guardrails (`guardrails.allowedDomains`), so Cloudflare itself blocks off-list requests — redirects and sub-resources included, and also inside the raw `launch()` escape hatch. Guardrails accept at most 50 entries; a longer list is refused before launch.

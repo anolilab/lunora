@@ -450,7 +450,7 @@ export * from "../../lunora/_generated/workflows.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.workflows).toHaveLength(1);
-        expect(result.workflows[0]).toMatchObject({ bindingName: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exported: true });
+        expect(result.workflows[0]).toMatchObject({ className: "OrderPipelineWorkflow", exported: true });
         expect(result.signals.join(" ")).toContain('workflow "orderPipeline" declared and exported');
     });
 
@@ -533,7 +533,7 @@ export * from "../../lunora/_generated/agents.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.agents).toHaveLength(1);
-        expect(result.agents[0]).toMatchObject({ bindingName: "AGENT_SUPPORT", className: "SupportAgentWorkflow", exported: true });
+        expect(result.agents[0]).toMatchObject({ className: "SupportAgentWorkflow", exported: true });
         expect(result.signals.join(" ")).toContain('agent "support" declared and exported');
     });
 

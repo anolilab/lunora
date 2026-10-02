@@ -1,3 +1,92 @@
+## @lunora/studio [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.247...@lunora/studio@1.0.0-alpha.248) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.178
+* **@lunora/react:** upgraded to 1.0.0-alpha.175
+
+## @lunora/studio [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.246...@lunora/studio@1.0.0-alpha.247) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.177
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.89
+* **@lunora/client:** upgraded to 1.0.0-alpha.167
+* **@lunora/react:** upgraded to 1.0.0-alpha.174
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.169
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.104
+
+## @lunora/studio [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.245...@lunora/studio@1.0.0-alpha.246) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.176
+* **@lunora/client:** upgraded to 1.0.0-alpha.166
+* **@lunora/react:** upgraded to 1.0.0-alpha.173
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.168
+
+## @lunora/studio [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.244...@lunora/studio@1.0.0-alpha.245) (2026-10-01)
+
+### Features
+
+* **queue:** add pub/sub topics over cloudflare queues ([#916](https://github.com/anolilab/lunora/issues/916)) ([eba0175](https://github.com/anolilab/lunora/commit/eba0175f586e804555d0e0c485a3a93d73f15d1f))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.175
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.88
+* **@lunora/client:** upgraded to 1.0.0-alpha.165
+* **@lunora/react:** upgraded to 1.0.0-alpha.172
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.167
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.103
+
+## @lunora/studio [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.243...@lunora/studio@1.0.0-alpha.244) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.174
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.87
+* **@lunora/client:** upgraded to 1.0.0-alpha.164
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/react:** upgraded to 1.0.0-alpha.171
+* **@lunora/mail:** upgraded to 1.0.0-alpha.94
+* **@lunora/notify:** upgraded to 1.0.0-alpha.70
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.166
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.102
+
+## @lunora/studio [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.242...@lunora/studio@1.0.0-alpha.243) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.173
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.86
+* **@lunora/client:** upgraded to 1.0.0-alpha.163
+* **@lunora/react:** upgraded to 1.0.0-alpha.170
+* **@lunora/platform:** upgraded to 1.0.0-alpha.45
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.165
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.101
+
 ## @lunora/studio [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.241...@lunora/studio@1.0.0-alpha.242) (2026-09-30)
 
 ### ⚠ BREAKING CHANGES

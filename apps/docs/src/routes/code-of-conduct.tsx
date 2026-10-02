@@ -2,6 +2,7 @@ import { createCompiler } from "@fumadocs/mdx-remote";
 import { executeMdxSync } from "@fumadocs/mdx-remote/client";
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { staticFunctionMiddleware } from "@tanstack/start-static-server-functions";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 
 import ContentPage from "@/components/sections/content-page";
@@ -17,13 +18,15 @@ const compiler = createCompiler({
 
 const loader = createServerFn({
     method: "GET",
-}).handler(async () => {
-    const result = await compiler.compile({ source: codeOfConductSource });
+})
+    .middleware([staticFunctionMiddleware])
+    .handler(async () => {
+        const result = await compiler.compile({ source: codeOfConductSource });
 
-    return {
-        compiled: result.compiled,
-    };
-});
+        return {
+            compiled: result.compiled,
+        };
+    });
 
 const RouteComponent = () => {
     const { compiled } = Route.useLoaderData();

@@ -367,4 +367,58 @@ describe(resolveContainerEnvVars, () => {
 
         expect(() => resolveContainerEnvVars(definition, {}, "transcoder")).toThrow('container "transcoder": declared secret "API_KEY" is not set');
     });
+
+    describe("schedulingPolicy durable_object", () => {
+        it("accepts named images, a default image and a runtime size", () => {
+            expect.assertions(2);
+
+            const definition = defineContainer({
+                image: "base",
+                images: { base: "./container", pinned: { registry: "registry.cloudflare.com/acct/repo@sha256:abc" } },
+                instanceType: { diskMb: 8000, memoryMib: 4096, vcpu: 1 },
+                schedulingPolicy: "durable_object",
+            });
+
+            expect(definition.schedulingPolicy).toBe("durable_object");
+            expect(defineContainer({ image: "cloudflare/debian-trixie", schedulingPolicy: "durable_object" }).image).toBe("cloudflare/debian-trixie");
+        });
+
+        it("rejects a default image that names no declared or managed image", () => {
+            expect.assertions(1);
+
+            expect(() => defineContainer({ image: "gpu", images: { base: "./container" }, schedulingPolicy: "durable_object" })).toThrow(
+                /must name an entry of `images`/u,
+            );
+        });
+
+        it("rejects registry references outside the Cloudflare registry or without a digest", () => {
+            expect.assertions(2);
+
+            expect(() => defineContainer({ images: { base: { registry: "docker.io/acme/app:1" } }, schedulingPolicy: "durable_object" })).toThrow(
+                /digest-pinned \(@sha256\) reference under registry.cloudflare.com/u,
+            );
+            expect(() =>
+                defineContainer({ images: { base: { registry: "registry.cloudflare.com/acct/repo:latest" } }, schedulingPolicy: "durable_object" }),
+            ).toThrow(/digest-pinned/u);
+        });
+
+        it("rejects wrangler-only sizes and partial custom sizes", () => {
+            expect.assertions(2);
+
+            expect(() => defineContainer({ instanceType: "basic" as never, schedulingPolicy: "durable_object" })).toThrow(/not a runtime size/u);
+            expect(() => defineContainer({ instanceType: { vcpu: 1 } as never, schedulingPolicy: "durable_object" })).toThrow(
+                /positive vcpu, memoryMib and diskMb/u,
+            );
+        });
+
+        it("rejects default-policy fields, and images without the policy", () => {
+            expect.assertions(3);
+
+            expect(() => defineContainer({ maxInstances: 3, schedulingPolicy: "durable_object" } as never)).toThrow(/`maxInstances` is not supported/u);
+            expect(() => defineContainer({ rollout: { stepPercentage: 10 }, schedulingPolicy: "durable_object" } as never)).toThrow(
+                /`rollout` is not supported/u,
+            );
+            expect(() => defineContainer({ image: "./app", images: { base: "./x" } } as never)).toThrow(/`images` needs schedulingPolicy "durable_object"/u);
+        });
+    });
 });

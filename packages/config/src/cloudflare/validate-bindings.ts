@@ -4,6 +4,7 @@
  */
 
 import type { SchemaInfo } from "../schema-info";
+import { isPlainObject, settingLeaf, WORKFLOW_SETTINGS } from "./workflow-settings";
 import type { WranglerConfig, WranglerContainerEntry } from "./wrangler-config";
 
 /**
@@ -75,6 +76,29 @@ const validateInstanceType = (entry: WranglerContainerEntry, label: string, erro
     }
 };
 
+/**
+ * Validate a `durable_object`-scheduled entry: it takes named `images` (each
+ * with exactly one of `dockerfile` / `image`) instead of an application-wide
+ * `image`, and rejects the default-policy fields Cloudflare does not accept.
+ */
+const validateDurableObjectScheduledEntry = (entry: WranglerContainerEntry, label: string, errors: string[]): void => {
+    for (const field of ["image", "instance_type", "max_instances"] as const) {
+        if (entry[field] !== undefined) {
+            errors.push(
+                `${label} sets "${field}", which the durable_object scheduling policy does not take — the Durable Object picks image and size at start`,
+            );
+        }
+    }
+
+    for (const [name, image] of Object.entries(entry.images ?? {})) {
+        const sources = [image?.dockerfile, image?.image].filter((source) => typeof source === "string" && source.length > 0);
+
+        if (sources.length !== 1) {
+            errors.push(`${label} images["${name}"] must set exactly one of "dockerfile" or "image"`);
+        }
+    }
+};
+
 /** Shared lookups + sinks for one `containers[]` entry validation pass. */
 interface ContainerEntryChecks {
     boundClasses: ReadonlySet<string | undefined>;
@@ -100,7 +124,15 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
         return;
     }
 
-    if (typeof entry.image !== "string" || entry.image.length === 0) {
+    const durableObjectScheduled = entry.scheduling_policy === "durable_object";
+
+    if (entry.scheduling_policy !== undefined && entry.scheduling_policy !== "default" && !durableObjectScheduled) {
+        errors.push(`${label} ("${entry.class_name}") has unknown scheduling_policy "${entry.scheduling_policy}" — expected "default" or "durable_object"`);
+    }
+
+    if (durableObjectScheduled) {
+        validateDurableObjectScheduledEntry(entry, `${label} ("${entry.class_name}")`, errors);
+    } else if (typeof entry.image !== "string" || entry.image.length === 0) {
         errors.push(`${label} ("${entry.class_name}") must have an "image" — a Dockerfile path or a registry reference`);
     }
 
@@ -122,7 +154,9 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
 
     validateInstanceType(entry, `${label} ("${entry.class_name}")`, errors);
 
-    if (entry.max_instances === undefined) {
+    // The `durable_object` policy has no max_instances to set: its instances count
+    // against the account limit instead.
+    if (entry.max_instances === undefined && !durableObjectScheduled) {
         warnings.push(`${label} ("${entry.class_name}") declares no max_instances — set a cap so a traffic spike can't fan out unbounded container spend`);
     }
 };
@@ -326,11 +360,162 @@ const validateRequiredFieldEntries = (value: unknown, labelPrefix: string, rule:
 const WORKFLOWS_RULE: RequiredFieldsRule = {
     arrayMessage: "workflows must be an array of { name, binding, class_name } entries",
     fields: [
-        { field: "binding", message: (label) => `${label} must have a non-empty "binding" naming the Workflow binding (e.g. WORKFLOW_ORDER_PIPELINE)` },
+        { field: "binding", message: (label) => `${label} must have a non-empty "binding" naming the Workflow binding (e.g. MY_WORKFLOW)` },
         { field: "class_name", message: (label) => `${label} must have a non-empty "class_name" naming the exported WorkflowEntrypoint class` },
         { field: "name", message: (label) => `${label} must have a non-empty "name" naming the deployed workflow` },
     ],
     objectMessage: (label) => `${label} must be a { name, binding, class_name } object`,
+};
+
+/**
+ * `schedules` is a non-empty list of cron strings (the rule `defineWorkflow`
+ * and codegen apply too); an export may also give a single string.
+ */
+const schedulesProblem = (schedules: unknown, allowSingle: boolean): string | undefined => {
+    const valid =
+        schedules === undefined ||
+        (allowSingle && isNonEmptyString(schedules)) ||
+        (Array.isArray(schedules) && schedules.length > 0 && (schedules as unknown[]).every((schedule) => isNonEmptyString(schedule)));
+
+    return valid ? undefined : "schedules must be a non-empty array of cron expression strings";
+};
+
+const limitsProblem = (limits: unknown): string | undefined => {
+    if (limits === undefined) {
+        return undefined;
+    }
+
+    if (!isPlainObject(limits)) {
+        return "limits must be an object";
+    }
+
+    return limits.steps === undefined || (Number.isInteger(limits.steps) && (limits.steps as number) > 0)
+        ? undefined
+        : "limits.steps must be a positive integer";
+};
+
+const retentionProblems = (retention: unknown): string[] => {
+    if (retention === undefined) {
+        return [];
+    }
+
+    if (!isPlainObject(retention)) {
+        return ["default_retention must be an object"];
+    }
+
+    return ["success_retention", "error_retention"]
+        .filter((key) => retention[key] !== undefined && !isNonEmptyString(retention[key]))
+        .map((key) => `default_retention.${key} must be a duration string (e.g. "7 days")`);
+};
+
+/**
+ * Shape-check a workflow's deploy settings — the same three on a `workflows[]`
+ * binding and on an `exports` entry of `type: "workflow"`: `schedules` cron
+ * strings, a positive-integer `limits.steps`, string `default_retention`
+ * durations. Ranges (the 25,000-step ceiling, the plan's retention maximum)
+ * are left to wrangler.
+ */
+const validateWorkflowSettingShapes = (entry: Record<string, unknown>, label: string, allowSingleSchedule: boolean, errors: string[]): void => {
+    const problems = [schedulesProblem(entry.schedules, allowSingleSchedule), limitsProblem(entry.limits), ...retentionProblems(entry.default_retention)];
+
+    for (const problem of problems) {
+        if (problem !== undefined) {
+            errors.push(`${label}.${problem}`);
+        }
+    }
+};
+
+/** The setting leaves a binding and an export of one workflow both set, to different values. */
+const conflictingSettings = (binding: Record<string, unknown>, entry: Record<string, unknown>): string[] =>
+    WORKFLOW_SETTINGS.map(({ path }) => path)
+        .filter((path) => {
+            const fromBinding = settingLeaf(binding, path);
+            const fromExport = settingLeaf(entry, path);
+            // An export may spell a single schedule as a bare string.
+            const normalizedExport = typeof fromExport === "string" && path[0] === "schedules" ? [fromExport] : fromExport;
+
+            return fromBinding !== undefined && fromExport !== undefined && JSON.stringify(fromBinding) !== JSON.stringify(normalizedExport);
+        })
+        .map((path) => path.join("."));
+
+/**
+ * Cross-check one workflow export against the `workflows[]` bindings with the
+ * same `name` — which Cloudflare treats as the same Workflow: a same-Worker
+ * binding must name the export's class and may not set a setting to a
+ * different value; a binding to ANOTHER Worker's workflow (`script_name`) may
+ * not reuse the name at all (workflow names are unique per account).
+ */
+const validateExportAgainstBindings = (
+    className: string,
+    entry: Record<string, unknown>,
+    bindings: ReadonlyArray<Record<string, unknown> | null | undefined>,
+    errors: string[],
+): void => {
+    const label = `exports["${className}"]`;
+    const name = String(entry.name);
+
+    for (const binding of bindings) {
+        if (!isPlainObject(binding) || binding.name !== entry.name) {
+            continue;
+        }
+
+        const bindingLabel = `workflows entry "${String(binding.binding)}"`;
+
+        if (binding.script_name !== undefined) {
+            errors.push(
+                `${bindingLabel} binds workflow "${name}" in another Worker, but ${label} declares a workflow with that name here — workflow names are unique per account`,
+            );
+
+            continue;
+        }
+
+        if (binding.class_name !== className) {
+            errors.push(
+                `${bindingLabel} and ${label} both declare workflow "${name}" but name different classes ("${String(binding.class_name)}" vs "${className}")`,
+            );
+        }
+
+        for (const path of conflictingSettings(binding, entry)) {
+            errors.push(`${bindingLabel} and ${label} set ${path} to different values for workflow "${name}" — set it in one place`);
+        }
+    }
+};
+
+/**
+ * Validate the workflow deploy settings on both declaration sites, and the
+ * rules Cloudflare applies between them (Wrangler >= 4.139): an `exports`
+ * entry of `type: "workflow"` is keyed by its `WorkflowEntrypoint` class and
+ * needs a `name`, and must agree with any `workflows[]` binding of the same
+ * name ({@link validateExportAgainstBindings}).
+ *
+ * Lunora writes its own workflows as exports; a `workflows[]` binding of the
+ * same name only appears when written by hand (a test-only binding for
+ * `introspectWorkflow`, say) — which is exactly when a conflicting setting
+ * slips in.
+ */
+const validateWorkflowSettings = (wrangler: WranglerConfig, errors: string[]): void => {
+    const bindings = Array.isArray(wrangler.workflows) ? asBindingEntries(wrangler.workflows) : [];
+
+    for (const [index, entry] of bindings.entries()) {
+        if (isPlainObject(entry)) {
+            validateWorkflowSettingShapes(entry, `workflows[${String(index)}]`, false, errors);
+        }
+    }
+
+    const exported = isPlainObject(wrangler.exports) ? Object.entries(wrangler.exports) : [];
+
+    for (const [className, entry] of exported) {
+        if (!isPlainObject(entry) || entry.type !== "workflow") {
+            continue;
+        }
+
+        if (isNonEmptyString(entry.name)) {
+            validateWorkflowSettingShapes(entry, `exports["${className}"]`, true, errors);
+            validateExportAgainstBindings(className, entry, bindings, errors);
+        } else {
+            errors.push(`exports["${className}"] is a workflow export and must have a non-empty "name" naming the deployed workflow`);
+        }
+    }
 };
 
 const QUEUE_PRODUCERS_RULE: RequiredFieldsRule = {
@@ -490,6 +675,8 @@ const validateHintBinding = (wrangler: WranglerConfig, rule: (typeof HINT_BINDIN
 const SELF_DESCRIBING_BINDING_RULES = [
     { key: "browser", message: 'browser must be an object with a non-empty "binding" (e.g. { "binding": "BROWSER" })' },
     { key: "images", message: 'images must be an object with a non-empty "binding" (e.g. { "binding": "IMAGES" })' },
+    { key: "media", message: 'media must be an object with a non-empty "binding" (e.g. { "binding": "MEDIA" })' },
+    { key: "stream", message: 'stream must be an object with a non-empty "binding" (e.g. { "binding": "STREAM" })' },
 ] as const satisfies ReadonlyArray<{ key: keyof WranglerConfig; message: string }>;
 
 /**
@@ -561,6 +748,27 @@ const REQUIRED_FIELD_BINDING_RULES = [
         ],
         key: "r2_buckets",
         objectMessage: (label: string) => `${label} must be a { binding, bucket_name } object`,
+    },
+    {
+        arrayMessage: "vpc_services must be an array of { binding, service_id } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding" naming the VPC Service binding` },
+            {
+                field: "service_id",
+                message: (label: string) => `${label} must have a non-empty "service_id" (create one with \`wrangler vpc service create\`)`,
+            },
+        ],
+        key: "vpc_services",
+        objectMessage: (label: string) => `${label} must be a { binding, service_id } object`,
+    },
+    {
+        arrayMessage: "artifacts must be an array of { binding, namespace } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding" naming the Artifacts binding` },
+            { field: "namespace", message: (label: string) => `${label} must have a non-empty "namespace" naming the Artifacts namespace` },
+        ],
+        key: "artifacts",
+        objectMessage: (label: string) => `${label} must be a { binding, namespace } object`,
     },
 ] as const satisfies ReadonlyArray<RequiredFieldsRule & { key: keyof WranglerConfig }>;
 
@@ -640,6 +848,45 @@ const validateD1Databases = (wrangler: WranglerConfig, errors: string[]): void =
     }
 };
 
+/**
+ * Every `vpc_networks[]` entry: a non-empty `binding` plus exactly one target —
+ * a Cloudflare Tunnel (`tunnel_id`) or the Cloudflare Mesh network
+ * (`network_id`, `"cf1:network"`). The two are mutually exclusive, which
+ * {@link RequiredFieldsRule} cannot express, so this is hand-rolled like
+ * {@link validateD1Databases}.
+ */
+const validateVpcNetworks = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { vpc_networks: networks } = wrangler;
+
+    if (networks === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(networks)) {
+        errors.push("vpc_networks must be an array of { binding, tunnel_id | network_id } entries");
+
+        return;
+    }
+
+    for (const [index, entry] of asBindingEntries(networks).entries()) {
+        const label = `vpc_networks[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { binding, tunnel_id | network_id } object`);
+
+            continue;
+        }
+
+        if (!isNonEmptyString(entry.binding)) {
+            errors.push(`${label} must have a non-empty "binding" naming the VPC Network binding`);
+        }
+
+        if (isNonEmptyString(entry.tunnel_id) === isNonEmptyString(entry.network_id)) {
+            errors.push(`${label} must set exactly one of "tunnel_id" (a Cloudflare Tunnel) or "network_id" ("cf1:network" for Cloudflare Mesh)`);
+        }
+    }
+};
+
 // `objectBindingEntries` / `stringEntries` are exported for `reconcile-bindings`,
 // which replays the same hand-edited `migrations` list this validator folds and
 // hit the same raw `TypeError` on a `null` entry. Package-internal only — the
@@ -661,5 +908,7 @@ export {
     validateRequiredFieldEntries,
     validateSelfDescribingBinding,
     validateVectorizeBindings,
+    validateVpcNetworks,
+    validateWorkflowSettings,
     WORKFLOWS_RULE,
 };

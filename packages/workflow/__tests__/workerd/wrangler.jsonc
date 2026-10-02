@@ -15,6 +15,10 @@
         { "name": "timed-decline-workflow", "binding": "WORKFLOW_TIMED_DECLINE", "class_name": "TimedDeclineWorkflow" },
         { "name": "rollback-config-workflow", "binding": "WORKFLOW_ROLLBACK_CONFIG", "class_name": "RollbackConfigWorkflow" },
     ],
+    // `SmokeWorkflow` is ALSO declared as an export under the binding's `name`, so
+    // the two share instances: a create through `ctx.exports` (the shape codegen
+    // emits) can be introspected through the binding, which introspection needs.
+    "exports": { "SmokeWorkflow": { "type": "workflow", "name": "smoke-workflow" } },
     // `ctx.run` dispatches to this origin; the test worker answers it in-process
     // (see `originFetch` in test-worker.ts), so no network is involved.
     "vars": { "LUNORA_ADMIN_TOKEN": "test-token", "LUNORA_ORIGIN_URL": "https://origin.test" },

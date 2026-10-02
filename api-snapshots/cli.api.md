@@ -134,6 +134,7 @@ interface DeployCommandOptions {
     secretConfirm?: (message: string) => Promise<boolean>;
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
+    skipServices?: boolean;
     spawner?: Spawner;
     strictAdvisories?: boolean;
     target?: string;
@@ -202,6 +203,7 @@ interface DevCommandOptions {
     port?: number;
     probeReady?: ReadinessProbe;
     remote?: boolean;
+    startCelldSession?: typeof startCelldDevSession;
     startCodegen?: typeof startCodegenWatch;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
@@ -217,6 +219,7 @@ interface DevCommandOptions {
 
 ```ts
 interface DevCommandPlan {
+    celldSession?: true;
     flavor: DevFlavor;
     frameworkHint?: string;
     ipv4LoopbackForced: boolean;

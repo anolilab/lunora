@@ -1,0 +1,8 @@
+{
+    "name": "lunora-example-services-gateway",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    // Only the app reaches this Worker, through its service binding.
+    "workers_dev": false,
+    "vars": { "VERB": "completed" },
+}

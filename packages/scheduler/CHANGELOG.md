@@ -1,3 +1,36 @@
+## @lunora/scheduler [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.101...@lunora/scheduler@1.0.0-alpha.102) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+
+## @lunora/scheduler [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.100...@lunora/scheduler@1.0.0-alpha.101) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+
+## @lunora/scheduler [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.99...@lunora/scheduler@1.0.0-alpha.100) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+
+## @lunora/scheduler [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.98...@lunora/scheduler@1.0.0-alpha.99) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.45
+
 ## @lunora/scheduler [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.97...@lunora/scheduler@1.0.0-alpha.98) (2026-09-30)
 
 

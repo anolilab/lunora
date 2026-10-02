@@ -1,8 +1,9 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
+        // No outDir/rootDir: `cross_module_table_write` inlines
+        // `shared/architecture-manifest.ts`, and a set rootDir raises TS6059 for that
+        // out-of-package file under `tsc --noEmit`. The real build is packem.
         "moduleResolution": "bundler",
         "types": ["node"]
     },

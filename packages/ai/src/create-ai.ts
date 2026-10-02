@@ -18,7 +18,16 @@ import {
     warnIgnoredBindingToken,
 } from "./gateway";
 import instrumentModel from "./telemetry";
-import type { AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
+import type {
+    AiGatewayOptions,
+    AiModelOptions,
+    AiRunOptions,
+    EmbeddingModelInput,
+    LunoraAi,
+    LunoraAiOptions,
+    ModelInput,
+    WorkersAiProviderLike,
+} from "./types";
 
 /**
  * Wire-format plugins for AI Gateway catalog models. `openai` parses every
@@ -47,6 +56,20 @@ const bindingRequired = (subject: string): never => {
 const workersAiUnavailable = (): never => bindingRequired("this model id");
 
 workersAiUnavailable.textEmbeddingModel = (): never => bindingRequired("this embedding model id");
+
+/**
+ * Workers AI error `3040` ("Capacity temporarily exceeded") — what a
+ * `rejectIfBusy` call rejects with. The binding throws a plain `Error` whose
+ * message carries the code (`"3040: …"`, sometimes prefixed with the error
+ * name), or a numeric `code` property.
+ */
+const CAPACITY_EXCEEDED_CODE = 3040;
+
+/** The code leads the message (after an optional error name), so "line 3040: …" elsewhere never matches. */
+const CAPACITY_EXCEEDED_MESSAGE = /^(?:[A-Z]\w*:\s*)?3040\s*:/iu;
+
+const isCapacityExceeded = (error: unknown): boolean =>
+    (error as { code?: unknown } | null)?.code === CAPACITY_EXCEEDED_CODE || (error instanceof Error && CAPACITY_EXCEEDED_MESSAGE.test(error.message));
 
 /** A proxy host a bearer token may reach over plain HTTP: this machine only. */
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
@@ -211,9 +234,10 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     const workersai: WorkersAiProviderLike =
         provider ?? (binding ? createWorkersAI({ binding, gateway: resolvedGateway, providers: GATEWAY_PROVIDER_PLUGINS }) : workersAiUnavailable);
 
-    const resolveModelId = (modelId: string): LanguageModel => {
+    const resolveModelId = (modelId: string, modelOptions: AiModelOptions | undefined): LanguageModel => {
         if (!isGatewayModelId(modelId)) {
-            return workersai(modelId);
+            // Unlisted provider settings are forwarded to `binding.run`'s options.
+            return modelOptions?.rejectIfBusy === undefined ? workersai(modelId) : workersai(modelId, { rejectIfBusy: modelOptions.rejectIfBusy });
         }
 
         if (proxy !== undefined) {
@@ -223,7 +247,7 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         return gatewayMetadataFields === undefined ? workersai(modelId) : workersai(modelId, { metadata: gatewayMetadataFields });
     };
 
-    const model = (input?: ModelInput): LanguageModel => {
+    const model = (input?: ModelInput, modelOptions?: AiModelOptions): LanguageModel => {
         const requestedId = input ?? effectiveDefaultModel;
 
         if (requestedId === undefined || requestedId === "") {
@@ -236,7 +260,7 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         // A string is a model id (Workers AI, or a gateway slug); anything else is
         // an already-built AI SDK model from some provider — passed straight through.
         if (typeof requestedId === "string") {
-            return instrumentModel(resolveModelId(requestedId), telemetry, requestedId);
+            return instrumentModel(resolveModelId(requestedId, modelOptions), telemetry, requestedId);
         }
 
         return instrumentModel(requestedId, telemetry);
@@ -283,7 +307,7 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         return resolveEmbeddingModel(modelId);
     };
 
-    const run = async (modelId: string, inputs: Record<string, unknown>, runOptions?: Record<string, unknown>): Promise<unknown> => {
+    const run = async (modelId: string, inputs: Record<string, unknown>, runOptions?: AiRunOptions): Promise<unknown> => {
         if (!binding) {
             return bindingRequired("ai.run");
         }
@@ -293,7 +317,17 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         // gateway routing isn't limited to the AI-SDK model path.
         const mergedOptions = resolvedGateway !== undefined && runOptions?.gateway === undefined ? { ...runOptions, gateway: resolvedGateway } : runOptions;
 
-        return binding.run(modelId, inputs, mergedOptions);
+        try {
+            return await binding.run(modelId, inputs, mergedOptions);
+        } catch (error) {
+            if (isCapacityExceeded(error)) {
+                throw new LunoraError("RATE_LIMITED", `@lunora/ai: Workers AI has no free capacity for ${modelId} (error 3040) — retry later`, {
+                    cause: error,
+                });
+            }
+
+            throw error;
+        }
     };
 
     return { embeddingModel, model, run, workersai };

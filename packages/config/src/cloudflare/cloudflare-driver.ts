@@ -34,6 +34,10 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
             args.push(request.entry);
         }
 
+        if (request.configPath !== undefined) {
+            args.push("--config", request.configPath);
+        }
+
         if (request.environment !== undefined) {
             args.push("--env", request.environment);
         }

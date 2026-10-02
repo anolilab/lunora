@@ -203,6 +203,13 @@ export interface TableIR {
     commitOrdered?: boolean;
 
     /**
+     * `true` when that extension was resolved from a package in `node_modules`
+     * rather than from source under `lunora/` (a registry copy-in). Decides
+     * whether the component's module owns a `lunora/<key>/` folder.
+     */
+    extensionFromPackage?: true;
+
+    /**
      * The `defineSchemaExtension` key that contributed this table, set when it
      * arrived through `defineSchema(...).extend(...)`. Absent for a table the app
      * declared itself.
@@ -531,26 +538,26 @@ export interface CronJobIR {
 
     /**
      * Set when the job targets a durable workflow (a `lunora/workflows.ts`
-     * export) instead of a function: the workflow's `WORKFLOW_*` binding name
-     * plus its export name. On each fire the worker starts a new workflow
+     * export) instead of a function: the workflow's class name (its
+     * `ctx.exports` key) plus its export name. On each fire the worker starts a new workflow
      * INSTANCE (the {@link CronJobIR.args} become its `params`) rather than
      * dispatching a one-shot function.
      */
-    workflow?: { binding: string; exportName: string };
+    workflow?: { className: string; exportName: string };
 }
 
-/**
- * A container lifted from a `defineContainer()` export in
- * `lunora/containers.ts`. Carries everything the emitters and the config layer
- * need to wire wrangler (`containers[]` + the Durable Object binding +
- * migration class) and the generated `_generated/containers.ts` DO class.
- * Names are derived via `@lunora/container`'s shared helpers so codegen and
- * the config layer can never disagree.
- */
-export interface ContainerIR {
+/** A normalized container image source, as written into `wrangler.jsonc`. */
+export type ContainerImageIR =
+    { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
+
+/** A `durable_object` container's named image — a Dockerfile or a registry digest, never a Railpack build. */
+export type ContainerNamedImageIR = Exclude<ContainerImageIR, { kind: "build" }>;
+
+/** The fields every container carries, whichever scheduling policy it uses. */
+export interface ContainerIRBase {
     /** Durable Object binding name, e.g. `CONTAINER_TRANSCODER`. */
     bindingName: string;
-    /** Static Dockerfile build args (wrangler `image_vars`), when declared as literals. */
+    /** Static Dockerfile build args (wrangler `image_vars` / named-image `build_vars`), when declared as literals. */
     buildArgs?: Record<string, string>;
     /** Generated DO class name, e.g. `TranscoderContainer`. */
     className: string;
@@ -563,21 +570,10 @@ export interface ContainerIR {
     enableInternet?: boolean;
     /** The `lunora/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
-
-    /**
-     * Normalized image source: a local Dockerfile (`dockerfile`), a pre-built
-     * registry reference (`registry`), or a Railpack source directory (`build`)
-     * that the deploy step builds and pushes before wrangler runs.
-     */
-    image: { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
-    /** Static `instanceType`, when declared. */
+    /** Static `instanceType`, when declared (the default size, under `durable_object`). */
     instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
-    /** Static `maxInstances`, when declared. */
-    maxInstances?: number;
     /** Static wrangler `containers[].name` override, when declared. */
     name?: string;
-    /** Static rolling-deploy tuning, when declared as literals. */
-    rollout?: { gracePeriodSeconds?: number; stepPercentage?: number };
 
     /**
      * The static `sleepAfter` value, when it was a literal. `undefined` means
@@ -585,6 +581,44 @@ export interface ContainerIR {
      */
     sleepAfter?: number | string;
 }
+
+/** A container under the default scheduling policy: one application image, a cap, and a rollout. */
+export interface DefaultScheduledContainerIR extends ContainerIRBase {
+    /**
+     * Normalized image source: a local Dockerfile (`dockerfile`), a pre-built
+     * registry reference (`registry`), or a Railpack source directory (`build`)
+     * that the deploy step builds and pushes before wrangler runs.
+     */
+    image: ContainerImageIR;
+    /** Static `maxInstances`, when declared. */
+    maxInstances?: number;
+    /** Static rolling-deploy tuning, when declared as literals. */
+    rollout?: { gracePeriodSeconds?: number; stepPercentage?: number };
+    /** Absent under the default policy — the union's discriminant. */
+    schedulingPolicy?: never;
+}
+
+/**
+ * A container under the `durable_object` scheduling policy (wrangler
+ * `scheduling_policy`): each instance picks its image and size per start. Also
+ * the `containerRuntimeScheduling` platform signal.
+ */
+export interface DurableObjectScheduledContainerIR extends ContainerIRBase {
+    /** The named images an instance can start from (wrangler `containers[].images`). */
+    images?: Record<string, ContainerNamedImageIR>;
+    schedulingPolicy: "durable_object";
+}
+
+/**
+ * A container lifted from a `defineContainer()` export in
+ * `lunora/containers.ts`, discriminated on its scheduling policy. Carries
+ * everything the emitters and the config layer need to wire wrangler
+ * (`containers[]` + the Durable Object binding + migration class) and the
+ * generated `_generated/containers.ts` DO class. Names are derived via
+ * `@lunora/container`'s shared helpers so codegen and the config layer can
+ * never disagree.
+ */
+export type ContainerIR = DefaultScheduledContainerIR | DurableObjectScheduledContainerIR;
 
 /**
  * A workflow lifted from a `defineWorkflow()` export in `lunora/workflows.ts`.
@@ -596,19 +630,28 @@ export interface ContainerIR {
  * shared helpers so codegen and the config layer can never disagree.
  */
 export interface WorkflowIR {
-    /** The Cloudflare `Workflow` binding name, e.g. `WORKFLOW_ORDER_PIPELINE`. */
-    bindingName: string;
-    /** Generated `WorkflowEntrypoint` class name, e.g. `OrderPipelineWorkflow`. */
+    /** Generated `WorkflowEntrypoint` class name, e.g. `OrderPipelineWorkflow` — also its `exports` key and `ctx.exports` property. */
     className: string;
+    /** Static `defaultRetention` literal → `exports.<Class>.default_retention`. */
+    defaultRetention?: { errorRetention?: string; successRetention?: string };
     /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
+    /** Static `limits` literal → `exports.<Class>.limits`. */
+    limits?: { steps?: number };
 
     /**
-     * The stable wrangler `workflows[].name`. Defaults to the kebab-cased export
+     * The stable wrangler `exports.<Class>.name`. Defaults to the kebab-cased export
      * name (`orderPipeline` → `order-pipeline`); a static `name:` literal in the
      * definition overrides it.
      */
     name: string;
+
+    /**
+     * Static `schedules` cron literals → `exports.<Class>.schedules`. Each one
+     * starts an instance on Cloudflare; gated by the `workflowSchedules`
+     * capability, since a host that ignores them would never run the workflow.
+     */
+    schedules?: ReadonlyArray<string>;
 
     /**
      * Durable step labels lifted from the handler body — the first string-literal
@@ -633,15 +676,13 @@ export interface WorkflowIR {
  * the config layer can never disagree.
  */
 export interface AgentIR {
-    /** The Cloudflare `Workflow` binding name, e.g. `AGENT_SUPPORT`. */
-    bindingName: string;
-    /** Generated `WorkflowEntrypoint` class name, e.g. `SupportAgentWorkflow`. */
+    /** Generated `WorkflowEntrypoint` class name, e.g. `SupportAgentWorkflow` — also its `exports` key and `ctx.exports` property. */
     className: string;
     /** The `lunora/agents.ts` export name, e.g. `support`. */
     exportName: string;
 
     /**
-     * The stable wrangler `workflows[].name`. Defaults to the kebab-cased export
+     * The stable wrangler `exports.<Class>.name`. Defaults to the kebab-cased export
      * name (`support` → `agent-support`); a static `name:` literal in the
      * definition overrides it.
      */
@@ -719,6 +760,13 @@ export interface QueueIR {
      * `name:` literal in the definition overrides it.
      */
     name: string;
+
+    /**
+     * Set for a `defineSubscription(topic, …)` export: the `defineTopic` export it
+     * consumes. A subscription is an ordinary push queue everywhere except
+     * `ctx.*` — it is published to through `ctx.topics.<topic>`, never `ctx.queues`.
+     */
+    topic?: string;
     /** Push-consumer batch/retry tuning, mirrored onto the wrangler `queues.consumers[]` entry. */
     tuning: {
         deadLetterQueue?: string;
@@ -727,6 +775,103 @@ export interface QueueIR {
         maxRetries?: number;
         retryDelay?: number;
     };
+}
+
+/**
+ * A `defineTopic()` export in `lunora/queues.ts`. A topic deploys nothing of its
+ * own: each subscription is a {@link QueueIR} whose `topic` names this export, and
+ * that is the only record of the link (see {@link subscriptionsOf}).
+ */
+export interface TopicIR {
+    /** The `lunora/queues.ts` export name, e.g. `signups`. */
+    exportName: string;
+}
+
+/** The queues published to through `ctx.queues` — every queue except a topic subscription. */
+export const plainQueues = (queues: ReadonlyArray<QueueIR>): QueueIR[] => queues.filter((queue) => queue.topic === undefined);
+
+/** The subscription queues consuming one topic. */
+export const subscriptionsOf = (queues: ReadonlyArray<QueueIR>, topic: string): QueueIR[] => queues.filter((queue) => queue.topic === topic);
+
+/**
+ * A module: a folder under `lunora/` whose `module.ts` default-exports
+ * `defineModule(...)`. Metadata for the Studio catalog, the architecture
+ * manifest and the `cross_module_table_write` lint — it changes no `api.*` path.
+ */
+export interface ModuleIR {
+    /** One-line description from `defineModule({ description })`. */
+    description?: string;
+
+    /**
+     * `true` for an installed component (a `defineSchemaExtension` key merged with
+     * `.extend(...)`) treated as a module: it owns its prefixed tables and the
+     * `lunora/<key>/` folder its copy-in code lives in. Absent for a declared module.
+     */
+    installed?: true;
+
+    /** The folder path relative to `lunora/`, e.g. `billing` — also the module's name. */
+    name: string;
+
+    /**
+     * `false` for an installed component shipped as a package: its code is in
+     * `node_modules`, so it owns its tables but no `lunora/<key>/` folder (an app
+     * folder of that name stays the app's). Absent means the module owns its folder.
+     */
+    ownsFolder?: false;
+    /** Tables the module declares it owns (`defineModule({ tables })`); empty when it declares none. */
+    tables: ReadonlyArray<string>;
+}
+
+/**
+ * One call-site edge of the architecture graph, attributed to the exported
+ * declaration it sits in (`exportName` is `""` inside a non-exported helper).
+ * Exactly one of `target` / `reason` is set: `target` is a `namespace:export`
+ * function key (`call` / `schedule`) or a queue / topic export name (`enqueue` /
+ * `publish`); `reason` says why the target could not be read statically.
+ */
+export interface CallEdgeIR {
+    exportName: string;
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+    kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
+    /** 1-based line of the call. */
+    line: number;
+    reason?: string;
+    target?: string;
+}
+
+/**
+ * A sibling Worker the app calls through a Cloudflare service binding, declared in
+ * `lunora.config.*` `services` (plan 457). Becomes a wrangler `services[]` entry,
+ * a typed `ctx.services.<name>` on actions, and a `service` node in the
+ * architecture manifest.
+ */
+export interface ServiceBindingIR {
+    /** The `services[].binding` Lunora writes, e.g. `SERVICE_DOCUMENT_PARSER`. */
+    binding: string;
+    /** The exported `WorkerEntrypoint` class for an RPC service; absent for a fetch service. */
+    entrypoint?: string;
+
+    /**
+     * The Worker name per `env.<name>` block the service's own wrangler config
+     * sets a `name` in. An environment missing here deploys as wrangler's
+     * default `<worker>-<env>`.
+     */
+    envWorkers: Readonly<Record<string, string>>;
+    /** Absolute path of the service's entry module (its wrangler `main`) — what the RPC type is read from. */
+    main: string;
+    /** The `ctx.services.<name>` key, e.g. `documentParser`. */
+    name: string;
+
+    /**
+     * The scopes in which the service still serves on `*.workers.dev` with no
+     * route of its own: `""` for the top level, else the environment name.
+     */
+    publicScopes: ReadonlyArray<string>;
+    /** The Worker's own `name` from its wrangler config — the `services[].service` target. */
+    worker: string;
+    /** Absolute path of the service's wrangler config. */
+    wranglerPath: string;
 }
 
 /**
@@ -836,6 +981,25 @@ export interface AuthApiCallIR {
     line: number;
     /** The better-auth method invoked (e.g. `banUser`); empty when not statically known. */
     method: string;
+}
+
+/**
+ * A table write other than a plain `ctx.db.insert(...)` (see {@link InsertWriteIR}):
+ * a by-id `patch`/`replace`/`delete`/`hardDelete`/`restore`, a batch write, or a
+ * `ctx.db.<table>.*` facade write. Feeds the architecture manifest's `write`
+ * edges and the `cross_module_table_write` lint.
+ */
+export interface TableWriteIR {
+    /** Export binding name of the function performing the write. */
+    exportName: string;
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the call. */
+    line: number;
+    /** The writer method called, e.g. `patch`, `deleteMany`, `upsert`. */
+    method: string;
+    /** Target table; `""` when it can't be read (an untyped id, a non-literal name). */
+    table: string;
 }
 
 /**

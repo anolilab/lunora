@@ -21,14 +21,19 @@ import type { WranglerConfig } from "./wrangler-config";
  * same-pattern inference from a direct quote, not a guess. Flagged so a
  * future reviewer can re-check it if Cloudflare's docs are ever updated to
  * state it explicitly (or to contradict this).
+ *
+ * `artifacts` is not in that list either; the Artifacts Workers-binding page
+ * states it directly ("`artifacts` is non-inheritable", checked 2026-09-30).
  */
 const NON_INHERITABLE_KEYS = [
+    "artifacts",
     "containers",
     "d1_databases",
     "durable_objects",
     "kv_namespaces",
     "queues",
     "r2_buckets",
+    "secrets",
     "secrets_store_secrets",
     "services",
     "tail_consumers",

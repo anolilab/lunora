@@ -1,3 +1,55 @@
+## @lunora/agent [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.159...@lunora/agent@1.0.0-alpha.160) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.167
+
+## @lunora/agent [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.158...@lunora/agent@1.0.0-alpha.159) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.166
+
+## @lunora/agent [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.157...@lunora/agent@1.0.0-alpha.158) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.165
+
+## @lunora/agent [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.156...@lunora/agent@1.0.0-alpha.157) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.164
+
+## @lunora/agent [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.155...@lunora/agent@1.0.0-alpha.156) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.105
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/mail:** upgraded to 1.0.0-alpha.94
+* **@lunora/server:** upgraded to 1.0.0-alpha.163
+* **@lunora/values:** upgraded to 1.0.0-alpha.58
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.69
+* **@lunora/container:** upgraded to 1.0.0-alpha.64
+
+## @lunora/agent [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.154...@lunora/agent@1.0.0-alpha.155) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.162
+
 ## @lunora/agent [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.153...@lunora/agent@1.0.0-alpha.154) (2026-09-30)
 
 

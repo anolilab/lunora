@@ -1,3 +1,61 @@
+## @lunora/server [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.166...@lunora/server@1.0.0-alpha.167) (2026-10-02)
+
+### Performance Improvements
+
+* **docs:** serve content loaders as static json ([#922](https://github.com/anolilab/lunora/issues/922)) ([61c1d93](https://github.com/anolilab/lunora/commit/61c1d932e6cf69231d776ea905fd007980b3a1cc)), closes [#914](https://github.com/anolilab/lunora/issues/914)
+
+## @lunora/server [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.165...@lunora/server@1.0.0-alpha.166) (2026-10-02)
+
+### Features
+
+* **codegen:** typed service bindings to sibling workers ([#918](https://github.com/anolilab/lunora/issues/918)) ([e57cf93](https://github.com/anolilab/lunora/commit/e57cf930ea443c21b1d1d6abf2600d031f010c5c))
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.102
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.104
+* **@lunora/observability:** upgraded to 1.0.0-alpha.113
+
+## @lunora/server [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.164...@lunora/server@1.0.0-alpha.165) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+## @lunora/server [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.163...@lunora/server@1.0.0-alpha.164) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.101
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.103
+* **@lunora/observability:** upgraded to 1.0.0-alpha.112
+
+## @lunora/server [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.162...@lunora/server@1.0.0-alpha.163) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.100
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.102
+* **@lunora/values:** upgraded to 1.0.0-alpha.58
+* **@lunora/observability:** upgraded to 1.0.0-alpha.111
+
+## @lunora/server [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.161...@lunora/server@1.0.0-alpha.162) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.99
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.101
+* **@lunora/observability:** upgraded to 1.0.0-alpha.110
+
 ## @lunora/server [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.160...@lunora/server@1.0.0-alpha.161) (2026-09-30)
 
 

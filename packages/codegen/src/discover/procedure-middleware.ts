@@ -254,15 +254,16 @@ const isUserTableInsert = (call: CallExpression): boolean => {
 };
 
 /** Method names that dispatch privileged, billable async work (fan-out surfaces). */
-const FANOUT_METHODS = new Set(["create", "runAfter", "runAt", "send", "sendBatch"]);
+const FANOUT_METHODS = new Set(["create", "publish", "publishBatch", "runAfter", "runAt", "send", "sendBatch"]);
 
 /** `ctx.<surface>` accessors those fan-out methods dispatch through. */
-const FANOUT_SURFACES = new Set(["queues", "scheduler", "workflows"]);
+const FANOUT_SURFACES = new Set(["queues", "scheduler", "topics", "workflows"]);
 
 /**
  * True when `call` is a privileged fan-out dispatch — a {@link FANOUT_METHODS}
  * call whose receiver chain roots at `ctx.scheduler` / `ctx.queues` /
- * `ctx.workflows` (`ctx.scheduler.runAfter(...)`, `ctx.queues.<name>.send(...)`,
+ * `ctx.topics` / `ctx.workflows` (`ctx.scheduler.runAfter(...)`,
+ * `ctx.queues.<name>.send(...)`, `ctx.topics.<name>.publish(...)`,
  * `ctx.workflows.<name>.create(...)`). Anchoring to the `ctx.<surface>` root — not
  * just the method name — keeps generic `.create`/`.send` calls on unrelated
  * objects from matching.
@@ -355,7 +356,7 @@ const AI_MEMBERS: ReadonlySet<string> = new Set(["ai"]);
 const MAIL_MEMBERS: ReadonlySet<string> = new Set(["email", "mail"]);
 
 /** `ctx.*` members that reach the outside world and can therefore fail in ways worth catching. */
-const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch", "mail", "notify", "queues", "sql", "storage", "workflows"]);
+const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch", "mail", "notify", "queues", "sql", "storage", "topics", "workflows"]);
 
 /** True when any `ctx.<member>` in `declaration` is one of `members`. */
 const referencesContextMember = (declaration: TsNode, members: ReadonlySet<string>): boolean =>

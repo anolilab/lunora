@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "1.0.0-alpha.161",
+    "version": "1.0.0-alpha.167",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
@@ -81,16 +81,18 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.47",
-        "@lunora/scheduler": "1.0.0-alpha.98",
-        "@lunora/shard-engine": "1.0.0-alpha.100",
-        "@lunora/values": "1.0.0-alpha.57",
+        "@lunora/errors": "1.0.0-alpha.48",
+        "@lunora/scheduler": "1.0.0-alpha.102",
+        "@lunora/shard-engine": "1.0.0-alpha.104",
+        "@lunora/values": "1.0.0-alpha.58",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/observability": "1.0.0-alpha.109",
+        "@lunora/observability": "1.0.0-alpha.113",
         "@lunora/search-core": "workspace:*",
         "@opentelemetry/api": "catalog:otel",
         "@types/node": "catalog:types",
@@ -99,7 +101,8 @@
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
         "@opentelemetry/api": "^1.9.0"

@@ -38,6 +38,7 @@ import type {
     MailRecipientAccessIR,
     MaskProcedureIR,
     MaskStrategyIR,
+    ModuleIR,
     MutatorIR,
     MutatorWriteIR,
     NondeterministicCallIR,
@@ -61,6 +62,7 @@ import type {
     StorageKeyAccessIR,
     StorageUploadIR,
     TableIR,
+    TableWriteIR,
     UnrestrictedWhereBranchIR,
     VectorNamespaceAccessIR,
     WorkflowCallIR,
@@ -216,6 +218,7 @@ interface LintSchemaOptions {
     mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
     maskProcedures?: ReadonlyArray<MaskProcedureIR>;
     maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     mutators?: ReadonlyArray<MutatorIR>;
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
@@ -241,6 +244,7 @@ interface LintSchemaOptions {
     staleMigrationImports?: ReadonlyArray<StaleMigrationImportIR>;
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
+    tableWrites?: ReadonlyArray<TableWriteIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;

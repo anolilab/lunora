@@ -36,7 +36,7 @@
 
 ---
 
-Cloudflare [Browser Rendering](https://developers.cloudflare.com/browser-rendering/) for Lunora. Wraps the `env.BROWSER` binding — driven through [`@cloudflare/playwright`](https://github.com/cloudflare/playwright) (`launch(env.BROWSER)`) — with a small typed `ctx.browser` API: `screenshot`, `pdf`, `scrape`/`content`, plus a low-level `launch()` escape hatch. Every helper opens a context + page, navigates, performs the op, and **always closes the session in a `finally`** (a leaked Browser Rendering session is billed and rate-limited).
+Cloudflare [Browser Run](https://developers.cloudflare.com/browser-run/) (formerly Browser Rendering) for Lunora. Wraps the `env.BROWSER` binding — driven through [`@cloudflare/playwright`](https://github.com/cloudflare/playwright) (`launch(env.BROWSER)`) — with a small typed `ctx.browser` API: `screenshot`, `pdf`, `scrape`/`content`, plus a low-level `launch()` escape hatch. Every helper opens a context + page, navigates, performs the op, and **always closes the session in a `finally`** (a leaked Browser Rendering session is billed and rate-limited).
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -97,6 +97,17 @@ const html = await browser.content("https://example.com");
 const title = await browser.scrape("https://example.com", () => document.title);
 ```
 
+## Quick Actions, crawling, shared sessions
+
+- `quickAction(action, url, options?)` runs a Browser Run Quick Action (`markdown`, `snapshot` with `formats`, `accessibilityTree`, `links`, `json`, …) through the binding's `quickAction()` and returns Browser Run's `Response`. No Playwright session is started.
+- `crawl(url, options?)` starts an async `/crawl` job and returns its id; read it with `crawlResult(jobId)` and stop it with `cancelCrawl(jobId)`. `/crawl` is REST-only, so these need `createBrowser({ …, restApi: { accountId, apiToken } })`. To skip polling, subscribe a Queue to `browserRun` crawl events and type its messages as `BrowserRunCrawlEvent`.
+- Sessions held open with `launch(fn, { keepAlive })` accept several `connect(sessionId, fn)` callers at once. Open a context per caller; `close: true` ends the session for everyone.
+
+```ts
+const response = await ctx.browser.quickAction("snapshot", url, { formats: ["markdown", "accessibilityTree"] });
+const { result } = await response.json();
+```
+
 ## URL safety (SSRF guard)
 
 Every navigation URL is validated before the browser is launched. Beyond rejecting non-`http(s)` schemes (`file:`, `javascript:`, `data:`, …) and embedded `user:pass@` credentials, the helper **default-denies private / internal targets** — loopback (`127.0.0.0/8`, `::1`), RFC1918 (`10/8`, `172.16/12`, `192.168/16`), link-local incl. the cloud-metadata address (`169.254.169.254`), CGNAT (`100.64/10`), IPv6 ULA/link-local, and `localhost` / `*.internal` / `*.local` literals (octal/hex/integer IPv4 and IPv4-mapped IPv6 encodings are normalized first, so they can't slip past). This matters because action `url` args are often caller-controlled. <!-- gitleaks:allow -- illustrative `user:pass@` in prose, not a credential -->
@@ -110,6 +121,8 @@ const browser = createBrowser({ binding: env.BROWSER, launch, allowPrivateTarget
 Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface.
 
 DNS rebinding is covered too: whenever `allowedHosts` is unset, the host is resolved over DoH and refused if it maps to a private address, before the browser launches and again on every redirect hop. Setting `allowedHosts` turns that re-check off, because an exact-host allowlist already closes rebinding and may deliberately name an internal host reachable over a Tunnel; pass `resolveDns: true` to force both. An empty `allowedHosts: []` is a configured allowlist with no members and refuses every navigation — omit the option to run without one.
+
+Browsers the factory launches also get `allowedHosts` as Browser Run session guardrails, so Cloudflare blocks off-list redirects and sub-resources too, including inside the raw `launch()` escape hatch (at most 50 entries). Quick Actions and crawls have no guardrails: there, the starting URL is checked and nothing after it.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/browser)**.
 

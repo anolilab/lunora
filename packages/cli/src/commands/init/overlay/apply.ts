@@ -233,7 +233,8 @@ const ENV_EXAMPLE = `# Lunora endpoint for the browser client.
 /** The dev-time deps every overlaid project needs on top of the framework adapter. */
 const COMMON_DEV_DEPENDENCIES: Record<string, string> = {
     "@cloudflare/workers-types": "^4.20260611.1",
-    wrangler: "^4.100.0",
+    // >= 4.142 declares and runs Workflows in `exports`, which codegen now writes.
+    wrangler: "^4.143.1",
 };
 
 const writeFile = (target: string, relativePath: string, contents: string, written: string[]): void => {
