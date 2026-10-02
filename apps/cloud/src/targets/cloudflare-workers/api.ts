@@ -13,6 +13,7 @@
  * reported by status and Cloudflare's own error text, which never echoes it.
  */
 
+import { fetchBillableUsage } from "../../cloudflare/billable-usage";
 import type { CloudflareAccountAccess } from "../../cloudflare/fetch";
 import { CLOUDFLARE_API_ROOT, cloudflareFetch, CloudflareTokenError } from "../../cloudflare/fetch";
 import type { CloudflarePermission } from "../../provision-contract";
@@ -101,24 +102,6 @@ export const readDisplayName = async (access: CloudflareAccountAccess): Promise<
     }
 };
 
-/**
- * How each permission in {@link CLOUDFLARE_TOKEN_PERMISSIONS} is detected: a
- * read-only GET that answers 2xx only when the token holds the permission group
- * (read or edit). The probes are read-only, so what is recorded at connect time
- * is "this permission group is granted", not "this permission is Edit" —
- * Cloudflare's API does not expose a token's own policies without the API
- * Tokens Read permission, which the target deliberately does not ask for. A
- * token granted Read where Edit is needed fails its first converge, with
- * Cloudflare's own error. `analytics` is probed with a GraphQL query instead.
- */
-const PROBE_PATHS: Record<Exclude<CloudflarePermission, "analytics">, (accountId: string) => string> = {
-    d1: (id) => `/accounts/${id}/d1/database?per_page=1`,
-    kv: (id) => `/accounts/${id}/storage/kv/namespaces?per_page=1`,
-    queues: (id) => `/accounts/${id}/queues?per_page=1`,
-    r2: (id) => `/accounts/${id}/r2/buckets?per_page=1`,
-    workersScripts: (id) => `/accounts/${id}/workers/scripts`,
-};
-
 export const CLOUDFLARE_PERMISSIONS = Object.keys(CLOUDFLARE_TOKEN_PERMISSIONS) as CloudflarePermission[];
 
 /** One script's requests in a window. */
@@ -204,10 +187,31 @@ export const readScriptRequests = async (access: CloudflareAccountAccess, sinceM
     });
 };
 
+/**
+ * How each permission in {@link CLOUDFLARE_TOKEN_PERMISSIONS} is detected: a
+ * read that succeeds only when the token holds the permission group (read or
+ * edit). The probes are read-only, so what is recorded at connect time is
+ * "this permission group is granted", not "this permission is Edit" —
+ * Cloudflare's API does not expose a token's own policies without the API
+ * Tokens Read permission, which the target deliberately does not ask for. A
+ * token granted Read where Edit is needed fails its first converge, with
+ * Cloudflare's own error. `analytics` and `billing` are probed with the very
+ * reads they enable: the GraphQL request counts and the billable usage.
+ */
+const PROBES: Record<CloudflarePermission, (access: CloudflareAccountAccess) => Promise<unknown>> = {
+    analytics: async (access) => readScriptRequests(access, Date.now() - 60_000),
+    billing: async (access) => fetchBillableUsage(access),
+    d1: async (access) => call(access, `/accounts/${access.accountId}/d1/database?per_page=1`),
+    kv: async (access) => call(access, `/accounts/${access.accountId}/storage/kv/namespaces?per_page=1`),
+    queues: async (access) => call(access, `/accounts/${access.accountId}/queues?per_page=1`),
+    r2: async (access) => call(access, `/accounts/${access.accountId}/r2/buckets?per_page=1`),
+    workersScripts: async (access) => call(access, `/accounts/${access.accountId}/workers/scripts`),
+};
+
 /** Probe one permission: `true` when its read answers, `false` when Cloudflare refuses the token for it. */
 const probe = async (access: CloudflareAccountAccess, permission: CloudflarePermission): Promise<boolean> => {
     try {
-        await (permission === "analytics" ? readScriptRequests(access, Date.now() - 60_000) : call(access, PROBE_PATHS[permission](access.accountId)));
+        await PROBES[permission](access);
 
         return true;
     } catch {

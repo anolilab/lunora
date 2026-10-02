@@ -1,6 +1,7 @@
 /**
- * Cloudflare Billable Usage API reader (per-org BYO cost overview). A BYO org
- * connects its *own* Cloudflare account (`lunora/cloudflareBilling.ts`); this
+ * Cloudflare Billable Usage API reader (per-org BYO cost overview). An org
+ * connects its *own* Cloudflare account (`lunora/cloudflare-accounts.ts`), with
+ * the Billing Read permission; this
  * module reads that account's authoritative billable usage — one row per product
  * per charge period — so the console can show the org its real Cloudflare spend,
  * as opposed to the control plane's *estimate* (`src/billing/spend.ts`, which
@@ -8,8 +9,8 @@
  *
  * Two halves, mirroring `src/telemetry/metrics-read.ts`: {@link fetchBillableUsage}
  * does the authenticated `fetch` (the account id + Billing-Read token are
- * action-only), and {@link normalizeBillableUsage} is a pure roll-up the summary
- * action and the tests share.
+ * action-only), and {@link normalizeBillableUsage} is a pure roll-up the costs
+ * read (`src/cloudflare-accounts/costs.ts`) and the tests share.
  *
  * Endpoint: `GET /accounts/{account_id}/billable-usage` — standard Cloudflare
  * envelope, `result` an array of rows, updated daily, gated by a token with the

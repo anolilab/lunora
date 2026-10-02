@@ -330,9 +330,9 @@ export default createConfig(
             "src/dispatcher/**/*.ts",
             "src/tail/**/*.ts",
             // The control plane's own HOST, not a deploy target: its D1 export, and the
-            // cost overview of an organization's own Cloudflare account.
+            // cost overview (Billable Usage API) of a Cloudflare account an organization connected.
             "src/backup/control-plane-export.ts",
-            "lunora/cloudflare-billing.ts",
+            "src/cloudflare-accounts/costs.ts",
         ],
         rules: {
             "@typescript-eslint/no-restricted-imports": "off",

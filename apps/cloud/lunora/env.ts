@@ -46,8 +46,8 @@ export const env = defineEnv({
 
     /**
      * 32-byte hex master key for envelope encryption (§7). Shared with the edge
-     * `/v1/secrets` + `/v1/cloudflare-billing` routes; `cloudflareBilling.summary`
-     * reads it to *decrypt* a BYO org's stored Billing-Read token before the
+     * `/v1/secrets` + `/v1/cloudflare-accounts` routes; `cloudflareAccounts.costs`
+     * reads it to *decrypt* a connected account's token before the
      * Billable-Usage read. Absent → the costs read no-ops to a "not configured" view.
      */
     SECRET_ENCRYPTION_KEY: v.optional(v.string()),

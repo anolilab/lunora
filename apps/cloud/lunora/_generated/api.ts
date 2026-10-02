@@ -40,14 +40,9 @@ export interface ApiTypes {
         list: FunctionReference<"query", {}, { _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
     };
     cloudflare_accounts: {
+        costs: FunctionReference<"action", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { status: "error" | "no-permission" | "ok" | "unauthorized" | "unconfigured"; view: null | { currency: string; periodEnd: string | null; periodStart: string | null; products: { costMinor: number; currency: string; product: string; quantity: null | number; unit: null | string; }[]; totalMinor: number } }>;
         disconnect: FunctionReference<"mutation", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, void>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"cloudflareAccounts">; accountId: string; createdAt: number; displayName?: string; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
-    };
-    cloudflare_billing: {
-        disconnect: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, { removed: boolean; }>;
-        status: FunctionReference<"query", { organizationId: Id<"organizations"> }, { cloudflareAccountId: null | string; connected: boolean; }>;
-        store: FunctionReference<"mutation", { ciphertext: unknown; cloudflareAccountId: unknown; iv: unknown; organizationId: Id<"organizations"> }, Id<"cloudflareBilling">>;
-        summary: FunctionReference<"action", { organizationId: Id<"organizations"> }, { cloudflareAccountId: string | null; status: "error" | "not-connected" | "ok" | "unauthorized" | "unconfigured"; view: null | { currency: string; periodEnd: string | null; periodStart: string | null; products: { costMinor: number; currency: string; product: string; quantity: null | number; unit: null | string; }[]; totalMinor: number } }>;
     };
     dashboards: {
         create: FunctionReference<"mutation", { name: unknown; organizationId: Id<"organizations">; panels?: Array<{ config: { filter?: string; metricName?: string; stat?: "last" | "first" | "count" }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }> }, Id<"dashboards">>;

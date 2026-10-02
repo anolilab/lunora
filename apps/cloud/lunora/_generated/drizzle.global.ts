@@ -616,19 +616,6 @@ export const usageCheckpoints = sqliteTable("usageCheckpoints", {
     by_target_scope: uniqueIndex("by_target_scope").on(t.target, t.scopeKey),
 }));
 
-export const cloudflareBilling = sqliteTable("cloudflareBilling", {
-    _id: text("_id").primaryKey(),
-    _creationTime: integer("_creationTime").notNull(),
-    cloudflareAccountId: text("cloudflareAccountId").notNull(),
-    ciphertext: text("ciphertext").notNull(),
-    createdAt: real("createdAt").notNull(),
-    iv: text("iv").notNull(),
-    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    updatedAt: real("updatedAt").notNull(),
-}, (t) => ({
-    by_org: uniqueIndex("by_org").on(t.organizationId),
-}));
-
 export const customers = sqliteTable("customers", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

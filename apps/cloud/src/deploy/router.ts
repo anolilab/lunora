@@ -74,12 +74,6 @@ interface SecretBody {
     value?: string;
 }
 
-interface CloudflareBillingBody {
-    cloudflareAccountId?: string;
-    organizationId?: string;
-    token?: string;
-}
-
 /**
  * `POST /v1/telemetry` body — an OTLP `ExportTraceServiceRequest` (its
  * `resourceSpans`) plus the deploy-key/org fields that authenticate + route it.
@@ -354,51 +348,6 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
         return Response.json({ ok: true });
     } catch (error) {
         return rejected(error, "set secret failed");
-    }
-};
-
-/**
- * `POST /v1/cloudflare-billing` — connect a BYO org's own Cloudflare account for
- * the cost overview. Encrypts the Billing-Read token at the edge (the master key
- * never reaches the browser or the database in plaintext), exactly like
- * `/v1/secrets`, then stores ciphertext via `cloudflareBilling.store` under the
- * caller's session (so its owner/admin `assertMember` gate applies).
- */
-const handleCloudflareBillingRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = requireContext(environment);
-
-    if (!environment.SECRET_ENCRYPTION_KEY) {
-        return jsonError(500, "SECRET_ENCRYPTION_KEY not configured");
-    }
-
-    const body = (await request.json().catch(() => null)) as CloudflareBillingBody | null;
-
-    if (!body?.organizationId || !body.cloudflareAccountId || typeof body.token !== "string" || body.token.length === 0) {
-        return jsonError(400, "organizationId, cloudflareAccountId and token are required");
-    }
-
-    // Encryption failure is a server misconfiguration (e.g. a malformed master
-    // key) → 500, kept distinct from the membership 403 the store mutation raises.
-    let ciphertext: string;
-    let iv: string;
-
-    try {
-        ({ ciphertext, iv } = await encryptSecret(environment.SECRET_ENCRYPTION_KEY, body.token));
-    } catch (error) {
-        return jsonError(500, error instanceof Error ? error.message : "token encryption failed");
-    }
-
-    try {
-        await context.runMutation(api.cloudflare_billing.store, {
-            ciphertext,
-            cloudflareAccountId: body.cloudflareAccountId,
-            iv,
-            organizationId: body.organizationId,
-        });
-
-        return Response.json({ ok: true });
-    } catch (error) {
-        return rejected(error, "connect cloudflare billing failed");
     }
 };
 
@@ -754,7 +703,6 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleDomainRemoveRoute, method: "POST", path: "/v1/domains/remove", spec: { auth: "session" } },
         { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },
         { handler: handleSecretRoute, method: "POST", path: "/v1/secrets", spec: { auth: "session" } },
-        { handler: handleCloudflareBillingRoute, method: "POST", path: "/v1/cloudflare-billing", spec: { auth: "session" } },
         // webhookHmac — provider signature (Creem / GitHub).
         { handler: handleBillingWebhookRoute, method: "POST", path: "/v1/billing/webhook", spec: { auth: "webhookHmac" } },
         { handler: handleWebhookRoute, method: "POST", path: "/v1/github/webhook", spec: { auth: "webhookHmac" } },

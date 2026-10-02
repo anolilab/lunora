@@ -1,10 +1,11 @@
 import { LunoraError } from "@lunora/server";
 
+import { readAccountCosts } from "../src/cloudflare-accounts/costs";
 import type { CloudflareAccountRow } from "../src/cloudflare-accounts/store";
 import { cloudflareAccountStore } from "../src/cloudflare-accounts/store";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
-import { internalMutation, mutation, query, v } from "./_generated/server.js";
+import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { pendingTeardown } from "./deployments";
 import { assertWithinQuota } from "./entitlements";
@@ -227,5 +228,57 @@ export const disconnect = mutation
             createdAt: context.now,
             organizationId,
             target: row.accountId,
+        });
+    });
+
+/** The env keys {@link costs} reads off `ctx.env` (the validated `lunora/env.ts` contract). */
+interface CostsEnvironment {
+    SECRET_ENCRYPTION_KEY?: string;
+}
+
+/**
+ * A connected account's cost view as {@link costs} answers it. Spelled out
+ * here rather than imported (`src/cloudflare/billable-usage`'s
+ * `CloudflareCostView`) so codegen inlines the full shape into `_generated/*`.
+ */
+interface CloudflareCostsView {
+    currency: string;
+    periodEnd: null | string;
+    periodStart: null | string;
+    products: { costMinor: number; currency: string; product: string; quantity: null | number; unit: null | string }[];
+    totalMinor: number;
+}
+
+/** What {@link costs} answers: how the read resolved, and the view when it is `ok`. */
+interface CloudflareCostsResult {
+    status: "error" | "no-permission" | "ok" | "unauthorized" | "unconfigured";
+    view: CloudflareCostsView | null;
+}
+
+/**
+ * A connected account's real Cloudflare spend for its most recent charge
+ * period, from its Billable Usage API — read with the connection's own token,
+ * when it was granted Billing Read (members; the Cloudflare costs tab). An
+ * **action**: the read is a `fetch`, and unsealing the token needs the master
+ * key. Fails open to a status (`readAccountCosts`), so the tab never errors
+ * and the token never surfaces. Rate-limited as a paid round-trip (`archive`).
+ */
+export const costs = action
+    .use(rateLimit("archive"))
+    .input({ id: v.id("cloudflareAccounts"), organizationId: v.id("organizations") })
+    .action(async ({ ctx: context, args: { id, organizationId } }): Promise<CloudflareCostsResult> => {
+        await assertMember(context, organizationId);
+
+        const row = await cloudflareAccountStore(context.db.cloudflareAccounts).lookup(id);
+
+        if (row?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "Cloudflare account not found in this organization");
+        }
+
+        const environment = (context.env ?? {}) as CostsEnvironment;
+
+        return readAccountCosts(row, {
+            ...(environment.SECRET_ENCRYPTION_KEY === undefined ? {} : { encryptionKey: environment.SECRET_ENCRYPTION_KEY }),
+            fetch: context.fetch,
         });
     });

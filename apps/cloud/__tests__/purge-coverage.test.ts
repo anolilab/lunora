@@ -11,9 +11,10 @@ import { describe, expect, it } from "vitest";
  * function's own docblock claimed erasure "across every org-scoped table". What
  * it left behind was the worst half: `observations`, `metricPoints` and the
  * `issues`/`incidents` bodies all carry end-user data, `alertRules` keeps live
- * webhook and PagerDuty destinations for a deleted tenant, and `cloudflareBilling`
- * keeps the org's envelope-encrypted billing token — orphaned, with no org row
- * left for any later sweep to key off.
+ * webhook and PagerDuty destinations for a deleted tenant, and the org's
+ * envelope-encrypted Cloudflare token (then in `cloudflareBilling`, now in
+ * `cloudflareAccounts`) stayed behind — orphaned, with no org row left for any
+ * later sweep to key off.
  *
  * This asserts the list against the schema, so the next org-scoped table added
  * fails here rather than silently surviving an erasure request.

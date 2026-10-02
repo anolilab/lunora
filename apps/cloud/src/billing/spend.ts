@@ -25,7 +25,7 @@
  *
  * **This is an estimate, not an invoice.** The authoritative number for an org
  * that has connected its own Cloudflare account is the Billable Usage API
- * (`lunora/cloudflare-billing.ts`); this model is what the platform can compute
+ * (`cloudflareAccounts.costs`); this model is what the platform can compute
  * for *every* org, including those that have connected nothing.
  *
  * Rates are held as integer **nano-cents per unit** (1 cent = 1e9 nano-cents)

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { connect, disconnect, list } from "../lunora/cloudflare-accounts";
+import { connect, costs, disconnect, list } from "../lunora/cloudflare-accounts";
 import { CloudflareTokenError } from "../src/cloudflare/fetch";
 import { handleCloudflareAccountConnectRoute } from "../src/deploy/routes/cloudflare-accounts";
-import { decryptSecret } from "../src/secrets/crypto";
+import { decryptSecret, encryptSecret } from "../src/secrets/crypto";
 import { inspectAccount, readScriptRequests, verifyToken } from "../src/targets/cloudflare-workers/api";
 import { createCloudflareWorkersFleet } from "../src/targets/cloudflare-workers/driver";
 import { resourceRefOf } from "../src/targets/placement";
@@ -63,6 +63,14 @@ describe("the cloudflare-workers account API", () => {
 
         expect(methods.filter((method) => method !== "GET")).toStrictEqual(["POST"]);
         expect(fetch.mock.calls.every(([, init]) => (init?.headers as Record<string, string>)["authorization"] === `Bearer ${TOKEN}`)).toBe(true);
+    });
+
+    it("records Billing: Read when the token may read the account's billable usage", async () => {
+        const fetch = healthyAccount({ [`/accounts/${ACCOUNT}/billable-usage`]: ok([]) });
+
+        await expect(inspectAccount({ accountId: ACCOUNT, apiToken: TOKEN, fetch })).resolves.toMatchObject({
+            permissions: ["billing", "d1", "workersScripts"],
+        });
     });
 
     it("falls back to the account-owned verify endpoint", async () => {
@@ -174,6 +182,44 @@ describe("the cloudflare-workers usage readback", () => {
         await expect(fleet.usage?.read("cfa_1", 0)).resolves.toStrictEqual([
             { requests: 3, resourceRef: resourceRefOf({ placementRef: "cfa_1", target: "cloudflare-workers" }, "web") },
         ]);
+    });
+});
+
+describe("cloudflareAccounts.costs", () => {
+    const KEY = "11".repeat(32);
+
+    const run = async (row: Row, options: { env?: Record<string, unknown>; fetch?: typeof globalThis.fetch; organizationId?: string } = {}) => {
+        const { ctx } = makeCtx({ cloudflareAccounts: [row], members: [owner("org_1")] });
+        const context = Object.assign(ctx, { env: options.env ?? { SECRET_ENCRYPTION_KEY: KEY }, fetch: options.fetch ?? fakeCloudflare({}) });
+
+        return costs.handler(context, { id: "cfa_1" as never, organizationId: (options.organizationId ?? "org_1") as never });
+    };
+
+    it("reads the billable usage of a connection granted Billing: Read, with its own token", async () => {
+        const sealed = await encryptSecret(KEY, TOKEN);
+        const fetch = fakeCloudflare({ [`/accounts/${ACCOUNT}/billable-usage`]: ok([{ cost: 1.5, period_end: "2026-09-30", product: "Workers" }]) });
+
+        await expect(run(account({ ...sealed, permissions: ["workersScripts", "billing"] }), { fetch })).resolves.toMatchObject({
+            status: "ok",
+            view: { products: [{ costMinor: 150, product: "Workers" }], totalMinor: 150 },
+        });
+        expect((fetch.mock.calls[0]?.[1]?.headers as Record<string, string>).authorization).toBe(`Bearer ${TOKEN}`);
+    });
+
+    it("answers a status, never a throw: no permission, no master key, a refused token", async () => {
+        const sealed = await encryptSecret(KEY, TOKEN);
+        const billing = account({ ...sealed, permissions: ["workersScripts", "billing"] });
+
+        await expect(run(account({ ...sealed }))).resolves.toStrictEqual({ status: "no-permission", view: null });
+        await expect(run(billing, { env: {} })).resolves.toStrictEqual({ status: "unconfigured", view: null });
+        await expect(run(billing, { fetch: fakeCloudflare({ [`/accounts/${ACCOUNT}/billable-usage`]: refused }) })).resolves.toStrictEqual({
+            status: "unauthorized",
+            view: null,
+        });
+    });
+
+    it("refuses another organization's connection", async () => {
+        await expect(run(account({ organizationId: "org_2" }))).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 });
 

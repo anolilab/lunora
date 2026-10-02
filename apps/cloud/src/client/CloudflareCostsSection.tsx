@@ -1,26 +1,23 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
-import { useLunora, useMutation, usePreloadedQuery } from "@lunora/react";
+import type { ReturnOf } from "@lunora/client";
+import { useLunora, usePreloadedQuery } from "@lunora/react";
+import { Link } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { CloudflareAccountView } from "./cloudflare-accounts";
+import { accountTitle } from "./cloudflare-accounts";
 import { formatNumber } from "./format";
 import { COLUMN_LABEL } from "./section-styles";
-import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
+import { Row, RowActions, RowList, StatusBadge } from "./section-ui";
+import type { SectionProps } from "./tabs";
 import type { OrgId } from "./types";
 
-interface CloudflareCostsSectionProps {
-    organizationId: OrgId;
-    /** SSR-preloaded connection status. Stays live so connect/disconnect update without a reload. */
-    preloaded: Preloaded<ReturnOf<typeof api.cloudflare_billing.status>>;
-}
-
-/** The summary action's result — a status plus (on "ok") the normalized cost view. */
-type SummaryResult = ReturnOf<typeof api.cloudflare_billing.summary>;
+/** The costs action's result — a status plus (on "ok") the normalized cost view. */
+type SummaryResult = ReturnOf<typeof api.cloudflare_accounts.costs>;
 
 const LOCALE = "en-GB";
 
@@ -50,7 +47,8 @@ const formatMoney = (minor: number, currency: string): string => {
 /** Human line for each non-ok summary status. */
 const STATUS_MESSAGE: Record<string, string> = {
     error: "Couldn’t read Cloudflare billing right now. The Billable Usage API updates daily — try again shortly.",
-    unauthorized: "The stored token was rejected. Re-connect with a token that has the Billing Read permission (self-serve accounts only).",
+    "no-permission": "This account's token was not granted Billing: Read. Rotate it on the Cloudflare accounts tab with that permission to see its costs.",
+    unauthorized: "Cloudflare refused the token for the Billable Usage API. Rotate it with Billing: Read (self-serve accounts only).",
     unconfigured: "Cost data is unavailable because this cell has no encryption key configured, so the stored token cannot be read.",
 };
 
@@ -101,62 +99,70 @@ const SummaryBody = ({ summary }: { summary: SummaryResult | undefined }): React
 };
 
 /**
- * Cloudflare costs tab. Shows a BYO org its **real** Cloudflare spend by product
- * for the most recent charge period, read from that account's own
- * [Billable Usage API](https://developers.cloudflare.com/billing/manage/billable-usage/).
- * This is distinct from the Usage tab, which shows the control plane's *estimate*
- * (metered requests/CPU × a fixed cost basis).
- *
- * Connecting stores the account's Billing-Read token via the `/v1/cloudflare-billing`
- * edge route, which encrypts it before it reaches the database — the master key
- * never touches the browser, exactly like the Secrets tab. `status` is a live
- * query (so connect/disconnect reflect immediately); the cost view comes from the
- * `summary` **action** (a `fetch`, not reactive), polled on connect and on manual
- * refresh, and it fails open to a status line rather than an error.
+ * One connected account's costs. The view comes from the `costs` **action** (a
+ * `fetch`, not reactive), so — like `use-metrics-series` — it is read in an
+ * effect that writes state only in its async callbacks, with an out-of-order
+ * guard; it re-runs on a manual refresh.
  */
-export const CloudflareCostsSection = ({ organizationId, preloaded }: CloudflareCostsSectionProps): ReactElement => {
-    const connection = usePreloadedQuery(preloaded);
+const AccountCosts = ({ account, organizationId, refresh }: { account: CloudflareAccountView; organizationId: OrgId; refresh: number }): ReactElement => {
     const client = useLunora();
-    const disconnect = useMutation(api.cloudflare_billing.disconnect);
-
     const [summary, setSummary] = useState<SummaryResult | undefined>(undefined);
-    const [refreshNonce, setRefreshNonce] = useState(0);
 
-    const [accountId, setAccountId] = useState("");
-    const [token, setToken] = useState("");
-    const [pending, setPending] = useState(false);
-    const [error, setError] = useState<null | string>(null);
-
-    const { cloudflareAccountId, connected } = connection ?? { cloudflareAccountId: null, connected: false };
-
-    // The cost view comes from an action (a fetch, not reactive), so — like
-    // `use-metrics-series` — poll it in an effect and write state only in the
-    // async callbacks, with an out-of-order guard. Re-runs on connect and on a
-    // manual refresh; the `status` live query drives connect/disconnect.
     useEffect(() => {
         let cancelled = false;
 
-        if (connected) {
-            void client
-                .action(api.cloudflare_billing.summary, { organizationId })
-                .then((result) => {
-                    if (!cancelled) {
-                        setSummary(result);
-                    }
+        void client
+            .action(api.cloudflare_accounts.costs, { id: account._id, organizationId })
+            .then((result) => {
+                if (!cancelled) {
+                    setSummary(result);
+                }
 
-                    return result;
-                })
-                .catch(() => {
-                    if (!cancelled) {
-                        setSummary({ cloudflareAccountId, status: "error", view: null });
-                    }
-                });
-        }
+                return result;
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setSummary({ status: "error", view: null });
+                }
+            });
 
         return () => {
             cancelled = true;
         };
-    }, [client, cloudflareAccountId, connected, organizationId, refreshNonce]);
+    }, [account._id, client, organizationId, refresh]);
+
+    return (
+        <Card>
+            <CardHeader>
+                <CardTitle>{accountTitle(account)}</CardTitle>
+                <CardDescription>
+                    <span className="font-mono text-xs">{account.accountId}</span>
+                </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+                <SummaryBody summary={summary} />
+            </CardContent>
+        </Card>
+    );
+};
+
+/**
+ * Cloudflare costs tab. Shows an organization the **real** Cloudflare spend of
+ * each Cloudflare account it connected, by product, for the most recent charge
+ * period, read from that account's own
+ * [Billable Usage API](https://developers.cloudflare.com/billing/manage/billable-usage/).
+ * This is distinct from the Usage tab, which shows the control plane's
+ * estimate* (metered requests/CPU × a fixed cost basis).
+ *
+ * There is no second connection here: an account is connected once, on the
+ * Cloudflare accounts tab, and its token is read here when it was granted
+ * Billing: Read (`cloudflareAccounts.costs`). The list is the live
+ * `cloudflareAccounts.list` query, so connecting, rotating or disconnecting
+ * there shows here without a reload.
+ */
+export const CloudflareCostsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.cloudflare_accounts.list>>): ReactElement => {
+    const accounts = usePreloadedQuery(preloaded);
+    const [refresh, setRefresh] = useState(0);
 
     return (
         <div className="flex flex-col gap-6">
@@ -165,14 +171,14 @@ export const CloudflareCostsSection = ({ organizationId, preloaded }: Cloudflare
                     <div className="flex flex-col gap-1.5">
                         <CardTitle>Cloudflare costs</CardTitle>
                         <CardDescription>
-                            The real billable usage on your Cloudflare account, by product, for the current charge period — from the Billable Usage API.
-                            Distinct from the Usage tab, which shows the control plane&apos;s estimate.
+                            The real billable usage on each Cloudflare account your organization connected, by product, for the current charge period — from the
+                            Billable Usage API. Distinct from the Usage tab, which shows the control plane&apos;s estimate.
                         </CardDescription>
                     </div>
-                    {connected ? (
+                    {accounts !== undefined && accounts.length > 0 ? (
                         <Button
                             onClick={() => {
-                                setRefreshNonce((value) => value + 1);
+                                setRefresh((value) => value + 1);
                             }}
                             size="sm"
                             variant="outline"
@@ -183,114 +189,23 @@ export const CloudflareCostsSection = ({ organizationId, preloaded }: Cloudflare
                 </CardHeader>
             </Card>
 
-            {connected ? (
-                <>
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Connected account</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <Row>
-                                <span className={`${COLUMN_LABEL} text-muted-foreground`}>Account</span>
-                                <span className="font-mono text-sm">{cloudflareAccountId}</span>
-                                <RowActions>
-                                    <Button
-                                        className="text-destructive hover:text-destructive"
-                                        onClick={() => {
-                                            void disconnect.mutate({ organizationId });
-                                        }}
-                                        size="sm"
-                                        variant="ghost"
-                                    >
-                                        Disconnect
-                                    </Button>
-                                </RowActions>
-                            </Row>
-                        </CardContent>
-                    </Card>
-
-                    <Card>
-                        <CardContent className="flex flex-col gap-4 pt-6">
-                            <SummaryBody summary={summary} />
-                        </CardContent>
-                    </Card>
-                </>
-            ) : (
+            {accounts?.length === 0 ? (
                 <Card>
-                    <CardHeader>
-                        <CardTitle>Connect your Cloudflare account</CardTitle>
-                        <CardDescription>
-                            Paste your Cloudflare account ID and an API token with the <span className="font-mono text-xs">Billing Read</span> permission. The
-                            token is encrypted before storage — it never reaches the database in plaintext.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <FieldForm
-                            action={() => {
-                                setError(null);
-                                setPending(true);
-
-                                // Promise combinators (not try/finally) so React Compiler can memoize this component.
-                                const save = async (): Promise<void> => {
-                                    const response = await fetch("/v1/cloudflare-billing", {
-                                        body: JSON.stringify({ cloudflareAccountId: accountId, organizationId, token }),
-                                        credentials: "include",
-                                        headers: { "content-type": "application/json" },
-                                        method: "POST",
-                                    });
-
-                                    if (!response.ok) {
-                                        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-
-                                        setError(payload?.error ?? `connect failed (${String(response.status)})`);
-
-                                        return;
-                                    }
-
-                                    setAccountId("");
-                                    setToken("");
-                                };
-
-                                void save()
-                                    .catch((error_: unknown) => {
-                                        setError(error_ instanceof Error ? error_.message : "connect failed");
-                                    })
-                                    .finally(() => {
-                                        setPending(false);
-                                    });
-                            }}
-                        >
-                            <Field htmlFor="cf-account-id" label="Cloudflare account ID">
-                                <Input
-                                    id="cf-account-id"
-                                    onChange={(event) => {
-                                        setAccountId(event.target.value);
-                                    }}
-                                    placeholder="your Cloudflare account ID"
-                                    required
-                                    value={accountId}
-                                />
-                            </Field>
-                            <Field htmlFor="cf-token" label="API token (Billing Read)">
-                                <Input
-                                    id="cf-token"
-                                    onChange={(event) => {
-                                        setToken(event.target.value);
-                                    }}
-                                    placeholder="cloudflare API token"
-                                    required
-                                    type="password"
-                                    value={token}
-                                />
-                            </Field>
-                            <Button className="justify-self-start" disabled={pending} type="submit">
-                                {pending ? "Connecting…" : "Connect"}
-                            </Button>
-                            <FormError message={error} />
-                        </FieldForm>
+                    <CardContent className="pt-6">
+                        <p className="m-0 text-sm text-muted-foreground">
+                            No Cloudflare account is connected.{" "}
+                            <Link className="underline-offset-2 hover:underline" params={{ organizationId }} to="/orgs/$organizationId/cloudflare-accounts">
+                                Connect one on the Cloudflare accounts tab
+                            </Link>{" "}
+                            with a token that also holds <span className="font-mono text-xs">Billing: Read</span>.
+                        </p>
                     </CardContent>
                 </Card>
-            )}
+            ) : null}
+
+            {(accounts ?? []).map((account) => (
+                <AccountCosts account={account} key={account._id} organizationId={organizationId} refresh={refresh} />
+            ))}
         </div>
     );
 };

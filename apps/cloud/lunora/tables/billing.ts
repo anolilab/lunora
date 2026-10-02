@@ -1,6 +1,6 @@
 /**
- * Billing and metering: the usage ledger, overage debits, BYO Cloudflare
- * billing, and the `@lunora/payment` tables.
+ * Billing and metering: the usage ledger, overage debits, readback
+ * checkpoints, and the `@lunora/payment` tables.
  *
  * Composed into the schema by `lunora/schema.ts`.
  */
@@ -70,24 +70,6 @@ export const billingTables = {
     })
         .global()
         .index("by_target_scope", ["target", "scopeKey"], { unique: true }),
-
-    // Per-org BYO Cloudflare billing connection (Billable Usage API). Stores the
-    // org's *own* Cloudflare account id + an AES-256-GCM-encrypted API token with
-    // the Billing Read scope (same edge-encryption path as `secrets`, so only
-    // ciphertext + IV live here — never the token). `cloudflareBilling.summary`
-    // decrypts it at the edge to read that account's real billable usage, so a
-    // BYO-Cloudflare org sees its actual Cloudflare spend by product, not the
-    // control plane's *estimate* (`src/billing/spend.ts`). One row per org.
-    cloudflareBilling: defineTable({
-        cloudflareAccountId: v.string(),
-        ciphertext: v.string(),
-        createdAt: v.number(),
-        iv: v.string(),
-        organizationId: v.id("organizations"),
-        updatedAt: v.number(),
-    })
-        .global()
-        .index("by_org", ["organizationId"], { unique: true }),
 
     // ── @lunora/payment tables (§4 billing) ───────────────────────────────────
     // Declared inline (codegen parses this file's AST and can't resolve a cross-

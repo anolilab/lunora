@@ -233,6 +233,7 @@ export const TARGETS = {
  */
 export const CLOUDFLARE_TOKEN_PERMISSIONS = {
     analytics: { label: "Account Analytics: Read", required: false, use: "request counts for the Usage tab" },
+    billing: { label: "Billing: Read", required: false, use: "the account's real spend on the Cloudflare costs tab (self-serve accounts only)" },
     d1: { label: "D1: Edit", required: false, use: "d1 bindings" },
     kv: { label: "Workers KV Storage: Edit", required: false, use: "kv bindings" },
     queues: { label: "Queues: Edit", required: false, use: "queue bindings" },

@@ -16,7 +16,7 @@ describe("token permissions", () => {
     });
 
     it("lists what a token was not seen to hold", () => {
-        expect(missingPermissions(["workersScripts", "d1", "kv", "r2", "queues"])).toStrictEqual(["Account Analytics: Read"]);
+        expect(missingPermissions(["workersScripts", "d1", "kv", "r2", "queues"])).toStrictEqual(["Account Analytics: Read", "Billing: Read"]);
     });
 });
 

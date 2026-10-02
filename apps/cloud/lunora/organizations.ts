@@ -244,8 +244,8 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
     // every org-scoped table" — so a right-to-erasure purge left the org's
     // telemetry (`observations`, `metricPoints`, `issues`/`incidents` bodies, all
     // of which can carry end-user data), its live alert destinations, and — the
-    // sharpest one — its envelope-encrypted Cloudflare billing token in
-    // `cloudflareBilling`, orphaned with no org row left to key a future sweep off.
+    // sharpest one — its envelope-encrypted Cloudflare tokens in
+    // `cloudflareAccounts`, orphaned with no org row left to key a future sweep off.
     //
     // Two deliberate exceptions to "every table with an organizationId":
     // `deployments` is NOT hard-deleted here — the block below transitions it to
@@ -268,7 +268,6 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         "buildLogs",
         "builds",
         "cloudflareAccounts",
-        "cloudflareBilling",
         "dashboards",
         "deployKeys",
         "domains",

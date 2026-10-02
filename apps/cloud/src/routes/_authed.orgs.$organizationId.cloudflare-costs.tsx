@@ -16,5 +16,5 @@ const CloudflareCostsSectionRoute = (): ReactElement => {
 /** `cloudflare-costs` tab — see `-section-loader.ts` for how its status query is server-rendered. */
 export const Route = createFileRoute("/_authed/orgs/$organizationId/cloudflare-costs")({
     component: CloudflareCostsSectionRoute,
-    loader: sectionLoader(api.cloudflare_billing.status),
+    loader: sectionLoader(api.cloudflare_accounts.list),
 });
