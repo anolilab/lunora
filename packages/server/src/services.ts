@@ -51,8 +51,31 @@ const unboundService = (spec: ServiceBindingSpec): unknown =>
     );
 
 /**
+ * An RPC stub whose `fetch` is bound to it, like a fetch service's, so
+ * `fetch: ctx.services.x.fetch` works for either kind. The stub is a workerd
+ * host object (a wildcard property per entrypoint method), so it is wrapped,
+ * not copied or extended, and every other property is read off the stub itself.
+ */
+const withBoundFetch = (stub: object): unknown => {
+    let fetch: ServiceFetcher["fetch"] | undefined;
+
+    return new Proxy(stub, {
+        get(target, property): unknown {
+            if (property === "fetch") {
+                fetch ??= (target as ServiceFetcher).fetch.bind(target);
+
+                return fetch;
+            }
+
+            return Reflect.get(target, property, target);
+        },
+    });
+};
+
+/**
  * Build `ctx.services` from the Worker `env` and the codegen-emitted specs. A
- * fetch service comes back as `{ fetch }` with `fetch` bound to the binding. A
+ * fetch service comes back as `{ fetch }` with `fetch` bound to the binding; an
+ * RPC service as its stub, with `fetch` bound the same way. A
  * declared service whose binding is absent resolves to a stand-in that throws on
  * first use, so a missing binding names itself instead of failing as
  * `Cannot read properties of undefined`.
@@ -66,8 +89,9 @@ const createServices = (env: Record<string, unknown>, specs: ReadonlyArray<Servi
         if ((typeof binding !== "object" && typeof binding !== "function") || binding === null) {
             services[spec.name] = unboundService(spec);
         } else if (spec.rpc === true) {
-            // An RPC stub: its methods are called on it, so it is handed over as is.
-            services[spec.name] = binding;
+            // An RPC stub: its methods are called on it, so it is handed over
+            // as is — apart from `fetch`, bound so it too can be passed detached.
+            services[spec.name] = withBoundFetch(binding);
         } else {
             // A Fetcher's `fetch` needs its `this`; binding it lets callers pass
             // `fetch: ctx.services.x.fetch` to a client, as the docs show.

@@ -35,7 +35,7 @@ export default runWorkerd
                                           modules: true,
                                           name: "gateway",
                                           script: `import { WorkerEntrypoint } from "cloudflare:workers";
-export class Gateway extends WorkerEntrypoint { async complete(prompt) { return "completed " + prompt; } }
+export class Gateway extends WorkerEntrypoint { async complete(prompt) { return "completed " + prompt; } fetch(request) { return new Response("gateway " + new URL(request.url).pathname); } }
 export default { fetch: () => new Response("gateway") };`,
                                       },
                                   ],
