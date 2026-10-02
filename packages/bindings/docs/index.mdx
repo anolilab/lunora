@@ -1,6 +1,6 @@
 ---
 title: "@lunora/bindings"
-description: The lightweight Cloudflare binding helpers for Lunora in one install — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts — with per-binding subpaths and tree-shaking.
+description: The lightweight Cloudflare binding helpers for Lunora in one install — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts, ctx.aiSearch — with per-binding subpaths and tree-shaking.
 ---
 
 `@lunora/bindings` bundles the thin, zero-dependency Cloudflare binding helpers into a single install, exposed as **per-binding subpaths**. Each is a typed `ctx.*` facade over its Cloudflare binding; codegen wires the matching context helper when a `lunora/` source imports the subpath (or reads the `ctx.*` property).
@@ -18,6 +18,7 @@ pnpm add @lunora/bindings
 | `@lunora/bindings/vectors`   | `ctx.vectors`   | Vectorize               | Query / Mutation / Action |
 | `@lunora/bindings/r2sql`     | `ctx.r2sql`     | R2 SQL (Apache Iceberg) | Action only               |
 | `@lunora/bindings/artifacts` | `ctx.artifacts` | Artifacts (Git repos)   | Action only               |
+| `@lunora/bindings/ai-search` | `ctx.aiSearch`  | AI Search (types only)  | Action only               |
 
 `sideEffects: false` subpath exports keep tree-shaking per-binding: an app that imports only `@lunora/bindings/kv` bundles nothing from the other helpers. Heavier add-ons with framework/driver peer deps (`@lunora/browser`, `@lunora/hyperdrive`, `@lunora/ai`, `@lunora/payment`) stay separate installs.
 
@@ -272,3 +273,22 @@ fake.putFile("docs", { ref: "main", path: "README.md", content: "# hello" }); //
 `fake.handles` counts opened and disposed repo handles, and `fake.failNext(code)` injects a binding error.
 
 Artifacts is Cloudflare-only: `target: "node"` and `celld` rate it `unsupported`, so codegen omits `ctx.artifacts` there and reports `platform_unsupported_feature`. Pushing to an Artifacts repo from Workers Builds is not wired into `lunora deploy`: a push-to-deploy build would skip codegen, migrations and the schema-drift gate.
+
+## AI Search — `@lunora/bindings/ai-search`
+
+Cloudflare AI Search (formerly AutoRAG): managed ingestion, chunking, embedding, hybrid (vector + BM25) retrieval and reranking. Action-only: every call is billed, non-deterministic network I/O. The subpath exports **types only**: `ctx.aiSearch` _is_ the raw `ai_search_namespaces` binding (`AiSearch`), passed through unwrapped, and `AiSearchInstance` is what its `get(name)` returns. Both are structural mirrors of Cloudflare's binding classes, like every other subpath here, so they type-check without `@cloudflare/workers-types` installed — and the real binding is pinned (by a type test) to satisfy them.
+
+`lunora dev` / `lunora deploy` add the binding for you the first time a `lunora/` source reads `ctx.aiSearch`, and never touch an entry you wrote:
+
+```jsonc
+{ "ai_search_namespaces": [{ "binding": "AI_SEARCH", "namespace": "default" }] }
+```
+
+```ts
+import { action } from "@/lunora/_generated/server";
+import { v } from "@lunora/values";
+
+export const searchDocs = action.input({ query: v.string() }).action(async ({ ctx, args }) => ctx.aiSearch.get("docs").search({ query: args.query }));
+```
+
+Point it at another binding with `defineApp().aiSearch((env) => env.MY_NAMESPACE)`. When to choose AI Search over `defineRag`, streaming chat completions, per-tenant instances and the billing and filter caveats are covered in [`@lunora/ai`](/docs/packages/ai#managed-rag-ai-search).
