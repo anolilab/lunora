@@ -347,6 +347,9 @@ export const create = mutation
                 ? { adminTokenCiphertext: arguments_.adminTokenCiphertext, adminTokenIv: arguments_.adminTokenIv }
                 : {}),
             alias: arguments_.scriptName,
+            // The box a `celld-vps` release runs on — what its teardown reaches
+            // once the project (and with it the placement) is gone.
+            ...(project.target === "celld-vps" && project.boxId != null ? { boxId: project.boxId } : {}),
             branch: arguments_.branch,
             ...(arguments_.cronSpecs && arguments_.cronSpecs.length > 0 ? { cronSpecs: arguments_.cronSpecs } : {}),
             createdAt: now,

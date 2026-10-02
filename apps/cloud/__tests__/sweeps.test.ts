@@ -89,6 +89,24 @@ describe(teardownPorts, () => {
         ]);
     });
 
+    it("hands a celld-vps alias's teardown the box its newest deployment names, whatever became of the project", async () => {
+        const database = fakeControlPlaneDb({
+            deployments: [
+                { _id: "old", alias: "web", boxId: "box_old", createdAt: 1, kind: "production", scriptName: "web", status: "destroyed", target: "celld-vps" },
+                { _id: "new", alias: "web", boxId: "box_new", createdAt: 2, kind: "production", scriptName: "web", status: "destroyed", target: "celld-vps" },
+                { _id: "wfp", alias: "a", kind: "production", scriptName: "a", status: "destroyed" },
+            ],
+        });
+
+        const pending = await teardownPorts(database, noop, 1000, everyTarget).listPending();
+
+        expect(pending).toStrictEqual([
+            { alias: "web", boxId: "box_new", destroyWorker: true, id: "old", target: "celld-vps" },
+            { alias: "web", boxId: "box_new", destroyWorker: false, id: "new", target: "celld-vps" },
+            { alias: "a", destroyWorker: true, id: "wfp", target: "cloudflare-wfp" },
+        ]);
+    });
+
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000, everyTarget);

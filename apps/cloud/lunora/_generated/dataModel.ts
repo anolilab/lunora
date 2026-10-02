@@ -87,6 +87,7 @@ export interface Doc_deployments {
     adminTokenCiphertext?: string;
     adminTokenIv?: string;
     alias?: string;
+    boxId?: Id<"boxes">;
     branch?: string;
     cronSpecs?: Array<string>;
     bindings?: Array<{ name: string; target?: string; type: string }>;
@@ -875,6 +876,7 @@ export interface Insert_deployments {
     adminTokenCiphertext?: string;
     adminTokenIv?: string;
     alias?: string;
+    boxId?: Id<"boxes">;
     branch?: string;
     cronSpecs?: Array<string>;
     bindings?: Array<{ name: string; target?: string; type: string }>;

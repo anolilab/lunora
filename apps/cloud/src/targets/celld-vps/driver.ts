@@ -50,6 +50,8 @@ export interface CelldVpsPorts {
      * box per alias instead and cannot name a tenant URL.
      */
     box?: BoxPlacement;
+    /** The box row `id`, or `null` when there is none (deleted with its organization). */
+    boxById: (id: string) => Promise<BoxReference | null>;
     /** The apex box hostnames live under (`LUNORA_BOX_DOMAIN`). */
     boxDomain: string;
     /** The box a deployed alias lives on, for a teardown that knows only the alias. `null` when it is on none. */
@@ -58,6 +60,8 @@ export interface CelldVpsPorts {
     boxForSlug: (slug: string) => Promise<BoxReference | null>;
     /** This control plane's public origin (`LUNORA_ORIGIN_URL`): where a box fetches a release from. */
     controlPlaneOrigin: string;
+    /** Receives the driver's own log lines (Workers Logs): what a teardown deliberately left behind. */
+    onLog?: (line: string) => void;
     /** Receives each progress line the box streams while it converges. */
     onProgress?: (line: string) => void;
     /** A box's session. */
@@ -135,17 +139,39 @@ export const createCelldVpsDriver = (ports: CelldVpsPorts): TargetDriver => {
             return { bundleHash, url: `https://${hostFor(spec.alias, box.slug)}` };
         },
         destroy: async (reference) => {
-            const box = ports.box ?? (await ports.boxForAlias(reference.alias));
+            const box = ports.box ?? (reference.boxId === undefined ? await ports.boxForAlias(reference.alias) : await ports.boxById(reference.boxId));
 
-            // Nothing to stop on no box, and nothing CAN be stopped on a revoked one:
-            // it is cut off, and its data is the customer's bucket to keep or delete.
-            if (!box || ("revoked" in box && box.revoked)) {
+            if (box === null) {
+                // The deployment row names a box that no longer exists: it was deleted
+                // with its organization, and nothing can reach the machine any more.
+                if (reference.boxId !== undefined) {
+                    ports.onLog?.(`alias "${reference.alias}": box ${reference.boxId} no longer exists; nothing to stop, releasing the alias`);
+
+                    return;
+                }
+
+                // A row that predates `deployments.boxId`, whose project is gone (or
+                // has left celld-vps): its fleet and data may still run on a box this
+                // driver cannot name. Throwing keeps the row pending and the alias
+                // claimed — releasing it would let another project claim the label and
+                // land on the old fleet's data.
+                throw new Error(
+                    `alias "${reference.alias}" has no box this control plane can resolve; its fleet cannot be stopped, so the alias stays claimed`,
+                );
+            }
+
+            // Nothing CAN be stopped on a revoked box: it is cut off, and its data is
+            // the customer's bucket to keep or delete. Recorded, then released.
+            if ("revoked" in box && box.revoked) {
+                ports.onLog?.(`alias "${reference.alias}": box "${box.slug}" is revoked; its fleet and data stay on the machine, releasing the alias`);
+
                 return;
             }
 
             // Reached only once the alias has no deployment left — an expired
             // preview or a deleted project (the teardown sweep) — so the data goes
-            // too, exactly as a cloudflare-wfp teardown deletes its D1 and R2.
+            // too, exactly as a cloudflare-wfp teardown deletes its D1 and R2. A box
+            // that is offline throws, which leaves the row pending for the next tick.
             await run(box, "destroy", { alias: reference.alias, deleteData: true, kind: "destroy" }, DESTROY_TIMEOUT_MS);
         },
         domains: {
@@ -256,7 +282,7 @@ export const celldVpsCanConverge = (environment: CelldVpsEnvironment): boolean =
 /** Build the driver off the Worker env. Lazy: nothing is touched until a member is called. */
 export const celldVpsDriverFromEnv = (
     environment: CelldVpsEnvironment,
-    options: { box?: BoxPlacement; onProgress?: (line: string) => void } = {},
+    options: { box?: BoxPlacement; onLog?: (line: string) => void; onProgress?: (line: string) => void } = {},
 ): TargetDriver => {
     const database = (): ControlPlaneStore => {
         if (environment.DB == null) {
@@ -269,6 +295,7 @@ export const celldVpsDriverFromEnv = (
     return createCelldVpsDriver({
         ...(options.box === undefined ? {} : { box: options.box }),
         boxDomain: environment.LUNORA_BOX_DOMAIN ?? DEFAULT_BOX_DOMAIN,
+        boxById: async (id) => boxReference((await database().get(id, "boxes")) as BoxRow | null),
         boxForAlias: (alias) => boxForAliasIn(database())(alias),
         boxForSlug: async (slug) => {
             const { page } = await database().findMany("boxes", { where: { slug } });
@@ -276,6 +303,7 @@ export const celldVpsDriverFromEnv = (
             return boxReference(page[0] as BoxRow | undefined);
         },
         controlPlaneOrigin: stripTrailingSlashes(environment.LUNORA_ORIGIN_URL ?? ""),
+        ...(options.onLog === undefined ? {} : { onLog: options.onLog }),
         ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
         session: (boxId) => {
             if (!environment.BOX_SESSION) {

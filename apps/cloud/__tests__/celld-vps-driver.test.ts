@@ -6,6 +6,8 @@ import { BoxSessionError } from "../src/boxes/session-client";
 import type { DeployBackend } from "../src/deploy/handler";
 import { startRelease } from "../src/deploy/handler";
 import { CellScheduler } from "../src/deploy/scheduler";
+import { teardownPorts } from "../src/deploy/sweeps";
+import { runTeardownSweep } from "../src/deploy/teardown";
 import { TokenBucket } from "../src/deploy/token-bucket";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { CelldVpsPorts } from "../src/targets/celld-vps/driver";
@@ -56,6 +58,7 @@ const recordingSession = (answer: (job: HostdJob) => Promise<Awaited<ReturnType<
 const driverWith = (session: BoxSession, overrides: Partial<CelldVpsPorts> = {}) =>
     createCelldVpsDriver({
         box: BOX,
+        boxById: () => Promise.resolve({ ...BOX, revoked: false }),
         boxDomain: "boxes.test",
         boxForAlias: () => Promise.resolve({ ...BOX, revoked: false }),
         boxForSlug: () => Promise.resolve(null),
@@ -121,13 +124,53 @@ describe("the celld-vps driver", () => {
         expect(jobs).toStrictEqual([{ alias: "web", deleteData: true, kind: "destroy" }]);
     });
 
-    it("leaves an alias on no box, or on a revoked box, alone", async () => {
+    it("tears down on the box the deployment row names, without asking the project", async () => {
+        const { jobs, session } = recordingSession();
+        const asked: string[] = [];
+
+        await driverWith(session, {
+            box: undefined,
+            boxById: (id) => {
+                asked.push(id);
+
+                return Promise.resolve({ ...BOX, revoked: false });
+            },
+            boxForAlias: () => Promise.reject(new Error("the project is gone")),
+        }).destroy({ alias: "web", boxId: "box_1" });
+
+        expect(asked).toStrictEqual(["box_1"]);
+        expect(jobs).toStrictEqual([{ alias: "web", deleteData: true, kind: "destroy" }]);
+    });
+
+    it("throws, keeping the alias claimed, when no box can be resolved for it", async () => {
         const { jobs, session } = recordingSession();
 
-        await driverWith(session, { box: undefined, boxForAlias: () => Promise.resolve(null) }).destroy({ alias: "web" });
-        await driverWith(session, { box: undefined, boxForAlias: () => Promise.resolve({ ...BOX, revoked: true }) }).destroy({ alias: "web" });
+        await expect(driverWith(session, { box: undefined, boxForAlias: () => Promise.resolve(null) }).destroy({ alias: "web" })).rejects.toThrow(
+            /no box this control plane can resolve/u,
+        );
+        expect(jobs).toStrictEqual([]);
+    });
+
+    it("leaves an alias on a revoked or deleted box alone, and says so", async () => {
+        const { jobs, session } = recordingSession();
+        const logged: string[] = [];
+        const onLog = (line: string): void => {
+            logged.push(line);
+        };
+
+        await driverWith(session, { box: undefined, boxForAlias: () => Promise.resolve({ ...BOX, revoked: true }), onLog }).destroy({ alias: "web" });
+        await driverWith(session, { box: undefined, boxById: () => Promise.resolve({ ...BOX, revoked: true }), onLog }).destroy({
+            alias: "web",
+            boxId: "box_1",
+        });
+        await driverWith(session, { box: undefined, boxById: () => Promise.resolve(null), onLog }).destroy({ alias: "web", boxId: "box_gone" });
 
         expect(jobs).toStrictEqual([]);
+        expect(logged).toStrictEqual([
+            'alias "web": box "bslug000001" is revoked; its fleet and data stay on the machine, releasing the alias',
+            'alias "web": box "bslug000001" is revoked; its fleet and data stay on the machine, releasing the alias',
+            'alias "web": box box_gone no longer exists; nothing to stop, releasing the alias',
+        ]);
     });
 
     it("routes default hostnames of any box by slug, and custom domains by lookup", async () => {
@@ -182,6 +225,83 @@ describe("the celld-vps driver", () => {
                 LUNORA_ORIGIN_URL: "https://c",
             }),
         ).toBe(true);
+    });
+});
+
+describe("celld-vps teardown after the project is gone", () => {
+    /**
+     * The world after `projects.remove` (or a preview's expiry): the deployment
+     * rows are `destroyed` and still name their box, the alias is still claimed,
+     * and — for a deleted project — the project row is gone.
+     */
+    const world = (box: Record<string, unknown>, projects: Record<string, unknown>[] = []) =>
+        memoryStore({
+            aliasOwnership: [{ _id: "own_1", alias: "web", projectId: "proj_1" }],
+            boxes: [{ _id: "box_1", slug: "bslug000001", ...box }],
+            deployments: [
+                { _id: "dep_1", alias: "web", boxId: "box_1", createdAt: 1, kind: "production", scriptName: "web", status: "destroyed", target: "celld-vps" },
+            ],
+            projects,
+        });
+
+    const sweep = async (store: ReturnType<typeof memoryStore>, session: BoxSession) => {
+        const driver = createCelldVpsDriver({
+            boxById: async (id) => {
+                const row = (await store.get(id, "boxes")) as null | { _id: string; slug: string; status: string };
+
+                return row ? { id: row._id, revoked: row.status === "revoked", slug: row.slug } : null;
+            },
+            boxDomain: "boxes.test",
+            boxForAlias: (alias) => boxForAliasIn(store)(alias),
+            boxForSlug: () => Promise.resolve(null),
+            controlPlaneOrigin: "https://cloud.test",
+            session: () => session,
+        });
+
+        return runTeardownSweep(
+            teardownPorts(store, { deleteRelease: () => Promise.resolve(), destroy: (_target, reference) => driver.destroy(reference) }, 1000, () => true),
+        );
+    };
+
+    const claimed = async (store: ReturnType<typeof memoryStore>): Promise<number> => {
+        const { page } = await store.findMany("aliasOwnership", { where: { alias: "web" } });
+
+        return page.length;
+    };
+
+    it("stops a deleted project's fleet and its data on its box, then frees the alias", async () => {
+        const store = world({ status: "online" });
+        const { jobs, session } = recordingSession();
+
+        await expect(sweep(store, session)).resolves.toStrictEqual({ failed: 0, tornDown: 1 });
+        expect(jobs).toStrictEqual([{ alias: "web", deleteData: true, kind: "destroy" }]);
+        await expect(claimed(store)).resolves.toBe(0);
+    });
+
+    it("stops an expired preview's fleet on its box while the project lives on", async () => {
+        const store = world({ status: "online" }, [{ _id: "proj_1", boxId: "box_1", organizationId: "org_1" }]);
+        const { jobs, session } = recordingSession();
+
+        await sweep(store, session);
+
+        expect(jobs).toStrictEqual([{ alias: "web", deleteData: true, kind: "destroy" }]);
+    });
+
+    it("keeps the alias claimed, and the row pending, while the box cannot be reached", async () => {
+        const store = world({ status: "offline" });
+        const { session } = recordingSession(() => Promise.reject(new BoxSessionError("BOX_OFFLINE", "the box is not connected")));
+
+        await expect(sweep(store, session)).resolves.toStrictEqual({ failed: 1, tornDown: 0 });
+        await expect(claimed(store)).resolves.toBe(1);
+    });
+
+    it("frees the alias of a fleet on a revoked box, which nothing can reach", async () => {
+        const store = world({ status: "revoked" });
+        const { jobs, session } = recordingSession();
+
+        await expect(sweep(store, session)).resolves.toStrictEqual({ failed: 0, tornDown: 1 });
+        expect(jobs).toStrictEqual([]);
+        await expect(claimed(store)).resolves.toBe(0);
     });
 });
 

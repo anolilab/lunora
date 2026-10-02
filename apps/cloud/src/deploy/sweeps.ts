@@ -21,6 +21,8 @@ import type { TeardownPorts, TeardownTarget } from "./teardown";
 interface TeardownRow {
     _id: string;
     alias?: string;
+    boxId?: null | string;
+    createdAt?: number;
     kind: string;
     scriptName: string;
     status: string;
@@ -74,6 +76,20 @@ export const teardownPorts = (
                 }
             }
 
+            // The box each alias was last converged on: its newest row that names
+            // one. A project that moved boxes leaves older rows naming the old one.
+            const boxes = new Map<string, { at: number; boxId: string }>();
+
+            for (const row of rows) {
+                const alias = row.alias ?? row.scriptName;
+                const at = row.createdAt ?? 0;
+                const known = boxes.get(alias);
+
+                if (row.boxId != null && (known === undefined || at >= known.at)) {
+                    boxes.set(alias, { at, boxId: row.boxId });
+                }
+            }
+
             const elected = new Set<string>();
 
             return (
@@ -87,7 +103,9 @@ export const teardownPorts = (
                             elected.add(alias);
                         }
 
-                        return { alias, destroyWorker, id: row._id, target: storedTarget(row.target) };
+                        const boxId = boxes.get(alias)?.boxId;
+
+                        return { alias, ...(boxId === undefined ? {} : { boxId }), destroyWorker, id: row._id, target: storedTarget(row.target) };
                     })
                     // A row whose target is unknown, or cannot converge here, waits.
                     .filter((target): target is TeardownTarget => target.target !== undefined && canConverge(target.target))

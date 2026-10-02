@@ -237,6 +237,11 @@ export default defineSchema({
         // The project's stable label — its public subdomain and the name of its
         // one dispatch-namespace script, which every release updates in place.
         alias: v.optional(v.string()),
+        // The box a `celld-vps` release was converged on, copied from the
+        // project's placement when the row is created. Teardown reads it here,
+        // not through the project: deleting a project removes the row that
+        // would have named the box, while its fleet and data still run on it.
+        boxId: v.optional(v.id("boxes")),
         // Preview deployments carry the originating git branch (§2.3).
         branch: v.optional(v.string()),
         // The tenant's compiled cron expressions (wrangler `triggers.crons`). WfP

@@ -79,6 +79,7 @@ export const deployments = sqliteTable("deployments", {
     adminTokenCiphertext: text("adminTokenCiphertext"),
     adminTokenIv: text("adminTokenIv"),
     alias: text("alias"),
+    boxId: text("boxId").references((): AnySQLiteColumn => boxes._id),
     branch: text("branch"),
     cronSpecs: text("cronSpecs", { mode: "json" }).$type<Array<string>>(),
     bindings: text("bindings", { mode: "json" }).$type<Array<{ name: string; target?: string; type: string }>>(),

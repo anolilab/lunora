@@ -23,6 +23,8 @@ import type { DestroyRef } from "../targets/driver";
 export interface TeardownTarget {
     /** The project's stable label — names its tenant and its per-project resources. */
     alias: string;
+    /** The box the alias runs on (`celld-vps`), from its deployment rows — the project may be gone. */
+    boxId?: string;
 
     /**
      * Whether to destroy the alias's tenant and its resources (D1, R2, KV,
@@ -71,7 +73,7 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
         try {
             if (target.destroyWorker) {
                 // eslint-disable-next-line no-await-in-loop -- sequential teardown paces the target's API work; volumes are small
-                await ports.destroy(target.target, { alias: target.alias });
+                await ports.destroy(target.target, { alias: target.alias, ...(target.boxId === undefined ? {} : { boxId: target.boxId }) });
 
                 // The alias is only free once its tenant and resources are gone.
                 // Released BEFORE `markTornDown` so a failure here leaves the row

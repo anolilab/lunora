@@ -31,6 +31,12 @@ export interface ConvergeResult {
 export interface DestroyRef {
     /** The project label — names the tenant and its per-project resources. */
     alias: string;
+
+    /**
+     * The box the alias was deployed on (`celld-vps`), read off its deployment
+     * row. Absent for other targets, and on rows that predate it.
+     */
+    boxId?: string;
 }
 
 /** What {@link TargetDriver.route} resolves a hostname to. */

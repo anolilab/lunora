@@ -138,6 +138,7 @@ describeTargetConformance("celld-vps", () => {
     return {
         driver: createCelldVpsDriver({
             box,
+            boxById: () => Promise.resolve({ ...box, revoked: false }),
             boxDomain: "boxes.test",
             boxForAlias: () => Promise.resolve({ ...box, revoked: false }),
             boxForSlug: (slug) => Promise.resolve(slug === box.slug ? { ...box, revoked: false } : null),

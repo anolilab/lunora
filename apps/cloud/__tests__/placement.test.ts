@@ -106,6 +106,16 @@ describe("deployments.create", () => {
         await expect(insertedDeployment({ target: "celld-vps" })).resolves.toMatchObject({ document: { resourceRef: "web", target: "celld-vps" } });
     });
 
+    it("records the box a celld-vps release runs on, so its teardown outlives the project", async () => {
+        await expect(insertedDeployment({ boxId: "box_1", target: "celld-vps" })).resolves.toMatchObject({ document: { boxId: "box_1", target: "celld-vps" } });
+    });
+
+    it("records no box for a cloudflare-wfp release", async () => {
+        const inserted = (await insertedDeployment({ boxId: "box_1", target: "cloudflare-wfp" })) as { document: Record<string, unknown> } | undefined;
+
+        expect(inserted?.document).not.toHaveProperty("boxId");
+    });
+
     it("records cloudflare-wfp for a project that predates targets", async () => {
         await expect(insertedDeployment({})).resolves.toMatchObject({ document: { resourceRef: "web", scriptName: "web", target: "cloudflare-wfp" } });
     });
