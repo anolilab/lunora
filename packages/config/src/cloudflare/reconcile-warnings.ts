@@ -45,11 +45,15 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
     // the Hyperdrive client by the app, so any name the app chose is correct.
     const pipelinesBindingMissing = inferred.usesPipelines && !(parsed?.pipelines ?? []).some((entry) => entry.binding === PIPELINES_BINDING);
 
-    // Keyed on the NAME too: the generated ShardDO reads `env.ARTIFACTS` unless the
-    // app's `.artifacts()` override points it elsewhere, so a `{ "binding": "REPOS" }`
-    // entry alone leaves `ctx.artifacts` throwing. The hint names that override, the
-    // one way an app legitimately keeps another name.
-    const artifactsBindingMissing = inferred.usesArtifacts && !(parsed?.artifacts ?? []).some((entry) => entry.binding === ARTIFACTS_BINDING);
+    // No entry at all gets the full setup hint. Entries without one named ARTIFACTS
+    // are usually a valid `.artifacts()` override, which this file can't see, so
+    // they get a softer reminder that the override must point at one of them —
+    // without it the generated ShardDO reads `env.ARTIFACTS` and `ctx.artifacts`
+    // throws.
+    const artifactsEntries = inferred.usesArtifacts ? (parsed?.artifacts ?? []) : [];
+    const artifactsOtherNames = artifactsEntries.some((entry) => entry.binding === ARTIFACTS_BINDING)
+        ? []
+        : artifactsEntries.flatMap((entry) => (entry.binding === undefined ? [] : [entry.binding]));
 
     const rules: ReadonlyArray<[boolean, string]> = [
         [
@@ -64,7 +68,11 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
             pipelinesBindingMissing,
             `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", stream }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
         ],
-        [artifactsBindingMissing, artifactsBindingHint(inferred.jurisdiction)],
+        [inferred.usesArtifacts && artifactsEntries.length === 0, artifactsBindingHint(inferred.jurisdiction)],
+        [
+            artifactsOtherNames.length > 0,
+            `ctx.artifacts is used and ${artifactsOtherNames.map((name) => `"${name}"`).join(", ")} ${artifactsOtherNames.length === 1 ? "is" : "are"} bound, but none is named "${ARTIFACTS_BINDING}"; make sure \`.artifacts()\` on defineApp points ctx.artifacts at it — otherwise it reads env.${ARTIFACTS_BINDING} and throws.`,
+        ],
         [
             flagshipBindingMissing,
             `lunora/flags.ts uses Flagship in binding mode but no flagship binding "${inferred.flagshipBinding ?? ""}" exists; add a flagship entry ({ binding: "${inferred.flagshipBinding ?? ""}", app_id }) — the app_id can't be auto-provisioned.`,

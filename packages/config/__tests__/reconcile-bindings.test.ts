@@ -377,10 +377,8 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().artifacts).toBeUndefined();
     });
 
-    it("keeps warning about artifacts until a binding named ARTIFACTS exists, naming the .artifacts() override", () => {
-        expect.assertions(3);
-
-        const wranglerWith = (binding: string): void => {
+    describe("an existing artifacts binding", () => {
+        const wranglerWith = (bindings: ReadonlyArray<string>): void => {
             writeFileSync(
                 join(root, "wrangler.jsonc"),
                 `{
@@ -388,24 +386,33 @@ describe("reconcileWranglerBindings", () => {
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "artifacts": [{ "binding": "${binding}", "namespace": "default" }],
+    "artifacts": [${bindings.map((binding) => `{ "binding": "${binding}", "namespace": "default" }`).join(", ")}],
 }
 `,
                 "utf8",
             );
         };
 
-        // Codegen reads env.ARTIFACTS by default, so another name alone leaves ctx.artifacts throwing.
-        wranglerWith("REPOS");
+        it("reminds about the .artifacts() override, not the full setup hint, when only another name is bound", () => {
+            expect.assertions(3);
 
-        const misnamed = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ");
+            // Usually a valid `.artifacts()` override, which reconcile can't see.
+            wranglerWith(["REPOS"]);
 
-        expect(misnamed).toMatch(/ctx\.artifacts/u);
-        expect(misnamed).toContain("`.artifacts()`");
+            const warnings = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ");
 
-        wranglerWith("ARTIFACTS");
+            expect(warnings).toContain('"REPOS" is bound, but none is named "ARTIFACTS"');
+            expect(warnings).toContain("`.artifacts()`");
+            expect(warnings).not.toMatch(/add an "artifacts" binding/u);
+        });
 
-        expect(reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ")).not.toMatch(/ctx\.artifacts/u);
+        it("stays quiet once a binding named ARTIFACTS exists", () => {
+            expect.assertions(1);
+
+            wranglerWith(["REPOS", "ARTIFACTS"]);
+
+            expect(reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ")).not.toMatch(/ctx\.artifacts/u);
+        });
     });
 
     it("keeps warning about pipelines until the binding codegen resolves actually exists", () => {
