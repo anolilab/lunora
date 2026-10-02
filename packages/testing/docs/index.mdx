@@ -212,6 +212,18 @@ const t = lunoraTest(schema, { fetch: fakeFetch });
 Without the option, `ctx.fetch` throws the v1 error the first time an action
 reaches for it.
 
+### Injectable `ctx.services`
+
+Pass a `services` option with a fake per `lunora.config` service an action
+calls. Like at runtime, only actions get `ctx.services`; a service with no fake
+throws on use, naming the option:
+
+```ts
+const t = lunoraTest(schema, {
+    services: { documentParser: { fetch: vi.fn().mockResolvedValue(Response.json({ text: "…" })) } },
+});
+```
+
 ### Scheduler
 
 `ctx.scheduler` is a working fake with a virtual clock. Jobs enqueue

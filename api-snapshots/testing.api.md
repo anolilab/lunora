@@ -164,6 +164,7 @@ interface LunoraTestOptions {
     fetch?: typeof globalThis.fetch;
     functions?: FunctionRegistry;
     now?: number;
+    services?: Record<string, object>;
 }
 ```
 

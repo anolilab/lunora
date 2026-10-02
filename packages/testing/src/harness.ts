@@ -233,6 +233,20 @@ interface LunoraTestOptions {
      * ```
      */
     now?: number;
+
+    /**
+     * Fakes for `ctx.services` (the `lunora.config` `services` an app calls),
+     * keyed like `ctx.services`. Set on action contexts only — queries and
+     * mutations have no `ctx.services` at runtime either. A key with no fake
+     * throws on use, naming the option to add it to.
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, {
+     *   services: { documentParser: { fetch: vi.fn().mockResolvedValue(Response.json({ text: "…" })) } },
+     * });
+     * ```
+     */
+    services?: Record<string, object>;
 }
 
 /**
@@ -358,6 +372,33 @@ const registeredFunctionVisibility = (value: unknown): "internal" | "public" =>
 const unavailable = (surface: string): never => {
     throw new LunoraError("INTERNAL", `ctx.${surface} is not available in the in-memory @lunora/testing harness (v1)`);
 };
+
+/**
+ * `ctx.services` for an action: the fakes passed to {@link lunoraTest}, with a
+ * read of any other key throwing — a missing fake then names itself instead of
+ * failing as `Cannot read properties of undefined`.
+ */
+const servicesContext = (fakes: Readonly<Record<string, object>> | undefined): Record<string, object> =>
+    new Proxy(
+        { ...fakes },
+        {
+            get(target, property): unknown {
+                // `then` is probed by `await`, and symbols by inspection; neither is a service.
+                if (property === "then" || typeof property === "symbol") {
+                    return undefined;
+                }
+
+                if (Object.hasOwn(target, property)) {
+                    return target[property];
+                }
+
+                throw new LunoraError(
+                    "INTERNAL",
+                    `ctx.services.${property} has no fake in the @lunora/testing harness — pass lunoraTest(schema, { services: { ${property}: … } })`,
+                );
+            },
+        },
+    );
 
 /**
  * The proxy target MUST be a function so the `apply` trap fires when the
@@ -1059,7 +1100,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // `queryContext`/`mutationContext`/`actionContext` above.
         const rawMutationContext: MutationCtx = { ...mutationContext, db: rawDatabase };
 
-        const actionContext: ActionCtx = {
+        // `services` is not on the base ActionCtx: codegen adds it to the app's own
+        // action context when `lunora.config` declares services.
+        const actionContext: ActionCtx & { services: Record<string, object> } = {
             auth,
             db: database,
             env: options?.env,
@@ -1094,6 +1137,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 runInternal("query", reference, queryContext, args) as Promise<never>) as unknown as QueryCtx["runQuery"],
             scheduler,
             secrets: stubProxy("secrets") as ActionCtx["secrets"],
+            services: servicesContext(options?.services),
             storage: stubProxy("storage") as ActionCtx["storage"],
             vectors: stubProxy("vectors") as ActionCtx["vectors"],
             workflows: stubProxy("workflows") as ActionCtx["workflows"],

@@ -116,6 +116,18 @@ const t = lunoraTest(schema, { fetch: fakeFetch });
 
 Without the option, `ctx.fetch` still throws the v1 error on first access.
 
+#### Injectable `ctx.services`
+
+Pass a `services` option with a fake per `lunora.config` service an action
+calls. Like at runtime, only actions get `ctx.services`; a service with no fake
+throws on use, naming the option:
+
+```ts
+const t = lunoraTest(schema, {
+    services: { documentParser: { fetch: vi.fn().mockResolvedValue(Response.json({ text: "…" })) } },
+});
+```
+
 #### Fixed `ctx.now`
 
 Pass a `now` option (epoch ms) to pin `ctx.now` across every context, so
