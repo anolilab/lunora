@@ -857,7 +857,7 @@ export interface CallEdgeIR {
 export interface ServiceBindingIR {
     /** The `services[].binding` Lunora writes, e.g. `SERVICE_DOCUMENT_PARSER`. */
     binding: string;
-    /** The exported `WorkerEntrypoint` class for an RPC service; absent for a fetch service. */
+    /** The exported `WorkerEntrypoint` class the binding targets; absent for the Worker's default export. */
     entrypoint?: string;
 
     /**
@@ -876,6 +876,15 @@ export interface ServiceBindingIR {
      * route of its own: `""` for the top level, else the environment name.
      */
     publicScopes: ReadonlyArray<string>;
+
+    /**
+     * The `WorkerEntrypoint` class the service is typed — and wired — as an RPC
+     * stub of. Equal to {@link ServiceBindingIR.entrypoint} for an RPC service;
+     * absent for a fetch service, including a named entrypoint declared
+     * `rpc: false`, which is called with plain `fetch` and so needs no import of
+     * the service's sources.
+     */
+    rpcEntrypoint?: string;
     /** The Worker's own `name` from its wrangler config — the `services[].service` target. */
     worker: string;
     /** Absolute path of the service's wrangler config. */

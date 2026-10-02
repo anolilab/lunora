@@ -3,6 +3,7 @@ import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 /**
  * The virtual-clock backoff each retry waits out, derived from the SAME
@@ -153,12 +154,12 @@ const functions = {
     "log:pingViaFetch": pingViaFetch,
 };
 
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 const start = (): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema, { functions });
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
@@ -167,16 +168,14 @@ const start = (): ReturnType<typeof lunoraTest> => {
 const startWithFetch = (fetchImpl: typeof globalThis.fetch): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema, { fetch: fetchImpl, functions });
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
 
 describe("fake scheduler", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("queues a job via runAfter and does not execute it immediately", async () => {
@@ -313,7 +312,7 @@ describe("fake scheduler", () => {
         const fixedNow = 1_700_000_000_000;
         const t = lunoraTest(schema, { functions, now: fixedNow });
 
-        open.push(t);
+        harnesses.track(t);
 
         await t.mutation(scheduleRelativeToNow, { delayMs: 60_000, message: "relative" });
 
@@ -403,7 +402,7 @@ describe("fake scheduler", () => {
         // (production does not surface a mid-retry failure either).
         const t = lunoraTest(schema);
 
-        open.push(t);
+        harnesses.track(t);
 
         // runAfter itself should succeed (enqueue) and return a job id string.
         const jobId = await t.mutation(scheduleAppend, { delayMs: 0, message: "unknown path" });
@@ -757,9 +756,7 @@ describe("fake scheduler", () => {
  */
 describe("fake scheduler production parity", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("rejects a negative or non-finite runAfter delay", async () => {
@@ -810,7 +807,7 @@ describe("fake scheduler production parity", () => {
 
         const t = lunoraTest(schema, { functions, now: 1_000_000 });
 
-        open.push(t);
+        harnesses.track(t);
 
         await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:recordNow", {}));
         await t.scheduler.advance(3_600_000);

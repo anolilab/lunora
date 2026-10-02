@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.248...@lunora/codegen@1.0.0-alpha.249) (2026-10-02)
+
+### Features
+
+* fetch-only service entrypoints, ctx.services test fakes, resumable upload docs ([#938](https://github.com/anolilab/lunora/issues/938)) ([6b3ff8a](https://github.com/anolilab/lunora/commit/6b3ff8a2728663e053587ee03f9b8a059bcc1177))
+
 ## @lunora/codegen [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.247...@lunora/codegen@1.0.0-alpha.248) (2026-10-02)
 
 ### Bug Fixes

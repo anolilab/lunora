@@ -54,7 +54,7 @@ describe("reconcileServices", () => {
     const service = (name: string, worker: string, envWorkers: Record<string, string> = {}, entrypoint?: string): ServiceBindingIR => {
         return {
             binding: `SERVICE_${name.toUpperCase()}`,
-            ...(entrypoint === undefined ? {} : { entrypoint }),
+            ...(entrypoint === undefined ? {} : { entrypoint, rpcEntrypoint: entrypoint }),
             envWorkers,
             main: join(root, "services", name, "src/index.ts"),
             name,
