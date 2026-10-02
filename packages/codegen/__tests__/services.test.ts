@@ -84,6 +84,37 @@ describe("services", () => {
         expect(shard).toContain(`{ binding: "SERVICE_PARSER", name: "parser" }`);
     });
 
+    it("binds a named entrypoint declared rpc: false as a fetcher, without importing the service's sources", () => {
+        expect.assertions(5);
+
+        writeServices();
+        write("lunora.config.ts", `export default { services: { llmGateway: { dir: "./services/llm-gateway", entrypoint: "InternalApi", rpc: false } } };\n`);
+        runCodegen({ projectRoot: workdir });
+
+        const server = generated("server.ts");
+        const [service] = resolveServiceBindings(workdir);
+
+        // #929: the RPC import made every consumer of _generated type-check the service.
+        expect(server).not.toContain("lunoraService_llmGateway");
+        expect(server).toContain("readonly llmGateway: ServiceFetcher;");
+        expect(generated("shard.ts")).toContain(`{ binding: "SERVICE_LLM_GATEWAY", name: "llmGateway" }`);
+        // The binding still targets the named entrypoint; nothing is typed from it.
+        expect(service).toMatchObject({ entrypoint: "InternalApi" });
+        expect(service).not.toHaveProperty("rpcEntrypoint");
+    });
+
+    it.each([
+        ["rpc: true", `{ dir: "./services/parser", entrypoint: "Parser", rpc: true }`],
+        ["a non-literal rpc", `{ dir: "./services/parser", rpc: rpcFlag }`],
+    ])("treats %s as an unreadable declaration (only rpc: false means anything)", (_label, declaration) => {
+        expect.assertions(1);
+
+        writeServices();
+        write("lunora.config.ts", `const rpcFlag = false;\nexport default { services: { parser: ${declaration} } };\n`);
+
+        expect(() => resolveServiceBindings(workdir)).toThrow(/must be an inline object/u);
+    });
+
     it("draws a service node and an invoke edge in the architecture manifest", () => {
         expect.assertions(3);
 

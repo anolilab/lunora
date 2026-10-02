@@ -289,12 +289,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
 End-user file uploads (live progress, pause/resume, large-file resumable and
 per-part retry) are re-exported from `@visulima/storage-client` (Lunora does not
-hand-roll the uploader). `useUpload` auto-selects TUS / chunked-REST / multipart
-by file size; the TUS path survives a pause/resume and a dropped connection.
+hand-roll the uploader). `useUpload` speaks the protocol named in `method`; without it, it uses the only
+endpoint given, or picks between several by file size against `tusThreshold`.
+The TUS path survives a pause/resume and a dropped connection.
 Point the endpoint at a route backed by
 [`@lunora/storage/upload`](/docs/packages/storage#end-user-uploads-rls-gated);
 these uploads are gated by _your_ per-user RLS policy, **not** the studio
-`adminToken`.
+`adminToken`. [File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
+walks through mounting the handler, authenticating the route, and the size limits.
 
 ### TanStack Query reconciliation
 
@@ -314,12 +316,14 @@ export function Uploader() {
     const [dragging, setDragging] = useState(false);
     const controlRef = useRef(null);
 
-    // `endpointTus` points at the RLS-gated `@lunora/storage/upload` handler.
-    // The hook auto-selects TUS for large files (resumable), a plain multipart
-    // POST for small ones.
+    // Each endpoint is its own `@lunora/storage/upload` handler: one handler
+    // speaks one protocol. The hook auto-selects TUS for large files
+    // (resumable), a plain multipart POST for small ones.
     const { upload, progress, isUploading, isPaused, pause, resume, abort, error, result } = useUpload({
-        endpointTus: "/upload",
-        endpointMultipart: "/upload",
+        endpointTus: "/uploads",
+        endpointMultipart: "/uploads-form",
+        // Over R2 each TUS chunk is a multipart part, and R2 rejects parts under 5 MiB.
+        chunkSize: 5 * 1024 * 1024,
         // Send the user's session so the server's `authorize` gate can identify them.
         headers: async () => ({ authorization: `Bearer ${await getSessionToken()}` }),
         restrictions: { maxFileSize: 5 * 1024 * 1024 * 1024, allowedFileTypes: ["video/*", "image/*"] },

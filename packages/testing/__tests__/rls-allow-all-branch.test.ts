@@ -12,6 +12,7 @@ import { allowAll, definePolicies, definePolicy, defineSchema, defineTable, init
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 const { query } = initLunora.dataModel().create();
 
@@ -49,13 +50,11 @@ const reads = query
         };
     });
 
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 describe("an rls read policy with an allowAll() branch", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("admits every row on findMany and on the shard reader", async () => {
@@ -63,7 +62,7 @@ describe("an rls read policy with an allowAll() branch", () => {
 
         const t = lunoraTest(schema);
 
-        open.push(t);
+        harnesses.track(t);
 
         await t.run(async (ctx) => {
             await ctx.db.insertMany(

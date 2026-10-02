@@ -62,7 +62,7 @@ const isPublicWithoutRoute = (scope: ServiceWranglerScope, top: ServiceWranglerS
     return !routed && (scope.workers_dev ?? top.workers_dev) !== false;
 };
 
-const resolveService = (projectRoot: string, key: string, declaration: { dir: string; entrypoint?: string }): ServiceBindingIR => {
+const resolveService = (projectRoot: string, key: string, declaration: { dir: string; entrypoint?: string; rpc?: false }): ServiceBindingIR => {
     if (!IDENTIFIER_RE.test(key)) {
         throw new Error(`@lunora/codegen: service key "${key}" must be an identifier — it becomes ctx.services.${key}`);
     }
@@ -97,6 +97,8 @@ const resolveService = (projectRoot: string, key: string, declaration: { dir: st
             ...(isPublicWithoutRoute(config, config) ? [""] : []),
             ...environments.filter(([, scope]) => isPublicWithoutRoute(scope, config)).map(([environment]) => environment),
         ],
+        // A named entrypoint is RPC unless declared `rpc: false`.
+        ...(declaration.entrypoint === undefined || declaration.rpc === false ? {} : { rpcEntrypoint: declaration.entrypoint }),
         worker: name,
         wranglerPath: path,
     };
@@ -114,7 +116,7 @@ const resolveServiceBindings = (projectRoot: string): ServiceBindingIR[] => {
 
     if (services?.unreadable === true) {
         throw new Error(
-            '@lunora/codegen: lunora.config `services` must be an inline object of { dir: "…", entrypoint?: "…" } string literals — codegen reads it without running the file',
+            '@lunora/codegen: lunora.config `services` must be an inline object of { dir: "…", entrypoint?: "…", rpc?: false } literals — codegen reads it without running the file',
         );
     }
 
