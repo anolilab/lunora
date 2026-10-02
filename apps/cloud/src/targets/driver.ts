@@ -17,7 +17,7 @@
  * conformance suite is written against lives in `__tests__/support/memory-driver.ts`.
  */
 import type { TenantSend } from "../backup/tenant-transport";
-import type { DeployKind, TenantDeploymentSpec } from "../provision-contract";
+import type { BindingSupportTable, BindingType, DeployKind, TenantDeploymentSpec } from "../provision-contract";
 
 /** What converging a release produced. */
 export interface ConvergeResult {
@@ -110,6 +110,14 @@ export interface TargetCapabilities {
 }
 
 export interface TargetDriver {
+    /**
+     * How this target satisfies each binding type. The deploy handler validates
+     * a manifest against it — refusing, by name, what the target cannot run —
+     * before a deployment row exists. A registered target's table is its row of
+     * `BINDING_SUPPORT` (`src/provision-contract.ts`).
+     */
+    readonly bindingSupport: BindingSupportTable;
+
     /** What the target can actually do. */
     readonly capabilities: TargetCapabilities;
 
@@ -165,6 +173,9 @@ export interface TargetDriver {
      * deploy router's `urlForScript` (`https://${alias}.${appDomain}`).
      */
     tenantUrl: (alias: string, kind: DeployKind) => string;
+
+    /** Why each type {@link bindingSupport} marks `unsupported` is refused, worded for this target. */
+    readonly unsupportedReasons: Readonly<Partial<Record<BindingType, string>>>;
 
     /**
      * Requests per resource with a timestamp strictly after `sinceMs` — the

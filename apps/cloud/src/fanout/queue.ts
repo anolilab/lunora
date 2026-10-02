@@ -1,6 +1,6 @@
 /**
  * Tenant queue routing. A Workers-for-Platforms namespaced Worker can hold
- * queue producer bindings but cannot be a queue consumer, so the contract marks
+ * queue producer bindings but cannot be a queue consumer, so `cloudflare-wfp`'s binding table marks
  * `queue_consumer` as `routed`: the control plane consumes on the tenant's behalf.
  *
  * Each tenant `queue_producer` binding gets its own per-project queue, named

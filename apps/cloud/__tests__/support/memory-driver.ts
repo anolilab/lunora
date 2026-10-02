@@ -9,10 +9,37 @@
  */
 import { tenantSender } from "../../src/backup/tenant-transport";
 import { sha256HexBytes } from "../../src/deploy/keys";
+import type { BindingSupportTable } from "../../src/provision-contract";
+import { BINDING_SUPPORT, UNSUPPORTED_REASONS } from "../../src/provision-contract";
 import type { TargetDriver, UsageRow } from "../../src/targets/driver";
 
 /** The platform apex memory tenants are served under. */
 export const MEMORY_APP_DOMAIN = "memory.test";
+
+/** Everything except two types — enough for the conformance suite to watch a refusal happen. */
+export const MEMORY_BINDING_SUPPORT: BindingSupportTable = {
+    ai: "bound",
+    analytics_engine: "provisioned",
+    artifacts: "bound",
+    assets: "bound",
+    browser: "bound",
+    container: "unsupported",
+    d1: "provisioned",
+    durable_object: "bound",
+    hyperdrive: "unsupported",
+    images: "bound",
+    kv: "provisioned",
+    media: "bound",
+    pipeline: "bound",
+    queue_consumer: "bound",
+    queue_producer: "provisioned",
+    r2: "provisioned",
+    stream: "bound",
+    vectorize: "bound",
+    vpc_network: "bound",
+    vpc_service: "bound",
+    workflow: "bound",
+};
 
 export interface MemoryTarget {
     driver: TargetDriver;
@@ -28,6 +55,7 @@ export const createMemoryTarget = (): MemoryTarget => {
     const tenantUrl = (alias: string): string => `https://${alias}.${MEMORY_APP_DOMAIN}`;
 
     const driver: TargetDriver = {
+        bindingSupport: MEMORY_BINDING_SUPPORT,
         capabilities: { fanout: "native", metering: "readback" },
         deploy: async (spec) => {
             const bundleHash = await sha256HexBytes(spec.bundle);
@@ -60,6 +88,7 @@ export const createMemoryTarget = (): MemoryTarget => {
             return resourceRef !== null && (await lookup.live(resourceRef)) ? { resourceRef } : null;
         },
         tenantUrl,
+        unsupportedReasons: { container: "memory tenants have no container runtime", hyperdrive: "memory tenants have no database to point at" },
         usage: async (sinceMs) => {
             const totals = new Map<string, number>();
 
@@ -84,7 +113,18 @@ export const createMemoryTarget = (): MemoryTarget => {
     };
 };
 
-/** The reference driver with some members replaced — the deploy-path tests' fake. */
+/**
+ * The deploy-path tests' fake: the reference driver standing in for a
+ * `cloudflare-wfp` project — that target's id and binding table, so the
+ * handler validates exactly as it does in production — with some members
+ * replaced.
+ */
 export const fakeDriver = (overrides: Partial<TargetDriver> = {}): TargetDriver => {
-    return { ...createMemoryTarget().driver, ...overrides };
+    return {
+        ...createMemoryTarget().driver,
+        bindingSupport: BINDING_SUPPORT["cloudflare-wfp"],
+        id: "cloudflare-wfp",
+        unsupportedReasons: UNSUPPORTED_REASONS["cloudflare-wfp"],
+        ...overrides,
+    };
 };

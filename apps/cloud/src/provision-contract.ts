@@ -75,7 +75,7 @@ export type BindingSupportTable = Readonly<Record<BindingType, BindingSupport>>;
  * cloud deploy` sends the same body whatever it lands on. Each id has a binding
  * table below and, once it can converge, a driver in `src/targets/registry.ts`.
  */
-export const TARGET_IDS = ["cloudflare-wfp"] as const;
+export const TARGET_IDS = ["celld-vps", "cloudflare-wfp"] as const;
 
 export type TargetId = (typeof TARGET_IDS)[number];
 
@@ -95,6 +95,35 @@ export type DeployKind = "dev" | "preview" | "production";
  * before a deployment row exists or anything is provisioned.
  */
 export const BINDING_SUPPORT = {
+    /**
+     * A customer box running celld (plan 458), rated from celld's own capability
+     * matrix (`@lunora/platform`'s `CELLD_CAPABILITIES`) — never looser than it,
+     * and stricter only where `__tests__/binding-support.test.ts` lists why.
+     * Queue consumers and crons are celld's own, not routed: celld delivers them.
+     */
+    "celld-vps": {
+        ai: "unsupported",
+        analytics_engine: "unsupported",
+        artifacts: "unsupported",
+        assets: "bound",
+        browser: "unsupported",
+        container: "unsupported",
+        d1: "provisioned",
+        durable_object: "bound",
+        hyperdrive: "unsupported",
+        images: "unsupported",
+        kv: "provisioned",
+        media: "unsupported",
+        pipeline: "unsupported",
+        queue_consumer: "bound",
+        queue_producer: "provisioned",
+        r2: "provisioned",
+        stream: "unsupported",
+        vectorize: "unsupported",
+        vpc_network: "unsupported",
+        vpc_service: "unsupported",
+        workflow: "bound",
+    },
     "cloudflare-wfp": {
         ai: "bound",
         analytics_engine: "provisioned",
@@ -132,6 +161,21 @@ export type UnsupportedType<T extends TargetId> = {
  * error, so each is worded for the host it describes.
  */
 export const UNSUPPORTED_REASONS: { [T in TargetId]: Record<UnsupportedType<T>, string> } = {
+    "celld-vps": {
+        ai: "Workers AI is not a celld binding; call a model over fetch instead (celld routes `<provider>/<model>` through LUNORA_AI_PROXY_URL, not an env.AI binding)",
+        analytics_engine: "Analytics Engine is not a celld binding type",
+        artifacts: "an Artifacts namespace is a Cloudflare account resource with no celld equivalent",
+        browser: "Browser Rendering is not a celld binding type",
+        container: "celld runs containers only with Docker on the node, and Lunora Cloud keeps managed boxes Docker-free for now",
+        hyperdrive: "Hyperdrive is not a celld binding type; connect to your database from an action instead",
+        images: "the Images binding is not a celld binding type",
+        media: "the Media Transformations binding is not a celld binding type",
+        pipeline: "Pipelines is not a celld binding type",
+        stream: "Stream is not a celld binding type",
+        vectorize: "Vectorize is not a celld binding type",
+        vpc_network: "a VPC network is a Cloudflare account resource with no celld equivalent",
+        vpc_service: "a VPC service is a Cloudflare account resource with no celld equivalent",
+    },
     "cloudflare-wfp": {
         artifacts: "an Artifacts namespace is an account resource the provision box does not create or bind yet",
         container: "containers need an image built and pushed per deploy, which Workers for Platforms cannot run",

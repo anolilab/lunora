@@ -61,6 +61,7 @@
         "@lunora/cli": "workspace:*",
         "@lunora/codegen": "workspace:*",
         "@lunora/config": "workspace:*",
+        "@lunora/platform": "workspace:*",
         "@lunora/vite": "workspace:*",
         "@rolldown/plugin-babel": "catalog:web",
         "@tailwindcss/vite": "catalog:vite",

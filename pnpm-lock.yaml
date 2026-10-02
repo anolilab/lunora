@@ -1343,6 +1343,9 @@ importers:
       '@lunora/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
       '@lunora/vite':
         specifier: workspace:*
         version: link:../../packages/vite

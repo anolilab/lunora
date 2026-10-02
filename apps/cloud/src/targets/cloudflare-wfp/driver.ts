@@ -10,7 +10,7 @@
  */
 import { tenantSender } from "../../backup/tenant-transport";
 import { sha256HexBytes } from "../../deploy/keys";
-import { BINDING_SUPPORT } from "../../provision-contract";
+import { BINDING_SUPPORT, UNSUPPORTED_REASONS } from "../../provision-contract";
 import type { TargetDriver, UsageRow } from "../driver";
 import type { AnalyticsUsageReader } from "./analytics";
 import { createHttpAnalyticsReader } from "./analytics";
@@ -46,7 +46,10 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
     const dispatch = dispatcher ? (tenant: { adminToken: string; resourceRef: string }) => dispatchTenantSender(dispatcher, tenant) : undefined;
     const { usage } = ports;
 
+    const bindingSupport = BINDING_SUPPORT["cloudflare-wfp"];
+
     return {
+        bindingSupport,
         capabilities: { fanout: "dispatcher", metering: "readback" },
         deploy: async (spec) => {
             const [bundleHash] = await Promise.all([
@@ -55,7 +58,7 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
                     ports.box().get(spec.alias),
                     {
                         action: "deploy",
-                        spec: deployJobSpec(spec, BINDING_SUPPORT["cloudflare-wfp"], {
+                        spec: deployJobSpec(spec, bindingSupport, {
                             cell: ports.cell,
                             dispatchNamespace: ports.dispatchNamespace,
                             tailConsumer: TAIL_CONSUMER,
@@ -90,6 +93,7 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
             return scriptName !== null && (await lookup.live(scriptName)) ? { resourceRef: scriptName } : null;
         },
         tenantUrl,
+        unsupportedReasons: UNSUPPORTED_REASONS["cloudflare-wfp"],
         ...(usage
             ? {
                   usage: async (sinceMs: number): Promise<UsageRow[]> => {

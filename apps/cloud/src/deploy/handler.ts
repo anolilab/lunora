@@ -1,5 +1,6 @@
 import type { AssetFile, AssetsUpload, BindingRequirement, DeployKind, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
-import { ALIAS_PATTERN, BINDING_SUPPORT, DEFAULT_TARGET, tenantResourceName, UNSUPPORTED_REASONS } from "../provision-contract";
+import { ALIAS_PATTERN, DEFAULT_TARGET, tenantResourceName } from "../provision-contract";
+import type { TargetDriver } from "../targets/driver";
 import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
 import { runDeployment } from "./orchestrator";
@@ -141,7 +142,9 @@ const NOT_FOUND_HANDLING = ["404-page", "none", "single-page-application"] as co
 const ASSETS_CONFIG_KEYS = new Set(["html_handling", "not_found_handling", "run_worker_first"]);
 
 type BindingType = BindingRequirement["type"];
-type UnsupportedType = keyof (typeof UNSUPPORTED_REASONS)[typeof DEFAULT_TARGET];
+
+/** What validating a manifest needs from the project's target. */
+type TargetSupport = Pick<TargetDriver, "bindingSupport" | "id" | "unsupportedReasons">;
 
 /** Validation outcome: the parsed value, or the 400 message. */
 type Parsed<T> = { error: string } | { value: T };
@@ -151,14 +154,13 @@ const isOneOf = <T extends string>(values: ReadonlyArray<T>, value: unknown): va
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-const isBindingType = (value: string): value is BindingType => Object.hasOwn(BINDING_SUPPORT[DEFAULT_TARGET], value);
-
-const isUnsupported = (type: BindingType): type is UnsupportedType => BINDING_SUPPORT[DEFAULT_TARGET][type] === "unsupported";
+/** Every table names every type `@lunora/config` emits, so any target's table answers "is this a binding type". */
+const isBindingType = (value: string, target: TargetSupport): value is BindingType => Object.hasOwn(target.bindingSupport, value);
 
 /** Class-backed types the platform binds straight to an export of the tenant bundle. */
 const needsClassName = (type: BindingType): boolean => type === "durable_object" || type === "workflow";
 
-const parseBinding = (entry: unknown, index: number): Parsed<BindingRequirement> => {
+const parseBinding = (entry: unknown, index: number, target: TargetSupport): Parsed<BindingRequirement> => {
     if (!isRecord(entry) || typeof entry["binding"] !== "string" || typeof entry["type"] !== "string") {
         return { error: `manifest.bindings[${String(index)}] must be an object with string \`binding\` and \`type\`` };
     }
@@ -169,7 +171,7 @@ const parseBinding = (entry: unknown, index: number): Parsed<BindingRequirement>
         return { error: `binding name "${binding}" must match ${IDENTIFIER.source} (it becomes an env key)` };
     }
 
-    if (!isBindingType(type)) {
+    if (!isBindingType(type, target)) {
         return { error: `binding ${binding} has unknown type "${type}"` };
     }
 
@@ -258,14 +260,16 @@ const parseCompatibility = (date: unknown, flags: unknown): Parsed<Pick<DeployMa
 };
 
 /**
- * Validate the request's binding manifest and floor it to ShardDO.
+ * Validate the request's binding manifest against the project's target and
+ * floor it to ShardDO.
  *
  * Every refusal happens here, before a deployment row is recorded or anything
- * is provisioned. An `unsupported` binding is refused rather than dropped: a
- * missing binding otherwise surfaces as an undefined `env.X` long after a green
- * deploy. All unsupported entries are reported at once so one retry fixes them.
+ * is provisioned. A binding the target marks `unsupported` is refused rather
+ * than dropped: a missing binding otherwise surfaces as an undefined `env.X`
+ * long after a green deploy. All unsupported entries are reported at once, with
+ * the target's own reason, so one retry fixes them.
  */
-const parseManifest = (raw: unknown): Parsed<DeployManifest> => {
+const parseManifest = (raw: unknown, target: TargetSupport): Parsed<DeployManifest> => {
     const input = raw ?? { bindings: [] };
 
     if (!isRecord(input) || !Array.isArray(input["bindings"])) {
@@ -282,7 +286,7 @@ const parseManifest = (raw: unknown): Parsed<DeployManifest> => {
     const unsupported: string[] = [];
 
     for (const [index, entry] of entries.entries()) {
-        const parsed = parseBinding(entry, index);
+        const parsed = parseBinding(entry, index, target);
 
         if ("error" in parsed) {
             return parsed;
@@ -290,15 +294,15 @@ const parseManifest = (raw: unknown): Parsed<DeployManifest> => {
 
         const { binding, type } = parsed.value;
 
-        if (isUnsupported(type)) {
-            unsupported.push(`${type} (${binding}): ${UNSUPPORTED_REASONS[DEFAULT_TARGET][type]}`);
+        if (target.bindingSupport[type] === "unsupported") {
+            unsupported.push(`${type} (${binding}): ${target.unsupportedReasons[type] ?? `not supported on ${target.id}`}`);
         }
 
         bindings.push(parsed.value);
     }
 
     if (unsupported.length > 0) {
-        return { error: `Lunora Cloud cannot provide these bindings — ${unsupported.join("; ")}` };
+        return { error: `Lunora Cloud cannot provide these bindings on the ${target.id} target — ${unsupported.join("; ")}` };
     }
 
     if (!bindings.some((entry) => entry.type === "durable_object" && entry.className === SHARD_DO_BINDING.className)) {
@@ -458,9 +462,9 @@ const parseAssets = (raw: unknown, manifest: DeployManifest): Parsed<AssetsUploa
 };
 
 /** Every per-project resource name must fit Cloudflare's limits — refused here, not halfway through provisioning. */
-const resourceNameError = (alias: string, manifest: DeployManifest): string | undefined => {
+const resourceNameError = (alias: string, manifest: DeployManifest, target: TargetSupport): string | undefined => {
     for (const requirement of manifest.bindings) {
-        if (BINDING_SUPPORT[DEFAULT_TARGET][requirement.type] !== "provisioned") {
+        if (target.bindingSupport[requirement.type] !== "provisioned") {
             continue;
         }
 
@@ -477,6 +481,7 @@ const resourceNameError = (alias: string, manifest: DeployManifest): string | un
 const parsePayload = (
     body: Pick<ReleaseRequest, "assets" | "manifest">,
     alias: string,
+    target: TargetSupport,
 ): Parsed<{ assets: AssetsUpload | undefined; manifest: DeployManifest }> => {
     // The script name is the project alias: it becomes the public subdomain and
     // keys every per-project resource, so it must be a shape that cannot collide.
@@ -484,13 +489,13 @@ const parsePayload = (
         return { error: `scriptName must be lowercase letters and digits in dash-separated runs (${String(ALIAS_PATTERN)})` };
     }
 
-    const manifest = parseManifest(body.manifest);
+    const manifest = parseManifest(body.manifest, target);
 
     if ("error" in manifest) {
         return manifest;
     }
 
-    const nameError = resourceNameError(alias, manifest.value);
+    const nameError = resourceNameError(alias, manifest.value, target);
 
     if (nameError !== undefined) {
         return { error: nameError };
@@ -639,7 +644,7 @@ export type ReleaseFrame = Record<string, unknown>;
  * the HTTP route answers the refusal as a status code and the run as a stream.
  */
 export type StartedRelease =
-    { deploymentId: string; run: (write: (frame: ReleaseFrame) => void) => Promise<ReleaseOutcome> } | { error: string; status: 400 | 403 };
+    { deploymentId: string; run: (write: (frame: ReleaseFrame) => void) => Promise<ReleaseOutcome> } | { error: string; status: 400 | 403 | 409 | 501 };
 
 /** What {@link runRelease} needs to know about a release it was handed. */
 interface RecordedRelease {
@@ -648,6 +653,8 @@ interface RecordedRelease {
     bundle: ArrayBuffer;
     caller: ReleaseCaller;
     deploymentId: string;
+    /** The project's target driver — resolved before the row was recorded, so a missing one refused the release. */
+    driver: TargetDriver;
     encodedBundle: string;
     kind: DeployKind;
     manifest: DeployManifest;
@@ -766,7 +773,7 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
             onProgress: reportProgress({ deploymentId, deps, key, write }, (progressUrl) => {
                 url = progressUrl;
             }),
-            driver: deps.driverFor(DEFAULT_TARGET),
+            driver: release.driver,
             scheduler: deps.scheduler,
             ...(healthCheck ? { verify: (result) => healthCheck(result.url) } : {}),
         });
@@ -830,7 +837,17 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
         return { error: "bundle is not valid base64", status: 400 };
     }
 
-    const payload = parsePayload(request, request.scriptName);
+    // The driver first: its binding table is what the payload is validated
+    // against, and a target with no driver must refuse before anything is recorded.
+    let driver: TargetDriver;
+
+    try {
+        driver = deps.driverFor(DEFAULT_TARGET);
+    } catch (error) {
+        return { error: error instanceof Error ? error.message : "no driver for this project's target", status: 501 };
+    }
+
+    const payload = parsePayload(request, request.scriptName, driver);
 
     if ("error" in payload) {
         return { error: payload.error, status: 400 };
@@ -868,7 +885,7 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
         deploymentId,
         run: (write) =>
             runRelease(
-                { adminToken, assets, bundle, caller, deploymentId, encodedBundle, kind, manifest, previousDeploymentId, projectId, scriptName },
+                { adminToken, assets, bundle, caller, deploymentId, driver, encodedBundle, kind, manifest, previousDeploymentId, projectId, scriptName },
                 deps,
                 write,
             ),
