@@ -2,6 +2,8 @@ import { LunoraError } from "@lunora/server";
 
 import { normalizeRootDirectory, normalizeWatchPaths } from "../src/builds/paths";
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
+import type { TargetId } from "../src/provision-contract";
+import { DEFAULT_TARGET, isTargetId } from "../src/provision-contract";
 import { constantTimeEqual } from "../src/security/constant-time-equal";
 import type { Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -17,6 +19,8 @@ const MIN_PREVIEW_PASSWORD_LENGTH = 8;
 interface ProjectRow {
     _id: Id<"projects">;
     activeDeploymentId?: string;
+    /** `.global()` rows answer SQL NULL for an unset column. */
+    boxId?: Id<"boxes"> | null;
     createdAt: number;
     framework?: string;
     githubRepo?: string;
@@ -26,6 +30,7 @@ interface ProjectRow {
     previewPasswordSalt?: string;
     rootDirectory?: string;
     slug: string;
+    target?: null | string;
     watchPaths?: string[];
 }
 
@@ -43,6 +48,8 @@ export interface ProjectView {
     _id: Id<"projects">;
     /** The production release currently on the project's Worker, when one has been activated. */
     activeDeploymentId?: string;
+    /** The box a `celld-vps` project deploys to (plan 458 G12); absent on every other target. */
+    boxId?: Id<"boxes">;
     createdAt: number;
     framework?: string;
     githubRepo?: string;
@@ -53,6 +60,13 @@ export interface ProjectView {
     /** Repo-relative directory builds run in; absent means the repository root. */
     rootDirectory?: string;
     slug: string;
+
+    /**
+     * Where the project deploys (`projects.target`). The studio gates what it
+     * shows by it: a `celld-vps` project cannot have every binding, plan limit or
+     * recovery tier a `cloudflare-wfp` one can (plan 458 W9).
+     */
+    target: TargetId;
     /** Globs a push must touch to rebuild; absent means everything under `rootDirectory`. */
     watchPaths?: string[];
 }
@@ -66,6 +80,9 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         organizationId: row.organizationId,
         previewProtected: Boolean(row.previewPasswordHash),
         slug: row.slug,
+        // A row from before targets, or a value this build does not know, reads as the default.
+        target: isTargetId(row.target) ? row.target : DEFAULT_TARGET,
+        ...(row.boxId == null ? {} : { boxId: row.boxId }),
         ...(row.framework === undefined ? {} : { framework: row.framework }),
         ...(row.githubRepo === undefined ? {} : { githubRepo: row.githubRepo }),
         ...(row.activeDeploymentId === undefined ? {} : { activeDeploymentId: row.activeDeploymentId }),

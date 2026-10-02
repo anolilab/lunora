@@ -47,7 +47,14 @@ describe(toProjectView, () => {
             organizationId: "org_1",
             previewProtected: true,
             slug: "web",
+            target: "cloudflare-wfp",
         });
+    });
+
+    it("reports the deploy target, defaulting a row from before targets to cloudflare-wfp", () => {
+        expect(toProjectView({ ...row, target: null }).target).toBe("cloudflare-wfp");
+        expect(toProjectView({ ...row, boxId: "box_1" as never, target: "celld-vps" })).toMatchObject({ boxId: "box_1", target: "celld-vps" });
+        expect(toProjectView({ ...row, boxId: null })).not.toHaveProperty("boxId");
     });
 
     it("omits optional fields rather than emitting undefined", () => {

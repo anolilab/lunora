@@ -26,6 +26,14 @@ export const env = defineEnv({
      */
     GITHUB_APP_ID: v.optional(v.string()),
     GITHUB_APP_PRIVATE_KEY: v.optional(v.string()),
+
+    /**
+     * The apex customer boxes' default hostnames live under
+     * (`{alias}.{slug}.{LUNORA_BOX_DOMAIN}`, plan 458 D9). Read here only so the
+     * studio can show a box's hostname (`boxes.domain`); the box routes and
+     * the celld-vps driver read the Worker env directly. Defaults to `boxes.lunora.app`.
+     */
+    LUNORA_BOX_DOMAIN: v.optional(v.string()),
     /** Bearer token for R2 SQL (archived-span read-back). Absent → the archive read no-ops. A secret. */
     R2_SQL_TOKEN: v.optional(v.string()),
 

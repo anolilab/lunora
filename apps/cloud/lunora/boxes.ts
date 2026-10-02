@@ -4,9 +4,10 @@ import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
 import { isBoxPublicKey } from "../src/boxes/encoding";
 import { ENROLMENT_TTL_MS, installCommandFor, mintBoxSlug, mintEnrolmentToken } from "../src/boxes/enrolment";
 import { sha256Hex } from "../src/deploy/keys";
+import { DEFAULT_BOX_DOMAIN } from "../src/targets/celld-vps/driver";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
-import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota, orgLimit } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -195,6 +196,25 @@ export const get = query
         const row = (await context.db.get(id)) as BoxRow | null;
 
         return row?.organizationId === organizationId ? toBoxView(row, await latestStableVersions(context)) : null;
+    });
+
+/**
+ * The apex a box's default hostname lives under (`{slug}.{domain}`; a tenant on
+ * it is `{alias}.{slug}.{domain}`, plan 458 D9), for the studio's Boxes tab
+ * (members).
+ *
+ * An action because `LUNORA_BOX_DOMAIN` is a Worker var and only actions carry
+ * `ctx.env`; the box list itself stays a live query.
+ */
+export const domain = action
+    .use(rateLimit("api"))
+    .input({ organizationId: v.id("organizations") })
+    .action(async ({ ctx: context, args: { organizationId } }): Promise<string> => {
+        await assertMember(context, organizationId);
+
+        const configured = (context.env as { LUNORA_BOX_DOMAIN?: string } | undefined)?.LUNORA_BOX_DOMAIN;
+
+        return configured === undefined || configured === "" ? DEFAULT_BOX_DOMAIN : configured;
     });
 
 /** Rename a box (owner/admin). The slug — its DNS label — never changes. */

@@ -105,6 +105,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "billing:processWebhook": lunora_billing_2.processWebhook as unknown as RegisteredLunoraFunction,
     "billing:subscription": lunora_billing_2.subscription as unknown as RegisteredLunoraFunction,
     "boxes:createEnrolment": lunora_boxes_3.createEnrolment as unknown as RegisteredLunoraFunction,
+    "boxes:domain": lunora_boxes_3.domain as unknown as RegisteredLunoraFunction,
     "boxes:enrol": lunora_boxes_3.enrol as unknown as RegisteredLunoraFunction,
     "boxes:get": lunora_boxes_3.get as unknown as RegisteredLunoraFunction,
     "boxes:identity": lunora_boxes_3.identity as unknown as RegisteredLunoraFunction,
@@ -293,6 +294,12 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_billing_2.subscription.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_boxes_3.domain.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
@@ -908,6 +915,7 @@ export interface Caller {
     };
     boxes: {
         createEnrolment: (args: { name: unknown; organizationId: Id<"organizations"> }) => Promise<{ expiresAt: number; installCommand: string; token: string; }>;
+        domain: (args: { organizationId: Id<"organizations"> }) => Promise<string>;
         enrol: (args: { hashedToken: unknown; ipv4?: unknown; ipv6?: unknown; publicKey: unknown; singleTrust: boolean; versions: { caddy: unknown; celld: unknown; hostd: unknown } }) => Promise<{ boxId: Id<"boxes">; created: boolean; ipv4?: string; ipv6?: string; organizationId: Id<"organizations">; slug: string }>;
         get: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }>;
         identity: (args: { boxId: Id<"boxes"> }) => Promise<{ organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string; } | null>;
@@ -1046,7 +1054,7 @@ export interface Caller {
     projects: {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
-        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rootDirectory?: string; slug: string; watchPaths?: string[] }[]>;
+        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; boxId?: Id<"boxes">; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; previewProtected: boolean; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp"; watchPaths?: string[] }[]>;
         placement: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ box?: { id: string; revoked: boolean; slug: string; }; cellName?: string; target?: string }>;
         remove: (args: { id: Id<"projects">; organizationId: Id<"organizations"> }) => Promise<{ destroyed: number; }>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
@@ -1167,6 +1175,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     boxes: {
         createEnrolment: (args) => callRegistered(context, "boxes:createEnrolment", args),
+        domain: (args) => callRegistered(context, "boxes:domain", args),
         enrol: (args) => callRegistered(context, "boxes:enrol", args),
         get: (args) => callRegistered(context, "boxes:get", args),
         identity: (args) => callRegistered(context, "boxes:identity", args),
