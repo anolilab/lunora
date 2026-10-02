@@ -318,10 +318,10 @@ export interface Doc_cloudflareAccounts {
     _id: Id<"cloudflareAccounts">;
     _creationTime: number;
     accountId: string;
-    displayName?: string;
     ciphertext: string;
     createdAt: number;
     createdBy: string;
+    displayName?: string;
     iv: string;
     label: string;
     organizationId: Id<"organizations">;
@@ -1147,10 +1147,10 @@ export interface Insert_cloudflareAccounts {
     _id?: Id<"cloudflareAccounts">;
     _creationTime?: number;
     accountId: string;
-    displayName?: string;
     ciphertext: string;
     createdAt: number;
     createdBy: string;
+    displayName?: string;
     iv: string;
     label: string;
     organizationId: Id<"organizations">;

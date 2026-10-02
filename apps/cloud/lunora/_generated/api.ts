@@ -41,7 +41,7 @@ export interface ApiTypes {
     };
     cloudflare_accounts: {
         disconnect: FunctionReference<"mutation", { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, void>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"cloudflareAccounts">; accountId: string; displayName?: string; createdAt: number; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"cloudflareAccounts">; accountId: string; createdAt: number; displayName?: string; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
     };
     cloudflare_billing: {
         disconnect: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, { removed: boolean; }>;

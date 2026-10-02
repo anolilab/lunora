@@ -104,11 +104,11 @@ export const boxesTables = {
     cloudflareAccounts: defineTable({
         // The Cloudflare account id (32 hex) — the account's own, not this row's.
         accountId: v.string(),
-        // The account's display name, when the token may read it (Account Settings Read is optional).
-        displayName: v.optional(v.string()),
         ciphertext: v.string(),
         createdAt: v.number(),
         createdBy: v.string(),
+        // The account's display name, when the token may read it (Account Settings Read is optional).
+        displayName: v.optional(v.string()),
         iv: v.string(),
         // The organization's own name for the connection.
         label: v.string(),

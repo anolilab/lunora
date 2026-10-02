@@ -31,8 +31,8 @@ import { boundedString, LIMITS } from "./validators";
 interface AccountRow {
     _id: Id<"cloudflareAccounts">;
     accountId: string;
-    displayName?: null | string;
     createdAt: number;
+    displayName?: null | string;
     label: string;
     organizationId: Id<"organizations">;
     permissions: string[];
@@ -45,8 +45,8 @@ interface AccountRow {
 export interface CloudflareAccountView {
     _id: Id<"cloudflareAccounts">;
     accountId: string;
-    displayName?: string;
     createdAt: number;
+    displayName?: string;
     label: string;
     organizationId: Id<"organizations">;
     /** The permission groups the token was seen to hold when last verified. */
