@@ -2237,15 +2237,7 @@ interface WranglerConfig {
         binding?: string;
         certificate_id?: string;
     } | null | undefined>;
-    observability?: {
-        enabled?: boolean;
-        head_sampling_rate?: number;
-        logs?: {
-            enabled?: boolean;
-            head_sampling_rate?: number;
-            invocation_logs?: boolean;
-        };
-    };
+    observability?: WranglerObservability;
     pipelines?: ReadonlyArray<{
         binding?: string;
         pipeline?: string;
@@ -2382,6 +2374,39 @@ interface WranglerEnvironmentMerge {
     error?: string;
     merged: WranglerConfig;
     unverifiedKeys: string[];
+}
+```
+
+### `WranglerObservability` (interface)
+
+```ts
+interface WranglerObservability {
+    enabled?: boolean;
+    head_sampling_rate?: number;
+    issues?: {
+        enabled?: boolean;
+    };
+    logs?: WranglerObservabilityLogs;
+    traces?: WranglerObservabilityTraces;
+}
+```
+
+### `WranglerObservabilityLogs` (interface)
+
+```ts
+interface WranglerObservabilityLogs extends WranglerObservabilityTraces {
+    invocation_logs?: boolean;
+}
+```
+
+### `WranglerObservabilityTraces` (interface)
+
+```ts
+interface WranglerObservabilityTraces {
+    destinations?: ReadonlyArray<string>;
+    enabled?: boolean;
+    head_sampling_rate?: number;
+    persist?: boolean;
 }
 ```
 

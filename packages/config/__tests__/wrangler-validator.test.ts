@@ -2554,6 +2554,75 @@ export const schema = defineSchema({
         });
     });
 
+    describe("observability logs + traces export blocks", () => {
+        const withObservability = (observability: unknown): WranglerConfig =>
+            ({ compatibility_date: REQUIRED_COMPATIBILITY_DATE, observability }) as WranglerConfig;
+
+        it("accepts the full documented block without errors or warnings", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(
+                withObservability({
+                    enabled: true,
+                    head_sampling_rate: 1,
+                    issues: { enabled: true },
+                    logs: { destinations: ["logs-destination"], enabled: true, head_sampling_rate: 0.6, invocation_logs: true, persist: false },
+                    traces: { destinations: ["tracing-destination"], enabled: true, head_sampling_rate: 0.05, persist: false },
+                }),
+            );
+
+            expect(report.errors.join(" ")).not.toContain("observability");
+            expect(report.warnings.join(" ")).not.toContain("observability");
+        });
+
+        it("warns on a typo'd key at every level", () => {
+            expect.assertions(4);
+
+            const report = validateWranglerConfig(
+                withObservability({
+                    enabled: true,
+                    issues: { enable: true },
+                    logs: { destination: ["logs-destination"] },
+                    trace: { enabled: true },
+                    traces: { head_sample_rate: 0.1 },
+                }),
+            );
+            const warnings = report.warnings.join(" ");
+
+            expect(warnings).toContain("observability.trace is not a documented wrangler key");
+            expect(warnings).toContain("observability.logs.destination is not a documented wrangler key");
+            expect(warnings).toContain("observability.traces.head_sample_rate is not a documented wrangler key");
+            expect(warnings).toContain("observability.issues.enable is not a documented wrangler key");
+        });
+
+        it("rejects wrong types in the traces block", () => {
+            expect.assertions(4);
+
+            const report = validateWranglerConfig(
+                withObservability({ traces: { destinations: "tracing-destination", enabled: "yes", head_sampling_rate: 2, persist: "false" } }),
+            );
+            const errors = report.errors.join(" ");
+
+            expect(errors).toContain("observability.traces.enabled must be a boolean");
+            expect(errors).toContain("observability.traces.persist must be a boolean");
+            expect(errors).toContain("observability.traces.head_sampling_rate must be a number in [0, 1]");
+            expect(errors).toContain("observability.traces.destinations must be an array of destination names");
+        });
+
+        it("rejects wrong types in the logs block and a non-object traces / issues block", () => {
+            expect.assertions(5);
+
+            const report = validateWranglerConfig(withObservability({ enabled: 1, issues: true, logs: { destinations: ["ok", 42], persist: 0 }, traces: [] }));
+            const errors = report.errors.join(" ");
+
+            expect(errors).toContain("observability.enabled must be a boolean");
+            expect(errors).toContain("observability.logs.destinations must be an array");
+            expect(errors).toContain("observability.logs.persist must be a boolean");
+            expect(errors).toContain("observability.traces must be an object");
+            expect(errors).toContain("observability.issues must be an object");
+        });
+    });
+
     describe("containers", () => {
         const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
             return {
