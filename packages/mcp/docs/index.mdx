@@ -438,11 +438,62 @@ retry.
     `createMcpProtectedRequestHandler(verifyOptions, handler)` when it does not (a separate resource server holds verification config, not an auth instance).
 </Callout>
 
+### Letting MCP clients register themselves (CIMD)
+
+`mcp()` registers no clients on its own: dynamic client registration is **off**
+unless you enable it. MCP 2026-07-28 pins Client ID Metadata Documents instead.
+The client's `client_id` is an HTTPS URL, and the authorization server fetches
+the client's metadata from it. That is how Claude, ChatGPT and other MCP hosts
+connect to a server they have never seen. Add the `cimd()` plugin next to
+`mcp()`:
+
+```ts
+import { createAuth } from "@lunora/auth";
+import workersCimdFetch from "@lunora/auth/cimd/workers";
+import { cimd, jwt, mcp } from "@lunora/auth/plugins";
+
+export const auth = createAuth({
+    database: env.DB,
+    secret: env.AUTH_SECRET,
+    plugins: [
+        jwt(),
+        mcp({ consentPage: "/consent", loginPage: "/login", resource: mcpResource, scopes: ["lunora:read", "lunora:write"] }),
+        cimd({
+            fetchClientMetadataResource: workersCimdFetch(),
+            // MCP's profile: `client_name` and `redirect_uris` become mandatory.
+            metadataProfile: "mcp-2026-07-28",
+            // Recommended in production: only fetch metadata from hosts you trust.
+            isMetadataDocumentUrlAllowed: (url) => ["https://claude.ai", "https://chatgpt.com"].includes(new URL(url).origin),
+        }),
+    ],
+});
+```
+
+The authorization-server metadata then advertises
+`client_id_metadata_document_supported: true`, and a client that presents a URL
+`client_id` is created from its document on first use.
+
+That fetch goes to a URL the client chose, so the transport must keep it on the
+public internet. On Workers, `workersCimdFetch()` relies on the
+`global_fetch_strictly_public` compatibility flag, which stops `fetch` from
+reaching private and special-use addresses. Add it to `wrangler.jsonc`:
+
+```jsonc
+{
+    "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+}
+```
+
+`workersCimdFetch()` throws at startup when the flag is missing, and
+`lunora doctor` reports it (`cimd-fetch-not-strictly-public`). The transport
+also refuses anything but an `https:` `GET`/`HEAD` and never follows a redirect.
+On Node, pass `fetchClientMetadataResource` from `@better-auth/cimd/node`
+instead.
+
 <Callout type="warn">
-    Dynamic client registration is **off** unless you turn it on. better-auth's `mcp()` plugin expects you to compose it with `@better-auth/cimd` for the Client
-    ID Metadata Document flow that MCP 2026-07-28 pins, or to enable the OAuth provider's registration options explicitly. `@lunora/auth` does not re-export
-    `cimd`: its transport contract requires resolve-once DNS validation and connection pinning, which Cloudflare Workers cannot provide — so on Workers,
-    register MCP clients explicitly instead.
+    The flag is a weaker guarantee than cimd asks for: a Worker cannot pin the connection to the address it resolved, so a host that rebinds its DNS still
+    reaches _some_ public address. That is the same trade Cloudflare's own `workers-oauth-provider` makes. Use `isMetadataDocumentUrlAllowed` as an origin
+    allowlist to close it. Metadata is cached per isolate, so each new isolate fetches a client's document again on its first authorization.
 </Callout>
 
 ## Connecting an MCP client
