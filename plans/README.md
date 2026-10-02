@@ -1858,6 +1858,6 @@ API), and jurisdiction-aware KV / R2 checks for `.jurisdiction()` schemas (KV ju
 
 | Plan | Title                                                                                 | Status                                                                                                       |
 | ---- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| 459  | [Cloudflare AI Search (GA) as a pass-through `ctx.aiSearch`](459-ai-search-ga.md)     | TODO                                                                                                         |
+| 459  | [Cloudflare AI Search (GA) as a pass-through `ctx.aiSearch`](459-ai-search-ga.md)     | IN PROGRESS (A–D shipped on `feat/ai-search-binding`; only the live smoke on a real account remains)         |
 | 460  | [Cloudflare Artifacts: an action-only `ctx.artifacts`](460-cloudflare-artifacts.md)   | IN PROGRESS (A, B, C shipped; D blocked: namespace GET schema undocumented; live probes need a paid account) |
 | 461  | [MCP OAuth: close the MCP 2026-07-28 authorization gaps](461-mcp-oauth-2026-07-28.md) | TODO                                                                                                         |
