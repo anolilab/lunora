@@ -1,6 +1,6 @@
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, resolveAuthOptions } from "@lunora/auth";
-import { jwt, mcp, requireMcpAuth } from "@lunora/auth/plugins";
+import { jwt, mcp, mcpDiscoveryPaths, requireMcpAuth } from "@lunora/auth/plugins";
 import type { LunoraClient } from "@lunora/client";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { getAuthTables } from "better-auth/db";
@@ -181,7 +181,7 @@ describe("createAuthedMcpFetchHandler behind real better-auth", () => {
         vi.unstubAllGlobals();
     });
 
-    /** The documented wiring: `resource` passed to BOTH `mcp()` and `requireMcpAuth`. */
+    /** The documented wiring: the same `resource` passed to `mcp()` and `requireMcpAuth`. */
     const documentedHandler = (server: (claims: McpAccessTokenClaims) => { allowWrites: boolean; client: LunoraClient }) =>
         createAuthedMcpFetchHandler({
             protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource: RESOURCE }),
@@ -195,9 +195,11 @@ describe("createAuthedMcpFetchHandler behind real better-auth", () => {
     it("advertises the lunora scopes in both discovery documents", async () => {
         expect.assertions(4);
 
-        const prm = await auth.handler(new Request(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`));
+        // The paths the docs route to `auth.handler`, derived the way the docs derive them.
+        const [protectedResourcePath, authorizationServerPath] = mcpDiscoveryPaths(RESOURCE);
+        const prm = await auth.handler(new Request(`${ORIGIN}${protectedResourcePath ?? ""}`));
         const prmBody: { resource: string; scopes_supported: string[] } = await prm.json();
-        const as = await auth.handler(new Request(`${ORIGIN}/.well-known/oauth-authorization-server/api/auth`));
+        const as = await auth.handler(new Request(`${ORIGIN}${authorizationServerPath ?? ""}`));
         const asBody: { issuer: string; scopes_supported: string[] } = await as.json();
 
         expect(prmBody.resource).toBe(RESOURCE);
@@ -327,34 +329,23 @@ describe("createAuthedMcpFetchHandler behind real better-auth", () => {
         expect(byScope).not.toHaveBeenCalled();
     });
 
-    /**
-     * The regression this suite exists for. Without `resource`, `requireMcpAuth`
-     * verifies against `audience = baseURL` (`…/api/auth`), which is not the
-     * audience `mcp({ resource })` issues — so the wiring the docs used to show
-     * refused every correctly minted token, and its challenge pointed clients at a
-     * protected-resource document nobody serves.
-     */
-    it("refuses every token when `resource` is left off requireMcpAuth", async () => {
-        expect.assertions(3);
+    // The regression this suite exists for: better-auth's `requireMcpAuth` falls back
+    // to `audience = baseURL`, which no `mcp()` token carries, so the wiring the docs
+    // used to show refused every request. Lunora's wrapper makes that unwritable.
+    it("refuses to build the gate when `resource` is left off requireMcpAuth", () => {
+        expect.assertions(1);
 
-        stubJwksFetch();
-        byScope.mockClear();
-
-        const token = await mintToken(auth, client, RESOURCE, "lunora:read");
-        const handle = createAuthedMcpFetchHandler({
-            protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"] }),
-            server: byScope,
-        });
-        const response = await handle(mcpRequest(initializeBody, token));
-
-        expect(response.status).toBe(401);
-        expect(resourceMetadataUrl(response)).toBe(`${ORIGIN}/.well-known/oauth-protected-resource/api/auth`);
-        expect(byScope).not.toHaveBeenCalled();
+        expect(() =>
+            createAuthedMcpFetchHandler({
+                protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"] } as unknown as { resource: string }),
+                server: byScope,
+            }),
+        ).toThrow(expect.objectContaining({ code: "AUTH_MCP_RESOURCE_INVALID" }));
     });
 
-    // The other half of the old docs bug: `mcp()` without `scopes` falls back to the
-    // OIDC defaults, so `lunora:read` / `lunora:write` are not scopes the provider
-    // knows — no client can even be registered for them, let alone issued a token.
+    // Why the documented wiring passes `scopes` to `mcp()`: left out, the provider
+    // falls back to the OIDC defaults, so `lunora:read` / `lunora:write` are not
+    // scopes it knows — no client can be registered for them, let alone issued a token.
     it("cannot grant lunora scopes when mcp() does not declare them", async () => {
         expect.assertions(1);
 

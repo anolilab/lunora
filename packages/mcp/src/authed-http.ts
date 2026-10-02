@@ -28,8 +28,7 @@
  * });
  *
  * export const handleMcp = createAuthedMcpFetchHandler({
- *     // `resource` here too: without it `requireMcpAuth` checks the token's
- *     // audience against the auth `baseURL`, which no `mcp()` token carries.
+ *     // `resource` is required: tokens are audience-bound to it.
  *     protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource }),
  *     server: (claims) => ({
  *         // Writes need a second scope the read-only token does not carry.
@@ -42,8 +41,8 @@
  *
  * `mcp()` must declare the `lunora:*` scopes: left out, it falls back to the
  * OIDC defaults and no client can be granted `lunora:read` at all. Also route
- * `GET /.well-known/oauth-protected-resource/mcp` and
- * `GET /.well-known/oauth-authorization-server/api/auth` to `auth.handler`.
+ * the paths `mcpDiscoveryPaths(resource)` returns (from `@lunora/auth/plugins`)
+ * to `auth.handler`: the protected-resource and authorization-server metadata.
  * Both sit outside the `/api/auth/*` base path, and the 401 challenge sends
  * clients to the first. `__tests__/authed-http.e2e.test.ts` runs this exact
  * wiring against a real better-auth instance.
