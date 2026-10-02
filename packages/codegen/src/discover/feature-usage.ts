@@ -1,4 +1,4 @@
-import type { Project, SourceFile } from "ts-morph";
+import type { ImportDeclaration, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
@@ -103,6 +103,31 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
 };
 
 /**
+ * Whether an import declaration compiles away: `import type { … } from "…"`, or
+ * a named-only import whose every specifier is `type`-qualified
+ * (`import { type A, type B } from "…"`). Such an import names a capability's
+ * types without using it — an events-only queue consumer importing a payload
+ * type, say — so it must not flip the usage probe and wire `ctx.<cap>`,
+ * mirroring `@lunora/config`'s binding inference, which skips the same imports.
+ * A side-effect import (`import "…"`), a default or namespace import, or a
+ * named list with at least one value specifier still counts.
+ */
+const isTypeOnlyImport = (declaration: ImportDeclaration): boolean => {
+    if (declaration.isTypeOnly()) {
+        return true;
+    }
+
+    const named = declaration.getNamedImports();
+
+    return (
+        declaration.getDefaultImport() === undefined &&
+        declaration.getNamespaceImport() === undefined &&
+        named.length > 0 &&
+        named.every((specifier) => specifier.isTypeOnly())
+    );
+};
+
+/**
  * Detect code-usage of every package-backed feature across the function files
  * under `lunora/`, in a single pass. The result feeds both worker gating (`ai` /
  * `payments`) and — via `buildStudioFeatures` — the studio nav.
@@ -117,7 +142,12 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const importSpecifiers = new Set(sourceFile.getImportDeclarations().map((declaration) => declaration.getModuleSpecifierValue()));
+        const importSpecifiers = new Set(
+            sourceFile
+                .getImportDeclarations()
+                .filter((declaration) => !isTypeOnlyImport(declaration))
+                .map((declaration) => declaration.getModuleSpecifierValue()),
+        );
         const contextProperties = contextPropertiesRead(sourceFile);
 
         for (const capability of CAPABILITIES) {

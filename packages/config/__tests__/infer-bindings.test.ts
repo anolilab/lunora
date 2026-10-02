@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { discoverSandboxUsage } from "@lunora/codegen";
+import { discoverFeatureUsage, discoverSandboxUsage } from "@lunora/codegen";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -841,6 +841,95 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(result.usesPipelines).toBe(true);
         expect(result.signals.some((signal) => signal.includes("wrangler pipelines create"))).toBe(true);
+    });
+
+    it("does not infer a ctx-access capability from a mention inside a comment or a string", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/notes.ts", `// TODO: move this to ctx.pipelines.send(...)\nexport const label = "see ctx.r2sql.query() for reports";`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesPipelines).toBe(false);
+        expect(result.usesR2sql).toBe(false);
+    });
+
+    it("infers a ctx-access capability from a destructured read off ctx", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/ingest.ts", `export const handler = async (ctx) => {\n    const { pipelines } = ctx;\n    await pipelines.send([]);\n};`);
+        write("lunora/reports.ts", `export const report = async ({ ctx: { r2sql } }) => r2sql.query("select 1");`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesPipelines).toBe(true);
+        expect(result.usesR2sql).toBe(true);
+    });
+
+    it("ignores a capability import whose every specifier is type-only", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/types.ts",
+            `import type { Kv } from "@lunora/bindings/kv";\nimport { type AnalyticsClient, type AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";\nexport type T = [Kv, AnalyticsClient, AnalyticsEngineDatasetLike];`,
+        );
+        write("lunora/images.ts", `import { createImages, type Images } from "@lunora/bindings/images";\nexport const make = (): Images => createImages();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesKv).toBe(false);
+        expect(result.usesAnalytics).toBe(false);
+        // One value specifier beside a type one is a real import.
+        expect(result.usesImages).toBe(true);
+    });
+
+    describe("agreement with codegen's discoverFeatureUsage on ctx-access and type-only signals", () => {
+        /**
+         * Feed the SAME `lunora/` source through codegen's feature probe and
+         * config's inference and assert they agree — the drift guard for the
+         * ctx-access capabilities and type-only imports.
+         */
+        const agree = async (source: string): Promise<{ codegen: { pipelines: boolean; r2sql: boolean }; config: { pipelines: boolean; r2sql: boolean } }> => {
+            write("wrangler.jsonc", WRANGLER);
+            write("src/server/index.ts", ENTRY_SHARD_ONLY);
+            write("lunora/handler.ts", source);
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const usage = discoverFeatureUsage(project, join(root, "lunora"));
+            const inferred = await inferLunoraBindings({ projectRoot: root });
+
+            return { codegen: { pipelines: usage.pipelines, r2sql: usage.r2sql }, config: { pipelines: inferred.usesPipelines, r2sql: inferred.usesR2sql } };
+        };
+
+        it("agree: comment and string mentions imply nothing", async () => {
+            expect.assertions(1);
+
+            const result = await agree(`// ctx.pipelines\nexport const s = "ctx.r2sql";`);
+
+            expect(result).toStrictEqual({ codegen: { pipelines: false, r2sql: false }, config: { pipelines: false, r2sql: false } });
+        });
+
+        it("agree: destructured and renamed ctx reads", async () => {
+            expect.assertions(1);
+
+            const result = await agree(`export const a = ({ ctx: { pipelines } }) => pipelines;\nexport const b = ({ ctx: context }) => context.r2sql;`);
+
+            expect(result).toStrictEqual({ codegen: { pipelines: true, r2sql: true }, config: { pipelines: true, r2sql: true } });
+        });
+
+        it("agree: a type-only import of the capability's subpath", async () => {
+            expect.assertions(1);
+
+            const result = await agree(`import type { PipelineClient } from "@lunora/bindings/pipelines";\nexport type P = PipelineClient;`);
+
+            expect(result).toStrictEqual({ codegen: { pipelines: false, r2sql: false }, config: { pipelines: false, r2sql: false } });
+        });
     });
 
     it("does not flip pipelines for an analytics-only project (no ctx.pipelines read)", async () => {

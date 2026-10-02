@@ -25,6 +25,13 @@ export { listLunoraSourceFiles } from "./discover/ast";
 export { default as discoverAuthApiCalls } from "./discover/authapi-calls";
 export { CONTAINERS_FILENAME, discoverContainers } from "./discover/containers";
 export { default as discoverCrons } from "./discover/crons";
+// The capability usage probe and its `ctx.<property>` read detector — exported
+// so `@lunora/config`'s binding inference keys its ctx-access capabilities
+// (`ctx.pipelines`, `ctx.r2sql`) off the very same AST reading (property
+// access, destructuring, renamed `ctx`; never comments or strings), and its
+// tests can assert the two probes agree.
+export type { FeatureUsage } from "./discover/feature-usage";
+export { contextPropertiesRead, discoverFeatureUsage } from "./discover/feature-usage";
 export { discoverFlags, FLAGS_FILENAME } from "./discover/flags";
 export { default as discoverFunctions } from "./discover/functions";
 export { default as discoverHttpRoutes } from "./discover/http-routes";

@@ -272,6 +272,12 @@ interface EmitAppOptions {
 const FLAGS_FILENAME = "flags.ts";
 ```
 
+### `FeatureUsage` (type)
+
+```ts
+type FeatureUsage = Record<CapabilityKey, boolean>;
+```
+
 ### `FieldSnapshot` (interface)
 
 ```ts
@@ -1099,6 +1105,12 @@ const buildOpenRpcDocument: (input: OpenRpcEmitInput) => Record<string, unknown>
 const buildSchemaSnapshot: (schema: SchemaIR, migrationIds: ReadonlyArray<string>) => SchemaSnapshot;
 ```
 
+### `contextPropertiesRead` (const)
+
+```ts
+const contextPropertiesRead: (sourceFile: SourceFile) => Set<string>;
+```
+
 ### `createCodegenProject` (const)
 
 ```ts
@@ -1148,6 +1160,12 @@ const discoverContainers: (project: Project, lunoraDirectory: string) => Contain
 
 ```ts
 const discoverCrons: (project: Project, lunoraDirectory: string, workflows?: ReadonlyArray<WorkflowIR>, agents?: ReadonlyArray<AgentIR>) => CronJobIR[];
+```
+
+### `discoverFeatureUsage` (const)
+
+```ts
+const discoverFeatureUsage: (project: Project, lunoraDirectory: string) => FeatureUsage;
 ```
 
 ### `discoverFlags` (const)
