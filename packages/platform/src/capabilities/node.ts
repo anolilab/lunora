@@ -163,7 +163,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         containers: {
             level: "unsupported",
-            note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",
+            note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec, spawn or terminal to run a command in either",
         },
         analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
         edgeRequestMetadata: {

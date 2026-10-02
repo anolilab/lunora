@@ -296,6 +296,27 @@ const assertValidDuration = (duration: number | string | undefined, field: strin
     }
 };
 
+/** Validate `backups`: it needs `sandbox: true`, a bucket binding name, and a `/`-terminated prefix when one is set. */
+const assertValidBackups = (config: ContainerConfig): void => {
+    const { backups } = config;
+
+    if (backups === undefined) {
+        return;
+    }
+
+    if (config.sandbox !== true) {
+        throw new TypeError("defineContainer: `backups` needs `sandbox: true` — directory backups are a Sandbox SDK helper");
+    }
+
+    if (typeof backups.bucket !== "string" || backups.bucket.trim().length === 0) {
+        throw new TypeError("defineContainer: `backups.bucket` must name an R2 bucket binding");
+    }
+
+    if (backups.prefix !== undefined && (typeof backups.prefix !== "string" || (backups.prefix.length > 0 && !backups.prefix.endsWith("/")))) {
+        throw new TypeError("defineContainer: `backups.prefix` must be a string ending in `/`, or omitted");
+    }
+};
+
 /** Validate the egress-firewall fields — host allow/deny lists and `interceptHttps`. */
 const assertValidEgressFields = (config: ContainerConfig): void => {
     for (const field of ["allowedHosts", "deniedHosts"] as const) {
@@ -353,6 +374,8 @@ const assertValidContainerRuntimeFields = (config: ContainerConfig): void => {
     if (config.sandbox !== undefined && typeof config.sandbox !== "boolean") {
         throw new TypeError("defineContainer: `sandbox` must be a boolean, or omitted");
     }
+
+    assertValidBackups(config);
 };
 
 /** Whether a registry reference is digest-pinned in the Cloudflare registry — the only kind a named image accepts. */

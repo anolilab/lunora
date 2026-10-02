@@ -105,7 +105,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         images: { level: "native", note: "Cloudflare Images binding" },
         containers: {
             level: "native",
-            note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container Durable Object answers through the runtime's native ctx.container.exec() (the image serves the route itself only on a runtime without native exec)",
+            note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container Durable Object answers through the runtime's native ctx.container.exec() (the image serves the route itself only on a runtime without native exec). spawn() and terminal() stream a process (stdin, a PTY, kill and resize) through the same native exec, and have no fallback on a runtime without it",
         },
         containerEgressPolicy: { level: "native", note: "@cloudflare/containers outbound interception (allowedHosts / deniedHosts / interceptHttps)" },
         containerRuntimeScheduling: {

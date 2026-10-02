@@ -220,6 +220,20 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", sandbox: "yes" as unknown as boolean })).toThrow("`sandbox` must be a boolean");
     });
 
+    it("validates backups: it needs sandbox, a bucket binding and a slash-terminated prefix", () => {
+        expect.assertions(4);
+
+        expect(defineContainer({ backups: { bucket: "WORKSPACES", prefix: "ws/" }, image: "./app", sandbox: true }).backups).toStrictEqual({
+            bucket: "WORKSPACES",
+            prefix: "ws/",
+        });
+        expect(() => defineContainer({ backups: { bucket: "WORKSPACES" }, image: "./app" })).toThrow("`backups` needs `sandbox: true`");
+        expect(() => defineContainer({ backups: { bucket: " " }, image: "./app", sandbox: true })).toThrow("`backups.bucket` must name an R2 bucket binding");
+        expect(() => defineContainer({ backups: { bucket: "WORKSPACES", prefix: "ws" }, image: "./app", sandbox: true })).toThrow(
+            "`backups.prefix` must be a string ending in `/`",
+        );
+    });
+
     it("accepts hardTimeout and readyOn config", () => {
         expect.assertions(3);
 

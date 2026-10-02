@@ -35,6 +35,25 @@ interface ContainerAccessor {
 }
 ```
 
+### `ContainerBackupOptions` (interface)
+
+```ts
+interface ContainerBackupOptions {
+    exclude?: ReadonlyArray<string>;
+    gitignore?: boolean;
+    name?: string;
+}
+```
+
+### `ContainerBackupStorage` (interface)
+
+```ts
+interface ContainerBackupStorage {
+    bucket: string;
+    prefix?: string;
+}
+```
+
 ### `ContainerBindingSpec` (interface)
 
 ```ts
@@ -56,6 +75,7 @@ type ContainerConfig = DefaultScheduledContainerConfig | DurableObjectScheduledC
 ```ts
 interface ContainerConfigBase {
     allowedHosts?: ReadonlyArray<string>;
+    backups?: ContainerBackupStorage;
     buildArgs?: Readonly<Record<string, string>>;
     defaultPort?: number;
     deniedHosts?: ReadonlyArray<string>;
@@ -120,6 +140,40 @@ interface ContainerExecResult {
 }
 ```
 
+### `ContainerFileContent` (type)
+
+```ts
+type ContainerFileContent = ArrayBuffer | ArrayBufferView | ReadableStream<Uint8Array> | string;
+```
+
+### `ContainerFileOptions` (interface)
+
+```ts
+interface ContainerFileOptions {
+    cwd?: string;
+    user?: string;
+}
+```
+
+### `ContainerFiles` (interface)
+
+```ts
+interface ContainerFiles {
+    mkdir: (path: string, options?: ContainerFileOptions & {
+        recursive?: boolean;
+    }) => Promise<void>;
+    readDirectory: (path: string, options?: ContainerFileOptions) => Promise<SandboxDirectoryEntry[]>;
+    readFile: (path: string, options?: ContainerFileOptions) => Promise<Response>;
+    remove: (path: string, options?: ContainerFileOptions & {
+        force?: boolean;
+        recursive?: boolean;
+    }) => Promise<void>;
+    rename: (source: string, destination: string, options?: ContainerFileOptions) => Promise<void>;
+    stat: (path: string, options?: ContainerFileOptions) => Promise<SandboxFileStat>;
+    writeFile: (path: string, content: ContainerFileContent, options?: ContainerFileOptions) => Promise<void>;
+}
+```
+
 ### `ContainerHandle` (interface)
 
 ```ts
@@ -147,8 +201,10 @@ interface ContainerInstanceHandle extends ContainerHandle {
     snapshot: (options?: {
         name?: string;
     }) => Promise<ContainerSnapshot>;
+    spawn: (command: string, options?: ContainerSpawnOptions) => Promise<ContainerProcess>;
     start: (options?: ContainerStartOptions) => Promise<void>;
     stop: (signal?: number | string) => Promise<void>;
+    terminal: (request: Request, options?: ContainerTerminalOptions) => Promise<Response>;
 }
 ```
 
@@ -169,6 +225,31 @@ interface ContainerInstanceState {
 type ContainerInstanceType = CustomContainerInstanceType | NamedContainerInstanceType;
 ```
 
+### `ContainerMountCredentials` (interface)
+
+```ts
+interface ContainerMountCredentials {
+    accessKeyIdSecret: string;
+    secretAccessKeySecret: string;
+    sessionTokenSecret?: string;
+}
+```
+
+### `ContainerMountRequest` (interface)
+
+```ts
+interface ContainerMountRequest {
+    access: "read-only" | "read-write";
+    bucket: string;
+    credentials: ContainerMountCredentials;
+    endpoint: string;
+    keyPrefix?: string;
+    path: string;
+    region: string;
+    s3fsOptions?: Readonly<Record<string, boolean | number | string>>;
+}
+```
+
 ### `ContainerNamedImageSource` (type)
 
 ```ts
@@ -182,6 +263,21 @@ interface ContainerNamespaceLike {
     get: (id: unknown) => ContainerStubLike;
     idFromName: (name: string) => unknown;
     jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ContainerNamespaceLike;
+}
+```
+
+### `ContainerProcess` (interface)
+
+```ts
+interface ContainerProcess {
+    exitCode: Promise<number>;
+    isPty: boolean;
+    kill: (signal?: number) => Promise<void>;
+    pid: number;
+    resize: (cols: number, rows: number) => Promise<void>;
+    stderr: ReadableStream<Uint8Array> | null;
+    stdin: WritableStream<Uint8Array> | null;
+    stdout: ReadableStream<Uint8Array> | null;
 }
 ```
 
@@ -210,6 +306,22 @@ interface ContainerRollout {
 type ContainerRuntimeInstanceType = Exclude<NamedContainerInstanceType, "basic"> | Required<CustomContainerInstanceType>;
 ```
 
+### `ContainerSandboxControls` (interface)
+
+```ts
+interface ContainerSandboxControls {
+    backup: (directory: string, options?: ContainerBackupOptions) => Promise<DirectoryBackupRecord>;
+    deleteBackup: (backup: DirectoryBackupRecord) => Promise<void>;
+    files: ContainerFiles;
+    inspectMount: (path: string) => Promise<S3MountInspection>;
+    mount: (request: ContainerMountRequest) => Promise<void>;
+    restore: (backup: DirectoryBackupRecord, options?: {
+        directory?: string;
+    }) => Promise<void>;
+    unmount: (path: string) => Promise<void>;
+}
+```
+
 ### `ContainerSnapshot` (interface)
 
 ```ts
@@ -217,6 +329,23 @@ interface ContainerSnapshot {
     id: string;
     name?: string;
     size: number;
+}
+```
+
+### `ContainerSpawnOptions` (interface)
+
+```ts
+interface ContainerSpawnOptions {
+    args?: ReadonlyArray<string>;
+    cwd?: string;
+    env?: Readonly<Record<string, string>>;
+    pty?: {
+        cols?: number;
+        rows?: number;
+    };
+    signal?: AbortSignal;
+    stdin?: ReadableStream<Uint8Array> | boolean;
+    timeoutMs?: number;
 }
 ```
 
@@ -231,6 +360,16 @@ interface ContainerStartOptions {
     instanceType?: ContainerRuntimeInstanceType;
     labels?: Record<string, string>;
     snapshot?: ContainerSnapshot;
+}
+```
+
+### `ContainerTerminalOptions` (interface)
+
+```ts
+interface ContainerTerminalOptions extends Omit<ContainerSpawnOptions, "pty" | "signal" | "stdin"> {
+    cols?: number;
+    command?: string;
+    rows?: number;
 }
 ```
 
@@ -272,6 +411,10 @@ interface DefaultScheduledContainerConfig extends ContainerConfigBase {
     schedulingPolicy?: "default";
 }
 ```
+
+### `DirectoryBackupRecord` (interface)
+
+Re-exported from `@cloudflare/sandbox` — signature tracked at its source.
 
 ### `DurableObjectJurisdiction` (type)
 
@@ -342,6 +485,33 @@ interface RegistryImageSource {
 }
 ```
 
+### `S3MountInspection` (type)
+
+Re-exported from `@cloudflare/sandbox` — signature tracked at its source.
+
+### `SandboxContainerAccessor` (interface)
+
+```ts
+interface SandboxContainerAccessor extends ContainerAccessor {
+    get: (name: string, options?: InstanceRetryOptions) => SandboxContainerInstanceHandle;
+}
+```
+
+### `SandboxContainerInstanceHandle` (interface)
+
+```ts
+interface SandboxContainerInstanceHandle extends ContainerInstanceHandle, ContainerSandboxControls {
+}
+```
+
+### `SandboxDirectoryEntry` (interface)
+
+Re-exported from `@cloudflare/sandbox` — signature tracked at its source.
+
+### `SandboxFileStat` (interface)
+
+Re-exported from `@cloudflare/sandbox` — signature tracked at its source.
+
 ### `containerBindingName` (const)
 
 ```ts
@@ -383,6 +553,14 @@ const defineContainer: {
         readonly isLunoraContainer: true;
     };
 };
+```
+
+### `getContainer` (const)
+
+```ts
+const getContainer: <Handle extends ContainerInstanceHandle = ContainerInstanceHandle>(env: Record<string, unknown>, exportName: string, name: string, options?: InstanceRetryOptions & {
+    jurisdiction?: DurableObjectJurisdiction;
+}) => Handle;
 ```
 
 ### `isCloudflareRegistryDigest` (const)
@@ -494,6 +672,7 @@ class ContainerProxy extends WorkerEntrypoint<Cloudflare.Env, ContainerProxyOpti
 
 ```ts
 class LunoraContainer<Env = unknown> extends Container<Env> {
+    protected readonly lunoraName: string;
     constructor(context: DurableObjectContext, env: Env, definition: ContainerDefinition, exportName?: string, jurisdiction?: DurableObjectJurisdiction);
     lunoraSnapshot(options?: {
         name?: string;
@@ -501,6 +680,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     override fetch(request: Request): Promise<Response>;
     override containerFetch(...args: Parameters<Container<Env>["containerFetch"]>): Promise<Response>;
     lunoraExec(request: Request): Promise<Response>;
+    lunoraSpawn(request: ContainerSpawnRequest): Promise<SpawnedProcess>;
     override startAndWaitForPorts(...args: Parameters<Container<Env>["startAndWaitForPorts"]>): Promise<void>;
     override start(options?: LunoraStartOptions, waitOptions?: Parameters<Container<Env>["start"]>[1]): Promise<void>;
     override destroy(): Promise<void>;
@@ -511,6 +691,8 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         generation?: number;
     }): Promise<void>;
     override onStop(parameters: StopParams): Promise<void>;
+    protected lunoraAcquire(operation: string): Promise<AcquiredContainer>;
+    protected beforeContainerStart(): Promise<void>;
 }
 ```
 
@@ -667,6 +849,36 @@ const createContainerTelemetry: (options?: ContainerTelemetryOptions) => Contain
 
 Re-exported from `@cloudflare/sandbox` — signature tracked at its source.
 
+### `LunoraSandboxContainer` (class)
+
+```ts
+class LunoraSandboxContainer<Env = unknown> extends LunoraContainer<Env> {
+    #private;
+    constructor(context: DurableObjectContext, env: Env, definition: ContainerDefinition, exportName?: string, jurisdiction?: ConstructorParameters<typeof LunoraContainer>[4]);
+    lunoraReadFile(path: string, options?: ContainerFileOptions): Promise<Response>;
+    lunoraWriteFile(path: string, content: ContainerFileContent, options?: ContainerFileOptions): Promise<void>;
+    lunoraStat(path: string, options?: ContainerFileOptions): Promise<SandboxFileStat>;
+    lunoraReadDirectory(path: string, options?: ContainerFileOptions): Promise<SandboxDirectoryEntry[]>;
+    lunoraMkdir(path: string, options?: ContainerFileOptions & {
+        recursive?: boolean;
+    }): Promise<void>;
+    lunoraRename(source: string, destination: string, options?: ContainerFileOptions): Promise<void>;
+    lunoraRemove(path: string, options?: ContainerFileOptions & {
+        force?: boolean;
+        recursive?: boolean;
+    }): Promise<void>;
+    lunoraBackup(directory: string, options?: ContainerBackupOptions): Promise<DirectoryBackupRecord>;
+    lunoraRestore(backup: DirectoryBackupRecord, options?: {
+        directory?: string;
+    }): Promise<void>;
+    lunoraDeleteBackup(backup: DirectoryBackupRecord): Promise<void>;
+    lunoraMount(request: ContainerMountRequest): Promise<void>;
+    lunoraInspectMount(path: string): Promise<S3MountInspection>;
+    lunoraUnmount(path: string): Promise<void>;
+    protected override beforeContainerStart(): Promise<void>;
+}
+```
+
 ### `S3Gateway` (class)
 
 Re-exported from `@cloudflare/sandbox` — signature tracked at its source.
@@ -676,6 +888,15 @@ Re-exported from `@cloudflare/sandbox` — signature tracked at its source.
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `AcquiredContainer` (interface)
+
+```ts
+interface AcquiredContainer {
+    container: ContainerRuntime;
+    release: () => void;
+}
+```
 
 ### `ArgsOfReference` (type)
 
@@ -786,6 +1007,28 @@ interface ContainerOptions {
 }
 ```
 
+### `ContainerProcessControl` (class)
+
+```ts
+class ContainerProcessControl extends RpcTarget {
+    #private;
+    constructor(process: NativeProcess, exit: Promise<number>);
+    exitCode(): Promise<number>;
+    kill(signal?: number): void;
+    resize(cols: number, rows: number): void;
+}
+```
+
+### `ContainerProcessControlStub` (interface)
+
+```ts
+interface ContainerProcessControlStub {
+    exitCode: () => Promise<number>;
+    kill: (signal?: number) => Promise<void> | void;
+    resize: (cols: number, rows: number) => Promise<void> | void;
+}
+```
+
 ### `ContainerProxyOptions` (type)
 
 ```ts
@@ -799,6 +1042,22 @@ type ContainerProxyOptions = {
     deniedHosts?: string[];
     interceptAll?: boolean;
 };
+```
+
+### `ContainerRuntime` (type)
+
+```ts
+type ContainerRuntime = NonNullable<DurableObjectContext["container"]>;
+```
+
+### `ContainerSpawnRequest` (interface)
+
+```ts
+interface ContainerSpawnRequest extends Omit<ContainerSpawnOptions, "args" | "env" | "signal"> {
+    args?: string[];
+    command: string;
+    env?: Record<string, string>;
+}
 ```
 
 ### `ContainerStartConfigOptions` (interface)
@@ -827,10 +1086,31 @@ interface ContainerStubLike {
     destroy?: () => Promise<void>;
     fetch: (input: Request) => Promise<Response>;
     getState?: () => Promise<ContainerInstanceState>;
+    lunoraBackup?: (directory: string, options?: ContainerBackupOptions) => Promise<DirectoryBackupRecord>;
+    lunoraDeleteBackup?: (backup: DirectoryBackupRecord) => Promise<void>;
     lunoraExec?: (request: Request) => Promise<Response>;
+    lunoraInspectMount?: (path: string) => Promise<S3MountInspection>;
+    lunoraMkdir?: (path: string, options?: ContainerFileOptions & {
+        recursive?: boolean;
+    }) => Promise<void>;
+    lunoraMount?: (request: ContainerMountRequest) => Promise<void>;
+    lunoraReadDirectory?: (path: string, options?: ContainerFileOptions) => Promise<SandboxDirectoryEntry[]>;
+    lunoraReadFile?: (path: string, options?: ContainerFileOptions) => Promise<Response>;
+    lunoraRemove?: (path: string, options?: ContainerFileOptions & {
+        force?: boolean;
+        recursive?: boolean;
+    }) => Promise<void>;
+    lunoraRename?: (source: string, destination: string, options?: ContainerFileOptions) => Promise<void>;
+    lunoraRestore?: (backup: DirectoryBackupRecord, options?: {
+        directory?: string;
+    }) => Promise<void>;
     lunoraSnapshot?: (options?: {
         name?: string;
     }) => Promise<ContainerSnapshot>;
+    lunoraSpawn?: (request: ContainerSpawnRequest) => Promise<SpawnResult>;
+    lunoraStat?: (path: string, options?: ContainerFileOptions) => Promise<SandboxFileStat>;
+    lunoraUnmount?: (path: string) => Promise<void>;
+    lunoraWriteFile?: (path: string, content: ContainerFileContent, options?: ContainerFileOptions) => Promise<void>;
     removeAllowedHost?: (hostname: string) => Promise<void>;
     removeDeniedHost?: (hostname: string) => Promise<void>;
     renewActivityTimeout?: () => Promise<void>;
@@ -847,12 +1127,33 @@ interface ContainerStubLike {
 type DurableObjectContext = ConstructorParameters<typeof Container>[0];
 ```
 
+### `DurableObjectContext` (type)
+
+```ts
+type DurableObjectContext = ConstructorParameters<typeof LunoraContainer>[0];
+```
+
 ### `LunoraStartOptions` (type)
 
 ```ts
 type LunoraStartOptions = NonNullable<Parameters<Container["start"]>[0]> & Pick<StartOverride, "image" | "instanceType"> & {
     snapshot?: ContainerSnapshot;
 };
+```
+
+### `NativeProcess` (interface)
+
+```ts
+interface NativeProcess {
+    exitCode: Promise<number>;
+    isPty?: boolean;
+    kill: (signal?: number) => void;
+    pid?: number;
+    resize?: (cols: number, rows: number) => void;
+    stderr: ReadableStream | null;
+    stdin?: WritableStream | null;
+    stdout: ReadableStream | null;
+}
 ```
 
 ### `OutboundByHostOverrideInput` (type)
@@ -937,6 +1238,32 @@ type Signal = 'SIGKILL' | 'SIGINT' | 'SIGTERM';
 
 ```ts
 type SignalInteger = number;
+```
+
+### `SpawnResult` (interface)
+
+```ts
+interface SpawnResult {
+    control: ContainerProcessControlStub;
+    isPty: boolean;
+    pid: number;
+    stderr: ReadableStream<Uint8Array> | null;
+    stdin: WritableStream<Uint8Array> | null;
+    stdout: ReadableStream<Uint8Array> | null;
+}
+```
+
+### `SpawnedProcess` (interface)
+
+```ts
+interface SpawnedProcess {
+    control: ContainerProcessControl;
+    isPty: boolean;
+    pid: number;
+    stderr: ReadableStream<Uint8Array> | null;
+    stdin: WritableStream<Uint8Array> | null;
+    stdout: ReadableStream<Uint8Array> | null;
+}
 ```
 
 ### `StartAndWaitForPortsOptions` (interface)

@@ -108,6 +108,18 @@ interface ContainerReadinessCheck {
 /**
  * The fields every container accepts, whichever scheduling policy it uses.
  */
+
+/**
+ * Where `handle.backup()` stores directory backups for a `sandbox: true`
+ * container: an R2 bucket binding and an optional key prefix.
+ */
+interface ContainerBackupStorage {
+    /** Name of an R2 bucket binding on the Worker env (`r2_buckets[].binding`). */
+    bucket: string;
+    /** Key prefix for the backup objects. A non-empty prefix ends in `/`. */
+    prefix?: string;
+}
+
 interface ContainerConfigBase {
     /**
      * Hostnames the container may reach **even when {@link ContainerConfigBase.enableInternet}
@@ -120,6 +132,14 @@ interface ContainerConfigBase {
      * handle's `egress` controls adjust the lists at runtime.
      */
     allowedHosts?: ReadonlyArray<string>;
+
+    /**
+     * Where `handle.backup()` saves directory backups (requires `sandbox: true`).
+     * The backup and restore traffic goes through the `DirectoryBackupGateway`
+     * Worker entrypoint, which hands the container a grant for one object per
+     * operation, so the container never holds bucket credentials.
+     */
+    backups?: ContainerBackupStorage;
 
     /**
      * Build-time variables for a Dockerfile/Railpack image — wrangler's
@@ -399,6 +419,7 @@ type NormalizedContainerImage =
 
 export type {
     BuildImageSource,
+    ContainerBackupStorage,
     ContainerConfig,
     ContainerConfigBase,
     ContainerDefinition,

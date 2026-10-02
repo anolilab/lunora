@@ -326,6 +326,48 @@ describe("emit (containers)", () => {
         );
     });
 
+    it("emitContainers extends LunoraSandboxContainer for a sandbox container, and imports only the bases in use", () => {
+        expect.assertions(5);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const transcoder = defineContainer({ image: "./containers/transcoder" });
+        `);
+
+        const mixed = emitContainers(discoverContainers(newProject(), workdir));
+
+        expect(mixed).toContain("export class BoxContainer extends LunoraSandboxContainer {");
+        expect(mixed).toContain("export class TranscoderContainer extends LunoraContainer {");
+        expect(mixed).toContain('import { LunoraSandboxContainer } from "@lunora/container/sandbox";');
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+        `);
+
+        const sandboxOnly = emitContainers(discoverContainers(newProject(), workdir));
+
+        expect(sandboxOnly).not.toContain('import { LunoraContainer } from "@lunora/container/do";');
+        expect(sandboxOnly).toContain("ConstructorParameters<typeof LunoraSandboxContainer>[0]");
+    });
+
+    it("emitServer types a sandbox container as a SandboxContainerAccessor", () => {
+        expect.assertions(3);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const transcoder = defineContainer({ image: "./containers/transcoder" });
+        `);
+
+        const server = emitServer({ containers: discoverContainers(newProject(), workdir), schema: EMPTY_SCHEMA });
+
+        expect(server).toContain('import type { ContainerAccessor, SandboxContainerAccessor } from "@lunora/container";');
+        expect(server).toContain("readonly box: SandboxContainerAccessor;");
+        expect(server).toContain("readonly transcoder: ContainerAccessor;");
+    });
+
     it('emitContainers returns "" without containers', () => {
         expect.assertions(1);
 
