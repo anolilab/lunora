@@ -11,15 +11,19 @@
  * `[A-Za-z0-9_-]` turned into `_`) and `--out` (default
  * `{artifacts-dir}/manifest.json`).
  *
- * `hostd` artifacts are `{artifacts-dir}/lunora-hostd-{platform}`, published at
- * `{base-url}/lunora-hostd-{platform}`. celld and Caddy come from
- * `release-pins.json`. Signing is refused while a pin is still a placeholder,
- * and unless the signature verifies against a key pinned in
- * `src/trusted-release-keys.ts` — so a key no box trusts can never sign a
- * release.
+ * Lunora builds two of the three components, and both sit in `{artifacts-dir}`,
+ * published under `{base-url}`: `hostd` as `lunora-hostd-{platform}`, and Caddy
+ * (built with xcaddy by the release workflow, since no upstream release ships
+ * the `caddy-ratelimit` module) as the gzipped `caddy-{platform}.gz`. Their
+ * hashes and sizes come from those files. celld artifacts, and the Caddy version
+ * and module list the build used, come from `release-pins.json`. Signing is
+ * refused while an input is missing or still a placeholder, and unless the
+ * signature verifies against a key pinned in `src/trusted-release-keys.ts` — so
+ * a key no box trusts can never sign a release.
  *
  * Verify an envelope against the pinned keys with `--verify manifest.json`;
- * add `--artifacts-dir` to also check the `hostd` binaries in that directory.
+ * add `--artifacts-dir` to also check the `hostd` and Caddy files in that
+ * directory.
  */
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -50,6 +54,12 @@ const { values } = parseArgs({
 
 /** Outside the protocol id alphabet that an `upgrade` job's `releaseId` uses. */
 const NON_ID_CHARACTER = /[^\w-]/gu;
+
+/** A Caddy release tag, as `xcaddy build` takes it. */
+const CADDY_VERSION = /^v\d+\.\d+\.\d+$/u;
+
+/** A full Git commit id: a module is pinned to a commit, never to a branch. */
+const COMMIT = /^[\da-f]{40}$/u;
 
 /** Ends the script with a message and no stack: every refusal here is an operator error, not a bug. */
 class RefusedError extends Error {}
@@ -90,6 +100,57 @@ const findPlaceholders = (value, path = "$") => {
     return [];
 };
 
+/**
+ * Reads the Caddy build inputs from the pins: the version and the modules,
+ * each at a commit. The release workflow builds from exactly these.
+ * @param {unknown} caddy `pins.caddy`
+ * @returns {{ modules: string[], version: string }} what the manifest records
+ */
+const readCaddyPins = (caddy) => {
+    if (typeof caddy !== "object" || caddy === null) {
+        fail("release-pins.json: caddy is missing");
+    }
+
+    if (typeof caddy.version !== "string" || !CADDY_VERSION.test(caddy.version)) {
+        fail("release-pins.json: caddy.version must be a Caddy release tag such as v2.11.6");
+    }
+
+    if (!Array.isArray(caddy.modules) || caddy.modules.length === 0) {
+        fail("release-pins.json: caddy.modules must list the modules compiled in (at least caddy-ratelimit)");
+    }
+
+    const modules = caddy.modules.map((module, index) => {
+        if (typeof module?.path !== "string" || module.path === "" || typeof module.commit !== "string" || !COMMIT.test(module.commit)) {
+            fail(`release-pins.json: caddy.modules[${String(index)}] needs a path and a 40-hex commit`);
+        }
+
+        return module.path;
+    });
+
+    return { modules, version: caddy.version };
+};
+
+/**
+ * Hashes the Lunora-built files a release publishes.
+ * @param {string} directory where the files are
+ * @param {string} base the release download URL, no trailing slash
+ * @param {(platform: string) => string} name the file name for a platform
+ * @param {Partial<{ compression: "gzip" }>} extra fields every artifact carries
+ * @returns {object[]} one manifest artifact per platform
+ */
+const hashArtifacts = (directory, base, name, extra = {}) =>
+    HOSTD_RELEASE_PLATFORMS.map((platform) => {
+        const file = join(directory, name(platform));
+
+        if (!existsSync(file)) {
+            fail(`${file} is missing: every platform needs its binary`);
+        }
+
+        const bytes = readFileSync(file);
+
+        return { ...extra, platform, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.byteLength, url: `${base}/${name(platform)}` };
+    });
+
 const verifyMode = async (envelopePath) => {
     const verified = verifyReleaseManifest(JSON.parse(readFileSync(envelopePath, "utf8")), HOSTD_TRUSTED_RELEASE_KEYS);
 
@@ -102,7 +163,7 @@ const verifyMode = async (envelopePath) => {
     if (values["artifacts-dir"] !== undefined) {
         const directory = resolve(values["artifacts-dir"]);
         const checks = await Promise.all(
-            manifest.hostd.artifacts.map(async (artifact) => {
+            [...manifest.hostd.artifacts, ...manifest.caddy.artifacts].map(async (artifact) => {
                 const file = join(directory, basename(new URL(artifact.url).pathname));
 
                 return { file, result: await verifyArtifact(file, artifact.sha256, artifact.size) };
@@ -138,6 +199,7 @@ const makeMode = () => {
         fail(`release-pins.json still holds placeholders, refusing to sign:\n  ${placeholders.join("\n  ")}`);
     }
 
+    const caddy = readCaddyPins(pins.caddy);
     const signingKey = process.env.HOSTD_RELEASE_SIGNING_KEY;
 
     if (signingKey === undefined || signingKey.trim() === "") {
@@ -146,21 +208,11 @@ const makeMode = () => {
 
     const base = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
     const artifactsDirectory = resolve(values["artifacts-dir"] ?? join(packageDirectory, "dist", "sea"));
-    const hostdArtifacts = HOSTD_RELEASE_PLATFORMS.map((platform) => {
-        const name = `lunora-hostd-${platform}`;
-        const file = join(artifactsDirectory, name);
-
-        if (!existsSync(file)) {
-            fail(`${file} is missing: every platform needs its binary`);
-        }
-
-        const bytes = readFileSync(file);
-
-        return { platform, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.byteLength, url: `${base}/${name}` };
-    });
+    const hostdArtifacts = hashArtifacts(artifactsDirectory, base, (platform) => `lunora-hostd-${platform}`);
+    const caddyArtifacts = hashArtifacts(artifactsDirectory, base, (platform) => `caddy-${platform}.gz`, { compression: "gzip" });
 
     const manifest = {
-        caddy: pins.caddy,
+        caddy: { artifacts: caddyArtifacts, modules: caddy.modules, version: caddy.version },
         celld: pins.celld,
         createdAt: new Date().toISOString(),
         hostd: { artifacts: hostdArtifacts, version },

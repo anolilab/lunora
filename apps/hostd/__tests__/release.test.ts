@@ -248,9 +248,9 @@ describe(verifyReleaseManifest, () => {
 
     it("refuses a trusted key that is not Ed25519", () => {
         const { envelope } = signed();
-        const rsa = generateKeyPairSync("rsa", { modulusLength: 1024 }).publicKey.export({ format: "pem", type: "spki" });
+        const ecdsa = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "pem", type: "spki" });
 
-        expect(verifyReleaseManifest(envelope, { [envelope.keyId]: rsa })).toMatchObject({ error: { code: "INVALID_TRUSTED_KEY" }, ok: false });
+        expect(verifyReleaseManifest(envelope, { [envelope.keyId]: ecdsa })).toMatchObject({ error: { code: "INVALID_TRUSTED_KEY" }, ok: false });
     });
 
     it("refuses an invalid envelope with its path", () => {
@@ -266,9 +266,9 @@ describe(verifyReleaseManifest, () => {
     });
 
     it("refuses to sign with a non-Ed25519 key or an invalid manifest", () => {
-        const rsa = generateKeyPairSync("rsa", { modulusLength: 1024 }).privateKey;
+        const ecdsa = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey;
 
-        expect(() => signReleaseManifest(makeManifest(), rsa)).toThrow(TypeError);
+        expect(() => signReleaseManifest(makeManifest(), ecdsa)).toThrow(TypeError);
         expect(() => signReleaseManifest({ ...makeManifest(), releaseId: "a.b" }, keyPair().privateKey)).toThrow(TypeError);
     });
 });

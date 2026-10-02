@@ -371,8 +371,10 @@ The published file (`manifest.json`, a GitHub Release asset of
 | `…artifacts[].compression`?            | `"gzip"`: the bytes at `url` are a gzip stream of the binary. Hash and size are of the download         |
 
 Validation is strict as in §4: an unknown field anywhere rejects the file.
-`hostd` artifacts are built by Lunora; `celld` and `caddy` artifacts pin
-upstream (or upstream-derived) builds by checksum.
+`hostd` and `caddy` artifacts are built by Lunora's release workflow (Caddy with
+xcaddy, from a pinned Caddy version and module commits, gzipped) and published on
+the same GitHub Release; `celld` artifacts pin upstream release assets by
+checksum.
 
 ### 8.2 Signed bytes
 
