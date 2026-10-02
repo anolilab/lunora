@@ -755,6 +755,9 @@ authenticated control-plane usage, and mixing them makes both harder to read.
 
 ## Deploy
 
+The ordered, once-per-cell setup checklist (resources, tokens, GitHub App,
+secrets, box zone, `hostd` signing key) is [`RUNBOOK.md`](./RUNBOOK.md).
+
 A cell is **three Workers**, each with its own config, deployed together:
 
 | Worker              | Config                      | What it is                                                    |
