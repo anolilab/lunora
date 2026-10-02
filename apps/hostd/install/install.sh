@@ -85,53 +85,56 @@ TOKEN="${LUNORA_HOSTD_ENROL_TOKEN:-}"
 UNINSTALL=0
 FORCE=0
 ENROL_ARGS=()
+PLATFORM=""
+RELEASE_ID=""
+TAG=""
 
 need_value() {
     [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
 }
 
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --control-plane | --bucket | --endpoint | --region | --ipv4 | --ipv6)
-            need_value "$@"
-            ENROL_ARGS+=("$1" "$2")
-            shift 2
-            ;;
-        --single-trust | --skip-bucket-check)
-            ENROL_ARGS+=("$1")
-            shift
-            ;;
-        --force)
-            FORCE=1
-            ENROL_ARGS+=("$1")
-            shift
-            ;;
-        --token)
-            need_value "$@"
-            TOKEN="$2"
-            shift 2
-            ;;
-        --version)
-            need_value "$@"
-            VERSION="${2#v}"
-            shift 2
-            ;;
-        --uninstall)
-            UNINSTALL=1
-            shift
-            ;;
-        -h | --help)
-            usage
-            exit 0
-            ;;
-        *)
-            usage
-            die "unknown option: $1"
-            ;;
-    esac
-done
-
-[ "$(id -u)" -eq 0 ] || die "run as root (sudo bash install.sh ...)"
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --control-plane | --bucket | --endpoint | --region | --ipv4 | --ipv6)
+                need_value "$@"
+                ENROL_ARGS+=("$1" "$2")
+                shift 2
+                ;;
+            --single-trust | --skip-bucket-check)
+                ENROL_ARGS+=("$1")
+                shift
+                ;;
+            --force)
+                FORCE=1
+                ENROL_ARGS+=("$1")
+                shift
+                ;;
+            --token)
+                need_value "$@"
+                TOKEN="$2"
+                shift 2
+                ;;
+            --version)
+                need_value "$@"
+                VERSION="${2#v}"
+                shift 2
+                ;;
+            --uninstall)
+                UNINSTALL=1
+                shift
+                ;;
+            -h | --help)
+                usage
+                exit 0
+                ;;
+            *)
+                usage
+                die "unknown option: $1"
+                ;;
+        esac
+    done
+}
 
 uninstall() {
     say "removing lunora-hostd (the bucket and everything in it are left alone)"
@@ -157,11 +160,6 @@ uninstall() {
 
     say "done. Revoke the box in the Lunora Cloud studio; its fleets' data stays in your bucket under fleets/."
 }
-
-if [ "${UNINSTALL}" -eq 1 ]; then
-    uninstall
-    exit 0
-fi
 
 # --- The machine -------------------------------------------------------------
 
@@ -469,11 +467,26 @@ start_service() {
     say "lunora-hostd is running: systemctl status lunora-hostd; journalctl -u lunora-hostd -f"
 }
 
-check_machine
-install_packages
-create_users
-create_directories
-install_release
-install_unit
-enrol
-start_service
+main() {
+    parse_args "$@"
+    [ "$(id -u)" -eq 0 ] || die "run as root (sudo bash install.sh ...)"
+
+    if [ "${UNINSTALL}" -eq 1 ]; then
+        uninstall
+        exit 0
+    fi
+
+    check_machine
+    install_packages
+    create_users
+    create_directories
+    install_release
+    install_unit
+    enrol
+    start_service
+}
+
+# Sourced (the test:hostd lane does, to set a box up from these same functions), it only defines them.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

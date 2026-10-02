@@ -70,6 +70,7 @@
         "test:coverage": "vis run test:coverage --query \"project!=lunora-e2e\"",
         "test:templates": "./scripts/template-build-smoke.sh",
         "test:celld": "pnpm exec vis run build --query \"project=platform-celld\" && LUNORA_CELLD_TESTS=1 pnpm --filter \"@lunora/platform-celld\" run test --project celld",
+        "test:hostd": "pnpm exec vis run build --query \"project=hostd\" && LUNORA_HOSTD_TESTS=1 pnpm --filter \"@lunora/hostd\" run test --project integration",
         "test:workerd": "./scripts/test-workerd.sh",
         "worker-size:check": "node scripts/check-worker-size.js",
         "worker-size:update": "node scripts/check-worker-size.js --update"

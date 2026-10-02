@@ -381,6 +381,20 @@ node_capabilities_docs:
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
+# The `test-hostd` job: the hostd lane (`pnpm run test:hostd`) — the daemon as a single
+# executable under its real systemd unit, the pinned celld release, a Caddy built from
+# release-pins.json, moto — so it runs when hostd, what it builds on (`@lunora/config`
+# writes the celld config of every release it deploys) or the hostd wire protocol
+# changes, plus its own workflow and this file, per the self-listing rule above.
+hostd:
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - "apps/hostd/**"
+    - "packages/config/**"
+    - "protocol/hostd/**"
+
 # The `test-celld` job: a live celld (GitHub release), moto (pipx) and a Docker Hub
 # image, so it runs only when something it can observe changes — the packages its
 # harness (packages/platform-celld/__tests__/celld) builds on, the inlined `shared/`
