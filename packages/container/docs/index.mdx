@@ -1027,10 +1027,13 @@ session starts clean.
     - it rewrites `/work/.git/config`, for example a `core.fsmonitor` command;
     - it puts its own `git` earlier on `PATH`.
 
-    So for untrusted code, build in one session, move the output out (for
-    example to R2 with [`@lunora/storage`](/docs/packages/storage)), and clone,
-    commit and push from a fresh session the build never ran in. The hardening
-    above is for builds you trust; it is not a sandbox.
+    So for untrusted code, build in one session and move only the output out:
+    with `sandbox: true`, `backup()` the output directory (never its `.git`)
+    and `restore()` it into a fresh session the build never ran in (see
+    [Backups](#backups)), or copy it through R2 with
+    [`@lunora/storage`](/docs/packages/storage). Clone, commit and push from
+    that fresh session. The hardening above is for builds you trust; it is not
+    a sandbox.
 
 - **The image needs `git`.** `node:22-slim` doesn't include it, so add
   `RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates`
