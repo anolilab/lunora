@@ -1,5 +1,5 @@
 {
-    "$comment": "Upstream binaries a hostd release pins (plan 458 W7). celld: denoland/celld release assets, sha256 and size checked against the downloaded bytes; keep the version in step with CELLD_VERSION in .github/workflows/test.yml. caddy: PLACEHOLDER until Lunora builds Caddy with the caddy-ratelimit module (xcaddy) and hosts it; no upstream release ships that module. make-release-manifest.mjs refuses to sign while any PLACEHOLDER remains.",
+    "$comment": "Inputs to a hostd release (plan 458 W7). celld: upstream denoland/celld release assets, sha256 and size checked against the downloaded bytes; keep the version in step with CELLD_VERSION in .github/workflows/test.yml. caddy: no upstream release ships the caddy-ratelimit module, so .github/workflows/hostd-release.yml builds this Caddy version with these modules at these commits (xcaddy) and attaches the gzipped binaries to the hostd-v<version> release; make-release-manifest.mjs hashes those built files. It refuses to sign while any input is missing or a PLACEHOLDER.",
     "celld": {
         "version": "v0.6.0",
         "artifacts": [
@@ -21,19 +21,11 @@
     },
     "caddy": {
         "version": "v2.11.6",
-        "modules": ["github.com/mholt/caddy-ratelimit"],
-        "artifacts": [
+        "modules": [
             {
-                "platform": "linux-x64",
-                "url": "PLACEHOLDER",
-                "sha256": "PLACEHOLDER",
-                "size": 0
-            },
-            {
-                "platform": "linux-arm64",
-                "url": "PLACEHOLDER",
-                "sha256": "PLACEHOLDER",
-                "size": 0
+                "path": "github.com/mholt/caddy-ratelimit",
+                "commit": "5625512f24f6f59d6f64fb3aafe5eecff0b286db",
+                "$comment": "master, 2026-06-12"
             }
         ]
     }

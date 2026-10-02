@@ -1,9 +1,11 @@
 "name": "hostd Release"
 
 # Builds `lunora-hostd` (apps/hostd) as a Node single executable for each Linux
-# platform a box can run, signs a release manifest over the binaries and the
-# pinned celld + Caddy builds, attests provenance, and publishes all of it as the
-# GitHub Release `hostd-v<version>` (plan 458 W7, §9 Q2).
+# platform a box can run, builds Caddy with the `caddy-ratelimit` module from
+# pinned source (no upstream Caddy release ships that module), signs a release
+# manifest over those binaries and the pinned celld release, attests provenance,
+# and publishes all of it as the GitHub Release `hostd-v<version>` (plan 458 W7,
+# §9 Q2).
 #
 # How a box trusts a release: `manifest.json` is an Ed25519-signed envelope, and
 # the public key that verifies it is compiled into `hostd` and the control plane
@@ -164,9 +166,115 @@
                   "if-no-files-found": "error"
                   "retention-days": 7
 
+    # The box edge needs `http.handlers.rate_limit`, which only a custom build has.
+    # The Caddy version and each module's commit come from apps/hostd/release-pins.json
+    # (the same file make-release-manifest.mjs records them from); the toolchain
+    # (Go, xcaddy) is pinned here. Reproducible: CGO off, no VCS stamping,
+    # xcaddy's default `-trimpath -ldflags "-w -s"`, and `gzip -n` (no name or
+    # mtime), so the same inputs give the same bytes; Go embeds no build time, so
+    # there is no SOURCE_DATE_EPOCH to set.
+    "build-caddy":
+        "name": "Build Caddy (${{ matrix.platform }})"
+        "needs": "prepare"
+        "runs-on": "${{ matrix.runner }}"
+        "timeout-minutes": 30
+        "permissions":
+            "contents": "read" # for checkout
+        "strategy":
+            "fail-fast": true
+            "matrix":
+                "include":
+                    - "platform": "linux-x64"
+                      "runner": "ubuntu-24.04"
+                    - "platform": "linux-arm64"
+                      "runner": "ubuntu-24.04-arm"
+        "env":
+            "CGO_ENABLED": "0"
+            "GOFLAGS": "-buildvcs=false"
+            # Never let a go.mod `toolchain` line swap in an unpinned Go.
+            "GOTOOLCHAIN": "local"
+            "XCADDY_VERSION": "v0.4.7" # caddyserver/xcaddy release, 2026-08-17
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # No module cache: a release build starts from a clean module download,
+            # verified against the Go checksum database.
+            - "name": "Setup go"
+              "uses": "actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00" # v6.0.0
+              "with":
+                  "go-version": "1.26.8" # Caddy v2.11.6 needs go >= 1.26.0
+                  "cache": "false"
+
+            - "name": "Install xcaddy"
+              "run": 'go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"'
+
+            - "name": "Build Caddy"
+              "shell": "bash"
+              "env":
+                  "PLATFORM": "${{ matrix.platform }}"
+              "run": |
+                  set -euo pipefail
+
+                  pins="apps/hostd/release-pins.json"
+                  version="$(jq -r '.caddy.version' "${pins}")"
+
+                  if ! [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                      echo "::error::${pins}: caddy.version is not a Caddy release tag."
+                      exit 1
+                  fi
+
+                  with=()
+
+                  while IFS=$'\t' read -r path commit; do
+                      if ! [[ "${path}" =~ ^[a-z0-9][a-z0-9.-]*(/[A-Za-z0-9_.~-]+)+$ && "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
+                          echo "::error::${pins}: every caddy module needs a module path and a 40-hex commit."
+                          exit 1
+                      fi
+
+                      with+=(--with "${path}@${commit}")
+                  done < <(jq -r '.caddy.modules[] | [.path, .commit] | @tsv' "${pins}")
+
+                  if [ "${#with[@]}" -eq 0 ]; then
+                      echo "::error::${pins}: caddy.modules is empty."
+                      exit 1
+                  fi
+
+                  mkdir -p dist
+                  "$(go env GOPATH)/bin/xcaddy" build "${version}" "${with[@]}" --output "dist/caddy-${PLATFORM}"
+
+                  printed="$("dist/caddy-${PLATFORM}" version)"
+
+                  if [ "${printed%% *}" != "${version}" ]; then
+                      echo "::error::caddy version printed '${printed}', expected ${version}."
+                      exit 1
+                  fi
+
+                  if ! "dist/caddy-${PLATFORM}" list-modules | grep -qx 'http.handlers.rate_limit'; then
+                      echo "::error::The build lacks http.handlers.rate_limit."
+                      exit 1
+                  fi
+
+                  gzip -n -9 "dist/caddy-${PLATFORM}"
+                  sha256sum "dist/caddy-${PLATFORM}.gz"
+                  echo "Built Caddy ${printed} with $(( ${#with[@]} / 2 )) module(s)."
+
+            - "name": "Upload the binary"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "caddy-${{ matrix.platform }}"
+                  "path": "dist/caddy-${{ matrix.platform }}.gz"
+                  "if-no-files-found": "error"
+                  "retention-days": 7
+
     "release":
         "name": "Sign, attest and publish"
-        "needs": ["prepare", "build"]
+        "needs": ["prepare", "build", "build-caddy"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20
         # Holds HOSTD_RELEASE_SIGNING_KEY (secret): the Ed25519 private key, PKCS#8
@@ -208,8 +316,17 @@
                   "path": "apps/hostd/dist/sea"
                   "merge-multiple": true
 
-            # Refuses while release-pins.json holds a placeholder, and unless the
-            # signature verifies against a key pinned in trusted-release-keys.ts.
+            - "name": "Download the Caddy builds"
+              "uses": "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" # v4.3.0
+              "with":
+                  "pattern": "caddy-*"
+                  "path": "apps/hostd/dist/sea"
+                  "merge-multiple": true
+
+            # Hashes the hostd and Caddy files in dist/sea, takes celld and the Caddy
+            # version + modules from release-pins.json. Refuses while an input is
+            # missing or a placeholder, and unless the signature verifies against a
+            # key pinned in trusted-release-keys.ts.
             - "name": "Make and sign the release manifest"
               "working-directory": "apps/hostd"
               "env":
@@ -237,6 +354,7 @@
               "with":
                   "subject-path": |
                       apps/hostd/dist/sea/lunora-hostd-*
+                      apps/hostd/dist/sea/caddy-*.gz
                       apps/hostd/dist/sea/manifest.json
 
             # `gh release create --target` mints the tag on a dispatch run (on a tag
@@ -268,4 +386,5 @@
 
                   gh release create "${TAG}" "${args[@]}" \
                       --notes "lunora-hostd ${VERSION}. Verify \`manifest.json\` against the release keys pinned in apps/hostd/src/trusted-release-keys.ts (protocol/hostd/README.md §8); provenance: \`gh attestation verify <file> --repo anolilab/lunora\`." \
-                      manifest.json lunora-hostd-linux-x64 lunora-hostd-linux-arm64
+                      manifest.json lunora-hostd-linux-x64 lunora-hostd-linux-arm64 \
+                      caddy-linux-x64.gz caddy-linux-arm64.gz

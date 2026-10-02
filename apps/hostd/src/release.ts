@@ -59,9 +59,9 @@ interface HostdReleaseCaddy extends HostdReleaseComponent {
 }
 
 /**
- * Everything a box installs for one release. `hostd` artifacts are built and
- * hosted by Lunora; `celld` and `caddy` pin upstream (or upstream-derived)
- * binaries by checksum.
+ * Everything a box installs for one release. `hostd` and `caddy` artifacts are
+ * built and hosted by Lunora (Caddy from pinned source, with its modules);
+ * `celld` pins upstream release binaries by checksum.
  */
 interface HostdReleaseManifest {
     caddy: HostdReleaseCaddy;
