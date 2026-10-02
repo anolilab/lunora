@@ -1,7 +1,7 @@
 # Plan 458 — Container sandbox parity with Cloudflare Sandbox SDK 1.0
 
 **Baseline:** `f79680910` (2026-10-02)
-**Status:** DONE in code (A–H shipped); live deploy smoke outstanding (§7 phase 4)
+**Status:** DONE (A–H shipped; validated locally and on real Cloudflare Containers, §10; only `mount` unverified live)
 
 ## 0. Headline finding
 
@@ -452,9 +452,17 @@ instant may still see the old size.
 Remaining for a remote (`wrangler versions upload` preview) run: backups,
 mounts, and a WebSocket upgrade through `port(n).fetch`.
 
-Remote attempt (2026-10-02): blocked. The account has no Cloudflare Containers
-access, which requires the Workers Paid plan (`wrangler containers list`:
-"Unauthorized: You do not have access to Cloudflare Containers"). The
-throwaway Worker and R2 bucket created for the attempt were deleted. Backups,
-mounts and the preview WebSocket upgrade remain unverified until an account
-with Containers can run the harness.
+Remote run (2026-10-02, real Cloudflare Containers, a throwaway Worker on a
+Workers Paid account, removed afterwards): ✅ every surface the local run
+covered, plus the three it could not.
+
+- `backup` → delete the file → `restore` → read back → `deleteBackup` passes
+  against a real R2 bucket. The local failure was purely `wrangler dev`'s
+  gateway path.
+- A WebSocket upgrade through `port(8081).fetch` reaches a WebSocket server
+  inside the container and echoes.
+- `terminal()` passed 3 of 3 runs. `spawn`, `files.*`, the preview `fetch`
+  and live stdin also pass.
+
+Only `mount` is still unverified on a live container; it needs an R2 API
+token's S3 keys.

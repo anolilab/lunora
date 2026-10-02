@@ -1846,6 +1846,6 @@ Sandbox SDK 1.0 moved container control into the app's own Durable Object, which
 `@lunora/container` already does. What remains: its `Files` / `S3Mount` /
 `DirectoryBackup` helpers, plus streaming and PTY exec (which enable browser terminals).
 
-| Plan | Title                                                                         | Status                    |
-| ---- | ----------------------------------------------------------------------------- | ------------------------- |
-| 458  | [Container sandbox parity with Sandbox SDK 1.0](458-container-sandbox-1-0.md) | DONE (live smoke pending) |
+| Plan | Title                                                                         | Status                         |
+| ---- | ----------------------------------------------------------------------------- | ------------------------------ |
+| 458  | [Container sandbox parity with Sandbox SDK 1.0](458-container-sandbox-1-0.md) | DONE (`mount` unverified live) |
