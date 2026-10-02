@@ -10,7 +10,7 @@
  */
 import { api, internal } from "../../../lunora/_generated/api.js";
 import { createDohResolver, verifyDomain } from "../../domains/verify";
-import type { DomainCertificate } from "../../targets/driver";
+import type { DomainCertificate, DomainOps } from "../../targets/driver";
 import { resolveTargetDriver } from "../../targets/registry";
 import { placementFor } from "./deploy";
 import type { RouterEnv } from "./shared";
@@ -147,10 +147,12 @@ export const handleDomainRemoveRoute = async (request: Request, environment: Rou
         return rejected(error, "domain removal refused");
     }
 
+    let domains: DomainOps | undefined;
+
     // Only a domain a target issued a certificate for holds anything outside the control plane.
     if (target.customHostnameId !== undefined) {
         try {
-            const { domains } = resolveTargetDriver(await placementFor(context, environment, body.organizationId, target.projectId), environment);
+            domains = resolveTargetDriver(await placementFor(context, environment, body.organizationId, target.projectId), environment).domains;
 
             await domains.onRemoved?.({ customHostnameId: target.customHostnameId, hostname: target.hostname });
         } catch (error) {
@@ -165,6 +167,18 @@ export const handleDomainRemoveRoute = async (request: Request, environment: Rou
         await context.runMutation(internal.domains.remove, { id: body.id, organizationId: body.organizationId });
     } catch (error) {
         return rejected(error, "domain removal failed");
+    }
+
+    try {
+        domains ??= resolveTargetDriver(await placementFor(context, environment, body.organizationId, target.projectId), environment).domains;
+        await domains.afterRemoved?.();
+    } catch (error) {
+        // The row is gone; the target catches up at its next sync, so Workers Logs is the only record.
+        // eslint-disable-next-line no-console -- the request already succeeded; nothing else can carry this
+        console.warn(
+            "[domain-remove]",
+            `${target.hostname} removed, but its target could not be told: ${error instanceof Error ? error.message : String(error)}`,
+        );
     }
 
     return Response.json({ ok: true });

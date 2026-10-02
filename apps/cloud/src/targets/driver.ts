@@ -77,6 +77,14 @@ export interface DomainCertificate {
 /** Custom-domain hooks (`src/domains/verify.ts`, `POST /v1/domains/verify`, `POST /v1/domains/remove`). */
 export interface DomainOps {
     /**
+     * Run after a domain's row is deleted, best-effort. `celld-vps` pushes the
+     * box's routing table, which is built from the remaining rows, so a removed
+     * domain stops being served at once rather than at the next push. A failure
+     * is logged, never surfaced: the row is already gone.
+     */
+    afterRemoved?: () => Promise<void>;
+
+    /**
      * Release what {@link onVerified} set up for a domain being removed.
      * `cloudflare-wfp` deletes its custom hostname (and certificate); absent
      * where a domain holds nothing outside the control plane.

@@ -915,8 +915,8 @@ const seedBuildLogs = async (
         .join(",");
 
     const sql = [
-        `INSERT OR IGNORE INTO buildLogs (id,_creationTime,createdAt,buildId,level,line,organizationId) VALUES ${values};`,
-        `UPDATE builds SET status='successful', successfulAt=${String(now)}, updatedAt=${String(now)} WHERE id='${build._id}';`,
+        `INSERT OR IGNORE INTO buildLogs (_id,_creationTime,createdAt,buildId,level,line,organizationId) VALUES ${values};`,
+        `UPDATE builds SET status='successful', successfulAt=${String(now)}, updatedAt=${String(now)} WHERE _id='${build._id}';`,
     ].join(" ");
 
     try {

@@ -117,6 +117,11 @@ describe("the celld-vps driver", () => {
         await expect(driver.domains.onVerified?.({ hostname: "www.example.com" })).resolves.toBeUndefined();
 
         expect(pushes()).toBe(1);
+
+        // Once a domain's row is gone, the table is pushed again so the box stops serving it.
+        await driver.domains.afterRemoved?.();
+
+        expect(pushes()).toBe(2);
     });
 
     it("reaches every tenant on its public hostname, with no in-network path or readback", () => {

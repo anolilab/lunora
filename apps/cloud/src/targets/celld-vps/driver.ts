@@ -97,6 +97,10 @@ export const createCelldVpsDriver = (ports: CelldVpsPorts): TargetDriver => {
             await run("destroy", { alias, deleteData: true, kind: "destroy" }, DESTROY_TIMEOUT_MS, options);
         },
         domains: {
+            // Rebuilt from the remaining domain rows, so the removed one drops out.
+            afterRemoved: async (): Promise<void> => {
+                await session().pushRoutes();
+            },
             // A box serves a custom domain once its routing table names it (plan 458 W5).
             onVerified: async (): Promise<undefined> => {
                 await session()
