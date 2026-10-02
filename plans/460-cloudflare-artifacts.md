@@ -1,7 +1,7 @@
 # Plan 460 — Cloudflare Artifacts: an action-only `ctx.artifacts` and nothing deeper yet
 
 **Baseline:** `f79680910` (2026-10-02)
-**Status:** TODO
+**Status:** IN PROGRESS (A, B and C shipped on `feat/artifacts-binding`; D blocked on undocumented API; the live probes need a Workers Paid account)
 
 ## 0. Headline finding
 
@@ -221,6 +221,64 @@ Testing: export a `createArtifactsFake()` from `@lunora/testing` (in-memory
 repos, tokens and files keyed by `ref:path`), because miniflare has no
 simulator. Gates: `api:check`, `dist:check`, `lint:package-json`.
 
+**Done.** Shipped `@lunora/bindings/artifacts` (`types.ts`, `create-artifacts.ts`,
+`remote.ts`, `index.ts` + the `./artifacts` export). `createArtifacts({ binding })`
+returns `ArtifactsClient` (`create`, `import`, `list`, `delete`, `info(name)`,
+`withRepo(name, callback)`, `authenticatedRemote`); the repo ops (`info`,
+`createToken`, `listTokens`, `revokeToken`, `fork`, `log`, `readCommit`,
+`readTree`, `readBlob`, `readFile`) live on the handle `withRepo` passes, which
+is disposed in a `finally`. Error mapping as decision 1(b), plus
+`CREATE_IN_PROGRESS` → `CONFLICT` (a code `workers-types@5.20261002.1` added) and
+an unknown code on a named `ArtifactsError` → `INTERNAL`; the binding's message
+is never copied into ours (it stays on `cause`), `code`/`numericCode` go in
+`data`. Codegen: one `CAPABILITY_ROWS` row (ActionCtx tier, `.artifacts()` app
+method, a uniform `shardBinding` facet — no bespoke emitter since #933 made
+codegen table-driven), `CAPABILITY_TO_FEATURE.artifacts`, and a new
+`artifacts` golden fixture (`app.ts`/`server.ts`/`shard.ts`); every existing
+golden is byte-identical. `assertArtifactsJurisdiction` refuses a `fedramp`
+schema that uses it (`CODEGEN_DIAGNOSTIC`). Config: `usesArtifacts` in
+`CAPABILITY_SOURCES` (a ctx-access row: the `ctx.artifacts` read and a value
+import flip it, a type-only import does not), a hint-only signal + reconcile
+warning that, for a pinned schema, prints the REST
+`POST …/artifacts/namespaces` call with the jurisdiction; `InferredBindings`
+gained `jurisdiction?`. Platform: `artifacts` rated native / unsupported /
+unsupported, `platform-node` docs row added. Testing: `createArtifactsFake()` in
+`@lunora/testing` (which now depends on `@lunora/bindings`).
+_Deviations:_ the client type is `ArtifactsClient`, not `Artifacts`, so it does
+not shadow the global `Artifacts` binding type; the repo ops sit on the
+`withRepo` handle rather than being duplicated as top-level methods taking a repo
+name; the jurisdiction hint lives in the reconcile warnings / inference signals,
+not `HINT_BINDING_RULES`, because the `artifacts` validation rule is a
+required-fields rule (a missing `namespace` is already an error) and has no hint
+field to warn on. The structural types follow the docs, which
+`@cloudflare/workers-types@5.20261002.1` now matches (`ArtifactsRepo extends
+Disposable` with `info()`); the catalog pin and wrangler are unchanged.
+
+**Review fixes (PR #926, rebased onto #933's capability table).**
+The codegen and config wiring were redone through the table recipe instead of
+the old `has*` plumbing; the regenerated `artifacts` golden is byte-identical to
+the pre-rebase one. Fixed from review:
+
+- _Security (docs):_ the bindings example returned the authenticated remote (a
+  push credential) from a public action — it now checks ownership first and
+  returns at most the token id; the container recipe no longer exposes a token
+  to code the build runs (see C).
+- _Type-only imports:_ an `import type { ArtifactsEvent }` wires neither
+  `ctx.artifacts` nor the FedRAMP refusal (codegen and config tests).
+- _Config:_ the hint is a `describeCapabilitySignals` row fed the schema facts,
+  in its own `artifacts-hint.ts`, typed off `SchemaInfo["jurisdiction"]`; the
+  reconcile warning keys on a binding named `ARTIFACTS` and names the
+  `.artifacts()` override; `assertArtifactsJurisdiction` is documented as the
+  authority for "eu/us only".
+- _Types:_ `ArtifactsRepoClient` / `ArtifactsClient` derive from the Like types,
+  and the error mapping does one code lookup.
+- _Fake:_ a stale handle answers `NOT_FOUND`, `delete` drops tokens, `fork`
+  shares blobs/trees and honours `defaultBranchOnly`, `log` honours a commit-id
+  ref, `list` rejects a cursor it never issued.
+- _Kept:_ the generated stub's `authenticatedRemote` still throws without a
+  binding; delegating needs a bespoke emitter for one pure helper, so the docs
+  point at importing `authenticatedRemote` directly instead.
+
 **B. Event types (S, independent of A's codegen half).**
 Add `ArtifactsEvent = ArtifactsRepoLifecycleEvent | ArtifactsRepoActivityEvent`
 in `@lunora/bindings/artifacts/types.ts`, shaped from the nine documented
@@ -228,6 +286,15 @@ payloads, with `eventSchemaVersion: 1` in the envelope. Write a docs section
 that shows a `defineQueue` consumer narrowing on `type` and the two
 `wrangler queues subscription create` commands. Add one type-level test per
 event.
+
+**Done.** `ArtifactsEvent = ArtifactsRepoActivityEvent | ArtifactsRepoLifecycleEvent`
+(nine members, `eventSchemaVersion: 1`, tagged `@experimental` like the Browser
+Run events) in `types.ts`, one test per event built from the documented example
+payload, and a docs section with a `defineQueue<ArtifactsEvent>` consumer.
+_Deviation:_ only the account-level subscription is a `wrangler` command;
+`wrangler queues subscription create` has no namespace / repo flags for the
+`artifacts.repo` source (checked against the wrangler reference 2026-10-02), so
+the docs send repo-level subscriptions to the dashboard.
 
 **C. Container ↔ repo recipe (S, docs + one live smoke, after plan 458 B).**
 This is a docs page under `packages/container/docs/`. An action mints a
@@ -240,12 +307,31 @@ large repos at ArtifactFS (FUSE) as an image-level choice that Lunora does
 not wrap. One live deploy smoke runs clone → commit → push → `readFile`
 round-trip. No container API change.
 
+**Done (docs).** The recipe is a "Pushing to a Cloudflare Artifacts repo" section
+in `packages/container/docs/index.mdx` rather than a separate page. It needs no
+plan-458 code: it uses the existing `exec(cmd, { args, env, timeoutMs })` (plain
+`exec`, no `sandbox: true`, no 458 B `files`). The build and the commit run with
+no token; the clone gets a read token and the push a write token minted after
+the build, each delivered to one `git` process as an `http.extraHeader` through
+`GIT_CONFIG_*` (never argv or `.git/config`), with hooks disabled on every `git`
+step. Each token is revoked by id in its own try/catch in a `finally`. Open question 3 is answered for the scaffolded `node:22-slim` image
+(no `git`; the docs give the `apt-get` line); the `cloudflare/sandbox` base
+image was not checked. **Not done:** the live clone → commit → push → `readFile`
+→ revoke smoke, which needs a Workers Paid account.
+
 **D. Deploy-time namespace jurisdiction check (S, optional, gated on open question 1).**
 If `wrangler artifacts namespaces get --json` reports the jurisdiction,
 `lunora doctor` / the deploy preflight compares it with the schema's
 `.jurisdiction()` and fails on a mismatch, or when the namespace is missing
 for a pinned app. If the API doesn't expose it, drop D and leave the decision-5
 hint as the only control.
+
+**TODO (blocked).** Open question 1 is unresolved: the REST reference documents
+`GET /artifacts/namespaces/:namespace` and `wrangler artifacts namespaces get
+--json` but publishes no response schema, and the shared types list `Jurisdiction`
+only as a create-time input. Nothing shows the jurisdiction coming back, so D is
+not built; the decision-5 hint is the only control. Revisit with one call against
+a real account.
 
 **Explicitly out of scope** (each one waits for a real request): an
 Artifacts-backed agent fs tool, a `backups: { artifacts }` container mode, a
@@ -317,6 +403,12 @@ gate-bearing key list gains `artifacts`.
   instance.
 
 ## 9. Open questions (answer during execution)
+
+_Status 2026-10-02:_ 1 open (see D); 2 answered from the docs and
+`workers-types@5.20261002.1`, which agree (`info()`, `Disposable`, no metadata
+properties); the docs' sandbox example reading `repo.defaultBranch` is stale,
+but no live probe has confirmed the runtime yet; 3 answered for `node:22-slim`
+only; 4 and 5 kept their defaults.
 
 1. Does `wrangler artifacts namespaces get --json` (or REST `GET …/namespaces/:name`)
    return the namespace's `jurisdiction`? This decides workstream D.
