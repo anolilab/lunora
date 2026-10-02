@@ -1,3 +1,20 @@
+## @lunora/runtime [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.170...@lunora/runtime@1.0.0-alpha.171) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.91
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/observability:** upgraded to 1.0.0-alpha.115
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+* **@lunora/do:** upgraded to 1.0.0-alpha.188
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.106
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.70
+
 ## @lunora/runtime [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.169...@lunora/runtime@1.0.0-alpha.170) (2026-10-02)
 
 

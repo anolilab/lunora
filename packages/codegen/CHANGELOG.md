@@ -1,3 +1,26 @@
+## @lunora/codegen [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.249...@lunora/codegen@1.0.0-alpha.250) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.181
+* **@lunora/agent:** upgraded to 1.0.0-alpha.163
+* **@lunora/container:** upgraded to 1.0.0-alpha.66
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+* **@lunora/queue:** upgraded to 1.0.0-alpha.86
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.104
+* **@lunora/values:** upgraded to 1.0.0-alpha.59
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.70
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.91
+* **@lunora/do:** upgraded to 1.0.0-alpha.188
+* **@lunora/server:** upgraded to 1.0.0-alpha.170
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.106
+
 ## @lunora/codegen [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.248...@lunora/codegen@1.0.0-alpha.249) (2026-10-02)
 
 ### Features
