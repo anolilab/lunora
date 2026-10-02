@@ -22,6 +22,7 @@ import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
 import { createCloudflareTelemetryStore } from "../telemetry/store";
 import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken } from "./admin-token";
+import { createDeployPacer } from "./pacing";
 import type { DeployTarget } from "./release-core";
 import type { RouteParameters } from "./route-path";
 import { isRoutePattern, matchRoutePath } from "./route-path";
@@ -36,8 +37,6 @@ import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } fr
 import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, withContext } from "./routes/shared";
 import { handleCellRegisterRoute, handlePreviewAuthRoute, handleTenantCustomDomainRoute, handleTenantPlanRoute } from "./routes/tenant-admin";
-import { CellScheduler } from "./scheduler";
-import { cloudflareAccountBudget } from "./token-bucket";
 
 interface HttpRouterLike {
     fetch: (request: Request, environment?: unknown, context?: ExecutionContextLike) => Promise<Response>;
@@ -682,9 +681,10 @@ const handleEjectRoute = async (request: Request, environment: RouterEnv): Promi
  * abuse on the `/v1/*` surface (§7).
  */
 export const createDeployRouter = (): HttpRouterLike => {
-    // One scheduler per worker instance (≈ per cell): paces all Cloudflare API
-    // work against the account's 1,200-req/5-min budget (§2.5).
-    const scheduler = new CellScheduler({ bucket: cloudflareAccountBudget() });
+    // One pacer per worker instance (≈ per cell): paces each converge against the
+    // budget it spends — the cell's Cloudflare account (1,200 req / 5 min, §2.5),
+    // a connected account's own, or a box's job slots (`src/deploy/pacing.ts`).
+    const pacer = createDeployPacer();
 
     // Per-instance, per-IP request cap on the control-plane API. The in-memory
     // store is per-isolate (an acceptable first abuse control); a durable store
@@ -709,7 +709,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         },
     });
 
-    const { handleBuildDispatchRoute, handleBuildRunRoute, handleDeployRoute, handleRollbackRoute, handleSessionRollbackRoute } = createDeployRoutes(scheduler);
+    const { handleBuildDispatchRoute, handleBuildRunRoute, handleDeployRoute, handleRollbackRoute, handleSessionRollbackRoute } = createDeployRoutes(pacer);
 
     // Every route carries an explicit auth classification; `assertRoutesClassified`
     // (below) fails construction if any is missing — an unclassified route can

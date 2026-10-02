@@ -4,8 +4,8 @@ import type { AssetsUpload, DeployKind, DeployManifest, TargetId, TenantDeployme
 import { TARGETS } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
 import type { Placement } from "../targets/placement";
+import type { DeployPacer } from "./pacing";
 import type { ReleaseStore } from "./release-store";
-import type { CellScheduler } from "./scheduler";
 
 /**
  * Releases on a project's one stable Worker.
@@ -61,6 +61,8 @@ export interface ReleaseDeps {
      * namespace, a box — is the placement's, not the release's.
      */
     driverFor: (placement: Placement) => TargetDriver;
+    /** Paces each converge against the budget its placement spends (§2.5, `src/deploy/pacing.ts`). */
+    pacer: DeployPacer;
     /** Where each deployment's payload is kept for rollback. */
     releases: ReleaseStore;
 
@@ -73,8 +75,6 @@ export interface ReleaseDeps {
      * is swallowed and the deploy proceeds untelemetered.
      */
     resolveTelemetry?: (input: { key?: string; organizationId: string }) => Promise<DeployTelemetry | undefined>;
-    /** Paces converges against the cell's API budget (§2.5). */
-    scheduler: CellScheduler;
 }
 
 /** The telemetry wiring injected into a tenant deploy, when the cell resolved any. */
@@ -274,7 +274,7 @@ export const reprovision = async (
     );
     const driver = deps.driverFor(placement);
 
-    await deps.scheduler.run(() => driver.deploy(spec), { priority: options.priority });
+    await deps.pacer.schedulerFor(placement).run(() => driver.deploy(spec), { priority: options.priority });
 };
 
 /**

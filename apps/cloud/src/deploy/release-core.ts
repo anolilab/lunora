@@ -181,6 +181,8 @@ interface RecordedRelease {
     encodedBundle: string;
     kind: DeployKind;
     manifest: DeployManifest;
+    /** Where the release converges — what decides whose budget paces it. */
+    placement: Placement;
     previousDeploymentId: string | undefined;
     projectId: string;
     scriptName: string;
@@ -292,7 +294,7 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
             onProgress: reportProgress({ deploymentId, deps, key, write }, (progressUrl) => {
                 url = progressUrl;
             }),
-            scheduler: deps.scheduler,
+            scheduler: deps.pacer.schedulerFor(release.placement),
             ...(healthCheck ? { verify: healthCheck } : {}),
         });
     } catch (error) {
@@ -435,6 +437,7 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
                     deploymentId,
                     driver,
                     encodedBundle,
+                    placement,
                     kind,
                     manifest,
                     previousDeploymentId,

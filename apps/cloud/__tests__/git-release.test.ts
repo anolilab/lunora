@@ -5,8 +5,7 @@ import { describeReleaseFrame, FORK_RELEASE_SKIP_REASON, releaseBuild, releaseRo
 import type { BuildExecution } from "../src/builds/runner";
 import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
-import { CellScheduler } from "../src/deploy/scheduler";
-import { TokenBucket } from "../src/deploy/token-bucket";
+import { createDeployPacer } from "../src/deploy/pacing";
 import type { TargetDriver } from "../src/targets/driver";
 import memoryReleaseStore from "./_helpers/memory-release-store";
 import { fakeDriver } from "./support/memory-driver";
@@ -94,7 +93,7 @@ const harness = (options: { progress?: string[]; provisioner?: Provisioner; targ
         },
         healthCheck: () => Promise.resolve(true),
         releases: store,
-        scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) }),
+        pacer: createDeployPacer(),
     };
 
     return {

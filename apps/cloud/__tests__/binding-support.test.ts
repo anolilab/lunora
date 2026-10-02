@@ -4,8 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DeployBackend } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
-import { CellScheduler } from "../src/deploy/scheduler";
-import { TokenBucket } from "../src/deploy/token-bucket";
+import { createDeployPacer } from "../src/deploy/pacing";
 import type { BindingType, TargetId } from "../src/provision-contract";
 import { BINDING_SUPPORT, TARGET_IDS, UNSUPPORTED_REASONS } from "../src/provision-contract";
 import type { Placement } from "../src/targets/placement";
@@ -174,7 +173,7 @@ describe("the deploy handler validates against the project's target", () => {
                 backend: { ...backend, placement: () => Promise.resolve(placements[target]) },
                 driverFor: () => fakeDriver(),
                 releases: memoryReleaseStore().store,
-                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+                pacer: createDeployPacer(),
             },
         );
 
@@ -200,7 +199,7 @@ describe("the deploy handler validates against the project's target", () => {
                 backend: { ...backend, placement: () => Promise.resolve(resolvePlacement({ target: "celld-vps" }, "default")) },
                 driverFor: (placement) => resolveTargetDriver(placement, {}),
                 releases: memoryReleaseStore().store,
-                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+                pacer: createDeployPacer(),
             },
         );
 
@@ -222,7 +221,7 @@ describe("the deploy handler validates against the project's target", () => {
                 backend: { ...backend, placement: () => Promise.resolve(resolvePlacement({ cellName: "default", target: "cloudflare-workers" }, "default")) },
                 driverFor: (placement) => resolveTargetDriver(placement, {}),
                 releases: memoryReleaseStore().store,
-                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+                pacer: createDeployPacer(),
             },
         );
 
@@ -237,7 +236,7 @@ describe("the deploy handler validates against the project's target", () => {
                 backend: { ...backend, placement: () => Promise.reject(new LunoraError("CONFLICT", 'placed on cell "eu-1"')) },
                 driverFor: () => fakeDriver(),
                 releases: memoryReleaseStore().store,
-                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+                pacer: createDeployPacer(),
             },
         );
 

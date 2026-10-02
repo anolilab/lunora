@@ -4,10 +4,9 @@ import { describe, expect, it } from "vitest";
 import type { BoxSession } from "../src/boxes/session-client";
 import type { DeployBackend } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
-import { CellScheduler } from "../src/deploy/scheduler";
+import { createDeployPacer } from "../src/deploy/pacing";
 import { teardownPorts } from "../src/deploy/sweeps";
 import { runTeardownSweep } from "../src/deploy/teardown";
-import { TokenBucket } from "../src/deploy/token-bucket";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { CelldVpsPorts } from "../src/targets/celld-vps/driver";
 import { celldVpsCanConverge, celldVpsFleet, createCelldVpsDriver } from "../src/targets/celld-vps/driver";
@@ -303,7 +302,7 @@ describe("the deploy stream", () => {
                 backend,
                 driverFor: (placement) => driverWith(session, "box" in placement ? { box: placement.box } : {}),
                 releases: memoryReleaseStore().store,
-                scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 10, refillPerWindow: 10, windowMs: 1000 }) }),
+                pacer: createDeployPacer(),
             },
         );
         const frames: Record<string, unknown>[] = [];

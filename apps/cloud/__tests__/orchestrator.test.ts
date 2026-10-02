@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { sha256HexBytes } from "../src/deploy/keys";
 import type { DeployProgress } from "../src/deploy/orchestrator";
 import { runDeployment } from "../src/deploy/orchestrator";
-import { CellScheduler } from "../src/deploy/scheduler";
+import { ConvergeScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { TargetDriver } from "../src/targets/driver";
@@ -20,7 +20,7 @@ const spec: TenantDeploymentSpec = {
     tags: ["org:org", "project:project", "env:production"],
 };
 
-const ampleScheduler = (): CellScheduler => new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) });
+const ampleScheduler = (): ConvergeScheduler => new ConvergeScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) });
 
 describe(runDeployment, () => {
     it("emits queued → provisioning → live and returns the result on success", async () => {

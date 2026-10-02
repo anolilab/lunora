@@ -1,18 +1,19 @@
 import type { TokenBucket } from "./token-bucket";
 
 /**
- * Per-cell scheduler. Paces and serializes the work a cell
- * sends to Cloudflare — chiefly the Alchemy `finalize()` runs behind the
- * `cloudflare-wfp` driver's converge — against the cell's {@link TokenBucket} budget, with priority
- * ordering and a concurrency cap. A CI stampede degrades to queued-but-ordered,
- * never to dropped API calls.
+ * Converge scheduler: paces and serializes the converges that spend ONE budget
+ * (`src/deploy/pacing.ts` keeps one per budget) — on Cloudflare targets the
+ * Alchemy `finalize()` runs behind a driver's converge, against that account's
+ * {@link TokenBucket}; on a box, its concurrency alone — with priority ordering
+ * and a concurrency cap. A CI stampede degrades to queued-but-ordered, never to
+ * dropped API calls.
  *
  * Time is injectable (`now` + `sleep`) so the pacing is deterministic in tests.
  */
 
-export interface CellSchedulerOptions {
-    /** The cell's API budget. */
-    bucket: TokenBucket;
+export interface ConvergeSchedulerOptions {
+    /** The API budget a converge spends; absent → nothing but the concurrency cap paces it. */
+    bucket?: TokenBucket;
     /** Max tasks running concurrently. Defaults to 6. */
     maxConcurrent?: number;
     /** Injected clock (ms epoch). Defaults to `Date.now`. */
@@ -37,8 +38,8 @@ const defaultSleep = (ms: number): Promise<void> =>
         setTimeout(resolve, ms);
     });
 
-export class CellScheduler {
-    private readonly bucket: TokenBucket;
+export class ConvergeScheduler {
+    private readonly bucket: TokenBucket | undefined;
 
     private inFlight = 0;
 
@@ -54,11 +55,19 @@ export class CellScheduler {
 
     private readonly sleep: (ms: number) => Promise<void>;
 
-    public constructor(options: CellSchedulerOptions) {
+    public constructor(options: ConvergeSchedulerOptions) {
         this.bucket = options.bucket;
         this.maxConcurrent = options.maxConcurrent ?? 6;
         this.now = options.now ?? Date.now;
         this.sleep = options.sleep ?? defaultSleep;
+    }
+
+    /**
+     * Nothing queued, nothing running, and a budget back at its full burst — so
+     * dropping this scheduler and building a fresh one later changes nothing.
+     */
+    public idle(at: number = this.now()): boolean {
+        return this.queue.length === 0 && this.inFlight === 0 && (this.bucket === undefined || this.bucket.isFull(at));
     }
 
     /** Submit a task; it runs once a token is free and a concurrency slot opens. */
@@ -109,7 +118,7 @@ export class CellScheduler {
 
         try {
             while (this.queue.length > 0 && this.inFlight < this.maxConcurrent) {
-                if (this.bucket.tryRemove(this.now())) {
+                if (this.bucket === undefined || this.bucket.tryRemove(this.now())) {
                     const job = this.queue.shift();
 
                     if (job) {
@@ -122,7 +131,7 @@ export class CellScheduler {
 
                 // Out of budget — wait for the next token, then re-evaluate.
                 // eslint-disable-next-line no-await-in-loop -- intentional: serialize until a token frees
-                await this.sleep(this.bucket.msUntilNext(this.now()));
+                await this.sleep(this.bucket?.msUntilNext(this.now()) ?? 0);
             }
         } finally {
             this.pumping = false;

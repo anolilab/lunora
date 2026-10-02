@@ -7,7 +7,7 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 > Status: **Phases 1–4 implemented as code**, verified by codegen, tsc, eslint,
 > and unit tests; end-to-end runs need live Cloudflare and provider keys. In
 > place: the data model, CRUD functions, org/deploy-key authorization, the deploy
-> orchestration core (token bucket, per-cell scheduler, state machine) and the
+> orchestration core (token bucket, per-budget converge pacing, state machine) and the
 > `POST /v1/deploy` streaming endpoint, a **real Cloudflare REST provisioner**
 > (`src/cloudflare/api.ts` — D1/R2 create, dispatch-script upload, secrets), the
 > dispatcher Worker with **per-plan runtime limits**, the server-rendered
@@ -95,8 +95,9 @@ src/
     scheduled.ts     every scheduled sweep, its cron bucket, the build drain and the
                      tenant cron fan-out (`runScheduled`)
   deploy/
-    token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
-    scheduler.ts     CellScheduler — paces provisioner work, priority + concurrency
+    token-bucket.ts  per-account API budget (CF 1,200/5min, §2.5)
+    scheduler.ts     ConvergeScheduler — paces one budget's converges, priority + concurrency
+    pacing.ts        DeployPacer — one scheduler per budget a converge spends (per target)
     orchestrator.ts  runDeployment state machine (queued→provisioning→live/failed)
     keys.ts          deploy-key format / parse / hash helpers
     preview.ts       preview script-name + TTL helpers (§2.3)
@@ -167,8 +168,13 @@ Mounted as the worker's `httpRouter` (lowest-priority matcher). Flow: read the
 `Authorization: Bearer <deployKey>`, `deploy_keys:verify` it, `deployments:create`
 a queued record, then drive `runDeployment` while streaming **NDJSON progress**
 (`accepted` → `queued` → `provisioning` → `live`/`failed` → `done`), patching
-status via `deployments:updateStatus` per phase. All Cloudflare work is paced by
-the per-cell `CellScheduler`. The route reaches these mutations through the Lunora
+status via `deployments:updateStatus` per phase. Each converge is paced by the
+scheduler of the budget it spends (`src/deploy/pacing.ts`, from the target's
+`TARGETS[target].convergeBudget`): `cloudflare-wfp` by the cell's Cloudflare
+account (1,200 requests / 5 minutes, six at a time — as before targets),
+`cloudflare-workers` by the connected account's own budget (one scheduler per
+Cloudflare account; it spends none of ours), and `celld-vps` by its box alone,
+four converges at a time and no API budget. The route reaches these mutations through the Lunora
 action context (`env.__lunoraCtx.runMutation`); they stay **public** (not
 `internalMutation`) because that dispatch carries no system flag — an internal
 function would 404 at the RPC visibility gate — so authorization is enforced
