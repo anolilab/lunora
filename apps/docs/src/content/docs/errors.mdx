@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 160 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 161 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -106,6 +106,12 @@ Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 `500` — CIMD transport needs the global_fetch_strictly_public flag
 
 Add "global_fetch_strictly_public" to "compatibility_flags" in wrangler.jsonc, so CIMD metadata fetches cannot reach private addresses. `lunora doctor` reports it as `cimd-fetch-not-strictly-public`.
+
+### `AUTH_MCP_RESOURCE_AMBIGUOUS`
+
+`500` — MCP resource cannot be told apart from the provider's other resources
+
+Use `mcp` from "@lunora/auth/plugins" (not `@better-auth/mcp`) and pass the plugin object as is: it records its `resource`, which the worker needs to serve the protected-resource metadata when the provider names several resources.
 
 ### `AUTH_MCP_RESOURCE_INVALID`
 
@@ -485,9 +491,9 @@ Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of
 
 ### `MCP_STEP_UP_MISCONFIGURED`
 
-`500` — MCP write step-up misconfigured
+`500` — MCP step-up misconfigured
 
-Set `writeScope` (a non-empty scope such as `lunora:write`) and `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`) together on `createAuthedMcpFetchHandler`, or neither.
+Give `createAuthedMcpFetchHandler`'s `stepUp` a non-empty `scope` (such as `lunora:write`) and a `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`), or leave `stepUp` out.
 
 ### `METHOD_NOT_ALLOWED`
 

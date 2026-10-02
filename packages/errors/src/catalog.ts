@@ -323,15 +323,20 @@ export const ERROR_CATALOG = {
         status: 500,
         title: "CIMD transport needs the global_fetch_strictly_public flag",
     },
+    AUTH_MCP_RESOURCE_AMBIGUOUS: {
+        hint: 'Use `mcp` from "@lunora/auth/plugins" (not `@better-auth/mcp`) and pass the plugin object as is: it records its `resource`, which the worker needs to serve the protected-resource metadata when the provider names several resources.',
+        status: 500,
+        title: "MCP resource cannot be told apart from the provider's other resources",
+    },
     AUTH_MCP_RESOURCE_INVALID: {
         hint: "Pass `resource` to `requireMcpAuth` (and `mcp()`) as the absolute URL of the MCP route, e.g. `https://app.example.com/mcp`: issued tokens are audience-bound to it.",
         status: 500,
         title: "MCP resource missing or not an absolute URL",
     },
     MCP_STEP_UP_MISCONFIGURED: {
-        hint: "Set `writeScope` (a non-empty scope such as `lunora:write`) and `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`) together on `createAuthedMcpFetchHandler`, or neither.",
+        hint: "Give `createAuthedMcpFetchHandler`'s `stepUp` a non-empty `scope` (such as `lunora:write`) and a `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`), or leave `stepUp` out.",
         status: 500,
-        title: "MCP write step-up misconfigured",
+        title: "MCP step-up misconfigured",
     },
     BACKUP_NOT_CONFIGURED: { status: 500, title: "Scheduled backup not configured" },
     BACKUP_RETENTION_NOT_CONFIGURED: {
