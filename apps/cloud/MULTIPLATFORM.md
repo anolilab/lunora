@@ -527,8 +527,8 @@ Deviations from the §5.1 sketch, and why:
   `cloudflareAccountId` stays a column rather than migrating into `config`.
 - **Pacing per target** (closed on `feat/cloud-followups`): the old
   `CellScheduler` paced every converge against the platform account's
-  Cloudflare budget. Each target's descriptor now names the budget a converge
-  spends (`TARGETS[target].convergeBudget`), and `src/deploy/pacing.ts` keeps
+  Cloudflare budget. The budget a converge spends now follows where its target
+  places it (`TARGETS[target].placedOn`), and `src/deploy/pacing.ts` keeps
   one `ConvergeScheduler` per budget: the cell's account for `cloudflare-wfp`
   (unchanged: 1,200 / 5 min, six at a time), the connected account for
   `cloudflare-workers`, and the box (four at a time, no API budget) for

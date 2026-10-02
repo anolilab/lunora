@@ -113,15 +113,6 @@ export const CELLD_PITR_NOTE =
 
 /** What every part of the control plane and the studio knows about a target without building its driver. */
 export interface TargetDescriptor {
-    /**
-     * Whose budget a converge spends, and so what paces it (`src/deploy/pacing.ts`).
-     * `platform-account` — the cell's own Cloudflare account, whose API limit
-     * every converge in the cell shares. `connected-account` — the
-     * organization's connected Cloudflare account, which Cloudflare limits on
-     * its own and which spends none of ours. `box` — no API at all; the box's
-     * session takes a bounded number of jobs, so converges are only queued per box.
-     */
-    convergeBudget: "box" | "connected-account" | "platform-account";
     /** The studio's one-line description of the target. */
     description: string;
 
@@ -162,7 +153,10 @@ export interface TargetDescriptor {
      * organization's cell, whose provision box holds the convergence state. A
      * box or an account is the host row `projects.placementRef` names; which
      * table that is, and how every layer reads it, is `PLACEMENT_HOSTS` in
-     * `src/targets/placement.ts`.
+     * `src/targets/placement.ts`. It also decides whose budget a converge
+     * spends (`src/deploy/pacing.ts`): the cell's account, the connected
+     * account — Alchemy runs in the cell's provision box, but every API call
+     * it makes goes there — or the box's session alone.
      */
     placedOn: "account" | "box" | "cell";
 }
@@ -170,7 +164,6 @@ export interface TargetDescriptor {
 /** Every target's descriptor — the one place "does this target need a box", its name and its limits are decided. */
 export const TARGETS = {
     "celld-vps": {
-        convergeBudget: "box",
         description: "Runs on celld on a Linux server your organization enrolled. Its data stays in your own bucket.",
         dropsUnboundClasses: false,
         fanout: "native",
@@ -189,7 +182,6 @@ export const TARGETS = {
         placedOn: "box",
     },
     "cloudflare-wfp": {
-        convergeBudget: "platform-account",
         description: "Runs on Cloudflare's network, managed end to end by Lunora Cloud.",
         dropsUnboundClasses: true,
         fanout: "dispatcher",
@@ -199,8 +191,6 @@ export const TARGETS = {
         placedOn: "cell",
     },
     "cloudflare-workers": {
-        // Alchemy runs in the cell's provision box, but every API call it makes goes to the connected account.
-        convergeBudget: "connected-account",
         description:
             "Runs as a plain Worker in a Cloudflare account your organization connected. Its data stays in that account, and Cloudflare bills you for it directly.",
         // Alchemy emits `deleted_classes` for a class any Worker it manages stops binding.

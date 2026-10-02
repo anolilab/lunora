@@ -171,8 +171,8 @@ Mounted as the worker's `httpRouter` (lowest-priority matcher). Flow: read the
 a queued record, then drive `runDeployment` while streaming **NDJSON progress**
 (`accepted` → `queued` → `provisioning` → `live`/`failed` → `done`), patching
 status via `deployments:updateStatus` per phase. Each converge is paced by the
-scheduler of the budget it spends (`src/deploy/pacing.ts`, from the target's
-`TARGETS[target].convergeBudget`): `cloudflare-wfp` by the cell's Cloudflare
+scheduler of the budget it spends (`src/deploy/pacing.ts`, from where the
+target places it, `TARGETS[target].placedOn`): `cloudflare-wfp` by the cell's Cloudflare
 account (1,200 requests / 5 minutes, six at a time — as before targets),
 `cloudflare-workers` by the connected account's own budget (one scheduler per
 Cloudflare account; it spends none of ours), and `celld-vps` by its box alone,

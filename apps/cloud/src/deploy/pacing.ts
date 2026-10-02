@@ -1,28 +1,28 @@
 /**
  * Deploy pacing per target (MULTIPLATFORM.md Phase 1 deviation, closed): every
  * converge runs on the {@link ConvergeScheduler} of the budget it spends, which
- * the target's descriptor names (`TARGETS[target].convergeBudget`):
+ * is where its target places it (`TARGETS[target].placedOn`):
  *
- * - `cloudflare-wfp` spends the cell's own Cloudflare account — ONE scheduler,
- *   key `platform`, over Cloudflare's 1,200-requests-per-5-minutes budget, six
- *   at a time: exactly the pacing every converge had before targets.
- * - `cloudflare-workers` spends the CONNECTED account's budget, not ours — one
- *   scheduler per Cloudflare account (`account:{accountId}`, so two
+ * - `cell` (`cloudflare-wfp`) spends the cell's own Cloudflare account — ONE
+ *   scheduler, key `platform`, over Cloudflare's 1,200-requests-per-5-minutes
+ *   budget, six at a time: exactly the pacing every converge had before targets.
+ * - `account` (`cloudflare-workers`) spends the CONNECTED account's budget, not
+ *   ours — one scheduler per Cloudflare account (`account:{accountId}`, so two
  *   organizations that connected the same account share its limit, as
  *   Cloudflare counts it), with that account's own bucket.
- * - `celld-vps` spends no API at all. A box's session refuses a job past its
- *   in-flight cap (`BOX_BUSY`), so converges are queued per box (`box:{id}`),
- *   {@link BOX_CONVERGE_CONCURRENCY} at a time, and are never held behind a
- *   Cloudflare budget.
+ * - `box` (`celld-vps`) spends no API at all. A box's session refuses a job past
+ *   its in-flight cap (`BOX_BUSY`), so converges are queued per box
+ *   (`box:{id}`), {@link BOX_CONVERGE_CONCURRENCY} at a time, and are never
+ *   held behind a Cloudflare budget.
+ *
+ * The key past the kind is the host's `paceKey` (`PLACEMENT_HOSTS`).
  *
  * One pacer lives per Worker isolate (the router builds it once), like the
  * single scheduler it replaces. Schedulers of other budgets are dropped again
  * once idle — nothing queued or running, the bucket refilled — so a long-lived
  * isolate does not keep one per box it ever deployed to.
  */
-import type { TargetDescriptor } from "../provision-contract";
-import { TARGETS } from "../provision-contract";
-import type { Placement } from "../targets/placement";
+import type { PlacedOn, Placement } from "../targets/placement";
 import { hostsOf, placedOnOf } from "../targets/placement";
 import { ConvergeScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
@@ -42,20 +42,21 @@ const PRUNE_ABOVE = 64;
 
 /** Which budget a converge spends: its key, and what paces it. */
 export interface Pacing {
-    budget: TargetDescriptor["convergeBudget"];
+    /** The kind of budget — the placement's `placedOn`. */
+    budget: PlacedOn;
     /** One scheduler per key: `platform`, `account:{cloudflare account id}` or `box:{box id}`. */
     key: string;
 }
 
 /** The budget a converge for `placement` spends (see the module comment). */
 export const pacingOf = (placement: Placement): Pacing => {
-    const budget = TARGETS[placement.target].convergeBudget;
-
     if (!("host" in placement)) {
-        return { budget, key: "platform" };
+        return { budget: "cell", key: "platform" };
     }
 
-    return { budget, key: `${placedOnOf(placement.target)}:${hostsOf(placement.target).paceKey(placement.host)}` };
+    const budget = placedOnOf(placement.target);
+
+    return { budget, key: `${budget}:${hostsOf(placement.target).paceKey(placement.host)}` };
 };
 
 /** Picks the scheduler a converge runs on. */

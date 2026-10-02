@@ -54,11 +54,11 @@ const hold = (scheduler: ConvergeScheduler, count: number): { release: () => voi
 
 describe(pacingOf, () => {
     it("paces cloudflare-wfp on the platform account, one budget for the whole cell", () => {
-        expect(pacingOf(WFP)).toStrictEqual({ budget: "platform-account", key: "platform" });
+        expect(pacingOf(WFP)).toStrictEqual({ budget: "cell", key: "platform" });
     });
 
     it("paces cloudflare-workers on the connected Cloudflare account, keyed by the account itself", () => {
-        expect(pacingOf(account("cfa_1", "a".repeat(32)))).toStrictEqual({ budget: "connected-account", key: `account:${"a".repeat(32)}` });
+        expect(pacingOf(account("cfa_1", "a".repeat(32)))).toStrictEqual({ budget: "account", key: `account:${"a".repeat(32)}` });
         // Two organizations that connected the same account share Cloudflare's limit for it.
         expect(pacingOf(account("cfa_2", "a".repeat(32))).key).toBe(pacingOf(account("cfa_1", "a".repeat(32))).key);
     });
