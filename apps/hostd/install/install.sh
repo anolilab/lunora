@@ -13,9 +13,10 @@
 # Trust: this script pins the Ed25519 release keys (TRUSTED RELEASE KEYS below,
 # the same set compiled into lunora-hostd) and checks each key's fingerprint.
 # It verifies the release manifest's signature with OpenSSL before trusting any
-# hash in it (protocol/hostd/README.md §8), checks lunora-hostd against the
-# manifest's SHA-256 and size, then has that binary verify the manifest again
-# with its own strict verifier, and checks celld and Caddy against it too.
+# hash in it (protocol/hostd/README.md §8) and checks lunora-hostd against the
+# manifest's SHA-256 and size. That binary then verifies the manifest again with
+# its own strict verifier and installs the release (`install-release`), checking
+# celld and Caddy against it, exactly as an `upgrade` job does.
 #
 # The enrolment token and the bucket credentials are read from the environment
 # (or --token), handed to `lunora-hostd enrol` through its environment, never
@@ -240,9 +241,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# fetch <url> <out> [curl options]: HTTPS only, also across redirects (GitHub serves assets from its CDN).
 fetch() {
-    # HTTPS only, also across redirects (GitHub serves assets from its CDN).
-    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 -o "$2" "$1"
+    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 "${@:3}" -o "$2" "$1"
+}
+
+# Run a command as lunora-hostd, from its data directory, with only the environment exported to it.
+as_hostd() {
+    (
+        cd "${DATA_DIR}"
+        exec setpriv --reuid="${HOSTD_USER}" --regid="${HOSTD_USER}" --init-groups -- "$@"
+    )
 }
 
 resolve_tag() {
@@ -282,31 +291,47 @@ verify_signature() {
         die "the release manifest's signature does not verify"
 }
 
-# Download one component for this platform and check its size and SHA-256 against the manifest.
+# Download one component for this platform as published, no larger than the manifest pins.
+# lunora-hostd checks every download against the manifest before it installs anything.
 download_component() {
-    local component="$1" out="$2" entry url sha256 size
+    local component="$1" out="$2" entry url size
 
     entry="$(jq -c --arg c "${component}" --arg p "${PLATFORM}" '.manifest[$c].artifacts[] | select(.platform == $p)' "${WORK}/manifest.json")"
     [ -n "${entry}" ] || die "release ${RELEASE_ID} ships no ${component} for ${PLATFORM}"
     url="$(jq -r '.url' <<< "${entry}")"
-    sha256="$(jq -r '.sha256' <<< "${entry}")"
     size="$(jq -r '.size' <<< "${entry}")"
-    [[ "${url}" =~ ^https:// && "${sha256}" =~ ^[0-9a-f]{64}$ && "${size}" =~ ^[0-9]+$ ]] || die "the manifest's ${component} entry is malformed"
+    [[ "${url}" =~ ^https:// && "${size}" =~ ^[0-9]+$ ]] || die "the manifest's ${component} entry is malformed"
 
     say "downloading ${component} ($((size / 1048576)) MiB)"
-    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --max-filesize "${size}" -o "${out}" "${url}"
-    [ "$(stat -c %s "${out}")" -eq "${size}" ] || die "${component}: the download is not the ${size} bytes the manifest pins"
-    printf '%s  %s\n' "${sha256}" "${out}" | sha256sum --check --status || die "${component}: SHA-256 does not match the manifest"
+    fetch "${url}" "${out}" --max-filesize "${size}"
+}
+
+# The one binary this script runs from the release: lunora-hostd, checked against the
+# SHA-256 and size of the manifest it has just verified, decompressed when published so.
+bootstrap_hostd() {
+    local entry sha256 size
+
+    entry="$(jq -c --arg p "${PLATFORM}" '.manifest.hostd.artifacts[] | select(.platform == $p)' "${WORK}/manifest.json")"
+    sha256="$(jq -r '.sha256' <<< "${entry}")"
+    size="$(jq -r '.size' <<< "${entry}")"
+    [[ "${sha256}" =~ ^[0-9a-f]{64}$ ]] || die "the manifest's hostd entry is malformed"
+    [ "$(stat -c %s "${WORK}/lunora-hostd")" -eq "${size}" ] || die "lunora-hostd: the download is not the ${size} bytes the manifest pins"
+    printf '%s  %s\n' "${sha256}" "${WORK}/lunora-hostd" | sha256sum --check --status || die "lunora-hostd: SHA-256 does not match the manifest"
 
     if [ "$(jq -r '.compression // empty' <<< "${entry}")" = "gzip" ]; then
-        gzip -dc "${out}" > "${out}.bin"
+        gzip -dc "${WORK}/lunora-hostd" > "${WORK}/bootstrap"
     else
-        cp "${out}" "${out}.bin"
+        cp "${WORK}/lunora-hostd" "${WORK}/bootstrap"
     fi
+
+    chmod 0755 "${WORK}/bootstrap"
 }
 
 install_release() {
-    WORK="$(mktemp -d)"
+    # Not the temporary directory, which may be mounted noexec, and not the install
+    # directory, which lunora-hostd may write: a root-owned directory beside it.
+    WORK="$(mktemp -d "${INSTALL_DIR%/*}/.lunora-hostd-install.XXXXXX")"
+    chmod 0755 "${WORK}"
     resolve_tag
 
     local base="https://github.com/${REPOSITORY}/releases/download/${TAG}"
@@ -320,51 +345,16 @@ install_release() {
     download_component hostd "${WORK}/lunora-hostd"
     download_component celld "${WORK}/celld"
     download_component caddy "${WORK}/caddy"
+    chmod 0644 "${WORK}/lunora-hostd" "${WORK}/celld" "${WORK}/caddy" "${WORK}/manifest.json"
+    bootstrap_hostd
 
-    local target="${INSTALL_DIR}/${RELEASE_ID}"
-    local staging="${target}.partial"
-
-    # Staged under the install directory, not the temporary one, which may be mounted noexec.
-    rm -rf -- "${staging}"
-    install -d -m 0755 "${staging}"
-    install -m 0755 "${WORK}/lunora-hostd.bin" "${staging}/lunora-hostd"
-    install -m 0755 "${WORK}/celld.bin" "${staging}/celld"
-    install -m 0755 "${WORK}/caddy.bin" "${staging}/caddy"
-    install -m 0644 "${WORK}/manifest.json" "${staging}/manifest.json"
-
-    # lunora-hostd's bytes match the manifest this script verified; now its own,
-    # strict verifier checks the manifest and every download again.
-    "${staging}/lunora-hostd" verify-release "${WORK}/manifest.json" --platform "${PLATFORM}" \
-        --hostd "${WORK}/lunora-hostd" --celld "${WORK}/celld" --caddy "${WORK}/caddy" > /dev/null ||
+    # lunora-hostd's bytes match the manifest this script verified; now its own strict
+    # verifier checks the manifest and every download again, and installs the release
+    # exactly as an upgrade does — as lunora-hostd, which owns the install directory.
+    as_hostd "${WORK}/bootstrap" install-release "${WORK}/manifest.json" --from "${WORK}" \
+        --install-dir "${INSTALL_DIR}" --platform "${PLATFORM}" > /dev/null ||
         die "lunora-hostd refused the release"
-    "${staging}/celld" --version > /dev/null || die "celld does not run on this machine"
-    "${staging}/caddy" version > /dev/null || die "caddy does not run on this machine"
-
-    local previous=""
-
-    if [ -L "${INSTALL_DIR}/current" ]; then
-        previous="$(basename "$(readlink "${INSTALL_DIR}/current")")"
-    fi
-
-    chown -R "${HOSTD_USER}:${HOSTD_USER}" "${staging}"
-    rm -rf -- "${target}"
-    mv -T "${staging}" "${target}"
-    ln -sfn "${RELEASE_ID}" "${INSTALL_DIR}/current.next"
-    chown -h "${HOSTD_USER}:${HOSTD_USER}" "${INSTALL_DIR}/current.next"
-    mv -T "${INSTALL_DIR}/current.next" "${INSTALL_DIR}/current"
-    say "installed ${RELEASE_ID} at ${target}"
-
-    # Keep the release that ran before (for a rollback: point current back at it); remove older ones.
-    local release
-
-    for release in "${INSTALL_DIR}"/*/; do
-        release="$(basename "${release}")"
-
-        if [ ! -L "${INSTALL_DIR}/${release}" ] && [ "${release}" != "${RELEASE_ID}" ] && [ "${release}" != "${previous}" ] &&
-            [ -f "${INSTALL_DIR}/${release}/manifest.json" ]; then
-            rm -rf -- "${INSTALL_DIR:?}/${release}"
-        fi
-    done
+    say "installed ${RELEASE_ID}"
 }
 
 # --- The service -------------------------------------------------------------
@@ -453,12 +443,8 @@ enrol() {
 
     # As lunora-hostd, so it owns what enrol writes. The token travels in the
     # environment only, never on a command line another user can read.
-    (
-        cd "${DATA_DIR}"
-        export LUNORA_HOSTD_ENROL_TOKEN="${TOKEN}"
-        exec setpriv --reuid="${HOSTD_USER}" --regid="${HOSTD_USER}" --init-groups -- \
-            "${INSTALL_DIR}/current/lunora-hostd" enrol "${ENROL_ARGS[@]}"
-    ) || die "enrolment failed (see above); nothing was started"
+    LUNORA_HOSTD_ENROL_TOKEN="${TOKEN}" as_hostd "${INSTALL_DIR}/current/lunora-hostd" enrol "${ENROL_ARGS[@]}" ||
+        die "enrolment failed (see above); nothing was started"
 }
 
 start_service() {

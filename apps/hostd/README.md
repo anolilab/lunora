@@ -29,13 +29,14 @@ sudo LUNORA_HOSTD_ENROL_TOKEN=<token> AWS_ACCESS_KEY_ID=<id> AWS_SECRET_ACCESS_K
 the users `lunora-hostd` and `lunora-fleet` (system users, no shell, no home);
 creates `/etc/lunora-hostd` (`lunora-hostd`, 0700), `/var/lib/lunora-hostd`
 (`lunora-hostd:lunora-fleet`, 0710) and `/opt/lunora-hostd`; downloads and
-verifies the release (below) into `/opt/lunora-hostd/<releaseId>/` and points
-`/opt/lunora-hostd/current` at it; writes `/etc/systemd/system/lunora-hostd.service`;
-runs `lunora-hostd enrol` **as `lunora-hostd`**, passing the flags through; and
-enables and starts the service. The token comes from `LUNORA_HOSTD_ENROL_TOKEN`
-(or `--token`) and the bucket credentials from `AWS_*`; both reach `enrol`
-through its environment, never a command line, and are never printed. Without
-`--version` it installs the newest stable `hostd-v*` release.
+verifies the release (below), and has `lunora-hostd install-release` install it
+into `/opt/lunora-hostd/<releaseId>/` and point `/opt/lunora-hostd/current` at
+it; writes `/etc/systemd/system/lunora-hostd.service`; runs `lunora-hostd enrol`
+**as `lunora-hostd`**, passing the flags through; and enables and starts the
+service. The token comes from `LUNORA_HOSTD_ENROL_TOKEN` (or `--token`) and the
+bucket credentials from `AWS_*`; both reach `enrol` through its environment,
+never a command line, and are never printed. Without `--version` it installs
+the newest stable `hostd-v*` release.
 
 **Re-running it upgrades the box in place:** it installs the newest (or
 `--version`) release beside the running one, switches `current`, keeps the
@@ -75,28 +76,35 @@ follow-up for the `apps/cloud` branch).
    canonical bytes with `openssl pkeyutl -verify` exactly as
    [protocol §8.2](../../protocol/hostd/README.md#82-signed-bytes) shows —
    **before** trusting any hash in it.
-3. It downloads `lunora-hostd`, celld and Caddy for its platform, each checked
-   against the size and SHA-256 the verified manifest pins.
-4. It then runs the just-verified `lunora-hostd verify-release`, which validates
-   the manifest strictly and verifies it again with the keys compiled into that
-   binary, and checks every download against it. The binary is trusted for that
-   only because its bytes matched the manifest the script had already verified.
-5. It runs each binary once (`--version`) and only then switches `current`.
+3. It downloads `lunora-hostd`, celld and Caddy for its platform (each capped at
+   the size the manifest pins) into a root-owned directory beside
+   `/opt/lunora-hostd`, and checks `lunora-hostd` against the size and SHA-256
+   the verified manifest pins. That is the only binary the script runs from the
+   release, and only because its bytes matched.
+4. It runs that binary's `install-release` **as `lunora-hostd`**: the binary
+   validates the manifest strictly and verifies it again with the keys
+   compiled into it, then installs the release exactly as the `upgrade` job
+   does (one implementation, `src/daemon/release-install.ts`): each file is
+   checked against its size and SHA-256, decompressed, run once
+   (`--version`), staged in `<releaseId>.partial/`, renamed into place, and
+   `current` is switched in one rename. The release that ran before stays, for
+   a rollback; older ones are removed.
 
-The `upgrade` job does steps 2–5 inside the running daemon with the keys
-compiled into it, then exits for systemd to restart into the new release (or
-restarts the fleets in place when `lunora-hostd` itself did not change).
+The `upgrade` job does steps 2–4 inside the running daemon with the keys
+compiled into it, downloading each artifact itself, then exits for systemd to
+restart into the new release (or restarts the fleets in place when
+`lunora-hostd` itself did not change).
 
 ## The daemon
 
 ### Commands
 
-| Command                                                                        | What it does                                                                                                   |
-| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| `lunora-hostd enrol …`                                                         | Binds the machine to an organization with the one-time token the studio shows, and writes the configuration    |
-| `lunora-hostd run`                                                             | The daemon, in the foreground (what systemd runs). Exit 0 on SIGTERM or after replacing itself, 2 when revoked |
-| `lunora-hostd status`                                                          | The enrolment and the fleets, from the files on disk                                                           |
-| `lunora-hostd verify-release <manifest.json> [--hostd/--celld/--caddy <file>]` | Verify a release manifest with the compiled-in keys, and downloaded files against it (install.sh runs it)      |
+| Command                                                     | What it does                                                                                                                             |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `lunora-hostd enrol …`                                      | Binds the machine to an organization with the one-time token the studio shows, and writes the configuration                              |
+| `lunora-hostd run`                                          | The daemon, in the foreground (what systemd runs). Exit 0 on SIGTERM or after replacing itself, 2 when revoked                           |
+| `lunora-hostd status`                                       | The enrolment and the fleets, from the files on disk                                                                                     |
+| `lunora-hostd install-release <manifest.json> --from <dir>` | Verify a release manifest with the compiled-in keys and install the files downloaded into `<dir>` as `upgrade` does (install.sh runs it) |
 
 `enrol` takes `--control-plane <origin>` (required until a production origin
 is published), `--bucket <name|s3://name>`, `--endpoint <url>` for an

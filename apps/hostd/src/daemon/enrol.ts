@@ -21,7 +21,7 @@ import type { HostdConfig } from "./config";
 import { ConfigError, CREDENTIAL_NAMES, DEFAULT_DATA_DIR, DEFAULT_PORTS, parseHostdConfig, saveBucketCredentials, saveHostdConfig } from "./config";
 import { generateIdentity } from "./identity";
 import type { Logger } from "./log";
-import { installedVersions } from "./upgrade";
+import { installedVersions } from "./release-install";
 
 /** The production control plane `enrol` uses without `--control-plane` — none is published yet (plan 458 D16). */
 const DEFAULT_CONTROL_PLANE: string | undefined = undefined;

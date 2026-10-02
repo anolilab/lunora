@@ -21,6 +21,7 @@ import { JobRunner } from "./jobs";
 import type { Logger } from "./log";
 import LogTailer from "./log-tailer";
 import type { SpawnFunction } from "./process";
+import { installedVersions } from "./release-install";
 import { ReportQueue } from "./report-queue";
 import { ReportAggregator } from "./reports";
 import type { SocketFactory } from "./session";
@@ -29,7 +30,7 @@ import { createSignedFetch } from "./signed-fetch";
 import type { HostdState } from "./state";
 import { fleetSummaries, loadState, saveState } from "./state";
 import { Supervisor } from "./supervisor";
-import { installedVersions, runUpgrade } from "./upgrade";
+import { runUpgrade } from "./upgrade";
 
 /** How often the access log is read and closed report windows are sent. */
 const REPORT_TICK_MS = 10_000;
