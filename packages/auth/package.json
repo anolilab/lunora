@@ -56,6 +56,10 @@
             "types": "./dist/plugins-enterprise-client.d.ts",
             "import": "./dist/plugins-enterprise-client.mjs"
         },
+        "./cimd/workers": {
+            "types": "./dist/cimd-workers.d.ts",
+            "import": "./dist/cimd-workers.mjs"
+        },
         "./middleware": {
             "types": "./dist/middleware.d.ts",
             "import": "./dist/middleware.mjs"
@@ -113,6 +117,7 @@
     },
     "dependencies": {
         "@better-auth/api-key": "catalog:auth",
+        "@better-auth/cimd": "catalog:auth",
         "@better-auth/mcp": "catalog:auth",
         "@better-auth/oauth-provider": "catalog:auth",
         "@better-auth/passkey": "catalog:auth",

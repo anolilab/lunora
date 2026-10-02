@@ -24,6 +24,7 @@ const EXPECTED_EXPORTS = [
     "apiKey",
     "bearer",
     "captcha",
+    "cimd",
     "createAccessControl",
     "createMcpProtectedRequestHandler",
     "customSession",

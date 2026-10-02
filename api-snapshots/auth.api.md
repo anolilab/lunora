@@ -1216,6 +1216,14 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
+## `@lunora/auth/cimd/workers`
+
+### `default` (const)
+
+```ts
+const workersCimdFetch: () => ClientMetadataResourceFetch;
+```
+
 ## `@lunora/auth/email-guard`
 
 ### `EmailClass` (type)
@@ -1345,6 +1353,10 @@ Re-exported from `better-auth` — signature tracked at its source.
 ### `captcha` (const)
 
 Re-exported from `better-auth` — signature tracked at its source.
+
+### `cimd` (const)
+
+Re-exported from `@better-auth/cimd` — signature tracked at its source.
 
 ### `createAccessControl` (function)
 

@@ -77,6 +77,16 @@ export { uiConfig } from "./ui-config";
 // permissions. Its own package rather than a `better-auth/plugins` subpath.
 export { apiKey } from "@better-auth/api-key";
 
+// Client ID Metadata Documents: a client uses an HTTPS URL as its `client_id`, and
+// the authorization server fetches the client's metadata from it instead of
+// requiring registration. This is the client-registration path MCP 2026-07-28 pins
+// (`metadataProfile: "mcp-2026-07-28"`), and how MCP hosts connect to an
+// `mcp()` server unassisted. Opt-in: nothing fetches until you add the plugin.
+// It needs a fetch transport that keeps those fetches on the public internet —
+// `workersCimdFetch()` from `@lunora/auth/cimd/workers` on Cloudflare Workers,
+// `@better-auth/cimd/node`'s `fetchClientMetadataResource` on Node.
+export { cimd } from "@better-auth/cimd";
+
 // OAuth-protected Model Context Protocol servers — pairs with `@lunora/mcp`,
 // whose `createAuthedMcpFetchHandler` mounts a Lunora MCP server behind
 // `requireMcpAuth`. better-auth 1.7 moved these out of its core barrel into
