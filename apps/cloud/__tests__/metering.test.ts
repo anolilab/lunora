@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AnalyticsEngineDatasetLike } from "../src/metering/analytics";
-import { createHttpAnalyticsReader, normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../src/metering/analytics";
+import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/analytics";
+import { createHttpAnalyticsReader, normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../src/targets/cloudflare-wfp/analytics";
 
 describe(recordRequestUsage, () => {
     it("writes a per-request data point carrying the full traffic dimension set", () => {

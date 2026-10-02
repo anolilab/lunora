@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import dispatcher from "../src/dispatcher/worker";
-import type { AnalyticsEngineDatasetLike } from "../src/metering/analytics";
+import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/analytics";
 
 /**
  * The `DISPATCHER.get` shape the worker calls, mirrored from its own

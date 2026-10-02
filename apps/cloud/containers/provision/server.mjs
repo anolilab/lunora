@@ -150,7 +150,7 @@ const writeInputs = async (workspace, job) => {
 /**
  * One job: plan → write inputs → run each stack step → result.
  * @param {unknown} job The parsed request body.
- * @param {(event: import("../../src/provision-contract").ProvisionEvent) => void} emit Writes one NDJSON line.
+ * @param {(event: import("../../src/targets/cloudflare-wfp/box-contract").ProvisionEvent) => void} emit Writes one NDJSON line.
  * @returns {Promise<void>} Resolves once the terminal event is emitted.
  */
 const provision = async (job, emit) => {
@@ -240,7 +240,7 @@ const handleProvision = async (request, response) => {
 
     response.writeHead(200, { "content-type": "application/x-ndjson" });
 
-    /** @param {import("../../src/provision-contract").ProvisionEvent} event The event to send. */
+    /** @param {import("../../src/targets/cloudflare-wfp/box-contract").ProvisionEvent} event The event to send. */
     const emit = (event) => {
         response.write(`${JSON.stringify(event)}\n`);
     };

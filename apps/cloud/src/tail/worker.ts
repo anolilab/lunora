@@ -12,8 +12,8 @@
  * `logs.ingest`. Best-effort and fail-open: a missing binding or a rejected POST
  * is swallowed so tail delivery never back-pressures the tenant workers.
  *
- * Deploy: this is its own worker (`tail.wrangler.jsonc`); the provisioner sets
- * `tail_consumers` on each tenant script (or the namespace) to point at it. The
+ * Deploy: this is its own worker (`tail.wrangler.jsonc`); the `cloudflare-wfp`
+ * driver (its `logs` source) sets `tail_consumers` on each tenant script (or the namespace) to point at it. The
  * control-plane URL/secret ride the tail worker's `env`.
  */
 import type { TailTraceItem } from "./parse";

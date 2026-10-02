@@ -1,5 +1,5 @@
-import type { DestroyRef, Provisioner, ProvisionResult } from "../provision";
 import type { TenantDeploymentSpec } from "../provision-contract";
+import type { ConvergeResult, DestroyRef, TargetDriver } from "../targets/driver";
 import type { CellScheduler } from "./scheduler";
 
 /**
@@ -9,9 +9,9 @@ import type { CellScheduler } from "./scheduler";
  * bundle is prebuilt by the app's Vite pipeline, so "building" is the client's
  * concern; the platform's phases are queued → provisioning → live / failed.
  *
- * The actual Cloudflare work is paced through the cell's {@link CellScheduler}
- * and executed by the {@link Provisioner} (the Alchemy 2 provision box). Both are injected, so a
- * deployment can be driven end-to-end in tests with a fake provisioner.
+ * The converge is paced through the cell's {@link CellScheduler} and executed by
+ * the project's {@link TargetDriver}. Both are injected, so a deployment can be
+ * driven end-to-end in tests with a fake driver.
  */
 
 export type DeployPhase = "failed" | "live" | "provisioning" | "queued" | "verifying";
@@ -24,11 +24,12 @@ export interface DeployProgress {
 }
 
 export interface RunDeploymentOptions {
+    /** Priority for the cell scheduler (interactive deploy > preview > cleanup). */
+    /** The project's target driver — only its converge half is used here. */
+    driver: Pick<TargetDriver, "deploy">;
     /** Reports each phase transition (NDJSON event / status patch). */
     onProgress?: (progress: DeployProgress) => Promise<void> | void;
-    /** Priority for the cell scheduler (interactive deploy > preview > cleanup). */
     priority?: number;
-    provisioner: Provisioner;
     scheduler: CellScheduler;
 
     /**
@@ -40,15 +41,15 @@ export interface RunDeploymentOptions {
      * broken code is live and the previous release must be re-provisioned.
      * Omit to skip verification.
      */
-    verify?: (result: ProvisionResult) => Promise<boolean>;
+    verify?: (result: ConvergeResult) => Promise<boolean>;
 }
 
 /**
- * `provisioned` says whether the failed release reached the Worker: true only
- * for a failed health check. A provisioner failure leaves the Worker on the
- * previous release (the upload is the box's last step, and it is atomic).
+ * `provisioned` says whether the failed release reached the tenant: true only
+ * for a failed health check. A converge failure leaves the tenant on the
+ * previous release (every driver makes the cut-over its last, atomic step).
  */
-export type DeployOutcome = { error: string; provisioned: boolean; status: "failed" } | { result: ProvisionResult; status: "live" };
+export type DeployOutcome = { error: string; provisioned: boolean; status: "failed" } | { result: ConvergeResult; status: "live" };
 
 export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDeploymentOptions): Promise<DeployOutcome> => {
     const emit = async (progress: DeployProgress): Promise<void> => {
@@ -59,7 +60,7 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
     await emit({ phase: "provisioning" });
 
     try {
-        const result = await options.scheduler.run(() => options.provisioner.deploy(spec), { priority: options.priority });
+        const result = await options.scheduler.run(() => options.driver.deploy(spec), { priority: options.priority });
 
         if (options.verify) {
             await emit({ phase: "verifying", url: result.url });
@@ -91,7 +92,7 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
  */
 export const destroyDeployment = async (
     reference: DestroyRef,
-    options: { priority?: number; provisioner: Provisioner; scheduler: CellScheduler },
+    options: { driver: Pick<TargetDriver, "destroy">; priority?: number; scheduler: CellScheduler },
 ): Promise<void> => {
-    await options.scheduler.run(() => options.provisioner.destroy(reference), { priority: options.priority ?? -1 });
+    await options.scheduler.run(() => options.driver.destroy(reference), { priority: options.priority ?? -1 });
 };

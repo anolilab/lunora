@@ -24,10 +24,10 @@ Not a pnpm workspace member: the image installs its own lockfile.
 
 ## The contract
 
-| Route                      | Purpose                                                                                                |
-| -------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `POST /__lunora/provision` | Body is a `ProvisionJob` (JSON, `src/provision-contract.ts`). Responds `200` NDJSON `ProvisionEvent`s. |
-| `GET /__lunora/health`     | Readiness probe, `200 ok`.                                                                             |
+| Route                      | Purpose                                                                                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `POST /__lunora/provision` | Body is a `ProvisionJob` (JSON, `src/targets/cloudflare-wfp/box-contract.ts`). Responds `200` NDJSON `ProvisionEvent`s. |
+| `GET /__lunora/health`     | Readiness probe, `200 ok`.                                                                                              |
 
 Responses to `POST /__lunora/provision`:
 

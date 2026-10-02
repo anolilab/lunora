@@ -18,11 +18,6 @@ import readJson from "../read-json";
 /** One call into a tenant Worker's admin API, with the admin bearer already attached. */
 export type TenantSend = (path: string, body: string, contentType: "application/json" | "application/x-ndjson") => Promise<Response>;
 
-/** The dispatch-namespace binding, as far as reaching one script goes. */
-export interface DispatchNamespaceLike {
-    get: (scriptName: string) => { fetch: (request: Request) => Promise<Response> };
-}
-
 /** The subset of an R2 bucket binding tenant backups use. */
 export interface TenantBackupBucket {
     delete: (keys: string | string[]) => Promise<void>;
@@ -68,25 +63,15 @@ const IMPORT_PATH = "/_lunora/admin/import";
 const MAX_ERROR_LENGTH = 300;
 
 /**
- * A {@link TenantSend} for one deployment: through the dispatch namespace when
- * the control plane has one bound (the same path the cron fan-out takes, so the
- * call never leaves Cloudflare), else over the deployment's public URL (local dev,
- * where dispatch namespaces are not emulated).
+ * A {@link TenantSend} for one deployment over its public URL — the path every
+ * target has. A driver with a shorter in-network path (`cloudflare-wfp`'s
+ * dispatch namespace) offers it as its own `reach`.
  */
-export const tenantSender = (target: { adminToken: string; scriptName: string; url: string }, dispatcher: DispatchNamespaceLike | undefined): TenantSend => {
-    const init = (body: string, contentType: string): RequestInit => {
-        return { body, headers: { authorization: `Bearer ${target.adminToken}`, "content-type": contentType }, method: "POST" };
-    };
-
-    if (dispatcher) {
-        const script = dispatcher.get(target.scriptName);
-
-        return (path, body, contentType) => script.fetch(new Request(`https://tenant.internal${path}`, init(body, contentType)));
-    }
-
+export const tenantSender = (target: { adminToken: string; url: string }): TenantSend => {
     const base = stripTrailingSlashes(target.url);
 
-    return (path, body, contentType) => fetch(`${base}${path}`, init(body, contentType));
+    return (path, body, contentType) =>
+        fetch(`${base}${path}`, { body, headers: { authorization: `Bearer ${target.adminToken}`, "content-type": contentType }, method: "POST" });
 };
 
 /** The tenant's error message (runtime error bodies are `{ error: { message } }`), bounded. */

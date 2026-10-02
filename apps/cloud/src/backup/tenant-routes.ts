@@ -18,8 +18,10 @@ import type { StoredAdminToken } from "../deploy/admin-token";
 import { resolveAdminToken } from "../deploy/admin-token";
 import type { RouterEnv } from "../deploy/routes/shared";
 import { jsonError, rejected, requireContext } from "../deploy/routes/shared";
+import { DEFAULT_TARGET } from "../provision-contract";
+import { resolveTargetDriver } from "../targets/registry";
 import type { RestoreSummary, TenantBackupBucket, TenantSend } from "./tenant-transport";
-import { captureTenantSnapshot, restoreTenantSnapshot, tenantSender } from "./tenant-transport";
+import { captureTenantSnapshot, restoreTenantSnapshot } from "./tenant-transport";
 
 /** The deployment a begin* mutation resolved, admin token still sealed. */
 type TenantTarget = StoredAdminToken & { alias: string; scriptName: string; url: string };
@@ -32,7 +34,7 @@ const describe = (error: unknown, fallback: string): string => (error instanceof
 
 const readBody = async <T>(request: Request): Promise<Partial<T> | null> => (await request.json().catch(() => null)) as Partial<T> | null;
 
-/** Unseal the target's admin token and build its sender, or throw when it has none usable. */
+/** Unseal the target's admin token and reach it through its driver, or throw when it has none usable. */
 const senderFor = async (target: TenantTarget, environment: RouterEnv): Promise<TenantSend> => {
     const adminToken = await resolveAdminToken(target, environment.SECRET_ENCRYPTION_KEY);
 
@@ -40,7 +42,7 @@ const senderFor = async (target: TenantTarget, environment: RouterEnv): Promise<
         throw new Error("deployment has no usable admin token");
     }
 
-    return tenantSender({ adminToken, scriptName: target.scriptName, url: target.url }, environment.DISPATCHER);
+    return resolveTargetDriver(DEFAULT_TARGET, environment).reach({ adminToken, resourceRef: target.scriptName, url: target.url });
 };
 
 /**

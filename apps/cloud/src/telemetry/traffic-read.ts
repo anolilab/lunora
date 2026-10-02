@@ -3,7 +3,7 @@
  * dataset — the source behind the Traffic tab (visitors by country, top paths,
  * response codes, and volume/bytes/latency over time).
  *
- * The write side is `src/metering/analytics.ts`'s `recordRequestUsage`, called
+ * The write side is `src/targets/cloudflare-wfp/analytics.ts`'s `recordRequestUsage`, called
  * once per dispatched request:
  * `blob1=script`, `blob2=plan`, `blob3=outcome`, `blob4=route`, `blob5=country`,
  * `blob6=hostname`, `blob7=status`, `double1=count`, `double2=durationMs`,

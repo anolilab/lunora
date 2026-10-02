@@ -10,7 +10,7 @@
  * Expressed over injected ports like the other sweeps (`../deploy/sweeps.ts`,
  * `../uptime/sweep.ts`), so the selection, isolation and retention are testable
  * against a fake store and bucket. `src/server.ts` supplies the real D1, R2 and
- * dispatch namespace.
+ * each deployment's target driver.
  *
  * One tenant never takes the sweep down: every snapshot runs in its own
  * try/catch and lands as a `failed` row with a bounded reason. Snapshots run one
@@ -43,8 +43,12 @@ export interface BackupTargetRow {
     kind: string;
     organizationId: string;
     projectId: string;
+    /** The deployment's handle on its target; absent on rows that predate it (the script name serves). */
+    resourceRef?: string;
     scriptName: string;
     status: string;
+    /** Absent on rows that predate targets (`cloudflare-wfp`). */
+    target?: string;
     url?: string;
 }
 

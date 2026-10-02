@@ -268,8 +268,8 @@ interface CreatedDeployment {
 /**
  * Record a new deployment in the `queued` state. Authorized either by a member
  * session (dashboard) or a valid `deployKey` (CI; §2.2). The actual provisioning
- * — bundle upload + per-tenant binding creation via the Alchemy provisioner
- * (`src/provision`), paced by the per-cell scheduler (§2.5) — is driven
+ * — bundle upload + per-tenant binding creation through the project's target
+ * driver (`src/targets/`), paced by the per-cell scheduler (§2.5) — is driven
  * separately and reports progress back through `updateStatus`.
  */
 export const create = mutation

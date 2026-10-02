@@ -1,9 +1,9 @@
 import { limitsForPlan } from "../billing/plans";
-import type { AnalyticsEngineDatasetLike } from "../metering/analytics";
-import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../metering/analytics";
+import type { AnalyticsEngineDatasetLike } from "../targets/cloudflare-wfp/analytics";
+import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../targets/cloudflare-wfp/analytics";
+import type { CustomDomainRoute, ScriptFacts } from "../targets/cloudflare-wfp/route";
+import { createCustomDomainResolver, createPlanResolver, resolveTenant } from "../targets/cloudflare-wfp/route";
 import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
-import type { CustomDomainRoute, ScriptFacts } from "./route";
-import { createCustomDomainResolver, createPlanResolver, resolveTenant } from "./route";
 
 /**
  * The Lunora Cloud dispatcher Worker — a SEPARATE,

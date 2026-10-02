@@ -13,7 +13,7 @@
  */
 
 /**
- * @typedef {import("../../src/provision-contract").ProvisionJob} ContractJob
+ * @typedef {import("../../src/targets/cloudflare-wfp/box-contract").ProvisionJob} ContractJob
  * @typedef {import("../../src/provision-contract").BindingRequirement & { resourceName?: string }} JobBinding
  * @typedef {Extract<ContractJob, { action: "deploy" }>["spec"]} ContractSpec
  * @typedef {Omit<ContractSpec, "manifest"> & { manifest: Omit<ContractSpec["manifest"], "bindings"> & { bindings: JobBinding[] } }} JobSpec

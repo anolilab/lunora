@@ -1,50 +1,52 @@
 /**
  * Resource teardown sweep (GAPS.md A1). The lifecycle crons
  * (`cleanupExpiredPreviews`, `pruneSuperseded`, `organizations.purgeDeleted`)
- * only transition deployments to `destroyed`; the Cloudflare and R2 work happens
+ * only transition deployments to `destroyed`; the target and R2 work happens
  * here, off that status.
  *
- * A release owns no script — each alias has one Worker, updated in place — so a
- * row's own teardown is deleting its stored bundle. The Worker and the project's
+ * A release owns no tenant — each alias has one, updated in place — so a row's
+ * own teardown is deleting its stored bundle. The tenant and the project's
  * resources go only once the alias has no deployment left that is not
- * `destroyed`: the project (or preview) itself is gone. `failed` rows are swept
+ * `destroyed`: the project (or preview) itself is gone, and the row's target
+ * driver destroys them. `failed` rows are swept
  * too, for their bundle only: a failed release is never a rollback target.
  *
- * Pure over injected ports (like `fanOutCron`). Per-target failure isolation —
- * one Cloudflare or R2 error leaves that row pending for the next tick and never
- * aborts the sweep. Never throws.
+ * Pure over injected ports (like `fanOutCron`). Per-row failure isolation — one
+ * driver or R2 error leaves that row pending for the next tick and never aborts
+ * the sweep. Never throws.
  */
 
-import type { DestroyRef } from "../provision";
+import type { TargetId } from "../provision-contract";
+import type { DestroyRef } from "../targets/driver";
 
 /** A destroyed or failed deployment whose stored release has not been reclaimed. */
 export interface TeardownTarget {
-    /** The project's stable label — names its Worker and its project stack. */
+    /** The project's stable label — names its tenant and its per-project resources. */
     alias: string;
 
     /**
-     * Whether to destroy the alias's Worker and project stack (D1, R2, KV,
+     * Whether to destroy the alias's tenant and its resources (D1, R2, KV,
      * queues …). True for exactly one pending row of an alias that has no
      * deployment left that is not `destroyed`, so a routine prune never touches
-     * the Worker the live release runs on.
+     * the tenant the live release runs on.
      */
     destroyWorker: boolean;
-    /** Dispatch namespace the Worker lives in (`lunora-{kind}`). */
-    dispatchNamespace: string;
     /** Deployment row id — its stored release key, stamped `teardownAt` once reclaimed. */
     id: string;
+    /** The target the row was deployed to — whose driver destroys it. */
+    target: TargetId;
 }
 
 export interface TeardownPorts {
     /** Delete a deployment's stored release. Idempotent. */
     deleteRelease: (id: string) => Promise<void>;
-    /** Destroy the alias's Worker and project resources — `Provisioner.destroy`. */
-    destroy: (reference: DestroyRef) => Promise<void>;
+    /** Destroy the alias's tenant and its resources — the target driver's `destroy`. */
+    destroy: (target: TargetId, reference: DestroyRef) => Promise<void>;
     /** The destroyed/failed deployments whose release has not been reclaimed yet. */
     listPending: () => Promise<TeardownTarget[]>;
-    /** Record that a deployment's stored release (and, for {@link TeardownTarget.destroyWorker}, its Worker) is gone. */
+    /** Record that a deployment's stored release (and, for {@link TeardownTarget.destroyWorker}, its tenant) is gone. */
     markTornDown: (id: string) => Promise<void>;
-    /** Release the alias's ownership row once its Worker is gone. Idempotent. */
+    /** Release the alias's ownership row once its tenant is gone. Idempotent. */
     releaseAlias: (alias: string) => Promise<void>;
 }
 
@@ -68,10 +70,10 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
     for (const target of targets) {
         try {
             if (target.destroyWorker) {
-                // eslint-disable-next-line no-await-in-loop -- sequential teardown paces Cloudflare API work; volumes are small
-                await ports.destroy({ alias: target.alias, dispatchNamespace: target.dispatchNamespace });
+                // eslint-disable-next-line no-await-in-loop -- sequential teardown paces the target's API work; volumes are small
+                await ports.destroy(target.target, { alias: target.alias });
 
-                // The alias is only free once its Worker and resources are gone.
+                // The alias is only free once its tenant and resources are gone.
                 // Released BEFORE `markTornDown` so a failure here leaves the row
                 // pending and the (idempotent) release retries next tick.
                 // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small
@@ -84,7 +86,7 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
             await ports.markTornDown(target.id);
             tornDown += 1;
         } catch {
-            // A Cloudflare/R2 failure (or a transient markTornDown error) leaves the
+            // A driver/R2 failure (or a transient markTornDown error) leaves the
             // row pending — `teardownAt` stays unset, so the next sweep retries.
             failed += 1;
         }

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ProvisionJob } from "../containers/provision/plan.mjs";
 import { assetRelativePath, DEFAULT_COMPATIBILITY_DATE, PlanError, planJob } from "../containers/provision/plan.mjs";
 import type { BindingRequirement } from "../src/provision-contract";
-import { BINDING_SUPPORT, tenantResourceName } from "../src/provision-contract";
+import { BINDING_SUPPORT as BINDING_SUPPORT_BY_TARGET, tenantResourceName } from "../src/provision-contract";
 
 /**
  * The provision box's job → plan mapping. The plan is the only thing the
@@ -13,6 +13,9 @@ import { BINDING_SUPPORT, tenantResourceName } from "../src/provision-contract";
  */
 
 const ALIAS = "acme";
+
+/** The box provisions for `cloudflare-wfp` only; its table is the contract this mapping honours. */
+const BINDING_SUPPORT = BINDING_SUPPORT_BY_TARGET["cloudflare-wfp"];
 
 /** What the control plane sends: provisioned bindings carry their resource name. */
 const withName = (requirement: BindingRequirement): BindingRequirement & { resourceName?: string } =>

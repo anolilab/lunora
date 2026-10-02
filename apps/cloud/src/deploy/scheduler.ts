@@ -3,7 +3,7 @@ import type { TokenBucket } from "./token-bucket";
 /**
  * Per-cell scheduler. Paces and serializes the work a cell
  * sends to Cloudflare — chiefly the Alchemy `finalize()` runs behind the
- * provisioner — against the cell's {@link TokenBucket} budget, with priority
+ * `cloudflare-wfp` driver's converge — against the cell's {@link TokenBucket} budget, with priority
  * ordering and a concurrency cap. A CI stampede degrades to queued-but-ordered,
  * never to dropped API calls.
  *

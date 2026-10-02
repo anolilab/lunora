@@ -1,24 +1,24 @@
-import type { AssetFile, AssetsUpload, BindingRequirement, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
-import { ALIAS_PATTERN, BINDING_SUPPORT, tenantResourceName, UNSUPPORTED_REASONS } from "../provision-contract";
+import type { AssetFile, AssetsUpload, BindingRequirement, DeployKind, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
+import { ALIAS_PATTERN, BINDING_SUPPORT, DEFAULT_TARGET, tenantResourceName, UNSUPPORTED_REASONS } from "../provision-contract";
 import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
 import { runDeployment } from "./orchestrator";
-import type { DeployKind, ReleaseBackend, ReleaseDeps } from "./release";
+import type { ReleaseBackend, ReleaseDeps } from "./release";
 import { buildDeploymentSpec, decodeBundle, reprovision, resolveTelemetrySafely } from "./release";
 
 /**
  * The deploy API request handler. `POST /v1/deploy`:
  * authenticate the bearer deploy key, record a queued deployment, then drive the
  * orchestrator while streaming NDJSON progress (one JSON object per line). The
- * Cloudflare-touching work runs through the cell scheduler + the Alchemy
- * provisioner — both injected, so the whole flow is unit-testable with fakes.
+ * converge runs through the cell scheduler + the project's target driver — both
+ * injected, so the whole flow is unit-testable with fakes.
  *
- * Every deploy updates the project's one stable Worker in place (the script
- * name is the alias), so Durable Object data survives releases. The validated
+ * Every deploy updates the project's one stable tenant in place (named by the
+ * alias), so Durable Object data survives releases. The validated
  * payload is stored first ({@link ReleaseDeps.releases}) — that stored copy is
  * what a rollback, or the automatic revert below, re-provisions.
  *
- * Pure: all I/O is behind {@link DeployBackend} + the injected provisioner/
+ * Pure: all I/O is behind {@link DeployBackend} + the injected driver/
  * scheduler/store. The Worker mount in `src/server.ts` wires the backend to the
  * control-plane mutations via the Lunora action context.
  */
@@ -141,7 +141,7 @@ const NOT_FOUND_HANDLING = ["404-page", "none", "single-page-application"] as co
 const ASSETS_CONFIG_KEYS = new Set(["html_handling", "not_found_handling", "run_worker_first"]);
 
 type BindingType = BindingRequirement["type"];
-type UnsupportedType = keyof typeof UNSUPPORTED_REASONS;
+type UnsupportedType = keyof (typeof UNSUPPORTED_REASONS)[typeof DEFAULT_TARGET];
 
 /** Validation outcome: the parsed value, or the 400 message. */
 type Parsed<T> = { error: string } | { value: T };
@@ -151,9 +151,9 @@ const isOneOf = <T extends string>(values: ReadonlyArray<T>, value: unknown): va
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-const isBindingType = (value: string): value is BindingType => Object.hasOwn(BINDING_SUPPORT, value);
+const isBindingType = (value: string): value is BindingType => Object.hasOwn(BINDING_SUPPORT[DEFAULT_TARGET], value);
 
-const isUnsupported = (type: BindingType): type is UnsupportedType => BINDING_SUPPORT[type] === "unsupported";
+const isUnsupported = (type: BindingType): type is UnsupportedType => BINDING_SUPPORT[DEFAULT_TARGET][type] === "unsupported";
 
 /** Class-backed types the platform binds straight to an export of the tenant bundle. */
 const needsClassName = (type: BindingType): boolean => type === "durable_object" || type === "workflow";
@@ -189,7 +189,7 @@ const parseBinding = (entry: unknown, index: number): Parsed<BindingRequirement>
         return { error: `binding ${binding}: sqlite must be a boolean` };
     }
 
-    // Rebuilt field by field so unknown keys never reach the provisioner.
+    // Rebuilt field by field so unknown keys never reach a driver.
     // `resourceId` is deliberately not carried: an id minted in the tenant's own
     // account means nothing in the platform account, and honouring one would let
     // a manifest point a binding at another tenant's resource.
@@ -291,7 +291,7 @@ const parseManifest = (raw: unknown): Parsed<DeployManifest> => {
         const { binding, type } = parsed.value;
 
         if (isUnsupported(type)) {
-            unsupported.push(`${type} (${binding}): ${UNSUPPORTED_REASONS[type]}`);
+            unsupported.push(`${type} (${binding}): ${UNSUPPORTED_REASONS[DEFAULT_TARGET][type]}`);
         }
 
         bindings.push(parsed.value);
@@ -460,7 +460,7 @@ const parseAssets = (raw: unknown, manifest: DeployManifest): Parsed<AssetsUploa
 /** Every per-project resource name must fit Cloudflare's limits — refused here, not halfway through provisioning. */
 const resourceNameError = (alias: string, manifest: DeployManifest): string | undefined => {
     for (const requirement of manifest.bindings) {
-        if (BINDING_SUPPORT[requirement.type] !== "provisioned") {
+        if (BINDING_SUPPORT[DEFAULT_TARGET][requirement.type] !== "provisioned") {
             continue;
         }
 
@@ -657,7 +657,7 @@ interface RecordedRelease {
 }
 
 /**
- * The provisioner spec for a release. Tenant env secrets are decrypted and
+ * The target-neutral spec for a release. Tenant env secrets are decrypted and
  * merged in; `LUNORA_ADMIN_TOKEN` is platform-owned and always wins over a
  * same-named tenant secret. Throws when the secrets cannot be resolved.
  */
@@ -671,8 +671,6 @@ const releaseSpec = async (release: RecordedRelease, deps: DeployHandlerDeps): P
         alias: release.scriptName,
         assets: release.assets,
         bundle: release.bundle,
-        cell: deps.cell,
-        dispatchNamespace: deps.dispatchNamespace,
         kind,
         manifest: release.manifest,
         organizationId,
@@ -768,12 +766,12 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
             onProgress: reportProgress({ deploymentId, deps, key, write }, (progressUrl) => {
                 url = progressUrl;
             }),
-            provisioner: deps.provisioner,
+            driver: deps.driverFor(DEFAULT_TARGET),
             scheduler: deps.scheduler,
             ...(healthCheck ? { verify: (result) => healthCheck(result.url) } : {}),
         });
     } catch (error) {
-        // `runDeployment` converts provisioner/scheduler faults into
+        // `runDeployment` converts driver/scheduler faults into
         // `{ status: "failed" }` itself, so reaching here means the *callback*
         // threw — an `updateStatus` write that failed, most likely. Without
         // this the row is stranded mid-flight in `accepted`/`provisioning`

@@ -1,7 +1,8 @@
-import readJson from "../read-json";
+import readJson from "../../read-json";
 
 /**
- * Dispatcher routing. Resolves an inbound hostname to the
+ * `cloudflare-wfp` routing, shared by the dispatcher Worker (`src/dispatcher/worker.ts`,
+ * the request path) and the driver's `route` (the control plane). Resolves an inbound hostname to the
  * dispatch-namespace script that serves it. A project has one Worker, named by
  * its alias and updated in place by every release, and it is reachable at
  * `{alias}.{appDomain}` — so the subdomain label *is* the script name, with no
@@ -32,26 +33,29 @@ export interface ResolveTenantOptions {
     resolvePlan?: (scriptName: string) => Promise<ScriptFacts>;
 }
 
+/**
+ * The platform hostname grammar: `{alias}.{appDomain}` → the alias (the script
+ * name), `null` for a malformed platform hostname, and `undefined` for one that is
+ * not under the apex at all (a custom-domain candidate).
+ */
+export const scriptForPlatformHostname = (hostname: string, appDomain: string): null | string | undefined => {
+    const host = hostname.toLowerCase();
+    const suffix = `.${appDomain.toLowerCase()}`;
+
+    if (!host.endsWith(suffix)) {
+        return undefined;
+    }
+
+    const label = host.slice(0, -suffix.length);
+
+    // Single-label subdomains only (`proj.lunora.app`, not `a.b.lunora.app`).
+    return label === "" || label.includes(".") ? null : label;
+};
+
 export const resolveTenant = async (hostname: string, options: ResolveTenantOptions): Promise<null | TenantRoute> => {
     const host = hostname.toLowerCase();
-    const suffix = `.${options.appDomain.toLowerCase()}`;
-
-    const resolveScript = async (): Promise<null | string> => {
-        if (host.endsWith(suffix)) {
-            const label = host.slice(0, -suffix.length);
-
-            // Single-label subdomains only (`proj.lunora.app`, not `a.b.lunora.app`).
-            if (label === "" || label.includes(".")) {
-                return null;
-            }
-
-            return label;
-        }
-
-        return (await options.resolveCustomDomain?.(host)) ?? null;
-    };
-
-    const scriptName = await resolveScript();
+    const platform = scriptForPlatformHostname(host, options.appDomain);
+    const scriptName = platform === undefined ? ((await options.resolveCustomDomain?.(host)) ?? null) : platform;
 
     if (!scriptName) {
         return null;

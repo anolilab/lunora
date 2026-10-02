@@ -18,9 +18,11 @@ import type { BuildRecordResult } from "../github/webhook";
 import { handleGitHubWebhook } from "../github/webhook";
 import { deliverAlert, sendInvitationEmail } from "../mail/notify";
 import { createMcpRouteHandler } from "../mcp/handler";
-import { createAlchemyProvisioner, provisionBoxFrom } from "../provision";
+import type { DeployKind } from "../provision-contract";
+import { DEFAULT_TARGET } from "../provision-contract";
 import { decryptSecret, encryptSecret } from "../secrets/crypto";
 import { constantTimeEqual } from "../security/constant-time-equal";
+import { resolveTargetDriver } from "../targets/registry";
 import { resolveTelemetryConfig } from "../telemetry/ingest-key";
 import type { OtlpTracePayload } from "../telemetry/otlp";
 import { decodeObservations, decodeTelemetryEvents } from "../telemetry/otlp";
@@ -29,14 +31,14 @@ import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken, sealAdminToken } from "./admin-token";
 import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
-import type { DeployKind, ReleaseDeps } from "./release";
+import type { ReleaseDeps } from "./release";
 import { rollbackRelease } from "./release";
 import { createReleaseStore } from "./release-store";
 import type { RegisteredRoute } from "./route-registry";
 import { assertRoutesClassified } from "./route-registry";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
-import { dispatchNamespaceOf, jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
+import { jsonError, otlpBearer, rejected, requireContext, strictBearer, withContext } from "./routes/shared";
 import {
     handleCellRegisterRoute,
     handlePreviewAuthRoute,
@@ -665,12 +667,12 @@ const handleEjectRoute = async (request: Request, environment: RouterEnv): Promi
     }
 
     // The same export the tenant backups read (src/backup/tenant-transport). Over
-    // the public URL rather than the dispatch namespace: an eject may target a
-    // preview, whose script lives in another namespace than the one bound here.
+    // the public URL rather than the driver's in-network `reach`: the exit hatch
+    // reads the tenant exactly as its owner's own tooling would.
     let snapshot: string;
 
     try {
-        const exported = await exportTenantSnapshot(tenantSender({ adminToken, scriptName: target.scriptName, url: target.url }, undefined));
+        const exported = await exportTenantSnapshot(tenantSender({ adminToken, url: target.url }));
 
         snapshot = await new Response(exported).text();
     } catch (error) {
@@ -748,9 +750,8 @@ const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv)
             return jsonError(404, "domain not found");
         }
 
-        const appDomain = environment.LUNORA_APP_DOMAIN ?? "lunora.app";
         const result = await verifyDomain(domain.hostname, {
-            platformTargets: [appDomain],
+            platformTargets: resolveTargetDriver(DEFAULT_TARGET, environment).domains.platformTargets(),
             resolve: createDohResolver(),
             txtToken: domain.txtToken,
         });
@@ -810,9 +811,6 @@ export const createDeployRouter = (): HttpRouterLike => {
         if (!environment.RELEASES) {
             return undefined;
         }
-
-        const cell = environment.LUNORA_CELL ?? "default";
-        const appDomain = environment.LUNORA_APP_DOMAIN ?? "lunora.app";
 
         return {
             backend: {
@@ -881,19 +879,16 @@ export const createDeployRouter = (): HttpRouterLike => {
                         organizationId,
                     }),
             },
-            cell,
-            dispatchNamespace: dispatchNamespaceOf(environment),
-            provisioner: createAlchemyProvisioner({
-                box: provisionBoxFrom(environment),
-                onLog: (line) => {
-                    // eslint-disable-next-line no-console -- the provision box's log is only visible here, in Workers Logs
-                    console.log("[provision]", line);
-                },
-                urlForScript: (alias) => `https://${alias}.${appDomain}`,
-            }),
+            driverFor: (target) =>
+                resolveTargetDriver(target, environment, {
+                    onLog: (line) => {
+                        // eslint-disable-next-line no-console -- the driver's converge log is only visible here, in Workers Logs
+                        console.log("[provision]", line);
+                    },
+                }),
             releases: createReleaseStore(environment.RELEASES),
             // Provision (once per org) the scoped ingest key + hand the tenant its
-            // OTLP endpoint/token/tail-consumer (src/telemetry/ingest-key).
+            // OTLP endpoint/token (src/telemetry/ingest-key).
             resolveTelemetry: (input) => resolveTelemetryConfig(context, environment, input),
             scheduler,
         };

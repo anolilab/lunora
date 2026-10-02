@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { ProvisionEvent } from "../src/provision-contract";
+import type { ProvisionEvent } from "../src/targets/cloudflare-wfp/box-contract";
 
 /**
  * The provision box's HTTP contract, with Alchemy stubbed.

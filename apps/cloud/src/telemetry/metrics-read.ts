@@ -173,7 +173,7 @@ export interface MetricsReaderOptions {
 
 /**
  * HTTP {@link MetricsReader} over the AE SQL API (same read path as
- * `src/metering/analytics.ts`'s usage reader). Runs at the edge (needs the
+ * `src/targets/cloudflare-wfp/analytics.ts`'s usage reader). Runs at the edge (needs the
  * account API token); pure query-building + folding are delegated to the tested
  * helpers above so this is a thin seam.
  */

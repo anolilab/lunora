@@ -5,9 +5,11 @@ import { authorizeDownload, beginBackup, beginRestore } from "../lunora/tenant-b
 import { backupRetentionFor, isDueForBackup, OPERATION_STALE_MS, tenantBackupKey } from "../src/backup/tenant-policy";
 import type { BackupTargetRow } from "../src/backup/tenant-sweep";
 import { runTenantBackupSweep } from "../src/backup/tenant-sweep";
-import type { DispatchNamespaceLike, TenantBackupBucket, TenantSend } from "../src/backup/tenant-transport";
-import { IMPORT_BATCH_BYTES, restoreTenantSnapshot, tenantSender } from "../src/backup/tenant-transport";
+import type { TenantBackupBucket, TenantSend } from "../src/backup/tenant-transport";
+import { IMPORT_BATCH_BYTES, restoreTenantSnapshot } from "../src/backup/tenant-transport";
 import { createDeployRouter } from "../src/deploy/router";
+import type { DispatchNamespaceLike } from "../src/targets/cloudflare-wfp/dispatch";
+import { dispatchTenantSender } from "../src/targets/cloudflare-wfp/dispatch";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 
@@ -180,8 +182,7 @@ describe(runTenantBackupSweep, () => {
             database,
             log: (line) => logs.push(line),
             now: NOW,
-            senderFor: (row: BackupTargetRow) =>
-                Promise.resolve(tenantSender({ adminToken: TOKEN, scriptName: row.scriptName, url: row.url ?? "" }, dispatcher)),
+            senderFor: (row: BackupTargetRow) => Promise.resolve(dispatchTenantSender(dispatcher, { adminToken: TOKEN, resourceRef: row.scriptName })),
         });
 
         expect(result).toMatchObject({ failed: 1, succeeded: 1 });

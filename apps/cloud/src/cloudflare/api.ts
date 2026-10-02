@@ -1,7 +1,8 @@
 /**
  * Cloudflare REST API port for the control plane's own account work: D1 export
  * for backups and Cloudflare-for-SaaS custom hostnames. Tenant provisioning is
- * not here — it runs through Alchemy in the provision box (`src/provision.ts`).
+ * not here — it runs through Alchemy in the provision box (the `cloudflare-wfp`
+ * driver, `src/targets/cloudflare-wfp/`).
  *
  * The HTTP implementation ({@link createHttpCloudflareApi}) calls the
  * documented REST endpoints under `https://api.cloudflare.com/client/v4`.

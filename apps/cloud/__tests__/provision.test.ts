@@ -1,22 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { sha256HexBytes } from "../src/deploy/keys";
-import type { AlchemyProvisionerOptions } from "../src/provision";
-import { createAlchemyProvisioner } from "../src/provision";
-import type { ProvisionJob, TenantDeploymentSpec } from "../src/provision-contract";
+import type { TenantDeploymentSpec } from "../src/provision-contract";
+import type { ProvisionJob } from "../src/targets/cloudflare-wfp/box-contract";
+import type { CloudflareWfpPorts } from "../src/targets/cloudflare-wfp/driver";
+import { createCloudflareWfpDriver } from "../src/targets/cloudflare-wfp/driver";
+import type { ProvisionBox } from "../src/targets/cloudflare-wfp/provision-box";
 
 const spec: TenantDeploymentSpec = {
     alias: "org-project",
     bundle: new TextEncoder().encode("export default {}").buffer,
-    cell: "cell-1",
-    dispatchNamespace: "lunora-production",
+    kind: "production",
     manifest: { bindings: [{ binding: "DB", type: "d1" }] },
     secrets: { LUNORA_ADMIN_TOKEN: "t" },
     tags: ["org:org", "project:project", "env:production"],
 };
 
 /** A fake provision box: records each instance name + job, answers these chunks (split wherever the test says). */
-const fakeBox = (chunks: ReadonlyArray<string>, status = 200): { box: AlchemyProvisionerOptions["box"]; calls: { job: ProvisionJob; name: string }[] } => {
+const fakeBox = (chunks: ReadonlyArray<string>, status = 200): { box: ProvisionBox; calls: { job: ProvisionJob; name: string }[] } => {
     const calls: { job: ProvisionJob; name: string }[] = [];
     const encoder = new TextEncoder();
 
@@ -47,9 +48,11 @@ const fakeBox = (chunks: ReadonlyArray<string>, status = 200): { box: AlchemyPro
     };
 };
 
-const urlForScript = (script: string): string => `https://${script}.lunora.app`;
+/** The driver over a fake box, configured the way the production cell is. */
+const driverFor = (box: ProvisionBox, overrides: Partial<CloudflareWfpPorts> = {}) =>
+    createCloudflareWfpDriver({ appDomain: "lunora.app", box: () => box, cell: "cell-1", dispatchNamespace: "lunora-production", ...overrides });
 
-describe(createAlchemyProvisioner, () => {
+describe(createCloudflareWfpDriver, () => {
     it("posts the deploy job to the project's box, forwards logs, and resolves the result", async () => {
         // The result line arrives split across two reads, with no trailing newline.
         const { box, calls } = fakeBox([
@@ -59,7 +62,7 @@ describe(createAlchemyProvisioner, () => {
         ]);
         const onLog = vi.fn<(line: string) => void>();
 
-        const result = await createAlchemyProvisioner({ box, onLog, urlForScript }).deploy(spec);
+        const result = await driverFor(box, { onLog }).deploy(spec);
 
         expect(result).toStrictEqual({
             bundleHash: await sha256HexBytes(spec.bundle),
@@ -73,30 +76,41 @@ describe(createAlchemyProvisioner, () => {
 
         expect(job?.action).toBe("deploy");
         expect(job?.action === "deploy" && atob(job.spec.bundle)).toBe("export default {}");
+        // The Cloudflare half the neutral spec does not carry comes from the driver's own configuration.
+        expect(job).toMatchObject({ spec: { alias: "org-project", cell: "cell-1", dispatchNamespace: "lunora-production" } });
+        expect(job?.action === "deploy" && job.spec.tailConsumers).toBeUndefined();
+    });
+
+    it("attaches the platform log tail when the release collects logs", async () => {
+        const { box, calls } = fakeBox(['{"type":"result"}\n']);
+
+        await driverFor(box).deploy({ ...spec, collectLogs: true });
+
+        expect(calls[0]?.job).toMatchObject({ spec: { tailConsumers: ["lunora-log-tail"] } });
     });
 
     it("throws the box's error message", async () => {
         const { box } = fakeBox(['{"type":"log","line":"x"}\n{"type":"error","message":"d1 quota exceeded"}\n']);
 
-        await expect(createAlchemyProvisioner({ box, urlForScript }).deploy(spec)).rejects.toThrow("d1 quota exceeded");
+        await expect(driverFor(box).deploy(spec)).rejects.toThrow("d1 quota exceeded");
     });
 
     it("throws when the stream ends without a result", async () => {
         const { box } = fakeBox(['{"type":"log","line":"x"}\n']);
 
-        await expect(createAlchemyProvisioner({ box, urlForScript }).deploy(spec)).rejects.toThrow(/without a result/u);
+        await expect(driverFor(box).deploy(spec)).rejects.toThrow(/without a result/u);
     });
 
     it("surfaces a 409 as a retryable busy error", async () => {
         const { box } = fakeBox([], 409);
 
-        await expect(createAlchemyProvisioner({ box, urlForScript }).deploy(spec)).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+        await expect(driverFor(box).deploy(spec)).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
     });
 
     it("sends the destroy job to the project's box", async () => {
         const { box, calls } = fakeBox(['{"type":"result"}\n']);
 
-        await createAlchemyProvisioner({ box, urlForScript }).destroy({ alias: "app", dispatchNamespace: "lunora-preview" });
+        await driverFor(box, { dispatchNamespace: "lunora-preview" }).destroy({ alias: "app" });
 
         expect(calls).toStrictEqual([{ job: { action: "destroy", alias: "app", dispatchNamespace: "lunora-preview" }, name: "app" }]);
     });

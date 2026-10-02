@@ -16,7 +16,8 @@ import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { isLunoraError } from "@lunora/errors";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
-import type { DispatchNamespaceLike, TenantBackupBucket } from "../../backup/tenant-transport";
+import type { TenantBackupBucket } from "../../backup/tenant-transport";
+import type { TargetEnvironment } from "../../targets/registry";
 import type { ReleaseBucket } from "../release-store";
 
 /** The Lunora action context the worker injects on `env.__lunoraCtx`. */
@@ -28,6 +29,8 @@ export interface LunoraActionContext {
 
 // Must stay a `type`: an `interface` gets no implicit index signature, so it will
 // not satisfy `Record<string, unknown>` at `sendInvitationEmail`/`deliverAlert`.
+// The target drivers' own keys (`DISPATCHER`, `LUNORA_CELL`, …) come from
+// `TargetEnvironment`, so a route builds a driver straight off its env.
 export type RouterEnv = {
     /**
      * The Worker's execution context, stashed by the router's `fetch` the same
@@ -40,19 +43,11 @@ export type RouterEnv = {
      */
     __executionCtx?: ExecutionContextLike;
     __lunoraCtx?: LunoraActionContext;
-    CLOUDFLARE_ACCOUNT_ID?: string;
-    CLOUDFLARE_API_TOKEN?: string;
-    /** The production dispatch namespace — how tenant backup/restore reach a project's Worker. */
-    DISPATCHER?: DispatchNamespaceLike;
     GITHUB_APP_ID?: string;
     GITHUB_APP_PRIVATE_KEY?: string;
     GITHUB_WEBHOOK_SECRET?: string;
     /** Bearer gating the dispatcher's plan-lookup endpoint (`GET /v1/tenants/plan`). */
     LUNORA_ADMIN_TOKEN?: string;
-    LUNORA_APP_DOMAIN?: string;
-    LUNORA_CELL?: string;
-    /** The dispatch namespace this environment's `DISPATCHER` is bound to — where every tenant deploy lands. */
-    LUNORA_DISPATCH_NAMESPACE?: string;
     /** OTLP ingest base injected into tenant Workers (`LUNORA_OTLP_ENDPOINT`); telemetry is off when unset. */
     LUNORA_OTLP_ENDPOINT?: string;
     /** Shared secret the dispatch-namespace tail worker presents to `POST /v1/logs/tail`. */
@@ -69,16 +64,7 @@ export type RouterEnv = {
     TELEMETRY_PIPELINE?: PipelineBindingLike;
     /** Private R2 bucket of tenant data snapshots (docs/RESTORE.md). */
     TENANT_BACKUPS?: TenantBackupBucket;
-};
-
-/**
- * The one dispatch namespace tenants deploy into: the one this environment's
- * dispatcher is bound to. Deploying per kind (`lunora-preview`, `lunora-dev`) put
- * previews where no dispatcher routes, and staging's tenants outside `lunora-staging`.
- * Aliases are unique platform-wide (the ownership ledger), so kinds share it safely.
- */
-export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: string }): string =>
-    environment.LUNORA_DISPATCH_NAMESPACE ?? "lunora-production";
+} & TargetEnvironment;
 
 export const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 

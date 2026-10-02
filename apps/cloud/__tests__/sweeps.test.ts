@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { teardownPorts, usageRollbackPorts } from "../src/deploy/sweeps";
-import type { AnalyticsUsageReader } from "../src/metering/analytics";
 import type { ControlPlaneDatabase } from "../src/store";
+import type { UsageRow } from "../src/targets/driver";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 
 describe(teardownPorts, () => {
     const noop = { deleteRelease: () => Promise.resolve(), destroy: () => Promise.resolve() };
+    const everyTarget = (): boolean => true;
 
     it("destroys the Worker of an alias with no deployment left, once, and skips torn-down rows", async () => {
         const database = fakeControlPlaneDb({
@@ -17,12 +18,12 @@ describe(teardownPorts, () => {
             ],
         });
 
-        const pending = await teardownPorts(database, noop, 1000, "lunora-production").listPending();
+        const pending = await teardownPorts(database, noop, 1000, everyTarget).listPending();
 
         // One destroy job per dead alias; the other row only drops its stored bundle.
         expect(pending).toStrictEqual([
-            { alias: "a", destroyWorker: true, dispatchNamespace: "lunora-production", id: "d1" },
-            { alias: "a", destroyWorker: false, dispatchNamespace: "lunora-production", id: "d3" },
+            { alias: "a", destroyWorker: true, id: "d1", target: "cloudflare-wfp" },
+            { alias: "a", destroyWorker: false, id: "d3", target: "cloudflare-wfp" },
         ]);
     });
 
@@ -36,11 +37,11 @@ describe(teardownPorts, () => {
             ],
         });
 
-        const pending = await teardownPorts(database, noop, 1000, "lunora-production").listPending();
+        const pending = await teardownPorts(database, noop, 1000, everyTarget).listPending();
 
         expect(pending).toStrictEqual([
-            { alias: "app", destroyWorker: false, dispatchNamespace: "lunora-production", id: "v1" },
-            { alias: "app", destroyWorker: false, dispatchNamespace: "lunora-production", id: "v2" },
+            { alias: "app", destroyWorker: false, id: "v1", target: "cloudflare-wfp" },
+            { alias: "app", destroyWorker: false, id: "v2", target: "cloudflare-wfp" },
         ]);
     });
 
@@ -52,14 +53,14 @@ describe(teardownPorts, () => {
             ],
         });
 
-        const pending = await teardownPorts(database, noop, 1000, "lunora-production").listPending();
+        const pending = await teardownPorts(database, noop, 1000, everyTarget).listPending();
 
         expect(pending.map((row) => row.destroyWorker)).toStrictEqual([false, false]);
     });
 
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000, "lunora-production");
+        const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000, everyTarget);
 
         await ports.markTornDown("dep_1");
 
@@ -69,7 +70,7 @@ describe(teardownPorts, () => {
     it("releaseAlias deletes the ownership ledger row(s) for the alias", async () => {
         const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
         const database = fakeControlPlaneDb({ aliasOwnership: [{ _id: "ao_1", alias: "app" }] }, { delete: deleteRow });
-        const ports = teardownPorts(database, noop, 1000, "lunora-production");
+        const ports = teardownPorts(database, noop, 1000, everyTarget);
 
         await ports.releaseAlias("app");
 
@@ -78,7 +79,7 @@ describe(teardownPorts, () => {
 
     it("releaseAlias is a no-op when no ownership row exists (pre-ledger or already released)", async () => {
         const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
-        const ports = teardownPorts(fakeControlPlaneDb({ aliasOwnership: [] }, { delete: deleteRow }), noop, 1000, "lunora-production");
+        const ports = teardownPorts(fakeControlPlaneDb({ aliasOwnership: [] }, { delete: deleteRow }), noop, 1000, everyTarget);
 
         await ports.releaseAlias("ghost");
 
@@ -86,9 +87,10 @@ describe(teardownPorts, () => {
     });
 });
 
-const reader = (rows: { requests: number; scriptName: string }[]): AnalyticsUsageReader => {
-    return { readRequestUsage: () => Promise.resolve(rows) };
-};
+const reader =
+    (rows: UsageRow[]): ((sinceMs: number) => Promise<UsageRow[]>) =>
+    () =>
+        Promise.resolve(rows);
 
 describe(usageRollbackPorts, () => {
     it("resolves a script to its owning org/deployment from the deployments table", async () => {
@@ -103,11 +105,11 @@ describe(usageRollbackPorts, () => {
             ],
         });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 500 });
+        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 500, target: "cloudflare-wfp" });
 
         // Every release shares the alias's script; its usage lands on the live one.
-        expect(ports.resolveScript("a")).toStrictEqual({ deploymentId: "dep_a", organizationId: "org_a" });
-        expect(ports.resolveScript("missing")).toBeUndefined();
+        expect(ports.resolveResource("a")).toStrictEqual({ deploymentId: "dep_a", organizationId: "org_a" });
+        expect(ports.resolveResource("missing")).toBeUndefined();
         await expect(ports.getCheckpoint()).resolves.toBe(999);
     });
 
@@ -115,7 +117,7 @@ describe(usageRollbackPorts, () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
         const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1" }], deployments: [] }, { insert });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 777 });
+        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 777, target: "cloudflare-wfp" });
         await ports.record({ attribution: { deploymentId: "dep_a", organizationId: "org_a" }, quantity: 12 });
 
         expect(insert).toHaveBeenCalledWith("platformUsage", {
@@ -132,7 +134,7 @@ describe(usageRollbackPorts, () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const database = fakeControlPlaneDb({ cells: [{ _id: "cell_1", name: "default" }], deployments: [] }, { patch });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 0 });
+        const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 0, target: "cloudflare-wfp" });
         await ports.setCheckpoint(4242);
 
         expect(patch).toHaveBeenCalledWith("cell_1", { usageReadAtMs: 4242 }, "cells");
@@ -142,7 +144,7 @@ describe(usageRollbackPorts, () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const database = fakeControlPlaneDb({ cells: [], deployments: [] }, { patch });
 
-        const ports = await usageRollbackPorts(database, reader([]), { cellName: "ghost", now: 1000, periodStart: 0 });
+        const ports = await usageRollbackPorts(database, reader([]), { cellName: "ghost", now: 1000, periodStart: 0, target: "cloudflare-wfp" });
         await ports.setCheckpoint(4242);
 
         await expect(ports.getCheckpoint()).resolves.toBeUndefined();

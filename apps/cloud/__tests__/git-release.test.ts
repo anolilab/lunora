@@ -7,13 +7,16 @@ import type { DeployBackend, DeployHandlerDeps } from "../src/deploy/handler";
 import { startRelease } from "../src/deploy/handler";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
-import type { Provisioner } from "../src/provision";
+import type { TargetDriver } from "../src/targets/driver";
 import memoryReleaseStore from "./_helpers/memory-release-store";
+import { fakeDriver } from "./support/memory-driver";
+
+type Provisioner = Pick<TargetDriver, "deploy" | "destroy">;
 
 /**
  * A git build's release: routed to production or a preview by what recorded the
  * build, and run through the REAL deploy core (`startRelease`) — the same one
- * `POST /v1/deploy` runs — over fake backend/provisioner ports.
+ * `POST /v1/deploy` runs — over fake backend/driver ports.
  */
 
 const build = { buildId: "bld_1", commitSha: "abc1234", projectId: "prj_1" }; // secret-scanner:allow -- domain field name
@@ -73,10 +76,8 @@ const harness = (options: { provisioner?: Provisioner; target?: BuildReleaseTarg
     };
     const deps: DeployHandlerDeps = {
         backend,
-        cell: "cell-1",
-        dispatchNamespace: "lunora-production",
+        driverFor: () => fakeDriver(options.provisioner ?? okProvisioner),
         healthCheck: () => Promise.resolve(true),
-        provisioner: options.provisioner ?? okProvisioner,
         releases: store,
         scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) }),
     };

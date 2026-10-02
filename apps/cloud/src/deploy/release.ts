@@ -1,22 +1,21 @@
 import { LunoraError } from "@lunora/server";
 
-import type { Provisioner } from "../provision";
-import type { AssetsUpload, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
+import type { AssetsUpload, DeployKind, DeployManifest, TargetId, TenantDeploymentSpec } from "../provision-contract";
+import { DEFAULT_TARGET } from "../provision-contract";
+import type { TargetDriver } from "../targets/driver";
 import type { ReleaseStore } from "./release-store";
 import type { CellScheduler } from "./scheduler";
 
 /**
  * Releases on a project's one stable Worker.
  *
- * Every deploy and every rollback converges the same dispatch-namespace script
- * (the alias), so the project's Durable Object data survives both. A release is
- * therefore a stored payload ({@link ReleaseStore}), and "go back to release N"
- * means re-provisioning N's bundle onto the stable script — {@link reprovision}.
+ * Every deploy and every rollback converges the same tenant (the alias) on the
+ * project's target, so the project's Durable Object data survives both. A release
+ * is therefore a stored payload ({@link ReleaseStore}), and "go back to release N"
+ * means re-converging N's bundle onto the stable tenant — {@link reprovision}.
  * The deploy handler uses it to undo a release that failed its health check;
  * {@link rollbackRelease} uses it for an operator's rollback.
  */
-
-export type DeployKind = "dev" | "preview" | "production";
 
 /** What re-provisioning a stored release needs to know about its deployment row. */
 export interface ReleaseTarget {
@@ -42,12 +41,14 @@ export interface ReleaseBackend {
 
 export interface ReleaseDeps {
     backend: ReleaseBackend;
-    /** Cell hosting this deployment (§2.5). */
-    cell: string;
-    /** Map a deployment kind to the dispatch namespace it deploys into. */
-    /** This environment's one dispatch namespace — every kind deploys into it (the dispatcher binds exactly one). */
-    dispatchNamespace: string;
-    provisioner: Provisioner;
+
+    /**
+     * The driver for a target, built for this request's env
+     * (`resolveTargetDriver` in `src/targets/registry.ts`). Every converge goes
+     * through it; where the tenant lands — a cell's dispatch namespace, a box —
+     * is the driver's configuration, not the release's.
+     */
+    driverFor: (target: TargetId) => TargetDriver;
     /** Where each deployment's payload is kept for rollback. */
     releases: ReleaseStore;
 
@@ -55,22 +56,22 @@ export interface ReleaseDeps {
      * Resolve the telemetry config injected into a tenant Worker: the OTLP ingest
      * endpoint (set as a `LUNORA_OTLP_ENDPOINT` var), a scoped ingest token (set
      * as a `LUNORA_OTLP_TOKEN` secret, so a tenant's `otlpSink` ships to the
-     * cloud), and the tail-consumer service to wire. Omit — or return undefined —
+     * cloud); a resolved config also wires the driver's log source. Omit — or return undefined —
      * to deploy without telemetry (everything still works). Best-effort: a throw
      * is swallowed and the deploy proceeds untelemetered.
      */
     resolveTelemetry?: (input: { key?: string; organizationId: string }) => Promise<DeployTelemetry | undefined>;
+    /** Paces converges against the cell's API budget (§2.5). */
     scheduler: CellScheduler;
 }
 
 /** The telemetry wiring injected into a tenant deploy, when the cell resolved any. */
 export interface DeployTelemetry {
     endpoint: string;
-    tailConsumer?: string;
     token: string;
 }
 
-/** Decode the base64 bundle payload into the ArrayBuffer the provisioner uploads, or `null` if malformed. */
+/** Decode the base64 bundle payload into the ArrayBuffer the driver converges, or `null` if malformed. */
 export const decodeBundle = (encoded: string): ArrayBuffer | null => {
     try {
         const binary = atob(encoded);
@@ -98,9 +99,7 @@ export const buildDeploymentSpec = (input: {
     alias: string;
     assets: AssetsUpload | undefined;
     bundle: ArrayBuffer;
-    cell: string;
-    dispatchNamespace: string;
-    kind: string;
+    kind: DeployKind;
     manifest: DeployManifest;
     organizationId: string;
     projectId: string; // gitleaks:allow -- a field declaration; the scanner matches the Cypress project-id shape
@@ -113,11 +112,10 @@ export const buildDeploymentSpec = (input: {
         alias: input.alias,
         ...(input.assets ? { assets: input.assets } : {}),
         bundle: input.bundle,
-        cell: input.cell,
-        dispatchNamespace: input.dispatchNamespace,
+        ...(telemetry ? { collectLogs: true } : {}),
+        kind: input.kind,
         manifest: input.manifest,
         secrets: { ...input.tenantSecrets, LUNORA_ADMIN_TOKEN: input.adminToken, ...(telemetry ? { LUNORA_OTLP_TOKEN: telemetry.token } : {}) },
-        ...(telemetry?.tailConsumer ? { tailConsumers: [telemetry.tailConsumer] } : {}),
         tags: [`org:${input.organizationId}`, `project:${input.projectId}`, `env:${input.kind}`],
         ...(telemetry ? { vars: { LUNORA_OTLP_ENDPOINT: telemetry.endpoint } } : {}),
     };
@@ -199,8 +197,6 @@ export const reprovision = async (
         alias: target.alias,
         assets: release.assets,
         bundle,
-        cell: deps.cell,
-        dispatchNamespace: deps.dispatchNamespace,
         kind: target.kind,
         manifest: release.manifest,
         organizationId: target.organizationId,
@@ -209,7 +205,9 @@ export const reprovision = async (
         tenantSecrets,
     });
 
-    await deps.scheduler.run(() => deps.provisioner.deploy(spec), { priority: options.priority });
+    const driver = deps.driverFor(DEFAULT_TARGET);
+
+    await deps.scheduler.run(() => driver.deploy(spec), { priority: options.priority });
 };
 
 /**

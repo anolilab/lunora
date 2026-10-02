@@ -4,14 +4,15 @@ import type { DeployProgress } from "../src/deploy/orchestrator";
 import { destroyDeployment, runDeployment } from "../src/deploy/orchestrator";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
-import type { DestroyRef, Provisioner } from "../src/provision";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
+import type { DestroyRef, TargetDriver } from "../src/targets/driver";
+
+type Provisioner = Pick<TargetDriver, "deploy" | "destroy">;
 
 const spec: TenantDeploymentSpec = {
     alias: "org__project",
     bundle: new ArrayBuffer(8),
-    cell: "cell-1",
-    dispatchNamespace: "lunora-production",
+    kind: "production",
     manifest: { bindings: [{ binding: "DB", type: "d1" }] },
     secrets: {},
     tags: ["org:org", "project:project", "env:production"],
@@ -31,7 +32,7 @@ describe(runDeployment, () => {
             onProgress: (p) => {
                 progress.push(p);
             },
-            provisioner,
+            driver: provisioner,
             scheduler: ampleScheduler(),
         });
 
@@ -51,7 +52,7 @@ describe(runDeployment, () => {
             onProgress: (p) => {
                 progress.push(p);
             },
-            provisioner,
+            driver: provisioner,
             scheduler: ampleScheduler(),
         });
 
@@ -66,16 +67,16 @@ describe(runDeployment, () => {
             destroy: () => Promise.resolve(),
         };
 
-        const outcome = await runDeployment(spec, { provisioner, scheduler: ampleScheduler(), verify: () => Promise.resolve(false) });
+        const outcome = await runDeployment(spec, { driver: provisioner, scheduler: ampleScheduler(), verify: () => Promise.resolve(false) });
 
         expect(outcome).toStrictEqual({ error: "health check failed", provisioned: true, status: "failed" });
     });
 });
 
 describe(destroyDeployment, () => {
-    it("calls the provisioner's destroy through the scheduler", async () => {
+    it("calls the driver's destroy through the scheduler", async () => {
         const destroyed: DestroyRef[] = [];
-        const target: DestroyRef = { alias: "org__project", dispatchNamespace: "lunora-preview" };
+        const target: DestroyRef = { alias: "org__project" };
         const provisioner: Provisioner = {
             deploy: () => Promise.reject(new Error("unused")),
             destroy: (reference) => {
@@ -85,7 +86,7 @@ describe(destroyDeployment, () => {
             },
         };
 
-        await destroyDeployment(target, { provisioner, scheduler: ampleScheduler() });
+        await destroyDeployment(target, { driver: provisioner, scheduler: ampleScheduler() });
 
         expect(destroyed).toStrictEqual([target]);
     });

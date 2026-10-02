@@ -33,7 +33,7 @@ import { join, relative } from "node:path";
 import { readRelease } from "./release.mjs";
 import { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory } from "./workspace.mjs";
 
-/** Where the deploy path expects the entry module. `provision.ts` defaults `mainModule` to this. */
+/** Where the deploy path expects the entry module. The provision box defaults `mainModule` to this. */
 const ENTRY_MODULE = "index.js";
 
 /** `lunora build`'s default out-dir (`DEFAULT_OUT_DIR` in the CLI's build handler). */

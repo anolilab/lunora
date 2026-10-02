@@ -4,10 +4,14 @@ import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../src/depl
 import { handleDeployRequest } from "../src/deploy/handler";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
-import type { Provisioner } from "../src/provision";
 import type { BindingRequirement, TenantDeploymentSpec } from "../src/provision-contract";
 import readJson from "../src/read-json";
+import type { TargetDriver } from "../src/targets/driver";
 import memoryReleaseStore from "./_helpers/memory-release-store";
+import { fakeDriver } from "./support/memory-driver";
+
+/** The converge half of a target driver — what these tests fake. */
+type Provisioner = Pick<TargetDriver, "deploy" | "destroy">;
 
 const target: DeployTarget = { organizationId: "org_1", projectId: "proj_1", type: "production" };
 
@@ -29,9 +33,7 @@ const request = (key: null | string, body: unknown): Request =>
 const deps = (backend: DeployBackend, provisioner: Provisioner): DeployHandlerDeps => {
     return {
         backend,
-        cell: "cell-1",
-        dispatchNamespace: "lunora-production",
-        provisioner,
+        driverFor: () => fakeDriver(provisioner),
         releases: memoryReleaseStore().store,
         scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) }),
     };
@@ -361,8 +363,7 @@ describe("deploy manifest validation", () => {
         expect(specs[0]).toMatchObject({
             alias: "s",
             assets,
-            cell: "cell-1",
-            dispatchNamespace: "lunora-production",
+            kind: "production",
             manifest: {
                 // `resourceId` is never carried: a tenant-supplied account id means nothing in the platform account.
                 bindings: bindings.map(({ resourceId: _resourceId, ...rest }) => rest),
@@ -372,6 +373,9 @@ describe("deploy manifest validation", () => {
             tags: ["org:org_1", "project:proj_1", "env:production"],
         });
         expect(specs[0]).not.toHaveProperty("bindings");
+        // Target-neutral: where the tenant lands is the driver's configuration, not the spec's.
+        expect(specs[0]).not.toHaveProperty("cell");
+        expect(specs[0]).not.toHaveProperty("dispatchNamespace");
     });
 
     it("refuses every unsupported binding with its reason, before recording a deployment", async () => {

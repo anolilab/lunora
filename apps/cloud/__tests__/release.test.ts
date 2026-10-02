@@ -8,14 +8,17 @@ import { rollbackRelease } from "../src/deploy/release";
 import type { StoredRelease } from "../src/deploy/release-store";
 import { CellScheduler } from "../src/deploy/scheduler";
 import { TokenBucket } from "../src/deploy/token-bucket";
-import { resolveTenant } from "../src/dispatcher/route";
-import type { Provisioner } from "../src/provision";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
+import { resolveTenant } from "../src/targets/cloudflare-wfp/route";
+import type { TargetDriver } from "../src/targets/driver";
 import memoryReleaseStore from "./_helpers/memory-release-store";
+import { fakeDriver } from "./support/memory-driver";
+
+type Provisioner = Pick<TargetDriver, "deploy" | "destroy">;
 
 /**
  * The release flow on a project's ONE stable Worker (GAPS.md A1): every deploy
- * and rollback converges the same dispatch-namespace script (the alias), so its
+ * and rollback converges the same tenant (the alias) on the project's target, so its
  * Durable Object data persists; releases are stored payloads; a failed health
  * check — which runs after cutover — puts the previous release back.
  */
@@ -28,7 +31,7 @@ const PREVIOUS: StoredRelease = {
 
 const scheduler = (): CellScheduler => new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) });
 
-/** A provisioner that records every spec, with its bundle decoded. */
+/** A converge half that records every spec, with its bundle decoded. */
 const capture = (): { deployed: { bundle: string; spec: TenantDeploymentSpec }[]; provisioner: Provisioner } => {
     const deployed: { bundle: string; spec: TenantDeploymentSpec }[] = [];
 
@@ -67,12 +70,14 @@ const backendWith = (overrides: Partial<DeployBackend>): DeployBackend => {
     };
 };
 
-const deps = (backend: DeployBackend, overrides: Partial<DeployHandlerDeps> = {}): DeployHandlerDeps => {
+/** Deploy deps whose every target resolves to `provisioner` (a fresh capturing one by default). */
+const deps = (
+    backend: DeployBackend,
+    { provisioner = capture().provisioner, ...overrides }: Partial<DeployHandlerDeps> & { provisioner?: Provisioner } = {},
+): DeployHandlerDeps => {
     return {
         backend,
-        cell: "cell-1",
-        dispatchNamespace: "lunora-production",
-        provisioner: capture().provisioner,
+        driverFor: () => fakeDriver(provisioner),
         releases: memoryReleaseStore().store,
         scheduler: scheduler(),
         ...overrides,
@@ -92,8 +97,7 @@ const readLines = async (response: Response): Promise<Record<string, unknown>[]>
 const SPEC: TenantDeploymentSpec = {
     alias: "s",
     bundle: new ArrayBuffer(0),
-    cell: "c",
-    dispatchNamespace: "ns",
+    kind: "production",
     manifest: { bindings: [] },
     secrets: {},
     tags: [],
@@ -106,7 +110,7 @@ describe("orchestrator verify phase", () => {
             onProgress: (progress) => {
                 phases.push(progress.phase);
             },
-            provisioner: capture().provisioner,
+            driver: capture().provisioner,
             scheduler: scheduler(),
             verify: () => Promise.resolve(false),
         });
@@ -121,7 +125,7 @@ describe("orchestrator verify phase", () => {
             onProgress: (progress) => {
                 phases.push(progress.phase);
             },
-            provisioner: capture().provisioner,
+            driver: capture().provisioner,
             scheduler: scheduler(),
             verify: () => Promise.resolve(true),
         });
@@ -151,9 +155,9 @@ describe("handler: one stable Worker per project", () => {
             await handleDeployRequest(request({ bundle: BUNDLE, projectId: "proj_1", scriptName: "app" }), deps(backend, { provisioner, releases: store })),
         );
 
-        expect(deployed.map(({ spec }) => [spec.alias, spec.dispatchNamespace])).toStrictEqual([
-            ["app", "lunora-production"],
-            ["app", "lunora-production"],
+        expect(deployed.map(({ spec }) => [spec.alias, spec.kind])).toStrictEqual([
+            ["app", "production"],
+            ["app", "production"],
         ]);
         expect([...objects.keys()]).toStrictEqual(["releases/dep_1.json", "releases/dep_2.json"]);
         await expect(store.get("dep_2")).resolves.toMatchObject({ bundle: BUNDLE });
@@ -334,7 +338,7 @@ describe(rollbackRelease, () => {
     it("does not record the rollback when the provision fails", async () => {
         const { deps: release, rollbackDeployment } = await setup();
 
-        release.provisioner = { deploy: () => Promise.reject(new Error("box failed")), destroy: () => Promise.resolve() };
+        release.driverFor = () => fakeDriver({ deploy: () => Promise.reject(new Error("box failed")) });
 
         await expect(rollbackRelease({ deploymentId: "dep_prev", organizationId: "org_1" }, release)).rejects.toThrow("box failed");
         expect(rollbackDeployment).not.toHaveBeenCalled();

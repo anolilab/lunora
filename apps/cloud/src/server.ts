@@ -20,7 +20,6 @@ import type { BackupBucket } from "./backup/sweep";
 import { runBackupSweep } from "./backup/sweep";
 import { runTenantBackupSweep } from "./backup/tenant-sweep";
 import type { TenantBackupBucket } from "./backup/tenant-transport";
-import { tenantSender } from "./backup/tenant-transport";
 import type { CreemCreditsClientLike } from "./billing/creem-credits";
 import { createCreemCreditsLedger } from "./billing/creem-credits";
 import { reconcileAllOverages } from "./billing/overage";
@@ -31,19 +30,21 @@ import { resolveAdminToken } from "./deploy/admin-token";
 import type { ReleaseBucket } from "./deploy/release-store";
 import { createReleaseStore } from "./deploy/release-store";
 import { createDeployRouter } from "./deploy/router";
-import { dispatchNamespaceOf } from "./deploy/routes/shared";
 import { teardownPorts, usageRollbackPorts } from "./deploy/sweeps";
 import { runTeardownSweep } from "./deploy/teardown";
-import type { CronTarget } from "./fanout/cron";
+import type { CronTarget, CronTick } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
 import type { QueueRouteCandidate } from "./fanout/queue";
 import { routeQueue } from "./fanout/queue";
 import { deliverAlert } from "./mail/notify";
-import { createHttpAnalyticsReader } from "./metering/analytics";
 import { runUsageRollback } from "./metering/rollback";
-import { createAlchemyProvisioner, provisionBoxFrom } from "./provision";
+import type { TargetId } from "./provision-contract";
+import { BINDING_SUPPORT } from "./provision-contract";
 import readJson from "./read-json";
 import type { ControlPlaneDatabase } from "./store";
+import type { TargetDriver } from "./targets/driver";
+import type { TargetEnvironment } from "./targets/registry";
+import { registeredTargets, resolveTargetDriver, storedTarget, targetCanConverge } from "./targets/registry";
 import { runAlertDrain } from "./telemetry/alert-drain";
 import type { AlertDelivery } from "./telemetry/alerts";
 import { runAlertSweep } from "./telemetry/sweep";
@@ -210,8 +211,10 @@ export const ShardDO = createShardDO({
 // sites (`createMailerFromEnv`, `deliverAlert`). Those read keys this type does
 // not declare (`RESEND_API_KEY`, `SEND_EMAIL`, …) — it is the set
 // this module uses, not the full runtime env, so an undeclared var is not
-// necessarily an unused one.
-type Env = {
+// necessarily an unused one. The target drivers' keys (`DISPATCHER`, the
+// provision box, `LUNORA_CELL`, the Cloudflare credentials) come from
+// `TargetEnvironment`.
+type Env = TargetEnvironment & {
     /** Secret backing the studio's better-auth sessions. */
     AUTH_SECRET?: string;
 
@@ -224,12 +227,6 @@ type Env = {
      * token and auth session in the cell, so this bucket must never be public.
      */
     BACKUPS?: BackupBucket;
-    /** Cloudflare account hosting this cell (§2.5) — the backup/analytics REST target, forwarded to the provision box. */
-    CLOUDFLARE_ACCOUNT_ID?: string;
-    /** Scoped Cloudflare API token — REST reads here, forwarded to the provision box for provisioning. */
-    CLOUDFLARE_API_TOKEN?: string;
-    /** The provision box's Container DO namespace; absent → resource teardown is skipped. */
-    CONTAINER_PROVISION_BOX?: unknown;
 
     /**
      * The control-plane D1's own uuid, which the export REST call addresses.
@@ -243,8 +240,6 @@ type Env = {
     CREEM_WEBHOOK_SECRET?: string;
     /** Control-plane D1 — backs the `.global()` cells/organizations tables + auth. */
     DB: unknown;
-    /** Dispatch namespace — used by the cron fan-out to tick tenants (§2.4). */
-    DISPATCHER?: { get: (scriptName: string) => { fetch: (request: Request) => Promise<Response> } };
     /** Optional GitHub OAuth app for studio social sign-in. */
     GITHUB_CLIENT_ID?: string;
     GITHUB_CLIENT_SECRET?: string;
@@ -253,9 +248,6 @@ type Env = {
     GOOGLE_CLIENT_SECRET?: string;
     /** Bearer token gating the admin endpoints the studio + platform tools call. */
     LUNORA_ADMIN_TOKEN?: string;
-    /** This cell's name (`cells.name`) — keys the metering readback checkpoint. */
-    LUNORA_CELL?: string;
-    LUNORA_DISPATCH_NAMESPACE?: string;
     /** Sender address for auth (verification / reset) email; captured in dev. */
     MAIL_FROM?: string;
     /** Private R2 bucket of stored releases (`src/deploy/release-store.ts`); absent → the teardown sweep no-ops. */
@@ -270,8 +262,6 @@ type Env = {
      * every project's production data, so it must never be public.
      */
     TENANT_BACKUPS?: TenantBackupBucket;
-    /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
-    USAGE_ANALYTICS_DATASET?: string;
     /** `"development"` under `lunora dev` (set by vite.config.ts); read by the invite gate's bootstrap carve-out. */
     WORKER_ENV?: string;
 };
@@ -331,7 +321,9 @@ interface LiveDeploymentRow {
     alias?: string;
     cronSpecs?: string[];
     liveAt?: number;
+    resourceRef?: string;
     scriptName: string;
+    target?: string;
 }
 
 /** Read the live deployments (admin tokens stay in-process, never exposed over an endpoint). */
@@ -349,19 +341,21 @@ const readLiveDeployments = async (env: Env): Promise<LiveDeploymentRow[]> => {
     return page as LiveDeploymentRow[];
 };
 
+/** The handle a target driver addresses a deployment by: `resourceRef`, or the script name on rows that predate it. */
+const resourceRefOf = (row: { resourceRef?: null | string; scriptName: string }): string => row.resourceRef ?? row.scriptName;
+
 /**
  * Live deployments that declare cron expressions, shaped for the cron fan-out.
  * The stored admin token is sealed at rest (§7), so it is decrypted in-process
  * here with the master key before it becomes the tenant Bearer.
  */
-const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
-    const live = await readLiveDeployments(env);
+const readCronTargets = async (env: Env, live: ReadonlyArray<LiveDeploymentRow>): Promise<CronTarget[]> => {
     const resolved = await Promise.all(
         live.map(async (row) => {
             return {
                 adminToken: await resolveAdminToken(row, env.SECRET_ENCRYPTION_KEY),
                 cronSpecs: row.cronSpecs,
-                scriptName: row.scriptName,
+                scriptName: resourceRefOf(row),
             };
         }),
     );
@@ -383,28 +377,33 @@ const controlPlaneDatabase = (database: D1DatabaseLike): ControlPlaneDatabase =>
 /**
  * Reclaim what the lifecycle crons marked `destroyed` (§2.3 / GAPS.md A1): each
  * pruned or failed release's stored bundle, and — once an alias has no
- * deployment left — its Worker and project stack, through a destroy job on the
- * provision box. No-ops without the box or the `RELEASES` bucket (deploys are
- * refused without the bucket, so there is nothing to reclaim); the `teardownAt`
- * stamp makes the sweep crash-safe idempotent.
+ * deployment left — its tenant and resources, through the row's target driver.
+ * No-ops without the `RELEASES` bucket (deploys are refused without it, so there
+ * is nothing to reclaim); rows of a target that cannot converge here (no
+ * provision box, for `cloudflare-wfp`) stay pending. The `teardownAt` stamp
+ * makes the sweep crash-safe idempotent.
  */
 const sweepTeardown = async (env: Env): Promise<void> => {
-    if (!env.DB || !env.CONTAINER_PROVISION_BOX || !env.RELEASES) {
+    if (!env.DB || !env.RELEASES) {
         return;
     }
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
-    const provisioner = createAlchemyProvisioner({
-        box: provisionBoxFrom(env),
-        onLog: (line) => {
-            // eslint-disable-next-line no-console -- the provision box's log is only visible here, in Workers Logs
-            console.log("[teardown]", line);
-        },
-        urlForScript: (alias) => alias,
-    });
+    const onLog = (line: string): void => {
+        // eslint-disable-next-line no-console -- the driver's teardown log is only visible here, in Workers Logs
+        console.log("[teardown]", line);
+    };
 
     await runTeardownSweep(
-        teardownPorts(database, { deleteRelease: createReleaseStore(env.RELEASES).delete, destroy: provisioner.destroy }, Date.now(), dispatchNamespaceOf(env)),
+        teardownPorts(
+            database,
+            {
+                deleteRelease: createReleaseStore(env.RELEASES).delete,
+                destroy: (target, reference) => resolveTargetDriver(target, env, { onLog }).destroy(reference),
+            },
+            Date.now(),
+            (target) => targetCanConverge(target, env),
+        ),
     );
 };
 
@@ -416,26 +415,41 @@ const currentPeriodStart = (): number => {
 };
 
 /**
- * Fold Analytics-Engine tenant request counts into the `platformUsage` ledger
- * (§4) so spend caps, the usage summary, and the usage chart have data to read.
- * Delta-read off this cell's `usageReadAtMs` checkpoint (no double counting);
- * no-ops without Cloudflare credentials.
+ * Fold tenant request counts into the `platformUsage` ledger (§4) so spend caps,
+ * the usage summary, and the usage chart have data to read — for every target
+ * whose driver reads usage back (`cloudflare-wfp`: Analytics Engine, and only
+ * with account credentials configured). Delta-read off this cell's
+ * `usageReadAtMs` checkpoint (no double counting).
  */
 const sweepUsageRollback = async (env: Env): Promise<void> => {
-    if (!env.DB || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+    if (!env.DB) {
+        return;
+    }
+
+    const readers = registeredTargets().flatMap((target) => {
+        const { capabilities, usage } = resolveTargetDriver(target, env);
+
+        return capabilities.metering === "readback" && usage ? [{ target, usage }] : [];
+    });
+
+    if (readers.length === 0) {
         return;
     }
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
-    const reader = createHttpAnalyticsReader({
-        accountId: env.CLOUDFLARE_ACCOUNT_ID,
-        apiToken: env.CLOUDFLARE_API_TOKEN,
-        dataset: env.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage",
-    });
 
-    const ports = await usageRollbackPorts(database, reader, { cellName: env.LUNORA_CELL ?? "default", now: Date.now(), periodStart: currentPeriodStart() });
+    for (const { target, usage } of readers) {
+        // eslint-disable-next-line no-await-in-loop -- one readback target today; sequential keeps the checkpoint writes ordered
+        const ports = await usageRollbackPorts(database, usage, {
+            cellName: env.LUNORA_CELL ?? "default",
+            now: Date.now(),
+            periodStart: currentPeriodStart(),
+            target,
+        });
 
-    await runUsageRollback(ports);
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await runUsageRollback(ports);
+    }
 };
 
 /**
@@ -574,8 +588,9 @@ const sweepBackup = async (env: Env): Promise<void> => {
 
 /**
  * Snapshot tenants' production data to R2 and apply per-plan retention
- * (docs/RESTORE.md). No-ops without the bucket. Reaches each tenant through the
- * dispatch namespace when bound (the cron fan-out's path), else its public URL.
+ * (docs/RESTORE.md). No-ops without the bucket. Reaches each tenant through its
+ * target driver's `reach` (on `cloudflare-wfp`, the dispatch namespace when
+ * bound — the cron fan-out's path — else its public URL).
  */
 const sweepTenantBackups = async (env: Env): Promise<void> => {
     if (!env.DB || !env.TENANT_BACKUPS) {
@@ -592,9 +607,11 @@ const sweepTenantBackups = async (env: Env): Promise<void> => {
         now: Date.now(),
         senderFor: async (deployment) => {
             const adminToken = await resolveAdminToken(deployment, env.SECRET_ENCRYPTION_KEY);
+            const target = storedTarget(deployment.target);
 
-            return adminToken && deployment.url != null
-                ? tenantSender({ adminToken, scriptName: deployment.scriptName, url: deployment.url }, env.DISPATCHER)
+            // A row of a target with no driver here is skipped, not failed: nothing could reach it.
+            return adminToken && deployment.url != null && target !== undefined && registeredTargets().includes(target)
+                ? resolveTargetDriver(target, env).reach({ adminToken, resourceRef: resourceRefOf(deployment), url: deployment.url })
                 : null;
         },
     });
@@ -611,8 +628,8 @@ const sweepTenantBackups = async (env: Env): Promise<void> => {
  * match at 00/06/12/18:00 UTC and Cloudflare delivers them as two separate
  * scheduled() invocations, so a broader gate would run the usage rollback twice
  * and double-insert that window into `platformUsage` (over-billing overage). The
- * tenant cron fan-out is *not* here — it needs env.DISPATCHER and stays a
- * separate branch in scheduled().
+ * tenant cron fan-out is *not* here — it needs a driver's in-network `dispatch`
+ * and stays a separate branch in scheduled().
  */
 const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     { cron: EVERY_HOUR, run: sweepTeardown },
@@ -673,18 +690,12 @@ const drainBuildQueue = async (env: Env, context: ExecutionContextLike, target: 
     }
 };
 
-/** Tick one tenant's cron over the dispatcher, gated by its admin token. */
-const dispatchCronTick = async (
-    dispatcher: NonNullable<Env["DISPATCHER"]>,
-    tick: { adminToken: string; cron: string; scriptName: string },
-): Promise<boolean> => {
-    const response = await dispatcher.get(tick.scriptName).fetch(
-        new Request("https://tenant.internal/_lunora/scheduled", {
-            body: JSON.stringify({ cron: tick.cron }),
-            headers: { authorization: `Bearer ${tick.adminToken}`, "content-type": "application/json" },
-            method: "POST",
-        }),
-    );
+type TenantDispatch = NonNullable<TargetDriver["dispatch"]>;
+
+/** Tick one tenant's cron over its driver's in-network path, gated by its admin token. */
+const dispatchCronTick = async (dispatch: TenantDispatch, tick: CronTick): Promise<boolean> => {
+    const send = dispatch({ adminToken: tick.adminToken, resourceRef: tick.scriptName });
+    const response = await send("/_lunora/scheduled", JSON.stringify({ cron: tick.cron }), "application/json");
 
     return response.ok;
 };
@@ -698,22 +709,17 @@ const dispatchCronTick = async (
  * tenant's wrangler config declared; map it back when a tenant needs to route
  * several queues by their own names.
  */
-const dispatchQueueBatch = async (
-    dispatcher: NonNullable<Env["DISPATCHER"]>,
-    target: { adminToken: string; scriptName: string },
-    batch: QueueBatchLike,
-): Promise<string[]> => {
-    const response = await dispatcher.get(target.scriptName).fetch(
-        new Request("https://tenant.internal/_lunora/queue", {
-            body: JSON.stringify({
-                messages: batch.messages.map((message) => {
-                    return { body: message.body, id: message.id };
-                }),
-                queue: batch.queue,
+const dispatchQueueBatch = async (dispatch: TenantDispatch, target: { adminToken: string; resourceRef: string }, batch: QueueBatchLike): Promise<string[]> => {
+    const send = dispatch(target);
+    const response = await send(
+        "/_lunora/queue",
+        JSON.stringify({
+            messages: batch.messages.map((message) => {
+                return { body: message.body, id: message.id };
             }),
-            headers: { authorization: `Bearer ${target.adminToken}`, "content-type": "application/json" },
-            method: "POST",
+            queue: batch.queue,
         }),
+        "application/json",
     );
 
     if (!response.ok) {
@@ -732,32 +738,61 @@ interface QueueBatchLike {
     queue: string;
 }
 
+/**
+ * The targets whose queue consumers this Worker stands in for (`queue_consumer:
+ * "routed"` in their binding table), each with its in-network path when bound.
+ */
+const queueRoutedDispatches = (env: Env): Map<TargetId, TenantDispatch> => {
+    const dispatches = new Map<TargetId, TenantDispatch>();
+
+    for (const target of registeredTargets()) {
+        const { dispatch } = resolveTargetDriver(target, env);
+
+        if (BINDING_SUPPORT[target].queue_consumer === "routed" && dispatch) {
+            dispatches.set(target, dispatch);
+        }
+    }
+
+    return dispatches;
+};
+
 /** The live deployment that owns a per-project queue, with its admin token decrypted in-process. */
-const readQueueTarget = async (env: Env, queue: string): Promise<undefined | { adminToken: string; scriptName: string }> => {
+const readQueueTarget = async (
+    env: Env,
+    queue: string,
+    dispatches: ReadonlyMap<TargetId, TenantDispatch>,
+): Promise<undefined | { adminToken: string; dispatch: TenantDispatch; resourceRef: string }> => {
     const live = await readLiveDeployments(env);
     const target = routeQueue(
         queue,
         live.filter((row): row is LiveDeploymentRow & QueueRouteCandidate => row.alias !== undefined),
     );
+    const rowTarget = target ? storedTarget(target.target) : undefined;
+    const dispatch = rowTarget === undefined ? undefined : dispatches.get(rowTarget);
 
-    if (!target) {
+    if (!target || !dispatch) {
         return undefined;
     }
 
     const adminToken = await resolveAdminToken(target, env.SECRET_ENCRYPTION_KEY);
 
-    return adminToken ? { adminToken, scriptName: target.scriptName } : undefined;
+    return adminToken ? { adminToken, dispatch, resourceRef: resourceRefOf(target) } : undefined;
 };
 
 /**
  * The platform-owned queue consumer (§2.4). WfP tenants can't be queue
  * consumers, so the provision box attaches this Worker to every per-project
  * queue it creates. A batch comes from one queue, so it routes whole: queue name
- * → alias → the alias's live release (see `src/fanout/queue.ts`). Per the
- * tenant's reply (or a delivery failure) it retries only the failed messages.
+ * → alias → the alias's live release (see `src/fanout/queue.ts`), delivered over
+ * that release's target driver. Per the tenant's reply (or a delivery failure)
+ * it retries only the failed messages.
  */
 const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> => {
-    if (!env.DISPATCHER) {
+    const dispatches = queueRoutedDispatches(env);
+
+    // No routed target has an in-network path bound here: nothing can deliver,
+    // so the whole batch waits for one.
+    if (dispatches.size === 0) {
         batch.messages.forEach((message) => {
             message.retry();
         });
@@ -765,7 +800,7 @@ const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> 
         return;
     }
 
-    const target = await readQueueTarget(env, batch.queue);
+    const target = await readQueueTarget(env, batch.queue, dispatches);
 
     // No live release (or token) owns this queue: acked, since retrying an
     // undeliverable message would only loop until it hits the retry limit.
@@ -773,7 +808,7 @@ const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> 
 
     if (target) {
         try {
-            retry = new Set(await dispatchQueueBatch(env.DISPATCHER, target, batch));
+            retry = new Set(await dispatchQueueBatch(target.dispatch, target, batch));
         } catch {
             retry = new Set(batch.messages.map((message) => message.id));
         }
@@ -882,18 +917,33 @@ export default {
         }
 
         // Tenant cron fan-out (§2.4): the every-minute trigger ticks each tenant
-        // whose cron is due. WfP drops `triggers.crons` for namespaced workers, so
-        // this is the only path that fires their cron jobs. Special-cased (not in
-        // SCHEDULED_SWEEPS) because it needs env.DISPATCHER.
-        if (controller.cron === EVERY_MINUTE && env.DISPATCHER) {
-            const dispatcher = env.DISPATCHER;
-            const targets = await readCronTargets(env);
+        // whose cron is due, for every target that cannot fire crons itself. WfP
+        // drops `triggers.crons` for namespaced workers, so this is the only path
+        // that fires their cron jobs; a `native` target's deployments are never
+        // read here. Special-cased (not in SCHEDULED_SWEEPS) because it needs a
+        // driver's in-network `dispatch`.
+        if (controller.cron === EVERY_MINUTE) {
+            const fanOut = registeredTargets().flatMap((target) => {
+                const { capabilities, dispatch } = resolveTargetDriver(target, env);
 
-            await fanOutCron({
-                dispatch: (tick) => dispatchCronTick(dispatcher, tick),
-                now: new Date(),
-                targets,
+                return capabilities.fanout === "dispatcher" && dispatch ? [{ dispatch, target }] : [];
             });
+
+            if (fanOut.length > 0) {
+                const live = await readLiveDeployments(env);
+                const now = new Date();
+
+                for (const { dispatch, target } of fanOut) {
+                    // eslint-disable-next-line no-await-in-loop -- one fan-out target today; each fans its own ticks out concurrently
+                    const targets = await readCronTargets(
+                        env,
+                        live.filter((row) => storedTarget(row.target) === target),
+                    );
+
+                    // eslint-disable-next-line no-await-in-loop -- see above
+                    await fanOutCron({ dispatch: (tick) => dispatchCronTick(dispatch, tick), now, targets });
+                }
+            }
         }
     },
 };

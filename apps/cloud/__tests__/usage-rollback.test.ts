@@ -15,7 +15,7 @@ const ports = (overrides: Partial<UsageRollbackPorts>): UsageRollbackPorts => {
         now: NOW,
         read: () => Promise.resolve([]),
         record: () => Promise.resolve(),
-        resolveScript: () => undefined,
+        resolveResource: () => undefined,
         setCheckpoint: () => Promise.resolve(),
         ...overrides,
     };
@@ -31,9 +31,9 @@ describe(runUsageRollback, () => {
                 read: (since) => {
                     readSince = since;
 
-                    return Promise.resolve([{ requests: 5, scriptName: "s-v1" }]);
+                    return Promise.resolve([{ requests: 5, resourceRef: "s-v1" }]);
                 },
-                resolveScript: () => attribution("org_1", "dep_1"),
+                resolveResource: () => attribution("org_1", "dep_1"),
                 setCheckpoint: (ms) => {
                     checkpoint = ms;
 
@@ -71,15 +71,15 @@ describe(runUsageRollback, () => {
             ports({
                 read: () =>
                     Promise.resolve([
-                        { requests: 12, scriptName: "a-v1" },
-                        { requests: 3, scriptName: "b-v2" },
+                        { requests: 12, resourceRef: "a-v1" },
+                        { requests: 3, resourceRef: "b-v2" },
                     ]),
                 record: ({ attribution: a, quantity }) => {
                     recorded.push({ org: a.organizationId, quantity });
 
                     return Promise.resolve();
                 },
-                resolveScript: (script) => (script === "a-v1" ? attribution("org_a", "dep_a") : attribution("org_b", "dep_b")),
+                resolveResource: (resourceRef) => (resourceRef === "a-v1" ? attribution("org_a", "dep_a") : attribution("org_b", "dep_b")),
             }),
         );
 
@@ -95,10 +95,10 @@ describe(runUsageRollback, () => {
             ports({
                 read: () =>
                     Promise.resolve([
-                        { requests: 9, scriptName: "gone-v1" },
-                        { requests: 0, scriptName: "idle-v1" },
+                        { requests: 9, resourceRef: "gone-v1" },
+                        { requests: 0, resourceRef: "idle-v1" },
                     ]),
-                resolveScript: () => undefined,
+                resolveResource: () => undefined,
             }),
         );
 
@@ -112,11 +112,11 @@ describe(runUsageRollback, () => {
             ports({
                 read: () =>
                     Promise.resolve([
-                        { requests: 4, scriptName: "ok-v1" },
-                        { requests: 7, scriptName: "boom-v1" },
+                        { requests: 4, resourceRef: "ok-v1" },
+                        { requests: 7, resourceRef: "boom-v1" },
                     ]),
                 record: ({ attribution: a }) => (a.organizationId === "org_boom" ? Promise.reject(new Error("d1 write failed")) : Promise.resolve()),
-                resolveScript: (script) => (script === "ok-v1" ? attribution("org_ok", "dep_ok") : attribution("org_boom", "dep_boom")),
+                resolveResource: (resourceRef) => (resourceRef === "ok-v1" ? attribution("org_ok", "dep_ok") : attribution("org_boom", "dep_boom")),
                 setCheckpoint: (ms) => {
                     checkpoint = ms;
 

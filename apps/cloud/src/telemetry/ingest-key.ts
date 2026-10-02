@@ -1,8 +1,9 @@
 /**
  * Telemetry ingest-key provisioning for the deploy path. Resolves the config the
- * provisioner injects into a tenant Worker so its `otlpSink` ships back to this
- * cloud: the OTLP endpoint (a `LUNORA_OTLP_ENDPOINT` var), a scoped ingest token
- * (a `LUNORA_OTLP_TOKEN` secret), and the tail-consumer service.
+ * target driver injects into a tenant Worker so its `otlpSink` ships back to this
+ * cloud: the OTLP endpoint (a `LUNORA_OTLP_ENDPOINT` var) and a scoped ingest token
+ * (a `LUNORA_OTLP_TOKEN` secret). Which log source the tenant is wired to (the
+ * tail consumer, on `cloudflare-wfp`) is the target driver's business.
  *
  * Lives here — not inline in the router factory — because it is key-lifecycle +
  * crypto business logic, not HTTP wiring: one `ingest`-capability key per org,
@@ -34,7 +35,6 @@ interface IngestKeyEnv {
 /** The telemetry config injected into a tenant Worker. */
 export interface TelemetryConfig {
     endpoint: string;
-    tailConsumer?: string;
     token: string;
 }
 
@@ -85,5 +85,5 @@ export const resolveTelemetryConfig = async (
         });
     }
 
-    return { endpoint, tailConsumer: "lunora-log-tail", token: await decryptSecret(encryptionKey, cipher) };
+    return { endpoint, token: await decryptSecret(encryptionKey, cipher) };
 };
