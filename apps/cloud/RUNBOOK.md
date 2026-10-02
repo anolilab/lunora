@@ -47,6 +47,12 @@ CI=true CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… \
   npx alchemy@2.0.0-beta.79 provider cloudflare bootstrap
 ```
 
+Keep the store's URL (`https://alchemy-state-store.<subdomain>.workers.dev`) and
+its bearer token (in the account's Secrets Store): a cell that converges into
+customers' own accounts (`cloudflare-workers`) needs both as Worker secrets
+(`LUNORA_STATE_STORE_URL`, `LUNORA_STATE_STORE_TOKEN`, step 4), so that state
+stays here and never lands in a customer's account.
+
 ## 2. API tokens (Cloudflare dashboard — cannot be scripted from here)
 
 Two tokens, both scoped to this account:
@@ -88,7 +94,8 @@ App can be installed on public repositories.
 - `lunora-cloud`: `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`, `SECRET_ENCRYPTION_KEY`
   (64 hex), `CLOUDFLARE_API_TOKEN` (the cell token), `GITHUB_WEBHOOK_SECRET`,
   `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `CREEM_API_KEY`,
-  `CREEM_WEBHOOK_SECRET`, `LUNORA_TAIL_SECRET`, and the optional ones in
+  `CREEM_WEBHOOK_SECRET`, `LUNORA_TAIL_SECRET`, `LUNORA_STATE_STORE_URL` +
+  `LUNORA_STATE_STORE_TOKEN` (step 1; for `cloudflare-workers`), and the optional ones in
   [`.dev.vars.example`](./.dev.vars.example) (each documents its symptom when
   unset).
 - `lunora-dispatcher`: `CONTROL_PLANE_TOKEN` = the control plane's

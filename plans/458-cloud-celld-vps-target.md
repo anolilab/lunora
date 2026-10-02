@@ -702,6 +702,22 @@ the interface in two directions:
   staffed, `celld-vps` Phases 1–2 go first, because they need no customer
   Cloudflare account to test against.
 
+**The parallel driver landed (2026-10-02).** `cloudflare-workers` is on
+`feat/byo-cloudflare` (`MULTIPLATFORM.md` Phase 3 status). What it means here:
+
+- It changed the interface once: `TargetFleet.usage` is a `UsageReadback` of
+  scopes, each with its own `usageCheckpoints` row (the cell-wide checkpoint
+  could not serve a second readback target). `celld-vps` is untouched — its
+  fleet has no `usage` (`metering: "pushed"`) — but the change is its own
+  commit, to be split into its own PR per the first rule above.
+- Shared work it did: `projects.setTarget` (moved from
+  `boxes.setProjectTarget`, now also writing `projects.cloudflareAccountId`),
+  a third `Placement` member, the deploy-target card's account picker, and a
+  capabilities card that states each target's limitations, not only celld's.
+- It passes the same `describeTargetConformance` legs, plus the per-scope
+  readback legs, over a fake provision box and a fake GraphQL source — not yet
+  against a real account.
+
 ## 8. Risks & STOP conditions
 
 - **STOP** if Phase 1 (`TargetDriver`) has not landed. Building `celld-vps` as a

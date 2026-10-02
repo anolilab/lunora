@@ -430,7 +430,7 @@ interface below is the current one):
         dispatch?: (tenant: Pick<TenantHandle, "adminToken" | "resourceRef">) => TenantSend;
         readonly id: TargetId;
         reach: (tenant: TenantHandle) => TenantSend;
-        usage?: (sinceMs: number) => Promise<UsageRow[]>;
+        usage?: UsageReadback; // { scopes(): Promise<string[]>; read(scope, sinceMs): Promise<UsageRow[]> }
     }
     ```
 
@@ -442,7 +442,8 @@ interface below is the current one):
     limitations — is static, in `TARGETS` beside `BINDING_SUPPORT` /
     `UNSUPPORTED_REASONS` in `src/provision-contract.ts`; the deploy core
     validates a manifest against the `TargetId`'s tables, never a driver's.
-    `Placement` is `{ target: BoxTargetId; box } | { target: CellTargetId }`.
+    `Placement` is `{ target: BoxTargetId; box } | { target: AccountTargetId; account } | { target: CellTargetId }`
+    (the account member landed with Phase 3).
 
 2. `src/targets/cloudflare-wfp/` — the provision-box client and its job contract
    (was `src/provision.ts` + the job half of `provision-contract.ts`), the
@@ -504,11 +505,12 @@ Deviations from the §5.1 sketch, and why:
 - **No `route`, `logs` or `tenantUrl`.** Each had no production caller: the
   dispatcher resolves hostnames itself (`resolveTenant`), the log source is the
   WfP driver's own business, and the URL is what `deploy` answers.
-- **`usage(sinceMs)` without a cell argument**, on the fleet, and optional: a
-  fleet is built for one cell's env, and a WfP deployment without account
-  credentials has no reader. The readback checkpoint stays the cell's
-  (`cells.usageReadAtMs`); a second `readback` target needs its own before it is
-  swept.
+- **`usage` on the fleet, without a cell argument**, and optional: a fleet is
+  built for one cell's env, and a WfP deployment without account credentials
+  has no reader. _Superseded by Phase 3 (2026-10-02):_ `usage` is now a
+  `UsageReadback` of scopes, each with its own checkpoint row in
+  `usageCheckpoints` (keyed by target and scope). `cloudflare-wfp`'s one scope
+  is its cell, seeded once from the old `cells.usageReadAtMs`.
 - **Added members** the sketch did not have: `reach`, `dispatch` and
   `domains.onVerified` — each replaced a Cloudflare assumption a sweep or route
   had inlined — and the per-target `TARGETS` descriptor.
@@ -555,6 +557,90 @@ documented leak.
 
 **Exit:** the ROADMAP's BYO-Cloudflare tier ships, and the abstraction has been
 tested by a second implementation instead of by inspection.
+
+**Status: 🔨 code complete, untested against a real account (2026-10-02)** —
+`c5aa68ff6`, `89a4d4c33`, `a890e83b8`, `236fa6bc0`, `9151bda55` on
+`feat/byo-cloudflare`.
+
+What shipped:
+
+1. **Credentials.** `cloudflareAccounts` (one row per connected account per
+   org; `lunora/cloudflare-accounts.ts`). An owner/admin pastes an account id
+   and a scoped API token; `POST /v1/cloudflare-accounts` verifies it
+   (`/user/tokens/verify`, falling back to `/accounts/{id}/tokens/verify` for
+   an account-owned token), requires Workers Scripts on THIS account and a
+   workers.dev subdomain, probes D1/KV/R2/Queues/Account Analytics read-only
+   and records what answered, then seals the token with
+   `SECRET_ENCRYPTION_KEY`. Rotate (same account only) and disconnect
+   (refused while a project or an un-torn-down deployment uses it) are
+   audited; `limits.cloudflareAccounts` caps connections; the org purge
+   erases them. Token permissions: `CLOUDFLARE_TOKEN_PERMISSIONS` in
+   `src/provision-contract.ts`.
+2. **Placement.** `TARGETS["cloudflare-workers"]` is `placedOn: "account"`,
+   `fanout: "native"`, `metering: "readback"`. `projects.setTarget` (moved
+   from `boxes.setProjectTarget`) writes `projects.cloudflareAccountId`;
+   deployments copy it and qualify `resourceRef` as `<account row>/<alias>`.
+   The organization's cell still converges an account-placed project, since
+   its provision box holds the state and its sweep reads the usage.
+3. **Driver** (`src/targets/cloudflare-workers/`). The provision-box client
+   and job contract moved to `src/targets/provision-box/` and carry a
+   `ProvisionTarget`; an `account` job runs Alchemy with the job's token and
+   keeps the state in the cell's `alchemy-state-store` over HTTP (its URL and
+   bearer are control-plane secrets carried in the job), never in the
+   customer's account. The Worker carries its own crons and consumes its own
+   queues; `destroy` mirrors WfP's two-stack teardown; `platformTargets` is
+   the account's workers.dev subdomain. The fleet `reach`es the public URL
+   and has no `dispatch`.
+4. **Usage.** One scope per connected account (of this cell's organizations,
+   with Account Analytics granted), read from the GraphQL Analytics API's
+   `workersInvocationsAdaptive` (requests per `scriptName`, `datetime_gt`
+   the checkpoint). Rows carry `cloudflareAccountId` and `isBillableUsage`
+   excludes them: never on the spend cap, the overage debit or the invoice.
+5. **`POST /v1/cells`** takes `target` (cell-placed targets only) and
+   `config`. **`cells.credentialsRef` was not added:** BYO credentials are per
+   organization, not per cell, and nothing else would read it.
+6. **Studio.** A Cloudflare accounts tab (connect, verify, permissions,
+   rotate, disconnect); the deploy-target card's "Your Cloudflare account"
+   with an account picker; the capabilities card states the target's
+   limitations and refusals.
+7. **Conformance.** `describeTargetConformance` and the per-scope readback
+   legs run against the driver over a fake provision box and a fake
+   GraphQL source.
+
+Binding support (`BINDING_SUPPORT["cloudflare-workers"]`): `ai`, `assets`,
+`browser`, `durable_object`, `images` bound; `d1`, `kv`, `r2`,
+`queue_producer`, `analytics_engine` provisioned; `queue_consumer` bound (the
+Worker's own consumer, not routed). Refused, each with its reason, because the
+provision program does not create or bind them yet or the manifest lacks
+their config: `workflow`, `container`, `hyperdrive`, `vectorize`, `pipeline`,
+`stream`, `media`, `artifacts`, `vpc_network`, `vpc_service`.
+
+Platform parity: no new `ctx.*` surface and no new binding type. The engine
+host is still Cloudflare, so `PlatformCapabilities` needs no new row: a
+`cloudflare-workers` tenant runs on exactly the host a `cloudflare-wfp` one
+does, and what differs is only what the control plane provisions and meters.
+
+Deviations and what is not done:
+
+- **Token paste, not OAuth.** Cloudflare now offers OAuth for third-party
+  clients (Authorization Code, scopes named like token permissions); adopting
+  it is a follow-up that keeps the stored-credential shape.
+- **Granted permissions are probed, not read:** a token's own policies need
+  API Tokens Read, which the target does not ask for, and a read-only probe
+  cannot tell Read from Edit.
+- **The `usage` interface change** landed in this branch with every driver
+  updated, as its own commit — plan 458 §7 asks for its own PR; split it out
+  before merging if `celld-vps` is in flight.
+- **Not wired:** custom domains on the customer's zone (Workers Custom
+  Domains / Zone → Workers Routes), platform runtime logs (the tail consumer
+  lives in the platform's account), per-plan runtime limits (no dispatcher in
+  front), backups beyond the admin-API snapshot path every target shares.
+- **Never run against a real account.** The Alchemy program's `account`
+  branch (`makeHttpStateStore`, a plain `Workers.Worker` with `crons` and
+  `workersDev`, `Queues.Consumer` on a referenced queue) and the GraphQL query
+  are written from the Alchemy 2.0.0-beta.79 source and Cloudflare's docs,
+  but only the plan, the box's HTTP contract and the control plane are
+  tested.
 
 ### Phase 4 — Resource breadth (🔨)
 

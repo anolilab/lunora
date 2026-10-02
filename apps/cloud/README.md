@@ -65,11 +65,14 @@ src/
   targets/
     driver.ts        TargetDriver (one placement) + TargetFleet (every tenant of a target)
     registry.ts      placement → driver, target → fleet, built over the Worker env
-    placement.ts     a project's placement (its org's cell, or its box), and a
-                     deployment's, for the sweeps
-    cloudflare-wfp/  the Workers-for-Platforms driver: provision-box client + job
-                     contract, dispatch-namespace sender, hostname grammar,
-                     Analytics Engine writer/reader
+    placement.ts     a project's placement (its org's cell, its box, or its connected
+                     Cloudflare account), and a deployment's, for the sweeps
+    provision-box/   the Alchemy provision box's client + job contract, shared by
+                     both Cloudflare drivers
+    cloudflare-wfp/  the Workers-for-Platforms driver: dispatch-namespace sender,
+                     hostname grammar, Analytics Engine writer/reader
+    cloudflare-workers/ the bring-your-own-Cloudflare driver: a plain Worker in a
+                     connected account, token checks, GraphQL Analytics readback
     celld-vps/       the customer-box driver (plan 458): jobs over the box's session,
                      box DNS in the platform's own zone
   boxes/             customer boxes: the BoxSessionDO (session-do.ts, native RPC) and
@@ -179,19 +182,22 @@ placement — `deploy`, `destroy`, and the custom-domain hooks (`platformTargets
 `onVerified`) — and is built per placement (`resolveTargetDriver`). A
 `TargetFleet` reaches any tenant of a target — admin `reach`, the in-network
 `dispatch` the cron and queue fan-out use, and the request-count readback
-(`usage`). What a target is — placed in a cell or on a box, who fires its
-crons, how it is metered, which bindings it refuses — is static: `TARGETS`,
+(`usage`, split into scopes — one metering source each, with its own
+`usageCheckpoints` row). What a target is — placed in a cell, on a box or in
+a connected account, who fires its crons, how it is metered, which bindings it
+refuses — is static: `TARGETS`,
 `BINDING_SUPPORT` and `UNSUPPORTED_REASONS` in `src/provision-contract.ts`,
 read by the server and the studio alike. A project's target comes from its
-`target` column (absent means `cloudflare-wfp`), and a cell-placed project
-deploys only from the control plane of its organization's cell
+`target` column (absent means `cloudflare-wfp`), and a cell- or
+account-placed project deploys only from the control plane of its
+organization's cell
 (`src/targets/placement.ts`). Every driver must pass the conformance suite in
 `__tests__/support/target-conformance.ts`; ESLint fences the Cloudflare-specific
 modules so nothing else imports them.
 
-The one driver today, `cloudflare-wfp` (`src/targets/cloudflare-wfp/`),
-converges by posting a `ProvisionJob` (`box-contract.ts`) to the **provision
-box** — a trusted container declared in `lunora/containers.ts` running
+`cloudflare-wfp` (`src/targets/cloudflare-wfp/`), the managed tier,
+converges by posting a `ProvisionJob` (`src/targets/provision-box/contract.ts`)
+to the **provision box** — a trusted container declared in `lunora/containers.ts` running
 **Alchemy 2** — and reading its NDJSON reply: `log` lines go to Workers Logs,
 and exactly one `result` or `error` ends the job. `deploy` converges the
 project's resources and uploads the release into the dispatch namespace;
@@ -212,8 +218,9 @@ Secrets Store edit and Workers subdomain read for Alchemy's state store. Run
 `alchemy provider cloudflare bootstrap` once per new cell so two first deploys
 do not race to create that store (details in `containers/provision/README.md`).
 
-The second driver, `celld-vps` (`src/targets/celld-vps/`), is described under
-"Customer boxes" below.
+`cloudflare-workers` (`src/targets/cloudflare-workers/`) is bring-your-own
+Cloudflare, described under "Customer Cloudflare accounts" below; `celld-vps`
+(`src/targets/celld-vps/`) under "Customer boxes".
 
 What each binding type gets (provisioned, bound, routed or refused) is
 `BINDING_SUPPORT` in the contract, one table per target; GAPS.md has the
@@ -221,6 +228,49 @@ What each binding type gets (provisioned, bound, routed or refused) is
 routed: the box attaches this Worker as the consumer of each per-project queue,
 and `queue()` in `src/server.ts` forwards the batch to the owning project's live
 release.
+
+### Customer Cloudflare accounts (`cloudflare-workers`, MULTIPLATFORM.md Phase 3)
+
+An organization connects its own Cloudflare account (Cloudflare accounts tab →
+`POST /v1/cloudflare-accounts`) with a scoped API token, and a project set to
+"Your Cloudflare account" deploys into it as a **plain Worker** — no dispatch
+namespace — at `https://{alias}.{account subdomain}.workers.dev`.
+
+- **Credential.** The route checks the token before storing anything: it must
+  verify as active (`/user/tokens/verify`, or `/accounts/{id}/tokens/verify`
+  for an account-owned token), reach the account with Workers Scripts, and the
+  account must have a workers.dev subdomain. D1, KV, R2, Queues and Account
+  Analytics are probed with read-only calls and recorded on the row. The token
+  is then sealed with `SECRET_ENCRYPTION_KEY` like a tenant secret
+  (`cloudflareAccounts`, `lunora/cloudflare-accounts.ts`); rotate replaces it
+  for the same account only; disconnect deletes it, and is refused while a
+  project or an un-torn-down deployment still uses the account. Cloudflare's
+  OAuth for third-party clients would replace the paste — a follow-up.
+- **Token permissions** (account-scoped, least privilege, listed in
+  `CLOUDFLARE_TOKEN_PERMISSIONS`): Workers Scripts: Edit (required); D1: Edit,
+  Workers KV Storage: Edit, Workers R2 Storage: Edit, Queues: Edit as the app's
+  bindings need them; Account Analytics: Read for the usage chart. No zone
+  permission: custom routes on the customer's zone are not wired yet.
+- **Converge.** The same provision box and Alchemy program as `cloudflare-wfp`,
+  with an `account` job target carrying the account id and the unsealed token
+  (as process env to the Alchemy child, scrubbed from every log line). The
+  Worker carries its own cron triggers and consumes its own queues. Alchemy's
+  **state stays in the platform's account**: the job also carries the cell's
+  `alchemy-state-store` URL and bearer (`LUNORA_STATE_STORE_URL`,
+  `LUNORA_STATE_STORE_TOKEN`, control-plane secrets), and the box reaches it
+  over HTTP. Without them this control plane cannot converge the target, and
+  the box refuses an account job that names no store.
+- **Usage.** The hourly rollback reads each connected account's GraphQL
+  Analytics API (`workersInvocationsAdaptive`, requests per script) — one usage
+  scope, and checkpoint, per account, only for accounts of this cell's
+  organizations whose token holds Account Analytics. The rows carry
+  `cloudflareAccountId` and are shown, never billed: Cloudflare bills the
+  customer, and Lunora Cloud charges for the control plane
+  (`limits.cloudflareAccounts` caps connections per plan).
+- **Not yet:** custom domains on the customer's zone, platform runtime logs
+  (the tail consumer lives in the platform's account), per-plan runtime limits
+  (no dispatcher in front), and Workflows, containers, Hyperdrive, Vectorize,
+  Pipelines, Stream, Media and VPC bindings — each refused with its reason.
 
 ### Customer boxes (`celld-vps`, plan 458)
 

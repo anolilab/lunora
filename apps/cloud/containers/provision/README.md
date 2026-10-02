@@ -2,7 +2,8 @@
 
 The container that turns a `ProvisionJob` into Cloudflare resources, by running
 [Alchemy 2](https://alchemy.run) (`alchemy@2.0.0-beta.79`) against one cell's
-account. It replaces the hand-written REST provisioner (`src/provision.ts`,
+account (`cloudflare-wfp`) or a customer's connected account
+(`cloudflare-workers`). It replaces the hand-written REST provisioner (`src/provision.ts`,
 `src/cloudflare/api.ts`).
 
 Alchemy's engine is Node-shaped (rolldown, `fs`, a state store), so it cannot
@@ -24,10 +25,10 @@ Not a pnpm workspace member: the image installs its own lockfile.
 
 ## The contract
 
-| Route                      | Purpose                                                                                                                 |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `POST /__lunora/provision` | Body is a `ProvisionJob` (JSON, `src/targets/cloudflare-wfp/box-contract.ts`). Responds `200` NDJSON `ProvisionEvent`s. |
-| `GET /__lunora/health`     | Readiness probe, `200 ok`.                                                                                              |
+| Route                      | Purpose                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `POST /__lunora/provision` | Body is a `ProvisionJob` (JSON, `src/targets/provision-box/contract.ts`). Responds `200` NDJSON `ProvisionEvent`s. |
+| `GET /__lunora/health`     | Readiness probe, `200 ok`.                                                                                         |
 
 Responses to `POST /__lunora/provision`:
 
@@ -55,7 +56,18 @@ the same resource.
 
 ## What a job does
 
-Stage = the dispatch namespace (`lunora-production`). Two stacks per project:
+Every job names its `target` (`ProvisionTarget`):
+
+- `dispatch-namespace` (`cloudflare-wfp`) — the cell's own account, with the box's own credentials. Stage = the
+  dispatch namespace (`lunora-production`). Everything below describes this target unless it says otherwise.
+- `account` (`cloudflare-workers`) — a customer's account, with the token the job carries. Stage =
+  `account-<account id>`. The Worker is a plain Worker (no `namespace`) on the account's `workers.dev` subdomain
+  (version preview URLs off), carries the release's `crons` itself, and consumes its own queues: each consumed
+  producer queue gets a `Queues.Consumer` attached to the Worker, declared in the **worker** stack after the Worker
+  exists. No tail consumer is attached. The token reaches the Alchemy child only as `CLOUDFLARE_API_TOKEN` in its
+  env — never in the plan file — and is scrubbed from every log line like the box's own.
+
+Two stacks per project:
 
 - **`lunora-project-<alias>`** owns the per-project resources: a D1 database, KV namespace, R2 bucket
   (`forceDestroy`) or Queue per provisioned binding, named by `resourceName`; and for each producer
@@ -110,6 +122,14 @@ the account id and token: the box reads the bearer token back through a short-li
 and reaches the store at `alchemy-state-store.<account-subdomain>.workers.dev`. Local state is useless
 here (the container is ephemeral); `HttpStateStore`/`PostgresState` would need a store run elsewhere.
 
+An `account` job cannot use `Cloudflare.state()`: it runs with the CUSTOMER's credentials, so that store would be
+found — or bootstrapped — in the customer's account, and convergence state is platform state a customer must
+never be able to corrupt (`MULTIPLATFORM.md` §5.3). The program instead builds `makeHttpStateStore` over the cell's
+own store (`plan.state === "platform"`), whose URL and bearer the job carries in `target.state` (the control plane's
+`LUNORA_STATE_STORE_URL` / `LUNORA_STATE_STORE_TOKEN`) and the box hands the Alchemy child as env; `plan.mjs` refuses
+an `account` job that names no store, or one off `workers.dev`. Stacks of different accounts never collide: the
+stage names the account.
+
 The first job in a fresh cell bootstraps it (the box passes `--yes`). Two first jobs racing on a new cell
 could both try; bootstrap it once when the cell is created instead:
 
@@ -134,7 +154,8 @@ Telemetry (`otel.alchemy.run`) is disabled by env and needs no egress.
 ## Not supported, and why
 
 - **`workflow`** — Alchemy registers a Workflow with the account-level `putWorkflow`
-  (`src/Cloudflare/Workflows/Workflow.ts`), which has no dispatch-namespace variant. Refused.
+  (`src/Cloudflare/Workflows/Workflow.ts`), which has no dispatch-namespace variant, and only for an
+  Effect-native Workflow — not a prebuilt bundle's class. Refused on both targets.
 - **An assets binding not named `ASSETS`** — Alchemy always binds uploaded assets as `ASSETS`. Refused.
 - `container`, `hyperdrive`, `pipeline`, `vectorize` — refused here too, as in the deploy handler.
 
