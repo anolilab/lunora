@@ -64,13 +64,13 @@ interface DevCommandOptions {
     probeReady?: ReadinessProbe;
     /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`LUNORA_REMOTE=1` / `--remote`); DO shards stay local. */
     remote?: boolean;
-    /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
     /** Starts the celld dev session for the celld target; injected in tests. */
     startCelldSession?: typeof startCelldDevSession;
     /** Injection seam for tests — defaults to the real codegen watcher. */
     startCodegen?: typeof startCodegenWatch;
     /** Injection seam for tests — defaults to the real studio server. */
     startStudio?: typeof startStudioServer;
+    /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
     startWorker?: WorkerSpawner;
 
     /** Disable the embedded studio server. */
@@ -111,8 +111,8 @@ interface DevRemotePlan {
 
 interface DevCommandPlan {
     /**
-     * `true` when the worker is a celld dev session (`lunora dev --target
-     * celld`) rather than {@link DevCommandPlan.wrangler}'s process: services
+     * `true` when the worker is a celld dev session (a target running its own
+     * dev server) rather than {@link DevCommandPlan.wrangler}'s process: services
      * registered first, a service edit re-registering it and restarting the app.
      */
     celldSession?: true;

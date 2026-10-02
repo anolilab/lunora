@@ -738,7 +738,6 @@ describe("lunora dev", () => {
                     return {
                         // The app crashes once it is up, which ends `lunora dev` the way a worker exit does.
                         exited: Promise.resolve(1),
-                        restartService: async () => {},
                         stop: async () => {
                             stopped += 1;
                         },
@@ -774,7 +773,7 @@ describe("lunora dev", () => {
                 port: 8790,
                 projectRoot: workdir,
                 start: async () => {
-                    return { exited: new Promise<number>(() => {}), restartService: async () => {}, stop: async () => {} };
+                    return { exited: new Promise<number>(() => {}), stop: async () => {} };
                 },
             });
 

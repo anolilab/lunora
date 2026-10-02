@@ -10,24 +10,20 @@
  * only ever deployed by booting it, so a change under a service's folder
  * re-registers that service and restarts the app.
  */
-import type { ChildProcess } from "node:child_process";
-import { spawn as spawnProcess } from "node:child_process";
 import type { FSWatcher } from "node:fs";
 import { watch } from "node:fs";
-import { connect } from "node:net";
+import { createServer } from "node:net";
 import { dirname } from "node:path";
 
+import type { ServiceBindingIR } from "@lunora/codegen";
 import { readServiceBindings } from "@lunora/codegen";
 
+import type { DevProcess, DevProcessSpawner } from "../dev-process";
+import { acceptsConnection, startDevProcess } from "../dev-process";
 import { planCelldConfig, planCelldServiceConfig } from "./celld-config";
 
 /** How long one `celld dev` gets to accept connections. */
 const READY_TIMEOUT_MS = 60_000;
-
-const READY_POLL_MS = 150;
-
-/** How long a stopping `celld dev` gets before SIGKILL. */
-const STOP_ESCALATION_MS = 5000;
 
 /** Quiet period after the last service file change before the restart. */
 const RESTART_DEBOUNCE_MS = 200;
@@ -37,83 +33,54 @@ const IGNORED_SEGMENTS = new Set([".celld", ".wrangler", "node_modules"]);
 
 const PATH_SEPARATOR = /[/\\]/u;
 
-/** Spawns `celld` — injectable so tests drive the session without the binary. */
-type CelldSpawner = (args: ReadonlyArray<string>, cwd: string) => ChildProcess;
+/**
+ * Where a line came from: `celld` (the app, and the session's own notices) or
+ * `celld:<worker>`, and `stderr` for a session notice that reports a failure.
+ */
+interface CelldLineOrigin {
+    stream: "stderr" | "stdout";
+    tag: string;
+}
 
 interface CelldDevSessionOptions {
-    /** Prints one line of the session's output; `source` is `app` or the service's Worker name. */
-    log: (line: string, source: string) => void;
-    /** Port every `celld dev` of the session serves on, one at a time. */
+    /** Prints one non-empty line of the session's output. */
+    log: (line: string, origin: CelldLineOrigin) => void;
+    /** Port the app serves on. */
     port: number;
     projectRoot: string;
-    spawn?: CelldSpawner;
+    spawn?: DevProcessSpawner;
 }
 
 interface CelldDevSession {
-    /** Resolves with the exit code when the app's `celld dev` exits on its own — a crash, not a stop or restart. */
+    /**
+     * Resolves with an exit code once the app is gone without {@link CelldDevSession.stop}
+     * asking: its `celld dev` crashed, or did not come back after a restart.
+     */
     exited: Promise<number>;
-    /** Re-register the service whose Worker is `worker`, then restart the app. */
-    restartService: (worker: string) => Promise<void>;
-    /** Stop watching, then stop the app. */
+    /** Stop watching, cut short a restart in flight, then stop the app. */
     stop: () => Promise<void>;
 }
 
-/** A running `celld dev` and the handle that stops it. */
-interface Running {
-    /** Resolves when the process exits without {@link Running.stop} asking it to. */
-    crashed: Promise<number>;
-    stop: () => Promise<void>;
-}
+/** A free TCP port on the loopback, released before it is handed back. */
+const freePort = async (): Promise<number> =>
+    new Promise((resolve, reject) => {
+        const server = createServer();
 
-const defaultSpawn: CelldSpawner = (args, cwd) =>
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- `celld` is a standalone binary resolved from PATH (its install location varies); args are fixed and no shell is involved
-    spawnProcess("celld", [...args], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+            const address = server.address();
 
-/** `true` once something accepts a TCP connection on `port`. */
-const accepts = async (port: number): Promise<boolean> =>
-    new Promise((resolve) => {
-        const socket = connect({ host: "127.0.0.1", port });
-        const settle = (ready: boolean): void => {
-            socket.destroy();
-            resolve(ready);
-        };
-
-        socket.once("connect", () => {
-            settle(true);
-        });
-        socket.once("error", () => {
-            settle(false);
+            server.close(() => {
+                resolve(typeof address === "object" && address !== null ? address.port : 0);
+            });
         });
     });
-
-const pause = async (ms: number): Promise<void> =>
-    new Promise((resolve) => {
-        setTimeout(resolve, ms);
-    });
-
-/** Forward a child stream to `log`, one non-empty line at a time. */
-const pipeLines = (stream: NodeJS.ReadableStream | null, log: (line: string) => void): void => {
-    let buffered = "";
-
-    stream?.setEncoding("utf8");
-    stream?.on("data", (chunk: string) => {
-        buffered += chunk;
-
-        const lines = buffered.split("\n");
-
-        buffered = lines.pop() ?? "";
-
-        for (const line of lines.filter((entry) => entry.trim() !== "")) {
-            log(line);
-        }
-    });
-};
 
 /** Whether a changed path (relative to the watched folder) is state or output rather than source. */
 const isIgnoredChange = (file: string | null): boolean => file?.split(PATH_SEPARATOR).some((segment) => IGNORED_SEGMENTS.has(segment)) === true;
 
 /** Watch `directory`, calling `onChange` once per burst of source changes. */
-const watchSourceChanges = (directory: string, onChange: () => void): { close: () => void } => {
+const watchSourceChanges = (directory: string, onChange: () => void, onError: (error: Error) => void): { close: () => void } => {
     let timer: NodeJS.Timeout | undefined;
     const watcher: FSWatcher = watch(directory, { recursive: true }, (_event, file) => {
         if (isIgnoredChange(file)) {
@@ -123,84 +90,21 @@ const watchSourceChanges = (directory: string, onChange: () => void): { close: (
         clearTimeout(timer);
         timer = setTimeout(onChange, RESTART_DEBOUNCE_MS);
     });
-
-    return {
-        close: () => {
-            clearTimeout(timer);
-            watcher.close();
-        },
-    };
-};
-
-/** Spawn `celld dev <configPath>` and resolve once it accepts connections on `port`. */
-const startCelldDev = async (options: {
-    configPath: string;
-    cwd: string;
-    log: (line: string) => void;
-    port: number;
-    spawn: CelldSpawner;
-}): Promise<Running> => {
-    const child = options.spawn(["dev", options.configPath, "--port", String(options.port)], options.cwd);
-    let failure: Error | undefined;
-    let stopping = false;
-
-    pipeLines(child.stdout, options.log);
-    pipeLines(child.stderr, options.log);
-    child.once("error", (error: NodeJS.ErrnoException) => {
-        failure = error.code === "ENOENT" ? new Error("`celld` was not found on PATH — install it (https://celld.dev) to run the celld target") : error;
-    });
-    child.once("exit", (code) => {
-        failure ??= new Error(`celld dev exited with code ${String(code)} before it was ready`);
-    });
-
-    const crashed = new Promise<number>((resolve) => {
-        child.once("exit", (code) => {
-            if (!stopping) {
-                resolve(code ?? 1);
-            }
-        });
-    });
-
-    const stop = async (): Promise<void> => {
-        stopping = true;
-
-        if (child.exitCode !== null || child.signalCode !== null) {
-            return;
-        }
-
-        await new Promise<void>((resolve) => {
-            const escalation = setTimeout(() => {
-                child.kill("SIGKILL");
-            }, STOP_ESCALATION_MS);
-
-            child.once("exit", () => {
-                clearTimeout(escalation);
-                resolve();
-            });
-            child.kill("SIGTERM");
-        });
+    const close = (): void => {
+        clearTimeout(timer);
+        watcher.close();
     };
 
-    const deadline = Date.now() + READY_TIMEOUT_MS;
+    // Unhandled, a watcher error (the folder removed, EMFILE) would take the host down.
+    watcher.once("error", (error) => {
+        close();
+        onError(error);
+    });
 
-    while (Date.now() < deadline) {
-        if (failure !== undefined) {
-            throw failure;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- a readiness poll is sequential by definition
-        if (await accepts(options.port)) {
-            return { crashed, stop };
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- a readiness poll is sequential by definition
-        await pause(READY_POLL_MS);
-    }
-
-    await stop();
-
-    throw new Error(`celld dev did not accept connections on port ${String(options.port)} within ${String(READY_TIMEOUT_MS / 1000)}s`);
+    return { close };
 };
+
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
  * Start the session: register every service, run the app, then watch the
@@ -210,10 +114,19 @@ const startCelldDev = async (options: {
  */
 const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<CelldDevSession> => {
     const { log, port, projectRoot } = options;
-    const spawn = options.spawn ?? defaultSpawn;
+    const notice = (line: string, stream: CelldLineOrigin["stream"] = "stdout"): void => {
+        log(line, { stream, tag: "celld" });
+    };
 
-    if (await accepts(port)) {
+    if (await acceptsConnection(port)) {
         throw new Error(`port ${String(port)} is already in use — stop whatever is serving there (another dev server?), or pick another worker port`);
+    }
+
+    const bindings = readServiceBindings(projectRoot);
+
+    // Started without them, every `ctx.services` call would fail with no reason given.
+    if (bindings.error !== undefined) {
+        throw new Error(`could not read the lunora.config services: ${bindings.error}`);
     }
 
     const app = planCelldConfig(projectRoot, "dev");
@@ -222,39 +135,47 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
 
     const root = dirname(app.configPath);
     // Two keys may bind two entrypoints of one Worker: it registers once.
-    const services = [...new Map(readServiceBindings(projectRoot).services.map((service) => [service.wranglerPath, service])).values()];
+    const services = [...new Map(bindings.services.map((service) => [service.wranglerPath, service])).values()];
+    const lifetime = new AbortController();
+    // A call, not a property read: it changes across every `await` in a restart.
+    const stopping = (): boolean => lifetime.signal.aborted;
 
-    const run = async (configPath: string, source: string): Promise<Running> =>
-        startCelldDev({
-            configPath,
+    const run = async (configPath: string, tag: string, onPort: number): Promise<DevProcess> =>
+        startDevProcess({
+            args: ["dev", configPath, "--port", String(onPort)],
+            command: "celld",
             cwd: projectRoot,
-            log: (line) => {
-                log(line, source);
+            label: "celld dev",
+            notFound: "`celld` was not found on PATH — install it (https://celld.dev) to run the celld target",
+            // celld writes its banner and progress to stderr: its stream says
+            // nothing about severity, so its lines go out as plain output.
+            onLine: (line) => {
+                if (line.trim() !== "") {
+                    log(line, { stream: "stdout", tag });
+                }
             },
-            port,
-            spawn,
+            port: onPort,
+            readyTimeoutMs: READY_TIMEOUT_MS,
+            signal: lifetime.signal,
+            spawn: options.spawn,
         });
 
-    const register = async (worker: string): Promise<void> => {
-        const service = services.find((candidate) => candidate.worker === worker);
-
-        if (service === undefined) {
-            return;
-        }
-
+    // On a port of its own: booting it only records the deployment, and on the
+    // app's port it would answer the app's traffic while the app is down.
+    const register = async (service: ServiceBindingIR): Promise<void> => {
         const projected = planCelldServiceConfig(root, service.wranglerPath);
 
         projected.write();
-        log(`registering service ${service.worker} in the local dev state`, "app");
+        notice(`registering service ${service.worker} in the local dev state`);
 
-        const registration = await run(projected.configPath, service.worker);
+        const registration = await run(projected.configPath, `celld:${service.worker}`, await freePort());
 
         await registration.stop();
     };
 
     for (const service of services) {
-        // eslint-disable-next-line no-await-in-loop -- one registration at a time, on one port
-        await register(service.worker);
+        // eslint-disable-next-line no-await-in-loop -- one at a time: each writes the shared local state
+        await register(service);
     }
 
     let settleExited: (code: number) => void = () => {};
@@ -262,8 +183,8 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
         settleExited = resolve;
     });
 
-    const runApp = async (): Promise<Running> => {
-        const started = await run(app.configPath, "app");
+    const runApp = async (): Promise<DevProcess> => {
+        const started = await run(app.configPath, "celld", port);
 
         started.crashed.then(settleExited).catch(() => undefined);
 
@@ -272,57 +193,93 @@ const startCelldDevSession = async (options: CelldDevSessionOptions): Promise<Ce
 
     let running = await runApp();
 
-    const restartNow = async (worker: string): Promise<void> => {
+    const restartNow = async (service: ServiceBindingIR): Promise<void> => {
         await running.stop();
 
+        let registrationFailure: Error | undefined;
+
         try {
-            await register(worker);
-        } finally {
-            // The app comes back even when the service did not, so only the service's error surfaces.
+            await register(service);
+        } catch (error: unknown) {
+            registrationFailure = error instanceof Error ? error : new Error(String(error));
+        }
+
+        if (stopping()) {
+            return;
+        }
+
+        // The app comes back even when the service did not; when it does not, the session is over.
+        try {
             running = await runApp();
+        } catch (error: unknown) {
+            if (!stopping()) {
+                settleExited(1);
+            }
+
+            throw error;
+        }
+
+        if (registrationFailure !== undefined) {
+            throw registrationFailure;
         }
     };
 
     // Serialised: a burst of saves restarts one at a time, never two at once.
     let queue: Promise<void> = Promise.resolve();
 
-    const restartService = async (worker: string): Promise<void> => {
-        const restart = queue.then(async () => restartNow(worker));
+    const restart = (service: ServiceBindingIR): void => {
+        notice(`service ${service.worker} changed — restarting`);
 
-        queue = restart.catch(() => undefined);
-
-        await restart;
+        queue = queue
+            .then(async () => restartNow(service))
+            .catch((error: unknown) => {
+                if (!stopping()) {
+                    notice(`service ${service.worker} failed to restart: ${errorText(error)}`, "stderr");
+                }
+            });
     };
 
-    const watchers = services.map((service) =>
-        watchSourceChanges(dirname(service.wranglerPath), () => {
-            log(`service ${service.worker} changed — restarting`, "app");
-            restartService(service.worker).catch((error: unknown) => {
-                log(`service ${service.worker} failed to restart: ${error instanceof Error ? error.message : String(error)}`, "app");
-            });
-        }),
-    );
-
+    const watchers: { close: () => void }[] = [];
     const closeWatchers = (): void => {
         for (const watcher of watchers) {
             watcher.close();
         }
     };
 
+    try {
+        for (const service of services) {
+            watchers.push(
+                watchSourceChanges(
+                    dirname(service.wranglerPath),
+                    () => {
+                        restart(service);
+                    },
+                    (error) => {
+                        notice(`stopped watching service ${service.worker}: ${error.message} — restart the dev server to pick up its edits`, "stderr");
+                    },
+                ),
+            );
+        }
+    } catch (error: unknown) {
+        closeWatchers();
+        await running.stop();
+
+        throw error;
+    }
+
     // A crashed app leaves nothing to restart, and open watchers would keep the process alive.
     exited.then(closeWatchers).catch(() => undefined);
 
     return {
         exited,
-        restartService,
         stop: async () => {
+            lifetime.abort();
             closeWatchers();
-
             await queue;
             await running.stop();
         },
     };
 };
 
-export type { CelldDevSession, CelldDevSessionOptions, CelldSpawner };
+export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin };
 export { startCelldDevSession };

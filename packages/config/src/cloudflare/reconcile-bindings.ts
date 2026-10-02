@@ -70,12 +70,16 @@ interface ReconcileBindingsResult {
     /** `true` when `wrangler.jsonc` was rewritten. */
     changed: boolean;
 
+    /** What was written to the SvelteKit / Nuxt dev sidecar's own config, when anything was. */
+    devConfig?: { added: string[]; path: string; updated: string[] };
+
     /**
      * Declared containers/workflows the worker entry doesn't re-export — the
      * structured form of the corresponding `warnings` entries, for the dev error
      * overlay. Empty when every declaration is wired.
      */
     exportGaps: ExportGap[];
+
     /** Reason reconciliation was skipped, for logging. */
     reason?: string;
 
@@ -87,6 +91,7 @@ interface ReconcileBindingsResult {
     updated: string[];
     /** Non-fatal hints for capabilities that cannot be auto-provisioned. */
     warnings: string[];
+
     /** Resolved wrangler path, or `undefined` when none was found. */
     wranglerPath?: string;
 }
@@ -888,13 +893,14 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // The SvelteKit / Nuxt dev sidecar runs its own `wrangler.dev.jsonc`; its
     // worker hosts the actions, so it gets the same service bindings. Same
     // skip-when-unreadable rule as the step above.
-    if (inferred.services !== undefined && (inferred.services.length > 0 || ownedServicesRecord["dev:services"] !== undefined)) {
+    let devConfig: ReconcileBindingsResult["devConfig"];
+
+    if (inferred.services !== undefined) {
         const devStep = reconcileDevConfigServices(projectRoot, inferred.services, ownedServicesRecord);
 
-        added.push(...devStep.added);
-        updated.push(...(devStep.updated ?? []));
-        warnings.push(...(devStep.warnings ?? []));
+        warnings.push(...devStep.warnings);
         ownedServices = { ...ownedServices, ...devStep.owned };
+        devConfig = devStep.added.length > 0 || devStep.updated.length > 0 ? { added: devStep.added, path: devStep.path, updated: devStep.updated } : undefined;
     }
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
@@ -910,14 +916,13 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     if (text === original) {
         recordOwnership(false);
 
-        // `added`/`updated` can still hold the dev sidecar config's changes.
-        return { added, changed: false, exportGaps, reason: "bindings already in sync", updated, warnings, wranglerPath };
+        return { added, changed: false, devConfig, exportGaps, reason: "bindings already in sync", updated, warnings, wranglerPath };
     }
 
     writeFileSync(wranglerPath, text, "utf8");
     recordOwnership(true);
 
-    return { added, changed: true, exportGaps, updated, warnings, wranglerPath };
+    return { added, changed: true, devConfig, exportGaps, updated, warnings, wranglerPath };
 };
 
 export type { ExportGap, ReconcileBindingsResult };

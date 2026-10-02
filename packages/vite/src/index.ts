@@ -209,9 +209,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
 
     if (cloudflareOptions !== undefined) {
         plugins.push(serviceWorkersPlugin(cloudflareOptions, resolved.projectRoot));
-    }
 
-    if (cloudflareOptions !== undefined) {
         // A host with its own dev server (celld): `vite dev` runs the Worker on
         // it when it can — the Cloudflare plugin then builds only — and falls back
         // to workerd, saying why, when it can't (a Vite virtual `main`).
@@ -226,7 +224,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
 
         if (ownDevServer) {
             plugins.push(celldDevPlugin(resolved.projectRoot, onCelld), {
-                apply: (_config, env) => env.command === "serve" && !onCelld(),
+                apply: (_config, env) => env.command === "serve" && env.isPreview !== true && !onCelld(),
                 configureServer(server) {
                     server.config.logger.warn(
                         `[lunora] target "${resolved.target}": vite dev serves the worker in workerd, not on ${resolved.target} — ${celld().reason ?? "it cannot run this project"}. \`vite build\` then \`lunora deploy\` ships it to ${resolved.target}.`,

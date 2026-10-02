@@ -2,12 +2,42 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ConfigEnv, Plugin, UserConfig } from "vite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ConfigEnv, Plugin, UserConfig, ViteDevServer } from "vite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { celldDevPlugin, celldDevSupport, withoutDevWhen } from "../src/celld-dev-plugin";
 
+const { events, startCelldDevSession } = vi.hoisted(() => {
+    const log: string[] = [];
+    let started = 0;
+
+    return {
+        events: log,
+        startCelldDevSession: vi.fn<() => Promise<{ exited: Promise<number>; stop: () => Promise<void> }>>(async () => {
+            started += 1;
+
+            const id = started;
+
+            log.push(`start ${String(id)}`);
+
+            return {
+                exited: new Promise<number>(() => {}),
+                stop: async () => {
+                    log.push(`stop ${String(id)}`);
+                },
+            };
+        }),
+    };
+});
+
+vi.mock(import("@lunora/config"), async (importOriginal) => {
+    const original = await importOriginal();
+
+    return { ...original, startCelldDevSession: startCelldDevSession as unknown as typeof original.startCelldDevSession };
+});
+
 const SERVE: ConfigEnv = { command: "serve", mode: "development" };
+const PREVIEW: ConfigEnv = { command: "serve", isPreview: true, mode: "production" };
 const BUILD: ConfigEnv = { command: "build", mode: "production" };
 
 const applies = (plugin: Plugin, env: ConfigEnv): boolean => (plugin.apply as (config: UserConfig, env: ConfigEnv) => boolean)({}, env);
@@ -47,6 +77,33 @@ describe("celld dev plugin", () => {
         expect(applies(always!, SERVE)).toBe(false);
         expect(applies(devOnly!, BUILD)).toBe(false);
         expect(applies(withoutDevWhen([{ name: "cf" }], () => false)[0]!, SERVE)).toBe(true);
+    });
+
+    it("leaves vite preview to the Cloudflare plugin", () => {
+        expect.assertions(2);
+
+        expect(applies(withoutDevWhen([{ name: "cf" }], () => true)[0]!, PREVIEW)).toBe(true);
+        expect(
+            applies(
+                celldDevPlugin(root, () => true),
+                PREVIEW,
+            ),
+        ).toBe(false);
+    });
+
+    it("stops the previous session before a restarted server starts its own, which needs the same port", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "main": "src/server.ts" }\n`);
+
+        const server = (): ViteDevServer =>
+            ({ config: { logger: { error: () => {}, info: () => {}, warn: () => {} } }, httpServer: { once: () => {} } }) as unknown as ViteDevServer;
+        const configure = celldDevPlugin(root, () => true).configureServer as (server: ViteDevServer) => Promise<void>;
+
+        await configure(server());
+        await configure(server());
+
+        expect(events).toStrictEqual(["start 1", "stop 1", "start 2"]);
     });
 
     it("proxies /_lunora with the WebSocket to the wrangler dev.port, and keeps a route the project declares", () => {

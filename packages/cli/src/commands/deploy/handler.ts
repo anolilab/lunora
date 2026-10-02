@@ -165,6 +165,12 @@ const provisionBindings = async (
             logger.success(`updated bindings: ${reconciled.updated.join(", ")} → ${writtenTo}`);
         }
 
+        if (reconciled.devConfig !== undefined) {
+            const { added, path, updated } = reconciled.devConfig;
+
+            logger.success(`dev sidecar bindings: ${[...added, ...updated].join(", ")} → ${path}`);
+        }
+
         for (const warning of reconciled.warnings) {
             logger.warn(warning);
         }
@@ -602,7 +608,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
 };
 
 /** Why this run deploys no services, or `undefined` when it deploys them. */
-const serviceDeploySkipReason = (options: DeployCommandOptions, driver: DeployDriver): string | undefined => {
+const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefined => {
     if (options.skipServices === true) {
         return "--skip-services";
     }
@@ -617,7 +623,7 @@ const serviceDeploySkipReason = (options: DeployCommandOptions, driver: DeployDr
         return "--temporary deploys the app to a throwaway account";
     }
 
-    return driver.toolchain === undefined ? `target "${driver.id}" has no deploy command` : undefined;
+    return undefined;
 };
 
 /**
@@ -641,17 +647,17 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
         return undefined;
     }
 
-    const skipped = serviceDeploySkipReason(options, driver);
+    const { toolchain } = driver;
+    const skipped = toolchain === undefined ? `target "${driver.id}" has no deploy command` : serviceDeploySkipReason(options);
 
-    if (skipped !== undefined || driver.toolchain === undefined) {
+    if (skipped !== undefined || toolchain === undefined) {
         const names = services.map((service) => service.worker).join(", ");
 
-        options.logger.warn(`services not deployed (${skipped ?? "no deploy command"}): ${names} — deploy them yourself if the app calls anything new`);
+        options.logger.warn(`services not deployed (${skipped ?? ""}): ${names} — deploy them yourself if the app calls anything new`);
 
         return undefined;
     }
 
-    const { toolchain } = driver;
     const manager = detectPackageManager(cwd);
     // Two keys may bind two entrypoints of one Worker: it deploys once.
     const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
@@ -662,7 +668,10 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
 
         try {
             invocation = planToolchainInvocation(driver, directory, "deploy", (configPath) =>
-                toolchain.deploy({ configPath, dryRun: options.dryRun === true, environment: options.env }),
+                // Always an explicit config: wrangler left to discover one walks up
+                // from the service folder and can find the app's `wrangler.json`
+                // or a Vite build's `.wrangler/deploy/config.json` first.
+                toolchain.deploy({ configPath: configPath ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
             );
         } catch (error_: unknown) {
             return `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`;

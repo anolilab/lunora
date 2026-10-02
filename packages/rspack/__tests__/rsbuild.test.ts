@@ -15,8 +15,8 @@ const { celldStop, startCelldDevSession } = vi.hoisted(() => {
 
     return {
         celldStop: stop,
-        startCelldDevSession: vi.fn<() => Promise<{ restartService: () => Promise<void>; stop: () => Promise<void> }>>(async () => {
-            return { restartService: async () => {}, stop };
+        startCelldDevSession: vi.fn<() => Promise<{ exited: Promise<number>; stop: () => Promise<void> }>>(async () => {
+            return { exited: new Promise<number>(() => {}), stop };
         }),
     };
 });
@@ -24,7 +24,7 @@ const { celldStop, startCelldDevSession } = vi.hoisted(() => {
 vi.mock(import("@lunora/config"), async (importOriginal) => {
     const original = await importOriginal();
 
-    return { ...original, startCelldDevSession: startCelldDevSession as unknown as typeof original.startCelldDevSession };
+    return { ...original, startCelldDevSession };
 });
 
 /** The actionable message a missing wrangler must produce. */

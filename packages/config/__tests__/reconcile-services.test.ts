@@ -178,4 +178,15 @@ describe("reconcileServices", () => {
 
         expect(devConfig()["services"]).toBeUndefined();
     });
+
+    it("keeps the dev sidecar's ownership while wrangler.dev.jsonc cannot be read", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "wrangler.dev.jsonc"), `{ "name": "app-dev", "main": "lunora/server.ts" }\n`, "utf8");
+        reconcileWranglerBindings(root, inferred([parser]));
+        writeFileSync(join(root, "wrangler.dev.jsonc"), `{ "name": `, "utf8");
+        reconcileWranglerBindings(root, inferred([parser]));
+
+        expect((lunora() as { services: Record<string, unknown> }).services["dev:services"]).toStrictEqual(["SERVICE_PARSER"]);
+    });
 });

@@ -25,10 +25,11 @@
  * ("Wrangler configuration") and `docs/services/containers.md`.
  */
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { findWranglerFile, readWranglerJsonc } from "../cloudflare/wrangler-path";
 import type { ProjectedConfig, ProjectionPurpose } from "../deploy-driver";
+import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
 
 /** The projected config's filename. */
 const CELLD_CONFIG_FILE = ".celld.wrangler.json";
@@ -503,19 +504,32 @@ const planCelldConfig = (projectRoot: string, purpose: ProjectionPurpose): Proje
  * records its deployment where the app's `celld dev` looks it up. celld also
  * requires every path a config names to sit inside its directory, so the
  * service has to live inside `root`.
+ *
+ * celld reads `.dev.vars` from the projection's directory — the app's — so the
+ * service's own `.dev.vars` is inlined as `vars`; a key the app's `.dev.vars`
+ * also defines still takes the app's value under `celld dev`.
  */
 const planCelldServiceConfig = (root: string, wranglerPath: string): ProjectedConfig => {
     const own = readConfig(wranglerPath);
     const serviceDirectory = dirname(wranglerPath);
     const { config, dropped } = projectCelldConfig(own);
     const name = typeof own["name"] === "string" ? own["name"] : "service";
+    const offset = relative(root, serviceDirectory);
 
-    if (relative(root, serviceDirectory).startsWith("..")) {
+    // On Windows a service on another drive comes back absolute, not `..`-prefixed.
+    if (offset === ".." || offset.startsWith(`..${sep}`) || isAbsolute(offset)) {
         throw new Error(`service ${name} (${serviceDirectory}) must sit inside ${root} — celld dev runs it from a config beside the app's`);
     }
 
-    const configPath = join(root, `.celld.service.${name}.wrangler.json`);
-    const contents = `${JSON.stringify(markDevelopment(rebasePaths(config, serviceDirectory, root)), undefined, 4)}\n`;
+    const devVariablesPath = join(serviceDirectory, DEV_VARS_FILE);
+    const devVariables = existsSync(devVariablesPath)
+        ? Object.fromEntries(parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).map(({ key, value }) => [key, value]))
+        : {};
+    const rebased = rebaseMigrationDirectories(rebasePaths(config, serviceDirectory, root), own, serviceDirectory, root);
+    const variables = isRecord(rebased["vars"]) ? rebased["vars"] : {};
+    // The Worker name is the service's own config; keep it from steering the file name.
+    const configPath = join(root, `.celld.service.${name.replaceAll(/[^\w.-]/gu, "-")}.wrangler.json`);
+    const contents = `${JSON.stringify(markDevelopment({ ...rebased, vars: { ...variables, ...devVariables } }), undefined, 4)}\n`;
 
     return {
         configPath,

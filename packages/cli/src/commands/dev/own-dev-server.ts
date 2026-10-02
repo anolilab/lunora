@@ -10,6 +10,7 @@ import { detectPackageManager, toolchainExecArgs } from "../../util/detect-packa
 import type { Logger } from "../../util/logger";
 import type { DevFlavor } from "./lifecycle";
 import { codegenRequested } from "./lifecycle";
+import { emitChildLine } from "./supervise";
 import type { DevCommandOptions, DevCommandPlan, WorkerProcess } from "./types";
 
 /**
@@ -44,8 +45,8 @@ const resolveTargetFlavor = (target: string, detected: DevFlavor, logger: Logger
 const startCelldWorker = async (inputs: { logger: Logger; port: number; projectRoot: string; start?: typeof startCelldDevSession }): Promise<WorkerProcess> => {
     const { logger } = inputs;
     const session = await (inputs.start ?? startCelldDevSession)({
-        log: (line, source) => {
-            logger.info(source === "app" ? `[celld] ${line}` : `[celld:${source}] ${line}`);
+        log: (line, { stream, tag }) => {
+            emitChildLine(line, tag, stream, logger);
         },
         port: inputs.port,
         projectRoot: inputs.projectRoot,
@@ -118,8 +119,9 @@ const planOwnDevServer = (inputs: {
         ipv4LoopbackForced: false,
         remote: { bindings: [], cleanup: () => {}, enabled: false },
         runsCodegenWatch: codegenRequested(options),
-        // celld runs as a dev session (services registered first, restarted on edit), not a bare `celld dev`.
-        ...(driver.id === "celld" ? { celldSession: true } : {}),
+        // Run as a dev session (services registered first, restarted on edit);
+        // `wrangler` below then only names the worker in the banner.
+        celldSession: true,
         studioEnabled: options.studio !== false,
         studioPort,
         workerEnabled: options.worker !== false,

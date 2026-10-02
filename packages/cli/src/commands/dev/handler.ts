@@ -46,7 +46,7 @@ import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
 import type { Teardown } from "./supervise";
 import { defaultWorkerSpawner, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt } from "./supervise";
-import type { DevCommandOptions, DevCommandPlan, WorkerProcess } from "./types";
+import type { DevCommandOptions, DevCommandPlan, WorkerProcess, WorkerSpawner } from "./types";
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
 const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined, manifestPath: string | undefined): void => {
@@ -379,11 +379,17 @@ const startBanner = (plan: DevCommandPlan): string =>
  * The worker the plan runs — a celld dev session, else the planned dev server
  * process — or `undefined`, logged, when it cannot start.
  */
-const startPlannedWorker = async (plan: DevCommandPlan, options: DevCommandOptions, cwd: string, logger: Logger): Promise<WorkerProcess | undefined> => {
+const startPlannedWorker = async (
+    plan: DevCommandPlan,
+    options: DevCommandOptions,
+    spawn: WorkerSpawner,
+    cwd: string,
+    logger: Logger,
+): Promise<WorkerProcess | undefined> => {
     try {
         return plan.celldSession === true
             ? await startCelldWorker({ logger, port: plan.workerPort, projectRoot: cwd, start: options.startCelldSession })
-            : (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
+            : spawn(plan.wrangler, logger);
     } catch (error: unknown) {
         logger.error(`could not start the worker: ${error instanceof Error ? error.message : String(error)}`);
 
@@ -595,8 +601,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         ensureSidecarGenerated(plan, options, cwd, logger, target);
 
         const spawn = options.startWorker ?? defaultWorkerSpawner;
-
-        const worker = await startPlannedWorker(plan, options, cwd, logger);
+        const worker = await startPlannedWorker(plan, options, spawn, cwd, logger);
 
         if (worker === undefined) {
             return { code: EXIT_CODE.FAILURE, plan };

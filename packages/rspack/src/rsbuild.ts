@@ -243,13 +243,22 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
                 // with each `lunora.config` service registered into its local
                 // state first, behind the same proxy.
                 if (targetRunsOwnDevServer(resolved.target)) {
-                    celld = await startCelldDevSession({
-                        log: (line, source) => {
-                            printWorkerLine(source === "app" ? line : `[${source}] ${line}`);
+                    const session = await startCelldDevSession({
+                        // A structured Lunora event formats as under wrangler; a service's own line names it.
+                        log: (line, { tag }) => {
+                            printWorkerLine(tag === "celld" ? line : `[${tag}] ${line}`);
                         },
                         port,
                         projectRoot: resolved.projectRoot,
                     });
+
+                    celld = session;
+                    const reportExit = (code: number): void => {
+                        // eslint-disable-next-line no-console -- dev-server notice; the proxy now points at nothing
+                        console.error(lunoraLine(`the worker on celld exited (code ${String(code)}) — restart \`rsbuild dev\` to bring it back`));
+                    };
+
+                    session.exited.then(reportExit).catch(() => undefined);
 
                     return;
                 }

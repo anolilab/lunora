@@ -300,8 +300,10 @@ describe("lunora deploy", () => {
                 const result = await runDeployCommand({ cwd: workdir, dryRun: true, env: "production", logger, secretLister: noRemoteSecrets, spawner });
 
                 expect(result.code).toBe(0);
-                // Run from the service's folder, so wrangler reads the service's own config.
-                expect(calls[0]?.descriptor.args.join(" ")).toContain("wrangler deploy --env production --dry-run");
+                // An explicit --config: discovery would walk up to the app's config.
+                expect(calls[0]?.descriptor.args.join(" ")).toContain(
+                    `wrangler deploy --config ${join(workdir, "services", "parser", "wrangler.jsonc")} --env production --dry-run`,
+                );
                 expect(calls.at(-1)?.descriptor.args.join(" ")).not.toContain("services/parser");
                 // From the service's folder, so its own build command runs there.
                 expect(calls[0]?.descriptor.cwd).toBe(join(workdir, "services", "parser"));
@@ -354,7 +356,9 @@ describe("lunora deploy", () => {
                 const { logger } = silentLogger();
                 const failed = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner: failing });
 
-                expect(failed.error).toMatch(/^service parser \(parser\): .*wrangler deploy --dry-run exited 1 — stopping before the app$/u);
+                expect(failed.error).toMatch(
+                    /^service parser \(parser\): .*wrangler deploy --config \S+services\/parser\/wrangler\.jsonc --dry-run exited 1 — stopping before the app$/u,
+                );
             });
 
             it.each([

@@ -378,6 +378,20 @@ describe(planCelldServiceConfig, () => {
         });
     });
 
+    it("inlines the service's own .dev.vars, which celld would read from the app's folder instead, and keeps the name out of the path", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "services", "parser", "wrangler.jsonc"), `{ "name": "../parser", "main": "src/index.ts", "vars": { "MODE": "config" } }\n`);
+        writeFileSync(join(root, "services", "parser", ".dev.vars"), `MODE=local\nTOKEN=secret\n`);
+
+        const projected = planCelldServiceConfig(root, join(root, "services", "parser", "wrangler.jsonc"));
+
+        projected.write();
+
+        expect(projected.configPath).toBe(join(root, ".celld.service...-parser.wrangler.json"));
+        expect(JSON.parse(readFileSync(projected.configPath, "utf8")).vars).toStrictEqual({ MODE: "local", TOKEN: "secret", WORKER_ENV: "development" });
+    });
+
     it("refuses a service outside the app's folder, which celld cannot resolve from there", () => {
         expect.assertions(1);
 

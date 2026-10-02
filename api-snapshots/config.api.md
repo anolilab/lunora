@@ -182,7 +182,6 @@ const COMPOSED_WORKER_ENTRY = "src/worker.ts";
 ```ts
 interface CelldDevSession {
     exited: Promise<number>;
-    restartService: (worker: string) => Promise<void>;
     stop: () => Promise<void>;
 }
 ```
@@ -191,17 +190,20 @@ interface CelldDevSession {
 
 ```ts
 interface CelldDevSessionOptions {
-    log: (line: string, source: string) => void;
+    log: (line: string, origin: CelldLineOrigin) => void;
     port: number;
     projectRoot: string;
-    spawn?: CelldSpawner;
+    spawn?: DevProcessSpawner;
 }
 ```
 
-### `CelldSpawner` (type)
+### `CelldLineOrigin` (interface)
 
 ```ts
-type CelldSpawner = (args: ReadonlyArray<string>, cwd: string) => ChildProcess;
+interface CelldLineOrigin {
+    stream: "stderr" | "stdout";
+    tag: string;
+}
 ```
 
 ### `ClaimDevServerStateResult` (interface)
@@ -347,7 +349,6 @@ interface DeployDriver {
     readonly id: string;
     readonly name: string;
     readonly projectConfig?: (projectRoot: string, purpose: ProjectionPurpose) => ProjectedConfig;
-    readonly projectServiceConfig?: (root: string, wranglerPath: string) => ProjectedConfig;
     readonly toolchain?: DriverToolchain;
 }
 ```
@@ -392,6 +393,42 @@ interface DestructivePolicyEdit {
 
 ```ts
 type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid" | "vinext";
+```
+
+### `DevProcess` (interface)
+
+```ts
+interface DevProcess {
+    crashed: Promise<number>;
+    stop: () => Promise<void>;
+}
+```
+
+### `DevProcessOptions` (interface)
+
+```ts
+interface DevProcessOptions {
+    args: ReadonlyArray<string>;
+    command: string;
+    cwd: string;
+    label: string;
+    notFound: string;
+    onLine: (line: string, stream: "stderr" | "stdout") => void;
+    port: number;
+    readyTimeoutMs: number;
+    shell?: boolean;
+    signal?: AbortSignal;
+    spawn?: DevProcessSpawner;
+}
+```
+
+### `DevProcessSpawner` (type)
+
+```ts
+type DevProcessSpawner = (command: string, args: ReadonlyArray<string>, options: {
+    cwd: string;
+    shell: boolean;
+}) => ChildProcess;
 ```
 
 ### `DevRequest` (interface)
@@ -1095,6 +1132,12 @@ interface WireRlsEdit {
 
 Re-exported from `@lunora/codegen` — signature tracked at its source.
 
+### `acceptsConnection` (const)
+
+```ts
+const acceptsConnection: (port: number) => Promise<boolean>;
+```
+
 ### `addArgsFor` (const)
 
 ```ts
@@ -1622,6 +1665,12 @@ const secretsForPackages: (packageNames: ReadonlyArray<string>) => SecretEntry[]
 const startCelldDevSession: (options: CelldDevSessionOptions) => Promise<CelldDevSession>;
 ```
 
+### `startDevProcess` (const)
+
+```ts
+const startDevProcess: (options: DevProcessOptions) => Promise<DevProcess>;
+```
+
 ### `streamContainerLogs` (const)
 
 ```ts
@@ -1914,6 +1963,11 @@ interface ReadWranglerResult<T> {
 interface ReconcileBindingsResult {
     added: string[];
     changed: boolean;
+    devConfig?: {
+        added: string[];
+        path: string;
+        updated: string[];
+    };
     exportGaps: ExportGap[];
     reason?: string;
     updated: string[];

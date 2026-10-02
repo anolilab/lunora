@@ -159,12 +159,22 @@ const reconcileDevConfigServices = (
     projectRoot: string,
     declared: ReadonlyArray<ServiceBindingIR>,
     recorded: OwnedServices,
-): Pick<ReconcileStep, "added" | "updated" | "warnings"> & { owned: OwnedServices } => {
+): { added: string[]; owned: OwnedServices; path: string; updated: string[]; warnings: string[] } => {
     const path = join(projectRoot, DEV_CONFIG);
+    const unchanged = { added: [], path, updated: [], warnings: [] };
+
+    // Nothing declared and nothing of ours to remove.
+    if (declared.length === 0 && recorded[DEV_CONFIG_SCOPE] === undefined) {
+        return { ...unchanged, owned: {} };
+    }
+
     const { parsed, text } = existsSync(path) ? readWranglerJsonc<ServicesShape>(path) : { parsed: undefined, text: "" };
 
     if (parsed === undefined) {
-        return { added: [], owned: {}, updated: [], warnings: [] };
+        // Absent or unreadable: nothing to reconcile, but what was owned stays owned for the next pass.
+        const previous = recorded[DEV_CONFIG_SCOPE];
+
+        return { ...unchanged, owned: previous === undefined || previous.length === 0 ? {} : { [DEV_CONFIG_SCOPE]: previous } };
     }
 
     const step = reconcileScope(text, ["services"], parsed.services ?? [], declared, new Set(recorded[DEV_CONFIG_SCOPE]), undefined);
@@ -173,13 +183,12 @@ const reconcileDevConfigServices = (
         writeFileSync(path, step.text, "utf8");
     }
 
-    const label = (entry: string): string => `${DEV_CONFIG} ${entry}`;
-
     return {
-        added: step.added.map((entry) => label(entry)),
+        added: step.added,
         owned: step.owned.length > 0 ? { [DEV_CONFIG_SCOPE]: step.owned } : {},
-        updated: (step.updated ?? []).map((entry) => label(entry)),
-        warnings: (step.warnings ?? []).map((entry) => label(entry)),
+        path,
+        updated: step.updated ?? [],
+        warnings: (step.warnings ?? []).map((entry) => `${DEV_CONFIG} ${entry}`),
     };
 };
 

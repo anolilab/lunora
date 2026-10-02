@@ -286,9 +286,12 @@ deploy` does not deploy services there either.
   deploys each service through the target's driver (celld: from a projection of
   the service's config). Every dev server — `lunora dev --target celld`,
   `vite dev` and Rsbuild — runs one `startCelldDevSession` (`@lunora/config`):
-  it boots each service once from a projection beside the app's
-  (`DeployDriver.projectServiceConfig`), starts the app, and on a change under
-  a service's folder re-registers it and restarts the app. Under Vite the
+  it boots each service once, on a port of its own, from a projection beside
+  the app's (`planCelldServiceConfig`, the service's `.dev.vars` inlined as
+  `vars`), starts the app, and on a change under a service's folder
+  re-registers it and restarts the app. A Vite restart hands the port from the
+  old session to the new one, and an app crash ends `lunora dev` and is
+  reported under Vite and Rsbuild. Under Vite the
   Cloudflare plugin builds only and `/_lunora` is proxied to the session. A
   Vite virtual `main` keeps the workerd fallback (celld dev cannot resolve it).
   Verified live on `examples/services` with all three dev servers, including

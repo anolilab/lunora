@@ -5,10 +5,10 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CelldSpawner } from "../src/celld/dev-session";
 import { startCelldDevSession } from "../src/celld/dev-session";
+import type { DevProcessSpawner } from "../src/dev-process";
 
 /** A free TCP port, released before it is handed back. */
 const freePort = async (): Promise<number> =>
@@ -24,24 +24,43 @@ const freePort = async (): Promise<number> =>
         });
     });
 
+interface Started {
+    child: ChildProcess;
+    config: string;
+    port: number;
+}
+
 /**
  * A stand-in for `celld dev`: it listens on the `--port` it is given until it
- * is killed, recording the config it was started with.
+ * is killed, recording what it was started with. `refuse` makes the matching
+ * start exit at once instead.
  */
 const fakeCelld =
-    (started: string[], children: ChildProcess[] = []): CelldSpawner =>
-    (args) => {
+    (started: Started[], refuse: (start: number) => boolean = () => false): DevProcessSpawner =>
+    (_command, args) => {
         // An unspawned ChildProcess: the real class, so `once`/`emit`/`exitCode` behave as the session expects.
         const child = new ChildProcess();
         const port = Number(args[args.indexOf("--port") + 1]);
+        const exit = (code: number): void => {
+            Object.defineProperty(child, "exitCode", { value: code });
+            child.emit("exit", code);
+        };
+
+        started.push({ child, config: basename(String(args[1])), port });
+
+        if (refuse(started.length)) {
+            setImmediate(() => {
+                exit(1);
+            });
+
+            return child;
+        }
+
         const server: Server = createServer().listen(port, "127.0.0.1");
 
-        started.push(basename(String(args[1])));
-        children.push(child);
         child.kill = () => {
             server.close(() => {
-                Object.defineProperty(child, "exitCode", { value: 0 });
-                child.emit("exit", 0);
+                exit(0);
             });
 
             return true;
@@ -57,7 +76,7 @@ describe("celld dev session", () => {
         root = mkdtempSync(join(tmpdir(), "lunora-celld-session-"));
         writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "main": "src/server.ts" }\n`);
         writeFileSync(join(root, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
-        mkdirSync(join(root, "services", "parser"), { recursive: true });
+        mkdirSync(join(root, "services", "parser", "src"), { recursive: true });
         writeFileSync(join(root, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`);
     });
 
@@ -65,32 +84,63 @@ describe("celld dev session", () => {
         rmSync(root, { force: true, recursive: true });
     });
 
-    it("registers each service before the app, and re-registers it before restarting the app", async () => {
-        expect.assertions(2);
+    it("registers each service on a port of its own before the app, and again before restarting the app on a service edit", async () => {
+        expect.assertions(3);
 
-        const started: string[] = [];
-        const session = await startCelldDevSession({ log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
+        const started: Started[] = [];
+        const port = await freePort();
+        const session = await startCelldDevSession({ log: () => {}, port, projectRoot: root, spawn: fakeCelld(started) });
 
-        expect(started).toStrictEqual([".celld.service.parser.wrangler.json", ".celld.wrangler.json"]);
+        expect(started.map(({ config }) => config)).toStrictEqual([".celld.service.parser.wrangler.json", ".celld.wrangler.json"]);
+        // Never on the app's port, which would answer the app's traffic while it is down.
+        expect(started[0]?.port).not.toBe(port);
 
-        await session.restartService("parser");
+        writeFileSync(join(root, "services", "parser", "src", "index.ts"), "export default {};\n");
+
+        await vi.waitFor(
+            () => {
+                if (started.length < 4) {
+                    throw new Error("not restarted yet");
+                }
+            },
+            { timeout: 5000 },
+        );
+
+        expect(started.slice(2).map(({ config }) => config)).toStrictEqual([".celld.service.parser.wrangler.json", ".celld.wrangler.json"]);
+
         await session.stop();
-
-        expect(started.slice(2)).toStrictEqual([".celld.service.parser.wrangler.json", ".celld.wrangler.json"]);
     });
 
     it("reports an app that exits on its own, but not one it stops", async () => {
         expect.assertions(1);
 
-        const children: ChildProcess[] = [];
-        const session = await startCelldDevSession({ log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld([], children) });
+        const started: Started[] = [];
+        const session = await startCelldDevSession({ log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
 
-        // children[0] registered the service and was stopped; children[1] is the app.
-        children[1]!.emit("exit", 3);
+        // started[0] registered the service and was stopped; started[1] is the app.
+        started[1]?.child.emit("exit", 3);
 
         await expect(session.exited).resolves.toBe(3);
 
-        children[1]!.kill();
+        started[1]?.child.kill();
+    });
+
+    it("ends the session when the app does not come back after a restart", async () => {
+        expect.assertions(1);
+
+        const session = await startCelldDevSession({
+            log: () => {},
+            port: await freePort(),
+            projectRoot: root,
+            // Start 4 is the app coming back after the re-registration.
+            spawn: fakeCelld([], (start) => start === 4),
+        });
+
+        writeFileSync(join(root, "services", "parser", "src", "index.ts"), "export default {};\n");
+
+        await expect(session.exited).resolves.toBe(1);
+
+        await session.stop();
     });
 
     it("refuses a port something else already holds", async () => {
@@ -102,5 +152,15 @@ describe("celld dev session", () => {
         await expect(startCelldDevSession({ log: () => {}, port, projectRoot: root, spawn: fakeCelld([]) })).rejects.toThrow(/already in use/u);
 
         holder.close();
+    });
+
+    it("refuses to start without the services lunora.config declares", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/missing" } } };\n`);
+
+        await expect(startCelldDevSession({ log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld([]) })).rejects.toThrow(
+            /could not read the lunora\.config services/u,
+        );
     });
 });
