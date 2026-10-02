@@ -868,6 +868,70 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("observability sampling", () => {
+        const wranglerWith = (extra: Record<string, unknown>): string => JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), ...extra }, null, 4);
+
+        const samplingFinding = (result: Awaited<ReturnType<typeof runDoctor>>) =>
+            result.findings.find((finding) => finding.code === "observability-full-sampling");
+
+        it("informs about the pricing when the block is absent (the reconciled default samples everything)", async () => {
+            expect.assertions(5);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const finding = samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.level).toBe("info");
+            expect(finding?.message).toContain("logs (top level)");
+            expect(finding?.message).toContain("2026-12-01");
+            expect(finding?.message).toContain("0.5 GB/day");
+            expect(finding?.fix).toContain("under observability.traces for traces");
+        });
+
+        it("names traces too when they are enabled at the default rate", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: true, head_sampling_rate: 1, traces: { enabled: true } } }));
+
+            const finding = samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.message).toContain("logs + traces (top level)");
+        });
+
+        it("is quiet once both rates are lowered", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: true, head_sampling_rate: 0.1, traces: { enabled: true, head_sampling_rate: 0.05 } } }));
+
+            expect(samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+
+        it("is quiet when observability is disabled", async () => {
+            expect.assertions(1);
+
+            seed(workdir, wranglerWith({ observability: { enabled: false } }));
+
+            expect(samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+
+        it("names an env whose own block samples everything", async () => {
+            expect.assertions(2);
+
+            seed(
+                workdir,
+                wranglerWith({
+                    env: { production: { observability: { enabled: true, logs: { head_sampling_rate: 1 } } }, staging: {} },
+                    observability: { enabled: true, head_sampling_rate: 0.2 },
+                }),
+            );
+
+            const finding = samplingFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }));
+
+            expect(finding?.message).toContain("logs (env.production)");
+            expect(finding?.message).not.toContain("top level");
+        });
+    });
+
     /**
      * The codes are the machine-readable contract, so adding or renaming one has
      * to be a deliberate act rather than a side effect of editing a check. The
