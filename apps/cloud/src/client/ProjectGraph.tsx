@@ -6,6 +6,10 @@ import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
 
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { cn } from "@/lib/utils";
+
+import type { TargetId } from "../provision-contract";
+import { bindingRefusal } from "./target-capabilities";
 
 interface Binding {
     name: string;
@@ -108,7 +112,15 @@ const colorFor = (type: string): string => TYPE_COLOR[type] ?? "#64748b";
 const documentationFor = (type: string): string => TYPE_DOCS[type] ?? "https://developers.cloudflare.com/workers/runtime-apis/bindings/";
 const accessSnippet = (binding: Binding): string => (ACCESS[binding.type] ?? ((name: string) => `const value = env.${name};`))(binding.name, binding.target);
 
-type BindingNodeType = Node<{ binding: Binding }, "binding">;
+/** A binding as the graph draws it: with the reason the project's target refuses it, when it does. */
+// A type alias, not an interface: React Flow's node data must be assignable to
+// `Record<string, unknown>`, and only an alias carries the implicit index signature.
+type GraphBinding = {
+    binding: Binding;
+    refusal?: string;
+};
+
+type BindingNodeType = Node<GraphBinding, "binding">;
 type WorkerNodeType = Node<{ label: string }, "worker">;
 
 /** The project's Worker — the graph's single source node. */
@@ -122,7 +134,12 @@ const WorkerNode = ({ data }: NodeProps<WorkerNodeType>): ReactElement => (
 
 /** A single bound resource — click to open its detail sheet. */
 const BindingNode = ({ data }: NodeProps<BindingNodeType>): ReactElement => (
-    <div className="flex min-w-44 cursor-pointer flex-col gap-0.5 rounded-md border border-border bg-card px-3 py-2 transition-colors hover:border-foreground/40">
+    <div
+        className={cn(
+            "flex min-w-44 cursor-pointer flex-col gap-0.5 rounded-md border border-border bg-card px-3 py-2 transition-colors hover:border-foreground/40",
+            data.refusal !== undefined && "border-dashed border-destructive/50 opacity-70",
+        )}
+    >
         <Handle position={Position.Left} style={{ background: "var(--muted-foreground)" }} type="target" />
         <span className="flex items-center gap-1.5 font-mono text-[10px] tracking-[0.06em] text-muted-foreground uppercase">
             <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: colorFor(data.binding.type) }} />
@@ -130,51 +147,58 @@ const BindingNode = ({ data }: NodeProps<BindingNodeType>): ReactElement => (
         </span>
         <span className="text-sm font-medium">{data.binding.name}</span>
         {data.binding.target ? <span className="truncate font-mono text-xs text-muted-foreground">{data.binding.target}</span> : null}
+        {data.refusal === undefined ? null : <span className="text-xs text-destructive">Unavailable on this target</span>}
     </div>
 );
 
 const NODE_TYPES: NodeTypes = { binding: BindingNode, worker: WorkerNode };
 
 /** The detail panel for a clicked binding — description, how to use it, and docs. */
-const BindingSheet = ({ binding, onClose }: { binding: Binding | null; onClose: () => void }): ReactElement => (
+const BindingSheet = ({ onClose, selected }: { onClose: () => void; selected: GraphBinding | null }): ReactElement => (
     <Sheet
         onOpenChange={(next) => {
             if (!next) {
                 onClose();
             }
         }}
-        open={binding !== null}
+        open={selected !== null}
     >
         <SheetContent className="w-full gap-0 sm:max-w-md" side="right">
-            {binding ? (
+            {selected ? (
                 <>
                     <SheetHeader>
                         <span className="flex items-center gap-1.5 font-mono text-[11px] tracking-[0.07em] text-muted-foreground uppercase">
-                            <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: colorFor(binding.type) }} />
-                            {TYPE_LABEL[binding.type] ?? binding.type}
+                            <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: colorFor(selected.binding.type) }} />
+                            {TYPE_LABEL[selected.binding.type] ?? selected.binding.type}
                         </span>
-                        <SheetTitle className="font-mono">{binding.name}</SheetTitle>
-                        <SheetDescription>{TYPE_DESC[binding.type] ?? "A Cloudflare Worker binding."}</SheetDescription>
+                        <SheetTitle className="font-mono">{selected.binding.name}</SheetTitle>
+                        <SheetDescription>{TYPE_DESC[selected.binding.type] ?? "A Cloudflare Worker binding."}</SheetDescription>
                     </SheetHeader>
 
                     <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-2">
                         <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2.5 text-sm">
                             <dt className="font-mono text-[10px] tracking-[0.09em] text-muted-foreground uppercase">Variable</dt>
-                            <dd className="font-mono">env.{binding.name}</dd>
-                            {binding.target ? (
+                            <dd className="font-mono">env.{selected.binding.name}</dd>
+                            {selected.binding.target ? (
                                 <>
                                     <dt className="font-mono text-[10px] tracking-[0.09em] text-muted-foreground uppercase">Resource</dt>
-                                    <dd className="truncate font-mono">{binding.target}</dd>
+                                    <dd className="truncate font-mono">{selected.binding.target}</dd>
                                 </>
                             ) : null}
                             <dt className="font-mono text-[10px] tracking-[0.09em] text-muted-foreground uppercase">Kind</dt>
-                            <dd>{TYPE_LABEL[binding.type] ?? binding.type}</dd>
+                            <dd>{TYPE_LABEL[selected.binding.type] ?? selected.binding.type}</dd>
                         </dl>
+
+                        {selected.refusal === undefined ? null : (
+                            <p className="m-0 rounded-md border border-destructive/40 p-3 text-sm" role="note">
+                                <span className="font-medium">Unavailable on this project&apos;s target:</span> {selected.refusal}.
+                            </p>
+                        )}
 
                         <div className="grid gap-1.5">
                             <span className="font-mono text-[10px] tracking-[0.09em] text-muted-foreground uppercase">Access in your Worker</span>
                             <pre className="overflow-x-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed">
-                                {accessSnippet(binding)}
+                                {accessSnippet(selected.binding)}
                             </pre>
                         </div>
                     </div>
@@ -182,11 +206,11 @@ const BindingSheet = ({ binding, onClose }: { binding: Binding | null; onClose: 
                     <SheetFooter className="border-t">
                         <a
                             className="inline-flex w-fit items-center gap-1.5 text-sm font-medium underline-offset-2 hover:underline"
-                            href={documentationFor(binding.type)}
+                            href={documentationFor(selected.binding.type)}
                             rel="noreferrer"
                             target="_blank"
                         >
-                            {TYPE_LABEL[binding.type] ?? binding.type} docs on Cloudflare
+                            {TYPE_LABEL[selected.binding.type] ?? selected.binding.type} docs on Cloudflare
                             <HugeiconsIcon className="size-3.5" icon={ArrowUpRight01Icon} strokeWidth={2} />
                         </a>
                     </SheetFooter>
@@ -201,9 +225,12 @@ const BindingSheet = ({ binding, onClose }: { binding: Binding | null; onClose: 
  * left with an edge to every connected resource (D1, KV, R2, queues, Durable
  * Objects, services, AI, …). Click any resource to open a detail sheet with what
  * it is, how to use it, and a link into the Cloudflare docs.
+ *
+ * A binding the project's `target` refuses (plan 458 W9) is drawn dashed and
+ * marked unavailable, and its sheet says why, in the deploy contract's own words.
  */
-export const ProjectGraph = ({ bindings, projectName }: { bindings: Binding[]; projectName: string }): ReactElement => {
-    const [selected, setSelected] = useState<Binding | null>(null);
+export const ProjectGraph = ({ bindings, projectName, target }: { bindings: Binding[]; projectName: string; target: TargetId }): ReactElement => {
+    const [selected, setSelected] = useState<GraphBinding | null>(null);
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: React Flow re-seeds its internal node store whenever the `nodes` array is a new reference, so a fresh one per render re-lays-out the diagram and drops the selection
     const nodes = useMemo<Node[]>(() => {
@@ -212,15 +239,17 @@ export const ProjectGraph = ({ bindings, projectName }: { bindings: Binding[]; p
         return [
             { data: { label: projectName }, id: "worker", position: { x: 0, y: (rows - 1) * 44 }, type: "worker" },
             ...bindings.map((binding, index) => {
+                const refusal = bindingRefusal(target, binding.type);
+
                 return {
-                    data: { binding },
+                    data: refusal === undefined ? { binding } : { binding, refusal },
                     id: `binding-${String(index)}`,
                     position: { x: 280 + (index % 2) * 230, y: Math.floor(index / 2) * 88 },
                     type: "binding",
                 };
             }),
         ];
-    }, [bindings, projectName]);
+    }, [bindings, projectName, target]);
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: same React Flow store as `nodes` above
     const edges = useMemo<Edge[]>(
@@ -251,7 +280,7 @@ export const ProjectGraph = ({ bindings, projectName }: { bindings: Binding[]; p
                     nodeTypes={NODE_TYPES}
                     onNodeClick={(_event, node) => {
                         if (node.type === "binding") {
-                            setSelected((node.data as { binding: Binding }).binding);
+                            setSelected(node.data as GraphBinding);
                         }
                     }}
                     panOnScroll={false}
@@ -263,10 +292,10 @@ export const ProjectGraph = ({ bindings, projectName }: { bindings: Binding[]; p
                 </ReactFlow>
             </div>
             <BindingSheet
-                binding={selected}
                 onClose={() => {
                     setSelected(null);
                 }}
+                selected={selected}
             />
         </>
     );

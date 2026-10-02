@@ -10,6 +10,7 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Input } from "@/components/ui/input";
 
 import { api } from "../../lunora/_generated/api.js";
+import { DEFAULT_TARGET } from "../provision-contract";
 import { DeploymentsSection } from "./DeploymentsSection";
 import type { GitProvider } from "./ImportProjectDialog";
 import { ImportProjectDialog } from "./ImportProjectDialog";
@@ -112,6 +113,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
 
         return (
             <DeploymentsSection
+                boxId={project?.boxId}
                 githubRepo={project?.githubRepo}
                 gitProvider={gitProviderOf(project?.githubRepo)}
                 onBack={() => {
@@ -122,6 +124,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                 projectId={activeProject}
                 projectName={project?.name ?? "Project"}
                 rootDirectory={project?.rootDirectory}
+                target={project?.target ?? DEFAULT_TARGET}
                 watchPaths={project?.watchPaths}
             />
         );

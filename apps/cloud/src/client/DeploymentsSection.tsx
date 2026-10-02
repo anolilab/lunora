@@ -11,7 +11,6 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ReturnOf } from "@lunora/client";
 import { useQuery } from "@lunora/react";
-import { ClientOnly } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -21,16 +20,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { TargetId } from "../provision-contract";
 import { BackupsSection } from "./BackupsSection";
 import { BuildSettingsCard } from "./BuildSettingsCard";
 import { DeleteProjectCard } from "./DeleteProjectCard";
 import { formatDateTime, formatTime } from "./format";
 import { PreviewProtectionCard } from "./PreviewProtectionCard";
 import { ProjectGraph } from "./ProjectGraph";
-import { StatusBadge } from "./section-ui";
+import { ProjectTargetCard } from "./ProjectTargetCard";
+import { RelativeTime, StatusBadge } from "./section-ui";
+import { TargetCapabilitiesCard } from "./TargetCapabilitiesCard";
 import type { OrgId, ProjectId } from "./types";
 
 interface DeploymentsSectionProps {
+    /** The box a `celld-vps` project deploys to. */
+    boxId?: string;
     githubRepo?: string;
     gitProvider?: string;
     onBack: () => void;
@@ -40,6 +44,8 @@ interface DeploymentsSectionProps {
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     projectName: string;
     rootDirectory?: string;
+    /** Where the project deploys; gates what the view offers (plan 458 W9). */
+    target: TargetId;
     watchPaths?: string[];
 }
 
@@ -73,50 +79,6 @@ const statusMeta = (status: string): { dot: string; label: string; tone: StatusT
  */
 const elapsedFor = (deployment: Deployment): number =>
     deployment.status === "live" || deployment.status === "superseded" ? deployment.updatedAt - deployment.createdAt : Date.now() - deployment.createdAt;
-
-/**
- * Render an age like "3s ago" against the wall clock — CLIENT-ONLY by nature.
- *
- * This route server-renders. Reading the clock during render meant the server
- * produced one label and the browser produced another a round trip later, which
- * is a hydration mismatch — and precisely for the rows that matter, since only a
- * recent deployment is close enough to the present for the two to disagree. An
- * hour-old row rendered "1h ago" on both sides and hid the problem.
- *
- * Callers pair this with {@link RelativeTime}, which renders an absolute
- * timestamp on the server pass and swaps to the relative label on the client.
- */
-const relativeTime = (ms: number): string => {
-    const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-
-    if (seconds < 60) {
-        return `${String(seconds)}s ago`;
-    }
-
-    const minutes = Math.floor(seconds / 60);
-
-    if (minutes < 60) {
-        return `${String(minutes)}m ago`;
-    }
-
-    const hours = Math.floor(minutes / 60);
-
-    if (hours < 24) {
-        return `${String(hours)}h ago`;
-    }
-
-    return `${String(Math.floor(hours / 24))}d ago`;
-};
-
-/**
- * A timestamp that is absolute on the server and relative in the browser.
- *
- * `ClientOnly` renders the fallback during SSR and on the first client pass, so
- * both sides agree on markup; the relative label appears once hydration is done.
- * The fallback is the real timestamp rather than a blank, so a reader with
- * JavaScript still off sees when the deployment was created.
- */
-const RelativeTime = ({ at }: { at: number }): ReactElement => <ClientOnly fallback={<>{formatDateTime(at)}</>}>{relativeTime(at)}</ClientOnly>;
 
 const formatDuration = (ms: number): string => {
     const seconds = Math.max(0, Math.round(ms / 1000));
@@ -521,6 +483,7 @@ const requestRollback = async (deploymentId: string, organizationId: OrgId): Pro
 };
 
 export const DeploymentsSection = ({
+    boxId,
     gitProvider,
     githubRepo,
     onBack,
@@ -529,6 +492,7 @@ export const DeploymentsSection = ({
     projectId,
     projectName,
     rootDirectory,
+    target,
     watchPaths,
 }: DeploymentsSectionProps): ReactElement => {
     const deployments = useQuery(api.deployments.listByProject, { organizationId, projectId });
@@ -553,6 +517,15 @@ export const DeploymentsSection = ({
         />
     );
 
+    // Where it deploys, and what that target cannot give it — before the first
+    // deploy too, since the target is chosen before anything is deployed.
+    const targetSettings = (
+        <>
+            <ProjectTargetCard boxId={boxId} key={`${target}|${boxId ?? ""}`} organizationId={organizationId} projectId={projectId} target={target} />
+            <TargetCapabilitiesCard target={target} />
+        </>
+    );
+
     const header = (
         <div className="flex items-center gap-3">
             <Button onClick={onBack} size="sm" variant="ghost">
@@ -573,6 +546,7 @@ export const DeploymentsSection = ({
                     </CardContent>
                 </Card>
                 {buildSettings}
+                {targetSettings}
             </div>
         );
     }
@@ -589,17 +563,20 @@ export const DeploymentsSection = ({
                 <Card>
                     <CardHeader>
                         <CardTitle>Bindings</CardTitle>
-                        <CardDescription>Cloudflare resources this deployment connects to, from its wrangler config.</CardDescription>
+                        <CardDescription>
+                            {target === "cloudflare-wfp" ? "Cloudflare resources" : "Resources"} this deployment connects to, from its wrangler config.
+                        </CardDescription>
                     </CardHeader>
                     <CardContent>
-                        <ProjectGraph bindings={active.bindings} projectName={projectName} />
+                        <ProjectGraph bindings={active.bindings} projectName={projectName} target={target} />
                     </CardContent>
                 </Card>
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
             {buildSettings}
+            {targetSettings}
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
-            <BackupsSection organizationId={organizationId} projectId={projectId} />
+            <BackupsSection organizationId={organizationId} projectId={projectId} target={target} />
             <DeleteProjectCard onDeleted={onBack} organizationId={organizationId} projectId={projectId} projectName={projectName} />
             {rollbackError ? (
                 <p className="text-sm text-destructive" role="alert">

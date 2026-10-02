@@ -1,15 +1,18 @@
 import { SquareLockPasswordIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { ClientOnly } from "@tanstack/react-router";
 import type { ComponentProps, ReactElement, ReactNode } from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
 import { captureEvent } from "./analytics";
+import { formatDateTime, formatRelativeTime } from "./format";
 import { rowClassName } from "./section-styles";
 import { useScreen } from "./tabs";
 
@@ -139,3 +142,53 @@ export const Upsell = ({ children, title }: { children: ReactNode; title: string
         </CardContent>
     </Card>
 );
+
+/**
+ * A timestamp that is absolute on the server and relative in the browser.
+ *
+ * `ClientOnly` renders the fallback during SSR and on the first client pass, so
+ * both sides agree on markup; the relative label ({@link formatRelativeTime})
+ * appears once hydration is done. The fallback is the real timestamp rather than
+ * a blank, so a reader with JavaScript still off sees when it happened.
+ */
+export const RelativeTime = ({ at }: { at: number }): ReactElement => <ClientOnly fallback={<>{formatDateTime(at)}</>}>{formatRelativeTime(at)}</ClientOnly>;
+
+/**
+ * Copy a literal (a command, a token) to the clipboard. The label flips to
+ * "Copied" — announced through a live region — or to "Copy failed" where the
+ * clipboard is unavailable (an insecure origin, a denied permission), so the
+ * operator knows to select the text by hand.
+ */
+export const CopyButton = ({ label = "Copy", value }: { label?: string; value: string }): ReactElement => {
+    const [state, setState] = useState<"failed" | "copied" | "idle">("idle");
+
+    let text = label;
+
+    if (state === "copied") {
+        text = "Copied";
+    } else if (state === "failed") {
+        text = "Copy failed";
+    }
+
+    return (
+        <Button
+            onClick={() => {
+                void (async () => {
+                    try {
+                        // Inside the try: `navigator.clipboard` is undefined on an insecure
+                        // origin, and reading through it throws rather than rejecting.
+                        await navigator.clipboard.writeText(value);
+                        setState("copied");
+                    } catch {
+                        setState("failed");
+                    }
+                })();
+            }}
+            size="sm"
+            type="button"
+            variant="outline"
+        >
+            <span aria-live="polite">{text}</span>
+        </Button>
+    );
+};

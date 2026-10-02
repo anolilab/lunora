@@ -141,3 +141,36 @@ export const countryName = (code: string): string => {
         return code;
     }
 };
+
+/**
+ * An age like "3s ago" against the wall clock — CLIENT-ONLY by nature.
+ *
+ * The studio server-renders. Reading the clock during render means the server
+ * produces one label and the browser another a round trip later, which is a
+ * hydration mismatch — and precisely for the rows that matter, since only a
+ * recent timestamp is close enough to the present for the two to disagree.
+ *
+ * Callers pair this with `RelativeTime` (`section-ui.tsx`), which renders an
+ * absolute timestamp on the server pass and swaps to this label on the client.
+ */
+export const formatRelativeTime = (epochMs: number, now: number = Date.now()): string => {
+    const seconds = Math.max(0, Math.floor((now - epochMs) / 1000));
+
+    if (seconds < 60) {
+        return `${String(seconds)}s ago`;
+    }
+
+    const minutes = Math.floor(seconds / 60);
+
+    if (minutes < 60) {
+        return `${String(minutes)}m ago`;
+    }
+
+    const hours = Math.floor(minutes / 60);
+
+    if (hours < 24) {
+        return `${String(hours)}h ago`;
+    }
+
+    return `${String(Math.floor(hours / 24))}d ago`;
+};

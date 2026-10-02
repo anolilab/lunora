@@ -9,3 +9,4 @@ export type MemberId = Id<"members">;
 export type DeployKeyId = Id<"deployKeys">;
 export type InvitationId = Id<"invitations">;
 export type SecretId = Id<"secrets">;
+export type BoxId = Id<"boxes">;

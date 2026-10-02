@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { TargetId } from "../provision-contract";
 import { formatBytes, formatDateTime, formatNumber } from "./format";
 import { FormError, StatusBadge } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
@@ -76,7 +77,7 @@ const describeRow = (row: BackupRow): string => {
  * Someone expecting a rewind would otherwise read "restored" as a promise the
  * platform does not keep.
  */
-export const BackupsSection = ({ organizationId, projectId }: { organizationId: OrgId; projectId: ProjectId }): ReactElement => {
+export const BackupsSection = ({ organizationId, projectId, target }: { organizationId: OrgId; projectId: ProjectId; target: TargetId }): ReactElement => {
     // `undefined` while loading and after an identity switch — every read below guards it.
     const rows = useQuery(api.tenant_backups.list, { organizationId, projectId });
     const [busy, setBusy] = useState(false);
@@ -108,6 +109,9 @@ export const BackupsSection = ({ organizationId, projectId }: { organizationId: 
                     Production data is snapshotted daily and kept per your plan. Restoring a snapshot brings back rows deleted since it was taken; rows that
                     still exist keep their current values and newer rows are left alone. A snapshot of the current data is taken first. Files in storage buckets
                     are not included.
+                    {target === "celld-vps"
+                        ? " On your own server these snapshots are the recovery tier: celld keeps no point-in-time history, so you cannot rewind to an arbitrary moment."
+                        : null}
                 </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
@@ -138,11 +142,11 @@ export const BackupsSection = ({ organizationId, projectId }: { organizationId: 
                             <Button
                                 disabled={busy}
                                 onClick={() => {
-                                    const target = confirming;
+                                    const snapshot = confirming;
 
                                     setConfirming(null);
                                     run(async () => {
-                                        const response = await post("/v1/backups/restore", { backupId: target._id, organizationId });
+                                        const response = await post("/v1/backups/restore", { backupId: snapshot._id, organizationId });
 
                                         return response.status === 207
                                             ? "Restore was partial — some data could not be written. Run it again."
