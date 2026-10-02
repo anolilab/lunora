@@ -604,3 +604,221 @@ Re-exported from `@lunora/hostd` — signature tracked in that section.
 ### `requestSigningPayload` (const)
 
 Re-exported from `@lunora/hostd` — signature tracked in that section.
+
+## `@lunora/hostd/release`
+
+### `HOSTD_RELEASE_KEY_PLACEHOLDER` (const)
+
+```ts
+const HOSTD_RELEASE_KEY_PLACEHOLDER = "PLACEHOLDER-NOT-A-KEY";
+```
+
+### `HOSTD_RELEASE_PLATFORMS` (const)
+
+```ts
+const HOSTD_RELEASE_PLATFORMS: readonly [
+    "linux-arm64",
+    "linux-x64"
+];
+```
+
+### `HOSTD_RELEASE_SCHEMA` (const)
+
+```ts
+const HOSTD_RELEASE_SCHEMA = 1;
+```
+
+### `HOSTD_RELEASE_SIGNING_DOMAIN` (const)
+
+```ts
+const HOSTD_RELEASE_SIGNING_DOMAIN = "lunora-hostd-release:v1";
+```
+
+### `HOSTD_TRUSTED_RELEASE_KEYS` (const)
+
+```ts
+const HOSTD_TRUSTED_RELEASE_KEYS: Readonly<Record<string, string>>;
+```
+
+### `HostdReleaseArtifact` (interface)
+
+```ts
+interface HostdReleaseArtifact {
+    compression?: "gzip";
+    platform: HostdReleasePlatform;
+    sha256: string;
+    size: number;
+    url: string;
+}
+```
+
+### `HostdReleaseCaddy` (interface)
+
+```ts
+interface HostdReleaseCaddy extends HostdReleaseComponent {
+    modules: string[];
+}
+```
+
+### `HostdReleaseComponent` (interface)
+
+```ts
+interface HostdReleaseComponent {
+    artifacts: HostdReleaseArtifact[];
+    version: string;
+}
+```
+
+### `HostdReleaseEnvelope` (interface)
+
+```ts
+interface HostdReleaseEnvelope {
+    keyId: string;
+    manifest: HostdReleaseManifest;
+    signature: string;
+}
+```
+
+### `HostdReleaseManifest` (interface)
+
+```ts
+interface HostdReleaseManifest {
+    caddy: HostdReleaseCaddy;
+    celld: HostdReleaseComponent;
+    createdAt: string;
+    hostd: HostdReleaseComponent;
+    releaseId: string;
+    schema: typeof HOSTD_RELEASE_SCHEMA;
+}
+```
+
+### `HostdReleasePlatform` (type)
+
+```ts
+type HostdReleasePlatform = (typeof HOSTD_RELEASE_PLATFORMS)[number];
+```
+
+### `ReleaseValidationError` (interface)
+
+```ts
+interface ReleaseValidationError {
+    message: string;
+    path: string;
+}
+```
+
+### `ReleaseValidationResult` (type)
+
+```ts
+type ReleaseValidationResult<T> = {
+    error: ReleaseValidationError;
+    ok: false;
+} | {
+    ok: true;
+    value: T;
+};
+```
+
+### `canonicalManifestBytes` (const)
+
+```ts
+const canonicalManifestBytes: (manifest: HostdReleaseManifest) => Uint8Array;
+```
+
+### `releaseSigningPayload` (const)
+
+```ts
+const releaseSigningPayload: (manifest: HostdReleaseManifest) => Uint8Array;
+```
+
+### `validateReleaseEnvelope` (const)
+
+```ts
+const validateReleaseEnvelope: (value: unknown) => ReleaseValidationResult<HostdReleaseEnvelope>;
+```
+
+### `validateReleaseManifest` (const)
+
+```ts
+const validateReleaseManifest: (value: unknown) => ReleaseValidationResult<HostdReleaseManifest>;
+```
+
+## `@lunora/hostd/release/verify`
+
+### `ArtifactVerifyErrorCode` (type)
+
+```ts
+type ArtifactVerifyErrorCode = "HASH_MISMATCH" | "INVALID_EXPECTATION" | "READ_FAILED" | "SIZE_MISMATCH";
+```
+
+### `ArtifactVerifyResult` (type)
+
+```ts
+type ArtifactVerifyResult = {
+    error: {
+        code: ArtifactVerifyErrorCode;
+        message: string;
+    };
+    ok: false;
+} | {
+    ok: true;
+};
+```
+
+### `ReleaseVerifyError` (interface)
+
+```ts
+interface ReleaseVerifyError {
+    code: ReleaseVerifyErrorCode;
+    message: string;
+    path?: string;
+}
+```
+
+### `ReleaseVerifyErrorCode` (type)
+
+```ts
+type ReleaseVerifyErrorCode = "BAD_SIGNATURE" | "INVALID_ENVELOPE" | "INVALID_TRUSTED_KEY" | "PLACEHOLDER_KEY" | "UNKNOWN_KEY";
+```
+
+### `ReleaseVerifyResult` (type)
+
+```ts
+type ReleaseVerifyResult = {
+    error: ReleaseVerifyError;
+    ok: false;
+} | {
+    manifest: HostdReleaseManifest;
+    ok: true;
+};
+```
+
+### `TrustedReleaseKey` (type)
+
+```ts
+type TrustedReleaseKey = string | Uint8Array;
+```
+
+### `releaseKeyId` (const)
+
+```ts
+const releaseKeyId: (key: KeyObject | TrustedReleaseKey) => string;
+```
+
+### `signReleaseManifest` (const)
+
+```ts
+const signReleaseManifest: (manifest: HostdReleaseManifest, privateKey: KeyObject | string) => HostdReleaseEnvelope;
+```
+
+### `verifyArtifact` (const)
+
+```ts
+const verifyArtifact: (source: string | Uint8Array, expectedSha256: string, expectedSize: number) => Promise<ArtifactVerifyResult>;
+```
+
+### `verifyReleaseManifest` (const)
+
+```ts
+const verifyReleaseManifest: (envelope: unknown, trustedKeys: Readonly<Record<string, TrustedReleaseKey>>) => ReleaseVerifyResult;
+```

@@ -236,6 +236,9 @@ catalogs:
     "babel-plugin-react-compiler": 1.0.0
     "babel-preset-solid": ^1.9.15
     esbuild: ^0.28.2
+    # Injects the SEA blob into a copy of `node` for `apps/hostd`'s single
+    # executable (scripts/build-sea.mjs). Node 24 has no built-in `--build-sea`.
+    postject: 1.0.0-alpha.6
     "rollup-plugin-svelte": ^7.2.3
     "unplugin-vue": ^7.2.0
   dev:
