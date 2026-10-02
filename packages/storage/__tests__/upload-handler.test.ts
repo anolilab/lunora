@@ -137,6 +137,22 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         expect(wire.requests.some((entry) => entry.method === "PATCH")).toBe(true);
     });
 
+    it("refuses to delete a finished upload through the upload route", async () => {
+        expect.hasAssertions();
+
+        const tus = rawTus(handler);
+        const location = await tus.create(4, "done.bin");
+
+        const patched = await tus.patch(location, 0, new Uint8Array(4).fill(1));
+
+        expect(patched.ok).toBe(true);
+
+        const deleted = await handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "DELETE" }));
+
+        expect(deleted.status).toBeGreaterThanOrEqual(400);
+        await expect(tus.head(location)).resolves.toBe(4);
+    });
+
     it("survives pause/resume mid-upload", async () => {
         expect.hasAssertions();
 

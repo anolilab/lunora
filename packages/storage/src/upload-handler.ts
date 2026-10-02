@@ -16,7 +16,9 @@
  *
  * The `authorize` callback is the RLS decision: it runs before every request
  * (create, chunk PATCH, resume HEAD, delete) and denies fail-closed — a thrown
- * callback is a deny, never a 500.
+ * callback is a deny, never a 500. A request declaring a size over
+ * `maxFileSize` is refused (413) before it reaches the gate. A finished upload
+ * cannot be deleted through the handler.
  */
 import { LunoraError } from "@lunora/errors";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
@@ -252,6 +254,10 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
     }
 
     const handlerOptions: UploadHandlerOptions = {
+        // A finished upload is a stored file; removing it is the app's call
+        // (`ctx.storage.delete`), not a `DELETE` any caller the upload gate
+        // admits can send to the upload route.
+        disableTerminationForFinishedUploads: true,
         maxFileSize,
         storage: options.storage,
     };
