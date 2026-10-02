@@ -3,8 +3,12 @@
  * source fetch (GitHub tarball via an App installation token) and the build
  * execution (a throwaway Cloudflare Container running `lunora build` — the
  * `@lunora/container` seam) are 🌐; this module owns the order of operations —
- * claim → fetch → execute (streaming logs) → complete/fail — so the whole flow
- * unit-tests with fakes.
+ * fetch → execute (streaming logs) ({@link executeBuild}), then release →
+ * complete ({@link finishBuild}), failing the build on the way — so the whole
+ * flow unit-tests with fakes.
+ *
+ * Two halves because each runs in its own Durable Object alarm invocation
+ * (`src/builds/runner-do.ts`), and each invocation has its own wall-clock cap.
  */
 
 export interface ClaimedBuild {
@@ -92,21 +96,21 @@ export interface BuildRunnerPorts {
 }
 
 /**
- * Cloudflare's wall-clock cap on one scheduled (Cron Trigger) invocation: the
- * runtime waits for `scheduled()` "up to a maximum of 15 minutes", and
- * `ctx.waitUntil` work must settle "before the invocation completes" — it buys
- * no extra time. The build drain runs inside the every-minute tick, so a build
- * AND its release have to fit in it.
- * https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/
- * https://developers.cloudflare.com/workers/platform/limits/ (Cron Triggers: 15 min duration)
+ * Cloudflare's wall-clock cap on one Durable Object alarm invocation: "Alarm
+ * handler invocations have a maximum wall time of 15 minutes" — the same cap a
+ * Cron Trigger invocation has. A build is fetched and executed in one alarm and
+ * released in the next (`src/builds/runner-do.ts`), so each half gets its own.
+ * https://developers.cloudflare.com/workers/platform/limits/ (Durable Objects: alarms)
+ * https://developers.cloudflare.com/durable-objects/api/alarms/
  */
-export const SCHEDULED_INVOCATION_LIMIT_MS = 15 * 60 * 1000;
+export const ALARM_INVOCATION_LIMIT_MS = 15 * 60 * 1000;
 
 /**
- * How long one build's execution may run, leaving the rest of the invocation
- * for fetching the source before it and the release after it. A build past it
- * fails with the reason instead of being cut off mid-flight, which would leave
- * its row `building` until the stale-lease recovery rebuilt it, forever.
+ * How long one build's execution may run, leaving its alarm room to fetch the
+ * source first and store the result after. A build past it fails with the
+ * reason instead of being cut off mid-flight. The two alarms together also stay
+ * inside the build's lease (`LEASE_STALE_MS`, 30 minutes): this half under 10
+ * minutes, the release half under its own 15.
  */
 export const BUILD_EXECUTE_BUDGET_MS = 9 * 60 * 1000;
 
@@ -117,7 +121,7 @@ export const withinBudget = async <T>(work: Promise<T>, budgetMs: number, what: 
         timer = setTimeout(() => {
             reject(
                 new Error(
-                    `${what} ran past ${String(Math.round(budgetMs / 60_000))} minutes, the most one scheduled invocation leaves it (Cloudflare stops a Cron Trigger invocation after ${String(SCHEDULED_INVOCATION_LIMIT_MS / 60_000)} minutes); make the install or build faster`,
+                    `${what} ran past ${String(Math.round(budgetMs / 60_000))} minutes, the most its run leaves it (Cloudflare stops a Durable Object alarm after ${String(ALARM_INVOCATION_LIMIT_MS / 60_000)} minutes); make the install or build faster`,
                 ),
             );
         }, budgetMs);
@@ -160,7 +164,7 @@ export const isUnconfiguredInfrastructure = (message: string): boolean => messag
  * Report a build's state, swallowing anything the report itself throws.
  *
  * `try`/`catch` rather than `.catch()`: the promise form only absorbs a
- * REJECTION, so a port that threw synchronously escaped into `runBuild`'s outer
+ * REJECTION, so a port that threw synchronously escaped into the runner's outer
  * catch and marked the build failed — a notification failure changing the outcome
  * of the work it was reporting on, which is the one thing this must never do.
  */
@@ -189,26 +193,48 @@ const reportReleaseFailure = async (ports: BuildRunnerPorts, build: ClaimedBuild
 
 export type BuildOutcome = { bundleHash: string; deploymentId?: string; status: "successful" } | { error: string; status: "failed" };
 
-/** Drive one claimed build through fetch → execute → complete/fail. Never throws. */
-export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Promise<BuildOutcome> => {
+/** Fail the build with `error`'s message: logged, recorded, and reported unless the platform itself is unconfigured. */
+const failBuild = async (build: ClaimedBuild, error: unknown, ports: BuildRunnerPorts): Promise<BuildOutcome> => {
+    const message = error instanceof Error ? error.message : String(error);
+
+    await ports.appendLog(build.buildId, "error", message).catch(() => {});
+    await ports.fail(build.buildId, message).catch(() => {});
+
+    if (!isUnconfiguredInfrastructure(message)) {
+        await report(ports, build, "failure", message);
+    }
+
+    return { error: message, status: "failed" };
+};
+
+/**
+ * The first half: report the build pending, fetch its source and execute it.
+ * Answers the execution, or — having failed the build — its outcome. Never throws.
+ */
+export const executeBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Promise<{ execution: BuildExecution } | { outcome: BuildOutcome }> => {
     try {
         await report(ports, build, "pending", "Building on Lunora Cloud…");
-
         await ports.appendLog(build.buildId, "info", `fetching source at ${build.commitSha}`);
 
         const source = await ports.fetchSource(build);
 
         await ports.appendLog(build.buildId, "info", "running build");
 
-        const result = await ports.execute(source, build.rootDirectory, (line) => ports.appendLog(build.buildId, "info", line));
+        return { execution: await ports.execute(source, build.rootDirectory, (line) => ports.appendLog(build.buildId, "info", line)) };
+    } catch (error) {
+        return { outcome: await failBuild(build, error, ports) };
+    }
+};
 
+/** The second half: release an executed build (when there is a release port) and complete it. Never throws. */
+export const finishBuild = async (build: ClaimedBuild, result: BuildExecution, ports: BuildRunnerPorts): Promise<BuildOutcome> => {
+    try {
         if (!ports.release) {
             await ports.complete(build.buildId, result.bundleHash);
             await report(ports, build, "success", "Built on Lunora Cloud.");
 
             return { bundleHash: result.bundleHash, status: "successful" };
         }
-
         // Released BEFORE `complete`: completing drops the lease, and the release's
         // progress lines are written under it. The build is done regardless of what
         // happens next — a failed release is reported, never turned into a failed
@@ -263,15 +289,6 @@ export const runBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts): Pr
 
         return { bundleHash: result.bundleHash, deploymentId: released.deploymentId, status: "successful" };
     } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        await ports.appendLog(build.buildId, "error", message).catch(() => {});
-        await ports.fail(build.buildId, message).catch(() => {});
-
-        if (!isUnconfiguredInfrastructure(message)) {
-            await report(ports, build, "failure", message);
-        }
-
-        return { error: message, status: "failed" };
+        return failBuild(build, error, ports);
     }
 };

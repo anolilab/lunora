@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { BuildRunnerPorts, ClaimedBuild } from "../src/builds/runner";
-import { runBuild } from "../src/builds/runner";
 import { createGitHubApp, DEFAULT_STATUS_CONTEXT, mintAppJwt, pkcs8FromPem } from "../src/github/app";
+import runBuild from "./support/run-build";
 
 /**
  * Writing the build's outcome back to the commit that triggered it (GAPS.md A4).

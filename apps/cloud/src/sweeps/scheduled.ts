@@ -459,23 +459,18 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
 const BUILD_DISPATCH_URL = "https://control-plane.internal/v1/builds/dispatch";
 
 /**
- * Drain the git build queue: claim, build and release (GAPS.md A3), through
- * `POST /v1/builds/dispatch`.
+ * Drain the git build queue (GAPS.md A3) through `POST /v1/builds/dispatch`:
+ * claim queued builds and hand each to its own build runner
+ * (`src/builds/runner-do.ts`), which builds and releases it in its own alarm
+ * invocations. Nothing slow happens on this tick, so its 15-minute wall-clock
+ * cap (https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/)
+ * no longer bounds a build and its release together.
  *
  * In-process, through the Worker's own `fetch`, because that is where a handler
- * gets the request-scoped Lunora context it runs the builds' mutations on — and
- * a `scheduled()` invocation has no request. It used to be a Lunora cron action,
- * which has the context but not the Worker's bindings, and a release needs those.
- *
- * Handed to `waitUntil` rather than awaited, so the tenant cron fan-out below
- * does not wait behind a build. `waitUntil` buys no extra time: the work must
- * settle before the invocation completes, and a scheduled invocation is capped
- * at 15 minutes of wall time
- * (https://developers.cloudflare.com/workers/runtime-apis/handlers/scheduled/,
- * https://developers.cloudflare.com/workers/platform/limits/). So the drain is
- * sized to fit it: one build per tick (`DEFAULT_MAX_BUILDS_PER_TICK`), its
- * execution bounded by `BUILD_EXECUTE_BUDGET_MS`, the rest left for its
- * release. No-ops without the admin token the route is gated on.
+ * gets the request-scoped Lunora context it claims builds with — and a
+ * `scheduled()` invocation has no request. Handed to `waitUntil` so the tenant
+ * cron fan-out below does not wait behind it. No-ops without the admin token
+ * the route is gated on.
  */
 const drainBuildQueue = async (env: ControlPlaneEnv, context: ExecutionContextLike, target: ScheduledWorker): Promise<void> => {
     if (!env.LUNORA_ADMIN_TOKEN) {

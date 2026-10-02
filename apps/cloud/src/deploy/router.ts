@@ -708,7 +708,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         },
     });
 
-    const { handleBuildDispatchRoute, handleDeployRoute, handleRollbackRoute, handleSessionRollbackRoute } = createDeployRoutes(scheduler);
+    const { handleBuildDispatchRoute, handleBuildRunRoute, handleDeployRoute, handleRollbackRoute, handleSessionRollbackRoute } = createDeployRoutes(scheduler);
 
     // Every route carries an explicit auth classification; `assertRoutesClassified`
     // (below) fails construction if any is missing — an unclassified route can
@@ -762,8 +762,9 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken" } },
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
         { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
-        // The build queue's drain, called in-process by the Worker's own `scheduled()`.
+        // The build queue: claimed by the Worker's own `scheduled()`, run by each build's runner alarm — both in-process.
         { handler: handleBuildDispatchRoute, method: "POST", path: "/v1/builds/dispatch", spec: { auth: "adminToken" } },
+        { handler: handleBuildRunRoute, method: "POST", path: "/v1/builds/run", spec: { auth: "adminToken" } },
     ];
 
     // The MCP surface (GAPS.md Ring-3 #8): opted-in tool routes are exposed to

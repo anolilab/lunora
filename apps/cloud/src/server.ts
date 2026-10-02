@@ -1,25 +1,17 @@
-import { createAuthAdmin, handleAuthRequest } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike } from "@lunora/d1";
-import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
+import { createD1CtxDb } from "@lunora/d1";
 import type { PaymentsFromContextOptions } from "@lunora/payment";
 import { createCreemAdapter } from "@lunora/payment/creem";
-import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike } from "@lunora/runtime";
-import { createWorker } from "@lunora/runtime";
-// TanStack Start's server entry default-exports a `{ fetch }` handler — the same
-// expression `@lunora/vite`'s class-A composition table emits for this framework.
-import ssrHandler from "@tanstack/react-start/server-entry";
+import type { ExecutionContextLike, ScheduledControllerLike } from "@lunora/runtime";
 import { Creem } from "creem";
 
-import { LUNORA_CRONS } from "../lunora/_generated/crons.js";
-import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
-import { openApiSpec } from "../lunora/_generated/openapi.js";
 import { createShardDO } from "../lunora/_generated/shard.js";
 import schema from "../lunora/schema.js";
-import { currentAuth, ensureAuth } from "./auth";
+import { ensureAuth } from "./auth";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import type { ControlPlaneEnv } from "./control-plane-env";
+import { controlPlaneWorker } from "./control-plane-worker";
 import { buildExec } from "./d1-store";
-import { createDeployRouter } from "./deploy/router";
 import type { QueueBatchLike } from "./fanout/platform-queue";
 import { handleQueueBatch } from "./fanout/platform-queue";
 import { runScheduled } from "./sweeps/scheduled";
@@ -30,17 +22,6 @@ import { runScheduled } from "./sweeps/scheduled";
  * provisions and tracks tenant deployments. Its own `.global()` tables
  * (`cells`, `organizations`) live in the control-plane D1 bound as `DB`.
  */
-
-/** Let the studio's global data browser list/page the `.global()` (D1) tables. */
-const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
-    const exec = buildExec(database);
-
-    return {
-        facetColumn: (options) => facetGlobalColumn(exec, schema as never, options),
-        listTables: () => listGlobalTables(exec, schema as never),
-        readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
-    };
-};
 
 interface ShardEnv {
     /** Creem API key (MoR billing, §4). Absent → billing reads work, live calls fail. */
@@ -137,6 +118,13 @@ export * from "../lunora/_generated/containers";
 export { BoxSessionDO } from "./boxes/session-do";
 
 /**
+ * One per git build (GAPS.md A3): runs the build and its release in its own
+ * alarm invocations, off the every-minute cron that claims it. Bound as
+ * `BUILD_RUNNER`, named by build id.
+ */
+export { BuildRunnerDO } from "./builds/runner-do";
+
+/**
  * Deferred-dispatch DO for `@lunora/scheduler`. The control plane's own crons
  * (`lunora/crons.ts`) ride Cloudflare cron triggers and don't need this, but the
  * class must be exported for the `SCHEDULER` binding to be provisionable — so
@@ -169,90 +157,20 @@ export const ShardDO = createShardDO({
 
 type Env = ControlPlaneEnv;
 
-let worker: ReturnType<typeof createWorker> | null = null;
-// The deploy API (`POST /v1/deploy`), mounted as the lowest-priority matcher.
-// Created once so its per-cell scheduler persists across requests.
-const deployRouter = createDeployRouter();
-
-/**
- * The `httpRouter` seam, shared by two consumers.
- *
- * `createWorker` treats `httpRouter` as its LOWEST-priority matcher — it runs only
- * after auth (`/api/auth/*`), the explicit routes, and the reserved `/_lunora/*`
- * endpoints have all declined. That is what makes this composition safe: the
- * studio's SSR loaders reach Lunora over `POST /_lunora/rpc` and better-auth over
- * `/api/auth/get-session`, both of which are dispatched ahead of here, so a render
- * can never recurse into itself.
- *
- * `/v1/*` is the machine-facing deploy/telemetry API and keeps its own router —
- * which 404s anything outside `/v1/`, so it cannot be the fallback. Everything
- * else is a browser navigation and belongs to the TanStack Start SSR handler.
- * Ordering, not overlap: the two never contend for a path.
- */
-const httpRouter = {
-    fetch: async (request: Request, environment?: unknown): Promise<Response> => {
-        if (new URL(request.url).pathname.startsWith("/v1/")) {
-            return deployRouter.fetch(request, environment);
-        }
-
-        // Only the request: TanStack Start's `fetch` takes its OWN options object
-        // second (`{ context, onEarlyHints, … }`), not the Cloudflare env. The
-        // loaders reach Lunora and better-auth over HTTP, so they need no bindings.
-        return ssrHandler.fetch(request);
-    },
-};
-
-const buildWorker = (env: Env): ReturnType<typeof createWorker> => {
-    // Non-null by construction: `fetch` awaits `ensureAuth` before it ever calls
-    // this, and `scheduled`/`queue` reach `buildWorker` only after a request has.
-    const auth = currentAuth();
-
-    return createWorker({
-        adminToken: env.LUNORA_ADMIN_TOKEN,
-        // Dispatch better-auth's `/api/auth/*` routes inside the worker so the
-        // studio and the control plane share an origin.
-        authAdmin: auth ? createAuthAdmin(auth) : undefined,
-        authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
-        // Code-first crons (lunora/crons.ts): the cleanup-expired-previews job
-        // fires on the worker's `scheduled()` entry. The control plane is an
-        // account-level worker, so its cron triggers fire normally (§2.4).
-        cronJobs: LUNORA_CRONS,
-        functions: LUNORA_FUNCTIONS,
-        globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
-        httpRouter,
-        openApiSpec,
-        resolveIdentity: async (request) => {
-            if (!auth) {
-                return null;
-            }
-
-            const session = await auth.api.getSession({ headers: request.headers });
-
-            return session?.user?.id ? { userId: session.user.id } : null;
-        },
-        routes: {},
-        shardDO: env.SHARD,
-    });
-};
-
 export default {
     async fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
         // Build the auth instance (once per isolate, migration included) before
-        // anything dispatches: `buildWorker` below reads it, and so does the
-        // invite route in `deploy/router.ts`.
+        // anything dispatches: the worker reads it, and so does the invite route
+        // in `deploy/router.ts`.
         await ensureAuth(env, new URL(request.url).origin);
 
-        worker ??= buildWorker(env);
-
-        return worker.fetch(request, env, context);
+        return controlPlaneWorker(env).fetch(request, env, context);
     },
     async queue(batch: QueueBatchLike, env: Env): Promise<void> {
         // Platform-owned queue consumer for namespaced tenants (§2.4).
         await handleQueueBatch(batch, env);
     },
     async scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
-        worker ??= buildWorker(env);
-
-        await runScheduled(controller, env, context, worker);
+        await runScheduled(controller, env, context, controlPlaneWorker(env));
     },
 };

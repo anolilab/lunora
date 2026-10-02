@@ -7,6 +7,7 @@ import type { ShardNamespaceLike } from "@lunora/runtime";
 
 import type { BackupBucket } from "./backup/sweep";
 import type { TenantBackupBucket } from "./backup/tenant-transport";
+import type { BuildRunnerNamespace } from "./builds/runner-job";
 import type { ReleaseBucket } from "./deploy/release-store";
 import type { TargetEnvironment } from "./targets/registry";
 
@@ -31,6 +32,9 @@ export type ControlPlaneEnv = TargetEnvironment & {
      * token and auth session in the cell, so this bucket must never be public.
      */
     BACKUPS?: BackupBucket;
+
+    /** One build runner per git build (`src/builds/runner-do.ts`); absent → claimed builds fail with the reason. */
+    BUILD_RUNNER?: BuildRunnerNamespace;
 
     /**
      * The control-plane D1's own uuid, which the export REST call addresses.

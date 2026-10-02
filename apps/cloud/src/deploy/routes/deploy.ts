@@ -14,7 +14,8 @@ import { LunoraError } from "@lunora/errors";
 
 import { api, internal } from "../../../lunora/_generated/api.js";
 import { captureServerEvent } from "../../analytics/capture";
-import { dispatchBuilds } from "../../builds/control-plane";
+import { dispatchBuilds, runBuildStage } from "../../builds/control-plane";
+import type { BuildJob, BuildStage } from "../../builds/runner-job";
 import type { DeployKind } from "../../provision-contract";
 import { decryptSecret } from "../../secrets/crypto";
 import type { Placement, StoredPlacement } from "../../targets/placement";
@@ -209,7 +210,13 @@ type RouteHandler = (request: Request, environment: RouterEnv) => Promise<Respon
 /** The deploy, rollback and build-dispatch routes over one scheduler. */
 export const createDeployRoutes = (
     scheduler: CellScheduler,
-): { handleBuildDispatchRoute: RouteHandler; handleDeployRoute: RouteHandler; handleRollbackRoute: RouteHandler; handleSessionRollbackRoute: RouteHandler } => {
+): {
+    handleBuildDispatchRoute: RouteHandler;
+    handleBuildRunRoute: RouteHandler;
+    handleDeployRoute: RouteHandler;
+    handleRollbackRoute: RouteHandler;
+    handleSessionRollbackRoute: RouteHandler;
+} => {
     const handleDeployRoute: RouteHandler = async (request, environment) => {
         const deps = deployDeps(requireContext(environment), environment, scheduler);
 
@@ -255,16 +262,12 @@ export const createDeployRoutes = (
 
     return {
         /**
-         * `POST /v1/builds/dispatch` — claim and run queued git builds, releasing
-         * each successful one through the deploy core (GAPS.md A3).
-         *
-         * A route, and not a Lunora cron action, because a release needs this
-         * Worker's bindings — the `RELEASES` bucket, the provision box, the master
-         * key — and an action's `ctx` carries only declared vars. The Worker's own
-         * `scheduled()` calls it once a minute, in-process (`drainBuildQueue` in
+         * `POST /v1/builds/dispatch` — claim queued git builds and hand each to
+         * its build runner (GAPS.md A3). Called in-process by the Worker's own
+         * every-minute `scheduled()` (`drainBuildQueue` in
          * `src/sweeps/scheduled.ts`), which is what hands it the request-scoped
-         * Lunora context every other route runs on. Admin-token gated like every
-         * other platform-internal route.
+         * Lunora context every route runs on. Admin-token gated like every other
+         * platform-internal route.
          */
         handleBuildDispatchRoute: async (request, environment) => {
             const unauthorized = requireAdminToken(request, environment);
@@ -273,9 +276,32 @@ export const createDeployRoutes = (
                 return unauthorized;
             }
 
+            return Response.json(await dispatchBuilds({ context: requireContext(environment), environment }));
+        },
+
+        /**
+         * `POST /v1/builds/run` — run one half of a build (`{ job, stage }`),
+         * called in-process by its build runner's alarm (`src/builds/runner-do.ts`).
+         * A route, and not code in the runner, because a build's mutations and
+         * its release need the Lunora context and this Worker's bindings, which
+         * a route is handed. Admin-token gated; the body is the runner's own.
+         */
+        handleBuildRunRoute: async (request, environment) => {
+            const unauthorized = requireAdminToken(request, environment);
+
+            if (unauthorized) {
+                return unauthorized;
+            }
+
+            const body = (await request.json().catch(() => null)) as null | { job?: BuildJob; stage?: BuildStage };
+
+            if (!body?.job || (body.stage !== "build" && body.stage !== "release" && body.stage !== "interrupted")) {
+                return jsonError(400, "job and stage are required");
+            }
+
             const context = requireContext(environment);
 
-            return Response.json(await dispatchBuilds({ context, deploy: deployDeps(context, environment, scheduler), environment }));
+            return Response.json(await runBuildStage({ context, deploy: deployDeps(context, environment, scheduler), environment }, body.job, body.stage));
         },
         handleDeployRoute,
         // POST /v1/deployments/rollback — the CLI's rollback, deploy-key authorized.

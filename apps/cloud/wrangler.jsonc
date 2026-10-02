@@ -30,6 +30,13 @@
                 "class_name": "BoxSessionDO",
                 "name": "BOX_SESSION",
             },
+            {
+                // One per git build, named by build id (GAPS.md A3): runs the build
+                // and its release in its own alarms, off the cron that claims it
+                // (src/builds/runner-do.ts).
+                "class_name": "BuildRunnerDO",
+                "name": "BUILD_RUNNER",
+            },
         ],
     },
     "migrations": [
@@ -58,6 +65,12 @@
             // box's request nonces in its own storage.
             "new_sqlite_classes": ["BoxSessionDO"],
             "tag": "v5",
+        },
+        {
+            // The per-build runner (GAPS.md A3). SQLite-class: it keeps its build's
+            // claim and stage in its own storage between alarms.
+            "new_sqlite_classes": ["BuildRunnerDO"],
+            "tag": "v6",
         },
     ],
     "d1_databases": [
@@ -243,6 +256,7 @@
                     { "class_name": "BuildBoxContainer", "name": "CONTAINER_BUILD_BOX" },
                     { "class_name": "ProvisionBoxContainer", "name": "CONTAINER_PROVISION_BOX" },
                     { "class_name": "BoxSessionDO", "name": "BOX_SESSION" },
+                    { "class_name": "BuildRunnerDO", "name": "BUILD_RUNNER" },
                 ],
             },
             "migrations": [
@@ -251,6 +265,7 @@
                 { "new_sqlite_classes": ["BuildBoxContainer"], "tag": "v3" },
                 { "new_sqlite_classes": ["ProvisionBoxContainer"], "tag": "v4" },
                 { "new_sqlite_classes": ["BoxSessionDO"], "tag": "v5" },
+                { "new_sqlite_classes": ["BuildRunnerDO"], "tag": "v6" },
             ],
             // Repeated per cell on purpose: wrangler does NOT inherit
             // `containers` into an environment, so a top-level-only entry
@@ -317,6 +332,7 @@
                     { "class_name": "BuildBoxContainer", "name": "CONTAINER_BUILD_BOX" },
                     { "class_name": "ProvisionBoxContainer", "name": "CONTAINER_PROVISION_BOX" },
                     { "class_name": "BoxSessionDO", "name": "BOX_SESSION" },
+                    { "class_name": "BuildRunnerDO", "name": "BUILD_RUNNER" },
                 ],
             },
             "migrations": [
@@ -325,6 +341,7 @@
                 { "new_sqlite_classes": ["BuildBoxContainer"], "tag": "v3" },
                 { "new_sqlite_classes": ["ProvisionBoxContainer"], "tag": "v4" },
                 { "new_sqlite_classes": ["BoxSessionDO"], "tag": "v5" },
+                { "new_sqlite_classes": ["BuildRunnerDO"], "tag": "v6" },
             ],
             // Repeated per cell on purpose: wrangler does NOT inherit
             // `containers` into an environment, so a top-level-only entry

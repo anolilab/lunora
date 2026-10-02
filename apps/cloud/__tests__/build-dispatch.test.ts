@@ -1,23 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import type { BuildDispatchPorts } from "../src/builds/dispatch";
-import { runBuildDispatch } from "../src/builds/dispatch";
-import type { BuildRunnerPorts, ClaimedBuild } from "../src/builds/runner";
+import { claimBuilds, DEFAULT_MAX_BUILDS_PER_TICK } from "../src/builds/dispatch";
+import type { ClaimedBuild } from "../src/builds/runner";
+import type { BuildJob } from "../src/builds/runner-job";
+
+/**
+ * The cron's half of a git build (GAPS.md A3): it claims queued builds and hands
+ * each to its own runner, and never runs one — the build and its release run in
+ * the runner's own alarms (`build-runner.test.ts`), off the tick's wall-clock cap.
+ */
 
 const claimed = (id: string): ClaimedBuild => {
     return { buildId: id, commitSha: `sha-${id}`, projectId: `proj-${id}` };
-};
-
-/** A runner-ports fake that records the lifecycle and returns a fixed execution. */
-const runnerPorts = (overrides: Partial<BuildRunnerPorts> = {}): BuildRunnerPorts => {
-    return {
-        appendLog: () => Promise.resolve(),
-        complete: () => Promise.resolve(),
-        execute: () => Promise.resolve({ bundle: "YnVuZGxl", bundleHash: "hash" }),
-        fail: () => Promise.resolve(),
-        fetchSource: () => Promise.resolve(new ArrayBuffer(8)),
-        ...overrides,
-    };
 };
 
 /** A claimNext that hands out the given builds in order, then returns null (drained). */
@@ -25,11 +20,7 @@ const queue = (builds: ClaimedBuild[]): ((runnerId: string) => Promise<ClaimedBu
     let index = 0;
 
     return () => {
-        if (index >= builds.length) {
-            return Promise.resolve(null);
-        }
-
-        const build = builds[index];
+        const build = builds[index] ?? null;
 
         index += 1;
 
@@ -40,58 +31,39 @@ const queue = (builds: ClaimedBuild[]): ((runnerId: string) => Promise<ClaimedBu
 const ports = (overrides: Partial<BuildDispatchPorts>): BuildDispatchPorts => {
     return {
         claimNext: queue([]),
+        fail: () => Promise.resolve(),
+        handOff: () => Promise.resolve(),
         runnerId: "runner-1",
-        runnerPorts: runnerPorts(),
         ...overrides,
     };
 };
 
-describe(runBuildDispatch, () => {
-    it("drains the queue, running each claimed build to a successful outcome", async () => {
-        const completed: string[] = [];
+describe(claimBuilds, () => {
+    it("hands every claimed build to its runner under the tick's lease, in claim order", async () => {
+        const handed: BuildJob[] = [];
 
-        const result = await runBuildDispatch(
+        const result = await claimBuilds(
             ports({
                 claimNext: queue([claimed("a"), claimed("b")]),
-                runnerPorts: runnerPorts({
-                    complete: (buildId) => {
-                        completed.push(buildId);
+                handOff: (build, runnerId) => {
+                    handed.push({ build, runnerId });
 
-                        return Promise.resolve();
-                    },
-                }),
-            }),
-            2,
-        );
-
-        expect(completed).toStrictEqual(["a", "b"]);
-        expect(result.outcomes).toStrictEqual([
-            { bundleHash: "hash", status: "successful" },
-            { bundleHash: "hash", status: "successful" },
-        ]);
-    });
-
-    it("stops immediately when the queue is empty", async () => {
-        let claims = 0;
-
-        const result = await runBuildDispatch(
-            ports({
-                claimNext: () => {
-                    claims += 1;
-
-                    return Promise.resolve(null);
+                    return Promise.resolve();
                 },
             }),
         );
 
-        expect(claims).toBe(1);
-        expect(result.outcomes).toStrictEqual([]);
+        expect(result).toStrictEqual({ handedOff: ["a", "b"] });
+        expect(handed).toStrictEqual([
+            { build: claimed("a"), runnerId: "runner-1" },
+            { build: claimed("b"), runnerId: "runner-1" },
+        ]);
     });
 
-    it("respects the per-tick drain cap and leaves the rest for the next tick", async () => {
+    it("stops at the per-tick cap, leaving the rest queued for the next tick", async () => {
         let claims = 0;
 
-        const result = await runBuildDispatch(
+        const result = await claimBuilds(
             ports({
                 claimNext: () => {
                     claims += 1;
@@ -103,48 +75,50 @@ describe(runBuildDispatch, () => {
         );
 
         expect(claims).toBe(2);
-        expect(result.outcomes).toHaveLength(2);
+        expect(result.handedOff).toStrictEqual(["1", "2"]);
     });
 
-    it("keeps draining after a failed build (runBuild reports failure, never throws)", async () => {
-        const result = await runBuildDispatch(
+    it("claims as many builds a tick as the build box runs at once", async () => {
+        const builds = Array.from({ length: DEFAULT_MAX_BUILDS_PER_TICK + 2 }, (_, index) => claimed(String(index)));
+
+        const result = await claimBuilds(ports({ claimNext: queue(builds) }));
+
+        expect(result.handedOff).toHaveLength(DEFAULT_MAX_BUILDS_PER_TICK);
+    });
+
+    it("fails a build its runner would not take, with the reason, and keeps claiming", async () => {
+        const failed: [string, string][] = [];
+
+        const result = await claimBuilds(
             ports({
                 claimNext: queue([claimed("boom"), claimed("ok")]),
-                runnerPorts: runnerPorts({
-                    execute: (_source, _rootDirectory, onLine) =>
-                        onLine("building").then(() => {
-                            throw new Error("container OOM");
-                        }),
-                }),
-            }),
-            2,
-        );
+                fail: (buildId, error) => {
+                    failed.push([buildId, error]);
 
-        // Both builds were attempted; the first failed but did not abort the drain.
-        expect(result.outcomes).toHaveLength(2);
-        expect(result.outcomes.every((outcome) => outcome.status === "failed")).toBe(true);
-    });
-
-    it("runs one build per tick by default — a scheduled invocation has room for one build and its release", async () => {
-        const result = await runBuildDispatch(ports({ claimNext: queue([claimed("a"), claimed("b")]) }));
-
-        expect(result.outcomes).toHaveLength(1);
-    });
-
-    it("passes the runner id through to the lease", async () => {
-        let seenRunnerId: string | undefined;
-
-        await runBuildDispatch(
-            ports({
-                claimNext: (runnerId) => {
-                    seenRunnerId = runnerId;
-
-                    return Promise.resolve(null);
+                    return Promise.resolve();
                 },
-                runnerId: "cell-a-runner",
+                handOff: (build) => (build.buildId === "boom" ? Promise.reject(new Error("no BUILD_RUNNER")) : Promise.resolve()),
             }),
         );
 
-        expect(seenRunnerId).toBe("cell-a-runner");
+        expect(result.handedOff).toStrictEqual(["ok"]);
+        expect(failed).toStrictEqual([["boom", "the build could not be handed to a runner: no BUILD_RUNNER"]]);
+    });
+
+    it("stops as soon as the queue is empty", async () => {
+        let claims = 0;
+
+        await expect(
+            claimBuilds(
+                ports({
+                    claimNext: () => {
+                        claims += 1;
+
+                        return Promise.resolve(null);
+                    },
+                }),
+            ),
+        ).resolves.toStrictEqual({ handedOff: [] });
+        expect(claims).toBe(1);
     });
 });

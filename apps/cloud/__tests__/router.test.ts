@@ -249,6 +249,47 @@ const dispatchPost = (token?: string): Request =>
         method: "POST",
     });
 
+describe("pOST /v1/builds/run", () => {
+    const runPost = (body: unknown, token = "admin-secret"): Request =>
+        new Request("https://control-plane.internal/v1/builds/run", {
+            body: JSON.stringify(body),
+            headers: { authorization: `Bearer ${token}` },
+            method: "POST",
+        });
+    const job = { build: { buildId: "bld_1", commitSha: "abc", projectId: "prj_1" }, runnerId: "edge-1" }; // secret-scanner:allow -- domain field name
+
+    it("401s anyone but a build runner (the platform admin token), and refuses a malformed stage", async () => {
+        const router = createDeployRouter();
+        const runMutation = vi.fn<ActionPort>();
+        const environment = { __lunoraCtx: makeCtx({ runMutation }), LUNORA_ADMIN_TOKEN: "admin-secret" };
+
+        await expect(router.fetch(runPost({ job, stage: "build" }, "nope"), environment)).resolves.toMatchObject({ status: 401 });
+        await expect(router.fetch(runPost({ job, stage: "deploy" }), environment)).resolves.toMatchObject({ status: 400 });
+        expect(runMutation).not.toHaveBeenCalled();
+    });
+
+    it("fails the build half with the reason when the platform has no GitHub App, under the runner's lease", async () => {
+        const router = createDeployRouter();
+        const calls: Record<string, unknown>[] = [];
+        const runMutation = vi.fn<ActionPort>((_reference, args) => {
+            calls.push(args ?? {});
+
+            return Promise.resolve(null);
+        });
+        const response = await router.fetch(runPost({ job, stage: "build" }), {
+            __lunoraCtx: makeCtx({ runMutation, runQuery: vi.fn<ActionPort>().mockResolvedValue(null) }),
+            LUNORA_ADMIN_TOKEN: "admin-secret",
+        });
+
+        await expect(response.json()).resolves.toStrictEqual({ next: null });
+
+        const failed = calls.find((args) => typeof args["error"] === "string");
+
+        expect(failed).toMatchObject({ buildId: "bld_1", runnerId: "edge-1" });
+        expect(failed?.["error"]).toMatch(/source fetch is not configured: the control plane has no GitHub App credentials/u);
+    });
+});
+
 describe("pOST /v1/builds/dispatch", () => {
     const env = (ctx: unknown): Record<string, unknown> => {
         return { __lunoraCtx: ctx, LUNORA_ADMIN_TOKEN: "admin-secret" };
@@ -273,18 +314,17 @@ describe("pOST /v1/builds/dispatch", () => {
         const response = await router.fetch(dispatchPost("admin-secret"), env(makeCtx({ runMutation })));
 
         expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toStrictEqual({ ran: 0 });
+        await expect(response.json()).resolves.toStrictEqual({ handedOff: [] });
     });
 
-    it("fails a claimed build with the reason when the platform has no GitHub App", async () => {
-        const router = createDeployRouter();
+    /** A claimNext that hands out `bld_1` once, then reports an empty queue; every call recorded. */
+    const claimOnce = () => {
         const calls: { args: Record<string, unknown> | undefined }[] = [];
         let handedOut = false;
         const runMutation = vi.fn<ActionPort>((_reference, args) => {
             calls.push({ args });
 
-            // `claimNext` is the one call carrying only the runner id: hand out
-            // one build, then report an empty queue.
+            // `claimNext` is the one call carrying only the runner id.
             const isClaim = args !== undefined && Object.keys(args).length === 1 && "runnerId" in args;
 
             if (isClaim && !handedOut) {
@@ -296,13 +336,48 @@ describe("pOST /v1/builds/dispatch", () => {
             return Promise.resolve(null);
         });
 
-        const response = await router.fetch(dispatchPost("admin-secret"), env(makeCtx({ runMutation, runQuery: vi.fn<ActionPort>().mockResolvedValue(null) })));
+        return { calls, runMutation };
+    };
 
-        expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toStrictEqual({ ran: 1 });
+    it("hands a claimed build to its own runner, under the tick's lease, and runs nothing itself", async () => {
+        const router = createDeployRouter();
+        const { calls, runMutation } = claimOnce();
+        const started: { job: unknown; name: string | undefined }[] = [];
+        const BUILD_RUNNER = {
+            get: (id: DurableObjectId) => {
+                return {
+                    start: (job: unknown) => {
+                        started.push({ job, name: id.name });
+
+                        return Promise.resolve();
+                    },
+                };
+            },
+            idFromName: (name: string): DurableObjectId => {
+                return { equals: () => false, name, toString: () => name };
+            },
+        };
+
+        const response = await router.fetch(dispatchPost("admin-secret"), { ...env(makeCtx({ runMutation })), BUILD_RUNNER });
+
+        await expect(response.json()).resolves.toStrictEqual({ handedOff: ["bld_1"] });
+        expect(started).toStrictEqual([
+            { job: { build: { buildId: "bld_1", commitSha: "abc", projectId: "prj_1" }, runnerId: calls[0]?.args?.["runnerId"] }, name: "bld_1" },
+        ]);
+        // Claimed, and nothing else: no log line, no failure, no completion on this tick.
+        expect(calls).toHaveLength(2);
+    });
+
+    it("fails a claimed build with the reason when the cell has no build runner", async () => {
+        const router = createDeployRouter();
+        const { calls, runMutation } = claimOnce();
+
+        const response = await router.fetch(dispatchPost("admin-secret"), env(makeCtx({ runMutation })));
+
+        await expect(response.json()).resolves.toStrictEqual({ handedOff: [] });
 
         const failed = calls.find((call) => typeof call.args?.["error"] === "string");
 
-        expect(failed?.args?.["error"]).toMatch(/source fetch is not configured: the control plane has no GitHub App credentials/u);
+        expect(failed?.args?.["error"]).toMatch(/build runner is not configured: the control plane has no BUILD_RUNNER binding/u);
     });
 });

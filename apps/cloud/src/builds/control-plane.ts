@@ -1,13 +1,15 @@
 /**
- * The build queue's drain, wired to the control-plane Worker (GAPS.md A3).
+ * The build queue, wired to the control-plane Worker (GAPS.md A3).
  *
- * `builds.recordPush` enqueues, `claimNext` leases and `runBuild` drives a
- * build through fetch → execute → release → complete/fail. This joins them to
- * the real ports. It runs in the Worker — on `POST /v1/builds/dispatch`, which
- * the Worker's own `scheduled()` calls once a minute — rather than in a Lunora
- * cron action, because the release half needs what only the Worker's env holds:
- * the `RELEASES` bucket, the provision box and the master key. An action's
- * `ctx.env` carries the declared vars and nothing else.
+ * `builds.recordPush` enqueues; {@link dispatchBuilds} (`POST /v1/builds/dispatch`,
+ * called by the Worker's every-minute `scheduled()`) claims builds and hands
+ * each to its own build runner (`BUILD_RUNNER`, `src/builds/runner-do.ts`);
+ * {@link runBuildStage} (`POST /v1/builds/run`, called in-process by that
+ * runner's alarms) runs one half of a build against the real ports. All of it
+ * runs in the Worker rather than a Lunora cron action, because the release half
+ * needs what only the Worker's env holds: the `RELEASES` bucket, the provision
+ * box and the master key. An action's `ctx.env` carries the declared vars and
+ * nothing else.
  */
 import type { ContainerAccessor } from "@lunora/container";
 import { containerBindingName, createContainerContext } from "@lunora/container";
@@ -21,11 +23,13 @@ import { startRelease } from "../deploy/release-core";
 import type { LunoraActionContext, RouterEnv } from "../deploy/routes/shared";
 import { createGitHubApp } from "../github/app";
 import { executeInContainer } from "./container-exec";
-import { runBuildDispatch } from "./dispatch";
+import { claimBuilds } from "./dispatch";
+import { createBuildExecutionStore } from "./execution-store";
 import type { BuildReleaseTarget } from "./release";
 import { releaseBuild } from "./release";
 import type { BuildRunnerPorts, ClaimedBuild } from "./runner";
-import { BUILD_EXECUTE_BUDGET_MS, UNCONFIGURED_MARKER, withinBudget } from "./runner";
+import { BUILD_EXECUTE_BUDGET_MS, executeBuild, finishBuild, UNCONFIGURED_MARKER, withinBudget } from "./runner";
+import type { BuildJob, BuildRunnerNamespace, BuildStage } from "./runner-job";
 
 /** The build box's Container DO namespace, the way `provisionBoxFrom` reaches the provision box. */
 const buildBoxFrom = (environment: Record<string, unknown>): ContainerAccessor =>
@@ -46,23 +50,17 @@ const unconfigured = (what: string, why: string) => (): never => {
     throw new LunoraError("INTERNAL", `build ${what} ${UNCONFIGURED_MARKER} ${why}`);
 };
 
-/**
- * Claim and run queued builds, releasing each successful one.
- *
- * `deploy` is the deploy core's wiring (`deployDeps` in `router.ts`), the same
- * object `POST /v1/deploy` runs on; `undefined` on a cell without a `RELEASES`
- * bucket, where builds still run and their release fails with the reason.
- */
-export const dispatchBuilds = async (input: {
+/** What a build's ports are wired to. */
+interface BuildWiring {
     context: LunoraActionContext;
+    /** The deploy core's wiring (`deployDeps`), the same object `POST /v1/deploy` runs on; `undefined` without a `RELEASES` bucket. */
     deploy: DeployHandlerDeps | undefined;
-    environment: RouterEnv;
-}): Promise<{ ran: number }> => {
+    environment: RouterEnv & { BUILD_RUNNER?: BuildRunnerNamespace };
+}
+
+/** The runner ports for one build's lease. Without `deploy`, the release fails with the reason. */
+const runnerPortsFor = (input: BuildWiring, runnerId: string): BuildRunnerPorts => {
     const { context, deploy, environment } = input;
-    // Identifies this tick's leases. Random rather than derived: unlike the
-    // action this replaced, a Worker invocation is never re-run under OCC retry,
-    // so there is no earlier lease of its own to rejoin.
-    const runnerId = `edge-${crypto.randomUUID()}`;
 
     // Absent App credentials this is `null`, and the runner reports to nobody —
     // the same 🌐 gate the source fetch sits behind, since it is the same credential.
@@ -83,8 +81,8 @@ export const dispatchBuilds = async (input: {
         // while Cloudflare provisions) while letting a genuine 5xx from a
         // running box pass straight through. Retrying a real build failure
         // would just pay for the same install twice.
-        // Bounded so the release still fits the scheduled invocation this runs in
-        // (`SCHEDULED_INVOCATION_LIMIT_MS`); the box's own timeouts are longer.
+        // Bounded so the build half fits the alarm it runs in
+        // (`ALARM_INVOCATION_LIMIT_MS`); the box's own timeouts are longer.
         execute: async (source, rootDirectory, onLine) =>
             await withinBudget(executeInContainer(buildBoxFrom(environment).any(), source, rootDirectory, onLine), BUILD_EXECUTE_BUDGET_MS, "the build"),
         fail: async (buildId, error) => {
@@ -159,11 +157,91 @@ export const dispatchBuilds = async (input: {
               }),
     };
 
-    const { outcomes } = await runBuildDispatch({
-        claimNext: async (id) => await context.runMutation<ClaimedBuild | null>(internal.builds.claimNext, { runnerId: id }),
-        runnerId,
-        runnerPorts,
-    });
+    return runnerPorts;
+};
 
-    return { ran: outcomes.length };
+/**
+ * Claim queued builds and hand each to its own build runner, which builds and
+ * releases it in its own alarm invocations. A cell without the `BUILD_RUNNER`
+ * binding fails what it claims with the reason, as an unconfigured build box does.
+ */
+export const dispatchBuilds = async (input: Omit<BuildWiring, "deploy">): Promise<{ handedOff: string[] }> => {
+    const { context, environment } = input;
+    // Identifies these builds' leases, for every half of them. Random rather than
+    // derived: a Worker invocation is never re-run under OCC retry, so there is
+    // no earlier lease of its own to rejoin.
+    const runnerId = `edge-${crypto.randomUUID()}`;
+    const namespace = environment.BUILD_RUNNER;
+
+    return claimBuilds({
+        claimNext: async (id) => await context.runMutation<ClaimedBuild | null>(internal.builds.claimNext, { runnerId: id }),
+        fail: async (buildId, error) => {
+            await context.runMutation(internal.builds.fail, { buildId, error, runnerId });
+        },
+        handOff: async (build, id) => {
+            const runner = namespace ?? unconfigured("runner", "the control plane has no BUILD_RUNNER binding to run builds in.")();
+
+            await runner.get(runner.idFromName(build.buildId)).start({ build, runnerId: id });
+        },
+        runnerId,
+    });
+};
+
+/** What the runner does after a stage: run the release half next, or nothing more. */
+export type BuildStageResult = { next: "release" } | { next: null };
+
+/**
+ * Run one half of a build, for its runner's alarm (`POST /v1/builds/run`).
+ *
+ * - `build` fetches and executes it. A successful execution is stored for the
+ *   release half; on a cell without a `RELEASES` bucket there is nothing to
+ *   store it in, and nothing could release it either, so it finishes here.
+ * - `release` releases the stored execution and completes the build.
+ * - `interrupted` fails a build whose half was cut off mid-run, rather than run
+ *   that half — a release, say — twice.
+ */
+export const runBuildStage = async (input: BuildWiring, job: BuildJob, stage: BuildStage): Promise<BuildStageResult> => {
+    const ports = runnerPortsFor(input, job.runnerId);
+    const { build } = job;
+    const executions = input.environment.RELEASES ? createBuildExecutionStore(input.environment.RELEASES) : undefined;
+
+    if (stage === "interrupted") {
+        const message = "this build's runner was cut off mid-run (a Durable Object alarm runs for at most 15 minutes); push again to rebuild";
+
+        await ports.appendLog(build.buildId, "error", message).catch(() => {});
+        await ports.fail(build.buildId, message);
+
+        return { next: null };
+    }
+
+    if (stage === "release") {
+        const execution = await executions?.get(build.buildId);
+
+        if (execution == null) {
+            await ports.fail(build.buildId, "this build's execution was not kept for its release; push again to rebuild");
+
+            return { next: null };
+        }
+
+        await finishBuild(build, execution, ports);
+        await executions?.delete(build.buildId);
+
+        return { next: null };
+    }
+
+    const executed = await executeBuild(build, ports);
+
+    if ("outcome" in executed) {
+        return { next: null };
+    }
+
+    if (executions === undefined) {
+        await finishBuild(build, executed.execution, ports);
+
+        return { next: null };
+    }
+
+    await executions.put(build.buildId, executed.execution);
+
+    return { next: "release" };
 };

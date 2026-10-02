@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { BuildRunnerPorts } from "../src/builds/runner";
-import { BUILD_EXECUTE_BUDGET_MS, runBuild, SCHEDULED_INVOCATION_LIMIT_MS, withinBudget } from "../src/builds/runner";
+import { ALARM_INVOCATION_LIMIT_MS, BUILD_EXECUTE_BUDGET_MS, withinBudget } from "../src/builds/runner";
 import { parseInstallationEvent, parsePushEvent } from "../src/github/webhook";
+import runBuild from "./support/run-build";
 
 /** Server-side builds + push-to-deploy (GAPS.md A3/A4). */
 
@@ -89,15 +90,15 @@ describe(withinBudget, () => {
             await vi.advanceTimersByTimeAsync(BUILD_EXECUTE_BUDGET_MS + 1);
 
             expect(String(await late)).toContain(
-                `the build ran past 9 minutes, the most one scheduled invocation leaves it (Cloudflare stops a Cron Trigger invocation after ${String(SCHEDULED_INVOCATION_LIMIT_MS / 60_000)} minutes)`,
+                `the build ran past 9 minutes, the most its run leaves it (Cloudflare stops a Durable Object alarm after ${String(ALARM_INVOCATION_LIMIT_MS / 60_000)} minutes)`,
             );
         } finally {
             vi.useRealTimers();
         }
     });
 
-    it("fits the build budget inside the invocation with room for the release", () => {
-        expect(BUILD_EXECUTE_BUDGET_MS).toBeLessThan(SCHEDULED_INVOCATION_LIMIT_MS - 5 * 60 * 1000);
+    it("fits the build budget inside its alarm with room to fetch the source and store the result", () => {
+        expect(BUILD_EXECUTE_BUDGET_MS).toBeLessThan(ALARM_INVOCATION_LIMIT_MS - 5 * 60 * 1000);
     });
 });
 
