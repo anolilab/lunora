@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.166...@lunora/server@1.0.0-alpha.167) (2026-10-02)
+
+### Performance Improvements
+
+* **docs:** serve content loaders as static json ([#922](https://github.com/anolilab/lunora/issues/922)) ([61c1d93](https://github.com/anolilab/lunora/commit/61c1d932e6cf69231d776ea905fd007980b3a1cc)), closes [#914](https://github.com/anolilab/lunora/issues/914)
+
 ## @lunora/server [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.165...@lunora/server@1.0.0-alpha.166) (2026-10-02)
 
 ### Features
