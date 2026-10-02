@@ -3764,6 +3764,9 @@ importers:
         specifier: catalog:mcp
         version: 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.5.4)
     devDependencies:
+      '@lunora/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@lunora/x402':
         specifier: workspace:*
         version: link:../x402
@@ -3776,6 +3779,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.10(vitest@4.1.10)
+      better-auth:
+        specifier: catalog:auth
+        version: 1.7.3(f7ab2d6d8275953a8dec7a3a66800cd7)
       esbuild:
         specifier: catalog:build
         version: 0.28.2
