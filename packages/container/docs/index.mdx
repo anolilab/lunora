@@ -234,13 +234,20 @@ await ctx.containers.agentComputer.get(otherTaskId).start({ snapshot: saved }); 
 [Sandbox SDK 1.0](https://developers.cloudflare.com/sandbox/) moved container
 control into the app's own Durable Object, which is what a `LunoraContainer`
 already is. Its three helpers, `Files`, `DirectoryBackup` and `S3Mount`, are
-built in. Opt a container in with `sandbox: true`, and base its image on
-Cloudflare's `cloudflare/sandbox` image, which ships the `sandbox-shim` helper
-they run at `/usr/local/bin/sandbox-shim`:
+built in. Opt a container in with `sandbox: true`. The helpers run Cloudflare's
+`sandbox-shim` binary inside the container, which must be at
+`/usr/local/bin/sandbox-shim`. Cloudflare publishes it as the image
+`cloudflare/sandbox`, which contains nothing but the shim. Copy it into your own
+image, pinned to the version matching `@cloudflare/sandbox`:
+
+```dockerfile title="containers/workspace/Dockerfile"
+FROM debian:trixie-slim
+COPY --from=docker.io/cloudflare/sandbox:1.0.0 /usr/local/bin/sandbox-shim /usr/local/bin/sandbox-shim
+```
 
 ```ts title="lunora/containers.ts"
 export const workspace = defineContainer({
-    image: "./containers/workspace", // FROM docker.io/cloudflare/sandbox:<version>
+    image: "./containers/workspace",
     sandbox: true,
     backups: { bucket: "WORKSPACE_BACKUPS", prefix: "workspaces/" },
 });
@@ -458,7 +465,11 @@ const code = await process.exitCode;
 ```
 
 The result carries `stdout`/`stderr` streams, `exitCode` (a promise), `kill()`
-and the process `pid`. Pass `stdin: true` to get a writable `stdin`, or a
+and the process `pid`. The container finishes a process's output, and settles
+its exit code, only while every output stream is being drained. Lunora drains
+both for you into a 1MB buffer per stream, so you can read them in any order,
+or await `exitCode` before reading, as long as the stream you are not reading
+stays under that size. For a noisier process, read both concurrently. Pass `stdin: true` to get a writable `stdin`, or a
 `ReadableStream` to pipe in as the whole input. Pass `pty: { cols, rows }` to
 run on a pseudo-terminal: stderr is merged into `stdout`, and `resize()` works.
 An `AbortSignal` in `signal` kills the process.
@@ -484,7 +495,8 @@ app.get("/terminal", async (c) => {
 ```
 
 The wire protocol is what xterm.js speaks. **Binary** frames are keystrokes, and
-a **text** frame `{"cols":120,"rows":40}` resizes the terminal. Output arrives as
+a **text** frame `{"cols":120,"rows":40}` resizes the terminal. Any other text
+frame counts as keystrokes too. Output arrives as
 binary frames, the socket closes with `1000` when the shell exits, and closing
 the socket kills the shell. The initial size comes from the request's
 `?cols=&rows=` search params, else `80×24`.

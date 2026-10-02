@@ -68,7 +68,7 @@ const toSandboxError = (error: unknown, label: string): unknown => {
     if (SandboxProtocolError.is(error)) {
         return new LunoraError("INTERNAL", `${label}: the container did not answer the sandbox helper protocol: ${error.detail}`, {
             cause: error,
-            hint: "The image needs `sandbox-shim` at `/usr/local/bin/sandbox-shim` in a version matching `@cloudflare/sandbox`. Base it on Cloudflare's `cloudflare/sandbox` image.",
+            hint: "The image needs `sandbox-shim` at `/usr/local/bin/sandbox-shim` in a version matching `@cloudflare/sandbox`. Copy it from Cloudflare's `cloudflare/sandbox` image (`COPY --from=docker.io/cloudflare/sandbox:<version> /usr/local/bin/sandbox-shim /usr/local/bin/sandbox-shim`).",
         });
     }
 

@@ -35,6 +35,14 @@ const fakeSocket = () => {
     };
 };
 
+/** Resolve once `ready()` holds — a poll that asserts nothing, so `expect.assertions` counts stay exact. */
+const until = async (ready: () => boolean): Promise<void> =>
+    vi.waitFor(() => {
+        if (!ready()) {
+            throw new Error("not yet");
+        }
+    });
+
 /** A fake PTY process: stdout fed by the test, stdin recorded. */
 const fakeProcess = () => {
     let push: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -131,6 +139,42 @@ describe(openTerminal, () => {
         await settle();
 
         expect(server.closed).toStrictEqual([{ code: 1000, reason: "exited with code 0" }]);
+    });
+
+    it("accepts keystrokes as Blob frames and as non-resize text frames, in arrival order", async () => {
+        expect.assertions(1);
+
+        const { proc, runtime, server, spawn } = setup();
+
+        await openTerminal(spawn, upgradeRequest(), {}, runtime);
+
+        // `wrangler dev`'s proxy hands binary frames over as Blobs.
+        server.emit("message", new Blob(["ls"]));
+        server.emit("message", " -la\n");
+        await until(() => proc.written.length === 2);
+
+        expect(proc.written.join("")).toBe("ls -la\n");
+    });
+
+    it("applies a resize after the keystrokes before it and before the ones after it", async () => {
+        expect.assertions(2);
+
+        const { proc, runtime, server, spawn } = setup();
+        let writtenAtResize: string[] = [];
+
+        vi.mocked(proc.process.resize).mockImplementation(async () => {
+            writtenAtResize = [...proc.written];
+        });
+        await openTerminal(spawn, upgradeRequest(), {}, runtime);
+
+        // A Blob frame resolves its bytes asynchronously; the resize must still wait for it.
+        server.emit("message", new Blob(["a"]));
+        server.emit("message", JSON.stringify({ cols: 120, rows: 40 }));
+        server.emit("message", new TextEncoder().encode("b").buffer);
+        await until(() => proc.written.length === 2);
+
+        expect(proc.written).toStrictEqual(["a", "b"]);
+        expect(writtenAtResize).toStrictEqual(["a"]);
     });
 
     it("kills the shell when the socket closes", async () => {

@@ -1150,9 +1150,9 @@ interface NativeProcess {
     kill: (signal?: number) => void;
     pid?: number;
     resize?: (cols: number, rows: number) => void;
-    stderr: ReadableStream | null;
+    stderr?: ReadableStream | null;
     stdin?: WritableStream | null;
-    stdout: ReadableStream | null;
+    stdout?: ReadableStream | null;
 }
 ```
 

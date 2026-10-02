@@ -10,8 +10,9 @@
  * route would be dangerous there.
  *
  * Wire protocol, matching Cloudflare's Sandbox terminal guide and xterm.js:
- * a **binary** frame is keystrokes for stdin; a **text** frame is a JSON
- * control message `{ "cols": n, "rows": n }` that resizes the PTY. Output
+ * a **binary** frame is keystrokes for stdin; a **text** frame that is the
+ * JSON control message `{ "cols": n, "rows": n }` resizes the PTY, and any
+ * other text frame is keystrokes too (many xterm.js setups send text). Output
  * arrives as binary frames. The socket closes with `1000` when the process
  * exits, and closing the socket kills the process.
  */
@@ -81,6 +82,26 @@ const parseResize = (text: string): { cols: number; rows: number } | undefined =
     }
 };
 
+/**
+ * The bytes of a binary frame. The runtime hands a frame over as an
+ * `ArrayBuffer`, a view, or — behind `wrangler dev`'s proxy — a `Blob`.
+ */
+const frameBytes = async (data: unknown): Promise<Uint8Array | undefined> => {
+    if (data instanceof ArrayBuffer) {
+        return new Uint8Array(data);
+    }
+
+    if (ArrayBuffer.isView(data)) {
+        return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+
+    if (data instanceof Blob) {
+        return new Uint8Array(await data.arrayBuffer());
+    }
+
+    return undefined;
+};
+
 /** Pump the process's output into the socket, then close it with the exit code. */
 const pumpOutput = async (process: ContainerProcess, server: TerminalSocket): Promise<void> => {
     const reader = process.stdout?.getReader();
@@ -136,22 +157,37 @@ const openTerminal = async (
         writer?.close().catch(() => undefined);
     };
 
+    // Every frame's effect is chained, not fired as it arrives: a Blob frame
+    // resolves its bytes asynchronously, and a resize must land before the
+    // keystrokes sent after it (`stty size` right after a resize should see it).
+    let pending = Promise.resolve();
+    const inOrder = (apply: () => Promise<void>): void => {
+        pending = pending.then(apply).catch(end);
+    };
+    const toStdin = (bytes: Promise<Uint8Array | undefined>): void => {
+        inOrder(async () => {
+            const chunk = await bytes;
+
+            if (chunk !== undefined) {
+                await writer?.write(chunk);
+            }
+        });
+    };
+
     server.accept();
     server.addEventListener("message", ({ data }) => {
-        if (typeof data === "string") {
-            const size = parseResize(data);
-
-            if (size !== undefined) {
-                process.resize(size.cols, size.rows).catch(() => undefined);
-            }
+        if (typeof data !== "string") {
+            toStdin(frameBytes(data));
 
             return;
         }
 
-        if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-            const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        const size = parseResize(data);
 
-            writer?.write(bytes).catch(end);
+        if (size === undefined) {
+            toStdin(Promise.resolve(new TextEncoder().encode(data)));
+        } else {
+            inOrder(async () => process.resize(size.cols, size.rows).catch(() => undefined));
         }
     });
     server.addEventListener("close", end);

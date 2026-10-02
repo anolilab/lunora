@@ -17,10 +17,40 @@ interface NativeProcess {
     kill: (signal?: number) => void;
     pid?: number;
     resize?: (cols: number, rows: number) => void;
-    stderr: ReadableStream | null;
+    stderr?: ReadableStream | null;
     stdin?: WritableStream | null;
-    stdout: ReadableStream | null;
+    stdout?: ReadableStream | null;
 }
+
+/**
+ * How much of each output stream the Durable Object buffers ahead of the
+ * caller's reads. The runtime finishes a process's streams, and settles its
+ * exit code, only while every piped stream is being drained, so a caller that
+ * reads stdout to the end before touching stderr (or awaits `exitCode` first)
+ * would otherwise deadlock on the very first byte of the other stream. Draining
+ * both here, into a bounded buffer, lets the caller read in any order as long
+ * as the stream it is not reading stays under this size.
+ */
+const BUFFERED_OUTPUT_BYTES = 1_048_576;
+
+/** Start draining a runtime output stream into a bounded buffer, and return the caller's end of it. */
+const drained = (stream: ReadableStream | null | undefined): ReadableStream<Uint8Array> | null => {
+    // Under a PTY the runtime reports the merged-away stderr as `undefined`, not `null`.
+    if (stream === null || stream === undefined) {
+        // eslint-disable-next-line unicorn/no-null -- mirrors the runtime's ExecProcess stream fields
+        return null;
+    }
+
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>(
+        undefined,
+        new ByteLengthQueuingStrategy({ highWaterMark: BUFFERED_OUTPUT_BYTES }),
+    );
+
+    // A cancelled reader aborts the pipe, which cancels the runtime stream.
+    (stream as ReadableStream<Uint8Array>).pipeTo(writable).catch(() => undefined);
+
+    return readable;
+};
 
 /** The runtime's `ctx.container.exec`, structurally. */
 type NativeExec = (cmd: string[], options?: Record<string, unknown>) => Promise<NativeProcess>;
@@ -127,11 +157,11 @@ const spawnNative = async (
         control: new ContainerProcessControl(process, exit),
         isPty: process.isPty === true,
         pid: process.pid ?? -1,
-        stderr: process.stderr as ReadableStream<Uint8Array> | null,
+        stderr: drained(process.stderr),
         // `null`, not `undefined`, for "no stream", as the runtime's own `ExecProcess` reports it.
         // eslint-disable-next-line unicorn/no-null -- mirrors the runtime's ExecProcess stream fields
         stdin: request.stdin === true ? ((process.stdin ?? null) as WritableStream<Uint8Array> | null) : null,
-        stdout: process.stdout as ReadableStream<Uint8Array> | null,
+        stdout: drained(process.stdout),
     };
 };
 

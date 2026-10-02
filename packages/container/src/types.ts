@@ -253,8 +253,8 @@ interface ContainerConfigBase {
      * Opt in to the Sandbox SDK helpers (`@cloudflare/sandbox`): structured
      * file operations, directory backups to R2 and S3-compatible bucket mounts
      * on a named instance. The image must ship the `sandbox-shim` helper at
-     * `/usr/local/bin/sandbox-shim` — base it on Cloudflare's `cloudflare/sandbox`
-     * image. Turning it on also makes codegen export the `S3Gateway` and
+     * `/usr/local/bin/sandbox-shim`, copied from Cloudflare's shim-only
+     * `cloudflare/sandbox` image (`COPY --from=…`). Turning it on also makes codegen export the `S3Gateway` and
      * `DirectoryBackupGateway` entrypoints from the worker, which the helpers
      * route the container's storage traffic through. Must be a `true`/`false`
      * literal, because codegen reads it. Defaults to `false`.

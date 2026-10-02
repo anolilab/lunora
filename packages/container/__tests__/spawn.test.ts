@@ -117,6 +117,45 @@ describe("lunoraContainer spawn", () => {
         expect(spawned.isPty).toBe(true);
     });
 
+    it("drains both output streams itself, so the caller can read them in any order", async () => {
+        expect.assertions(3);
+
+        let pulled = 0;
+        const stderr = new ReadableStream<Uint8Array>({
+            pull: (controller) => {
+                pulled += 1;
+                controller.enqueue(new TextEncoder().encode("err"));
+                controller.close();
+            },
+        });
+        const { exit, process } = controllableProcess({ stderr });
+        const { instance } = spawnInstance(async () => process);
+        const spawned = await instance.lunoraSpawn({ command: "noisy" });
+
+        // Nothing has read stderr on the caller's side, yet the runtime stream is being drained.
+        await vi.waitFor(() => {
+            if (pulled === 0) {
+                throw new Error("stderr not drained yet");
+            }
+        });
+
+        expect(pulled).toBe(1);
+        await expect(new Response(spawned.stdout).text()).resolves.toBe("hello");
+        await expect(new Response(spawned.stderr).text()).resolves.toBe("err");
+
+        exit(0);
+    });
+
+    it("reports a PTY's merged-away stderr as null, even when the runtime leaves it undefined", async () => {
+        expect.assertions(1);
+
+        const { process } = controllableProcess({ isPty: true, stderr: undefined });
+        const { instance } = spawnInstance(async () => process);
+        const spawned = await instance.lunoraSpawn({ command: "bash", pty: {} });
+
+        expect(spawned.stderr).toBeNull();
+    });
+
     it("refuses resize on a process without a PTY", async () => {
         expect.assertions(1);
 
