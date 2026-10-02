@@ -11,6 +11,12 @@
 > the open platform-abstraction PR
 > ([#190](https://github.com/anolilab/lunora/pull/190), plan 114), and an
 > evaluation of [alchemy](https://alchemy.run) as the provisioning engine.
+>
+> **Updated 2026-10-02** with a fourth input — a teardown of
+> [ryuzcorp/noite](https://github.com/ryuzcorp/noite), a self-hosted celld PaaS —
+> and the decision it prompted: a **BYO-VPS target** the control plane manages
+> (§7.9, implementation in [plan 458](../../plans/458-cloud-celld-vps-target.md)).
+> That decision narrows the first non-goal in §8.
 
 Legend (same as `GAPS.md`): ✅ wired end-to-end · 🧩 pure module, tested, no
 production caller · 🔨 code-tractable now · 🌐 needs live infra/credentials ·
@@ -453,20 +459,41 @@ tested by a second implementation instead of by inspection.
    resolution gating fleet upgrades — the honest reason to force a re-release,
    generalising `src/fleet/upgrade.ts` per target.
 
+### Phase 6 — `celld-vps`: a customer box the control plane manages (🔨 + 🌐)
+
+The first target that is not Cloudflare (§7.9). It gates on Phase 1, not on
+Phase 3: `celld-vps` and `cloudflare-workers` are siblings behind
+`TargetDriver`, and **they are built in parallel** (ruling, 2026-10-02).
+The full plan, with workstreams, gates and STOP conditions, is
+[plan 458](../../plans/458-cloud-celld-vps-target.md).
+
+1. `lunora-hostd`: enrolment, the outbound session, the job loop, a celld and
+   Caddy supervisor, and an install script.
+2. `src/targets/celld-vps/` against the driver conformance suite.
+3. A celld config derived from the stored release's binding manifest, and a
+   per-target binding-support table in the deploy handler.
+4. Usage and logs into `/v1/telemetry`; billing per enrolled box.
+5. Studio: enrolment, box health, and capability-gated tabs.
+
+**Exit:** a `git push` to a project on an enrolled box goes live on the
+customer's domain, with metering, logs, rollback and teardown, and the same
+conformance suite the Cloudflare drivers pass.
+
 ---
 
 ## 7. Decisions needed (🧭)
 
-| #   | Decision                          | Options                                                     | Recommendation                                                                                                                                                      |
-| --- | --------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Alchemy line                      | `0.93.x` stable vs `2.0.0-beta` (Effect)                    | **0.93.x, exact pin.** Provider breadth is the reason to adopt; Effect is a separate, larger bet. Re-evaluate at v2 GA.                                             |
-| 2   | Alchemy scope                     | all provisioning vs resources-only (WfP stays ours)         | **Resources-only.** Alchemy does not model dispatch namespaces, and WfP is the differentiator.                                                                      |
-| 3   | Second target                     | `cloudflare-workers` (BYO) vs Vercel vs AWS                 | **BYO Cloudflare.** Already on the ROADMAP, exercises every seam, no new engine-host work.                                                                          |
-| 4   | Multi-target scope of the promise | "same code anywhere" vs "same code, capability-gated"       | **Capability-gated, stated loudly.** A target without DOs cannot honour hibernated WS subscriptions; promising it is a lie the runtime will expose.                 |
-| 5   | Where converge runs               | control-plane Worker vs build container vs separate service | **Build container.** Forced by Alchemy's Node deps, and correct on blast radius anyway.                                                                             |
-| 6   | Openship code reuse               | patterns only vs port Apache-2.0 modules                    | **Port `core/src/metadata/` (config import) with attribution; patterns only elsewhere.** The rest is machine-shaped. Record it in `LICENSE.md` third-party notices. |
-| 7   | Relationship to PR #190           | wait for it vs build in parallel                            | **Parallel, but take its vocabulary.** `TargetCapabilities` must compose with `PlatformCapabilities`, not compete. Phases 0–2 do not depend on #190 merging.        |
-| 8   | Own the runtime or rent it        | rent Cloudflare vs fork a runtime vs build one              | **Rent, and keep the seam.** The runtime is a cost centre; the control plane and the DX are the product. celld ships unforked as the self-host tier — see below.    |
+| #   | Decision                           | Options                                                     | Recommendation                                                                                                                                                       |
+| --- | ---------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Alchemy line                       | `0.93.x` stable vs `2.0.0-beta` (Effect)                    | **0.93.x, exact pin.** Provider breadth is the reason to adopt; Effect is a separate, larger bet. Re-evaluate at v2 GA.                                              |
+| 2   | Alchemy scope                      | all provisioning vs resources-only (WfP stays ours)         | **Resources-only.** Alchemy does not model dispatch namespaces, and WfP is the differentiator.                                                                       |
+| 3   | Second target                      | `cloudflare-workers` (BYO) vs Vercel vs AWS                 | **BYO Cloudflare.** Already on the ROADMAP, exercises every seam, no new engine-host work.                                                                           |
+| 4   | Multi-target scope of the promise  | "same code anywhere" vs "same code, capability-gated"       | **Capability-gated, stated loudly.** A target without DOs cannot honour hibernated WS subscriptions; promising it is a lie the runtime will expose.                  |
+| 5   | Where converge runs                | control-plane Worker vs build container vs separate service | **Build container.** Forced by Alchemy's Node deps, and correct on blast radius anyway.                                                                              |
+| 6   | Openship code reuse                | patterns only vs port Apache-2.0 modules                    | **Port `core/src/metadata/` (config import) with attribution; patterns only elsewhere.** The rest is machine-shaped. Record it in `LICENSE.md` third-party notices.  |
+| 7   | Relationship to PR #190            | wait for it vs build in parallel                            | **Parallel, but take its vocabulary.** `TargetCapabilities` must compose with `PlatformCapabilities`, not compete. Phases 0–2 do not depend on #190 merging.         |
+| 8   | Own the runtime or rent it         | rent Cloudflare vs fork a runtime vs build one              | **Rent, and keep the seam.** The runtime is a cost centre; the control plane and the DX are the product. celld ships unforked as the self-host tier — see below.     |
+| 9   | Manage a box that isn't Cloudflare | no / SSH-push / install Noite / our own outbound agent      | **Our own outbound agent, one customer per box.** A `celld-vps` target: the customer's VPS runs celld + `lunora-hostd`, the control plane stays on Cloudflare. §7.9. |
 
 ### 7.8 Own the runtime or rent it — the long form
 
@@ -544,15 +571,114 @@ fork we let diverge. Fork the day we are already carrying a rejected patch.
 product for them — the same platform risk Cloudflare already represents. That is
 an argument for the abstraction, not for owning a second runtime.
 
+### 7.9 BYO-VPS — a celld box the control plane manages
+
+Row 9 is the first target that is not Cloudflare at all. It is the self-host tier
+§7.8 already blessed, with one difference: the customer brings the machine and
+**Lunora Cloud runs it**, instead of the customer running `celld deploy` by hand.
+
+**What Noite showed.** [ryuzcorp/noite](https://github.com/ryuzcorp/noite)
+(Apache-2.0, alpha, Rust runner + TypeScript UI) is a small PaaS built on celld.
+It ships as one Docker image:
+
+- a Rust runner, PID 1, which supervises Caddy, a control UI that is itself a
+  celld app, and one celld fleet per tenant app;
+- Caddy for on-demand TLS and routing by hostname;
+- one S3 bucket that holds everything durable (git bundles, fleet state, Parquet
+  telemetry, snapshots of the runner's SQLite), so the disk is a rebuildable cache.
+
+Noite is single-operator by design: no organizations, no multiple hosts, no
+billing. It is the on-box half of this feature with no control plane above it.
+Lunora Cloud is the reverse: a control plane with no box to manage. So we take
+**Noite's on-box patterns** and connect them to **our control plane**. We do not
+take its product (see the alternatives below).
+
+**The shape.**
+
+```
+Lunora Cloud (stays on Cloudflare)               Customer VPS (one customer)
+ control plane ── jobs · secrets · config ──►  lunora-hostd  (dials out; no inbound port)
+ RELEASES ── bundle · manifest · assets ────►   ├─ celld fleet per project
+                                                 │    CELLD_BUCKET = the customer's bucket
+ /v1/telemetry ◄────────── OTLP ──────────────   ├─ Caddy: on-demand TLS, ask-gated by the agent
+                                                 └─ celld + Caddy versions pinned by the control plane
+```
+
+Five rules make it honest:
+
+1. **The agent dials out.** It holds a long-lived WebSocket to the control plane
+   and receives jobs on it. We never hold SSH keys or root on a customer box, and
+   the box exposes only 80/443. This is the line between this design and
+   openship-style SSH executors (§2 gap 12, still rejected).
+2. **One customer per box.** celld states it is not safe for hostile multi-tenant
+   use (§7.8). One organization's projects are mutually trusting, so they may
+   share a box, still as **one fleet per project**, which is celld's own rule.
+   A box is bound to exactly one organization at enrolment and never rebound.
+3. **The customer owns the bucket.** Fleet state lives in an S3-compatible bucket
+   the customer controls. Its credentials stay on the box: the control plane
+   never sees them and so cannot read tenant rows. Leaving Lunora means keeping
+   the bucket. This makes the no-lock-in promise literally true.
+4. **Builds stay central.** A release reaches a box exactly as it reaches
+   Workers for Platforms: the stored release (bundle + binding manifest +
+   assets) in `RELEASES`. The box fetches it over an authenticated route and
+   derives the celld config from the manifest. Building on the box (Noite's
+   way) would duplicate the build pipeline and put a Node toolchain plus
+   untrusted install scripts on a 2 GB machine.
+5. **Versions are ours to roll.** celld patches only its latest release (§7.8).
+   The control plane pins a celld + Caddy version per box and `hostd`
+   converges to it. Upgrades are pushed, never left to the customer.
+
+**What the target can and cannot do** is already written down:
+`packages/platform/src/capabilities/celld.ts` rates every feature against celld
+v0.6.0. The deploy handler refuses an unsupported binding by name before
+anything is created, per target: AI, Analytics Engine, Hyperdrive, Browser,
+Images, Pipelines and PITR are `unsupported` on celld.
+
+**Metering changes meaning.** The customer pays for the box, so request volume
+is not our cost and is not what we bill. A `celld-vps` project is billed per
+enrolled box (plan 458 §4). Usage is still collected for the studio, but it
+cannot come from Analytics Engine. App traces and logs reach the existing
+`/v1/telemetry` ingest through Lunora's own `otlpSink`. Request counts come
+from the agent, which owns the edge.
+
+**Alternatives rejected.**
+
+| Option                                     | Why not                                                                                                                                                                            |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SSH push from the control plane            | We would hold root credentials to every customer box, and it needs an inbound port. One leaked control-plane secret becomes root on the whole fleet.                               |
+| Install Noite on the box and drive its API | Single operator, no orgs, alpha, a second product we would depend on. Its API is shaped for a human operator. We would also inherit a Git server and on-box builds we do not want. |
+| A Lunora-operated multi-tenant celld fleet | Still gated by §7.8: celld has no hostile-multi-tenant boundary, and only the latest release is patched.                                                                           |
+| Wait for hosted celld from Deno            | Possible, but it is the same platform risk as Cloudflare. The `TargetDriver` seam keeps that option open at no cost.                                                               |
+
+**Cost.** A new deliverable that is not a Worker: `lunora-hostd`, a Node SEA
+binary plus an install script. (Not "lunora-agent": `@lunora/agent` is the AI
+agent package.) It lives in `apps/hostd` under the framework's FSL rather than
+in this PolyForm tree, and it has no standalone mode: it only takes jobs from
+Lunora Cloud (plan 458, D15–D17). Also a box-session Durable Object in the control plane, the
+first WebSocket endpoint `apps/cloud` has, a `celld-vps` driver behind `TargetDriver`, and enrolment and box
+health in the studio. It **depends on Phase 1** (the `TargetDriver`
+extraction). Doing it earlier means writing the second target against an
+interface that does not exist yet, which is exactly what §9 forbids.
+
+**When to stop.** If celld's operator API or bucket contract changes
+incompatibly between two minor releases twice in a row, the target is too
+expensive to keep current. Pause it at the last good celld pin and revisit when
+celld reaches 1.0.
+
 ---
 
 ## 8. Non-goals
 
 Stated so they don't creep back in:
 
-- **We are not building a general-purpose PaaS.** No Docker, no VPS, no systemd,
-  no port allocation, no OpenResty, no SSH executors. Lunora Cloud deploys
-  **Lunora apps**. Gaps 9, 12 in §2 are permanent rejections, not backlog.
+- **We are not building a general-purpose PaaS.** No Docker images of user
+  apps, no OpenResty, no SSH executors, no workloads that are not Lunora apps.
+  Lunora Cloud deploys **Lunora apps**. Gaps 9, 12 in §2 are permanent
+  rejections, not backlog. _Narrowed 2026-10-02 (§7.9):_ the original bullet
+  also ruled out any VPS, systemd and port allocation. The `celld-vps` target
+  needs all three — on the **customer's** box, one customer per box, running
+  only celld fleets of Lunora apps. We still do not rent, operate or bin-pack
+  VPSes ourselves; that stays gated by §7.8.
 - **We are not running an MTA.** `@lunora/mail` → Resend, full stop.
 - **We are not promising target parity.** Capability-gated, per §7.4.
 - **We are not building or forking a runtime.** Per §7.8: we rent the substrate
@@ -578,3 +704,7 @@ This plan competes with `GAPS.md` for the same hands, so the interleave matters:
    a near-term commercial priority, stop after Phase 2 — Phases 0–2 pay for
    themselves inside the Cloudflare-only product, and Phase 1's conformance
    suite keeps the seam honest until a second target arrives.
+5. **Phases 3 and 6 run in parallel once Phase 1 is green** (ruling,
+   2026-10-02). Interface changes land in their own PR with every driver
+   updated. Neither target reaches early access until both pass the same
+   conformance suite. Plan 458 §7 has the rules.
