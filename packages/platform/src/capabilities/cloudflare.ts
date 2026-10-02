@@ -132,6 +132,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
+        services: {
+            level: "native",
+            note: "Cloudflare service bindings: the bound Worker runs on the same thread of the same server, with no extra request fee. Fetch services and WorkerEntrypoint RPC both work, in deploy and in local dev (auxiliary Workers / multiple wrangler configs)",
+        },
         topics: {
             level: "emulated",
             note: "Lunora's fan-out over Cloudflare Queues — a queue allows one consumer, so each subscription is its own queue (own retries and dead-letter queue) and a publish sends to every one in parallel. Not atomic: a failed send rejects the publish and a retry re-delivers to the subscriptions that already got it. No ordering key",

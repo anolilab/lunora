@@ -1,10 +1,15 @@
+import { isAbsolute, relative, sep } from "node:path";
+
 import { LunoraError } from "@lunora/errors";
 
 import type { CapabilityKey, CapabilityTier } from "../capabilities";
 import { SERVER_CTX_FIELDS } from "../capabilities";
-import type { AgentIR, ContainerIR, EnvIR, IdentityIR, QueueIR, SchemaIR, TopicIR, WorkflowIR } from "../ir";
+import type { AgentIR, ContainerIR, EnvIR, IdentityIR, QueueIR, SchemaIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
 import { plainQueues } from "../ir";
 import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, unwrapOptional } from "./shared";
+
+/** A TypeScript source extension, swapped for its JS twin (`.ts`→`.js`, `.mts`→`.mjs`, `.cts`→`.cjs`) in an emitted import specifier. */
+const TS_EXTENSION_RE = /\.([cm]?)tsx?$/u;
 
 /**
  * Emit `_generated/server.ts` — re-exports of the user-facing factories
@@ -72,6 +77,9 @@ interface EmitServerOptions {
      */
     env?: EnvIR;
 
+    /** Absolute `_generated/` directory, so an RPC service's entry module is imported by a path relative to it. Required with `services`. */
+    generatedDirectory?: string;
+
     /**
      * A `lunora/` source reads `ctx.access` — wires the verified Cloudflare Access
      * facade (`@lunora/cloudflare-access/context`) onto every ctx. Distinct from
@@ -101,6 +109,7 @@ interface EmitServerOptions {
     hasR2sql?: boolean;
     /** The target platform supports a vector store. `false` withholds `ctx.vectors` even when the schema declares an index. */
     hasVectors?: boolean;
+
     /** A `lunora/` source uses `@lunora/x402/pay` / `ctx.x402` — wires the agent-wallet pay rail onto ActionCtx only. */
     hasX402?: boolean;
 
@@ -116,6 +125,8 @@ interface EmitServerOptions {
     /** Queues declared via `defineQueue` exports — wires the typed `ctx.queues` producers onto Mutation/Action contexts. */
     queues?: ReadonlyArray<QueueIR>;
     schema?: SchemaIR;
+    /** Sibling Workers declared in `lunora.config.*` `services` — wires a typed `ctx.services` onto ActionCtx (plan 457). */
+    services?: ReadonlyArray<ServiceBindingIR>;
     storageRuleBuckets?: ReadonlyArray<string>;
     /** Topics declared via `defineTopic` exports — wires the typed `ctx.topics` publishers onto Mutation/Action contexts. */
     topics?: ReadonlyArray<TopicIR>;
@@ -146,6 +157,8 @@ const emitServer = ({
     identity,
     queues = [],
     schema,
+    generatedDirectory = "",
+    services = [],
     storageRuleBuckets = [],
     topics = [],
     useUmbrella = false,
@@ -391,6 +404,55 @@ ${topics.map((topic) => `    readonly ${topic.exportName}: TopicPublisher<QueueB
     const queuesContextField = hasQueues ? `\n    readonly queues: LunoraQueues;` : "";
     const topicsContextField = hasTopics ? `\n    readonly topics: LunoraTopics;` : "";
 
+    // Services (plan 457) are action-only, like `ctx.browser`: a cross-Worker call
+    // is non-deterministic I/O a query re-run or a mutation rollback cannot undo.
+    // An RPC service is typed from its own entry module, which pulls that service's
+    // sources (and its `cloudflare:workers` import) into the app's type check: a
+    // type error there fails the app's. A fetch service needs no import.
+    const hasServices = services.length > 0;
+    // The service's entry module as a `.js`-suffixed relative specifier from
+    // `_generated/` — the form generated imports use under NodeNext.
+    const serviceTypeImport = (main: string): string => {
+        if (generatedDirectory === "") {
+            throw new LunoraError("INTERNAL", "@lunora/codegen: emitServer needs `generatedDirectory` to import an RPC service's types");
+        }
+
+        const fromGenerated = relative(generatedDirectory, main);
+
+        // Another Windows drive has no relative path; an absolute one is not a valid specifier.
+        if (isAbsolute(fromGenerated)) {
+            throw new LunoraError("INTERNAL", `@lunora/codegen: an RPC service's entry (${main}) must be on the same drive as the app`);
+        }
+
+        const relativePath = fromGenerated.split(sep).join("/").replace(TS_EXTENSION_RE, ".$1js");
+
+        return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+    };
+    const rpcServices = services.filter((service) => service.entrypoint !== undefined);
+    const serviceTypeNames = rpcServices.length > 0 ? "ServiceFetcher, ServiceRpc" : "ServiceFetcher";
+    const servicesTypeImport = hasServices
+        ? `import type { ${serviceTypeNames} } from "${base.server}";\n${rpcServices
+              .map((service) => `import type * as lunoraService_${service.name} from ${JSON.stringify(serviceTypeImport(service.main))};\n`)
+              .join("")}`
+        : "";
+    const servicesTypeBlock = hasServices
+        ? `
+
+/** This project's service bindings (\`lunora.config\` \`services\`), addressable from \`ctx.services\` in actions. */
+export interface LunoraServices {
+${services
+    .map((service) => {
+        assertIdentifier(service.name, `service "${service.name}"`);
+
+        const type = service.entrypoint === undefined ? "ServiceFetcher" : `ServiceRpc<typeof lunoraService_${service.name}.${service.entrypoint}>`;
+
+        return `    readonly ${service.name}: ${type};`;
+    })
+    .join("\n")}
+}`
+        : "";
+    const servicesActionField = hasServices ? `\n    readonly services: LunoraServices;` : "";
+
     // Agents live on BOTH MutationCtx and ActionCtx (an agent run is kicked off
     // from a mutation or an action — like `ctx.workflows` / `ctx.queues`). Each
     // declared agent becomes a typed `AgentHandle` producer. The base contexts
@@ -526,7 +588,7 @@ export type {
 } from "${base.serverDataModel}";
 
 import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
-${vectorsTypeImport}${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
+${vectorsTypeImport}${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${servicesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /**
@@ -586,7 +648,7 @@ export interface OrmWriter extends OrmReader {
 }
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
-export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${agentsTypeBlock}${identityTypeBlock}${envTypeBlock}
+export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${servicesTypeBlock}${agentsTypeBlock}${identityTypeBlock}${envTypeBlock}
 
 /**
  * Project-typed contexts. The base contexts from \`@lunora/server\` are
@@ -664,7 +726,7 @@ export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${vec
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${servicesActionField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
 }
 
 /**

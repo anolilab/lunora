@@ -6,6 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { readServiceBindings } from "@lunora/codegen";
 import { detectFramework, DEV_VARS_FILE, parseDevVariableEntries, resolveDeployDriver, resolveProjectTarget, targetRunsOwnDevServer } from "@lunora/config";
 import { findWranglerFile, materializeRemoteWranglerConfig, readWranglerJsonc } from "@lunora/config/cloudflare";
 
@@ -65,6 +66,31 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
     }
 
     return { args: ["--config", result.configPath], plan: { bindings, cleanup, enabled: true } };
+};
+
+/**
+ * One `--config` per `lunora.config` service (plan 457), so a `wrangler dev`
+ * runs the sibling Workers in the same session and the app's `services[]`
+ * bindings resolve to them locally. Two keys bound to one Worker add it once.
+ * A declaration codegen rejects adds nothing; codegen reports it.
+ */
+const serviceConfigArgs = (cwd: string): string[] =>
+    [...new Set(readServiceBindings(cwd).services.map((service) => service.wranglerPath))].flatMap((path) => ["--config", path]);
+
+/**
+ * The wrangler flavor's {@link serviceConfigArgs}. wrangler treats the first
+ * `--config` as the primary Worker, so the app's own config leads when no
+ * remote temp config already does.
+ */
+const resolveServiceArgs = (cwd: string, remoteArgs: ReadonlyArray<string>): string[] => {
+    const services = serviceConfigArgs(cwd);
+    const primary = findWranglerFile(cwd);
+
+    if (services.length === 0 || primary === undefined) {
+        return [];
+    }
+
+    return [...(remoteArgs.length > 0 ? [] : ["--config", primary]), ...services];
 };
 
 /** Read `dev.ip` from one wrangler config file, or `undefined` when unset / the file doesn't parse. */
@@ -252,7 +278,9 @@ const planWorkerSidecar = (options: DevCommandOptions, cwd: string, manager: Ret
 
     const devCommand = driver.toolchain.dev({
         configPath: DEV_WRANGLER_CONFIG,
-        extraArgs: [...loopbackArgs, "--var", "WORKER_ENV:development"],
+        // The sidecar's worker hosts the actions, so it runs the services beside it;
+        // reconcile writes their bindings into `wrangler.dev.jsonc`.
+        extraArgs: [...loopbackArgs, "--var", "WORKER_ENV:development", ...serviceConfigArgs(cwd)],
     });
     const exec = toolchainExecArgs(manager, devCommand);
 
@@ -375,6 +403,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         "--var",
         "WORKER_ENV:development",
         ...remote.args,
+        ...resolveServiceArgs(cwd, remote.args),
     ]);
 
     return {

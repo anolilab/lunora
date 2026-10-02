@@ -773,6 +773,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ServiceBindingSpec` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceFetcher` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceRpc` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShapeDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1174,6 +1186,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `createSecrets` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `createServices` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5639,6 +5655,18 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ServiceBindingSpec` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceFetcher` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ServiceRpc` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShapeDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6040,6 +6068,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `createSecrets` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `createServices` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

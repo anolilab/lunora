@@ -12,6 +12,8 @@ export {
     LUNORA_SKILL_NAMES,
     ROOT_SKILL_NAME,
 } from "./agent-rules";
+export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
+export { startCelldDevSession } from "./celld/dev-session";
 export { CODEGEN_ENV, isCodegenDisabled } from "./codegen-env";
 export type { ContainerIR, DiscoverContainerInfoResult } from "./container-info";
 export { discoverContainerInfo } from "./container-info";
@@ -37,6 +39,8 @@ export type {
 } from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework, projectUsesUmbrella, readProjectDependencyNames } from "./detect-framework";
+export type { DevProcess, DevProcessOptions, DevProcessSpawner } from "./dev-process";
+export { acceptsConnection, startDevProcess } from "./dev-process";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
 export {
     claimDevServerState,

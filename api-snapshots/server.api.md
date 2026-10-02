@@ -2052,6 +2052,32 @@ interface SearchIndexDefinition {
 }
 ```
 
+### `ServiceBindingSpec` (interface)
+
+```ts
+interface ServiceBindingSpec {
+    readonly binding: string;
+    readonly name: string;
+    readonly rpc?: true;
+}
+```
+
+### `ServiceFetcher` (interface)
+
+```ts
+interface ServiceFetcher {
+    readonly fetch: (input: Request | string | URL, init?: RequestInit) => Promise<Response>;
+}
+```
+
+### `ServiceRpc` (type)
+
+```ts
+type ServiceRpc<Entrypoint extends abstract new (...parameters: never[]) => unknown> = ServiceFetcher & {
+    readonly [Key in keyof InstanceType<Entrypoint> as InstanceType<Entrypoint>[Key] extends ((...parameters: never[]) => unknown) ? Key : never]: InstanceType<Entrypoint>[Key] extends ((...parameters: infer Parameters) => infer Result) ? (...parameters: Parameters) => Promise<Awaited<Result>> : never;
+};
+```
+
 ### `ShapeDefinition` (interface)
 
 ```ts
@@ -3084,6 +3110,12 @@ const createPolicyDsl: <DM, REL extends Record<keyof DM, object>, Identity = Rec
 
 ```ts
 const createSecrets: (env: Record<string, unknown>) => Secrets;
+```
+
+### `createServices` (const)
+
+```ts
+const createServices: (env: Record<string, unknown>, specs: ReadonlyArray<ServiceBindingSpec>) => Record<string, unknown>;
 ```
 
 ### `cronJobs` (const)

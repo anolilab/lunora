@@ -306,6 +306,33 @@ export default defineModule({ description: "Invoices and payments", tables: ["in
 - Keep ids typed `Id<"table">` — a write through an untyped `string` id cannot
   be attributed to a table.
 
+## Services: calling sibling Workers
+
+A Worker the app calls (a parser, an LLM gateway) is declared in
+`lunora.config.ts`, not discovered. Each one becomes a typed `ctx.services.<key>`
+on **actions** (not queries/mutations: a cross-Worker call cannot be replayed or
+rolled back; HTTP actions reach it through `ctx.runAction`):
+
+```ts
+// lunora.config.ts
+export default {
+    services: {
+        documentParser: { dir: "services/document-parser" }, // fetch service
+        llmGateway: { dir: "services/llm-gateway", entrypoint: "Gateway" }, // RPC
+    },
+};
+
+// in an action
+const parsed = await ctx.services.documentParser.fetch("https://parser/parse", { body, method: "POST" });
+const text = await ctx.services.llmGateway.complete(prompt); // typed from the Gateway class
+```
+
+- The Worker name and entry come from `<dir>/wrangler.jsonc`; Lunora writes the
+  `services[]` binding (`SERVICE_<KEY>`), runs it in the same `lunora dev` /
+  `vite dev` session, and deploys it before the app.
+- A bound service needs no URL, no `*_URL` var and no HMAC: set
+  `"workers_dev": false` on it (`lunora doctor` warns otherwise).
+
 ## HTTP endpoints
 
 For webhooks or non-RPC HTTP, use `httpRouter` / `httpRoute` + `httpAction`:

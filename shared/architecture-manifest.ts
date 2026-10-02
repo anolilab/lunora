@@ -8,10 +8,10 @@
  */
 
 /** The resources a node can stand for. */
-export type ArchitectureNodeKind = "cron" | "function" | "http" | "queue" | "table" | "topic" | "workflow";
+export type ArchitectureNodeKind = "cron" | "function" | "http" | "queue" | "service" | "table" | "topic" | "workflow";
 
 /** How two nodes relate. */
-export type ArchitectureEdgeKind = "call" | "enqueue" | "publish" | "read" | "schedule" | "start" | "subscribe" | "trigger" | "write";
+export type ArchitectureEdgeKind = "call" | "enqueue" | "invoke" | "publish" | "read" | "schedule" | "start" | "subscribe" | "trigger" | "write";
 
 export interface ArchitectureNode {
     /** Short qualifier: a function's kind (`query`, …), `subscription` for a topic's queue, a cron's schedule. */
@@ -59,7 +59,18 @@ export interface ArchitectureManifest {
 }
 
 /** Every edge kind, in the order the studio's filter lists them. */
-export const EDGE_KINDS: ReadonlyArray<ArchitectureEdgeKind> = ["call", "schedule", "read", "write", "enqueue", "publish", "subscribe", "start", "trigger"];
+export const EDGE_KINDS: ReadonlyArray<ArchitectureEdgeKind> = [
+    "call",
+    "schedule",
+    "read",
+    "write",
+    "enqueue",
+    "publish",
+    "subscribe",
+    "start",
+    "trigger",
+    "invoke",
+];
 
 /** The manifest of an app that declares no module. */
 export const EMPTY_ARCHITECTURE: Readonly<ArchitectureManifest> = Object.freeze({ edges: [], nodes: [], modules: [], unresolved: [], version: 1 });

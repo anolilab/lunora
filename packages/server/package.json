@@ -89,6 +89,8 @@
         "hono": "catalog:http"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/observability": "1.0.0-alpha.112",
         "@lunora/search-core": "workspace:*",
@@ -99,7 +101,8 @@
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
         "@opentelemetry/api": "^1.9.0"

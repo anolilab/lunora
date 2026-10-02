@@ -1,13 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { lunoraLine } from "@lunora/config";
+import type { CelldDevSession } from "@lunora/config";
+import { lunoraLine, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
 import { createStudioMiddleware, isNonLoopbackHost, studioMountPath } from "@lunora/config/studio-host";
 
 import { resolveOptions } from "./options";
 import { LunoraRspackPlugin } from "./plugin";
 import type { LunoraRspackOptions, ResolvedLunoraRspackOptions } from "./types";
 import type { WorkerProcess } from "./worker";
-import { resolveWorkerPort, startWorker } from "./worker";
+import { printWorkerLine, resolveWorkerPort, startWorker } from "./worker";
 
 /** Path prefix the Lunora Worker serves — RPC, the WebSocket, and the studio. */
 const LUNORA_PATH = "/_lunora";
@@ -219,6 +220,7 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
             }
 
             let worker: WorkerProcess | undefined;
+            let celld: CelldDevSession | undefined;
 
             api.onBeforeStartDevServer(async () => {
                 // BEFORE the spawn. Rsbuild runs this hook ahead of the first
@@ -237,12 +239,38 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
                 // eslint-disable-next-line no-console -- startup notice, before any compilation has a logger
                 console.info(lunoraLine(`starting the worker on http://127.0.0.1:${String(port)} …`));
 
+                // celld runs its own dev server: `celld dev` serves the Worker,
+                // with each `lunora.config` service registered into its local
+                // state first, behind the same proxy.
+                if (targetRunsOwnDevServer(resolved.target)) {
+                    const session = await startCelldDevSession({
+                        // A structured Lunora event formats as under wrangler; a service's own line names it.
+                        log: (line, { tag }) => {
+                            printWorkerLine(tag === "celld" ? line : `[${tag}] ${line}`);
+                        },
+                        port,
+                        projectRoot: resolved.projectRoot,
+                    });
+
+                    celld = session;
+                    const reportExit = (code: number): void => {
+                        // eslint-disable-next-line no-console -- dev-server notice; the proxy now points at nothing
+                        console.error(lunoraLine(`the worker on celld exited (code ${String(code)}) — restart \`rsbuild dev\` to bring it back`));
+                    };
+
+                    session.exited.then(reportExit).catch(() => undefined);
+
+                    return;
+                }
+
                 worker = await startWorker({ port, projectRoot: resolved.projectRoot, wranglerArgs: options?.wranglerArgs });
             });
 
             api.onCloseDevServer(async () => {
                 await worker?.stop();
+                await celld?.stop();
                 worker = undefined;
+                celld = undefined;
             });
         },
     };

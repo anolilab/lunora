@@ -13,6 +13,9 @@ export const EXAMPLES = [
     { name: "team-chat", port: 5275 },
     { name: "chess", port: 5276 },
     { name: "tanstack-start", port: 5277 },
+    // Plan 457: two sibling Workers run as auxiliary Workers in the same
+    // `vite dev` session, bound to the app as `ctx.services`.
+    { name: "services", port: 5278 },
 ] as const;
 
 /**

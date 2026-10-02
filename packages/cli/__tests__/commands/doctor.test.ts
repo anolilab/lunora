@@ -137,6 +137,33 @@ describe("runDoctor", () => {
         expect(result.findings.some((finding) => finding.level === "warn")).toBe(false);
     });
 
+    it("warns about a bound service still public on workers.dev, per environment, but not one with a route", async () => {
+        expect.assertions(1);
+
+        seed(workdir, CLEAN_WRANGLER);
+        writeFileSync(
+            join(workdir, "lunora.config.ts"),
+            `export default { services: { parser: { dir: "./services/parser" }, gateway: { dir: "./services/gateway" } } };\n`,
+        );
+        mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+        mkdirSync(join(workdir, "services", "gateway"), { recursive: true });
+        writeFileSync(
+            join(workdir, "services", "parser", "wrangler.jsonc"),
+            `{ "name": "parser", "main": "src/index.ts", "env": { "production": { "workers_dev": false } } }\n`,
+        );
+        writeFileSync(
+            join(workdir, "services", "gateway", "wrangler.jsonc"),
+            `{ "name": "gateway", "main": "src/index.ts", "routes": [{ "pattern": "llm.example.com", "custom_domain": true }], "env": { "staging": { "routes": [] } } }\n`,
+        );
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.findings.filter((finding) => finding.code === "service-workers-dev").map((finding) => finding.message)).toStrictEqual([
+            "service gateway (gateway) is bound by the app but still public on workers.dev (env.staging).",
+            "service parser (parser) is bound by the app but still public on workers.dev.",
+        ]);
+    });
+
     describe("blast-radius guardrails", () => {
         it("prompts for a CPU cap when none is set, without failing the run", async () => {
             expect.assertions(3);

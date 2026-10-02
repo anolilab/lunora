@@ -24,9 +24,12 @@ import { containerBuildTag } from "@lunora/container";
 import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
+import type { Manifest } from "./lunora-manifest";
 import { readManifest } from "./lunora-manifest";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
+import type { OwnedServices } from "./reconcile-services";
+import { readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
 import collectWarnings from "./reconcile-warnings";
 import { objectBindingEntries, stringEntries } from "./validate-bindings";
 import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
@@ -67,12 +70,16 @@ interface ReconcileBindingsResult {
     /** `true` when `wrangler.jsonc` was rewritten. */
     changed: boolean;
 
+    /** What was written to the SvelteKit / Nuxt dev sidecar's own config, when anything was. */
+    devConfig?: { added: string[]; path: string; updated: string[] };
+
     /**
      * Declared containers/workflows the worker entry doesn't re-export — the
      * structured form of the corresponding `warnings` entries, for the dev error
      * overlay. Empty when every declaration is wired.
      */
     exportGaps: ExportGap[];
+
     /** Reason reconciliation was skipped, for logging. */
     reason?: string;
 
@@ -84,6 +91,7 @@ interface ReconcileBindingsResult {
     updated: string[];
     /** Non-fatal hints for capabilities that cannot be auto-provisioned. */
     warnings: string[];
+
     /** Resolved wrangler path, or `undefined` when none was found. */
     wranglerPath?: string;
 }
@@ -747,12 +755,15 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     const manifest = readManifest(projectRoot);
     const ownedTuning = readOwnedTuning(manifest, warnings);
     const ownedScopes: Record<string, OwnedTuning> = {};
+    const ownedServicesRecord = readOwnedServices(manifest);
+    let ownedServices: OwnedServices | undefined;
 
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
     // browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
-    // observability vs exports + workflows). A future step that depends on a key an
+    // observability vs exports + workflows vs queues vs services + env.*.services;
+    // the env queue step writes only env.<name>.queues). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (ai/browser/images/analytics) auto-write here;
     // their hint-only siblings (kv/hyperdrive/pipelines) carry an un-mintable
@@ -777,6 +788,19 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
                 const step = reconcileQueues(text, parsed, inferred.queues, ownedTuning.queues ?? {});
 
                 ownedScopes.queues = step.owned;
+
+                return step;
+            },
+        },
+        {
+            // Also runs with nothing declared, so an owned entry goes once its declaration does.
+            // Skipped when the declaration is unreadable: reconciling against "none"
+            // would strip every owned entry over a typo.
+            enabled: inferred.services !== undefined && (inferred.services.length > 0 || Object.keys(ownedServicesRecord).length > 0),
+            run: (text) => {
+                const step = reconcileServices(text, parsed, inferred.services ?? [], ownedServicesRecord);
+
+                ownedServices = step.owned;
 
                 return step;
             },
@@ -819,20 +843,65 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // before: a record ahead of the file would let the next pass remove a field
     // this one never managed to write.
     const recordOwnership = (wranglerWritten: boolean): void => {
-        if (manifest === undefined || Object.keys(ownedScopes).length === 0) {
+        if (manifest === undefined) {
             return;
         }
 
-        // Its own failure, not the caller's "binding inference skipped": the
-        // config change it describes may already be on disk.
-        try {
-            recordOwnedTuning(manifest, ownedTuning, ownedScopes);
-        } catch (error: unknown) {
-            warnings.push(
-                `${wranglerWritten ? "wrangler.jsonc was updated, but " : ""}recording the queue tuning reconcile owns in ${manifest.path} (lunora.queueTuning) failed: ${error instanceof Error ? error.message : String(error)}. Until it is recorded, an option removed from defineQueue stays deployed.`,
-            );
+        const servicesOwned = ownedServices;
+        const records = [
+            ...(Object.keys(ownedScopes).length > 0
+                ? [
+                      {
+                          consequence: "an option removed from defineQueue stays deployed",
+                          key: "queueTuning",
+                          label: "queue tuning",
+                          write: (current: Manifest) => {
+                              recordOwnedTuning(current, ownedTuning, ownedScopes);
+                          },
+                      },
+                  ]
+                : []),
+            ...(servicesOwned === undefined
+                ? []
+                : [
+                      {
+                          consequence: "a service removed from lunora.config stays bound",
+                          key: "services",
+                          label: "service bindings",
+                          write: (current: Manifest) => {
+                              recordOwnedServices(current, servicesOwned);
+                          },
+                      },
+                  ]),
+        ];
+
+        for (const record of records) {
+            // Its own failure, not the caller's "binding inference skipped": the
+            // config change it describes may already be on disk.
+            try {
+                // Re-read per record: each write starts from the file as the last
+                // one left it, or the second would drop the key the first wrote.
+                record.write(readManifest(projectRoot) ?? manifest);
+            } catch (error: unknown) {
+                warnings.push(
+                    `${wranglerWritten ? "wrangler.jsonc was updated, but " : ""}recording the ${record.label} reconcile owns in ${manifest.path} (lunora.${record.key}) failed: ${error instanceof Error ? error.message : String(error)}. Until it is recorded, ${record.consequence}.`,
+                );
+            }
         }
     };
+
+    // The SvelteKit / Nuxt dev sidecar runs its own `wrangler.dev.jsonc`; its
+    // worker hosts the actions, so it gets the same service bindings. Same
+    // skip-when-unreadable rule as the step above.
+    let devConfig: ReconcileBindingsResult["devConfig"];
+
+    if (inferred.services !== undefined) {
+        const devStep = reconcileDevConfigServices(projectRoot, inferred.services, ownedServicesRecord);
+
+        warnings.push(...devStep.warnings);
+        ownedServices = { ...ownedServices, ...devStep.owned };
+        devConfig = devStep.added.length > 0 || devStep.updated.length > 0 ? { added: devStep.added, path: devStep.path, updated: devStep.updated } : undefined;
+    }
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
     // user runs `wrangler d1 create` before the deploy reaches wrangler (which
@@ -847,13 +916,13 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     if (text === original) {
         recordOwnership(false);
 
-        return { added: [], changed: false, exportGaps, reason: "bindings already in sync", updated: [], warnings, wranglerPath };
+        return { added, changed: false, devConfig, exportGaps, reason: "bindings already in sync", updated, warnings, wranglerPath };
     }
 
     writeFileSync(wranglerPath, text, "utf8");
     recordOwnership(true);
 
-    return { added, changed: true, exportGaps, updated, warnings, wranglerPath };
+    return { added, changed: true, devConfig, exportGaps, updated, warnings, wranglerPath };
 };
 
 export type { ExportGap, ReconcileBindingsResult };

@@ -833,11 +833,45 @@ export interface CallEdgeIR {
     exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
-    kind: "call" | "enqueue" | "publish" | "schedule";
+    kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     /** 1-based line of the call. */
     line: number;
     reason?: string;
     target?: string;
+}
+
+/**
+ * A sibling Worker the app calls through a Cloudflare service binding, declared in
+ * `lunora.config.*` `services` (plan 457). Becomes a wrangler `services[]` entry,
+ * a typed `ctx.services.<name>` on actions, and a `service` node in the
+ * architecture manifest.
+ */
+export interface ServiceBindingIR {
+    /** The `services[].binding` Lunora writes, e.g. `SERVICE_DOCUMENT_PARSER`. */
+    binding: string;
+    /** The exported `WorkerEntrypoint` class for an RPC service; absent for a fetch service. */
+    entrypoint?: string;
+
+    /**
+     * The Worker name per `env.<name>` block the service's own wrangler config
+     * sets a `name` in. An environment missing here deploys as wrangler's
+     * default `<worker>-<env>`.
+     */
+    envWorkers: Readonly<Record<string, string>>;
+    /** Absolute path of the service's entry module (its wrangler `main`) — what the RPC type is read from. */
+    main: string;
+    /** The `ctx.services.<name>` key, e.g. `documentParser`. */
+    name: string;
+
+    /**
+     * The scopes in which the service still serves on `*.workers.dev` with no
+     * route of its own: `""` for the top level, else the environment name.
+     */
+    publicScopes: ReadonlyArray<string>;
+    /** The Worker's own `name` from its wrangler config — the `services[].service` target. */
+    worker: string;
+    /** Absolute path of the service's wrangler config. */
+    wranglerPath: string;
 }
 
 /**

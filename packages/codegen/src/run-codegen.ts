@@ -646,6 +646,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         platformGate,
         queues,
         serverContent,
+        services,
         storageRulesMetadata,
         topics,
         usesSandbox,
@@ -967,6 +968,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         schema,
         schemaSnapshot,
         shapes,
+        services,
         storageRules: storageRulesMetadata,
         studioFeatures,
         topics,
@@ -1124,6 +1126,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   modules,
                   queues,
                   schema,
+                  services,
                   topics,
                   workflows,
               })

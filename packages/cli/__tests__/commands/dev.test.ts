@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { negatableDevFlags, runDevCommand } from "../../src/commands/dev/handler";
 import { detectDevFlavor } from "../../src/commands/dev/lifecycle";
+import { startCelldWorker } from "../../src/commands/dev/own-dev-server";
 import { planDevCommand, resolveInspectorPort, resolveWorkerPort } from "../../src/commands/dev/plan";
 import { defaultWorkerSpawner } from "../../src/commands/dev/supervise";
 import type { DevCommandOptions } from "../../src/commands/dev/types";
@@ -47,6 +48,24 @@ describe("lunora dev", () => {
             expect(plan.wrangler.args.join(" ")).toContain("dev");
             expect(plan.wrangler.args.join(" ")).not.toContain("vite");
             expect(plan.studioEnabled).toBe(true);
+        });
+
+        it("runs each lunora.config service in the same `wrangler dev`, the app's config first", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), `{ "name": "app", "main": "src/index.ts" }\n`);
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
+            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`);
+
+            const { args } = planDevCommand({ cwd: workdir, logger: silentLogger() }).wrangler;
+
+            expect(args.slice(args.indexOf("--config"))).toStrictEqual([
+                "--config",
+                join(workdir, "wrangler.jsonc"),
+                "--config",
+                join(workdir, "services", "parser", "wrangler.jsonc"),
+            ]);
         });
 
         it("plans an attached run with --no-worker, keeping codegen + studio", () => {
@@ -462,6 +481,32 @@ describe("lunora dev", () => {
             expect(plan.studioEnabled).toBe(false);
         });
 
+        it("runs each lunora.config service beside the SvelteKit / Nuxt sidecar, after its own config", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
+            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`);
+
+            const args = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => true, logger: silentLogger() }).sidecar?.args.join(" ") ?? "";
+
+            const service = `--config ${join(workdir, "services", "parser", "wrangler.jsonc")}`;
+
+            expect(args).toContain(service);
+            // The sidecar's own config stays first, so wrangler keeps it as the primary Worker.
+            expect(args.indexOf(service)).toBeGreaterThan(args.indexOf("--config wrangler.dev.jsonc"));
+        });
+
         it("respects the sidecar's OWN `dev.ip` (wrangler.dev.jsonc), not the deploy wrangler.jsonc, on a no-::1 host", () => {
             expect.assertions(2);
 
@@ -672,12 +717,13 @@ describe("lunora dev", () => {
         // keys, so its dev server runs on the projected config — as the
         // `celld` binary itself, not through the package manager — even in a
         // project whose dependencies would otherwise pick the Vite flavor.
-        it("serves a celld-target app with `celld dev` on the projected config", async () => {
-            expect.assertions(3);
+        it("serves a celld-target app on a celld dev session over the projected config", async () => {
+            expect.assertions(4);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app", observability: { enabled: true } }), "utf8");
 
-            let spawned: string[] | undefined;
+            const started: { port: number; projectRoot: string }[] = [];
+            let stopped = 0;
 
             const result = await runDevCommand({
                 codegen: false,
@@ -685,25 +731,77 @@ describe("lunora dev", () => {
                 findFreePort: async () => 8790,
                 flavor: "vite",
                 logger: silentLogger(),
+                // The session (services first, restart on edit) has its own suite in `@lunora/config`.
+                startCelldSession: async (options) => {
+                    started.push({ port: options.port, projectRoot: options.projectRoot });
+
+                    return {
+                        // The app crashes once it is up, which ends `lunora dev` the way a worker exit does.
+                        exited: Promise.resolve(1),
+                        stop: async () => {
+                            stopped += 1;
+                        },
+                    };
+                },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
                 },
-                startWorker: (descriptor) => {
-                    spawned = [descriptor.command, ...descriptor.args];
-
-                    return { exited: Promise.resolve(0), kill: () => {} };
+                startWorker: () => {
+                    throw new Error("the celld target runs a dev session, not a bare worker process");
                 },
                 target: "celld",
+                waitForInterrupt: async () => EXIT_CODE.SUCCESS,
             });
 
-            expect(result.plan.flavor).toBe("wrangler");
-            expect(spawned).toStrictEqual(["celld", "dev", join(workdir, ".celld.wrangler.json"), "--port", "8790"]);
+            expect(result.code).toBe(1);
+            expect(started).toStrictEqual([{ port: 8790, projectRoot: workdir }]);
             // Marked as development, as `wrangler dev --var WORKER_ENV:development` does.
             expect(JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8"))).toStrictEqual({
                 main: "src/server.ts",
                 name: "app",
                 vars: { WORKER_ENV: "development" },
             });
+            // A crashed app is already gone; only a stop the user asks for stops the session.
+            expect(stopped).toBe(0);
+        });
+
+        it("stops the celld session when the worker is killed", async () => {
+            expect.assertions(1);
+
+            const worker = await startCelldWorker({
+                logger: silentLogger(),
+                port: 8790,
+                projectRoot: workdir,
+                start: async () => {
+                    return { exited: new Promise<number>(() => {}), stop: async () => {} };
+                },
+            });
+
+            worker.kill("SIGTERM");
+
+            await expect(worker.exited).resolves.toBe(0);
+        });
+
+        it("stops before anything is served when the celld session cannot start", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startCelldSession: async () => {
+                    throw new Error("celld dev exited with code 1 before it was ready");
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
         });
 
         it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {
