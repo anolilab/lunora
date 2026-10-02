@@ -168,6 +168,18 @@ export const deployTables = {
         .index("by_hash", ["hashedKey"], { unique: true })
         .index("by_org", ["organizationId"]),
 
+    // GitHub webhook deliveries already recorded (`X-GitHub-Delivery`), so a
+    // redelivered push or pull request is acknowledged without recording a
+    // second build. Kept for GitHub's redelivery window, pruned by
+    // `builds.recordPush` as it records new ones.
+    githubDeliveries: defineTable({
+        deliveryId: v.string(),
+        receivedAt: v.number(),
+    })
+        .global()
+        .index("by_delivery", ["deliveryId"], { unique: true })
+        .index("by_received", ["receivedAt"]),
+
     // Server-side builds (GAPS.md A3): a push (or PR) creates a build; the
     // runner claims it via a lease, streams lines into buildLogs, and hands the
     // bundle to the deploy pipeline. Dedup: a successful build for the same

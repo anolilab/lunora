@@ -114,6 +114,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
                 branch: intent.branch,
                 changes: intent.changes,
                 commitSha: intent.commitSha,
+                deliveryId: intent.deliveryId,
                 fromFork: intent.fromFork,
                 installationId: intent.installationId,
                 pullRequest: intent.pullRequest,
@@ -123,9 +124,11 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
         // default-branch push → record a build (dedup by commit SHA, GAPS.md A3).
         onPush: (intent) =>
             context.runMutation<BuildRecordResult>(internal.builds.recordPush, {
+                before: intent.before,
                 branch: intent.branch,
                 changes: intent.changes,
                 commitSha: intent.commitSha,
+                deliveryId: intent.deliveryId,
                 installationId: intent.installationId,
                 repository: intent.repository,
                 trigger: "push",

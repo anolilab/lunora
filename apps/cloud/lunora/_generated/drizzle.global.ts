@@ -189,6 +189,16 @@ export const deployKeys = sqliteTable("deployKeys", {
     by_hash: uniqueIndex("by_hash").on(t.hashedKey),
 }));
 
+export const githubDeliveries = sqliteTable("githubDeliveries", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    deliveryId: text("deliveryId").notNull(),
+    receivedAt: real("receivedAt").notNull(),
+}, (t) => ({
+    by_received: index("by_received").on(t.receivedAt),
+    by_delivery: uniqueIndex("by_delivery").on(t.deliveryId),
+}));
+
 export const builds = sqliteTable("builds", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

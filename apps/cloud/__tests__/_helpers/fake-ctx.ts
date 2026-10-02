@@ -12,7 +12,8 @@ import type { MutationCtx } from "../../lunora/_generated/server";
  *
  * What it models:
  *
- * - **`where`** on the per-table `findMany` facades, by equality.
+ * - **`where`** on the per-table `findMany` facades, by equality, plus the
+ *   `{ lt }` operator the cutoff-filtered reads use.
  * - **The explicit-`undefined` refusal** on `patch`, with the store's own message.
  * - **The rate-limit store**, because most mutations here carry
  *   `.use(rateLimit(...))` and `.handler` runs the middleware chain — a ctx
@@ -45,7 +46,11 @@ const assertNoExplicitUndefined = (patch: Row): void => {
     }
 };
 
-const matches = (row: Row, where: Row): boolean => Object.entries(where).every(([field, value]) => row[field] === value);
+/** Whether a `where` value is the `{ lt }` operator rather than an equality literal. */
+const isLessThan = (value: unknown): value is { lt: number } => typeof value === "object" && value !== null && "lt" in value;
+
+const matches = (row: Row, where: Row): boolean =>
+    Object.entries(where).every(([field, value]) => (isLessThan(value) ? typeof row[field] === "number" && row[field] < value.lt : row[field] === value));
 
 /**
  * Build the double.

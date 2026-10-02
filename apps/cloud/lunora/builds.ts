@@ -1,10 +1,11 @@
 import { LunoraError } from "@lunora/server";
 
-import type { PushChanges } from "../src/builds/paths";
+import type { BuildDecision, PushChanges } from "../src/builds/paths";
 import { decideBuild, MAX_CHANGED_FILES } from "../src/builds/paths";
 import type { BuildReleaseTarget } from "../src/builds/release";
 import { isUnconfiguredInfrastructure } from "../src/builds/runner";
 import type { Id } from "./_generated/dataModel.js";
+import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
 import { fireDeployAlerts } from "./alerts";
 import { assertMember } from "./authz";
@@ -68,9 +69,126 @@ type BuildTrigger = "pull_request" | "push";
  */
 const pushChangesValidator = v.union(v.object({ files: v.array(v.string()) }), v.object({ unknown: v.string() }));
 
-type RecordPushResult = null | { buildId: Id<"builds">; reused: boolean; skipped?: string };
+type RecordPushResult = null | { buildId: Id<"builds">; reused: boolean; skipped?: string } | { duplicate: true };
+
+/**
+ * How long a webhook delivery id is remembered. GitHub lets a delivery be
+ * redelivered for three days; a day on top covers a redelivery that is itself
+ * retried.
+ */
+export const DELIVERY_TTL_MS = 4 * 24 * 60 * 60 * 1000;
+
+/** Expired delivery ids deleted per recorded push, so the table stays bounded without a sweep of its own. */
+const DELIVERY_PRUNE_BATCH = 20;
 
 type ClaimResult = null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string };
+
+/**
+ * Why a production push of an already-built commit must NOT re-release it, or
+ * `undefined` when it may: the push moved `branch` from the newest commit
+ * pushed to it (`before`), so it is a deliberate reset to that commit rather
+ * than an older push arriving late.
+ */
+const staleRelease = (projectBuilds: ReadonlyArray<BuildRow>, branch: string, before: string | undefined): string | undefined => {
+    const head = projectBuilds
+        .filter((build) => build.trigger === "push" && build.branch === branch)
+        .toSorted((a, b) => b.createdAt - a.createdAt)
+        .at(0);
+
+    if (head === undefined || before === head.commitSha) {
+        return undefined;
+    }
+
+    return `not re-released: this push moved ${branch} from ${before ?? "an unknown commit"}, but the newest push recorded for it is ${head.commitSha}, so it is a stale or out-of-order delivery and would roll production back`;
+};
+
+/**
+ * What a push builds: its path-filter decision, and the earlier build it
+ * re-releases instead of rebuilding — unless re-releasing it would be a stale
+ * push rolling production back ({@link staleRelease}), which is skipped.
+ */
+const planBuild = (push: {
+    before: string | undefined;
+    branch: string;
+    changes: PushChanges;
+    projectBuilds: ReadonlyArray<BuildRow>;
+    rereleased: BuildRow | undefined;
+    rootDirectory: string | undefined;
+    trigger: BuildTrigger;
+    watchPaths: ReadonlyArray<string> | undefined;
+}): { decision: BuildDecision; reusesBuildId?: Id<"builds"> } => {
+    const { rereleased } = push;
+    const staleReason = push.trigger === "push" && rereleased !== undefined ? staleRelease(push.projectBuilds, push.branch, push.before) : undefined;
+
+    if (staleReason !== undefined) {
+        return { decision: { build: false, reason: staleReason } };
+    }
+
+    const bounded: PushChanges =
+        "files" in push.changes && push.changes.files.length > MAX_CHANGED_FILES
+            ? { unknown: `the push changed more than ${String(MAX_CHANGED_FILES)} files` }
+            : push.changes;
+
+    return { decision: decideBuild(bounded, push.rootDirectory, push.watchPaths), ...(rereleased === undefined ? {} : { reusesBuildId: rereleased._id }) };
+};
+
+/**
+ * The newest successful build of a push's dedup key — (commit, root
+ * directory, trigger, fork-ness) — and the deployment it fed, if it recorded
+ * one. Newest first: once a commit was re-released, its newest build names the
+ * newest deployment.
+ */
+const priorBuild = async (
+    context: MutationContext,
+    projectId: Id<"projects">,
+    key: { commitSha: string; fromFork: boolean | undefined; rootDirectory: string | undefined; trigger: BuildTrigger },
+): Promise<undefined | { build: BuildRow; deployment: null | { status: string } }> => {
+    const { page } = await context.db.builds.findMany({ where: { commitSha: key.commitSha, projectId } }); // secret-scanner:allow -- domain field name
+    const build = page
+        .toSorted((a, b) => b.createdAt - a.createdAt)
+        .find(
+            (candidate) =>
+                candidate.status === "successful" &&
+                candidate.bundleHash &&
+                candidate.rootDirectory === key.rootDirectory &&
+                candidate.trigger === key.trigger &&
+                (candidate.fromFork === true) === (key.fromFork === true),
+        );
+
+    if (build === undefined) {
+        return undefined;
+    }
+
+    const deployment = build.deploymentId == null ? null : ((await context.db.get(build.deploymentId as Id<"deployments">)) as null | { status: string });
+
+    return { build, deployment };
+};
+
+/**
+ * Whether webhook delivery `deliveryId` was recorded already; records it when
+ * not, and forgets a bounded batch of ids past {@link DELIVERY_TTL_MS}.
+ */
+const isRedelivery = async (context: MutationContext, deliveryId: string): Promise<boolean> => {
+    const { page: seen } = await context.db.githubDeliveries.findMany({ where: { deliveryId } });
+
+    if (seen.length > 0) {
+        return true;
+    }
+
+    await context.db.insert("githubDeliveries", { deliveryId, receivedAt: context.now });
+
+    const { page: expired } = await context.db.githubDeliveries.findMany({
+        limit: DELIVERY_PRUNE_BATCH,
+        where: { receivedAt: { lt: context.now - DELIVERY_TTL_MS } },
+    });
+
+    for (const row of expired) {
+        // eslint-disable-next-line no-await-in-loop -- a bounded batch
+        await context.db.delete(row._id);
+    }
+
+    return false;
+};
 
 /** A lease older than this is stale — the runner died; the build is reclaimable. */
 export const LEASE_STALE_MS = 30 * 60 * 1000;
@@ -95,6 +213,14 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
  * runner rebuilds instead when that release was pruned with the rollback window,
  * and a build that never recorded a deployment is rebuilt outright.
  *
+ * Never backwards: a production push re-releases an earlier build only when it
+ * moved the branch from the newest commit pushed to it (`before` is that
+ * commit) — a deliberate reset of the branch to an older commit. A stale or
+ * out-of-order delivery of an older push carries the `before` of ITS time, so
+ * it is recorded as a `skipped` build saying so, and never rolls production
+ * back over the newer release. A redelivered webhook (its `X-GitHub-Delivery`
+ * id seen before, `deliveryId`) records nothing at all (`duplicate`).
+ *
  * Path filter: a push whose changed files match none of the project's watch
  * paths is recorded as a `skipped` build carrying the reason, so the Builds tab
  * says why nothing deployed instead of showing nothing. A push that cannot
@@ -103,9 +229,13 @@ export const LEASE_STALE_MS = 30 * 60 * 1000;
 export const recordPush = internalMutation
     .use(rateLimit("machine"))
     .input({
+        // The commit the push moved the branch from (`push` payloads only).
+        before: v.optional(boundedString(LIMITS.id)),
         branch: boundedString(LIMITS.gitRef),
         changes: pushChangesValidator,
         commitSha: boundedString(LIMITS.id),
+        // The webhook's `X-GitHub-Delivery` id, which a redelivery repeats.
+        deliveryId: v.optional(boundedString(LIMITS.id)),
         // A pull request whose head is a fork's: built, never released.
         fromFork: v.optional(v.boolean()),
         installationId: v.number(),
@@ -116,7 +246,7 @@ export const recordPush = internalMutation
     .mutation(
         async ({
             ctx: context,
-            args: { branch, changes, commitSha, fromFork, installationId, pullRequest, repository, trigger },
+            args: { before, branch, changes, commitSha, deliveryId, fromFork, installationId, pullRequest, repository, trigger },
         }): Promise<RecordPushResult> => {
             const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
             const project = page[0];
@@ -135,33 +265,23 @@ export const recordPush = internalMutation
                 return null;
             }
 
-            const { rootDirectory, watchPaths } = project;
-            const { page: existingPage } = await context.db.builds.findMany({ where: { commitSha, projectId: project._id } }); // secret-scanner:allow -- domain field name
-            // Newest first: once a commit was re-released, its newest build names the newest deployment.
-            const successful = existingPage
-                .toSorted((a, b) => b.createdAt - a.createdAt)
-                .find(
-                    (build) =>
-                        build.status === "successful" &&
-                        build.bundleHash &&
-                        build.rootDirectory === rootDirectory &&
-                        build.trigger === trigger &&
-                        (build.fromFork === true) === (fromFork === true),
-                );
+            const { now } = context;
 
-            const previous =
-                successful?.deploymentId == null ? null : ((await context.db.get(successful.deploymentId as Id<"deployments">)) as null | { status: string });
-
-            if (successful && (successful.fromFork === true || (previous !== null && SERVING_STATUSES.has(previous.status)))) {
-                return { buildId: successful._id, reused: true };
+            if (deliveryId !== undefined && (await isRedelivery(context, deliveryId))) {
+                return { duplicate: true };
             }
 
-            const { now } = context;
-            const bounded: PushChanges =
-                "files" in changes && changes.files.length > MAX_CHANGED_FILES
-                    ? { unknown: `the push changed more than ${String(MAX_CHANGED_FILES)} files` }
-                    : changes;
-            const decision = decideBuild(bounded, rootDirectory, watchPaths);
+            const { rootDirectory, watchPaths } = project;
+            const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, trigger });
+
+            if (prior && (prior.build.fromFork === true || (prior.deployment !== null && SERVING_STATUSES.has(prior.deployment.status)))) {
+                return { buildId: prior.build._id, reused: true };
+            }
+
+            // Only a build that recorded a deployment has a stored release to re-release.
+            const rereleased = prior?.deployment == null ? undefined : prior.build;
+            const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
+            const { decision, reusesBuildId } = planBuild({ before, branch, changes, projectBuilds, rereleased, rootDirectory, trigger, watchPaths });
             const common = {
                 branch,
                 commitSha,
@@ -170,8 +290,7 @@ export const recordPush = internalMutation
                 organizationId: project.organizationId,
                 projectId: project._id, // secret-scanner:allow -- domain field name
                 ...(pullRequest === undefined ? {} : { pullRequest }),
-                // Only a build that recorded a deployment has a stored release to re-release.
-                ...(previous === null || successful === undefined ? {} : { reusesBuildId: successful._id }),
+                ...(reusesBuildId === undefined ? {} : { reusesBuildId }),
                 ...(rootDirectory === undefined ? {} : { rootDirectory }),
                 trigger,
                 updatedAt: now,
@@ -185,7 +304,6 @@ export const recordPush = internalMutation
 
             // Backpressure: cap unfinished builds per project so a webhook storm
             // (or spoofed spam) can't flood the queue.
-            const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
             const inFlight = projectBuilds.filter((build) => build.status === "pending" || build.status === "building").length;
 
             if (inFlight >= 5) {

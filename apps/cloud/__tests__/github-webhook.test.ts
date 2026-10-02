@@ -165,6 +165,37 @@ describe(handleGitHubWebhook, () => {
         expect(recorded).toStrictEqual([expect.objectContaining({ fromFork: false, pullRequest: 9 })]);
     });
 
+    it("hands a push its delivery id and the commit it moved from, and acknowledges a redelivery without a build", async () => {
+        const recorded: unknown[] = [];
+        const body = JSON.stringify({
+            after: "def456",
+            before: "abc123",
+            commits: [{ added: [], modified: ["src/a.ts"], removed: [] }],
+            installation: { id: 42 },
+            ref: "refs/heads/main",
+            repository: { default_branch: "main", full_name: "acme/app" },
+        });
+        const request = new Request("https://cloud/v1/github/webhook", {
+            body,
+            headers: { "x-github-delivery": "guid-1", "x-github-event": "push", "x-hub-signature-256": await sign(secret, body) },
+            method: "POST",
+        });
+
+        const response = await handleGitHubWebhook(request, {
+            onPush: (intent) => {
+                recorded.push(intent);
+
+                return Promise.resolve({ duplicate: true });
+            },
+            resolveProject: resolveProject(true),
+            secret,
+        });
+
+        expect(recorded).toStrictEqual([expect.objectContaining({ before: "abc123", commitSha: "def456", deliveryId: "guid-1" })]);
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ duplicate: true, ignored: true });
+    });
+
     it("202s when the repository is not connected to a project", async () => {
         const response = await handleGitHubWebhook(await signedRequest(prBody), { resolveProject: resolveProject(false), secret });
 

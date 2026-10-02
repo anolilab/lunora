@@ -195,7 +195,7 @@ export interface InternalApiTypes {
         complete: FunctionReference<"mutation", { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }, void>;
         expireStale: FunctionReference<"mutation", {}, { expired: number; }>;
         fail: FunctionReference<"mutation", { buildId: Id<"builds">; error: string; runnerId: string }, void>;
-        recordPush: FunctionReference<"mutation", { branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }, null | { buildId: Id<"builds">; reused: boolean; skipped?: string; }>;
+        recordPush: FunctionReference<"mutation", { before?: unknown; branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; deliveryId?: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }, null | { buildId: Id<"builds">; reused: boolean; skipped?: string; } | { duplicate: true; }>;
         releaseTarget: FunctionReference<"query", { buildId: Id<"builds"> }, null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: FunctionReference<"query", { buildId: Id<"builds"> }, { commitSha: string; installationId: number; repository: string; } | null>;
         reusableRelease: FunctionReference<"query", { buildId: Id<"builds"> }, null | { bundleHash: string; cronSpecs?: string[]; deploymentId: string }>;

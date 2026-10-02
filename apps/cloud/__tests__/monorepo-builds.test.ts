@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { recordPush, releaseTarget } from "../lunora/builds";
+import { DELIVERY_TTL_MS, recordPush, releaseTarget } from "../lunora/builds";
 import { updateBuildSettings } from "../lunora/projects";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -103,10 +103,12 @@ describe("builds.recordPush path filter", () => {
         expect(ops.filter((op) => op.kind === "insert" && op.table === "builds")).toStrictEqual([]);
     });
 
-    it.each(["superseded", "failed", "destroyed"])("re-releases a commit already built whose release is %s, naming the build it reuses", async (status) => {
+    /** Two builds of `abc123` (the newest re-released), then `def456` pushed on top of it. */
+    const rebuiltCommit = (status: string) => {
         const builds = [
             {
                 _id: "bld_first",
+                branch: "main",
                 bundleHash: "h",
                 commitSha: "abc123",
                 createdAt: 1,
@@ -118,6 +120,7 @@ describe("builds.recordPush path filter", () => {
             // The newest build of the commit is the one whose release is re-released.
             {
                 _id: "bld_newest",
+                branch: "main",
                 bundleHash: "h",
                 commitSha: "abc123",
                 createdAt: 2,
@@ -126,20 +129,89 @@ describe("builds.recordPush path filter", () => {
                 status: "successful",
                 trigger: "push",
             },
+            {
+                _id: "bld_head",
+                branch: "main",
+                bundleHash: "h2",
+                commitSha: "def456",
+                createdAt: 3,
+                deploymentId: "dep_head",
+                projectId: "prj_1",
+                status: "successful",
+                trigger: "push",
+            },
         ];
-        const { ctx, ops } = makeCtx({
+
+        return makeCtx({
             ...world(project(), builds),
             deployments: [
-                { _id: "dep_first", projectId: "prj_1", status: "live" },
+                { _id: "dep_first", projectId: "prj_1", status: "superseded" },
                 { _id: "dep_newest", projectId: "prj_1", status },
+                { _id: "dep_head", projectId: "prj_1", status: "live" },
             ],
+            githubDeliveries: [],
         });
+    };
 
-        await expect(recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" } })).resolves.toStrictEqual({
+    it.each(["superseded", "failed", "destroyed"])("re-releases a commit already built whose release is %s, naming the build it reuses", async (status) => {
+        const { ctx, ops } = rebuiltCommit(status);
+
+        // The branch was reset from the newest commit pushed to it back to abc123.
+        await expect(recordPush.handler(ctx, { ...push, before: "def456", changes: { unknown: "forced push" } })).resolves.toStrictEqual({
             buildId: "builds_new",
             reused: false,
         });
         expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({ document: { reusesBuildId: "bld_newest", status: "pending" } });
+    });
+
+    it("never re-releases an older commit over a newer one for a stale or out-of-order push", async () => {
+        const { ctx, ops } = rebuiltCommit("superseded");
+
+        // abc123's own push, arriving after def456 was pushed on top of it: it moved the branch from abc123's parent.
+        const result = await recordPush.handler(ctx, { ...push, before: "parent0", changes: { files: ["src/index.ts"] } });
+        const inserted = ops.find((op) => op.kind === "insert" && op.table === "builds") as { document: Row } | undefined;
+
+        expect(result).toMatchObject({
+            buildId: "builds_new",
+            reused: false,
+            skipped: expect.stringContaining("the newest push recorded for it is def456") as unknown,
+        });
+        expect(inserted?.document).toMatchObject({ status: "skipped" });
+        expect(inserted?.document).not.toHaveProperty("reusesBuildId");
+    });
+
+    it("records a webhook delivery once: a redelivery records nothing", async () => {
+        const fresh = makeCtx({ ...world(project()), githubDeliveries: [] });
+
+        await expect(recordPush.handler(fresh.ctx, { ...push, changes: { unknown: "forced push" }, deliveryId: "guid-1" })).resolves.toMatchObject({
+            buildId: "builds_new",
+        });
+        expect(fresh.ops.find((op) => op.kind === "insert" && op.table === "githubDeliveries")).toMatchObject({ document: { deliveryId: "guid-1" } });
+
+        const redelivered = makeCtx({ ...world(project()), githubDeliveries: [{ _id: "gd_1", deliveryId: "guid-1", receivedAt: 1 }] });
+
+        await expect(recordPush.handler(redelivered.ctx, { ...push, changes: { unknown: "forced push" }, deliveryId: "guid-1" })).resolves.toStrictEqual({
+            duplicate: true,
+        });
+        expect(redelivered.ops.filter((op) => op.kind === "insert" && op.table !== "rateLimits")).toStrictEqual([]);
+    });
+
+    it("forgets delivery ids past GitHub's redelivery window as it records new ones", async () => {
+        const now = 10 * DELIVERY_TTL_MS;
+        const { ctx, ops } = makeCtx(
+            {
+                ...world(project()),
+                githubDeliveries: [
+                    { _id: "gd_old", deliveryId: "guid-old", receivedAt: now - DELIVERY_TTL_MS - 1 },
+                    { _id: "gd_recent", deliveryId: "guid-recent", receivedAt: now - 1 },
+                ],
+            },
+            { now },
+        );
+
+        await recordPush.handler(ctx, { ...push, changes: { unknown: "forced push" }, deliveryId: "guid-new" });
+
+        expect(ops.filter((op) => op.kind === "delete")).toStrictEqual([{ id: "gd_old", kind: "delete" }]);
     });
 
     it("rebuilds a commit whose earlier build never recorded a deployment", async () => {

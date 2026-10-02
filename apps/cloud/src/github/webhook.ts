@@ -103,6 +103,8 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
 };
 
 export interface PushIntent {
+    /** The commit the push moved the branch from — what tells a deliberate reset from a stale delivery. */
+    before?: string;
     branch: string;
     /** The files the push changed, or why the payload cannot say — the path filter's input. */
     changes: PushChanges;
@@ -203,7 +205,14 @@ export const parsePushEvent = (payload: unknown): null | PushIntent => {
         return null;
     }
 
-    return { branch: defaultBranch, changes: pushChanges(event), commitSha, installationId, repository };
+    return {
+        ...(typeof event.before === "string" && !ZERO_SHA.test(event.before) ? { before: event.before } : {}),
+        branch: defaultBranch,
+        changes: pushChanges(event),
+        commitSha,
+        installationId,
+        repository,
+    };
 };
 
 export interface InstallationIntent {
@@ -238,8 +247,17 @@ export const parseInstallationEvent = (payload: unknown): InstallationIntent | n
     return null;
 };
 
-/** What recording a build returns: `null` for an unconnected repo; `skipped` when the path filter matched nothing. */
-export type BuildRecordResult = null | { buildId: string; reused: boolean; skipped?: string };
+/**
+ * What recording a build returns: `null` for an unconnected repo; `skipped`
+ * when nothing is built (the path filter matched nothing, or a stale push);
+ * `duplicate` for a delivery already recorded.
+ */
+export type BuildRecordResult = null | { buildId: string; reused: boolean; skipped?: string } | { duplicate: true };
+
+/** A delivery's `X-GitHub-Delivery` id, which a redelivery repeats — what dedupes it. */
+interface Delivery {
+    deliveryId?: string;
+}
 
 /** Resolves a connected GitHub repository to its Lunora project. */
 export type ResolveProject = (repository: string) => Promise<null | { organizationId: string; projectId: string; slug: string }>; // secret-scanner:allow -- domain field name
@@ -264,19 +282,21 @@ export interface GitHubWebhookHooks {
     listChangedFiles?: (range: { base: string; head: string; installationId: number; repository: string }) => Promise<PushChanges>;
     /** Link/unlink a GitHub App installation (`installation` events, GAPS.md A4). */
     onInstallation?: (intent: InstallationIntent) => Promise<void>;
-    onPreviewBuild?: (intent: {
-        branch: string;
-        changes: PushChanges;
-        commitSha: string;
-        /** The head is a fork's: built, never released (see {@link PreviewIntent.fromFork}). */
-        fromFork: boolean;
-        installationId: number;
-        /** The pull request number, which names a fork's preview. */
-        pullRequest: number;
-        repository: string;
-    }) => Promise<BuildRecordResult>;
+    onPreviewBuild?: (
+        intent: Delivery & {
+            branch: string;
+            changes: PushChanges;
+            commitSha: string;
+            /** The head is a fork's: built, never released (see {@link PreviewIntent.fromFork}). */
+            fromFork: boolean;
+            installationId: number;
+            /** The pull request number, which names a fork's preview. */
+            pullRequest: number;
+            repository: string;
+        },
+    ) => Promise<BuildRecordResult>;
     /** Record a build for a default-branch push (`push` events, GAPS.md A4). Returns the build id or null when the repo isn't connected. */
-    onPush?: (intent: PushIntent) => Promise<BuildRecordResult>;
+    onPush?: (intent: Delivery & PushIntent) => Promise<BuildRecordResult>;
     resolveProject: ResolveProject;
     secret: string;
 }
@@ -308,7 +328,7 @@ const previewChanges = async (intent: PreviewIntent & { commitSha: string; insta
 };
 
 /** Handle a parsed PR intent: resolve the project, optionally queue a preview build, acknowledge. */
-const handlePullRequestIntent = async (intent: PreviewIntent, options: GitHubWebhookHooks): Promise<Response> => {
+const handlePullRequestIntent = async (intent: PreviewIntent, delivery: Delivery, options: GitHubWebhookHooks): Promise<Response> => {
     const project = await options.resolveProject(intent.repository);
 
     if (!project) {
@@ -321,6 +341,7 @@ const handlePullRequestIntent = async (intent: PreviewIntent, options: GitHubWeb
 
     if (intent.action === "upsert" && intent.commitSha && intent.installationId !== undefined && options.onPreviewBuild) {
         previewBuild = await options.onPreviewBuild({
+            ...delivery,
             branch: intent.branch,
             changes: await previewChanges({ ...intent, commitSha: intent.commitSha, installationId: intent.installationId }, options),
             commitSha: intent.commitSha,
@@ -343,6 +364,27 @@ const handlePullRequestIntent = async (intent: PreviewIntent, options: GitHubWeb
     );
 };
 
+/** Handle a `push` event: record its build, or say why none was recorded. */
+const handlePushEvent = async (payload: unknown, delivery: Delivery, onPush: NonNullable<GitHubWebhookHooks["onPush"]>): Promise<Response> => {
+    const push = parsePushEvent(payload);
+
+    if (!push) {
+        return Response.json({ ignored: true }, { status: 202 });
+    }
+
+    const build = await onPush({ ...delivery, ...push });
+
+    if (!build) {
+        return Response.json({ ignored: true, reason: "repository not connected to a project" }, { status: 202 });
+    }
+
+    if ("duplicate" in build) {
+        return Response.json({ duplicate: true, ignored: true }, { status: 200 });
+    }
+
+    return Response.json({ accepted: true, ...build }, { status: 200 });
+};
+
 export const handleGitHubWebhook = async (request: Request, options: GitHubWebhookHooks): Promise<Response> => {
     const body = await request.text();
 
@@ -359,6 +401,8 @@ export const handleGitHubWebhook = async (request: Request, options: GitHubWebho
     }
 
     const eventName = request.headers.get("x-github-event");
+    const deliveryId = request.headers.get("x-github-delivery");
+    const delivery: Delivery = deliveryId === null || deliveryId === "" ? {} : { deliveryId };
 
     if (eventName === "installation" && options.onInstallation) {
         const installation = parseInstallationEvent(payload);
@@ -373,19 +417,7 @@ export const handleGitHubWebhook = async (request: Request, options: GitHubWebho
     }
 
     if (eventName === "push" && options.onPush) {
-        const push = parsePushEvent(payload);
-
-        if (!push) {
-            return Response.json({ ignored: true }, { status: 202 });
-        }
-
-        const build = await options.onPush(push);
-
-        if (!build) {
-            return Response.json({ ignored: true, reason: "repository not connected to a project" }, { status: 202 });
-        }
-
-        return Response.json({ accepted: true, ...build }, { status: 200 });
+        return handlePushEvent(payload, delivery, options.onPush);
     }
 
     const intent = parsePullRequestEvent(payload);
@@ -394,5 +426,5 @@ export const handleGitHubWebhook = async (request: Request, options: GitHubWebho
         return Response.json({ ignored: true }, { status: 202 });
     }
 
-    return handlePullRequestIntent(intent, options);
+    return handlePullRequestIntent(intent, delivery, options);
 };

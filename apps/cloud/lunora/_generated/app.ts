@@ -404,6 +404,7 @@ class AppBuilder<Env extends object> {
             ["deployments", { mode: { kind: "global" } }],
             ["aliasOwnership", { mode: { kind: "global" } }],
             ["deployKeys", { mode: { kind: "global" } }],
+            ["githubDeliveries", { mode: { kind: "global" } }],
             ["builds", { mode: { kind: "global" } }],
             ["buildLogs", { mode: { kind: "global" } }],
             ["domains", { mode: { kind: "global" } }],
