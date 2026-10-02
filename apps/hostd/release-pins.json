@@ -1,0 +1,40 @@
+{
+    "$comment": "Upstream binaries a hostd release pins (plan 458 W7). celld: denoland/celld release assets, sha256 and size checked against the downloaded bytes; keep the version in step with CELLD_VERSION in .github/workflows/test.yml. caddy: PLACEHOLDER until Lunora builds Caddy with the caddy-ratelimit module (xcaddy) and hosts it; no upstream release ships that module. make-release-manifest.mjs refuses to sign while any PLACEHOLDER remains.",
+    "celld": {
+        "version": "v0.6.0",
+        "artifacts": [
+            {
+                "platform": "linux-x64",
+                "url": "https://github.com/denoland/celld/releases/download/v0.6.0/celld-x86_64-unknown-linux-gnu.gz",
+                "sha256": "8f1e18072c234ab75459d4da104c13cebc9b29a3e4a4772086bf985829bea8aa",
+                "size": 25031703,
+                "compression": "gzip"
+            },
+            {
+                "platform": "linux-arm64",
+                "url": "https://github.com/denoland/celld/releases/download/v0.6.0/celld-aarch64-unknown-linux-gnu.gz",
+                "sha256": "3d4945df3abcc6832b6e7fa978b9ee3c26e46a0b7791924843d42c0ed14eff96",
+                "size": 24113149,
+                "compression": "gzip"
+            }
+        ]
+    },
+    "caddy": {
+        "version": "v2.11.6",
+        "modules": ["github.com/mholt/caddy-ratelimit"],
+        "artifacts": [
+            {
+                "platform": "linux-x64",
+                "url": "PLACEHOLDER",
+                "sha256": "PLACEHOLDER",
+                "size": 0
+            },
+            {
+                "platform": "linux-arm64",
+                "url": "PLACEHOLDER",
+                "sha256": "PLACEHOLDER",
+                "size": 0
+            }
+        ]
+    }
+}

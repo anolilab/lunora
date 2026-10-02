@@ -88,7 +88,7 @@ const MAX_HOSTNAME_LENGTH = 253;
 const ALL_DIGITS_PATTERN = /^\d+$/u;
 
 /** Version strings are displayed, never parsed: semver-ish characters only (`v2.8.4`, `1.0.0-alpha.1+abc`). */
-const VERSION_PATTERN = /^[\w.+~-]{1,64}$/u;
+const VERSION_PATTERN: RegExp = /^[\w.+~-]{1,64}$/u;
 
 /** Upper-snake-case error codes. */
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z\d_]{0,63}$/u;
@@ -607,4 +607,21 @@ const CLOUD_MESSAGE_READERS: ReadonlyMap<string, (value: unknown, path: string) 
     ["routes", readRoutes],
 ]);
 
-export { BOX_MESSAGE_READERS, CLOUD_MESSAGE_READERS, InvalidField, isAlias, isHostname, readBoxId, readNonce, utf8ByteLength };
+export {
+    BOX_MESSAGE_READERS,
+    CLOUD_MESSAGE_READERS,
+    fail,
+    InvalidField,
+    isAlias,
+    isHostname,
+    readArray,
+    readBoxId,
+    readId,
+    readInteger,
+    readMatching,
+    readNonce,
+    readObject,
+    readString,
+    utf8ByteLength,
+    VERSION_PATTERN,
+};

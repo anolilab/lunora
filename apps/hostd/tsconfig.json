@@ -4,6 +4,7 @@
         "outDir": "dist",
         "rootDir": ".",
         "moduleResolution": "bundler",
+        "resolveJsonModule": true,
         "types": ["node"]
     },
     "include": ["src/**/*", "__tests__/**/*"]

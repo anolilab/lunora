@@ -1,4 +1,4 @@
-import { createRequire } from "node:module";
+import HOSTD_VERSION from "./version";
 
 /** Where the binary writes; injected so tests need no real process streams. */
 interface BinOutput {
@@ -16,9 +16,6 @@ Enrolment and the daemon itself (enrol, run) are not implemented yet; they
 arrive with plan 458 W4.
 `;
 
-/** The package version, read from the manifest next to `dist/` (or `src/` in tests). */
-const readVersion = (): string => (createRequire(import.meta.url)("../package.json") as { version: string }).version;
-
 /**
  * Run `lunora-hostd` with the arguments after the executable and script.
  * Supports only `--version` and `--help` today; anything else exits non-zero
@@ -29,7 +26,7 @@ const runBin = (argv: ReadonlyArray<string>, output: BinOutput): number => {
     const [command] = argv;
 
     if (argv.length === 1 && (command === "--version" || command === "-v")) {
-        output.stdout(`${readVersion()}\n`);
+        output.stdout(`${HOSTD_VERSION}\n`);
 
         return 0;
     }
