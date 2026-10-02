@@ -207,13 +207,16 @@ export interface ArtifactsReadFileArgs {
 }
 
 /**
- * The repo capability `binding.get(name)` returns: an RPC stub that has to be
- * disposed before the request ends. `Symbol.dispose` is optional here only so a
- * plain-object test double satisfies the shape; the real handle always has it.
+ * The repo operations — the methods of the handle `binding.get(name)` returns,
+ * which `createArtifacts` wraps with the Lunora error mapping and hands to
+ * {@link ArtifactsClient.withRepo}'s callback.
+ *
+ * Declared on its own rather than derived from {@link ArtifactsRepoLike} by
+ * omitting `Symbol.dispose`: without `lib.esnext.disposable` or `@types/node`
+ * (an app on `lib: ["ES2024"]` + workers-types) `typeof Symbol.dispose` is
+ * `any`, and `Omit<…, any>` drops every member.
  */
-export interface ArtifactsRepoLike {
-    [Symbol.dispose]?: () => void;
-
+export interface ArtifactsRepoClient {
     /**
      * Mint a repo-scoped Git token. `ttl` is in seconds (60 to one year; the
      * binding defaults to 86,400). Keep write tokens short-lived and revoke them
@@ -239,6 +242,13 @@ export interface ArtifactsRepoLike {
     /** Revoke a token by id (preferred) or plaintext. `false` when it was not found. */
     revokeToken: (tokenOrId: string) => Promise<boolean>;
 }
+
+/**
+ * The repo capability `binding.get(name)` returns: an RPC stub that has to be
+ * disposed before the request ends. `Disposable` is `Partial` only so a
+ * plain-object test double satisfies the shape; the real handle always has it.
+ */
+export interface ArtifactsRepoLike extends ArtifactsRepoClient, Partial<Disposable> {}
 
 /** The namespace-level `env.ARTIFACTS` binding. */
 export interface ArtifactsBindingLike {
@@ -277,9 +287,6 @@ export interface ArtifactsErrorData {
     /** The binding's numeric code (matches the REST API's `errors[].code`), when it sent one. */
     numericCode?: number;
 }
-
-/** The repo operations, wrapped with the Lunora error mapping. Handed to {@link ArtifactsClient.withRepo}'s callback. */
-export type ArtifactsRepoClient = Omit<ArtifactsRepoLike, typeof Symbol.dispose>;
 
 /**
  * The action-only `ctx.artifacts` client: the binding's namespace operations,
