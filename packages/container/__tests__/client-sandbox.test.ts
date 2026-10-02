@@ -132,6 +132,17 @@ describe("createContainerTestContext files", () => {
         await expect(handle.files.readFile("/b/f").then(async (r) => r.text())).resolves.toBe("x");
     });
 
+    it("refuses to move a directory into its own subtree, as Linux does", async () => {
+        expect.assertions(2);
+
+        const handle = box();
+
+        await handle.files.mkdir("/a/b", { recursive: true });
+
+        await expect(handle.files.rename("/a", "/a/b/c")).rejects.toThrow("EINVAL");
+        await expect(handle.files.readDirectory("/a")).resolves.toStrictEqual([{ name: "b", type: "directory" }]);
+    });
+
     it("says spawn and backups need a real container", async () => {
         expect.assertions(2);
 

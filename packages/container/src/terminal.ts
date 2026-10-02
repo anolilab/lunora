@@ -46,6 +46,14 @@ interface TerminalRuntime {
     upgrade: (client: unknown) => Response;
 }
 
+/**
+ * Keystrokes queued for stdin but not yet written, per session. Frames queue
+ * while stdin is not accepting data, and the runtime's 32 MiB limit is per
+ * message, not per session, so without a cap one client could grow the
+ * isolate's memory frame by frame. Past it the socket closes with `1009`.
+ */
+const MAX_QUEUED_INPUT_BYTES = 1_048_576;
+
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
@@ -100,6 +108,15 @@ const frameBytes = async (data: unknown): Promise<Uint8Array | undefined> => {
     }
 
     return undefined;
+};
+
+/** A frame's size, known before its bytes are (a `Blob` resolves them asynchronously). */
+const frameSize = (data: unknown): number => {
+    if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+        return data.byteLength;
+    }
+
+    return data instanceof Blob ? data.size : 0;
 };
 
 /** Pump the process's output into the socket, then close it with the exit code. */
@@ -164,12 +181,26 @@ const openTerminal = async (
     const inOrder = (apply: () => Promise<void>): void => {
         pending = pending.then(apply).catch(end);
     };
-    const toStdin = (bytes: Promise<Uint8Array | undefined>): void => {
-        inOrder(async () => {
-            const chunk = await bytes;
+    let queuedBytes = 0;
+    const toStdin = (size: number, bytes: Promise<Uint8Array | undefined>): void => {
+        queuedBytes += size;
 
-            if (chunk !== undefined) {
-                await writer?.write(chunk);
+        if (queuedBytes > MAX_QUEUED_INPUT_BYTES) {
+            server.close(1009, "terminal input backlog too large");
+            end();
+
+            return;
+        }
+
+        inOrder(async () => {
+            try {
+                const chunk = await bytes;
+
+                if (chunk !== undefined) {
+                    await writer?.write(chunk);
+                }
+            } finally {
+                queuedBytes -= size;
             }
         });
     };
@@ -177,7 +208,7 @@ const openTerminal = async (
     server.accept();
     server.addEventListener("message", ({ data }) => {
         if (typeof data !== "string") {
-            toStdin(frameBytes(data));
+            toStdin(frameSize(data), frameBytes(data));
 
             return;
         }
@@ -185,7 +216,9 @@ const openTerminal = async (
         const size = parseResize(data);
 
         if (size === undefined) {
-            toStdin(Promise.resolve(new TextEncoder().encode(data)));
+            const keystrokes = new TextEncoder().encode(data);
+
+            toStdin(keystrokes.byteLength, Promise.resolve(keystrokes));
         } else {
             inOrder(async () => process.resize(size.cols, size.rows).catch(() => undefined));
         }

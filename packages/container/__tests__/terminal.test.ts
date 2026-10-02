@@ -177,6 +177,23 @@ describe(openTerminal, () => {
         expect(writtenAtResize).toStrictEqual(["a"]);
     });
 
+    it("closes the socket when queued input outgrows the session cap", async () => {
+        expect.assertions(2);
+
+        const { proc, runtime, server, spawn } = setup();
+
+        // A stdin that never accepts data, so every frame stays queued.
+        (proc.process as { stdin: WritableStream<Uint8Array> }).stdin = new WritableStream<Uint8Array>({ write: async () => new Promise<void>(() => {}) });
+        await openTerminal(spawn, upgradeRequest(), {}, runtime);
+
+        for (let frame = 0; frame < 3; frame += 1) {
+            server.emit("message", new Uint8Array(512 * 1024).buffer);
+        }
+
+        expect(server.closed).toStrictEqual([{ code: 1009, reason: "terminal input backlog too large" }]);
+        expect(proc.process.kill).toHaveBeenCalledTimes(1);
+    });
+
     it("kills the shell when the socket closes", async () => {
         expect.assertions(1);
 

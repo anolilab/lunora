@@ -27,7 +27,12 @@ interface ContainerFiles {
     mkdir: (path: string, options?: ContainerFileOptions & { recursive?: boolean }) => Promise<void>;
     /** List a directory's immediate entries, without following symlinked entries. */
     readDirectory: (path: string, options?: ContainerFileOptions) => Promise<SandboxDirectoryEntry[]>;
-    /** Stream a file out of the container. The body applies backpressure to the read. */
+
+    /**
+     * Stream a file out of the container. The body applies backpressure to the
+     * read. Read the body to the end or cancel it: the container is counted in
+     * flight until then, so an abandoned body keeps it from sleeping.
+     */
     readFile: (path: string, options?: ContainerFileOptions) => Promise<Response>;
     /** Remove a file or symlink; `recursive` removes a directory tree, `force` ignores a missing target. */
     remove: (path: string, options?: ContainerFileOptions & { force?: boolean; recursive?: boolean }) => Promise<void>;

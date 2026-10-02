@@ -65,7 +65,16 @@ interface SpawnResult {
     stdout: ReadableStream<Uint8Array> | null;
 }
 
-/** A running process in a container instance, returned by `handle.spawn()`. */
+/**
+ * A running process in a container instance, returned by `handle.spawn()`.
+ *
+ * The container finishes a process's output, and settles `exitCode`, only
+ * while its output is being drained. Lunora drains `stdout` and `stderr` into
+ * a 1 MiB buffer each, so they can be read in either order, or after awaiting
+ * `exitCode`, while the stream you are not reading stays under 1 MiB. Past
+ * that the process stalls until you read it: for a process that may write more
+ * to one stream, read both concurrently, or cancel the one you do not need.
+ */
 interface ContainerProcess {
     /** Resolves with the exit code once the process ends. */
     exitCode: Promise<number>;

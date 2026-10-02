@@ -172,14 +172,23 @@ const createTestDisk = (): ContainerFiles => {
 
             assertParent(destination, "rename");
 
-            for (const [entry, bytes] of files) {
+            // Linux refuses to move a directory into its own subtree.
+            if (destination.startsWith(`${source}/`)) {
+                throw fileError("EINVAL", "rename", source);
+            }
+
+            // Snapshots: both loops add entries to the collection they walk.
+            const fileEntries = [...files];
+            const directoryEntries = [...directories];
+
+            for (const [entry, bytes] of fileEntries) {
                 if (entry === source || entry.startsWith(`${source}/`)) {
                     files.delete(entry);
                     files.set(destination + entry.slice(source.length), bytes);
                 }
             }
 
-            for (const entry of directories) {
+            for (const entry of directoryEntries) {
                 if (entry === source || entry.startsWith(`${source}/`)) {
                     directories.delete(entry);
                     directories.add(destination + entry.slice(source.length));
