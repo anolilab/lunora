@@ -53,6 +53,7 @@ import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validatio
 
 import { memoizePromise } from "../../../shared/promise-memo";
 import { readScreenedBody, serveStateless } from "./serve-stateless";
+import callToolName from "./tool-call";
 import type { ToolInputSchema, ToolResult } from "./tools";
 
 /** A tool handler: receives the call's `arguments` bag, returns an MCP tool result. */
@@ -226,30 +227,6 @@ const loadChargeMiddleware = async (): Promise<CreateChargeMiddleware> => {
 };
 
 const DEFAULT_SERVER_INFO = { name: "lunora-paid-mcp", version: "0.0.0" } as const;
-
-/** The MCP method that invokes a tool — the only method a price gate applies to. */
-const CALL_TOOL_METHOD = "tools/call";
-
-/**
- * The tool name a JSON-RPC message targets, if it is a `tools/call`. Returns
- * `undefined` for any other method or a malformed message — those are never
- * gated (only a `tools/call` naming a registered paid tool is).
- */
-const callToolName = (message: unknown): string | undefined => {
-    if (typeof message !== "object" || message === null) {
-        return undefined;
-    }
-
-    const { method, params } = message as { method?: unknown; params?: unknown };
-
-    if (method !== CALL_TOOL_METHOD || typeof params !== "object" || params === null) {
-        return undefined;
-    }
-
-    const { name } = params as { name?: unknown };
-
-    return typeof name === "string" ? name : undefined;
-};
 
 /**
  * Refuse a JSON-RPC batch that references a paid tool. A single HTTP request

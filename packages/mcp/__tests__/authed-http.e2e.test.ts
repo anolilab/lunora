@@ -1,6 +1,6 @@
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, resolveAuthOptions } from "@lunora/auth";
-import { jwt, mcp, mcpDiscoveryPaths, requireMcpAuth } from "@lunora/auth/plugins";
+import { createInsufficientScopeError, jwt, mcp, mcpDiscoveryPaths, requireMcpAuth } from "@lunora/auth/plugins";
 import type { LunoraClient } from "@lunora/client";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { getAuthTables } from "better-auth/db";
@@ -55,7 +55,10 @@ interface Client {
 /** Minimal mock exposing only the methods the tools touch. */
 const mockClient = (): LunoraClient =>
     ({
-        listFunctions: vi.fn<() => Promise<{ kind: string; path: string }[]>>(async () => [{ kind: "query", path: "messages:list" }]),
+        listFunctions: vi.fn<() => Promise<{ kind: string; path: string }[]>>(async () => [
+            { kind: "query", path: "messages:list" },
+            { kind: "mutation", path: "messages:send" },
+        ]),
     }) as unknown as LunoraClient;
 
 /**
@@ -150,6 +153,13 @@ const initializeBody = {
 } as const;
 
 const listToolsBody = { id: 2, jsonrpc: "2.0", method: "tools/list", params: {} } as const;
+
+const runMutationBody = {
+    id: 3,
+    jsonrpc: "2.0",
+    method: "tools/call",
+    params: { arguments: { args: { text: "hi" }, functionPath: "messages:send" }, name: "lunora_run_mutation" },
+} as const;
 
 const toolNames = async (response: Response): Promise<string[]> => {
     const payload: { result: { tools: { name: string }[] } } = await response.json();
@@ -350,5 +360,109 @@ describe("createAuthedMcpFetchHandler behind real better-auth", () => {
         expect.assertions(1);
 
         await expect(registerClient(buildAuth({ scopes: undefined }), MCP_SCOPES)).rejects.toMatchObject({ body: { error: "invalid_scope" } });
+    });
+
+    // Plan 461 D: with `writeScope`, a read-only token sees the write tools and a call
+    // to one is answered with the RFC 6750 step-up challenge, not a tool error.
+    describe("step-up for writes", () => {
+        /** The documented step-up wiring: writes always listed, the scope checked per call. */
+        const stepUpHandler = () =>
+            createAuthedMcpFetchHandler({
+                challenge: createInsufficientScopeError,
+                protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource: RESOURCE }),
+                server: () => {
+                    return { allowWrites: true, client: mockClient() };
+                },
+                writeScope: "lunora:write",
+            });
+
+        it("lists the write tools to a read-only token", async () => {
+            expect.assertions(1);
+
+            stubJwksFetch();
+
+            const token = await mintToken(auth, client, RESOURCE, "lunora:read");
+
+            await expect(toolNames(await stepUpHandler()(mcpRequest(listToolsBody, token)))).resolves.toContain("lunora_run_mutation");
+        });
+
+        it("answers a read-only token's write call with a 403 insufficient_scope challenge for lunora:write", async () => {
+            expect.assertions(4);
+
+            stubJwksFetch();
+
+            const token = await mintToken(auth, client, RESOURCE, "lunora:read");
+            const response = await stepUpHandler()(mcpRequest(runMutationBody, token));
+            const challenge = response.headers.get("www-authenticate") ?? "";
+
+            expect(response.status).toBe(403);
+            expect(challenge).toContain('error="insufficient_scope"');
+            expect(challenge).toContain('scope="lunora:write"');
+            expect(resourceMetadataUrl(response)).toBe(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`);
+        });
+
+        it("lets a token carrying lunora:write make the call", async () => {
+            expect.assertions(2);
+
+            stubJwksFetch();
+
+            const token = await mintToken(auth, client, RESOURCE, "lunora:read lunora:write");
+            const response = await stepUpHandler()(mcpRequest(runMutationBody, token));
+            const payload: { error?: unknown; result?: unknown } = await response.json();
+
+            expect(response.status).toBe(200);
+            // The write reached the tool: its first answer is the confirmation proposal.
+            expect(payload).toHaveProperty("result");
+        });
+
+        it("still serves a read-only token's read calls", async () => {
+            expect.assertions(1);
+
+            stubJwksFetch();
+
+            const token = await mintToken(auth, client, RESOURCE, "lunora:read");
+            const response = await stepUpHandler()(
+                mcpRequest({ id: 4, jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name: "lunora_list_functions" } }, token),
+            );
+
+            expect(response.status).toBe(200);
+        });
+
+        // A write call tucked into a batch, or a body the gate cannot parse, must not
+        // slip past the scope check into the transport.
+        it.each([
+            ["a batch carrying the write call", JSON.stringify([listToolsBody, runMutationBody]), 403],
+            ["a body that is not JSON", '{"jsonrpc":"2.0","method":"tools/call",', 400],
+        ])("refuses %s from a read-only token", async (_label, body, status) => {
+            expect.assertions(1);
+
+            stubJwksFetch();
+
+            const token = await mintToken(auth, client, RESOURCE, "lunora:read");
+            const response = await stepUpHandler()(
+                new Request(RESOURCE, {
+                    body,
+                    headers: { accept: "application/json, text/event-stream", authorization: `Bearer ${token}`, "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+            expect(response.status).toBe(status);
+        });
+
+        // A type error first (checked by `tsc` over this file), and a refusal at
+        // construction for a caller the type cannot see.
+        it("refuses to build with writeScope but no challenge", () => {
+            expect.assertions(1);
+
+            // @ts-expect-error -- `writeScope` without `challenge` must not type-check
+            const misconfigured: Parameters<typeof createAuthedMcpFetchHandler>[0] = {
+                protect: (handler) => requireMcpAuth(auth, handler, { resource: RESOURCE }),
+                server: byScope,
+                writeScope: "lunora:write",
+            };
+
+            expect(() => createAuthedMcpFetchHandler(misconfigured)).toThrow(expect.objectContaining({ code: "MCP_STEP_UP_MISCONFIGURED" }));
+        });
     });
 });

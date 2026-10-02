@@ -37,7 +37,7 @@
  */
 export type { CallAgentToolOptions, McpAgentExposure } from "./agent-tools";
 export { AGENT_RUN_INPUT_SCHEMA, AGENT_STATUS_TOOL_NAME, agentToolDefinitions, callAgentTool, parseAgentsEnv } from "./agent-tools";
-export type { AuthedMcpFetchHandlerOptions, AuthedMcpServerOptions, McpAccessTokenClaims, McpAuthProtect } from "./authed-http";
+export type { AuthedMcpFetchHandlerOptions, AuthedMcpServerOptions, AuthedMcpStepUpOptions, McpAccessTokenClaims, McpAuthProtect } from "./authed-http";
 export { createAuthedMcpFetchHandler, mcpTokenScopes } from "./authed-http";
 export type { McpServerInfo, McpTool } from "./compose";
 export { createToolServer } from "./compose";
