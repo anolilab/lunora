@@ -18,7 +18,11 @@
  * order, a malformed frame, a flood — ends in one `error` frame and a close.
  *
  * The state lives in the socket's attachment ({@link SessionAttachment}), so it
- * survives the Durable Object hibernating between frames.
+ * survives the Durable Object hibernating between frames. The attachment holds
+ * only small, bounded fields — workerd caps a serialized attachment at 16 KiB,
+ * and a `hello` may list 500 fleets — so the fleets travel as an effect instead
+ * ({@link SessionEffect} `hello`), and the session keeps them in memory until
+ * the box authenticates.
  */
 import type { BoxResources, BoxVersions, FleetSummary, HostdFrame, ProgressMessage, ReportMessage, ResultMessage } from "@lunora/hostd/protocol";
 import { challengeSigningPayload, decodeBoxMessage, negotiateProtocolVersion, peekProtocolVersion } from "@lunora/hostd/protocol";
@@ -36,8 +40,8 @@ export interface SessionAttachment {
     bucket: { refilledAt: number; tokens: number };
     /** Set once the control plane refused the socket; it counts for nothing until the runtime drops it. */
     closed?: boolean;
-    /** What `hello` reported, kept until `auth` succeeds and it is recorded. */
-    hello?: { fleets: FleetSummary[]; resources: BoxResources; versions: BoxVersions };
+    /** What `hello` reported that fits an attachment, kept until `auth` succeeds and it is recorded. */
+    hello?: { resources: BoxResources; versions: BoxVersions };
     /** The outstanding challenge nonce. Cleared once used — a nonce answers exactly one `auth`. */
     nonce?: string;
     /** When the socket was accepted — bounds how long the handshake may take. */
@@ -63,7 +67,10 @@ export interface SessionPorts {
 /** What a frame made the session do, in order. The Durable Object carries these out. */
 export type SessionEffect =
     | { close: true; code: string; message: string }
-    | { hello: NonNullable<SessionAttachment["hello"]>; kind: "authenticated" }
+    /** The box proved its key; `nonce` is the challenge it answered — the key its `hello` fleets were held under. */
+    | { hello: NonNullable<SessionAttachment["hello"]>; kind: "authenticated"; nonce: string }
+    /** A `hello` was challenged with `nonce`: hold its fleets until that challenge is answered (never written before). */
+    | { fleets: FleetSummary[]; kind: "hello"; nonce: string }
     | { kind: "pong" }
     | { kind: "progress"; message: ProgressMessage }
     | { kind: "report"; message: ReportMessage }
@@ -139,8 +146,11 @@ const onHello = async (attachment: SessionAttachment, frame: HostdFrame, ports: 
     const nonce = (ports.nonce ?? randomBase64Url)();
 
     return {
-        attachment: { ...attachment, hello: { fleets: hello.fleets, resources: hello.resources, versions: hello.versions }, nonce, phase: "awaiting-auth" },
-        effects: [{ kind: "send", message: { nonce, type: "challenge" } }],
+        attachment: { ...attachment, hello: { resources: hello.resources, versions: hello.versions }, nonce, phase: "awaiting-auth" },
+        effects: [
+            { fleets: hello.fleets, kind: "hello", nonce },
+            { kind: "send", message: { nonce, type: "challenge" } },
+        ],
     };
 };
 
@@ -170,7 +180,7 @@ const onAuth = async (current: SessionAttachment, frame: HostdFrame, ports: Sess
         return refuse(attachment, "AUTH_FAILED", "the challenge signature does not verify against this box's key");
     }
 
-    return { attachment: { ...rest, phase: "ready" }, effects: hello === undefined ? [] : [{ hello, kind: "authenticated" }] };
+    return { attachment: { ...rest, phase: "ready" }, effects: hello === undefined ? [] : [{ hello, kind: "authenticated", nonce }] };
 };
 
 /** A frame from an authenticated box. `hello` and `auth` are no longer valid. */

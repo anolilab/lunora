@@ -17,7 +17,7 @@
  *   (`GET /v1/boxes/connect`) — so none of the rest is reachable from outside.
  */
 import type { D1DatabaseLike } from "@lunora/d1";
-import type { BoxVersions, CloudMessage, HostdJob, ReportMessage } from "@lunora/hostd/protocol";
+import type { BoxVersions, CloudMessage, FleetSummary, HostdJob, ReportMessage } from "@lunora/hostd/protocol";
 import { encodeMessage, HOSTD_PROTOCOL_LIMITS, isErrorCode, isNonce, isProtocolId } from "@lunora/hostd/protocol";
 import { DurableObject } from "cloudflare:workers";
 
@@ -139,6 +139,15 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
 
     /** Fleet updates from finished jobs, one at a time, so two jobs finishing together cannot lose each other's write. Never rejects. */
     private fleetWrites: Promise<void> = Promise.resolve();
+
+    /**
+     * The fleets each challenged `hello` reported, by challenge nonce, until its
+     * `auth` arrives — in memory, because a 500-fleet list does not fit a socket
+     * attachment. At most {@link MAX_SOCKETS} handshakes run at once; older
+     * entries are dropped past that, and an entry lost to an eviction only means
+     * the box's stored fleets wait for its next `hello` or job.
+     */
+    private readonly pendingFleets = new Map<string, FleetSummary[]>();
 
     /**
      * Each socket's report count in the current minute. In memory rather than in
@@ -431,10 +440,16 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
                     }
                 }
 
-                await recordHello(database, attachment.boxId, effect.hello, now);
+                const fleets = this.takeFleets(effect.nonce);
+
+                await recordHello(database, attachment.boxId, { ...effect.hello, ...(fleets === undefined ? {} : { fleets }) }, now);
                 await this.ctx.storage.put("seenWrittenAt", now);
                 await this.pushRoutes();
                 await this.replayDesiredRelease(database, socket, attachment.boxId, effect.hello.versions);
+                break;
+            }
+            case "hello": {
+                this.holdFleets(effect.nonce, effect.fleets);
                 break;
             }
             case "pong": {
@@ -467,6 +482,28 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
                 break;
             }
         }
+    }
+
+    /** Hold a challenged `hello`'s fleets until its `auth`, dropping the oldest past one per possible handshake. */
+    private holdFleets(nonce: string, fleets: FleetSummary[]): void {
+        this.pendingFleets.set(nonce, fleets);
+
+        for (const held of this.pendingFleets.keys()) {
+            if (this.pendingFleets.size <= MAX_SOCKETS) {
+                break;
+            }
+
+            this.pendingFleets.delete(held);
+        }
+    }
+
+    /** The fleets held for the challenge `nonce` answered, forgotten once taken. */
+    private takeFleets(nonce: string): FleetSummary[] | undefined {
+        const fleets = this.pendingFleets.get(nonce);
+
+        this.pendingFleets.delete(nonce);
+
+        return fleets;
     }
 
     private async socketGone(socket: SessionSocket): Promise<void> {

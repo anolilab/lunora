@@ -40,20 +40,35 @@ describe("the box handshake", () => {
         const key = await boxKey();
         const hello = await receiveFrame(openSession("box_1", NOW), helloFrame("box_1"), NOW, portsFor(key));
 
-        expect(hello.effects).toStrictEqual([{ kind: "send", message: { nonce: NONCE, type: "challenge" } }]);
+        expect(hello.effects).toStrictEqual([
+            { fleets: [], kind: "hello", nonce: NONCE },
+            { kind: "send", message: { nonce: NONCE, type: "challenge" } },
+        ]);
         expect(hello.attachment.phase).toBe("awaiting-auth");
 
         const auth = await receiveFrame(hello.attachment, await authFrame(key, "box_1", NONCE), NOW + 1, portsFor(key));
 
         expect(auth.effects).toStrictEqual([
             {
-                hello: { fleets: [], resources: { diskFreeMb: 40_960, memMb: 3891 }, versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.0.0" } },
+                hello: { resources: { diskFreeMb: 40_960, memMb: 3891 }, versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.0.0" } },
                 kind: "authenticated",
+                nonce: NONCE,
             },
         ]);
         expect(auth.attachment).toMatchObject({ phase: "ready", seenAt: NOW + 1 });
         expect(auth.attachment).not.toHaveProperty("nonce");
         expect(auth.attachment).not.toHaveProperty("hello");
+    });
+
+    it("holds a hello's fleets outside the attachment between hello and auth", async () => {
+        const key = await boxKey();
+        const fleets = Array.from({ length: 500 }, (_, index) => {
+            return { alias: `web-${String(index)}`, deploymentId: "d".repeat(128), state: "running" as const };
+        });
+        const hello = await receiveFrame(openSession("box_1", NOW), helloFrame("box_1", { fleets }), NOW, portsFor(key));
+
+        expect(hello.effects[0]).toStrictEqual({ fleets, kind: "hello", nonce: NONCE });
+        expect(new TextEncoder().encode(JSON.stringify(hello.attachment)).length).toBeLessThan(1024);
     });
 
     it("refuses a signature by another key", async () => {
@@ -269,6 +284,18 @@ describe("boxSessionDO", () => {
             { alias: "api", state: "stopped" },
             { alias: "web", deploymentId: "dep_2", state: "running" },
         ]);
+    });
+
+    it("keeps a full fleet list out of the socket attachment, which workerd caps at 16 KiB, and still records it", async () => {
+        const { key, session, state, store } = await setup();
+        // The protocol's maximum: 500 fleets, each with a 63-character alias and a 128-character deployment id.
+        const fleets = Array.from({ length: 500 }, (_, index) => {
+            return { alias: `${"a".repeat(59)}${String(index).padStart(4, "0")}`, deploymentId: "d".repeat(128), state: "running" };
+        });
+        const socket = await handshake(session, state, key, "box_1", { hello: { fleets } });
+
+        expect(new TextEncoder().encode(JSON.stringify(socket.attachment)).length).toBeLessThan(1024);
+        expect(store.tables["boxes"]?.[0]?.["fleets"]).toHaveLength(500);
     });
 
     it("moves the stored fleets on as deploy and destroy jobs succeed, and leaves them on a failure", async () => {

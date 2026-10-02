@@ -35,11 +35,16 @@ export const loadBox = async (database: ControlPlaneStore, boxId: string): Promi
 export const sessionBoxOf = (box: null | StoredBox): null | SessionBox =>
     box === null ? null : { publicKey: box.publicKey, revoked: box.status === "revoked" };
 
-/** Record an authenticated `hello`: the box is online, runs these versions and fleets, with this much room. */
+/**
+ * Record an authenticated `hello`: the box is online, runs these versions with
+ * this much room — and these fleets, when the session still held them (it holds
+ * them in memory between `hello` and `auth`, so an eviction in between loses
+ * them; the stored list then stays until the next job or `hello` moves it).
+ */
 export const recordHello = async (
     database: ControlPlaneStore,
     boxId: string,
-    hello: { fleets: FleetSummary[]; resources: BoxResources; versions: BoxVersions },
+    hello: { fleets?: FleetSummary[]; resources: BoxResources; versions: BoxVersions },
     now: number,
 ): Promise<void> => {
     const box = await loadBox(database, boxId);
@@ -50,7 +55,13 @@ export const recordHello = async (
 
     await database.patch(
         boxId,
-        { fleets: normaliseFleets(hello.fleets), lastSeenAt: now, resources: hello.resources, status: "online", versions: hello.versions },
+        {
+            ...(hello.fleets === undefined ? {} : { fleets: normaliseFleets(hello.fleets) }),
+            lastSeenAt: now,
+            resources: hello.resources,
+            status: "online",
+            versions: hello.versions,
+        },
         "boxes",
     );
 };
