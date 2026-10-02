@@ -16,6 +16,8 @@ const SANDBOX_MODULE_SPECIFIERS = new Set(["@lunora/agent", "@lunora/agent/sandb
 /** Sandbox tool name → the {@link SandboxUsage} flag its value import sets. */
 const TOOL_FLAGS: Record<string, keyof SandboxUsage> = {
     browserTool: "usesSandboxBrowser",
+    // Same requirements as `containerTool`: the dispatcher, and `ctx.containers` inside it.
+    containerFsTool: "usesSandboxContainer",
     containerTool: "usesSandboxContainer",
     fsTool: "usesSandboxFs",
     jsCodeTool: "usesSandboxLoader",

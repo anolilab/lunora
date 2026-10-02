@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.112...@lunora/platform-node@1.0.0-alpha.113) (2026-10-02)
+
+### Features
+
+* **container:** Sandbox SDK 1.0 parity (spawn, terminal, files, backups, mounts) ([#932](https://github.com/anolilab/lunora/issues/932)) ([207b674](https://github.com/anolilab/lunora/commit/207b674982f2f2e722d0bad529acc88d09cc2f41))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.157
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+* **@lunora/queue:** upgraded to 1.0.0-alpha.85
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.158
+* **@lunora/do:** upgraded to 1.0.0-alpha.187
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.68
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.170
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.105
+* **@lunora/storage:** upgraded to 1.0.0-alpha.97
+
 ## @lunora/platform-node [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.111...@lunora/platform-node@1.0.0-alpha.112) (2026-10-02)
 
 ### Features

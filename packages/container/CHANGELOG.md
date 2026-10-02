@@ -1,3 +1,9 @@
+## @lunora/container [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.64...@lunora/container@1.0.0-alpha.65) (2026-10-02)
+
+### Features
+
+* **container:** Sandbox SDK 1.0 parity (spawn, terminal, files, backups, mounts) ([#932](https://github.com/anolilab/lunora/issues/932)) ([207b674](https://github.com/anolilab/lunora/commit/207b674982f2f2e722d0bad529acc88d09cc2f41))
+
 ## @lunora/container [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.63...@lunora/container@1.0.0-alpha.64) (2026-09-30)
 
 ### Features

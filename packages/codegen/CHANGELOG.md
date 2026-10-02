@@ -1,3 +1,22 @@
+## @lunora/codegen [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.246...@lunora/codegen@1.0.0-alpha.247) (2026-10-02)
+
+### Features
+
+* **container:** Sandbox SDK 1.0 parity (spawn, terminal, files, backups, mounts) ([#932](https://github.com/anolilab/lunora/issues/932)) ([207b674](https://github.com/anolilab/lunora/commit/207b674982f2f2e722d0bad529acc88d09cc2f41))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.179
+* **@lunora/agent:** upgraded to 1.0.0-alpha.161
+* **@lunora/container:** upgraded to 1.0.0-alpha.65
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+* **@lunora/queue:** upgraded to 1.0.0-alpha.85
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.103
+* **@lunora/do:** upgraded to 1.0.0-alpha.187
+* **@lunora/server:** upgraded to 1.0.0-alpha.168
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.105
+
 ## @lunora/codegen [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.245...@lunora/codegen@1.0.0-alpha.246) (2026-10-02)
 
 

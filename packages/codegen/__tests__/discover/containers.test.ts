@@ -245,6 +245,33 @@ describe("discover/containers", () => {
         expect(container?.enableInternet).toBe(false);
         expect(container?.sleepAfter).toBe("30s");
     });
+
+    it("lifts a literal sandbox flag", () => {
+        expect.assertions(2);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const plain = defineContainer({ image: "./plain" });
+        `);
+
+        const [box, plain] = discoverContainers(newProject(), workdir);
+
+        expect(box?.sandbox).toBe(true);
+        expect(plain?.sandbox).toBeUndefined();
+    });
+
+    it("rejects a sandbox flag it cannot read statically", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            const enabled = process.env.SANDBOX === "1";
+            export const box = defineContainer({ image: "./box", sandbox: enabled });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow("`sandbox` must be a static true/false literal");
+    });
 });
 
 describe("emit (containers)", () => {
@@ -276,6 +303,69 @@ describe("emit (containers)", () => {
         expect(content).toContain("export class TranscoderContainer extends LunoraContainer {");
         expect(content).toContain('super(ctx, env, transcoder, "transcoder");');
         expect(content).toContain("Re-export them from your worker entry");
+    });
+
+    it("emitContainers exports the sandbox gateways only when a container opts in", () => {
+        expect.assertions(3);
+
+        const plain = emitContainers(discover());
+
+        expect(plain).not.toContain("@lunora/container/sandbox");
+        // Unchanged output for an app that never opts in: the ContainerProxy
+        // re-export is still followed directly by the first class.
+        expect(plain).toContain('export { ContainerProxy } from "@lunora/container/do";\n\n/** Container DO for');
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const transcoder = defineContainer({ image: "./containers/transcoder" });
+        `);
+
+        expect(emitContainers(discoverContainers(newProject(), workdir))).toContain(
+            'export { DirectoryBackupGateway, S3Gateway } from "@lunora/container/sandbox";',
+        );
+    });
+
+    it("emitContainers extends LunoraSandboxContainer for a sandbox container, and imports only the bases in use", () => {
+        expect.assertions(5);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const transcoder = defineContainer({ image: "./containers/transcoder" });
+        `);
+
+        const mixed = emitContainers(discoverContainers(newProject(), workdir));
+
+        expect(mixed).toContain("export class BoxContainer extends LunoraSandboxContainer {");
+        expect(mixed).toContain("export class TranscoderContainer extends LunoraContainer {");
+        expect(mixed).toContain('import { LunoraSandboxContainer } from "@lunora/container/sandbox";');
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+        `);
+
+        const sandboxOnly = emitContainers(discoverContainers(newProject(), workdir));
+
+        expect(sandboxOnly).not.toContain('import { LunoraContainer } from "@lunora/container/do";');
+        expect(sandboxOnly).toContain("ConstructorParameters<typeof LunoraSandboxContainer>[0]");
+    });
+
+    it("emitServer types a sandbox container as a SandboxContainerAccessor", () => {
+        expect.assertions(3);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+            export const box = defineContainer({ image: "./box", sandbox: true });
+            export const transcoder = defineContainer({ image: "./containers/transcoder" });
+        `);
+
+        const server = emitServer({ containers: discoverContainers(newProject(), workdir), schema: EMPTY_SCHEMA });
+
+        expect(server).toContain('import type { ContainerAccessor, SandboxContainerAccessor } from "@lunora/container";');
+        expect(server).toContain("readonly box: SandboxContainerAccessor;");
+        expect(server).toContain("readonly transcoder: ContainerAccessor;");
     });
 
     it('emitContainers returns "" without containers', () => {
