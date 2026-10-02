@@ -1014,8 +1014,9 @@ Landed on top of the BYO-Cloudflare branch (`010f04761`), each with node tests:
   driver's `domains.onVerified` / `onRemoved` create and delete
   Cloudflare-for-SaaS custom hostnames on `LUNORA_SAAS_ZONE_ID`; an hourly sweep
   follows them to `active` (GAPS.md B1; zone setup is 🌐, RUNBOOK step 6a).
-- **Pre-rename dev databases** — `bf8515923`: the seed renames a lone
-  `dev-cell` to `default` in the local D1 file, or prints the reseed steps.
+- **Pre-rename dev databases** — `bf8515923`: the seed refuses a database
+  without a `default` cell and prints the reseed steps (its rename of a lone
+  `dev-cell` was a dev shim, removed in §11).
 
 ## 11. Code-quality round 2 (`work/cloud-vps-gaps`, 2026-10-03)
 

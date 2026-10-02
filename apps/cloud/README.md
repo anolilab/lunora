@@ -612,13 +612,10 @@ it creates an account with a published password, sends your `LUNORA_ADMIN_TOKEN`
 to the target, force-activates the project's newest deployment, and revokes any
 `dev-seed` key. Set `LUNORA_SEED_ALLOW_REMOTE=1` to override, deliberately.
 
-**A database seeded before the cell rename heals itself.** Those hold one cell
-named `dev-cell`, and every deploy from them was refused (a project deploys only
-from its organization's cell). The seed renames a lone `dev-cell` to `default` in
-the dev server's **local** D1 file (`wrangler d1 execute --local`, loopback
-targets only) and says so; a database with any other mix of cells is refused with
-the exact reseed steps — stop `pnpm run dev`, delete `apps/cloud/.wrangler/state`,
-start it again, rerun the seed. Production cells are never touched.
+**A database without a `default` cell is refused.** Local dev runs as cell
+`default`, and a project deploys only from its organization's cell, so the seed
+refuses any other mix of cells with the exact reseed steps — stop `pnpm run dev`,
+delete `apps/cloud/.wrangler/state`, start it again, rerun the seed.
 
 **Re-running is safe.** Every stage looks for what it would create first, because
 none of the underlying mutations dedupe — `cells:register` inserts blindly, so an

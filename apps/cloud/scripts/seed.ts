@@ -228,18 +228,13 @@ const signIn = async (): Promise<string> => {
  *
  * Local dev runs as cell `default` (`LUNORA_CELL` in `wrangler.jsonc`), and a
  * project deploys only from the control plane of its organization's cell
- * (`src/targets/placement.ts`). Databases seeded before that rule named their
- * one cell `dev-cell`, so every deploy from them was refused. The seed heals
- * such a database itself — a lone `dev-cell` is renamed `default` in the LOCAL
- * D1 file — and refuses, saying how to reseed, for anything it cannot tell is
- * safe to change. Pure, so `__tests__/seed-cell.test.ts` drives it.
+ * (`src/targets/placement.ts`). A database whose cells hold no `default` could
+ * never deploy what is seeded on it, so the seed refuses, saying how to reseed.
+ * Pure, so `__tests__/seed-cell.test.ts` drives it.
  */
 
 /** The cell local dev runs as: `LUNORA_CELL` in `wrangler.jsonc`'s top-level `vars`. */
 const DEV_CELL_NAME = "default";
-
-/** What the seed named its cell before cells were matched against `LUNORA_CELL`. */
-const LEGACY_DEV_CELL_NAME = "dev-cell";
 
 /** How to start over, for a local database the seed will not change. */
 const RESEED_HINT = "stop `pnpm run dev`, delete apps/cloud/.wrangler/state, start it again, and rerun `pnpm run seed`";
@@ -250,16 +245,14 @@ interface CellRow {
 }
 
 /** What to do about the fleet's cells. */
-type SeedCellPlan = { cell: CellRow; kind: "rename" } | { cell: CellRow; kind: "use" } | { kind: "create" } | { kind: "refuse"; message: string };
+type SeedCellPlan = { cell: CellRow; kind: "use" } | { kind: "create" } | { kind: "refuse"; message: string };
 
 /**
  * Decide the seed's cell from the fleet's cells:
  *
  * - a `default` cell exists → use it;
  * - no cell at all → create `default`;
- * - exactly one cell, the legacy `dev-cell` → rename it to `default` (its org,
- *   projects and deployments keep pointing at the same row);
- * - anything else → refuse: there is no single cell a rename would fix.
+ * - anything else → refuse: nothing seeded on those cells could deploy locally.
  */
 const planSeedCell = (cells: ReadonlyArray<CellRow>): SeedCellPlan => {
     const current = cells.find((cell) => cell.name === DEV_CELL_NAME);
@@ -272,31 +265,10 @@ const planSeedCell = (cells: ReadonlyArray<CellRow>): SeedCellPlan => {
         return { kind: "create" };
     }
 
-    const only = cells.length === 1 ? cells.at(0) : undefined;
-
-    if (only?.name === LEGACY_DEV_CELL_NAME) {
-        return { cell: only, kind: "rename" };
-    }
-
     return {
         kind: "refuse",
         message: `this local database has the cell(s) ${cells.map((cell) => `"${cell.name}"`).join(", ")} but no "${DEV_CELL_NAME}", which local dev runs as (LUNORA_CELL), so nothing seeded on them can deploy. Reseed with a fresh database: ${RESEED_HINT}`,
     };
-};
-
-const ROW_ID = /^[\w-]{1,128}$/u;
-
-/**
- * The SQL that renames the legacy cell, for `wrangler d1 execute --local`.
- * Guarded twice: the id must look like a row id (it is interpolated), and the
- * row must still carry the legacy name, so a re-run changes nothing.
- */
-const renameLegacyCellSql = (cellId: string): string => {
-    if (!ROW_ID.test(cellId)) {
-        throw new Error(`refusing to rename cell ${JSON.stringify(cellId)}: not a row id`);
-    }
-
-    return `UPDATE cells SET name = '${DEV_CELL_NAME}' WHERE _id = '${cellId}' AND name = '${LEGACY_DEV_CELL_NAME}';`;
 };
 
 /** Run SQL against the dev server's LOCAL D1 file — never a remote database (`--local`). */
@@ -314,10 +286,7 @@ const executeLocalSql = async (sql: string): Promise<void> => {
  *
  * Registration goes through the operator route rather than `ctx.db`, so it
  * exercises the `LUNORA_ADMIN_TOKEN` boundary and the internal-function dispatch
- * that an org placement depends on. Healing a pre-rename database is the one
- * write behind the app's back, and only ever on a loopback target: it edits the
- * dev server's local D1 file, which a remote seed (`LUNORA_SEED_ALLOW_REMOTE`)
- * does not run against.
+ * that an org placement depends on.
  */
 const ensureCell = async (cookie: string): Promise<string> => {
     const plan = planSeedCell(await rpc<{ _id: string; name: string }[]>(cookie, "cells:list"));
@@ -330,19 +299,6 @@ const ensureCell = async (cookie: string): Promise<string> => {
 
     if (plan.kind === "refuse") {
         throw new Error(plan.message);
-    }
-
-    if (plan.kind === "rename") {
-        if (!isLoopback(BASE_URL)) {
-            throw new Error(
-                `the seeded cell is still "${LEGACY_DEV_CELL_NAME}", and only a local database is renamed. Reseed with a fresh database: ${RESEED_HINT}`,
-            );
-        }
-
-        await executeLocalSql(renameLegacyCellSql(plan.cell._id));
-        console.info(`  cell        ${LEGACY_DEV_CELL_NAME} → ${DEV_CELL_NAME} (renamed, so this database's projects deploy locally again)`);
-
-        return plan.cell._id;
     }
 
     const response = await fetch(`${BASE_URL}/v1/cells`, {
@@ -977,5 +933,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
 }
 
-export { DEV_CELL_NAME, LEGACY_DEV_CELL_NAME, planSeedCell, renameLegacyCellSql, RESEED_HINT };
+export { DEV_CELL_NAME, planSeedCell, RESEED_HINT };
 export type { SeedCellPlan };
