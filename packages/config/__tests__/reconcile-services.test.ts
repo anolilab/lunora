@@ -20,6 +20,7 @@ const inferred = (services: ServiceBindingIR[] | undefined): InferredBindings =>
         signals: [],
         usesAi: false,
         usesAnalytics: false,
+        usesArtifacts: false,
         usesAuth: false,
         usesBrowser: false,
         usesFlags: false,

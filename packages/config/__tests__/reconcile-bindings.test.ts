@@ -24,6 +24,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         signals: [],
         usesAi: false,
         usesAnalytics: false,
+        usesArtifacts: false,
         usesAuth: false,
         usesBrowser: false,
         usesHyperdrive: false,
@@ -362,6 +363,49 @@ describe("reconcileWranglerBindings", () => {
 
         expect(result.warnings.join(" ")).toMatch(/r2_buckets/u);
         expect(readConfig().r2_buckets).toBeUndefined();
+    });
+
+    it("warns about a missing artifacts binding, naming the schema's jurisdiction, and never writes one", () => {
+        expect.assertions(3);
+
+        const unpinned = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }));
+        const pinned = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
+
+        expect(unpinned.warnings.join(" ")).toMatch(/add an "artifacts" binding/u);
+        expect(pinned.warnings.join(" ")).toMatch(/"jurisdiction": "us"/u);
+        // The namespace's residency is fixed at creation, so nothing is auto-written.
+        expect(readConfig().artifacts).toBeUndefined();
+    });
+
+    it("keeps warning about artifacts until a binding named ARTIFACTS exists, naming the .artifacts() override", () => {
+        expect.assertions(3);
+
+        const wranglerWith = (binding: string): void => {
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "artifacts": [{ "binding": "${binding}", "namespace": "default" }],
+}
+`,
+                "utf8",
+            );
+        };
+
+        // Codegen reads env.ARTIFACTS by default, so another name alone leaves ctx.artifacts throwing.
+        wranglerWith("REPOS");
+
+        const misnamed = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ");
+
+        expect(misnamed).toMatch(/ctx\.artifacts/u);
+        expect(misnamed).toContain("`.artifacts()`");
+
+        wranglerWith("ARTIFACTS");
+
+        expect(reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ")).not.toMatch(/ctx\.artifacts/u);
     });
 
     it("keeps warning about pipelines until the binding codegen resolves actually exists", () => {

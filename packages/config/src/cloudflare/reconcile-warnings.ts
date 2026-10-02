@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import artifactsBindingHint from "../artifacts-hint";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
 import type { InferredBindings } from "../infer-bindings";
 import { packageNamesFromBindings } from "../infer-bindings";
@@ -24,6 +25,9 @@ import type { WranglerShape } from "./wrangler-shape";
 /** The one Pipelines binding name codegen resolves — `emitPipelinesFragments`'s `env.PIPELINES` fallback, which has no `defineApp` override. */
 const PIPELINES_BINDING = "PIPELINES";
 
+/** The Artifacts binding name codegen falls back to — `config.artifacts?.(env) ?? env.ARTIFACTS`. */
+const ARTIFACTS_BINDING = "ARTIFACTS";
+
 const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
     // A Flagship binding-mode provider needs a matching `flagship[]` entry; the
     // warning keys on the *binding name* (an app can wire several Flagship apps),
@@ -41,6 +45,12 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
     // the Hyperdrive client by the app, so any name the app chose is correct.
     const pipelinesBindingMissing = inferred.usesPipelines && !(parsed?.pipelines ?? []).some((entry) => entry.binding === PIPELINES_BINDING);
 
+    // Keyed on the NAME too: the generated ShardDO reads `env.ARTIFACTS` unless the
+    // app's `.artifacts()` override points it elsewhere, so a `{ "binding": "REPOS" }`
+    // entry alone leaves `ctx.artifacts` throwing. The hint names that override, the
+    // one way an app legitimately keeps another name.
+    const artifactsBindingMissing = inferred.usesArtifacts && !(parsed?.artifacts ?? []).some((entry) => entry.binding === ARTIFACTS_BINDING);
+
     const rules: ReadonlyArray<[boolean, string]> = [
         [
             inferred.usesKv && (parsed?.kv_namespaces?.length ?? 0) === 0,
@@ -54,6 +64,7 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
             pipelinesBindingMissing,
             `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", stream }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
         ],
+        [artifactsBindingMissing, artifactsBindingHint(inferred.jurisdiction)],
         [
             flagshipBindingMissing,
             `lunora/flags.ts uses Flagship in binding mode but no flagship binding "${inferred.flagshipBinding ?? ""}" exists; add a flagship entry ({ binding: "${inferred.flagshipBinding ?? ""}", app_id }) — the app_id can't be auto-provisioned.`,
