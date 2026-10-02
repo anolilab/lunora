@@ -346,6 +346,10 @@ that plugin; the resource server is the handler:
 import { createAuth } from "@lunora/auth";
 import { jwt, mcp } from "@lunora/auth/plugins";
 
+// The canonical protected-resource id (RFC 8707 / RFC 9728). Issued tokens are
+// audience-bound to it. HTTPS, no query or fragment.
+export const mcpResource = "https://app.example.workers.dev/mcp";
+
 export const auth = createAuth({
     database: env.DB,
     secret: env.AUTH_SECRET,
@@ -354,9 +358,10 @@ export const auth = createAuth({
         mcp({
             consentPage: "/consent",
             loginPage: "/login",
-            // The canonical protected-resource id (RFC 8707 / RFC 9728). Issued
-            // tokens are audience-bound to it. HTTPS, no query or fragment.
-            resource: "https://app.example.workers.dev/mcp",
+            resource: mcpResource,
+            // Declare the scopes the MCP route checks. Left out, `mcp()` falls back
+            // to the OIDC defaults and no client can be granted `lunora:read`.
+            scopes: ["lunora:read", "lunora:write"],
         }),
     ],
 });
@@ -367,10 +372,13 @@ export const auth = createAuth({
 import { requireMcpAuth } from "@lunora/auth/plugins";
 import { createAuthedMcpFetchHandler, mcpTokenScopes } from "@lunora/mcp";
 
-import { auth } from "./auth";
+import { auth, mcpResource } from "./auth";
 
 export const handleMcp = createAuthedMcpFetchHandler({
-    protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"] }),
+    // Pass `resource` here as well. Without it, `requireMcpAuth` checks the token's
+    // audience against the auth `baseURL` (`…/api/auth`), which no `mcp()` token
+    // carries, so every request is refused with a 401.
+    protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource: mcpResource }),
     server: (claims) => ({
         // Writes need a scope a read-only token does not carry.
         allowWrites: mcpTokenScopes(claims).has("lunora:write"),
@@ -383,6 +391,32 @@ export const handleMcp = createAuthedMcpFetchHandler({
 An unauthenticated request never reaches the MCP server at all — it gets a 401
 carrying the `WWW-Authenticate` challenge that starts the client's authorization
 flow, and no `LunoraClient` holding the admin bearer is ever constructed for it.
+
+### Routing the discovery documents
+
+The challenge sends the client to
+`https://app.example.workers.dev/.well-known/oauth-protected-resource/mcp`, and
+from there to the authorization server's metadata at
+`/.well-known/oauth-authorization-server/api/auth`. better-auth serves both, but
+they sit outside the `/api/auth/*` base path that Lunora sends to it. Route them
+to `auth.handler` next to the MCP route, or clients stop at the first 404:
+
+```ts
+const discoveryPaths = new Set(["/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server/api/auth"]);
+
+export const handleRequest = async (request: Request): Promise<Response> => {
+    const { pathname } = new URL(request.url);
+
+    if (discoveryPaths.has(pathname) && (request.method === "GET" || request.method === "HEAD")) {
+        return await auth.handler(request);
+    }
+
+    return await handleMcp(request);
+};
+```
+
+Match the exact paths, never a `/.well-known/` prefix: other documents under it
+(`security.txt`, app links) are not better-auth's to answer.
 
 ### Scoping tools to the token
 

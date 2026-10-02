@@ -19,14 +19,18 @@
  * import { jwt, mcp, requireMcpAuth } from "@lunora/auth/plugins";
  * import { createAuthedMcpFetchHandler, mcpTokenScopes } from "@lunora/mcp";
  *
+ * const resource = "https://api.example.com/mcp";
+ *
  * const auth = createAuth({
  *     database: env.DB,
  *     secret: env.AUTH_SECRET,
- *     plugins: [jwt(), mcp({ loginPage: "/login", consentPage: "/consent", resource: "https://api.example.com/mcp" })],
+ *     plugins: [jwt(), mcp({ loginPage: "/login", consentPage: "/consent", resource, scopes: ["lunora:read", "lunora:write"] })],
  * });
  *
  * export const handleMcp = createAuthedMcpFetchHandler({
- *     protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"] }),
+ *     // `resource` here too: without it `requireMcpAuth` checks the token's
+ *     // audience against the auth `baseURL`, which no `mcp()` token carries.
+ *     protect: (handler) => requireMcpAuth(auth, handler, { requiredScopes: ["lunora:read"], resource }),
  *     server: (claims) => ({
  *         // Writes need a second scope the read-only token does not carry.
  *         allowWrites: mcpTokenScopes(claims).has("lunora:write"),
@@ -35,6 +39,14 @@
  *     }),
  * });
  * ```
+ *
+ * `mcp()` must declare the `lunora:*` scopes: left out, it falls back to the
+ * OIDC defaults and no client can be granted `lunora:read` at all. Also route
+ * `GET /.well-known/oauth-protected-resource/mcp` and
+ * `GET /.well-known/oauth-authorization-server/api/auth` to `auth.handler`.
+ * Both sit outside the `/api/auth/*` base path, and the 401 challenge sends
+ * clients to the first. `__tests__/authed-http.e2e.test.ts` runs this exact
+ * wiring against a real better-auth instance.
  *
  * `protect` is a lambda rather than an `auth` instance on purpose. better-auth
  * is not a dependency of this package (see the note on {@link McpAuthProtect}),
