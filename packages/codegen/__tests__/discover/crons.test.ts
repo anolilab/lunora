@@ -398,7 +398,7 @@ describe("discover/crons", () => {
                 args: { region: "eu" },
                 cron: "0 9 * * *",
                 name: "nightly digest",
-                workflow: { binding: "WORKFLOW_DIGEST_PIPELINE", exportName: "digestPipeline" },
+                workflow: { className: "DigestPipelineWorkflow", exportName: "digestPipeline" },
             },
         ]);
     });
@@ -428,7 +428,7 @@ describe("discover/crons", () => {
         const workflows = discoverWorkflows(project, workdir);
 
         expect(discoverCrons(project, workdir, workflows)).toEqual([
-            { args: {}, cron: "0 9 * * *", name: "nightly digest", workflow: { binding: "WORKFLOW_DIGEST_PIPELINE", exportName: "digestPipeline" } },
+            { args: {}, cron: "0 9 * * *", name: "nightly digest", workflow: { className: "DigestPipelineWorkflow", exportName: "digestPipeline" } },
         ]);
     });
 
@@ -481,7 +481,7 @@ describe("discover/crons", () => {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
                 name: "nightly sweep",
-                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+                workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
         ]);
     });
@@ -532,7 +532,7 @@ describe("discover/crons", () => {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
                 name: "nightly sweep",
-                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+                workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
         ]);
     });
@@ -567,11 +567,11 @@ describe("discover/crons", () => {
                 args: { input: "sweep", threadKey: "cron" },
                 cron: "0 3 * * *",
                 name: "nightly sweep",
-                workflow: { binding: "AGENT_SUPPORT", exportName: "support" },
+                workflow: { className: "SupportAgentWorkflow", exportName: "support" },
             },
         ]);
 
-        expect(output).toContain('{ name: "nightly sweep", workflow: "AGENT_SUPPORT", args: {"input":"sweep","threadKey":"cron"} },');
+        expect(output).toContain('{ name: "nightly sweep", workflow: "SupportAgentWorkflow", args: {"input":"sweep","threadKey":"cron"} },');
         // The agent job carries no per-job functionPath dispatch (workflow-start only).
         expect(output).not.toContain('name: "nightly sweep", functionPath:');
     });
@@ -603,12 +603,12 @@ describe("emitCrons", () => {
         expect.assertions(3);
 
         const output = emitCrons([
-            { args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: { binding: "WORKFLOW_DIGEST", exportName: "digest" } },
+            { args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: { className: "DigestWorkflow", exportName: "digest" } },
             { args: {}, cron: "0 9 * * *", functionPath: "email:report", name: "report" },
         ]);
 
         // The workflow job carries `workflow: "<binding>"` and no functionPath…
-        expect(output).toContain('{ name: "nightly digest", workflow: "WORKFLOW_DIGEST", args: {"region":"eu"} },');
+        expect(output).toContain('{ name: "nightly digest", workflow: "DigestWorkflow", args: {"region":"eu"} },');
         // …while the function job is unchanged.
         expect(output).toContain('{ name: "report", functionPath: "email:report", args: {} },');
         // The emitted interface allows either target.

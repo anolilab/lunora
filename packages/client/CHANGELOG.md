@@ -1,3 +1,55 @@
+## @lunora/client [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.165...@lunora/client@1.0.0-alpha.166) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.168
+
+## @lunora/client [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.164...@lunora/client@1.0.0-alpha.165) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.185
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.167
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.103
+
+## @lunora/client [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.163...@lunora/client@1.0.0-alpha.164) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/do:** upgraded to 1.0.0-alpha.184
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.166
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.102
+
+## @lunora/client [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.162...@lunora/client@1.0.0-alpha.163) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.183
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.165
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.101
+
+## @lunora/client [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.161...@lunora/client@1.0.0-alpha.162) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.182
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.164
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.100
+
 ## @lunora/client [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.160...@lunora/client@1.0.0-alpha.161) (2026-09-29)
 
 

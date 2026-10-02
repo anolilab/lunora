@@ -106,6 +106,7 @@ const DURABLE_OBJECT_BINDINGS = {
     SchedulerDO: "SCHEDULER",
     SessionDO: "SESSION",
     ShardDO: "SHARD",
+    ShardRegistryDO: "SHARD_REGISTRY",
 } as const;
 
 type DurableObjectClass = keyof typeof DURABLE_OBJECT_BINDINGS;
@@ -183,10 +184,21 @@ const COMPOSED_ENTRY_DURABLE_OBJECTS: DurableObjectClass[] = ["ShardDO"];
  * has a `.scheduler()` method at all. `@lunora/vite` depends on `@lunora/config`, so config
  * owning it is the direction the dependency graph allows.
  */
-const GENERATED_CLASS_MODULES = ["agents", "containers", "scheduler", "workflows"] as const;
+const GENERATED_CLASS_MODULES = ["agents", "containers", "scheduler", "shardRegistry", "workflows"] as const;
 
 /** One {@link GENERATED_CLASS_MODULES} entry. */
 type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
+
+/**
+ * The framework Durable Object each class module forwards, for the modules that
+ * carry one: codegen writes them off the same signal that gives the builder the
+ * matching method, so the module's existence means the composed entry exports
+ * the class.
+ */
+const GENERATED_MODULE_DURABLE_OBJECTS: Partial<Record<GeneratedClassModule, DurableObjectClass>> = {
+    scheduler: "SchedulerDO",
+    shardRegistry: "ShardRegistryDO",
+};
 
 /**
  * The class-B composed entry. `lunora deploy` passes this file to wrangler as
@@ -464,6 +476,7 @@ export {
     DURABLE_OBJECT_BINDINGS,
     GENERATED_CLASS_MODULES,
     GENERATED_DIRECTORY,
+    GENERATED_MODULE_DURABLE_OBJECTS,
     isFrameworkDurableObject,
     isGeneratedOutput,
     LUNORA_WORKER_VIRTUAL_ID,

@@ -156,6 +156,29 @@ const projectRules = (rules: unknown, dropped: string[]): unknown => {
 };
 
 /**
+ * Turn workflow exports into bindings. celld has no workflow `exports` (nor
+ * `ctx.exports`), so each `exports.<Class>` workflow becomes a `workflows[]` binding named after the
+ * class — the key the runtime falls back to on `env` (`shared/workflow-binding.ts`).
+ * Only `class_name` and `name` carry over: the deploy settings an export takes
+ * are rated separately for celld (`workflowSchedules`).
+ * @returns the translated bindings, and the remaining non-workflow exports.
+ */
+const projectWorkflowExports = (exports: unknown): { bindings: Config[]; rest: Config } => {
+    const bindings: Config[] = [];
+    const rest: Config = {};
+
+    for (const [className, entry] of Object.entries(isRecord(exports) ? exports : {})) {
+        if (isRecord(entry) && entry["type"] === "workflow") {
+            bindings.push({ binding: className, class_name: className, name: entry["name"] });
+        } else {
+            rest[className] = entry;
+        }
+    }
+
+    return { bindings, rest };
+};
+
+/**
  * Project a parsed wrangler config onto what celld accepts.
  * @param config The parsed wrangler config.
  * @returns the projected config and every key removed from it. A removed key
@@ -165,8 +188,10 @@ const projectRules = (rules: unknown, dropped: string[]): unknown => {
 const projectCelldConfig = (config: Config): { config: Config; dropped: string[] } => {
     const dropped: string[] = [];
     const projected: Config = {};
+    const workflowExports = projectWorkflowExports(config["exports"]);
+    const source: Config = { ...config, exports: workflowExports.rest };
 
-    for (const [key, value] of Object.entries(config)) {
+    for (const [key, value] of Object.entries(source)) {
         if (!ACCEPTED_KEYS.has(key)) {
             if (!isEmpty(value)) {
                 dropped.push(key);
@@ -195,6 +220,12 @@ const projectCelldConfig = (config: Config): { config: Config; dropped: string[]
                 projected[key] = value;
             }
         }
+    }
+
+    if (workflowExports.bindings.length > 0) {
+        const bound: unknown[] = Array.isArray(projected["workflows"]) ? projected["workflows"] : [];
+
+        projected["workflows"] = [...bound, ...workflowExports.bindings];
     }
 
     return { config: projected, dropped };
@@ -312,10 +343,18 @@ const rebaseMigrationDirectories = (config: Config, own: Config, projectRoot: st
                 return database;
             }
 
-            const declared = ownDatabases.find((entry) => entry["binding"] === database["binding"])?.["migrations_dir"];
+            const ownDatabase = ownDatabases.find((entry) => entry["binding"] === database["binding"]);
+            const declared = ownDatabase?.["migrations_dir"];
             const directory = resolve(projectRoot, typeof declared === "string" ? declared : "migrations");
+            const rebased = existsSync(directory) ? { ...database, migrations_dir: relative(root, directory).split(sep).join("/") } : database;
+            // `migrations_pattern` (wrangler's glob for nested layouts) is relative
+            // to the config file too. Path resolution never touches the glob
+            // characters, so it rebases like a path.
+            const pattern = ownDatabase?.["migrations_pattern"];
 
-            return existsSync(directory) ? { ...database, migrations_dir: relative(root, directory).split(sep).join("/") } : database;
+            return typeof pattern === "string"
+                ? { ...rebased, migrations_pattern: relative(root, resolve(projectRoot, pattern)).split(sep).join("/") }
+                : rebased;
         }),
     };
 };

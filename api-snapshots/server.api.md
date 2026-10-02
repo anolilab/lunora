@@ -1317,6 +1317,23 @@ interface MigrationReader {
 type MigrationTransform = (document: MigrationDocument, ctx: MigrationCtx) => MigrationDocument | Promise<MigrationDocument | undefined | void> | undefined | void;
 ```
 
+### `ModuleConfig` (interface)
+
+```ts
+interface ModuleConfig {
+    description?: string;
+    tables?: ReadonlyArray<string>;
+}
+```
+
+### `ModuleDefinition` (interface)
+
+```ts
+interface ModuleDefinition extends ModuleConfig {
+    readonly isLunoraModule: true;
+}
+```
+
 ### `MonthlySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -2887,6 +2904,16 @@ interface WorkflowEventDefinition<Payload = unknown> {
 interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<{
+        deleted: {
+            id: string;
+        }[];
+        errors: {
+            code: number;
+            id: string;
+            message: string;
+        }[];
+    }>;
     get: (id: string) => Promise<WorkflowInstance>;
     sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
@@ -2896,6 +2923,7 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
 
 ```ts
 interface WorkflowInstance {
+    delete: () => Promise<void>;
     readonly id: string;
     pause: () => Promise<void>;
     restart: () => Promise<void>;
@@ -2905,7 +2933,25 @@ interface WorkflowInstance {
         type: string;
     }) => Promise<void>;
     status: () => Promise<WorkflowStatusResult>;
+    subscribe: (options?: {
+        cursor?: number;
+        filter?: string[];
+    }) => Promise<{
+        next: () => Promise<IteratorResult<WorkflowInstanceEvent, void>>;
+    }>;
     terminate: () => Promise<void>;
+}
+```
+
+### `WorkflowInstanceEvent` (interface)
+
+```ts
+interface WorkflowInstanceEvent {
+    [field: string]: unknown;
+    eventId: number;
+    instanceId: string;
+    timestamp: number;
+    type: string;
 }
 ```
 
@@ -3094,6 +3140,12 @@ const defineListArgs: <TDocument>() => <F extends ListFilterShape<TDocument>, O 
 
 ```ts
 const defineMigration: (definition: MigrationDefinition) => RegisteredMigration;
+```
+
+### `defineModule` (const)
+
+```ts
+const defineModule: (config?: ModuleConfig) => ModuleDefinition;
 ```
 
 ### `defineMutator` (const)
@@ -5256,6 +5308,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `WorkflowInstanceEvent` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `WorkflowInstanceStatus` (type)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -6072,7 +6128,7 @@ type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown>
 
 ```ts
 interface SchedulableWorkflowReference {
-    readonly binding?: string;
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
 }

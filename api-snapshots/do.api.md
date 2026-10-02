@@ -450,6 +450,10 @@ abstract class ShardDO {
     protected scheduleOutboxScheduler(): SchedulerLike | undefined;
     protected pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined>;
     protected currentShardKey(): string;
+    protected shardRegistry(): undefined | {
+        namespace: unknown;
+        shardedTables: ReadonlySet<string>;
+    };
     protected ensureShardInit(): Promise<void>;
     protected runShardInit(): Promise<void>;
     protected recordShardInitError(hookPath: string, error: unknown, trace?: TraceRefLike): void;
@@ -522,6 +526,7 @@ interface ShardDOState {
     abort?: (reason?: string) => void;
     acceptWebSocket: (ws: WebSocket, tags?: string[]) => void;
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
+    exports?: unknown;
     getWebSockets: (tag?: string) => WebSocket[];
     id?: {
         jurisdiction?: string;

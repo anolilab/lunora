@@ -480,6 +480,7 @@ class LunoraClient {
         ran: boolean;
     }>;
     fetchOpenApi(): Promise<Record<string, unknown>>;
+    fetchArchitecture(): Promise<Record<string, unknown>>;
     fetchOpenRpc(): Promise<Record<string, unknown>>;
     listStorageObjects(options?: {
         bucket?: string;

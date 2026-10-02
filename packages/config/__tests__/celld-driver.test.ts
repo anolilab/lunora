@@ -76,6 +76,18 @@ describe(toolchainExecArgs, () => {
 });
 
 describe(projectCelldConfig, () => {
+    it("turns an exports workflow into a workflows[] binding named after the class", () => {
+        expect.assertions(2);
+
+        const { config, dropped } = projectCelldConfig({
+            exports: { OrderPipelineWorkflow: { name: "order-pipeline", schedules: ["0 * * * *"], type: "workflow" } },
+            name: "app",
+        });
+
+        expect(config["workflows"]).toStrictEqual([{ binding: "OrderPipelineWorkflow", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }]);
+        expect(dropped).toStrictEqual([]);
+    });
+
     it("keeps what celld accepts and names everything it drops", () => {
         expect.assertions(2);
 
@@ -276,6 +288,35 @@ describe("celld config projection on disk", () => {
 
         expect(JSON.parse(readFileSync(String(projected?.configPath), "utf8"))).toMatchObject({
             d1_databases: [{ binding: "DB", migrations_dir: "../../migrations" }],
+        });
+    });
+
+    it("points a Vite build's nested D1 migrations_pattern back at the project", () => {
+        expect.assertions(1);
+
+        writeViteBuild();
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            JSON.stringify({
+                d1_databases: [{ binding: "DB", migrations_dir: "drizzle", migrations_pattern: "drizzle/*/migration.sql" }],
+                main: "virtual:lunora/worker",
+                name: "app",
+            }),
+            "utf8",
+        );
+        mkdirSync(join(root, "drizzle"));
+        writeFileSync(
+            join(root, "dist", "server", "wrangler.json"),
+            JSON.stringify({ d1_databases: [{ binding: "DB", database_id: "db", database_name: "db" }], main: "index.js", name: "app" }),
+            "utf8",
+        );
+
+        const projected = resolveDeployDriver("celld").projectConfig?.(root, "deploy");
+
+        projected?.write();
+
+        expect(JSON.parse(readFileSync(String(projected?.configPath), "utf8"))).toMatchObject({
+            d1_databases: [{ binding: "DB", migrations_dir: "../../drizzle", migrations_pattern: "../../drizzle/*/migration.sql" }],
         });
     });
 

@@ -140,6 +140,70 @@ export interface QueueDefinition<Body = unknown> extends QueueConfig<Body> {
     isLunoraQueue: true;
 }
 
+// ─── Topics (one publish → every subscription's queue) ──────────────────────
+
+/**
+ * The typed publisher bound to `ctx.topics.<name>`. A publish is one send to
+ * **each** subscription's queue, in parallel, so it is not atomic: when one send
+ * fails the call rejects, and a retry re-delivers to the subscriptions whose send
+ * already succeeded. Delivery is at-least-once per subscription — make handlers
+ * idempotent. A topic with no subscriptions publishes to nobody.
+ */
+export interface TopicPublisher<Payload = unknown> {
+    /** Publish one message to every subscription. */
+    publish: (payload: Payload, options?: QueueSendOptions) => Promise<void>;
+    /** Publish a batch (at most 100) to every subscription in one send per subscription. */
+    publishBatch: (messages: Iterable<MessageSendRequestLike<Payload>>, options?: QueueSendBatchOptions) => Promise<void>;
+}
+
+/** `ctx.topics` — declared topic export names → typed publishers. Codegen narrows it to the exact names. */
+export interface Topics {
+    [exportName: string]: TopicPublisher;
+}
+
+/** The branded result of `defineTopic`, discovered by codegen. Carries no deploy config of its own. */
+export interface TopicDefinition<Payload = unknown> {
+    /**
+     * Phantom carrier for the payload type, so codegen can type `ctx.topics.<name>`.
+     * Named like {@link QueueDefinition}'s so one emitted helper reads both. Never
+     * assigned at runtime.
+     */
+    readonly __lunoraBody?: Payload;
+    /** Runtime brand identifying a `defineTopic` result. */
+    isLunoraTopic: true;
+}
+
+/** The config passed to `defineSubscription`: a push consumer's handler plus its own retry/DLQ tuning. */
+export interface SubscriptionConfig<Payload = unknown> extends QueueConsumerTuning {
+    handler: QueueHandler<Payload>;
+
+    /**
+     * Stable wrangler queue name for this subscription. Defaults to the
+     * kebab-cased export name, exactly like a `defineQueue` export.
+     */
+    name?: string;
+}
+
+/**
+ * The branded result of `defineSubscription`: a push {@link QueueDefinition}
+ * (so dispatch, retries, the DLQ, wrangler reconcile and the studio treat it as
+ * the queue it is) tagged with the topic it consumes.
+ */
+export interface SubscriptionDefinition<Payload = unknown> extends QueueDefinition<Payload> {
+    handler: QueueHandler<Payload>;
+    mode: "push";
+    /** The topic this subscription consumes. */
+    topic: TopicDefinition<Payload>;
+}
+
+/** Wiring info for one declared topic, emitted by codegen into the generated shard. */
+export interface TopicBindingSpec {
+    /** The `lunora/queues.ts` topic export name, e.g. `signups`. */
+    exportName: string;
+    /** One entry per subscription: its export name and its `Queue` producer binding. */
+    subscriptions: ReadonlyArray<{ binding: string; exportName: string }>;
+}
+
 /** Wiring info for one declared queue, emitted by codegen into the generated shard/handler. */
 export interface QueueBindingSpec {
     /** The Cloudflare `Queue` producer binding name, e.g. `QUEUE_EMAIL`. */

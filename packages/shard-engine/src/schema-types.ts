@@ -113,12 +113,12 @@ export type TriggerOpLike = "delete" | "insert" | "update";
 
 /**
  * A schedulable durable-workflow reference — the generated `workflows.<name>` /
- * `agents.<name>` object (carries its `WORKFLOW_*`/`AGENT_*` binding + stable
+ * `agents.<name>` object (carries its generated class name + stable
  * name). Structural mirror so a scheduled target can be a workflow/agent, not
  * just a function path, without this package depending on `@lunora/scheduler`.
  */
 export interface SchedulableWorkflowReferenceLike {
-    readonly binding?: string;
+    readonly className?: string;
     readonly isLunoraWorkflow: true;
     readonly name?: string;
 }

@@ -64,6 +64,8 @@ lunora analyze [--format json]          # wrangler dry-run: bundle size + top mo
 lunora containers <build|push|images|list|info|delete> [args…]
             [--tag <name:tag>] [--push] [--env <n>]
             [--format json]             #   json: list | info | images list
+lunora ai gateway [--id <id>]           # create/reuse a Cloudflare AI Gateway, write its id to vars
+            [--no-logs] [--dry-run] [--format json]
 
 # Data
 lunora logs [worker]                    # stream live Worker logs via wrangler tail
@@ -77,6 +79,8 @@ lunora backup <create|list|restore|pitr> [--dir <d>] [--bucket <b>] [--at <iso>]
             [--format json]
 lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
             [--seed n] [--dry-run] [--reset] [--format json]
+lunora shards prune [--tables <a,b>]    # drop empty shards from the shard registry
+            [--dry-run] [--format json]
 lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
                   [--schema <s>] [--no-procedures] # existing Postgres/MySQL DB
                   [--format json]
@@ -313,6 +317,10 @@ A read-only preflight over the current project. It reports pass / warn / fail fo
   release channels (e.g. stable + alpha).
 - **CLI shadowing**: a globally-installed `lunora` running instead of the
   project's own, so the report describes a project this CLI is not pinned to.
+- **AI**: a project using `ctx.ai` with no `ai` binding, a
+  `LUNORA_AI_GATEWAY_TOKEN` with no gateway id to send it to, and (info) no
+  `LUNORA_AI_GATEWAY_ID`, which leaves `<provider>/<model>` slugs on the
+  account's `default` gateway.
 
 ```bash
 lunora doctor
@@ -358,6 +366,9 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | -------------------------------- | ----- | ----------------------------------------------------------------------------------- |
 | `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).                |
 | `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                        |
+| `ai-binding-missing`             | warn  | `ctx.ai` is used with no `ai` binding and no `LUNORA_AI_PROXY_URL`.                 |
+| `ai-gateway-default`             | info  | No `LUNORA_AI_GATEWAY_ID` or proxy; slugs route through the `default` AI Gateway.   |
+| `ai-gateway-token-unused`        | warn  | `LUNORA_AI_GATEWAY_TOKEN` is set, but `ctx.ai`'s binding path cannot send it.       |
 | `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                              |
 | `cpu-limit-missing`              | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                               |
 | `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                                |
@@ -1020,6 +1031,25 @@ unless you pass `--yes`; prefer `LUNORA_ADMIN_TOKEN` over `--token`, which is
 visible to other local processes through the process table. See
 [@lunora/seed](/docs/packages/seed) for using the same generator inside tests.
 
+### `lunora shards`
+
+Maintains the shard registry, the record of which shards hold `.shardBy()` rows
+that cross-shard export, backups, CDC sync and migrations fan out to. A shard
+registers when it first writes a table and is never removed on its own, so
+fan-outs keep visiting shards that have since emptied. `prune` asks every
+registered shard to drop its entry for each table it holds no rows of.
+
+```bash
+lunora shards prune --dry-run         # list the empty registered shards, change nothing
+lunora shards prune                   # remove them from the registry
+lunora shards prune --tables messages # only the shards listed for `messages`
+```
+
+Each shard checks its own rows, so a shard written during the prune keeps (or
+regains) its entry. A shard the prune cannot reach keeps its entry too, and the
+command exits `1` so you can re-run it. Needs a registry: an app without
+`.shardRegistry(...)` gets a `400`. See [Sharding](/docs/concepts/sharding#the-shard-registry).
+
 ### `lunora introspect`
 
 Reads an existing Postgres or MySQL database and scaffolds `lunora/schema.ts`
@@ -1171,6 +1201,47 @@ lunora containers images delete transcoder:v1
 Registry in the same step. `--env` selects the Cloudflare environment. See
 [@lunora/container](/docs/packages/container) for declaring containers in the
 first place.
+
+### `lunora ai`
+
+`ctx.ai.model("<provider>/<model>")` (for example `"anthropic/claude-sonnet-5"`)
+routes through [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/)
+over the Workers `AI` binding. The gateway is the one named by
+`LUNORA_AI_GATEWAY_ID` in the Worker's `vars`; without it, calls go through the
+account's auto-created `default` gateway. `lunora ai gateway` gives the app its
+own:
+
+```bash
+lunora ai gateway                 # gateway id = the worker `name` in wrangler.jsonc
+lunora ai gateway --id my-gateway # explicit id
+lunora ai gateway --no-logs       # don't store prompts/responses in the gateway
+lunora ai gateway --dry-run       # print the plan; no API call, no file edit
+```
+
+It creates the gateway over the Cloudflare API (or reuses it when the id already
+exists on the account), then writes `LUNORA_AI_GATEWAY_ID` and
+`LUNORA_AI_GATEWAY_ACCOUNT_ID` into the top-level `vars` of `wrangler.jsonc`,
+keeping comments and formatting. Redeploy afterwards so the Worker sees them.
+
+Credentials follow wrangler's non-interactive convention: `CLOUDFLARE_API_TOKEN`
+(a token with the **AI Gateway Write** permission) and `CLOUDFLARE_ACCOUNT_ID`,
+which falls back to the config's `account_id`. The binding is pre-authenticated,
+so no gateway token is needed.
+
+Log collection is **on** by default, matching the dashboard, so requests, costs
+and errors show up in the gateway's logs. Those logs include prompts and
+responses; pass `--no-logs` if they may carry data you must not store.
+Caching and rate limiting are left off.
+
+The gateway does not pay for third-party models on its own. Before the first
+`<provider>/<model>` call, set one of these up in the dashboard:
+
+- **Unified Billing** for OpenAI, Anthropic, Google, xAI, Groq and DeepSeek: load
+  credits on the account
+  ([docs](https://developers.cloudflare.com/ai-gateway/features/unified-billing/)).
+- **A key stored on the gateway** for other OpenAI-compatible providers (Mistral,
+  Perplexity, OpenRouter, …)
+  ([docs](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/)).
 
 ### `lunora logs`
 

@@ -46,37 +46,36 @@ import { discoverFeatureUsage } from "./discover/feature-usage";
 import { discoverIdentity } from "./discover/identity";
 import readPackageDependencies from "./discover/package-dependencies";
 import { discoverPlatformSignals } from "./discover/platform-signals";
-import { discoverQueues } from "./discover/queues";
+import { discoverQueueDeclarations } from "./discover/queues";
 import { discoverSandboxUsage } from "./discover/sandbox";
 import discoverStorageRulesMetadata from "./discover/storage-rules";
 import discoverWorkerEntryCrons from "./discover/worker-entry-crons";
 import { discoverWorkflows } from "./discover/workflows";
 import { buildStorageColumns, emitDataModel, emitServer } from "./emit";
-import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, WorkflowIR } from "./ir";
+import type { AgentIR, ContainerIR, CronJobIR, EnvIR, IdentityIR, QueueIR, SchemaIR, StorageRulesMetadataIR, TopicIR, WorkflowIR } from "./ir";
+import { isShardByTable } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
 import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget } from "./platform-target";
 import schemaDeclaresRelationGraph from "./relation-graph";
 
 /**
- * Reject a workflow and an agent that share a deployed `name`, `bindingName`,
- * or generated `className`. `discoverWorkflows`/`discoverAgents` each guard
+ * Reject a workflow and an agent that share a deployed `name` or generated
+ * `className`. `discoverWorkflows`/`discoverAgents` each guard
  * uniqueness WITHIN their own kind, but both kinds land in the exact same
- * wrangler `workflows[]` array (matched only by `class_name`/binding) — an
+ * wrangler `exports` map (keyed by the generated class) — an
  * agent named like a workflow (or vice versa) passes both discoverers silently
  * and either fails late in wrangler or clobbers a binding at reconcile time.
- * The `className` check catches the case where the deployed `name`/`bindingName`
- * differ but the derived generated class collides — two implementations would
+ * The `className` check catches the case where the deployed `name`s differ but
+ * the derived generated class collides — two implementations would
  * then compete for one worker export/`class_name`. Runs after both are
  * discovered, before reconcile ever sees them.
  */
 const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, agents: ReadonlyArray<AgentIR>): void => {
     const namesByLabel = new Map<string, string>();
-    const bindingsByLabel = new Map<string, string>();
     const classesByLabel = new Map<string, string>();
 
     for (const workflow of workflows) {
         namesByLabel.set(workflow.name, `workflow "${workflow.exportName}"`);
-        bindingsByLabel.set(workflow.bindingName, `workflow "${workflow.exportName}"`);
         classesByLabel.set(workflow.className, `workflow "${workflow.exportName}"`);
     }
 
@@ -87,18 +86,7 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
             throw new LunoraError(
                 // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
                 "DUPLICATE_WORKFLOW_NAME",
-                `Duplicate deployed name "${agent.name}": produced by both ${priorName} and agent "${agent.exportName}". Workflow and agent names share the same wrangler workflows[] array and must be unique together.`,
-                { status: 500 },
-            );
-        }
-
-        const priorBinding = bindingsByLabel.get(agent.bindingName);
-
-        if (priorBinding !== undefined) {
-            throw new LunoraError(
-                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
-                "DUPLICATE_WORKFLOW_BINDING",
-                `Duplicate binding "${agent.bindingName}": produced by both ${priorBinding} and agent "${agent.exportName}". Workflow and agent bindings share the same wrangler workflows[] array and must be unique together.`,
+                `Duplicate deployed name "${agent.name}": produced by both ${priorName} and agent "${agent.exportName}". Workflow and agent names share one account-wide namespace and must be unique together.`,
                 { status: 500 },
             );
         }
@@ -177,6 +165,7 @@ interface DeclarationSurface {
     /** `_generated/server.ts`, rendered. Not written — see the module docblock. */
     serverContent: string;
     storageRulesMetadata: StorageRulesMetadataIR;
+    topics: ReadonlyArray<TopicIR>;
     /** Either sandbox tool registers the `sandbox:invoke` dispatcher via `emitFunctions`. */
     usesSandbox: boolean;
     /** The project depends on the `lunorash` umbrella, so generated files import through its subpaths. */
@@ -213,7 +202,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // Workflows before agents before the collision guard: each discoverer dedups
     // only within its own kind, but both land in one wrangler `workflows[]`.
     const workflows = discoverWorkflows(project, lunoraDirectory);
-    const queues = discoverQueues(project, lunoraDirectory);
+    const { queues, topics } = discoverQueueDeclarations(project, lunoraDirectory);
     const agents = discoverAgents(project, lunoraDirectory);
 
     assertNoWorkflowAgentCollision(workflows, agents);
@@ -279,8 +268,11 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // `@lunora/server`, so the `featureUsage` arm (which keys `scheduler` on
         // a `@lunora/scheduler` import) cannot see one.
         cronTriggers: crons.length > 0,
-        crossShardFanout: schema.tables.some((table) => typeof table.shardMode === "object"),
+        crossShardFanout: schema.tables.some((table) => isShardByTable(table)),
         containerEgressPolicy: codeSignals.containerEgressPolicy,
+        // Read off the container IR: the policy is deploy configuration codegen
+        // already lifts statically, so no separate AST signal is needed.
+        containerRuntimeScheduling: containers.some((container) => container.schedulingPolicy === "durable_object"),
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
         queues: queues.length > 0,
@@ -291,6 +283,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // that cannot serve the traversal only refuses apps that would use one.
         relationGraph: schemaDeclaresRelationGraph(schema),
         secrets: codeSignals.secrets,
+        topics: topics.length > 0,
         // Read off the schema for the same reason `globalTables` is — and it has
         // to be, because `ctx.vectors` is emitted off `schema.vectorIndexes`
         // while the `vectors` capability only flips on an import or a literal
@@ -298,6 +291,10 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         vectorStore: schema.vectorIndexes.length > 0,
         workerLoaders: sandboxUsage.usesSandboxLoader,
         workflowRollback: codeSignals.workflowRollback,
+        // Read off the workflow IR like `cronTriggers` off the crons: the cron
+        // list is deploy configuration a host either turns into instances or
+        // silently ignores, and ignoring it means the workflow never runs.
+        workflowSchedules: workflows.some((workflow) => workflow.schedules !== undefined),
     });
     const featureUsage = platformGate.usage;
     // The gate's `vectorStore` verdict, named once for both consumers below.
@@ -376,10 +373,12 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             queues,
             schema,
             storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
+            topics,
             useUmbrella,
             workflows,
         }),
         storageRulesMetadata,
+        topics,
         // ANY sandbox tool needs the `sandbox:invoke` dispatcher registered — the
         // receiver's `fs` arm is as unreachable without it as the browser one.
         usesSandbox: sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer || sandboxUsage.usesSandboxFs,

@@ -16,8 +16,10 @@ import type {
     SchemaIR,
     ShapeIR,
     StorageRulesMetadataIR,
+    TopicIR,
     WorkflowIR,
 } from "../ir";
+import { isShardByTable, plainQueues } from "../ir";
 import renderJsonData from "../json-data";
 import ADMIN_WRITE_METHODS from "./shard-admin";
 import {
@@ -35,6 +37,7 @@ import {
     emitPipelinesFragments,
     emitR2sqlFragments,
     emitRelationFanout,
+    emitShardRegistryFragments,
     renderThrowingStub,
 } from "./shard-bindings";
 import renderBuildContext from "./shard-context";
@@ -47,6 +50,7 @@ import {
     emitPaymentFragments,
     emitQueueFragments,
     emitQueuesMetadataFragments,
+    emitTopicFragments,
     emitWorkflowFragments,
     emitWorkflowsMetadataFragments,
     emitX402Fragments,
@@ -103,7 +107,7 @@ interface EmitShardOptions {
     maskMetadata?: MaskMetadataIR;
     /** Custom mutators declared via `defineMutator` in `lunora/mutators.ts` — wires the `isCustomMutator` push-protocol override. */
     mutators?: ReadonlyArray<MutatorIR>;
-    /** Queues declared via `defineQueue` exports in `lunora/queues.ts` — wires the typed `ctx.queues` producers. */
+    /** Queues declared via `defineQueue` / `defineSubscription` exports in `lunora/queues.ts` — wires the typed `ctx.queues` producers. */
     queues?: ReadonlyArray<QueueIR>;
     rlsMetadata?: RlsMetadataIR;
     schema: SchemaIR;
@@ -120,6 +124,8 @@ interface EmitShardOptions {
     shapes?: ReadonlyArray<ShapeIR>;
     storageRules?: StorageRulesMetadataIR;
     studioFeatures?: StudioFeaturesResult;
+    /** Topics declared via `defineTopic` exports in `lunora/queues.ts` — wires `ctx.topics` to each subscription's queue binding. */
+    topics?: ReadonlyArray<TopicIR>;
     /** The project depends on the `lunora` umbrella — import base packages via its subpaths. */
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
@@ -156,6 +162,7 @@ const emitShard = ({
     shapes = [],
     storageRules,
     studioFeatures,
+    topics = [],
     useUmbrella = false,
     workflows = [],
 }: EmitShardOptions): string => {
@@ -179,7 +186,7 @@ const emitShard = ({
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.stringify(hashSchemaSnapshot(schemaSnapshot))}, json: ${JSON.stringify(schemaSnapshotJson)} };
 `;
     const snapshotArgument = schemaSnapshot === undefined ? "" : ", schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT";
-    const { build: aiBuild, configField: aiConfigField, contextField: aiContextField, stub: aiStub } = emitAiFragments(hasAi);
+    const { build: aiBuild, configField: aiConfigField } = emitAiFragments(hasAi);
     // New Cloudflare-capability helpers, mirroring `emitAiFragments`. `kv` /
     // `analytics` ride EVERY ctx (deterministic-read / fire-and-forget-write);
     // `images` / `sql` / `browser` are ActionCtx-only (external, non-deterministic
@@ -196,7 +203,8 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     const browserFragments = emitBrowserFragments(hasBrowser);
     const r2sqlFragments = emitR2sqlFragments(hasR2sql);
     const pipelinesFragments = emitPipelinesFragments(hasPipelines);
-    const { build: queuesBuild, contextField: queuesContextField, importLines: queueImportLines, specs: queueSpecs } = emitQueueFragments(queues);
+    const { build: queuesBuild, contextField: queuesContextField, importLines: queueImportLines, specs: queueSpecs } = emitQueueFragments(plainQueues(queues));
+    const { build: topicsBuild, contextField: topicsContextField, importLines: topicImportLines, specs: topicSpecs } = emitTopicFragments(topics, queues);
     const {
         build: containersBuild,
         contextField: containersContextField,
@@ -298,21 +306,13 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // alone misses those and leaves a sharded Shape-B index syncing into one
     // unpartitioned namespace — the same cross-tenant leak this guard exists
     // to close.
-    // `TableIR["shardMode"]` has exactly one object-typed member today, so
-    // `.kind === "shardBy"` below is a no-op under the current type — kept
-    // explicit (over bare `typeof === "object"`) so this still discriminates
-    // correctly if the union ever grows a second object-shaped shard mode.
-    const shardedTableNames = new Set(
-        schema.tables
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- see comment above
-            .filter((table) => typeof table.shardMode === "object" && table.shardMode.kind === "shardBy")
-            .map((table) => table.name),
-    );
+    const shardedTableNames = new Set(schema.tables.filter((table) => isShardByTable(table)).map((table) => table.name));
     // `hasVectorIndexes &&`, not the raw scan: this also gates the `ROOT_SHARD_NAME`
     // import, which would otherwise be emitted (and unused) on a target whose
     // matrix withholds the vector wiring the sentinel is only read by.
     const hasShardedVectors = hasVectorIndexes && schema.vectorIndexes.some((index) => shardedTableNames.has(index.table));
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
+    const shardRegistryFragments = emitShardRegistryFragments(shardedTableNames);
     // Which `.global()` backend(s) the schema uses. A `.global()` table defaults
     // to D1; `.global({ backend: "hyperdrive" })` routes it to a Postgres/MySQL
     // database via Hyperdrive. Both stay reactive — the writer is injected as
@@ -418,6 +418,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         ...containerImportLines,
         ...workflowImportLines,
         ...queueImportLines,
+        ...topicImportLines,
         ...agentImportLines,
         ...paymentsImports,
         ...x402Imports,
@@ -755,6 +756,7 @@ ${schema.tables
     // Each helper's ctx field is named after its local, so one list drives both
     // the attach here and the strip from a composed query's view of an action ctx.
     const actionOnlyFields = [
+        ...(hasAi ? ["ai"] : []),
         ...(hasImages ? ["images"] : []),
         ...(hasHyperdrive ? ["sql"] : []),
         ...(hasBrowser ? ["browser"] : []),
@@ -762,7 +764,7 @@ ${schema.tables
         ...(hasPipelines ? ["pipelines"] : []),
         ...(hasX402 ? ["x402"] : []),
     ];
-    const actionOnlyBuild = `${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${x402Build}`;
+    const actionOnlyBuild = `${aiBuild}${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${x402Build}`;
 
     return `${GENERATED_HEADER}${importLines.join("\n")}
 
@@ -821,7 +823,7 @@ const LUNORA_STORAGE_RULES = ${renderJsonData(storageRulesData, "StorageRulesRes
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES = ${renderJsonData(studioFeaturesData, "StudioFeaturesResult")};
-${schemaSnapshotConst}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${agentSpecs}
+${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -836,9 +838,9 @@ export interface ShardDOConfig {
     /** \`unknown\` because \`@lunora/scheduler\`'s \`Scheduler\` is not assignable to \`SchedulerLike\`; the shard casts it. */
     scheduler?: (env: Record<string, unknown>) => unknown;
     /** \`origin\` is the origin the current \`/rpc\` request reached the worker on — the fallback base for signed object URLs when no \`publicBaseUrl\` is configured. \`undefined\` off the synchronous dispatch path. */
-    storage?: (env: Record<string, unknown>, origin?: string) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}
+    storage?: (env: Record<string, unknown>, origin?: string) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}${shardRegistryFragments.configField}
 }
-${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "head", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${x402Stub}
+${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "head", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${x402Stub}
 ${DISPATCH_RUN_SOURCE}
 
 /**
@@ -856,7 +858,7 @@ ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${ext
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
-${shardInitOverride}
+${shardRegistryFragments.override}${shardInitOverride}
         // One \`onQueryChange\` dispatch. Mirrors \`executeSubscription\` — the
         // socket-terminated half of the same reactivity — and differs only in who
         // consumes the result: the base's \`dispatchReactors\` stores the digest as
@@ -977,7 +979,7 @@ ${
 `
         : ""
 }${vectorSyncMethod}
-${renderBuildContext({ actionOnlyFields, agentsBuild, agentsContextField, aiBuild, aiContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
+${renderBuildContext({ actionOnlyFields, agentsBuild, agentsContextField, containersBuild, containersContextField, databaseOptions, everyContextBuild, everyContextField, facadeBlock, globalDatabaseLine, notifyBuild, ormContextField, paymentsBuild, paymentsContextField, queuesBuild, queuesContextField, topicsBuild, topicsContextField, vectorsBuild, vectorsContextField, workflowsBuild, workflowsContextField, actionOnlyBuild })}
     };
 `;
 };

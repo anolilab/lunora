@@ -100,6 +100,50 @@ export const invite = mutation.input({ email: v.string() }).mutation(async ({ ct
 });
 ```
 
+## Topics (pub/sub)
+
+A queue has one consumer. To hand one event to several independent consumers, declare a **topic** and subscribe to it. Each subscription is its own queue with its own retries and dead-letter queue, so a failing subscriber never holds up the others:
+
+```ts
+// lunora/queues.ts
+import { defineSubscription, defineTopic } from "@lunora/queue";
+
+import { api } from "./_generated/api";
+
+export const signups = defineTopic<{ userId: string }>();
+
+export const welcomeEmail = defineSubscription(signups, {
+    handler: async (_ctx, batch) => {
+        for (const message of batch.messages) {
+            await message.run(api.email.welcome, { userId: message.body.userId });
+            message.ack();
+        }
+    },
+    maxRetries: 5,
+    deadLetterQueue: "welcome-email-dlq",
+});
+
+export const auditSignup = defineSubscription(signups, {
+    handler: async (_ctx, batch) => {
+        // ...
+    },
+});
+```
+
+Publish from a mutation or action with `ctx.topics.<exportName>`:
+
+```ts
+await ctx.topics.signups.publish({ userId });
+// or: await ctx.topics.signups.publishBatch([{ body: { userId: a } }, { body: { userId: b } }]);
+```
+
+`publish` sends one copy to every subscription's queue in parallel. The rules that follow from that:
+
+- **At-least-once, per subscription.** If one send fails, `publish` rejects. A retry re-delivers to the subscriptions whose send had already succeeded, so handlers must be idempotent.
+- **No ordering.** Cloudflare Queues does not order messages, so neither do topics.
+- **Subscriptions are queues.** A subscription deploys, reconciles into `wrangler.jsonc`, and shows in Studio exactly like a `defineQueue` export of the same name (`welcomeEmail` → queue `welcome-email`, binding `QUEUE_WELCOME_EMAIL`). It is published to only through its topic, never through `ctx.queues`. Renaming a subscription creates a new queue; messages still in the old one are not moved.
+- **Declare both in `lunora/queues.ts`.** The topic passed to `defineSubscription` must be a `defineTopic` export of the same file. A topic with no subscriptions yet accepts publishes and delivers them to nobody.
+
 ## Push vs pull consumers
 
 By default a queue is a **push** consumer: Cloudflare delivers batches to the worker's generated `queue()` handler. To expose the queue to an external HTTP **pull** consumer instead, omit the handler and set `mode: "pull"`:
@@ -116,4 +160,4 @@ Removing an option from `defineQueue` removes it from the consumer on the next `
 
 ## Studio
 
-Declared queues show in the Studio **Queues** page (export name, deployed queue name, consumer mode, producer binding, and dead-letter queue), refreshed on every codegen run.
+Declared queues show in the Studio **Queues** page (export name, deployed queue name, consumer mode, producer binding and dead-letter queue), with each topic's subscriptions grouped under it, refreshed on every codegen run. The **Send** tab can target a topic, which publishes the test message to every subscription.

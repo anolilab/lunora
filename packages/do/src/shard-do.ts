@@ -58,6 +58,7 @@ import {
     redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
+    setHostSpanAttributes,
     SpanBuffer,
     upsertIssueState,
 } from "@lunora/observability";
@@ -190,6 +191,7 @@ import {
     parseImportShardArgs,
     probeScheduleOutbox,
     projectColumns,
+    quoteIdentifier,
     ReactiveCache,
     reactiveCacheKey,
     reactorNeedsRun,
@@ -224,6 +226,7 @@ import {
     ShardRunner,
     stableStringify,
     stableWireKey,
+    stubByName,
     subscriptionFrames,
     summarizeFanoutTopics,
     summarizeSubscriptions,
@@ -256,9 +259,12 @@ import type { MetricEvent } from "../../../shared/metric-event";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { parseRelayName } from "../../../shared/relay-name";
+import { parseReplicaName } from "../../../shared/replica-name";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { adminSocketBinding, isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import {
     batchedTableLookup,
@@ -316,6 +322,7 @@ import {
     parseRecordContainerEventArgs,
     parseRecordMailArgs,
     parseRecordQueueMessageArgs,
+    parseReleaseShardRegistrationArgs,
     parseReplayQueueMessageArgs,
     parseRunAsArgs,
     parseRunMigrationArgs,
@@ -337,6 +344,7 @@ import { CdcRetentionRunner } from "./cdc-retention";
 import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
+import { registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
 import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 
 /**
@@ -470,8 +478,11 @@ interface TelemetrySink {
      * tree on the hosted path — capability-probed, and a safe no-op off-CF / on an
      * older compat date / when unsampled. This only ADDS a CF-side span; the
      * `onSpan` event below (our `SpanBuffer`/`otlpSink`) is unchanged and stays the
-     * source of truth. The bridge is now workerd-validated as available and
-     * side-effect-free inside a real DO (our recorded spans stay intact); CF's
+     * source of truth. Where the runtime has them, failures also get a native
+     * `recordException` and the `ctx.span` wide event is mirrored onto
+     * `tracing.getActiveSpan()` (the invocation root). The bridge is now
+     * workerd-validated as available and side-effect-free inside a real DO (our
+     * recorded spans stay intact); CF's
      * exported parent-linking under sampling is still unverified, so it stays
      * EXPERIMENTAL. Mirror of `@lunora/runtime`'s `ObservabilitySink`
      * `fuseCloudflareTraces`; see {@link createTracer} for the double-export caveat.
@@ -624,6 +635,13 @@ interface ShardDOState {
      * from other in-flight handlers on the same DO.
      */
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
+
+    /**
+     * Loopback bindings to the Worker's own top-level exports (`ctx.exports`) —
+     * where Cloudflare exposes the workflows and agents declared in wrangler
+     * `exports`, keyed by class name. Absent off Cloudflare.
+     */
+    exports?: unknown;
     getWebSockets: (tag?: string) => WebSocket[];
 
     /**
@@ -1351,6 +1369,9 @@ const streamFrames = (
  */
 
 const ROOT_SHARD_NAME = "__root__";
+
+/** How long a failed shard-registry registration waits before a later write retries it. */
+const SHARD_REGISTRY_RETRY_MS = 30_000;
 
 /**
  * Dependency-set sentinel for admin introspection subscriptions that aren't
@@ -2360,6 +2381,27 @@ abstract class ShardDO {
     private shardBinding: string | undefined;
 
     /**
+     * The `.shardBy()` tables this instance has registered with the shard
+     * registry, or is registering right now — claimed before the round trip so
+     * two concurrent first writes send one. Registration is idempotent, so this
+     * only saves round trips; it resets with the instance.
+     */
+    private readonly registeredTables = new Set<string>();
+
+    /**
+     * Epoch millis before which registration is not retried, set when one
+     * fails: a registry outage costs one attempt per window rather than one per
+     * write, against the single DO that has to recover.
+     */
+    private registryRetryAt = 0;
+
+    /**
+     * Every registry round trip this shard makes, in order — see
+     * {@link ShardDO.serializeRegistry}. Never rejects.
+     */
+    private registryTail: Promise<void> = Promise.resolve();
+
+    /**
      * Memoised {@link ShardDO.currentAdminBinding} result, keyed by the token it
      * was derived from so a rotation within one isolate re-derives rather than
      * serving the old fingerprint.
@@ -2509,6 +2551,18 @@ abstract class ShardDO {
     public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
+
+        // Settle the host-tracing probe before the first dispatch, so every
+        // dispatch — including the isolate's first — reads it synchronously (the
+        // root-span mirror in `recordDispatchRootSpan` has no await to wait on).
+        // Memoized and self-catching, so the gate costs one dynamic import once.
+        state
+            .blockConcurrencyWhile?.(async () => {
+                await resolveHostTracing();
+            })
+            .catch(() => {
+                /* unreachable: the probe catches its own failures */
+            });
 
         // Build the provider-neutral Cloudflare host adapters and mount the
         // host-neutral shard engine runner. The runner owns the platform contract
@@ -5598,6 +5652,17 @@ abstract class ShardDO {
     }
 
     /**
+     * The `ShardRegistryDO` namespace this shard reports to, and which of its
+     * tables are `.shardBy()`. The generated subclass overrides it for a schema
+     * with `.shardBy()` tables and answers `undefined` until the app declares
+     * `.shardRegistry(...)`; the default registers nothing.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the registry binding and its sharded tables
+    protected shardRegistry(): undefined | { namespace: unknown; shardedTables: ReadonlySet<string> } {
+        return undefined;
+    }
+
+    /**
      * Run the once-per-instance shard init — clear `.memory()` tables, then fire
      * every `onShardInit` hook — before the caller's dispatch proceeds.
      *
@@ -7750,22 +7815,34 @@ abstract class ShardDO {
         const collected = wide?.collector === undefined ? withoutWideEvent : { ...wide.collector.collected, attributes };
 
         try {
-            this.spans.push(
-                dispatchRootSpan({
-                    anchor,
-                    // Raw failure messages in dev only — matches `makeTracer`'s
-                    // `captureRaw` posture for this synthetic root span.
-                    captureRaw: isDevEnvironment(this.env),
-                    // The wide event, if the handler attached one through `ctx.span`.
-                    ...(collected === undefined ? {} : { collected }),
-                    durationMs,
-                    failure,
-                    functionPath,
-                    shardKey: this.runner.shardKey,
-                    startTs: startedAt,
-                    userId: this.getCurrentUserId(),
-                }),
-            );
+            const rootSpan = dispatchRootSpan({
+                anchor,
+                // Raw failure messages in dev only — matches `makeTracer`'s
+                // `captureRaw` posture for this synthetic root span.
+                captureRaw: isDevEnvironment(this.env),
+                // The wide event, if the handler attached one through `ctx.span`.
+                ...(collected === undefined ? {} : { collected }),
+                durationMs,
+                failure,
+                functionPath,
+                shardKey: this.runner.shardKey,
+                startTs: startedAt,
+                userId: this.getCurrentUserId(),
+            });
+
+            this.spans.push(rootSpan);
+
+            // Fused: land the (already redacted) wide-event attributes on the
+            // host's own invocation span too. Every `ctx.trace` custom span has
+            // ended by now, so `getActiveSpan()` is the invocation's root span —
+            // the host-side twin of this dispatch. The probe settled at construction.
+            if (wide?.sink?.fuseCloudflareTraces === true && rootSpan.attributes !== undefined) {
+                const hostSpan = cloudflareTracing?.getActiveSpan?.();
+
+                if (hostSpan !== undefined) {
+                    setHostSpanAttributes(hostSpan, rootSpan.attributes);
+                }
+            }
         } catch {
             // Best-effort — span capture must never fail a served request.
         }
@@ -9092,37 +9169,34 @@ abstract class ShardDO {
     /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
 
     /**
-     * Resolve a declared workflow's runtime binding handle from this shard's `env`.
-     * Looks the `exportName` up in {@link workflowsMetadata} (the codegen subclass's
-     * statically-discovered list) to find its generated `WORKFLOW_*` binding, then
-     * reads `env[binding]` and validates it carries the `create`/`get` methods. A
-     * bad export name or a missing/malformed binding throws a 400 `LunoraError` so
-     * the studio surfaces an actionable message instead of a generic 500.
+     * Resolve a declared workflow's runtime binding handle. Looks the
+     * `exportName` up in {@link workflowsMetadata} (the codegen subclass's
+     * statically-discovered list) to find its export key (the generated class
+     * name), then reads it off this shard's `ctx.exports` — or `env`, on a host
+     * without workflow exports — and validates it carries the `create`/`get`
+     * methods. A bad export name or a missing/malformed binding throws a 400
+     * `LunoraError` so the studio surfaces an actionable message instead of a
+     * generic 500.
      */
-    private resolveWorkflowBinding(exportName: string): WorkflowBindingHandle {
+    private declaredWorkflowHandle(exportName: string): WorkflowBindingHandle {
         const metadata = this.workflowsMetadata().workflows.find((workflow) => workflow.exportName === exportName);
 
         if (!metadata) {
             throw new LunoraError("BAD_REQUEST", `workflow "${exportName}" is not declared`);
         }
 
-        const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
+        const binding = resolveWorkflowHandle<WorkflowBindingHandle>(this.env, this.state.exports, metadata.className, ["create", "get"]);
 
-        if (
-            typeof binding !== "object" ||
-            binding === null ||
-            typeof (binding as WorkflowBindingHandle).create !== "function" ||
-            typeof (binding as WorkflowBindingHandle).get !== "function"
-        ) {
-            throw new LunoraError("BAD_REQUEST", `workflow binding "${metadata.binding}" is not available on this deployment`);
+        if (binding === undefined) {
+            throw new LunoraError("BAD_REQUEST", `workflow "${metadata.className}" is not available on this deployment`);
         }
 
-        return binding as WorkflowBindingHandle;
+        return binding;
     }
 
     /**
      * Serve `__lunora_admin__:createWorkflowInstance` — the studio's "Start
-     * instance" button. Resolves the declared workflow's `WORKFLOW_*` binding and
+     * instance" button. Resolves the declared workflow's binding and
      * calls `.create({ id?, params })`, returning the new instance's id and initial
      * status. No SQLite write happens (workflows are not Durable Objects and hold
      * no shard state), so this only records an audit entry — there's nothing to
@@ -9130,7 +9204,7 @@ abstract class ShardDO {
      */
     private async handleCreateWorkflowInstance(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseCreateWorkflowInstanceArgs(args);
-        const binding = this.resolveWorkflowBinding(parsed.exportName);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
 
         const instance = await binding.create({ id: parsed.id, params: parsed.params });
         const snapshot = await instance.status();
@@ -9150,7 +9224,7 @@ abstract class ShardDO {
      */
     private async handleGetWorkflowInstanceStatus(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseGetWorkflowInstanceStatusArgs(args);
-        const binding = this.resolveWorkflowBinding(parsed.exportName);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
 
         const instance = await binding.get(parsed.id);
         const snapshot = await instance.status();
@@ -9657,6 +9731,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.recordContainerEvent]: (args) => this.handleRecordContainerEvent(args),
             [ADMIN_FUNCTIONS.recordMail]: (args) => this.handleRecordMail(args),
             [ADMIN_FUNCTIONS.recordQueueMessage]: (args) => this.handleRecordQueueMessage(args),
+            [ADMIN_FUNCTIONS.releaseShardRegistration]: (args) => this.handleReleaseShardRegistration(args),
             [ADMIN_FUNCTIONS.replayQueueMessage]: (args) => this.handleReplayQueueMessage(args),
             [ADMIN_FUNCTIONS.sendQueueMessage]: (args) => this.handleSendQueueMessage(args),
             [ADMIN_FUNCTIONS.sendTestMail]: (args) => this.handleSendTestMail(args),
@@ -9798,7 +9873,7 @@ abstract class ShardDO {
      * statically-discovered list) to find its generated `QUEUE_*` binding, then
      * reads `env[binding]` and validates it carries `send`/`sendBatch`. A bad export
      * name or a missing/malformed binding throws a 400 `LunoraError` so the studio
-     * surfaces an actionable message. Mirrors {@link resolveWorkflowBinding}.
+     * surfaces an actionable message. Mirrors {@link declaredWorkflowHandle}.
      */
     private resolveQueueBinding(exportName: string): { binding: QueueBindingHandle; metadata: QueueMetadata } {
         const metadata = this.queuesMetadata().queues.find((queue) => queue.exportName === exportName);
@@ -10082,6 +10157,10 @@ abstract class ShardDO {
 
         if (restart) {
             // Apply now: restart the DO so it reopens at the armed bookmark.
+            // Deliberately WITHOUT `{ retryAlarm: false }`: this is an admin
+            // request, not the alarm, and an in-flight alarm it interrupts (the
+            // scheduler / poll tick that re-arms itself) must retry against the
+            // restored state, or the self-re-arming chain could stop for good.
             this.state.abort?.("lunora PITR restore");
         }
 
@@ -10836,6 +10915,158 @@ abstract class ShardDO {
     }
 
     /**
+     * Run one registry step after every step before it. Registration and release
+     * both go through here, so a release's emptiness check and unregister can
+     * never interleave with a registration: a write that lands mid-release
+     * registers AFTER the unregister, not before it.
+     */
+    private async serializeRegistry<T>(work: () => Promise<T>): Promise<T> {
+        const run = this.registryTail.then(work);
+
+        this.registryTail = run.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return run;
+    }
+
+    /** The registry stub, pinned to this DO's own jurisdiction — the subnamespace the worker pins the registry it reads. */
+    private registryStub(namespace: unknown): ReturnType<typeof stubByName> {
+        return stubByName(namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
+    }
+
+    /**
+     * Tell the shard registry this shard holds rows of each `.shardBy()` table
+     * the flushed write touched, once per table per instance. The cross-shard
+     * fan-outs (export, CDC sync, migrations) only reach the shards the registry
+     * lists, so a shard that never registers is left out of every one of them.
+     *
+     * Runs past the response (see `flushChangedTables`) and never rejects: the
+     * write has already committed, so a failure is logged, the table's claim
+     * released, and the first write after {@link SHARD_REGISTRY_RETRY_MS} retries.
+     */
+    private async registerWrittenShard(changed: ReadonlySet<string>): Promise<void> {
+        await this.serializeRegistry(async () => {
+            const registry = this.shardRegistry();
+
+            if (registry === undefined || Date.now() < this.registryRetryAt) {
+                return;
+            }
+
+            const shardKey = this.currentShardKey();
+
+            // A replica or relay is a copy of (or a door to) another shard, not a
+            // shard of its own. Listed, it would join every fan-out and refuse the
+            // admin RPCs it was sent — a replica answers 421 to anything not routed
+            // to it as a read — so every export and backup of the table would fail.
+            if (parseReplicaName(shardKey) !== undefined || parseRelayName(shardKey) !== undefined) {
+                return;
+            }
+
+            const tables = [...changed].filter((table) => registry.shardedTables.has(table) && !this.registeredTables.has(table));
+
+            if (tables.length === 0) {
+                return;
+            }
+
+            const stub = this.registryStub(registry.namespace);
+
+            if (stub === undefined) {
+                // eslint-disable-next-line no-console -- server-side diagnostic: a misbound registry leaves this shard out of every fan-out
+                console.error(
+                    `[@lunora/do] shard registry binding is not a Durable Object namespace in this shard's jurisdiction; shard "${shardKey}" is not registered`,
+                );
+
+                return;
+            }
+
+            await Promise.all(
+                tables.map(async (table) => {
+                    this.registeredTables.add(table);
+
+                    try {
+                        await registerShardKey(stub, table, shardKey);
+                    } catch (error: unknown) {
+                        this.registeredTables.delete(table);
+                        this.registryRetryAt = Date.now() + SHARD_REGISTRY_RETRY_MS;
+                        // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose registration failed
+                        console.error(
+                            `[@lunora/do] could not register shard "${shardKey}" for "${table}"; cross-shard export, sync and migrations miss it until a later write registers it:`,
+                            error,
+                        );
+                    }
+                }),
+            );
+        });
+    }
+
+    /**
+     * `__lunora_admin__:releaseShardRegistration`: drop this shard from the
+     * registry for each named table it holds no rows of, and keep it for the rest.
+     *
+     * The shard decides rather than the caller because only here can the check
+     * be ordered against this shard's own writes. It runs on the registry chain
+     * (see {@link ShardDO.serializeRegistry}) and clears the table's claim, so a
+     * row written before the check is seen by it and keeps the table, and one
+     * written after re-registers once the unregister has landed. A caller that
+     * probed first and unregistered second could hide a shard written in between:
+     * its claim would say "registered" while the registry said otherwise.
+     *
+     * A soft-deleted row still counts as a row — the shard is kept.
+     */
+    private async handleReleaseShardRegistration(args: Record<string, unknown>): Promise<Response> {
+        const { dryRun, tables } = parseReleaseShardRegistrationArgs(args);
+
+        const result = await this.serializeRegistry(async () => {
+            const registry = this.shardRegistry();
+            const stub = registry === undefined ? undefined : this.registryStub(registry.namespace);
+
+            if (registry === undefined || stub === undefined) {
+                throw new LunoraError("BAD_REQUEST", "releaseShardRegistration: this shard has no shard registry bound", { status: 400 });
+            }
+
+            const shardKey = this.currentShardKey();
+            const kept: string[] = [];
+            const released: string[] = [];
+
+            for (const table of tables) {
+                if (this.tableHasRows(table)) {
+                    kept.push(table);
+                    continue;
+                }
+
+                if (!dryRun) {
+                    // eslint-disable-next-line no-await-in-loop -- one small round trip per table this shard is listed for; ordered with the rest of the chain
+                    await unregisterShardKey(stub, table, shardKey);
+                    this.registeredTables.delete(table);
+                }
+
+                released.push(table);
+            }
+
+            return { kept, released };
+        });
+
+        if (!dryRun && result.released.length > 0) {
+            this.recordAudit("releaseShardRegistration", { detail: { released: result.released } });
+        }
+
+        return adminResponse(result);
+    }
+
+    /** Whether this shard's SQLite holds at least one row of `table` — `false` for a table it never created. */
+    private tableHasRows(table: string): boolean {
+        const sql = this.sql as SqlExec;
+
+        if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray().length === 0) {
+            return false;
+        }
+
+        return sql.exec(`SELECT 1 FROM ${quoteIdentifier(table)} LIMIT 1`).toArray().length > 0;
+    }
+
+    /**
      * Drain the tables written during the in-flight RPC and re-run every
      * subscription that depends on one of them. Called after `handleRpc`
      * resolves, and per-batch during a data migration via
@@ -10857,6 +11088,13 @@ abstract class ShardDO {
 
         if (!changed || changed.size === 0) {
             return;
+        }
+
+        // Past the response: the write is durable and nothing below depends on
+        // the registry having heard about it. Checked here first so a shard with
+        // no registry pays nothing on the write path.
+        if (this.shardRegistry() !== undefined) {
+            await this.deferPastResponse(this.registerWrittenShard(changed));
         }
 
         this.writeGeneration += 1;

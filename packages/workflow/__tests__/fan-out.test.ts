@@ -37,6 +37,7 @@ const engineRejectsInstanceId = (id: unknown): boolean =>
 /** A fake instance handle — only the methods the fan-out path touches are real. */
 const makeInstance = (id: string): WorkflowInstanceLike => {
     return {
+        delete: vi.fn<() => Promise<void>>(),
         id,
         pause: vi.fn<() => Promise<void>>(),
         restart: vi.fn<() => Promise<void>>(),
@@ -47,6 +48,7 @@ const makeInstance = (id: string): WorkflowInstanceLike => {
         status: vi.fn<() => Promise<WorkflowStatusResult>>(async () => {
             return { status: "running" };
         }),
+        subscribe: vi.fn<WorkflowInstanceLike["subscribe"]>(),
         terminate: vi.fn<() => Promise<void>>(),
     };
 };
@@ -160,7 +162,7 @@ const makeDeps = (
 
                 return id;
             },
-            parentBinding: "WORKFLOW_PARENT",
+            parentClassName: "ParentWorkflow",
             resolveBinding: () => {
                 return { create, get };
             },
@@ -219,11 +221,14 @@ describe("createParallel", () => {
         // Deterministic ids derived from the parent instance id + declaration index.
         expect(create.mock.calls[0]?.[0]).toStrictEqual({
             id: "parent-1-c0",
-            params: { [BRANCH_MARKER_KEY]: { eventType: "lunora:branch:parent-1-c0", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "parent-1" }, x: 1 },
+            params: {
+                [BRANCH_MARKER_KEY]: { eventType: "lunora:branch:parent-1-c0", index: 0, parentClassName: "ParentWorkflow", parentId: "parent-1" },
+                x: 1,
+            },
         });
         expect(create.mock.calls[1]?.[0]).toStrictEqual({
             id: "parent-1-c1",
-            params: { [BRANCH_MARKER_KEY]: { eventType: "lunora:branch:parent-1-c1", index: 1, parentBinding: "WORKFLOW_PARENT", parentId: "parent-1" } },
+            params: { [BRANCH_MARKER_KEY]: { eventType: "lunora:branch:parent-1-c1", index: 1, parentClassName: "ParentWorkflow", parentId: "parent-1" } },
         });
     });
 
@@ -653,7 +658,7 @@ describe("createParallel", () => {
 
                 return id;
             },
-            parentBinding: "WORKFLOW_PARENT",
+            parentClassName: "ParentWorkflow",
             resolveBinding: (workflow: string) => {
                 if (workflow === "undoSecond") {
                     throw new Error("no Workflow binding for undoSecond");
@@ -716,7 +721,7 @@ describe("createSpawn", () => {
         const step = makeStep();
         const { create, deps } = makeDeps(step);
 
-        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "victim" };
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentClassName: "ParentWorkflow", parentId: "victim" };
 
         const error = await createSpawn(deps)("child", { [BRANCH_MARKER_KEY]: forged }).catch((error_: unknown) => error_);
 
@@ -733,18 +738,28 @@ describe("branch marker helpers", () => {
     it("extracts a well-formed marker and ignores anything else", () => {
         expect.assertions(3);
 
-        const marker = { eventType: "lunora:branch:x", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "p1" };
+        const marker = { eventType: "lunora:branch:x", index: 0, parentClassName: "ParentWorkflow", parentId: "p1" };
 
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: marker, other: 1 })).toEqual(marker);
         expect(extractBranchMarker({ other: 1 })).toBeUndefined();
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: { eventType: "x" } })).toBeUndefined();
     });
 
-    it("rejects a shape-valid marker whose parentBinding is not a WORKFLOW_ binding", () => {
+    it("accepts the export keys of `_`- and `$`-prefixed workflow exports", () => {
+        expect.assertions(2);
+
+        for (const parentClassName of ["_ordersWorkflow", "$ordersWorkflow"]) {
+            const marker = { eventType: "lunora:branch:x", index: 0, parentClassName, parentId: "p1" };
+
+            expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: marker })).toStrictEqual(marker);
+        }
+    });
+
+    it("rejects a shape-valid marker whose parentClassName is not a workflow export key", () => {
         expect.assertions(1);
 
         // Attacker-chosen env key that is not a Workflow binding must not be dereferenced.
-        const forged = { eventType: "lunora:branch:x", index: 0, parentBinding: "SECRETS", parentId: "p1" };
+        const forged = { eventType: "lunora:branch:x", index: 0, parentClassName: "SECRETS", parentId: "p1" };
 
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: forged })).toBeUndefined();
     });
@@ -753,7 +768,7 @@ describe("branch marker helpers", () => {
         expect.assertions(1);
 
         // Attacker-chosen event type outside `lunora:branch:*` must not be sent.
-        const forged = { eventType: "attacker:event", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "p1" };
+        const forged = { eventType: "attacker:event", index: 0, parentClassName: "ParentWorkflow", parentId: "p1" };
 
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: forged })).toBeUndefined();
     });
@@ -889,17 +904,17 @@ describe("spawn create-or-attach (a step body that failed after `create` landed)
 });
 
 describe("signalBranchParent", () => {
-    const marker = { eventType: "lunora:branch:c0", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "parent-1" };
+    const marker = { eventType: "lunora:branch:c0", index: 0, parentClassName: "ParentWorkflow", parentId: "parent-1" };
 
     it("sends the outcome event to the parent instance", async () => {
         expect.assertions(2);
 
         const parent = makeInstance("parent-1");
-        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+        const env = { ParentWorkflow: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
 
         await signalBranchParent({ env, step: makeStep() }, marker, okOutcome({ done: true }));
 
-        expect(env.WORKFLOW_PARENT.get).toHaveBeenCalledWith("parent-1");
+        expect(env.ParentWorkflow.get).toHaveBeenCalledWith("parent-1");
         expect(parent.sendEvent).toHaveBeenCalledWith({ payload: { status: "ok", value: { done: true } }, type: "lunora:branch:c0" });
     });
 
@@ -907,7 +922,7 @@ describe("signalBranchParent", () => {
         expect.assertions(2);
 
         const parent = makeInstance("parent-1");
-        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+        const env = { ParentWorkflow: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
 
         // Just over Cloudflare's 1 MiB event-payload cap. Sent verbatim it rejects on
         // every retry, so the parent hibernated to its join timeout (24 h by default)
@@ -930,7 +945,7 @@ describe("signalBranchParent", () => {
         expect.assertions(2);
 
         const parent = makeInstance("parent-1");
-        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+        const env = { ParentWorkflow: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
 
         // A cyclic child output: `JSON.stringify` throws inside the size check, and
         // `signalBranchParentSafe` only logs — so the parent got no terminal event
@@ -958,7 +973,7 @@ describe("signalBranchParent", () => {
         expect.assertions(4);
 
         const parent = makeInstance("parent-1");
-        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+        const env = { ParentWorkflow: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
 
         // A branch handler's own `toJSON` decides what `JSON.stringify` throws, so
         // the thrown value is as arbitrary as any other user value. Two shapes
@@ -1020,7 +1035,7 @@ describe("signalBranchParent", () => {
 });
 
 describe("signalBranchParentSafe", () => {
-    const marker = { eventType: "lunora:branch:c0", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "parent-1" };
+    const marker = { eventType: "lunora:branch:c0", index: 0, parentClassName: "ParentWorkflow", parentId: "parent-1" };
 
     it("swallows a rejecting parent send (terminated parent) and logs it instead of throwing", async () => {
         expect.assertions(2);
@@ -1032,7 +1047,7 @@ describe("signalBranchParentSafe", () => {
 
         (parent.sendEvent as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("parent terminated"));
 
-        const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
+        const env = { ParentWorkflow: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
         const log = makeLog();
 
         await expect(

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverContainers } from "../../src/discover/containers";
 import discoverCrons from "../../src/discover/crons";
 import discoverSchema from "../../src/discover/schema";
+import type { DefaultScheduledContainerIR } from "../../src/ir";
 import { parseObjectShape } from "../../src/parse-validator";
 
 /**
@@ -119,7 +120,7 @@ describe("quoted object keys read as their runtime key", () => {
         `,
         );
 
-        const [container] = discoverContainers(newProject(), workdir);
+        const [container] = discoverContainers(newProject(), workdir) as DefaultScheduledContainerIR[];
 
         expect({ buildArgs: container?.buildArgs, enableInternet: container?.enableInternet, maxInstances: container?.maxInstances }).toStrictEqual({
             buildArgs: { NODE_VERSION: "22", PLAIN: "x" },

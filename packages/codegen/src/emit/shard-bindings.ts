@@ -37,58 +37,42 @@ const emitRelationFanout = (hasGlobalTables: boolean): { importFragment: string;
  * when the project doesn't use Workers AI. Extracted from `emitShard` so
  * its body stays flat (the gating lives here, not as inline ternaries).
  */
-const emitAiFragments = (hasAi: boolean): { build: string; configField: string; contextField: string; stub: string } => {
+const emitAiFragments = (hasAi: boolean): { build: string; configField: string } => {
     if (!hasAi) {
-        return { build: "", configField: "", contextField: "", stub: "" };
+        return { build: "", configField: "" };
     }
-
-    // ctx.ai falls back to this when neither `env.AI` nor a `config.ai` thunk
-    // resolves a binding — every method throws a directed error rather than a
-    // bare "undefined is not a function".
-    const aiMissing = `throw new Error("ctx.ai: no AI binding found. Add an \\\`ai\\\` binding (env.AI) to wrangler.jsonc, or pass \\\`ai\\\` to createShardDO().");`;
 
     return {
         // Build ctx.ai from the resolved Workers AI binding (a `config.ai` thunk
-        // override, else `env.AI`). createAi is provider-agnostic — a model-id
-        // string resolves Workers AI, any AI SDK model object passes through — so
-        // a handler is never locked to Workers AI. Falls back to `aiStub`.
+        // override, else `env.AI`). createAi is provider-agnostic — a Workers AI id,
+        // a `"<provider>/<model>"` slug routed through AI Gateway (or the
+        // `LUNORA_AI_PROXY_URL` proxy on a host without the binding), or any AI SDK
+        // model object — and with no binding it returns a facade whose calls throw a
+        // directed error, so there is no stub here. An ActionCtx-only helper:
+        // inference is external, non-deterministic I/O, so a query/mutation ctx
+        // never carries it.
         build: `
             const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
             // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
             // function path + trace id into createAi, which folds them into the
-            // gateway's native \`metadata\` only when a gateway is configured (absent
-            // otherwise). Mirror the tracer's anchor guard — a deferred subscription
-            // re-run must not borrow a concurrent dispatch's trace, so read
-            // \`getCurrentTrace()\` only on the synchronous (non-threaded-identity) path.
+            // gateway's \`metadata\`. Mirror the tracer's anchor guard — a deferred
+            // subscription re-run must not borrow a concurrent dispatch's trace, so
+            // read \`getCurrentTrace()\` only on the synchronous (non-threaded-identity) path.
             const aiTrace = options.identity ? undefined : this.getCurrentTrace();
-            const ai: LunoraAi = aiBinding
-                ? createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown>, metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId } })
-                : aiStub;
+            // \`telemetry\` gives every model call an \`ai.generate\` / \`ai.stream\` span
+            // and \`gen_ai.usage.*\` token + cost counters attributed to this function.
+            const ai: LunoraAi = createAi({
+                binding: aiBinding as AiBindingLike | undefined,
+                env: env as Record<string, unknown>,
+                metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
+                telemetry: { metrics, trace },
+            });
 `,
         // Optional override for the Workers AI binding. When omitted, ctx.ai is
         // built from `env.AI` (the conventional binding the config layer
         // auto-reconciles); the thunk lets a caller point it elsewhere or inject
         // a double in tests.
         configField: `\n    ai?: (env: Record<string, unknown>) => AiBindingLike;`,
-        contextField: `\n                ai,`,
-        stub: `
-const aiStub: LunoraAi = {
-    embeddingModel: () => {
-        ${aiMissing}
-    },
-    model: () => {
-        ${aiMissing}
-    },
-    run: async () => {
-        ${aiMissing}
-    },
-    // workersai is a callable-with-properties; a bare throwing arrow isn't
-    // structurally assignable, so cast it. Never invoked (the stub throws first).
-    workersai: (() => {
-        ${aiMissing}
-    }) as unknown as LunoraAi["workersai"],
-};
-`,
     };
 };
 
@@ -132,6 +116,37 @@ const EMPTY_HELPER_FRAGMENTS: HelperFragments = { build: "", configField: "", co
  * directed error via `kvStub`.
  */
 /* eslint-disable no-secrets/no-secrets -- the flagged high-entropy strings are emitted identifiers (`markUnvouchableReads(kvBinding`), not credentials. */
+
+/**
+ * The shard registry wiring, for a schema with `.shardBy()` tables: the
+ * `ShardDOConfig.shardRegistry` field, the `SHARDED_TABLES` constant and the
+ * `shardRegistry()` override through which the shard reports each `.shardBy()`
+ * table it writes. That is how the worker's cross-shard fan-outs learn which
+ * shards exist. All empty without `.shardBy()` tables.
+ */
+const emitShardRegistryFragments = (shardedTableNames: ReadonlySet<string>): { configField: string; constant: string; override: string } => {
+    if (shardedTableNames.size === 0) {
+        return { configField: "", constant: "", override: "" };
+    }
+
+    return {
+        configField: `
+    /** The \`ShardRegistryDO\` namespace (typically \`env.SHARD_REGISTRY\`). This shard registers its key for each \`.shardBy()\` table it writes, so cross-shard export, sync and migrations reach it. */
+    shardRegistry?: (env: Record<string, unknown>) => unknown;`,
+        constant: `
+/** The \`.shardBy()\` tables this shard registers with the shard registry when it writes them. */
+const SHARDED_TABLES: ReadonlySet<string> = new Set([${[...shardedTableNames].map((name) => JSON.stringify(name)).join(", ")}]);
+`,
+        override: `
+        protected override shardRegistry(): undefined | { namespace: unknown; shardedTables: ReadonlySet<string> } {
+            const namespace = config.shardRegistry?.((this.env ?? {}) as Record<string, unknown>);
+
+            return namespace === undefined ? undefined : { namespace, shardedTables: SHARDED_TABLES };
+        }
+`,
+    };
+};
+
 const emitKvFragments = (hasKv: boolean): HelperFragments => {
     if (!hasKv) {
         return EMPTY_HELPER_FRAGMENTS;
@@ -500,7 +515,19 @@ const emitBrowserFragments = (hasBrowser: boolean): HelperFragments => {
         // `@cloudflare/playwright` peer the worker stays free of), so only the
         // `Browser` type is referenced here.
         importLines: [`import type { Browser } from "@lunora/browser";`],
-        stub: renderThrowingStub("browserStub: Browser", browserMissing, ["connect", "content", "launch", "pdf", "scrape", "screenshot", "sessions"]),
+        stub: renderThrowingStub("browserStub: Browser", browserMissing, [
+            "cancelCrawl",
+            "connect",
+            "content",
+            "crawl",
+            "crawlResult",
+            "launch",
+            "pdf",
+            "quickAction",
+            "scrape",
+            "screenshot",
+            "sessions",
+        ]),
     };
 };
 
@@ -595,5 +622,6 @@ export {
     emitPipelinesFragments,
     emitR2sqlFragments,
     emitRelationFanout,
+    emitShardRegistryFragments,
     renderThrowingStub,
 };

@@ -383,6 +383,17 @@ interface AdvisorMaskStrategy {
 }
 ```
 
+### `AdvisorModule` (interface)
+
+```ts
+interface AdvisorModule {
+    installed?: true;
+    name: string;
+    ownsFolder?: false;
+    tables: ReadonlyArray<string>;
+}
+```
+
 ### `AdvisorMutatorDeclaration` (interface)
 
 ```ts
@@ -769,6 +780,14 @@ interface AdvisorTableScan {
 }
 ```
 
+### `AdvisorTableWrite` (interface)
+
+```ts
+interface AdvisorTableWrite extends AdvisorInsertWrite {
+    method: string;
+}
+```
+
 ### `AdvisorVectorNamespaceAccess` (interface)
 
 ```ts
@@ -967,6 +986,7 @@ interface LintContext {
     mailRecipientAccesses?: ReadonlyArray<AdvisorMailRecipientAccess>;
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
     maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
+    modules?: ReadonlyArray<AdvisorModule>;
     mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
     mutatorWrites?: ReadonlyArray<AdvisorMutatorWrite>;
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
@@ -994,6 +1014,7 @@ interface LintContext {
     storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+    tableWrites?: ReadonlyArray<AdvisorTableWrite>;
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
     workflowCalls?: ReadonlyArray<AdvisorWorkflowCall>;
@@ -1269,6 +1290,12 @@ const containerRuntimeEgressRelaxation: Lint;
 
 ```ts
 const containerStartEnableInternetOverride: Lint;
+```
+
+### `crossModuleTableWrite` (const)
+
+```ts
+const crossModuleTableWrite: Lint;
 ```
 
 ### `dedupeCacheKeys` (const)

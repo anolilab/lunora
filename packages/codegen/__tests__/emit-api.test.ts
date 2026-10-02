@@ -10,7 +10,6 @@ import { emitApi, emitFunctions } from "../src/emit";
 import type { AgentIR, FunctionIR, HttpRouteIR, WorkflowIR } from "../src/ir";
 
 const SUPPORT_AGENT: AgentIR = {
-    bindingName: "AGENT_SUPPORT",
     className: "SupportAgentWorkflow",
     exportName: "support",
     name: "agent-support",
@@ -44,7 +43,7 @@ describe("emitApi", () => {
         // Typed reference carries AgentRunInput.
         expect(rendered).toContain("support: WorkflowReference<AgentRunInput>;");
         // Runtime object carries the AGENT_* binding + stable name.
-        expect(rendered).toContain('support: { isLunoraWorkflow: true, binding: "AGENT_SUPPORT", name: "agent-support" },');
+        expect(rendered).toContain('support: { isLunoraWorkflow: true, className: "SupportAgentWorkflow", name: "agent-support" },');
         expect(rendered).toContain("export interface AgentsRef {");
         expect(rendered).toContain("export const agents: AgentsRef = {");
     });
@@ -76,7 +75,7 @@ describe("emitApi", () => {
         expect.assertions(4);
 
         const workflows: ReadonlyArray<WorkflowIR> = [
-            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
+            { className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
         ];
 
         const rendered = emitApi({ agents: [SUPPORT_AGENT], functions: [], workflows });
@@ -94,7 +93,7 @@ describe("emitApi", () => {
         expect.assertions(5);
 
         const workflows: ReadonlyArray<WorkflowIR> = [
-            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
+            { className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
         ];
 
         const rendered = emitApi({ functions: [], workflows });
@@ -105,7 +104,7 @@ describe("emitApi", () => {
         // eslint-disable-next-line no-secrets/no-secrets -- generated TS generic, not a credential
         expect(rendered).toContain("digestPipeline: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.digestPipeline>>;");
         // Runtime object carries the WORKFLOW_* binding + name.
-        expect(rendered).toContain('digestPipeline: { isLunoraWorkflow: true, binding: "WORKFLOW_DIGEST_PIPELINE", name: "digestPipeline" },');
+        expect(rendered).toContain('digestPipeline: { isLunoraWorkflow: true, className: "DigestPipelineWorkflow", name: "digestPipeline" },');
         expect(rendered).toContain("export const workflows: WorkflowsRef = {");
         expect(rendered).toContain("export interface WorkflowsRef {");
     });

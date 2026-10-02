@@ -23,7 +23,7 @@ const newProject = (): Project => new Project({ skipAddingFilesFromTsConfig: tru
  * recover each public function's declared return type for the drift guard
  * below.
  */
-const AGENT_COMPONENT_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "agent", "src", "component.ts");
+const ComponentSourcePathAgentWorkflow = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "agent", "src", "component.ts");
 
 /**
  * Read `const <constantName> = query|mutation.input({...}).query|mutation(async (...): Promise<T> => ...)`'s
@@ -34,7 +34,7 @@ const AGENT_COMPONENT_SOURCE_PATH = join(dirname(fileURLToPath(import.meta.url))
  */
 const sourceReturnTypeOf = (constantName: string): string => {
     const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-    const source = project.addSourceFileAtPath(AGENT_COMPONENT_SOURCE_PATH);
+    const source = project.addSourceFileAtPath(ComponentSourcePathAgentWorkflow);
     // `getVariableDeclaration` only searches the source file's TOP-LEVEL
     // statements — `agentMessages` et al. are declared inside the
     // `agentComponent()` function body, so the declaration must be found by
@@ -134,13 +134,11 @@ describe("discover/agents", () => {
 
         expect(discoverAgents(newProject(), workdir)).toEqual([
             {
-                bindingName: "AGENT_BILLING",
                 className: "BillingAgentWorkflow",
                 exportName: "billing",
                 name: "billing-bot",
             },
             {
-                bindingName: "AGENT_SUPPORT",
                 className: "SupportAgentWorkflow",
                 exportName: "support",
                 name: "agent-support",
@@ -157,7 +155,6 @@ describe("discover/agents", () => {
         `);
 
         expect(discoverAgents(newProject(), workdir)[0]).toEqual({
-            bindingName: "AGENT_SUPPORT_BOT",
             className: "SupportBotAgentWorkflow",
             exportName: "supportBot",
             name: "agent-support-bot",
@@ -220,8 +217,8 @@ describe("discover/agents", () => {
         expect(discoverAgents(newProject(), workdir).map((agent) => agent.exportName)).toEqual(["viaAs", "viaParens", "viaSatisfies"]);
     });
 
-    it("rejects duplicate agent names/bindings/classes with a located diagnostic (CODEGEN-01)", () => {
-        expect.assertions(3);
+    it("rejects duplicate agent names/classes with a located diagnostic (CODEGEN-01)", () => {
+        expect.assertions(2);
 
         writeAgents(`
             import { defineAgent } from "@lunora/agent";
@@ -232,20 +229,6 @@ describe("discover/agents", () => {
 
         expect(() => discoverAgents(newProject(), workdir)).toThrow(/Duplicate agent name "helper"/u);
 
-        writeAgents(`
-            import { defineAgent } from "@lunora/agent";
-
-            export const supportBot = defineAgent({ model: "m" });
-            export const support_bot = defineAgent({ model: "m" });
-        `);
-
-        expect(() => discoverAgents(newProject(), workdir)).toThrow(/Duplicate agent binding "AGENT_SUPPORT_BOT"/u);
-
-        // `aB` vs `AB`: bindingName is NOT invariant to a first-character case
-        // change when the first two characters straddle a camelCase boundary
-        // (`aB`'s "a"→"B" transition inserts an underscore that "AB" never
-        // gets: AGENT_A_B vs AGENT_AB), so distinct `name:` overrides isolate a
-        // className-only collision (both capitalize to "ABAgentWorkflow").
         writeAgents(`
             import { defineAgent } from "@lunora/agent";
 
@@ -415,11 +398,11 @@ describe("emit (agents)", () => {
         expect(emitServer({ schema: EMPTY_SCHEMA })).not.toContain("LunoraAgents");
     });
 
-    it("emitServer narrows the AGENT_* env binding when agents exist", () => {
+    it("emitServer adds no env binding for agents (they live on ctx.exports)", () => {
         expect.assertions(2);
 
-        expect(emitServer({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA })).toContain("readonly AGENT_SUPPORT?: unknown;");
-        expect(emitServer({ schema: EMPTY_SCHEMA })).not.toContain("AGENT_SUPPORT");
+        expect(emitServer({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA })).not.toContain("SupportAgentWorkflow?: unknown;");
+        expect(emitServer({ schema: EMPTY_SCHEMA })).not.toContain("SupportAgentWorkflow");
     });
 
     it("emitShard wires createAgentContext into the built ctx", () => {
@@ -428,8 +411,8 @@ describe("emit (agents)", () => {
         const shard = emitShard({ agents: discoverSupportAgent(), schema: EMPTY_SCHEMA });
 
         expect(shard).toContain('import { createAgentContext } from "@lunora/agent";');
-        expect(shard).toContain('{ binding: "AGENT_SUPPORT", exportName: "support" },');
-        expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS);");
+        expect(shard).toContain('{ className: "SupportAgentWorkflow", exportName: "support" },');
+        expect(shard).toContain("const agents = createAgentContext(env, LUNORA_AGENTS, { exports: this.state.exports });");
         expect(shard).toContain("agents,");
     });
 

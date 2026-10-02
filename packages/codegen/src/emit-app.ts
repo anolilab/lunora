@@ -1,7 +1,8 @@
 /* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
 import { APP_METHOD_CAPABILITIES } from "./capabilities";
 import { GENERATED_HEADER } from "./emit";
-import type { IdentityIR, JurisdictionIR } from "./ir";
+import type { IdentityIR, JurisdictionIR, TableIR } from "./ir";
+import { isShardByTable } from "./ir";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
@@ -11,7 +12,7 @@ interface EmitAppOptions {
      * `@lunora/agent/inbound`), so received mail starts a durable run. Empty/absent
      * ⇒ no wiring, byte-identical output for email-free (and agent-free) projects.
      */
-    emailAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
+    emailAgents?: ReadonlyArray<{ className: string; exportName: string }>;
     /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
     hasAccess: boolean;
     /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
@@ -99,13 +100,15 @@ interface EmitAppOptions {
     jurisdictionPinsAuth?: boolean;
 
     /**
-     * Every table the schema declares. Emitted as a literal `listSchemaTables`
-     * so export can answer "every table" with a real list: shard discovery is
-     * driven by the table list, so an export naming no tables reaches no shards.
-     * A literal (rather than a read off the imported `schema`) keeps this working
-     * for apps with no `.global()` tables, which never import `schema` at all.
+     * Every table the schema declares, with its shard mode. Emitted as a literal
+     * table map backing `listSchemaTables` and `resolveTableSharding`: export
+     * needs a real "every table" list (shard discovery is driven by it), and the
+     * import bucketing plus the worker's default shard registry need to tell a
+     * `.shardBy()` table from a root one. A literal (rather than a read off the
+     * imported `schema`) keeps this working for apps with no `.global()` tables,
+     * which never import `schema` at all.
      */
-    tableNames: ReadonlyArray<string>;
+    tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
     useUmbrella: boolean;
     /** Number of `.vectorize()` / `defineVectorIndex(...)` indexes the schema declares — the app-side half of {@link EmitAppOptions.hasVectors}. Defaults to `0`. */
@@ -119,6 +122,8 @@ interface EmitAppOptions {
      * output for voice-free (and agent-free) projects.
      */
     voiceAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
+    /** An architecture manifest is emitted (`architecture.ts`, the app declares a module) → wire `architecture` into the worker. */
+    wantsArchitecture: boolean;
     /** An OpenAPI spec is emitted (`openapi.ts`) → wire `openApiSpec` into the worker. */
     wantsOpenApi: boolean;
     /** An OpenRPC spec is emitted (`openrpc.ts`) → wire `openRpcSpec` into the worker. */
@@ -222,6 +227,9 @@ const buildInboundImports = (options: EmitAppOptions): string[] =>
 const buildAgentDefinitionsImport = (options: EmitAppOptions): string[] =>
     hasEmailAgents(options) ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
 
+/** The schema declares at least one `.shardBy()` table, so the app can wire a shard registry. */
+const hasShardedTables = (options: EmitAppOptions): boolean => options.tables.some((table) => isShardByTable(table));
+
 /**
  * The runtime module's own type and value import lines. Which symbols each side
  * needs is driven entirely by the enabled capabilities, so it is kept next to
@@ -242,12 +250,14 @@ const buildRuntimeImports = (options: EmitAppOptions): string[] => {
         // The queue consumer's fourth argument — the trigger's own trace, forwarded
         // so a handler's `ctx.run` dispatches join it.
         ...(hasQueue ? ["TriggerTrace"] : []),
-        ...(hasGlobal ? ["GlobalIntrospector", "AdminTableResolver"] : []),
+        ...(hasGlobal ? ["GlobalIntrospector"] : []),
+        ...(options.tables.length > 0 ? ["ShardingInfo"] : []),
         ...(hasFramework ? ["FrameworkHostHandler"] : []),
     ];
 
     const runtimeValueImports = [
         ...(hasGlobal || hasHyperdriveGlobal ? ["createCrossShardRelationCapabilities"] : []),
+        ...(hasShardedTables(options) ? ["createDynamicShardRegistry", "createQueryCoordinator"] : []),
         "createWorker",
         ...(options.jurisdiction ? ["declareAppJurisdiction"] : []),
         "resolveLogArchiveFromEnv",
@@ -318,6 +328,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
                   `import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`,
               ]
             : []),
+        ...(options.wantsArchitecture ? [`import { architecture } from "./architecture.js";`] : []),
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
@@ -413,6 +424,7 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     `    private readonly routeMap: Record<string, Route> = {};`,
     ...(options.hasScheduler ? [`    private schedulerDeclaration?: SchedulerDeclaration<Env>;`] : []),
     ...(hasAnyLongTail(options) ? [`    private readonly shardExtras: Partial<ShardConfig> = {};`] : []),
+    ...(hasShardedTables(options) ? [`    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike>;`] : []),
     `    private shardSelector?: Selector<Env, ShardNamespaceLike>;`,
     ...(options.hasSourcedTables ? [`    private sourceClientFactory?: NonNullable<ShardConfig["sourceClient"]>;`] : []),
     ...(options.hasStorage ? [`    private storageDeclaration?: StorageDeclaration<Env>;`] : []),
@@ -588,6 +600,16 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
 
         return this;
     }`,
+    ...(hasShardedTables(options)
+        ? [
+              `    /** The \`ShardRegistryDO\` namespace (typically \`env.SHARD_REGISTRY\`). Each shard registers itself for the \`.shardBy()\` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a \`.shardBy()\` table. */
+    public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.shardRegistrySelector = selector;
+
+        return this;
+    }`,
+          ]
+        : []),
     ...(options.hasSourcedTables
         ? [
               `    /** Resolve the SQL client a \`.source(...)\` table's ingest poll reads from, given the wrangler Hyperdrive binding it named. Build it with \`@lunora/hyperdrive\`'s \`createHyperdrive\` plus your driver adapter. REQUIRED for a sourced table: without it every poll tick records "no sourceClient resolved for binding" and the table stays empty. */
@@ -737,6 +759,11 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                 : {}),`,
               ]
             : []),
+        ...(hasShardedTables(options)
+            ? [
+                  `            ...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),`,
+              ]
+            : []),
         ...(options.hasSourcedTables ? [`            ...(this.sourceClientFactory === undefined ? {} : { sourceClient: this.sourceClientFactory }),`] : []),
         ...(options.hasStorage
             ? [
@@ -761,17 +788,53 @@ const doAuthJurisdictionLine = (options: EmitAppOptions): string =>
                 jurisdiction: ${JSON.stringify(options.jurisdiction)},`
         : "";
 
-/** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
-const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
+/** A table's IR shard mode as a runtime `ShardingInfo` literal. */
+const shardingLiteral = (shardMode: TableIR["shardMode"]): string =>
+    typeof shardMode === "string"
+        ? `{ mode: { kind: ${JSON.stringify(shardMode)} } }`
+        : `{ mode: { field: ${JSON.stringify(shardMode.field)}, kind: "shardBy" } }`;
+
+/**
+ * The worker's view of the schema's tables: the literal table map behind
+ * `listSchemaTables` / `resolveTableSharding`, and — for a schema with
+ * `.shardBy()` tables — the coordinator over the declared shard registry.
+ */
+const buildTableShardingLines = (options: EmitAppOptions): string[] => [
     // Export's answer to "every table". Shard discovery unions each named table's
     // live shard keys, so an export that names none discovers none — which is how
     // `lunora export` with no `--tables`, and the scheduled backup with
     // `backupTables` omitted, used to write a file holding only `.global()` rows.
-    // Emitted for every app (a literal, so it needs no `schema` import) and skipped
-    // only for an empty schema, where it would be an empty array anyway.
-    ...(options.tableNames.length > 0
-        ? [`        options.listSchemaTables = () => [${options.tableNames.map((table) => JSON.stringify(table)).join(", ")}];`]
+    // The same map answers `resolveTableSharding`: without it every import row
+    // routes to the default shard, and the worker's default shard registry cannot
+    // tell a `.shardBy()` table (which it must refuse) from a root one (which it
+    // can serve). Emitted for every app (a literal, so it needs no `schema`
+    // import) and skipped only for an empty schema.
+    ...(options.tables.length > 0
+        ? [
+              `        const tableSharding = new Map<string, ShardingInfo>([
+${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${shardingLiteral(table.shardMode)}],`).join("\n")}
+        ]);
+
+        options.listSchemaTables = () => [...tableSharding.keys()];
+        options.resolveTableSharding = (table) => tableSharding.get(table);`,
+          ]
         : []),
+    // A declared registry replaces the worker's default one, which refuses every
+    // `.shardBy()` table because it cannot know which shard keys hold rows.
+    ...(hasShardedTables(options)
+        ? [
+              `        const shardRegistry = this.shardRegistrySelector?.(env);
+
+        if (shardRegistry) {
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}namespace: shardRegistry }) });
+        }`,
+          ]
+        : []),
+];
+
+/** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
+const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
+    ...buildTableShardingLines(options),
     ...(options.hasScheduler
         ? [
               `        if (this.schedulerDeclaration) {
@@ -802,14 +865,9 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
 
             if (database) {
                 options.globalIntrospector = buildGlobalIntrospector(database);
-                // \`resolveTableSharding\`/\`importGlobals\` wire the admin bulk-import
-                // endpoint: without the former, EVERY row (including a \`.global()\`
-                // table's) routes to the default shard, so a global table is never
-                // recognised as global and the latter is never reached — the
-                // endpoint answers 200 with \`inserted: {}\` for a write that never
-                // happened. Both are mechanical over the schema this file already
-                // imports, so there is nothing project-specific to configure.
-                options.resolveTableSharding = buildTableShardingResolver();
+                // \`importGlobals\` wires the admin bulk-import endpoint's global
+                // plane: the rows \`resolveTableSharding\` classifies as \`.global()\`
+                // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
@@ -1029,6 +1087,7 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     // Cloudflare data-residency region. Emitted only when declared, so apps
     // without it keep the un-pinned global namespace (and unchanged output).
     ...(options.jurisdiction ? [`            jurisdiction: ${JSON.stringify(options.jurisdiction)},`] : []),
+    ...(options.wantsArchitecture ? [`            architecture,`] : []),
     ...(options.wantsOpenApi ? [`            openApiSpec,`] : []),
     ...(options.wantsOpenRpc ? [`            openRpcSpec,`] : []),
     // The push-consumer handler backing the worker's `queue(batch, …)` entry:
@@ -1323,19 +1382,6 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
 };
 
 /**
- * \`resolveTableSharding\` for the admin bulk-import endpoint: a lookup over each
- * table's declared \`shardMode\` (\`defineTable(...).global()\` / \`.shardBy(field)\`
- * already record exactly this shape on the table) — mechanical, nothing to
- * configure per project. \`undefined\` for a table the schema doesn't declare, so
- * the import endpoint's own unknown-table handling still applies.
- */
-const buildTableShardingResolver = (): AdminTableResolver => (table) => {
-    const declared = (schema as unknown as D1CtxDbOptions["schema"]).tables[table];
-
-    return declared?.shardMode ? { mode: declared.shardMode } : undefined;
-};
-
-/**
  * \`importGlobals\` for the admin bulk-import endpoint: routes \`.global()\` rows
  * through the same D1 writer \`.global()\` reads/writes already use, via
  * \`@lunora/d1\`'s \`importGlobalRows\`. Mirrors \`runShardImport\`'s shard-local
@@ -1583,7 +1629,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     const emailAgentsBlock =
         emailAgents.length > 0
             ? `        composed.email = dispatchAgentEmail([
-${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, binding: ${JSON.stringify(agent.bindingName)} },`).join("\n")}
+${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, className: ${JSON.stringify(agent.className)} },`).join("\n")}
         ]);
 
 `

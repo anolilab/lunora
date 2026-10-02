@@ -19,13 +19,16 @@
     // explicitly per the @astrojs/cloudflare Workers guide.
     "assets": { "binding": "ASSETS", "directory": "./dist" },
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+        ],
     },
     // Required: ShardDO is SQLite-backed, so binding it needs a migration that
     // registers the class. The Astro integration hook is side-effect-free (unlike
     // the class-A Vite binding reconciler), so the template ships this explicitly —
     // matching the sveltekit/nuxt class-B templates.
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] }],
     // Blast-radius cap. Alerting is lagging by definition — by the time a
     // threshold trips, the runaway handler has already run — so a CPU ceiling is
     // one of the few controls that bounds the damage rather than reporting it.

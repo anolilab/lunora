@@ -2,8 +2,9 @@ import type { JsonSchema } from "@lunora/values";
 
 import type { RestCachePolicy, RestFunctionKind } from "../../../shared/rest-surface";
 import { cacheControlValue, cacheVaryValue, restMethodForKind, restPathForFunction } from "../../../shared/rest-surface";
+import { moduleTagOf } from "./discover/modules";
 import { GENERATED_HEADER } from "./emit";
-import type { ExposeCacheIR, FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
+import type { ExposeCacheIR, FunctionIR, HttpRouteIR, ModuleIR, ValidatorIR } from "./ir";
 import renderJsonData from "./json-data";
 import sanitizeNamespace from "./paths";
 import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
@@ -88,8 +89,7 @@ const successResponse = (output: ValidatorIR | undefined): Record<string, unknow
 };
 
 /** Build one OpenAPI operation for a discovered HTTP route. */
-const httpRouteOperation = (route: HttpRouteIR): Record<string, unknown> => {
-    const tag = sanitizeNamespace(route.filePath);
+const httpRouteOperation = (route: HttpRouteIR, tag: string): Record<string, unknown> => {
     const parameters = buildParameters(route);
 
     const operation: Record<string, unknown> = {
@@ -133,9 +133,8 @@ const httpRouteOperation = (route: HttpRouteIR): Record<string, unknown> => {
  * `const`, types `args` from the function's validators, and allows an optional
  * `shardKey`.
  */
-const rpcOperation = (definition: FunctionIR): { operation: Record<string, unknown>; pathKey: string } => {
-    const tag = sanitizeNamespace(definition.filePath);
-    const functionPath = `${tag}:${definition.exportName}`;
+const rpcOperation = (definition: FunctionIR, tag: string): { operation: Record<string, unknown>; pathKey: string } => {
+    const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
 
     const requestSchema: JsonSchema = {
         additionalProperties: false,
@@ -237,9 +236,8 @@ const cacheResponseHeaders = (cache: ExposeCacheIR | undefined, method: "get" | 
  * cannot drift from the live surface). A `query` maps to `GET` with its args as
  * query parameters; a `mutation`/`action` maps to `POST` with a JSON request body.
  */
-const restOperation = (definition: FunctionIR): { method: "get" | "post"; operation: Record<string, unknown>; path: string } | undefined => {
-    const tag = sanitizeNamespace(definition.filePath);
-    const functionPath = `${tag}:${definition.exportName}`;
+const restOperation = (definition: FunctionIR, tag: string): { method: "get" | "post"; operation: Record<string, unknown>; path: string } | undefined => {
+    const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
     const path = restPathForFunction(functionPath);
 
     if (path === undefined) {
@@ -305,6 +303,8 @@ const restOperation = (definition: FunctionIR): { method: "get" | "post"; operat
 interface OpenApiEmitInput {
     functions: ReadonlyArray<FunctionIR>;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
+    /** The app's modules, passed only once it declares one; an operation in a module folder is tagged with the module instead of its file namespace. */
+    modules?: ReadonlyArray<ModuleIR>;
     /** `info.version`; defaults to `"0.0.0"` with a TODO when the project version is unknown. */
     version?: string;
 }
@@ -321,7 +321,8 @@ interface OpenApiEmitInput {
  * requestBody pinning `functionPath` + typed `args`. `internal`/`stream`
  * functions are excluded (unreachable / not invocable on the external RPC path).
  *
- * Operations are grouped into `tags` by file namespace, and every operation
+ * Operations are grouped into `tags` by module (when the file sits in a
+ * `defineModule` folder) or else by file namespace, and every operation
  * references a reusable `LunoraError` error-response component enumerating the
  * standard error codes. Borrows oRPC's per-procedure-operation + tag-grouping +
  * internal-filtering structure; the JSON Schema dialect matches `@lunora/values`
@@ -331,18 +332,23 @@ interface OpenApiEmitInput {
  */
 const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> => {
     const version = input.version ?? "0.0.0";
-    const paths: Record<string, Record<string, unknown>> = {};
+    // Null-prototype maps: route paths and methods come from app code, and a
+    // `__proto__` key must stay an ordinary entry, never reach Object.prototype.
+    const paths: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+    const pathItemFor = (path: string): Record<string, unknown> => paths[path] ?? (Object.create(null) as Record<string, unknown>);
     const tagNames = new Set<string>();
+    const modules = input.modules ?? [];
+    const tagOf = (filePath: string): string => moduleTagOf(modules, filePath);
 
     // HTTP routes: real REST paths. Multiple verbs on one path merge into the
     // same path-item object.
     for (const route of input.httpRoutes) {
         const openApiPath = toOpenApiPath(route.path);
-        const pathItem = paths[openApiPath] ?? {};
+        const pathItem = pathItemFor(openApiPath);
 
-        pathItem[route.method.toLowerCase()] = httpRouteOperation(route);
+        pathItem[route.method.toLowerCase()] = httpRouteOperation(route, tagOf(route.filePath));
         paths[openApiPath] = pathItem;
-        tagNames.add(sanitizeNamespace(route.filePath));
+        tagNames.add(tagOf(route.filePath));
     }
 
     // RPC functions: one POST operation each on a synthetic `/_lunora/rpc#<path>`.
@@ -351,10 +357,10 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
     const rpcFunctions = input.functions.filter((definition) => definition.visibility !== "internal" && definition.kind !== "stream");
 
     for (const definition of rpcFunctions) {
-        const { operation, pathKey } = rpcOperation(definition);
+        const { operation, pathKey } = rpcOperation(definition, tagOf(definition.filePath));
 
         paths[pathKey] = { post: operation };
-        tagNames.add(sanitizeNamespace(definition.filePath));
+        tagNames.add(tagOf(definition.filePath));
     }
 
     // Opt-in public REST surface (plan 167): a REAL REST path per
@@ -365,13 +371,13 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
             continue;
         }
 
-        const rest = restOperation(definition);
+        const rest = restOperation(definition, tagOf(definition.filePath));
 
         if (rest === undefined) {
             continue;
         }
 
-        const pathItem = paths[rest.path] ?? {};
+        const pathItem = pathItemFor(rest.path);
 
         pathItem[rest.method] = rest.operation;
         paths[rest.path] = pathItem;
@@ -380,7 +386,9 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
     const tags = [...tagNames]
         .toSorted((a, b) => a.localeCompare(b))
         .map((name) => {
-            return { description: `Operations declared in \`lunora/${name}\`.`, name };
+            const tagged = modules.find((candidate) => candidate.name === name);
+
+            return { description: tagged?.description ?? `Operations declared in \`lunora/${name}\`.`, name };
         });
 
     const document = {
@@ -423,7 +431,9 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
             version,
         },
         openapi: "3.1.0",
-        paths,
+        // Plain objects again for the emitted document: `Object.fromEntries` and a
+        // spread both define data properties, so a `__proto__` key stays an entry.
+        paths: Object.fromEntries(Object.entries(paths).map(([path, item]) => [path, { ...item }])),
         tags,
     };
 

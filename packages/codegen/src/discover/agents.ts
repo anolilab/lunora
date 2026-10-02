@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 // The /naming subpath keeps codegen from loading the agent runtime (and the
 // AI SDK behind it) just to derive deploy names.
-import { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "@lunora/agent/naming";
+import { agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "@lunora/agent/naming";
 import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -71,7 +71,6 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     }
 
     const ir: AgentIR = {
-        bindingName: agentBindingName(exportName),
         className: agentClassName(exportName),
         exportName,
         name: agentDefaultName(exportName),
@@ -170,16 +169,15 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
 };
 
 /**
- * Reject agents whose deployed `name`, `bindingName`, or `className` collide
- * across exports — all three flow into wrangler/generated output (`workflows[].name`,
- * the `AGENT_*` Workflow binding, and the `_generated/agents.ts` class), and agent
- * naming case-folds (`supportBot`/`SupportBot` both derive `AGENT_SUPPORT_BOT`), so a
- * collision on any one of them silently clobbers a binding or a generated class.
- * Mirrors `discover/workflows.ts`'s `assertUniqueNames`, extended with `className`.
+ * Reject agents whose deployed `name` or `className` collide across exports —
+ * both flow into wrangler/generated output (`exports.<Class>.name`, and the
+ * `_generated/agents.ts` class that is also the `exports` key), and agent naming
+ * case-folds (`supportBot`/`SupportBot` both derive `SupportBotAgentWorkflow`), so
+ * a collision on either silently clobbers an export or a generated class.
+ * Mirrors `discover/workflows.ts`'s `assertUniqueNames`.
  */
 const assertUniqueNames = (agents: ReadonlyArray<AgentIR>): void => {
     const seenNames = new Map<string, string>();
-    const seenBindings = new Map<string, string>();
     const seenClasses = new Map<string, string>();
 
     for (const agent of agents) {
@@ -194,18 +192,6 @@ const assertUniqueNames = (agents: ReadonlyArray<AgentIR>): void => {
         }
 
         seenNames.set(agent.name, agent.exportName);
-
-        const priorBinding = seenBindings.get(agent.bindingName);
-
-        if (priorBinding !== undefined) {
-            throw new LunoraError(
-                "DUPLICATE_AGENT_BINDING",
-                `Duplicate agent binding "${agent.bindingName}": produced by both "${priorBinding}" and "${agent.exportName}". Agent export names must yield unique binding names.`,
-                { status: 500 },
-            );
-        }
-
-        seenBindings.set(agent.bindingName, agent.exportName);
 
         const priorClass = seenClasses.get(agent.className);
 

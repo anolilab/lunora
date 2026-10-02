@@ -45,6 +45,80 @@ export interface AiGatewayOptions {
 }
 
 /**
+ * Options for the raw `ctx.ai.run(...)` passthrough — the Workers AI binding's
+ * third argument. Unlisted keys are forwarded to the binding unchanged.
+ * @experimental
+ */
+export interface AiRunOptions {
+    [key: string]: unknown;
+    /** Route this call through a Cloudflare AI Gateway. Defaults to the gateway `createAi` resolved. */
+    gateway?: AiGatewayOptions;
+
+    /**
+     * Fail at once instead of waiting in the Workers AI capacity queue when no
+     * capacity is free. The rejection surfaces as a `LunoraError` with code
+     * `RATE_LIMITED` (Workers AI error `3040`, HTTP 429).
+     */
+    rejectIfBusy?: boolean;
+}
+
+/**
+ * Per-call settings for `ctx.ai.model(...)`. Applied to Workers AI model ids
+ * (`@cf/…`) only; a gateway slug or a bring-your-own model ignores them.
+ * @experimental
+ */
+export interface AiModelOptions {
+    /**
+     * Fail at once instead of waiting in the Workers AI capacity queue. The
+     * provider reports the rejection as an AI SDK `APICallError` with
+     * `statusCode: 429`, which the AI SDK retries unless the call sets
+     * `maxRetries: 0`.
+     */
+    rejectIfBusy?: boolean;
+}
+
+/**
+ * Structural slice of the span handle `ctx.trace` hands its body — enough to
+ * attach a model call's usage once it is known. Declared here rather than
+ * imported so `@lunora/ai` takes no dependency on `@lunora/server`; the real
+ * handle is assignable to it.
+ * @experimental
+ */
+export interface AiSpan {
+    setAttribute: (key: string, value: unknown) => void;
+    setAttributes: (fields: Record<string, unknown>) => void;
+}
+
+/**
+ * Structural slice of `ctx.trace` (the server `LunoraTracer`): runs `function_`
+ * inside a named span and hands it the span's {@link AiSpan}.
+ * @experimental
+ */
+export type AiTracer = <T>(name: string, function_: (trace: AiTracer, span: AiSpan) => Promise<T> | T, attributes?: Record<string, unknown>) => Promise<T>;
+
+/**
+ * Structural slice of `ctx.metrics` (the server `LunoraMetrics`) — only the
+ * counter, which is what usage accounting needs.
+ * @experimental
+ */
+export interface AiMetrics {
+    count: (name: string, value?: number, attributes?: Record<string, unknown>) => void;
+}
+
+/**
+ * Where `ctx.ai` reports model usage. The generated `ctx.ai` passes the
+ * function's own `ctx.trace` / `ctx.metrics`, so every call made through
+ * `ctx.ai.model(...)` gets an `ai.generate` / `ai.stream` span and
+ * `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` /
+ * `gen_ai.usage.cost` counters attributed to that function.
+ * @experimental
+ */
+export interface AiTelemetry {
+    metrics?: AiMetrics;
+    trace?: AiTracer;
+}
+
+/**
  * `LunoraAiOptions` is part of the experimental `@lunora/ai` API and may change without a major version bump.
  * @experimental
  */
@@ -114,14 +188,23 @@ export interface LunoraAiOptions {
      * (e.g. `safePrompt`) before handing it to `@lunora/ai`.
      */
     provider?: WorkersAiProviderLike;
+
+    /**
+     * Record every language-model call resolved by `model()` — a span plus
+     * token and cost counters (see {@link AiTelemetry}). Omitted, models are
+     * returned unwrapped.
+     */
+    telemetry?: AiTelemetry;
 }
 
 /**
  * A model to run against. The AI SDK's {@link LanguageModel} already admits a
  * bare `string`, so this alias covers both arms of the provider-agnostic seam:
- * a string id is the Workers AI convenience path (resolved by `ctx.ai.model`),
- * a built model object is bring-your-own (`@ai-sdk/openai`, `@ai-sdk/anthropic`,
- * `@ai-sdk/google`, OpenRouter, …).
+ * a string id is resolved by `ctx.ai.model` — a Workers AI id (`@cf/…`), a
+ * `"<provider>/<model>"` slug (`anthropic/claude-sonnet-5`, `openai/gpt-5`, …)
+ * routed through Cloudflare AI Gateway, or a gateway dynamic route
+ * (`dynamic/<route>`); a built model object is bring-your-own (`@ai-sdk/openai`,
+ * `@ai-sdk/anthropic`, `@ai-sdk/google`, OpenRouter, …).
  * @experimental
  */
 export type ModelInput = LanguageModel;
@@ -145,8 +228,15 @@ export type EmbeddingModelInput = EmbeddingModel | string;
 export interface LunoraAi {
     /** Resolve an {@link EmbeddingModel}: a string → Workers AI, an object → passthrough. */
     embeddingModel: (model?: EmbeddingModelInput) => EmbeddingModel;
-    /** Resolve a {@link LanguageModel}: a string → Workers AI, an object → passthrough. */
-    model: (model?: ModelInput) => LanguageModel;
+
+    /**
+     * Resolve a {@link LanguageModel}: a `@cf/…` id → Workers AI, a
+     * `"<provider>/<model>"` slug or `dynamic/<route>` → Cloudflare AI Gateway
+     * over the same binding (Unified Billing or the gateway's stored keys — no
+     * provider key in the app) or, with `LUNORA_AI_PROXY_URL` set, to that
+     * OpenAI-compatible proxy; an object → passthrough.
+     */
+    model: (model?: ModelInput, options?: AiModelOptions) => LanguageModel;
 
     /**
      * Raw Workers AI binding passthrough (void-style `ai.run`). Bypasses the AI
@@ -154,7 +244,7 @@ export interface LunoraAi {
      * translation) not surfaced through the provider. Throws if no binding was
      * supplied.
      */
-    run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+    run: (model: string, inputs: Record<string, unknown>, options?: AiRunOptions) => Promise<unknown>;
     /** The underlying Workers AI provider — `ai.workersai("@cf/...")` for a raw model. */
     workersai: WorkersAiProviderLike;
 }

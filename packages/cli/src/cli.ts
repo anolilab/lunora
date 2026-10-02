@@ -10,6 +10,7 @@ import versionCommand from "@visulima/cerebro/command/version";
 
 import { addCommand } from "./commands/add";
 import { advisorCommand } from "./commands/advisor";
+import { aiCommand } from "./commands/ai";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
@@ -39,6 +40,7 @@ import { rulesCommand } from "./commands/rules";
 import { runCommand } from "./commands/run";
 import { sdkCommand } from "./commands/sdk";
 import { seedCommand } from "./commands/seed";
+import { shardsCommand } from "./commands/shards";
 import { verifyCommand } from "./commands/verify";
 import viewCommand from "./commands/view";
 import { detectPackageManager } from "./util/detect-package-manager";
@@ -58,6 +60,7 @@ const COMMANDS = [
     "build",
     "deploy",
     "containers",
+    "ai",
     "prepare",
     "link",
     "deployments",
@@ -69,6 +72,7 @@ const COMMANDS = [
     "export",
     "import",
     "seed",
+    "shards",
     "backup",
     "eval",
     "verify",
@@ -150,6 +154,7 @@ const CLI_COMMANDS = [
     buildCommand,
     deployCommand,
     containersCommand,
+    aiCommand,
     prepareCommand,
     linkCommand,
     deploymentsCommand,
@@ -161,6 +166,7 @@ const CLI_COMMANDS = [
     exportCommand,
     importCommand,
     seedCommand,
+    shardsCommand,
     introspectCommand,
     backupCommand,
     evalCommand,

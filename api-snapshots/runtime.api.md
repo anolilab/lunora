@@ -607,6 +607,7 @@ interface ExecutionContextLike {
             tags?: string[];
         }) => Promise<unknown>;
     };
+    exports?: unknown;
     passThroughOnException?: () => void;
     waitUntil?: (promise: Promise<unknown>) => void;
 }
@@ -2043,6 +2044,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 interface ShardRegistry {
+    invalidate?: (table?: string) => void;
     listShardKeys: (table: string) => Promise<ReadonlyArray<string>> | ReadonlyArray<string>;
 }
 ```
@@ -2235,6 +2237,7 @@ interface WorkerOptions {
     adminToken?: string;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
+    architecture?: unknown;
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;

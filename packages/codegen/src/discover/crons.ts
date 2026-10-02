@@ -193,19 +193,19 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
 
 /** Build a workflow target IR from a resolved {@link WorkflowIR}. */
 const workflowTarget = (workflow: WorkflowIR): Pick<CronJobIR, "workflow"> => {
-    return { workflow: { binding: workflow.bindingName, exportName: workflow.exportName } };
+    return { workflow: { className: workflow.className, exportName: workflow.exportName } };
 };
 
 /**
  * Build a workflow target IR from a resolved {@link AgentIR}. An agent compiles
- * onto a Cloudflare Workflow (its `AGENT_*` binding IS a Workflow binding), so a
+ * onto a Cloudflare Workflow (its `ctx.exports` entry IS a Workflow binding), so a
  * cron that targets it rides the exact same durable-workflow start path as a
  * `workflows.NAME` target — the runtime cron dispatcher calls `.create()` on the
  * binding per fire, and the agent's flat `AgentRunInput` args become the run
  * params.
  */
 const agentTarget = (agent: AgentIR): Pick<CronJobIR, "workflow"> => {
-    return { workflow: { binding: agent.bindingName, exportName: agent.exportName } };
+    return { workflow: { className: agent.className, exportName: agent.exportName } };
 };
 
 /**
@@ -249,7 +249,7 @@ const resolveReferenceAccess = <Definition>(
 /**
  * Resolve the cron's target argument into either a function dispatch
  * (`{ functionPath }`) or a durable-workflow start
- * (`{ workflow: { binding, exportName } }`).
+ * (`{ workflow: { className, exportName } }`).
  *
  * Targets mirror the generated reference objects in `_generated/api.ts`: a
  * `workflows.NAME` access is the canonical generated workflow reference; an

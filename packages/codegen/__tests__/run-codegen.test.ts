@@ -982,7 +982,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
             const result = runCodegen({ projectRoot: workdir });
 
             expect(result.generated.shard).toContain('import { createAi } from "@lunora/ai"');
-            expect(result.generated.shard).toContain("ai,");
+            expect(result.generated.shard).toContain("ctx.ai = ai;");
             expect(result.generated.server).toContain("readonly ai: LunoraAi;");
         });
 
@@ -3654,7 +3654,6 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 schema: { tables: [], vectorIndexes: [] },
                 workflows: [
                     {
-                        bindingName: "WORKFLOW_ORDER_PIPELINE",
                         className: "OrderPipelineWorkflow",
                         exportName: "orderPipeline",
                         name: "order-pipeline",
@@ -3667,7 +3666,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("const LUNORA_WORKFLOWS_INFO = JSON.parse(");
             expect(output).toContain(") as WorkflowsResult;");
             expect(emittedJsonData(output, "LUNORA_WORKFLOWS_INFO")).toStrictEqual({
-                workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+                workflows: [{ className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
             });
         });
 
@@ -4323,22 +4322,25 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("wires ctx.ai into the ShardDO when AI is used", () => {
-            expect.assertions(8);
+            expect.assertions(9);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
             const output = emitShard({ schema, hasAi: true });
 
             // Pull the AI helper + binding type, expose the override config field,
-            // and assemble ctx.ai (built from env.AI, with a throwing stub fallback).
+            // and assemble ctx.ai (built from env.AI; createAi itself throws on use
+            // when nothing backs it, so no stub is emitted).
             expect(output).toContain('import { createAi } from "@lunora/ai"');
             expect(output).toContain("AiBindingLike");
             expect(output).toContain("ai?: (env: Record<string, unknown>) => AiBindingLike;");
-            expect(output).toContain("const aiStub: LunoraAi");
-            expect(output).toContain(
-                "createAi({ binding: aiBinding as AiBindingLike, env: env as Record<string, unknown>, metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId } })",
-            );
-            expect(output).toContain("ai,");
+            expect(output).not.toContain("aiStub");
+            // The function's own tracer + metrics record every model call's usage.
+            expect(output).toContain("telemetry: { metrics, trace },");
+            // Inference is action-only: ctx.ai is attached inside the isAction
+            // block, never on a query/mutation ctx.
+            expect(output).toMatch(/if \(isAction\) \{[\s\S]*?const ai: LunoraAi = createAi\(\{[\s\S]*?ctx\.ai = ai;\n {12}\}/u);
+            expect(output).not.toMatch(/^ {16}ai,$/mu);
             // Correlation ids are threaded into the gateway metadata, reading the
             // dispatch trace under the same anchor guard the tracer uses.
             expect(output).toContain("const aiTrace = options.identity ? undefined : this.getCurrentTrace();");
@@ -4440,7 +4442,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("stubs every member of the Browser surface, including the session ones", () => {
-            expect.assertions(7);
+            expect.assertions(11);
 
             // The stub is a template string here, and `@lunora/codegen` does not
             // depend on `@lunora/browser`, so nothing typechecks it against the
@@ -4450,7 +4452,19 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // widen it deliberately when `Browser` grows.
             const output = emitShard({ hasBrowser: true, schema: { tables: [], vectorIndexes: [] } });
 
-            for (const member of ["connect", "content", "launch", "pdf", "scrape", "screenshot", "sessions"]) {
+            for (const member of [
+                "cancelCrawl",
+                "connect",
+                "content",
+                "crawl",
+                "crawlResult",
+                "launch",
+                "pdf",
+                "quickAction",
+                "scrape",
+                "screenshot",
+                "sessions",
+            ]) {
                 expect(output).toContain(`    ${member}: async () => {`);
             }
         });
@@ -4619,12 +4633,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                     },
                 ],
                 hasAi: true,
-                workflows: [{ bindingName: "WORKFLOW_ORDERS", className: "OrdersWorkflow", exportName: "orders", name: "orders", steps: [] }],
+                workflows: [{ className: "OrdersWorkflow", exportName: "orders", name: "orders", steps: [] }],
             });
 
             expect(server).toContain("readonly AI?: unknown;");
             expect(server).toContain("readonly CONTAINER_TRANSCODER?: unknown;");
-            expect(server).toContain("readonly WORKFLOW_ORDERS?: unknown;");
+            expect(server).not.toContain("OrdersWorkflow?: unknown;");
         });
 
         it("wires ctx.kv onto EVERY ctx (a KV read is allowed in deterministic handlers)", () => {
@@ -4714,6 +4728,49 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(shard).toContain("createQueueContext(env, LUNORA_QUEUES)");
             expect(shard).toContain('{ binding: "QUEUE_EMAIL", exportName: "emailQueue", name: "email-queue" }');
+        });
+
+        it("wires ctx.topics to each subscription's binding and keeps subscriptions off ctx.queues", () => {
+            expect.assertions(9);
+
+            const queues = [
+                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "push" as const, name: "email-queue", tuning: {} },
+                { bindingName: "QUEUE_AUDIT", exportName: "audit", mode: "push" as const, name: "audit", topic: "signups", tuning: {} },
+                { bindingName: "QUEUE_WELCOME", exportName: "welcome", mode: "push" as const, name: "welcome", topic: "signups", tuning: {} },
+            ];
+            const topics = [{ exportName: "orders" }, { exportName: "signups" }];
+            const server = emitServer({ queues, topics });
+
+            expect(server).toContain('import type { QueueProducer, TopicPublisher } from "@lunora/queue";');
+            // eslint-disable-next-line no-secrets/no-secrets -- an emitted type expression, not a credential
+            expect(server).toContain("readonly signups: TopicPublisher<QueueBodyOf<typeof lunoraQueueDefinitions.signups>>;");
+            // A topic nobody subscribes to yet is still publishable.
+            expect(server).toContain("readonly orders: TopicPublisher<");
+            expect(server).not.toContain("readonly welcome: QueueProducer");
+            expect(ctxInterface(server, "MutationCtx")).toContain("readonly topics: LunoraTopics;");
+            expect(ctxInterface(server, "ActionCtx")).toContain("readonly topics: LunoraTopics;");
+            expect(ctxInterface(server, "QueryCtx")).not.toContain("readonly topics:");
+
+            const shard = emitShard({ queues, schema: { tables: [], vectorIndexes: [] }, topics });
+
+            expect(shard).toContain(
+                '{ exportName: "signups", subscriptions: [{ binding: "QUEUE_AUDIT", exportName: "audit" }, { binding: "QUEUE_WELCOME", exportName: "welcome" }] },',
+            );
+            expect(shard).not.toContain('exportName: "welcome", name: "welcome"');
+        });
+
+        it("emits ctx.topics without ctx.queues when every queue is a subscription", () => {
+            expect.assertions(4);
+
+            const queues = [{ bindingName: "QUEUE_WELCOME", exportName: "welcome", mode: "push" as const, name: "welcome", topic: "signups", tuning: {} }];
+            const topics = [{ exportName: "signups" }];
+            const server = emitServer({ queues, topics });
+            const shard = emitShard({ queues, schema: { tables: [], vectorIndexes: [] }, topics });
+
+            expect(server).not.toContain("LunoraQueues");
+            expect(server).toContain('import type { TopicPublisher } from "@lunora/queue";');
+            expect(shard).toContain("createTopicContext(env, LUNORA_TOPICS)");
+            expect(shard).not.toContain("createQueueContext");
         });
 
         it("gives each push consumer its own producer binding, which a last-delivery decline is re-enqueued through", () => {

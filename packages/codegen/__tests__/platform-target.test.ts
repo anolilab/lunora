@@ -192,14 +192,19 @@ describe("gatePlatformFeatures", () => {
     // feature, so they are gated from the app's declaration, not discovered in
     // production. Worker Loaders (`jsCodeTool`) exist on both Workers hosts only.
     it.each([
-        ["celld", ["containerEgressPolicy", "workflowRollback"]],
-        ["node", ["containerEgressPolicy", "workerLoaders"]],
+        ["celld", ["containerEgressPolicy", "containerRuntimeScheduling", "workflowRollback"]],
+        ["node", ["containerEgressPolicy", "containerRuntimeScheduling", "workerLoaders"]],
         ["cloudflare", []],
-    ])("gates step rollback, container egress policies and worker loaders per target (%s)", async (target, refused) => {
+    ])("gates step rollback, container egress policies, container scheduling and worker loaders per target (%s)", async (target, refused) => {
         expect.assertions(1);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        const result = gatePlatformFeatures(ALL_OFF, target, { containerEgressPolicy: true, workerLoaders: true, workflowRollback: true });
+        const result = gatePlatformFeatures(ALL_OFF, target, {
+            containerEgressPolicy: true,
+            containerRuntimeScheduling: true,
+            workerLoaders: true,
+            workflowRollback: true,
+        });
 
         expect(
             result.diagnostics
@@ -209,8 +214,31 @@ describe("gatePlatformFeatures", () => {
         ).toStrictEqual(refused);
     });
 
+    it.each([
+        ["celld", true],
+        ["node", true],
+        ["cloudflare", false],
+    ])("gates scheduled workflows per target (%s)", async (target, refused) => {
+        expect.assertions(1);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { workflowSchedules: true });
+
+        expect(result.signals.workflowSchedules).toBe(!refused);
+    });
+
+    it.each(["celld", "node", "cloudflare"])("lets topics through on every target, since each rates them emulated (%s)", async (target) => {
+        expect.assertions(2);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { queues: true, topics: true });
+
+        expect(result.signals.topics).toBe(true);
+        expect(result.diagnostics.filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toStrictEqual([]);
+    });
+
     it("gates the celld target on what celld actually lacks, not on the whole surface", async () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
         const usage: FeatureUsage = { ...ALL_OFF, ai: true, kv: true, mail: true, scheduler: true, storage: true, vectors: true };
@@ -221,11 +249,10 @@ describe("gatePlatformFeatures", () => {
         expect(result.usage.storage).toBe(true);
         expect(result.usage.scheduler).toBe(true);
         expect(result.usage.mail).toBe(true);
+        // Emulated through LUNORA_AI_PROXY_URL, so ctx.ai is still emitted.
+        expect(result.usage.ai).toBe(true);
         expect(result.diagnostics.every((diagnostic) => diagnostic.name === "platform_unsupported_feature")).toBe(true);
-        expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
-            "ai",
-            "vectors",
-        ]);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["vectors"]);
     });
 });
 

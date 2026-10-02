@@ -53,6 +53,18 @@ const AI_GATEWAY_TAGS_ENV = "LUNORA_AI_GATEWAY_TAGS";
 const AI_GATEWAY_TOKEN_ENV = "LUNORA_AI_GATEWAY_TOKEN";
 ```
 
+### `AI_PROXY_TOKEN_ENV` (const)
+
+```ts
+const AI_PROXY_TOKEN_ENV = "LUNORA_AI_PROXY_TOKEN";
+```
+
+### `AI_PROXY_URL_ENV` (const)
+
+```ts
+const AI_PROXY_URL_ENV = "LUNORA_AI_PROXY_URL";
+```
+
 ### `AiBindingLike` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -62,6 +74,30 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `AiGatewayOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiMetrics` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiModelOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiRunOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiSpan` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiTelemetry` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiTracer` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

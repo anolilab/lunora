@@ -40,8 +40,8 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "The workflow half exists, the inference half does not: Workers AI is not a celld binding, so a generated agent's loop has no model to call. An experimental HTTP adapter behind CELLD_AI_URL is not an `env.AI` binding the emitted context can resolve",
         },
         ai: {
-            level: "unsupported",
-            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers). celld ships an experimental Workers AI HTTP adapter behind CELLD_AI_URL, which is a daemon-level escape hatch, not a binding on env",
+            level: "emulated",
+            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so `@cf/…` ids, `ctx.ai.run` and their `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway. celld's experimental CELLD_AI_URL Workers AI adapter is a daemon-level escape hatch, not a binding on env",
         },
         analytics: { level: "unsupported", note: "Analytics Engine is not a celld binding type" },
         authJurisdictionMove: {
@@ -57,9 +57,13 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "celld does not implement outbound interception: a container with an allowedHosts / deniedHosts / interceptHttps policy refuses to start (`interceptAllOutboundHttp()` is not implemented in celld). Egress is instead fenced per node — a container reaches the Internet and nothing of the node's own",
         },
+        containerRuntimeScheduling: {
+            level: "unsupported",
+            note: "celld refuses container snapshots, and the durable_object scheduling policy (a start that picks its image from ctx.container.images) has not been verified against celld — rated unsupported until it is",
+        },
         containers: {
             level: "native",
-            note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `LunoraContainer` on `@cloudflare/containers` runs as published — a request routes worker → container Durable Object → the container's port. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral). An egress policy is refused (see `containerEgressPolicy`), as are `inspect()` and snapshots; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally",
+            note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `LunoraContainer` on `@cloudflare/containers` runs as published — a request routes worker → container Durable Object → the container's port. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral). An egress policy is refused (see `containerEgressPolicy`), as are `inspect()` and snapshots; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally. Whether celld implements the native `ctx.container.exec()` is not verified; where it does not, `exec` falls back to the image serving `/__lunora/exec`",
         },
         cronTriggers: {
             level: "native",
@@ -67,7 +71,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         crossShardFanout: {
             level: "emulated",
-            note: "Same coordinator + relay tier as on Cloudflare, over cells rather than Durable Objects. It rides namespace stubs, so the celld gap that would bite — an RPC stub cannot cross an isolate boundary — does not apply to the fetch-shaped hops the tier makes; a remote cell call cannot be retried once its body starts streaming, because celld keeps no replay copy",
+            note: "Same coordinator + relay tier as on Cloudflare, over cells rather than Durable Objects. It rides namespace stubs, so the celld gap that would bite — an RPC stub cannot cross an isolate boundary — does not apply to the fetch-shaped hops the tier makes; a remote cell call cannot be retried once its body starts streaming, because celld keeps no replay copy. Shard keys come from ShardRegistryDO exactly as on Cloudflare: each shard registers on its first write to a .shardBy() table, so one written before the registry was bound is not listed until it is written again",
         },
         durableStreams: {
             level: "emulated",
@@ -155,6 +159,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "No Secrets Store equivalent — `vars` is the only value-carrying binding celld accepts, and `celld deploy` stores them as plain strings in the deployment in the fleet bucket, readable by anyone with bucket read access (node-level injection via CELLD_VAR_* was removed in v0.5). @lunora/platform-celld's README covers guarding the bucket and fetching real secrets from a secret manager at runtime",
         },
+        topics: {
+            level: "emulated",
+            note: "The same fan-out as on Cloudflare: each subscription is its own celld queue and a publish sends to every one. Inherits the `queues` row's limits per subscription (256 concurrent producer calls per queue owner, four-day retention)",
+        },
         serverReactors: {
             level: "emulated",
             note: "Reactors ride the existing post-write refresh drain, exactly as on Cloudflare. celld supplies the two properties that make that correct — one event at a time per cell, and `waitUntil` to keep the drain alive past the response — and has no notion of a server-side subscription of its own",
@@ -191,9 +199,13 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "celld does not implement step rollback: a step.do with a rollback option fails at first use (`step rollbackOptions are not implemented in celld`)",
         },
+        workflowSchedules: {
+            level: "unsupported",
+            note: "Not verified against celld: whether it reads a workflows[] entry's `schedules` list and starts instances from it is unknown, so a scheduled workflow is refused rather than deployed onto a host that may never start it. Rate it once that is checked",
+        },
         workflows: {
             level: "native",
-            note: "Workflows bindings with steps, sleeps, events and retries. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable (see `workflowRollback`). The studio's Workflows view reads Cloudflare's REST API and shows nothing for a celld fleet",
+            note: "Workflows bindings with steps, sleeps, events and retries. celld has no workflow `exports`, so the deploy projection turns each `exports.<Class>` workflow into a `workflows[]` binding named after the class, which the runtime reads off `env` when `ctx.exports` has no match. Differences to keep in mind: `run()` replays from the start so non-step code runs again, a crash after a step's side effect can re-run its callback, step results / event payloads / parameters are capped at 1 MiB each, non-step work cannot stay pending past 60 s, finished instances are retained at most 30 days, `locationHint` is accepted and ignored, and rollback plus sensitive or `ReadableStream` step results are unavailable (see `workflowRollback`). Instance `delete` and `subscribe`, binding `deleteBatch`, function-valued `retries.delay`, and the `limits` / `default_retention` binding settings have not been verified against celld. The studio's Workflows view reads Cloudflare's REST API and shows nothing for a celld fleet",
         },
     },
 };

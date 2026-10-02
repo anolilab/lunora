@@ -1,3 +1,320 @@
+## @lunora/platform [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.46...@lunora/platform@1.0.0-alpha.47) (2026-10-01)
+
+### Features
+
+* **queue:** add pub/sub topics over cloudflare queues ([#916](https://github.com/anolilab/lunora/issues/916)) ([eba0175](https://github.com/anolilab/lunora/commit/eba0175f586e804555d0e0c485a3a93d73f15d1f))
+
+## @lunora/platform [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.45...@lunora/platform@1.0.0-alpha.46) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+## @lunora/platform [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.44...@lunora/platform@1.0.0-alpha.45) (2026-09-30)
+
+### ⚠ BREAKING CHANGES
+
+* `EmitAppOptions.tableNames` is replaced by `tables`
+(`{ name, shardMode }[]`).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(runtime): resolve the shard registry stub per call
+
+createDynamicShardRegistry cached its registry stub for its lifetime, and
+the generated worker builds its options once per isolate. workerd refuses
+I/O on a stub created during a different request, so every request after
+the first failed with "Cannot perform I/O on behalf of a different request".
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(do): register written .shardBy() tables with the shard registry
+
+A Durable Object namespace cannot be enumerated, so cross-shard export,
+CDC sync and migrations only reach the shards ShardRegistryDO lists, and
+nothing ever registered one. After a write flushes, ShardDO now registers
+its key for each `.shardBy()` table it touched, once per table per
+instance, through a `shardRegistry()` hook the generated subclass
+overrides. The stub is pinned to the DO's own jurisdiction (via the new
+shard-engine `stubByName`, split out of `siblingStub`). A failed
+registration is logged and retried on the next write, never thrown at a
+caller whose write already committed.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(codegen): wire the shard registry into generated apps
+
+For a schema with `.shardBy()` tables, codegen now emits:
+
+- `.shardRegistry((env) => env.SHARD_REGISTRY)` on the app builder, which
+  feeds the namespace to the shard (so it registers what it writes) and
+  gives the worker a coordinator over `createDynamicShardRegistry`, so
+  export, CDC sync and migrations reach every registered shard;
+- `_generated/shardRegistry.ts`, re-exporting `ShardRegistryDO`.
+
+As with the scheduler module, the file's existence drives the rest:
+`@lunora/vite` composes `.shardRegistry(...)` and star-re-exports the class
+into `virtual:lunora/worker`, and `@lunora/config` maps `ShardRegistryDO`
+to `SHARD_REGISTRY` so `lunora dev` reconciles the binding and migration.
+The default registry's refusal now names `.shardRegistry(...)`.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(templates): bind the shard registry in every .shardBy() starter
+
+All 14 templates shard `messages` by `channelId`, so a fresh app's
+`lunora export` and backups refused it. Each now binds SHARD_REGISTRY to
+ShardRegistryDO in its v1 migration; hand-written entries declare
+`.shardRegistry(...)` and export the class, while `virtual:lunora/worker`
+templates get both from the composed entry. The playground is wired the
+same way, with the class added in a v2 migration.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(docs): document the shard registry
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(do): keep replicas and relays out of the shard registry
+
+A read replica (`<owner>::replica::<region>`) or relay is a ShardDO in the
+same namespace, and a replica's CDC apply flushes like any write, so it
+registered itself as a shard. It refuses admin RPCs with 421, so every
+later export, backup and migration of that table failed with a 502.
+
+Registration now also runs past the response (deferPastResponse) instead
+of on the write's tail, claims each table before the round trip so
+concurrent first writes send one request, bounds the request with a 5s
+timeout, and backs off 30s after a failure. The /register call moves into
+shard-registry-do next to the route it targets.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(runtime): settle the export fan-out before committing a status
+
+Export now runs its shard-local fan-out (prepareExportRows) before it
+builds the Response, so a failed shard answers 502 and a `.shardBy()`
+table the default registry cannot list answers 400, instead of a 200
+whose body ends early. That replaces the separate discovery pre-check.
+
+The default registry answers a root (or undeclared) table with the
+default shard itself rather than an empty list, because fan-out, rank and
+shard traffic have no empty-list fallback and reached no shard at all.
+Its refusal now names the unbound SHARD_REGISTRY case. `requireCoordinator`
+in the orchestration routes became `assertAdminPost`, which is all it did.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(cli): only blame the dev server for an unreachable local worker
+
+adminFetch now adds the "is the dev server running?" hint only for a
+loopback target, and rethrows anything that is not a network TypeError
+(an abort, a timeout) as it is. It takes the admin commands' own init
+shape, so the call sites lose their casts, and backup's PITR/prune legs
+use it too. The six `typeof fetchImpl` guards it made unreachable are
+gone. `lunora import` now says no batch was acknowledged, not that no
+row was written, and keeps the resume advice.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* refactor(codegen): one isShardByTable check and a fragment module
+
+`isShardByTable` in ir.ts replaces four spellings of the `.shardBy()`
+check. The shard registry's config field, constant and override move into
+`emitShardRegistryFragments` (shard-bindings), which brings shard.ts back
+under 1k lines. `EmitAppOptions.tables` is `Pick<TableIR, ...>` and
+`emitShardRegistry` takes the table list instead of two booleans.
+Orphaned and inaccurate comments in emit-app are fixed. Config derives the
+composed entry's framework DOs from one module-to-class map.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs: state the shard-registry mapping on every host
+
+Node and celld capability notes now say where fan-out shard keys come
+from (the Node host's own registry; ShardRegistryDO on celld). Templates
+and the playground export ShardRegistryDO from the generated
+shardRegistry module the docs show, and analog/nuxt forward it from their
+server module. The sharding docs note that a key is never removed and
+that the 30s delay applies to every worker.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat: prune empty shards from the shard registry
+
+A shard key stayed registered after its shard emptied, so every export,
+backup, CDC sync and migration kept visiting it. `lunora shards prune`
+(POST /_lunora/admin/shard-registry/prune) asks every registered shard to
+release the `.shardBy()` tables it holds no rows of.
+
+The shard decides, through a new `__lunora_admin__:releaseShardRegistration`
+RPC: its emptiness check and unregister run on the same chain as its own
+registrations, and clearing the table's claim means a write that lands
+mid-prune registers again after the unregister. A caller-side probe then
+delete could hide a shard written in between. An unreachable shard keeps
+its entries and the route answers 207 (the CLI exits 1); `--dry-run`
+reports without touching the registry. A caching registry is invalidated
+for the released tables, via a new optional `ShardRegistry.invalidate`.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix: green the lint and template-entry CI jobs
+
+- playground: order the `ShardRegistryDO` re-export the way
+  perfectionist/sort-exports wants.
+- vis-templates: the Nitro entry test swapped only the first
+  `"./lunora/server"` specifier, and the analog/nuxt entries now re-export
+  `ShardRegistryDO` from it too. Swap every occurrence, stub the class,
+  and assert the entry exports it.
+- do: skip the registry step entirely on a shard with no registry, so a
+  write flush there does no extra promise work.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* make admin data commands work on builder and sharded apps ([#912](https://github.com/anolilab/lunora/issues/912)) ([39c9f8c](https://github.com/anolilab/lunora/commit/39c9f8ce03f5c6ab1b0ccaca8a7e3254b227b02b))
+
+## @lunora/platform [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.43...@lunora/platform@1.0.0-alpha.44) (2026-09-30)
+
+### ⚠ BREAKING CHANGES
+
+* **ai:** `ctx.ai` is no longer present on query and mutation contexts at
+runtime. Code reaching it through a cast from a query or mutation now gets
+`undefined`; move the inference into an action.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(platform): state ai gateway routing in the capability matrix
+
+The `ai` rating now covers the `<provider>/<model>` and `dynamic/<route>` ids
+`ctx.ai.model()` routes through AI Gateway: native on Cloudflare over the same
+`AI` binding, and part of the existing `unsupported` rating on node and celld,
+which have no gateway (or `env.AI` binding) to route through.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(cli): add ai gateway provisioning and doctor checks
+
+Add `lunora ai gateway`, which creates (or reuses) a Cloudflare AI Gateway over
+the REST API (POST/GET /accounts/{account_id}/ai-gateway/gateways) and writes
+LUNORA_AI_GATEWAY_ID + LUNORA_AI_GATEWAY_ACCOUNT_ID into the wrangler `vars`,
+preserving comments. The id defaults to the worker name (--id overrides); log
+collection is on by default (--no-logs turns it off); --dry-run makes no API
+call and edits nothing. Credentials come from CLOUDFLARE_API_TOKEN and
+CLOUDFLARE_ACCOUNT_ID (falling back to wrangler `account_id`).
+
+`lunora doctor` gains three codes: ai-binding-missing (warn),
+ai-gateway-token-unused (warn) and ai-gateway-default (info).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(studio): add ai usage panel
+
+New Observability page (tab `aiUsage`) showing what ctx.ai.model(...) calls cost:
+total spend, input/output tokens and call count, a per-minute cost sparkline, breakdowns
+by function path and by model, and the recent ai.generate / ai.stream calls linking
+through to their trace.
+
+Totals read the durable gen_ai.usage.{input_tokens,output_tokens,cost} counter series
+from getMetricHistory: bucket `sum` is the tokens/USD spent, bucket `count` the calls
+(one ctx.metrics.count per call). Calls = max(input count, output count) so a call
+reporting both is not counted twice. Cost stays split by lunora.usage.cost.source;
+estimated (or unlabelled) cost is always marked "Estimated" and never shown as
+provider-reported. With no history yet, totals fall back to the live trace ring and
+the page says they reset on hibernation.
+
+The pure fold lives in features/ai-usage/ai-usage.ts with unit tests in the node
+`unit` project.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(ai): route provider slugs to a self-hosted proxy off cloudflare
+
+LUNORA_AI_PROXY_URL (+ LUNORA_AI_PROXY_TOKEN) points ctx.ai at any
+OpenAI-compatible proxy (LiteLLM, OpenRouter, your own). "<provider>/<model>"
+slugs go there unchanged instead of AI Gateway, and no AI binding is needed, so
+ctx.ai works on celld. @cf/... ids and ctx.ai.run still need the binding.
+
+celld's `ai` capability moves from unsupported to emulated, so codegen emits
+ctx.ai there again. lunora doctor skips the binding and default-gateway checks
+when the proxy var is set.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): settle stream spans on cancel and share usage accounting
+
+- Stream telemetry re-emits parts through a ReadableStream, so an ai.stream span closes on
+  consumer cancel and fails on an upstream error; a TransformStream's flush never ran on
+  either, leaving the span and its gen_ai.usage counters pending forever.
+- recordUsage/modelIdOf live in usage.ts and are shared with defineRag, whose embeds now
+  also count into ctx.metrics (RagContext.metrics), so RAG spend reaches the durable
+  history. The duplicate EmbedSpan/EmbedTracer types are gone in favour of AiSpan/AiTracer.
+- The binding path selects the gateway by LUNORA_AI_GATEWAY_ID alone; the account id is
+  only needed for a bring-your-own provider's baseURL.
+- No per-call slug metadata on top of an explicit gateway's own, which could exceed AI
+  Gateway's 5-key limit and get the whole object rejected.
+- createAi no longer throws without a binding, provider or proxy: it returns a facade whose
+  calls throw one directed error (embeddings and ai.run included), so codegen always emits
+  createAi and drops its aiStub.
+- node rates ai as emulated through LUNORA_AI_PROXY_URL, like celld.
+- Docs: unified-catalog providers are paid through Unified Billing on the run path; keys
+  stored on the gateway apply only to gateway-path providers.
+* **ai:** createAi({}) returns a throwing facade instead of throwing at construction.
+Every ctx.ai app now bundles @ai-sdk/openai and @ai-sdk/anthropic.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(cli): align ai doctor checks with the runtime
+
+- ai-gateway-token-unused now fires whenever ctx.ai is used with LUNORA_AI_GATEWAY_TOKEN set:
+  the Workers AI binding cannot send it, with or without a gateway id.
+- The checks read top-level vars, env.<name>.vars and .dev.vars, so a proxy or gateway id
+  set outside top-level vars no longer triggers a spurious finding.
+- Binding inference runs once in runDoctor and feeds both the export and AI checks.
+- WranglerConfig types the `ai` binding; the env var names live in one CLI module.
+- `lunora ai gateway` reuses @lunora/config's applyModify (now exported from
+  @lunora/config/cloudflare) and returns one failure shape from its resolvers.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(studio): count cost-only ai calls and fold usage per model
+
+- The history call count takes the largest series count per (function, model) pair and sums
+  across pairs, so a call that reported only a cost is counted and two models' counts are
+  never merged by max.
+- One slice-based flow serves both the history and live halves.
+- ai.embed spans (defineRag) show up in recent calls.
+- formatUsd/formatTokens move to reports/metrics-format and use the renderer's locale.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(platform-node): match the ai row to the emulated rating
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): refuse a proxy token over plain http
+
+- LUNORA_AI_PROXY_TOKEN is never sent to a non-HTTPS LUNORA_AI_PROXY_URL off loopback; the
+  proxy provider throws a directed error on use instead, as it does for an unparsable URL.
+- `lunora ai gateway --dry-run` warns when the account id a real run needs is missing.
+- doctor reads an unreadable .dev.vars as unset instead of aborting the run.
+- The node `agents` note no longer claims `ai` is unsupported there.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(ai): record stream usage that arrived before an upstream error
+
+A stream that emitted its `finish` part and then errored lost that usage: the span failed
+before recordUsage ran. The instrumented stream now settles once with its outcome and the
+error, so usage is recorded first and the error is then rethrown to fail the span.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Features
+
+* **ai:** AI Gateway model routing, per-function AI spend, and ctx.ai action-only ([#910](https://github.com/anolilab/lunora/issues/910)) ([f0e8623](https://github.com/anolilab/lunora/commit/f0e8623068b35d7c05bdb1b131761b95de768f9c))
+
 ## @lunora/platform [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.42...@lunora/platform@1.0.0-alpha.43) (2026-09-29)
 
 ### Features

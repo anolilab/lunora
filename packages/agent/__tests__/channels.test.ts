@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import { dispatchAgentChannel, verifyDiscord, verifyGithub, verifySlack } from "../src/channels";
 
+/** The Worker ctx the handler takes; these tests bind agents on env, so it carries no exports. */
+const NO_CONTEXT = {};
+
 const encoder = new TextEncoder();
 
-const NO_BINDING_PATTERN = /no Workflow binding/u;
+const NO_BINDING_PATTERN = /on ctx.exports or env/u;
 const TRANSIENT_FAILURE_PATTERN = /temporarily unavailable/u;
 const BRANCH_MARKER_PATTERN = /reserved workflow branch-marker key/u;
 const HASHED_SLACK_ID_PATTERN = /^slack-[0-9a-f]{16}$/u;
@@ -178,9 +181,9 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
 
-        const response = await handler(await slackRequest(secret, '{"event":{}}'), { AGENT_SUPPORT: binding, SLACK_SECRET: secret });
+        const response = await handler(await slackRequest(secret, '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret }, NO_CONTEXT);
 
         expect(response.status).toBe(200);
         expect(created).toStrictEqual([{ input: "hi from slack", owner: "team-42", threadKey: "t-1" }]);
@@ -200,10 +203,10 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
 
         // Signed with the wrong secret.
-        const response = await handler(await slackRequest("WRONG", '{"event":{}}'), { AGENT_SUPPORT: binding, SLACK_SECRET: secret });
+        const response = await handler(await slackRequest("WRONG", '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret }, NO_CONTEXT);
 
         expect(response.status).toBe(401);
         expect(mapped).toBe(false);
@@ -213,9 +216,9 @@ describe(dispatchAgentChannel, () => {
     it("returns 204 when the (verified) event is declined", async () => {
         const { binding, created } = fakeBinding();
         const agent = { onInbound: { channel: "slack" as const, map: () => null, secret: "SLACK_SECRET" } };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
 
-        const response = await handler(await slackRequest(secret, '{"event":{}}'), { AGENT_SUPPORT: binding, SLACK_SECRET: secret });
+        const response = await handler(await slackRequest(secret, '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret }, NO_CONTEXT);
 
         expect(response.status).toBe(204);
         expect(created).toStrictEqual([]);
@@ -246,17 +249,21 @@ describe(dispatchAgentChannel, () => {
             },
         };
         const handler = dispatchAgentChannel([
-            { agent: agentOne, binding: "AGENT_ONE" },
-            { agent: agentTwo, binding: "AGENT_TWO" },
+            { agent: agentOne, className: "AGENT_ONE" },
+            { agent: agentTwo, className: "AGENT_TWO" },
         ]);
 
         // Signed with tenant TWO's secret — only tenant two verifies and claims.
-        const response = await handler(await slackRequest("secret-two", '{"event":{}}'), {
-            AGENT_ONE: one.binding,
-            AGENT_TWO: two.binding,
-            SECRET_ONE: "secret-one",
-            SECRET_TWO: "secret-two",
-        });
+        const response = await handler(
+            await slackRequest("secret-two", '{"event":{}}'),
+            {
+                AGENT_ONE: one.binding,
+                AGENT_TWO: two.binding,
+                SECRET_ONE: "secret-one",
+                SECRET_TWO: "secret-two",
+            },
+            NO_CONTEXT,
+        );
 
         expect(response.status).toBe(200);
         expect(mappedOne).toBe(false); // tenant one's secret never verified → its mapper never ran
@@ -275,9 +282,9 @@ describe(dispatchAgentChannel, () => {
                 secret: "GH_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_GH" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "AGENT_GH" }]);
 
-        const response = await handler(await githubRequest("gh-secret", '{"action":"opened"}'), { AGENT_GH: binding, GH_SECRET: "gh-secret" });
+        const response = await handler(await githubRequest("gh-secret", '{"action":"opened"}'), { AGENT_GH: binding, GH_SECRET: "gh-secret" }, NO_CONTEXT);
 
         expect(response.status).toBe(200);
         expect(created).toStrictEqual([{ input: "gh", threadKey: "pr-1" }]);
@@ -296,9 +303,9 @@ describe(dispatchAgentChannel, () => {
                 secret: "DISCORD_KEY",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_D" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "AGENT_D" }]);
 
-        const response = await handler(await discordRequest(pair.privateKey, '{"type":1}'), { AGENT_D: binding, DISCORD_KEY: publicKey });
+        const response = await handler(await discordRequest(pair.privateKey, '{"type":1}'), { AGENT_D: binding, DISCORD_KEY: publicKey }, NO_CONTEXT);
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toStrictEqual({ type: 1 });
@@ -322,10 +329,14 @@ describe(dispatchAgentChannel, () => {
                 secret: "DISCORD_KEY",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_D" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "AGENT_D" }]);
         const timestamp = String(Math.floor(Date.now() / 1000) + skewSeconds);
 
-        const response = await handler(await discordRequest(pair.privateKey, '{"id":"i-1","type":2}', timestamp), { AGENT_D: binding, DISCORD_KEY: publicKey });
+        const response = await handler(
+            await discordRequest(pair.privateKey, '{"id":"i-1","type":2}', timestamp),
+            { AGENT_D: binding, DISCORD_KEY: publicKey },
+            NO_CONTEXT,
+        );
 
         expect(response.status).toBe(status);
         expect(created).toHaveLength(runs);
@@ -342,12 +353,12 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         const body = JSON.stringify({ event: {}, event_id: "Ev123" });
 
-        const first = await handler(await slackRequest(secret, body), env);
-        const second = await handler(await slackRequest(secret, body), env);
+        const first = await handler(await slackRequest(secret, body), env, NO_CONTEXT);
+        const second = await handler(await slackRequest(secret, body), env, NO_CONTEXT);
 
         expect(first.status).toBe(200);
         expect(second.status).toBe(200);
@@ -376,17 +387,17 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         // 70-char ids sharing their first 60 chars — the old sanitize-then-truncate
         // scheme collapsed these to one key, silently swallowing the second event.
         const shared = "E".repeat(60);
         const bodyA = JSON.stringify({ event: {}, event_id: `${shared}AAAAAAAAAA` });
         const bodyB = JSON.stringify({ event: {}, event_id: `${shared}BBBBBBBBBB` });
 
-        await handler(await slackRequest(secret, bodyA), env);
-        await handler(await slackRequest(secret, bodyB), env);
-        await handler(await slackRequest(secret, bodyA), env);
+        await handler(await slackRequest(secret, bodyA), env, NO_CONTEXT);
+        await handler(await slackRequest(secret, bodyB), env, NO_CONTEXT);
+        await handler(await slackRequest(secret, bodyA), env, NO_CONTEXT);
 
         expect(receivedIds).toHaveLength(3);
         // `slack-` + 16 hex chars, distinct across distinct ids, stable across redeliveries.
@@ -417,11 +428,11 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         const body = JSON.stringify({ event: {}, event_id: "Ev-transient" });
 
-        await expect(handler(await slackRequest(secret, body), env)).rejects.toThrow(TRANSIENT_FAILURE_PATTERN);
+        await expect(handler(await slackRequest(secret, body), env, NO_CONTEXT)).rejects.toThrow(TRANSIENT_FAILURE_PATTERN);
     });
 
     it("keys an empty event id on the body: distinct events both run, a replay does not", async () => {
@@ -435,17 +446,17 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         // An empty (but present) event_id must not collapse every such event to
         // one "slack-" id; the body hash keys it instead.
         const bodyA = JSON.stringify({ event: { ts: "1" }, event_id: "" });
         const bodyB = JSON.stringify({ event: { ts: "2" }, event_id: "" });
 
         const responses = [
-            await handler(await slackRequest(secret, bodyA), env),
-            await handler(await slackRequest(secret, bodyB), env),
-            await handler(await slackRequest(secret, bodyA), env),
+            await handler(await slackRequest(secret, bodyA), env, NO_CONTEXT),
+            await handler(await slackRequest(secret, bodyB), env, NO_CONTEXT),
+            await handler(await slackRequest(secret, bodyA), env, NO_CONTEXT),
         ];
 
         expect(responses.map((response) => response.status)).toStrictEqual([200, 200, 200]);
@@ -463,7 +474,7 @@ describe(dispatchAgentChannel, () => {
                 secret: "GH_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_GH" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "AGENT_GH" }]);
         const env = { AGENT_GH: binding, GH_SECRET: "gh-secret" };
         const body = '{"action":"opened","number":1}';
         const signature = `sha256=${await hmacHex("gh-secret", body)}`;
@@ -477,6 +488,7 @@ describe(dispatchAgentChannel, () => {
                     method: "POST",
                 }),
                 env,
+                NO_CONTEXT,
             );
 
         // Honest redelivery, replay under a fresh header, replay with the header dropped.
@@ -497,11 +509,11 @@ describe(dispatchAgentChannel, () => {
                 secret: "GH_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_GH" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "AGENT_GH" }]);
         const env = { AGENT_GH: binding, GH_SECRET: "gh-secret" };
 
-        await handler(await githubRequest("gh-secret", '{"action":"opened","number":1}'), env);
-        await handler(await githubRequest("gh-secret", '{"action":"opened","number":2}'), env);
+        await handler(await githubRequest("gh-secret", '{"action":"opened","number":1}'), env, NO_CONTEXT);
+        await handler(await githubRequest("gh-secret", '{"action":"opened","number":2}'), env, NO_CONTEXT);
 
         expect(created).toHaveLength(2);
     });
@@ -517,14 +529,14 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
-        const env = { AGENT_SUPPORT: binding, SLACK_SECRET: secret };
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
+        const env = { SupportAgentWorkflow: binding, SLACK_SECRET: secret };
         // Interactive payloads and slash commands carry no event_id.
         const body = JSON.stringify({ trigger_id: "t-1", type: "block_actions" });
 
-        await handler(await slackRequest(secret, body), env);
-        await handler(await slackRequest(secret, body), env);
-        await handler(await slackRequest(secret, JSON.stringify({ trigger_id: "t-2", type: "block_actions" })), env);
+        await handler(await slackRequest(secret, body), env, NO_CONTEXT);
+        await handler(await slackRequest(secret, body), env, NO_CONTEXT);
+        await handler(await slackRequest(secret, JSON.stringify({ trigger_id: "t-2", type: "block_actions" })), env, NO_CONTEXT);
 
         expect(created).toHaveLength(2);
     });
@@ -540,17 +552,21 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
 
-        const response = await handler(new Request("https://app/webhooks/agent", { body: "{}", method: "POST" }), {
-            AGENT_SUPPORT: binding,
-            SLACK_SECRET: secret,
-        });
+        const response = await handler(
+            new Request("https://app/webhooks/agent", { body: "{}", method: "POST" }),
+            {
+                SupportAgentWorkflow: binding,
+                SLACK_SECRET: secret,
+            },
+            NO_CONTEXT,
+        );
 
         expect(response.status).toBe(400);
     });
 
-    it("throws when a claimed event has no Workflow binding on env", async () => {
+    it("throws when a claimed event has no agent on ctx.exports or env", async () => {
         const agent = {
             onInbound: {
                 channel: "slack" as const,
@@ -560,10 +576,10 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_MISSING" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "AGENT_MISSING" }]);
 
         // Verified + claimed, but AGENT_MISSING is absent from env.
-        await expect(handler(await slackRequest(secret, '{"event":{}}'), { SLACK_SECRET: secret })).rejects.toThrow(NO_BINDING_PATTERN);
+        await expect(handler(await slackRequest(secret, '{"event":{}}'), { SLACK_SECRET: secret }, NO_CONTEXT)).rejects.toThrow(NO_BINDING_PATTERN);
     });
 
     it("rejects (throws, does not ack) a claimed run whose mapper injects the reserved branch-marker key", async () => {
@@ -581,12 +597,12 @@ describe(dispatchAgentChannel, () => {
                 secret: "SLACK_SECRET",
             },
         };
-        const handler = dispatchAgentChannel([{ agent, binding: "AGENT_SUPPORT" }]);
+        const handler = dispatchAgentChannel([{ agent, className: "SupportAgentWorkflow" }]);
 
         // Verified + claimed, but the mapper's run carries a forged marker — must
         // throw (surfacing as non-2xx so the provider redelivers), never be acked
         // as handled, and never reach `create()`.
-        await expect(handler(await slackRequest(secret, '{"event":{}}'), { AGENT_SUPPORT: binding, SLACK_SECRET: secret })).rejects.toThrow(
+        await expect(handler(await slackRequest(secret, '{"event":{}}'), { SupportAgentWorkflow: binding, SLACK_SECRET: secret }, NO_CONTEXT)).rejects.toThrow(
             BRANCH_MARKER_PATTERN,
         );
         expect(created).toStrictEqual([]);

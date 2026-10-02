@@ -181,6 +181,23 @@ export const job = defineContainer({
 });
 ```
 
+### Per-instance images and snapshots
+
+`schedulingPolicy: "durable_object"` (Cloudflare public beta) lets each instance pick its image and size at start, and save and restore its filesystem:
+
+```ts
+export const agentComputer = defineContainer({
+    schedulingPolicy: "durable_object",
+    images: { base: "./containers/base" },
+    image: "base",
+});
+
+const computer = ctx.containers.agentComputer.get(taskId);
+await computer.start({ image: "base", instanceType: "standard-2" });
+const saved = await computer.snapshot();
+await ctx.containers.agentComputer.get(otherId).start({ snapshot: saved });
+```
+
 ### Calling Lunora from inside a container
 
 Container code calls back into your app's functions with the bridge client (any JS runtime), over the Worker's HTTP RPC endpoint:

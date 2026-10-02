@@ -14,6 +14,7 @@
  * subpath rather than relocating wholesale.
  */
 
+export { applyModify } from "../jsonc-edit";
 export type { AssertWranglerOptions } from "./assert-wrangler";
 export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
 export type { BindingManifest, BindingRequirement, ManifestConfigShape } from "./binding-manifest";

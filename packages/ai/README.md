@@ -54,11 +54,11 @@ yarn add @lunora/ai
 pnpm add @lunora/ai
 ```
 
-To use another provider, install it alongside (optional): `pnpm add @ai-sdk/openai`.
+Other providers need no extra install: `ctx.ai.model("anthropic/claude-sonnet-5")` routes through Cloudflare AI Gateway (see below).
 
 ## Usage
 
-When a function uses AI, codegen wires a typed **`ctx.ai`** onto the action context (inference is an external call, so — like `ctx.fetch` — it lives on actions). Workers AI is the zero-config default; pass any AI SDK model to use another provider.
+When a function uses AI, codegen wires a typed **`ctx.ai`** onto the action context (inference is an external call, so — like `ctx.fetch` — it lives on actions). Workers AI is the zero-config default; a `"<provider>/<model>"` id reaches any other provider through Cloudflare AI Gateway, and any AI SDK model object passes straight through.
 
 ```ts
 // lunora/summarize.ts — ctx.ai (codegen-wired), Workers AI by default
@@ -82,12 +82,13 @@ export const summarize = action.input({ text: v.string().max(20_000) }).action(a
 ```
 
 ```ts
-// Bring-your-own provider — same call surface, no lock-in
-import { streamText } from "@lunora/ai";
-import { openai } from "@ai-sdk/openai";
-
-const result = streamText({ model: openai("gpt-5"), messages });
+// Any provider: change the string, nothing else. Routed through Cloudflare AI
+// Gateway over the same `AI` binding — Unified Billing or keys stored on the
+// gateway, so the app holds no provider API key.
+const result = streamText({ model: ctx.ai.model("anthropic/claude-sonnet-5"), messages });
 ```
+
+Every `ctx.ai.model(...)` call is traced and its tokens and cost are counted per function (`gen_ai.usage.*`), which Studio's **AI usage** page charts. `lunora ai gateway` creates a gateway for the app and sets `LUNORA_AI_GATEWAY_ID`; without it, calls use the account's `default` gateway.
 
 ```ts
 // RAG: embed via ctx.ai, store/search with @lunora/bindings/vectors (ctx.vectors)

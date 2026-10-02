@@ -100,6 +100,28 @@ describe("the import batcher", () => {
         rmSync(workDir, { force: true, recursive: true });
     });
 
+    it("does not claim rows were written when no batch was acknowledged", async () => {
+        expect.assertions(3);
+
+        const root = writeConvexExport({}, { docs: [{ _id: "d1" }] });
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: async () => {
+                throw new TypeError("fetch failed");
+            },
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(logs.error[0]).toBe("import failed before any batch was acknowledged: fetch failed");
+        expect(logs.error.join("\n")).not.toContain("already been written");
+    });
+
     it("splits a batch on byte size, not just row count", async () => {
         expect.assertions(2);
 

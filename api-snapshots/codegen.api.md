@@ -19,7 +19,6 @@ const AGENTS_FILENAME = "agents.ts";
 
 ```ts
 interface AgentIR {
-    bindingName: string;
     className: string;
     exportName: string;
     name: string;
@@ -118,39 +117,34 @@ interface CodegenResult {
 }
 ```
 
-### `ContainerIR` (interface)
+### `ContainerIR` (type)
 
 ```ts
-interface ContainerIR {
-    bindingName: string;
-    buildArgs?: Record<string, string>;
-    className: string;
-    enableInternet?: boolean;
-    exportName: string;
-    image: {
-        buildContext: string;
-        dockerfilePath: string;
-        kind: "dockerfile";
-    } | {
-        buildDir: string;
-        kind: "build";
-    } | {
-        kind: "registry";
-        reference: string;
-    };
-    instanceType?: string | {
-        diskMb?: number;
-        memoryMib?: number;
-        vcpu?: number;
-    };
-    maxInstances?: number;
-    name?: string;
-    rollout?: {
-        gracePeriodSeconds?: number;
-        stepPercentage?: number;
-    };
-    sleepAfter?: number | string;
-}
+type ContainerIR = DefaultScheduledContainerIR | DurableObjectScheduledContainerIR;
+```
+
+### `ContainerImageIR` (type)
+
+```ts
+type ContainerImageIR = {
+    buildContext: string;
+    dockerfilePath: string;
+    kind: "dockerfile";
+} | {
+    buildDir: string;
+    kind: "build";
+} | {
+    kind: "registry";
+    reference: string;
+};
+```
+
+### `ContainerNamedImageIR` (type)
+
+```ts
+type ContainerNamedImageIR = Exclude<ContainerImageIR, {
+    kind: "build";
+}>;
 ```
 
 ### `ContextPropertyCallIR` (interface)
@@ -174,7 +168,7 @@ interface CronJobIR {
     functionPath?: string;
     name: string;
     workflow?: {
-        binding: string;
+        className: string;
         exportName: string;
     };
 }
@@ -184,6 +178,20 @@ interface CronJobIR {
 
 ```ts
 const DEFAULT_TARGET = "cloudflare";
+```
+
+### `DefaultScheduledContainerIR` (interface)
+
+```ts
+interface DefaultScheduledContainerIR extends ContainerIRBase {
+    image: ContainerImageIR;
+    maxInstances?: number;
+    rollout?: {
+        gracePeriodSeconds?: number;
+        stepPercentage?: number;
+    };
+    schedulingPolicy?: never;
+}
 ```
 
 ### `DriftChange` (interface)
@@ -211,12 +219,21 @@ type DriftRemediation = "backfill" | "code" | "none" | "rehome";
 type DriftScope = "schema" | "table";
 ```
 
+### `DurableObjectScheduledContainerIR` (interface)
+
+```ts
+interface DurableObjectScheduledContainerIR extends ContainerIRBase {
+    images?: Record<string, ContainerNamedImageIR>;
+    schedulingPolicy: "durable_object";
+}
+```
+
 ### `EmitAppOptions` (interface)
 
 ```ts
 interface EmitAppOptions {
     emailAgents?: ReadonlyArray<{
-        bindingName: string;
+        className: string;
         exportName: string;
     }>;
     hasAccess: boolean;
@@ -244,13 +261,14 @@ interface EmitAppOptions {
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     jurisdictionPinsAuth?: boolean;
-    tableNames: ReadonlyArray<string>;
+    tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     useUmbrella: boolean;
     vectorIndexCount?: number;
     voiceAgents?: ReadonlyArray<{
         bindingName: string;
         exportName: string;
     }>;
+    wantsArchitecture: boolean;
     wantsOpenApi: boolean;
     wantsOpenRpc: boolean;
 }
@@ -407,6 +425,7 @@ interface LintSchemaOptions {
     mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>;
     maskProcedures?: ReadonlyArray<MaskProcedureIR>;
     maskStrategies?: ReadonlyArray<MaskStrategyIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     mutators?: ReadonlyArray<MutatorIR>;
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>;
     nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>;
@@ -432,6 +451,7 @@ interface LintSchemaOptions {
     staleMigrationImports?: ReadonlyArray<StaleMigrationImportIR>;
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
+    tableWrites?: ReadonlyArray<TableWriteIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
     workflowCalls?: ReadonlyArray<WorkflowCallIR>;
@@ -533,6 +553,7 @@ const OPENRPC_VERSION = "1.3.2";
 interface OpenApiEmitInput {
     functions: ReadonlyArray<FunctionIR>;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     version?: string;
 }
 ```
@@ -554,6 +575,7 @@ interface OpenRpcDocument {
 ```ts
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
+    modules?: ReadonlyArray<ModuleIR>;
     version?: string;
 }
 ```
@@ -650,6 +672,7 @@ interface QueueIR {
     exportName: string;
     mode: "pull" | "push";
     name: string;
+    topic?: string;
     tuning: {
         deadLetterQueue?: string;
         maxBatchSize?: number;
@@ -913,6 +936,7 @@ interface StorageRulesMetadataIR {
 ```ts
 interface TableIR {
     commitOrdered?: boolean;
+    extensionFromPackage?: true;
     extensionKey?: string;
     externallyManaged?: boolean;
     externalSource?: ExternalSourceIR;
@@ -949,6 +973,14 @@ interface TableSnapshot {
     relations: Record<string, RelationSnapshot>;
     shardMode: string;
     ttl?: TtlSnapshot;
+}
+```
+
+### `TopicIR` (interface)
+
+```ts
+interface TopicIR {
+    exportName: string;
 }
 ```
 
@@ -1003,10 +1035,17 @@ const WORKFLOWS_FILENAME = "workflows.ts";
 
 ```ts
 interface WorkflowIR {
-    bindingName: string;
     className: string;
+    defaultRetention?: {
+        errorRetention?: string;
+        successRetention?: string;
+    };
     exportName: string;
+    limits?: {
+        steps?: number;
+    };
     name: string;
+    schedules?: ReadonlyArray<string>;
     steps: ReadonlyArray<WorkflowStepIR>;
 }
 ```
@@ -1307,13 +1346,13 @@ const emitScheduler: (hasScheduler: boolean) => string;
 ### `emitServer` (const)
 
 ```ts
-const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasVectors, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, storageRuleBuckets, useUmbrella, workflows }?: EmitServerOptions) => string;
+const emitServer: ({ agents, containers, env, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasVectors, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasX402, identity, queues, schema, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
 ```
 
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasVectors, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, containers, env, flagKeys, hasAccessFacade, hasAi, hasAnalytics, hasBrowser, hasFlags, hasHyperdrive, hasImages, hasKv, hasNotify, hasPayments, hasPipelines, hasR2sql, hasVectors, hasX402, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1830,6 +1869,25 @@ interface ConfigCallIR {
 }
 ```
 
+### `ContainerIRBase` (interface)
+
+```ts
+interface ContainerIRBase {
+    bindingName: string;
+    buildArgs?: Record<string, string>;
+    className: string;
+    enableInternet?: boolean;
+    exportName: string;
+    instanceType?: string | {
+        diskMb?: number;
+        memoryMib?: number;
+        vcpu?: number;
+    };
+    name?: string;
+    sleepAfter?: number | string;
+}
+```
+
 ### `ContainerKeyAccessIR` (interface)
 
 ```ts
@@ -1905,6 +1963,7 @@ interface EmitServerOptions {
     queues?: ReadonlyArray<QueueIR>;
     schema?: SchemaIR;
     storageRuleBuckets?: ReadonlyArray<string>;
+    topics?: ReadonlyArray<TopicIR>;
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
@@ -1946,6 +2005,7 @@ interface EmitShardOptions {
     shapes?: ReadonlyArray<ShapeIR>;
     storageRules?: StorageRulesMetadataIR;
     studioFeatures?: StudioFeaturesResult;
+    topics?: ReadonlyArray<TopicIR>;
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
@@ -2155,6 +2215,18 @@ interface MaskStrategyIR {
 interface ModelNullPaths {
     nullable: ReadonlyArray<SchemaPath>;
     optional: ReadonlyArray<SchemaPath>;
+}
+```
+
+### `ModuleIR` (interface)
+
+```ts
+interface ModuleIR {
+    description?: string;
+    installed?: true;
+    name: string;
+    ownsFolder?: false;
+    tables: ReadonlyArray<string>;
 }
 ```
 
@@ -2432,6 +2504,18 @@ interface StorageUploadIR {
     line: number;
     method: "generateUploadUrl" | "getPresignedUrl" | "getSignedUrl" | "store" | "upload";
     presentKeys: string[];
+}
+```
+
+### `TableWriteIR` (interface)
+
+```ts
+interface TableWriteIR {
+    exportName: string;
+    file: string;
+    line: number;
+    method: string;
+    table: string;
 }
 ```
 

@@ -186,7 +186,7 @@ interface ClaimDevServerStateResult {
 }
 ```
 
-### `ContainerIR` (interface)
+### `ContainerIR` (type)
 
 Re-exported from `@lunora/codegen` — signature tracked at its source.
 
@@ -555,6 +555,7 @@ const GENERATED_CLASS_MODULES: readonly [
     "agents",
     "containers",
     "scheduler",
+    "shardRegistry",
     "workflows"
 ];
 ```
@@ -644,12 +645,12 @@ interface InferredBindings {
 }
 ```
 
-### `InferredContainer` (interface)
+### `InferredContainer` (type)
 
 ```ts
-interface InferredContainer extends ContainerIR {
+type InferredContainer = ContainerIR & {
     exported: boolean;
-}
+};
 ```
 
 ### `InferredWorkflow` (interface)
@@ -1695,7 +1696,7 @@ interface BindingRequirement {
     resource?: string;
     resourceId?: string;
     sqlite?: boolean;
-    type: "ai" | "analytics_engine" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "vectorize" | "workflow";
+    type: "ai" | "analytics_engine" | "artifacts" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "media" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "stream" | "vectorize" | "vpc_network" | "vpc_service" | "workflow";
 }
 ```
 
@@ -1727,6 +1728,10 @@ interface ManifestConfigShape extends WranglerConfigShape {
         binding?: string;
         dataset?: string;
     }>;
+    artifacts?: ReadonlyArray<{
+        binding?: string;
+        namespace?: string;
+    }>;
     assets?: {
         binding?: string;
         directory?: string;
@@ -1739,6 +1744,10 @@ interface ManifestConfigShape extends WranglerConfigShape {
         image?: string;
         max_instances?: number;
     }>;
+    exports?: Record<string, {
+        name?: string;
+        type?: string;
+    } | null | undefined>;
     hyperdrive?: ReadonlyArray<{
         binding?: string;
         id?: string;
@@ -1746,9 +1755,13 @@ interface ManifestConfigShape extends WranglerConfigShape {
     images?: {
         binding?: string;
     };
+    media?: {
+        binding?: string;
+    };
     pipelines?: ReadonlyArray<{
         binding?: string;
         pipeline?: string;
+        stream?: string;
     }>;
     queues?: {
         consumers?: ReadonlyArray<{
@@ -1759,9 +1772,21 @@ interface ManifestConfigShape extends WranglerConfigShape {
             queue?: string;
         }>;
     };
+    stream?: {
+        binding?: string;
+    };
     vectorize?: ReadonlyArray<{
         binding?: string;
         index_name?: string;
+    }>;
+    vpc_networks?: ReadonlyArray<{
+        binding?: string;
+        network_id?: string;
+        tunnel_id?: string;
+    }>;
+    vpc_services?: ReadonlyArray<{
+        binding?: string;
+        service_id?: string;
     }>;
     workflows?: ReadonlyArray<{
         binding?: string;
@@ -1980,9 +2005,17 @@ interface WranglerCacheShape {
 
 ```ts
 interface WranglerConfig {
+    ai?: {
+        binding?: unknown;
+    } | null;
     analytics_engine_datasets?: ReadonlyArray<{
         binding?: string;
         dataset?: string;
+    } | null | undefined>;
+    artifacts?: ReadonlyArray<{
+        binding?: string;
+        namespace?: string;
+        remote?: boolean;
     } | null | undefined>;
     assets?: {
         binding?: string;
@@ -2003,6 +2036,8 @@ interface WranglerConfig {
         binding?: string;
         database_id?: string;
         database_name?: string;
+        migrations_dir?: string;
+        migrations_pattern?: string;
     } | null | undefined>;
     dispatch_namespaces?: ReadonlyArray<{
         binding?: string;
@@ -2017,6 +2052,10 @@ interface WranglerConfig {
         cache?: {
             enabled?: boolean;
         } | null;
+        default_retention?: unknown;
+        limits?: unknown;
+        name?: unknown;
+        schedules?: unknown;
         type?: string;
     } | null> | null;
     flagship?: ReadonlyArray<{
@@ -2040,6 +2079,9 @@ interface WranglerConfig {
     };
     logpush?: boolean;
     main?: string;
+    media?: {
+        binding?: string;
+    };
     migrations?: ReadonlyArray<{
         deleted_classes?: ReadonlyArray<string>;
         new_classes?: ReadonlyArray<string>;
@@ -2081,6 +2123,9 @@ interface WranglerConfig {
         binding?: string;
         bucket_name?: string;
     } | null | undefined>;
+    secrets?: {
+        required?: unknown;
+    } | null;
     secrets_store_secrets?: ReadonlyArray<{
         binding?: string;
         secret_name?: string;
@@ -2097,11 +2142,25 @@ interface WranglerConfig {
         environment?: string;
         service?: string;
     } | null | undefined>;
+    stream?: {
+        binding?: string;
+    };
     tail_consumers?: ReadonlyArray<TailConsumer | null | undefined>;
     vars?: Record<string, unknown>;
     vectorize?: ReadonlyArray<{
         binding?: string;
         index_name?: string;
+    } | null | undefined>;
+    vpc_networks?: ReadonlyArray<{
+        binding?: string;
+        network_id?: string;
+        remote?: boolean;
+        tunnel_id?: string;
+    } | null | undefined>;
+    vpc_services?: ReadonlyArray<{
+        binding?: string;
+        remote?: boolean;
+        service_id?: string;
     } | null | undefined>;
     workflows?: ReadonlyArray<WranglerWorkflowEntry | null | undefined>;
 }
@@ -2157,12 +2216,19 @@ interface WranglerConfigShape {
 interface WranglerContainerEntry {
     class_name?: string;
     image?: string;
+    images?: Record<string, {
+        build_context?: string;
+        build_vars?: Record<string, string>;
+        dockerfile?: string;
+        image?: string;
+    } | null | undefined>;
     instance_type?: string | {
         disk_mb?: number;
         memory_mib?: number;
         vcpu?: number;
     };
     max_instances?: number;
+    scheduling_policy?: string;
 }
 ```
 
@@ -2212,9 +2278,18 @@ interface WranglerValidationReport {
 interface WranglerWorkflowEntry {
     binding?: string;
     class_name?: string;
+    default_retention?: unknown;
+    limits?: unknown;
     name?: string;
+    schedules?: unknown;
     script_name?: string;
 }
+```
+
+### `applyModify` (const)
+
+```ts
+const applyModify: (text: string, path: ReadonlyArray<number | string>, value: unknown) => string;
 ```
 
 ### `assertWranglerSatisfiesSchema` (const)

@@ -199,6 +199,10 @@ Narrow the snapshot with `backupTables`, or take this backup off-platform with `
 
 `400` — Batch limit exceeded
 
+### `BROWSER_RUN_ERROR`
+
+`502` — Browser Run API error
+
 ### `BROWSER_TIMEOUT`
 
 `504` — Browser operation timed out
@@ -290,10 +294,6 @@ A dispatch with this idempotency id is still running on the shard. Retry it; onc
 `403` — Dispatch caller not authenticated
 
 The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.
-
-### `DUPLICATE_AGENT_BINDING`
-
-`500` — Duplicate agent binding
 
 ### `DUPLICATE_AGENT_CLASS`
 

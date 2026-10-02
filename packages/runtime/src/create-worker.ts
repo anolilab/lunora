@@ -28,6 +28,7 @@ import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "../../../shared/wire-codec";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
@@ -42,7 +43,7 @@ import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJson
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
-import { streamExportRows } from "./export-stream";
+import { prepareExportRows } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import type { HealthProbe } from "./health-routes";
 import { buildHealthRoutes, d1Probe, durableObjectProbe, presenceProbe } from "./health-routes";
@@ -61,6 +62,7 @@ import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
 import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
+import { createDefaultShardRegistry, createQueryCoordinator } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
 import { createResourceAttributeResolver } from "./resource-detect";
@@ -604,7 +606,8 @@ interface CronJobDispatch {
 
     /**
      * Set when the job targets a durable workflow instead of a function: the
-     * `WORKFLOW_*` binding name on `env`. On a firing trigger the worker starts a
+     * workflow's export key (its generated class name), resolved off the Worker's
+     * `ctx.exports` or `env`. On a firing trigger the worker starts a
      * NEW workflow instance (the {@link CronJobDispatch.args} become its
      * `params`) rather than dispatching {@link CronJobDispatch.functionPath} to a
      * shard. Mutually exclusive with `functionPath`.
@@ -634,7 +637,7 @@ interface CronJobInfo {
     functionPath?: string;
     name: string;
     shardKey?: string;
-    /** The `WORKFLOW_*` binding name when the job starts a durable workflow instead of a function. */
+    /** The workflow's export key (its generated class name) when the job starts a durable workflow instead of a function. */
     workflow?: string;
 }
 
@@ -838,6 +841,15 @@ interface WorkerOptions {
      * (point-in-time recovery). When omitted, apply covers only shard-local tables.
      */
     applyGlobals?: GlobalCdcApplyFunction;
+
+    /**
+     * The generated architecture manifest (module catalog + static call graph).
+     * Codegen emits `_generated/architecture.ts` once the app declares a module
+     * (`lunora/<dir>/module.ts`) and the generated app passes it through. Served
+     * verbatim at the admin-gated `GET /_lunora/admin/architecture` for the
+     * studio's Architecture view; omitted, the route answers an empty manifest.
+     */
+    architecture?: unknown;
 
     /**
      * The auth user-management plane backing the studio's users dashboard:
@@ -1235,9 +1247,10 @@ interface WorkerOptions {
     passThroughOnException?: boolean;
 
     /**
-     * Coordinator for cross-shard RPCs. When absent, envelopes with
-     * `fanOut` set are rejected with a 400. Construct via
-     * `createQueryCoordinator({ registry })`.
+     * Coordinator for cross-shard RPCs and the admin fan-outs. Construct via
+     * `createQueryCoordinator({ registry })`. When absent, the worker uses one
+     * whose registry covers root and `.global()` tables and rejects a
+     * `.shardBy()` table with a 400, since only a real registry knows its keys.
      */
     queryCoordinator?: QueryCoordinator;
 
@@ -2797,6 +2810,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const noticeDroppedTrace = createDroppedTraceNotice(options.trustInboundTraceContext);
     const defaultShard = options.defaultShardKey ?? "__root__";
 
+    // Every admin fan-out (export, sync, apply, migrate, backup) goes through the
+    // coordinator, so a worker configured without one gets a default whose
+    // registry serves root and `.global()` tables and refuses to guess at a
+    // `.shardBy()` table's keys (see `createDefaultShardRegistry`).
+    const queryCoordinator =
+        options.queryCoordinator ?? createQueryCoordinator({ registry: createDefaultShardRegistry(options.resolveTableSharding, defaultShard) });
+
     // The trust-boundary identity gate: only the PUBLIC data paths (RPC /
     // WebSocket / HTTP-action / server-query) use this wrapped resolver, which
     // validates every resolved identity against the `defineIdentity(...)` contract
@@ -3150,9 +3170,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         defaultShard,
         forwardToShard,
         isAdmin: requestIsAdmin,
-        queryCoordinator: options.queryCoordinator,
+        queryCoordinator,
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
+        shardedTables: () => (options.listSchemaTables?.() ?? []).filter((table) => options.resolveTableSharding?.(table)?.mode.kind === "shardBy"),
     });
 
     /**
@@ -3278,11 +3299,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * previous attempt's create already landed. Every other rejection propagates,
      * so the record stays retryable.
      */
-    const startWorkflowInstance = async (binding: string, args: Record<string, unknown>, env: unknown, label: string, instanceId?: string): Promise<void> => {
-        const candidate = (env as Record<string, unknown> | null | undefined)?.[binding];
+    const startWorkflowInstance = async (
+        binding: string,
+        args: Record<string, unknown>,
+        source: { context?: ExecutionContextLike; env: unknown },
+        label: string,
+        instanceId?: string,
+    ): Promise<void> => {
+        const candidate = resolveWorkflowHandle<WorkflowBindingLike>(source.env, source.context?.exports, binding, ["create"]);
 
-        if (!candidate || typeof (candidate as { create?: unknown }).create !== "function") {
-            throw new LunoraError(`${label} targets workflow binding "${binding}", which is not bound on env`, {
+        if (candidate === undefined) {
+            throw new LunoraError(`${label} targets workflow "${binding}", which is on neither ctx.exports nor env`, {
                 code: "CRON_JOB_FAILED",
                 status: 500,
             });
@@ -3301,7 +3328,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         try {
-            await (candidate as WorkflowBindingLike).create(instanceId === undefined ? { params: args } : { id: instanceId, params: args });
+            await candidate.create(instanceId === undefined ? { params: args } : { id: instanceId, params: args });
         } catch (error: unknown) {
             if (!isDuplicateInstanceError(error)) {
                 throw error;
@@ -3315,9 +3342,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * Throws a {@link LunoraError} on failure so both the scheduled-fire loop and
      * the manual `/cron-jobs/run` trigger surface the same error shape.
      */
-    const runOneCronJob = async (job: CronJobDispatch, env: unknown, traceparent?: string): Promise<void> => {
+    const runOneCronJob = async (job: CronJobDispatch, env: unknown, context: ExecutionContextLike | undefined, traceparent?: string): Promise<void> => {
         if (job.workflow) {
-            await startWorkflowInstance(job.workflow, job.args ?? {}, env, `cron job "${job.name}"`);
+            await startWorkflowInstance(job.workflow, job.args ?? {}, { context, env }, `cron job "${job.name}"`);
 
             return;
         }
@@ -3378,7 +3405,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * @returns how many jobs were declared under `cron` — 0 means the expression
      * matched nothing, which the caller reports rather than treating as success.
      */
-    const runCronJobs = async (cron: string, env: unknown, errors: Error[], toError: (error: unknown) => Error, traceparent?: string): Promise<number> => {
+    const runCronJobs = async (
+        cron: string,
+        env: unknown,
+        context: ExecutionContextLike,
+        errors: Error[],
+        toError: (error: unknown) => Error,
+        traceparent?: string,
+    ): Promise<number> => {
         const cronJobs = options.cronJobs?.[cron];
 
         if (!cronJobs) {
@@ -3388,7 +3422,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         for (const job of cronJobs) {
             try {
                 // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
-                await runOneCronJob(job, env, traceparent);
+                await runOneCronJob(job, env, context, traceparent);
             } catch (error: unknown) {
                 errors.push(toError(error));
             }
@@ -3404,7 +3438,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * once, and reports success or the dispatch error. Admin-gated like the other
      * `/_lunora/admin/*` mutations.
      */
-    const handleRunCronJob = async (request: Request, env: unknown): Promise<Response> => {
+    const handleRunCronJob = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
         assertAdminAuthorized(request);
 
         assertMethod(request, "POST", "cron-jobs run");
@@ -3428,7 +3462,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError(`no cron job named "${name}" is registered`, { code: "CRON_JOB_NOT_FOUND", status: 404 });
         }
 
-        await runOneCronJob(job, env);
+        await runOneCronJob(job, env, context);
 
         return Response.json({ name, ran: true }, { status: 200 });
     };
@@ -3486,7 +3520,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * gate judges end-user callers and does not run here (see
      * {@link WorkerOptions.authorizeShard}).
      */
-    const handleSchedulerDispatch = async (request: Request, env: unknown): Promise<Response> => {
+    const handleSchedulerDispatch = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
         assertMethod(request, "POST", "Scheduler dispatch");
 
         // Read the raw body verbatim (byte-budgeted) — the HMAC is computed over
@@ -3551,7 +3585,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // A workflow/agent target starts a durable instance (the args become its
         // `params`) rather than dispatching a function to a shard — the
-        // `WORKFLOW_*`/`AGENT_*` binding lives on the runtime's `env`, not the DO.
+        // workflow/agent is reached off the Worker's `ctx.exports` (or `env`), not the DO.
         // The record id becomes the INSTANCE id, so a re-fire attaches to the
         // running instance instead of starting a second one; the function path
         // below spends the same id as the shard's replay-dedup `mutationId`.
@@ -3569,7 +3603,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // as a string. The wire form IS JSON-safe, so it travels intact and
             // `@lunora/workflow`'s `createWorkflowRunContext` decodes it where the
             // handler reads `params`.
-            await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow", recordId);
+            await startWorkflowInstance(candidate.workflow, args, { context, env }, "scheduled workflow", recordId);
 
             await releasePoolSlot(candidate);
 
@@ -3734,9 +3768,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // The data-movement admin routes (export / sync / connector-sync / apply /
     // import) live in a sibling module; the export/import row producers are
     // injected because they close over the worker options and are shared with
-    // the scheduled R2 backup (mirroring the other extracted clusters). Threads the
-    // shared `requireAdminOption` gate helper like its siblings (every route gates
-    // behind the coordinator option, so no bare `assertAdmin` is needed).
+    // the scheduled R2 backup (mirroring the other extracted clusters).
     const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
         applyGlobals: options.applyGlobals,
         assertAdmin: assertAdminAuthorized,
@@ -3749,12 +3781,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // that host, and leaving this blind kept CDC sync and the export tap
         // discovering no shards at all.
         knownTables: () => [...(options.listSchemaTables?.() ?? [])],
-        queryCoordinator: options.queryCoordinator,
-        requireAdminOption,
+        queryCoordinator,
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
-        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
-        streamingImport: (request, headers) => streamingImport(request, options, headers, shardDO),
+        prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
+        streamingImport: (request, headers) => streamingImport(request, options, queryCoordinator, headers, shardDO),
         syncGlobals: options.syncGlobals,
     });
 
@@ -3869,6 +3900,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             cronJobs: options.cronJobs,
             functions: options.functions,
             globalIntrospector: options.globalIntrospector,
+            architecture: options.architecture,
             openApiSpec: options.openApiSpec,
             openRpcSpec: options.openRpcSpec,
         },
@@ -4695,13 +4727,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
-     * The three pre-dispatch envelope-shape guards, hoisted out of {@link handleRpc}
+     * The two pre-dispatch envelope-shape guards, hoisted out of {@link handleRpc}
      * so the hot path stays flat: (1) `fanOut` + `shardKey` are mutually exclusive;
      * (2) a `__lunora_relation__:*` single-shard envelope would bypass the
      * `authorizeFanOut` gate and read raw rows, so it is refused (the literal prefix
-     * is inlined to keep the runtime free of a `@lunora/do` dependency); (3) a
-     * `fanOut` envelope is rejected BEFORE `resolveIdentity` runs when no coordinator
-     * is configured, so a request already destined for a 400 wastes no identity IO.
+     * is inlined to keep the runtime free of a `@lunora/do` dependency).
      */
     const assertDispatchableEnvelope = (envelope: RpcEnvelope): void => {
         if (envelope.fanOut && envelope.shardKey) {
@@ -4710,13 +4740,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (!envelope.fanOut) {
             assertNotReservedRelationPath(envelope.functionPath);
-        }
-
-        if (envelope.fanOut && !options.queryCoordinator) {
-            throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
-                code: "BAD_REQUEST",
-                status: 400,
-            });
         }
     };
 
@@ -4731,9 +4754,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // are visible; off by default.
         logRpcDebug(env, envelope);
 
-        // Throwing envelope guards: fan-out+shardKey, the fan-out-only relation
-        // prefix, and fan-out without a coordinator (checked BEFORE `resolveIdentity`
-        // so a doomed request never triggers the identity hook's DB/IO).
+        // Throwing envelope guards: fan-out+shardKey and the fan-out-only relation
+        // prefix (checked BEFORE `resolveIdentity` so a doomed request never
+        // triggers the identity hook's DB/IO).
         assertDispatchableEnvelope(envelope);
 
         // Reserved single-shard RPCs served at the worker boundary instead of being
@@ -4764,8 +4787,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const x402Tag = resolveX402Charge(envelope, options);
 
         {
-            // Timing wraps the dispatch only — envelope parse + coordinator
-            // gate + identity resolution happen above and are not part of
+            // Timing wraps the dispatch only — envelope parse + envelope
+            // guards + identity resolution happen above and are not part of
             // the user-observable RPC duration we report.
             const rpcStartedAt = Date.now();
             const { observability } = options;
@@ -4776,19 +4799,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const sinkContext = buildSinkContext(env, request, context && ((promise) => context.waitUntil?.(promise)));
 
             if (envelope.fanOut) {
-                // Coordinator presence was checked above; re-assert for the
-                // type system without a non-null assertion.
-                const coordinator = options.queryCoordinator;
-
-                if (!coordinator) {
-                    throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
-                        code: "BAD_REQUEST",
-                        status: 400,
-                    });
-                }
-
                 try {
-                    const result = await coordinator.fanOut(shardDO, {
+                    const result = await queryCoordinator.fanOut(shardDO, {
                         args: envelope.args ?? {},
                         fanOut: envelope.fanOut,
                         functionPath: envelope.functionPath,
@@ -5333,14 +5345,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         // Code-defined crons: run every job declared under the firing expression.
-        // Failures join `errors` for the combined rethrow below. `env` carries the
-        // `WORKFLOW_*` bindings a workflow-targeting job starts an instance on.
-        const ranJobs = await runCronJobs(controller.cron, env, errors, toError, traceparent);
+        // Failures join `errors` for the combined rethrow below. A workflow-targeting
+        // job starts its instance off the Worker's `ctx.exports` (or `env`).
+        const ranJobs = await runCronJobs(controller.cron, env, context, errors, toError, traceparent);
         const isBackupCron = Boolean(options.backupStore) && options.backupCron !== undefined && options.backupCron === controller.cron;
 
         if (isBackupCron) {
             try {
-                await runScheduledBackup(options, shardDO, effectiveAdminToken(), controller);
+                await runScheduledBackup(options, queryCoordinator, shardDO, effectiveAdminToken(), controller);
             } catch (error: unknown) {
                 errors.push(toError(error));
             }
@@ -5539,8 +5551,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
-        [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
-        [CRON_JOBS_RUN_PATH]: (request, env) => handleRunCronJob(request, env),
+        [SCHEDULER_DISPATCH_PATH]: (request, env, _url, context) => handleSchedulerDispatch(request, env, context),
+        [CRON_JOBS_RUN_PATH]: (request, env, _url, context) => handleRunCronJob(request, env, context),
         // Mint a short-lived HMAC-signed WS admin sub-token. Gated by the master
         // admin bearer (header) / `adminGate`; the studio then sends the minted
         // token — not the master credential — in the WS `?token=`

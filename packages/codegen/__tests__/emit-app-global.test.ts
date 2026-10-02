@@ -26,8 +26,9 @@ const baseOptions = {
     hasVectors: false,
     hasWorkflow: false,
     hasX402: false,
-    tableNames: [],
+    tables: [],
     useUmbrella: false,
+    wantsArchitecture: false,
     wantsOpenApi: false,
     wantsOpenRpc: false,
 };
@@ -39,24 +40,60 @@ const baseOptions = {
 // already imports when the app has a D1-backed `.global()` table, so codegen
 // emits them the same way it already emits `runShardExport`/`runShardImport`.
 describe("emitApp — admin bulk-import wiring (.global())", () => {
-    it("wires options.resolveTableSharding + options.importGlobals when the app has a .global() table", () => {
-        expect.assertions(4);
-
-        const output = emitApp({ ...baseOptions, hasGlobal: true });
-
-        expect(output).toContain("options.resolveTableSharding = buildTableShardingResolver();");
-        expect(output).toContain("options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);");
-        expect(output).toContain("const buildTableShardingResolver = (): AdminTableResolver =>");
-        expect(output).toContain("const buildGlobalImporter =");
-    });
-
-    it("resolveTableSharding is a mechanical lookup over each table's declared shardMode", () => {
+    it("wires options.importGlobals when the app has a .global() table", () => {
         expect.assertions(2);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
-        expect(output).toContain('const declared = (schema as unknown as D1CtxDbOptions["schema"]).tables[table];');
-        expect(output).toContain("return declared?.shardMode ? { mode: declared.shardMode } : undefined;");
+        expect(output).toContain("options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);");
+        expect(output).toContain("const buildGlobalImporter =");
+    });
+
+    it("wires resolveTableSharding from a literal table map for every app, .global() or not", () => {
+        expect.assertions(3);
+
+        const output = emitApp({
+            ...baseOptions,
+            tables: [
+                { name: "users", shardMode: "root" },
+                { name: "messages", shardMode: { field: "channelId", kind: "shardBy" } },
+                { name: "settings", shardMode: "global" },
+            ],
+        });
+
+        expect(output).toContain(
+            [
+                "        const tableSharding = new Map<string, ShardingInfo>([",
+                '            ["users", { mode: { kind: "root" } }],',
+                '            ["messages", { mode: { field: "channelId", kind: "shardBy" } }],',
+                '            ["settings", { mode: { kind: "global" } }],',
+                "        ]);",
+            ].join("\n"),
+        );
+        expect(output).toContain("options.listSchemaTables = () => [...tableSharding.keys()];");
+        expect(output).toContain("options.resolveTableSharding = (table) => tableSharding.get(table);");
+    });
+
+    it("wires a .shardRegistry() declaration into both the shard and the worker's coordinator", () => {
+        expect.assertions(4);
+
+        const output = emitApp({ ...baseOptions, tables: [{ name: "messages", shardMode: { field: "channelId", kind: "shardBy" } }] });
+
+        expect(output).toContain("public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {");
+        expect(output).toContain(
+            "...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),",
+        );
+        expect(output).toContain("options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry }) });");
+        expect(output).toContain("import { createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv }");
+    });
+
+    it("offers no .shardRegistry() to a schema without .shardBy() tables", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, tables: [{ name: "users", shardMode: "root" }] });
+
+        expect(output).not.toContain("shardRegistry");
+        expect(output).not.toContain("createDynamicShardRegistry");
     });
 
     it("importGlobals routes rows through @lunora/d1's importGlobalRows over the same D1 writer", () => {
@@ -82,14 +119,6 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
             "const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {",
         );
         expect(output).toContain("return retryingExec({");
-    });
-
-    it("imports AdminTableResolver from @lunora/runtime alongside GlobalIntrospector", () => {
-        expect.assertions(1);
-
-        const output = emitApp({ ...baseOptions, hasGlobal: true });
-
-        expect(output).toContain("AdminTableResolver");
     });
 
     it("omits the admin-import wiring entirely for an app with no .global() table", () => {

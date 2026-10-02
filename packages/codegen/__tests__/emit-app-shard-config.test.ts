@@ -26,8 +26,9 @@ const baseOptions = {
     hasVectors: false,
     hasWorkflow: false,
     hasX402: false,
-    tableNames: [],
+    tables: [],
     useUmbrella: false,
+    wantsArchitecture: false,
     wantsOpenApi: false,
     wantsOpenRpc: false,
 };

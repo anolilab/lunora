@@ -16,6 +16,7 @@ import type { ContainerExecOptions, ContainerExecResult } from "./exec";
 import { CONTAINER_EXEC_HEADER, execViaFetch, pathMatchesAnyDecoding } from "./exec";
 import type { DurableObjectJurisdiction } from "./jurisdiction";
 import { applyJurisdiction } from "./jurisdiction";
+import type { ContainerRuntimeInstanceType, ContainerSnapshot } from "./types";
 
 /**
  * Options for explicitly starting an instance (mirrors `@cloudflare/containers`).
@@ -40,8 +41,29 @@ interface ContainerStartOptions {
      * for as long as the instance exists.
      */
     envVars?: Record<string, string>;
+
+    /**
+     * The image to start (`schedulingPolicy: "durable_object"` only): a key of
+     * the definition's `images`, or a Cloudflare-managed `"cloudflare/…"` image.
+     * Persisted like `envVars`, so the implicit restart after a sleep boots the
+     * same image. Mutually exclusive with `snapshot`.
+     */
+    image?: string;
+
+    /**
+     * The instance size (`schedulingPolicy: "durable_object"` only). Persisted
+     * with `image`; defaults to the definition's `instanceType`, else `"lite"`.
+     */
+    instanceType?: ContainerRuntimeInstanceType;
     /** Metadata labels attached for metrics/observability. */
     labels?: Record<string, string>;
+
+    /**
+     * Restore a filesystem saved by `snapshot()` instead of starting from an
+     * image (`schedulingPolicy: "durable_object"` only). Applies to this start
+     * only — a later restart after a sleep boots the image again.
+     */
+    snapshot?: ContainerSnapshot;
 }
 
 /**
@@ -66,6 +88,8 @@ interface ContainerStubLike {
     getState?: () => Promise<ContainerInstanceState>;
     /** The container DO's exec entry (`LunoraContainer.lunoraExec`), the only way a request reaches `/__lunora/exec`. */
     lunoraExec?: (request: Request) => Promise<Response>;
+    /** The container DO's snapshot entry (`LunoraContainer.lunoraSnapshot`). */
+    lunoraSnapshot?: (options?: { name?: string }) => Promise<ContainerSnapshot>;
     removeAllowedHost?: (hostname: string) => Promise<void>;
     removeDeniedHost?: (hostname: string) => Promise<void>;
     renewActivityTimeout?: () => Promise<void>;
@@ -160,6 +184,14 @@ interface ContainerInstanceHandle extends ContainerHandle {
      * nor a WS message — e.g. a long out-of-band job running inside it.
      */
     renewActivityTimeout: () => Promise<void>;
+
+    /**
+     * Save the running container's filesystem and return a handle to restore it
+     * with `start({ snapshot })` — here or in another instance of the same
+     * container (`schedulingPolicy: "durable_object"` only; Cloudflare beta).
+     * Memory and processes are not captured.
+     */
+    snapshot: (options?: { name?: string }) => Promise<ContainerSnapshot>;
     /** Explicitly start the instance, optionally with per-instance env/entrypoint. */
     start: (options?: ContainerStartOptions) => Promise<void>;
     /** Stop the instance (optionally with a signal); it can start again on the next request. */
@@ -722,6 +754,7 @@ const instanceHandleFor = (
         egress: egressControlsFor(stub, spec.binding),
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
         renewActivityTimeout: async () => lifecycleCall(stub(), "renewActivityTimeout", spec.binding),
+        snapshot: async (snapshotOptions) => lifecycleCall(stub(), "lunoraSnapshot", spec.binding, snapshotOptions),
         start: async (startOptions) => lifecycleCall(stub(), "start", spec.binding, startOptions),
         stop: async (signal) => lifecycleCall(stub(), "stop", spec.binding, signal),
     };
@@ -934,6 +967,8 @@ const testNamespaceFor = (handler: ContainerTestHandler): ContainerNamespaceLike
             destroy: () => Promise.resolve(),
             fetch: (request) => Promise.resolve(handler(request, { name })),
             lunoraExec: (request) => Promise.resolve(handler(request, { name })),
+            lunoraSnapshot: (options) =>
+                Promise.resolve({ id: `test-snapshot-${name}`, size: 0, ...(options?.name === undefined ? {} : { name: options.name }) }),
             getState: () => Promise.resolve({ lastChange: 0 }),
             removeAllowedHost: () => Promise.resolve(),
             removeDeniedHost: () => Promise.resolve(),

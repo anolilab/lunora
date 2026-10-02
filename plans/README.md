@@ -1828,3 +1828,13 @@ Building those surfaced two bugs worth remembering — the conformance reference
 host could not serve a `PRAGMA` read (breaking any pragma-guarded `ALTER TABLE`),
 and a reactor's writes were staged but never flushed, so no subscriber saw them
 and the actor cascade never happened.
+
+## Encore parity (baseline `30823cc90`, 2026-10-01)
+
+Gaps against Encore that fit Lunora's single-app, Cloudflare-first model. Multi-cloud
+provisioning and per-service deploy were considered and left out.
+
+| Plan | Title                                                                                     | Status      |
+| ---- | ----------------------------------------------------------------------------------------- | ----------- |
+| 455  | [Pub/Sub topics: one publish, N durable subscriptions](455-queue-topics-fanout.md)        | IN PROGRESS |
+| 456  | [Modules: catalog, call graph, architecture diagram](456-modules-catalog-architecture.md) | IN PROGRESS |

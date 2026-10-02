@@ -16,6 +16,9 @@ import { internal } from "../../lunora/_generated/api.js";
 import { defineApp } from "../../lunora/_generated/app.js";
 import { rememberIssuedJob, wasJobIssued } from "./issued-jobs";
 
+// The registry of which shards hold `.shardBy()` rows — `.shardRegistry(...)`
+// below points at it, and cross-shard export / CDC sync fan out to what it lists.
+export { ShardRegistryDO } from "../../lunora/_generated/shardRegistry.js";
 // WorkflowEntrypoint class for `lunora/workflows.ts` — wrangler requires every
 // declared `workflows[].class_name` to be exported by the worker entry.
 export { ChannelWelcomeWorkflow } from "../../lunora/_generated/workflows.js";
@@ -55,6 +58,7 @@ interface Env extends Record<string, unknown> {
     MAIL_FROM?: string;
     SCHEDULER: DurableObjectNamespaceLike & ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
+    SHARD_REGISTRY: ShardNamespaceLike;
     STORAGE_SECRET?: string;
 }
 
@@ -167,6 +171,7 @@ const authOptions = (env: Env): LunoraAuthOptions => {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .shardRegistry((env) => env.SHARD_REGISTRY)
     // Required by `lunora/shapes.ts`: a shard-local `defineShape` replicates out
     // of `__cdc_log`, so without this the subscribe is refused. It used to be
     // accepted and then never deliver another row, which is how this app shipped

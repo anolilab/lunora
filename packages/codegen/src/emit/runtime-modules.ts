@@ -1,5 +1,6 @@
-import type { CronJobIR, VectorIndexIR } from "../ir";
-import { GENERATED_HEADER } from "./shared";
+import type { CronJobIR, TableIR, VectorIndexIR } from "../ir";
+import { isShardByTable } from "../ir";
+import { baseSpecifiers, GENERATED_HEADER } from "./shared";
 
 /**
  * Emit `_generated/crons.ts` from the discovered cron jobs.
@@ -64,6 +65,38 @@ export { SchedulerDO } from "@lunora/scheduler";
 `;
 };
 
+/**
+ * `_generated/shardRegistry.ts` — the `ShardRegistryDO` class, emitted only for a
+ * schema with `.shardBy()` tables (the file is not written otherwise).
+ *
+ * The scheduler module's twin, for the same reason: the class-A composed entry
+ * forwards this module and adds the builder's `.shardRegistry(...)` call off
+ * this FILE's existence, and binding inference provisions `SHARD_REGISTRY` off
+ * the same signal — so none of the three can disagree about whether the app has
+ * a registry.
+ */
+const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, useUmbrella: boolean): string => {
+    if (!tables.some((table) => isShardByTable(table))) {
+        return "";
+    }
+
+    return `${GENERATED_HEADER}/**
+ * The \`ShardRegistryDO\` Durable Object class — the live set of shard keys per
+ * \`.shardBy()\` table, which cross-shard export, CDC sync and migrations fan out
+ * to. Re-exported so a worker entry can forward it (wrangler binds only what the
+ * entry exports), next to \`.shardRegistry((env) => env.SHARD_REGISTRY)\`:
+ *
+ * \`export { ShardRegistryDO } from "./lunora/_generated/shardRegistry.js";\`
+ *
+ * Name the class in a hand-written entry: binding inference provisions
+ * \`SHARD_REGISTRY\` off the entry's named exports, and cannot see through an
+ * \`export *\`. A Vite-first (class-A) app needs neither line — its generated
+ * worker entry does both whenever this module exists.
+ */
+export { ShardRegistryDO } from "${baseSpecifiers(useUmbrella).do}";
+`;
+};
+
 const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     const byExpression = new Map<string, CronJobIR[]>();
 
@@ -88,7 +121,7 @@ const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
                     // its `params`); a function target dispatches `namespace:fn` to
                     // the shard. The two are mutually exclusive in the emitted entry.
                     const targetField = job.workflow
-                        ? `workflow: ${JSON.stringify(job.workflow.binding)}`
+                        ? `workflow: ${JSON.stringify(job.workflow.className)}`
                         : `functionPath: ${JSON.stringify(job.functionPath)}`;
 
                     return `        { name: ${JSON.stringify(job.name)}, ${targetField}, args: ${JSON.stringify(job.args)} },`;
@@ -104,7 +137,7 @@ const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     return `${GENERATED_HEADER}/**
  * One scheduled cron invocation. Exactly one target is set: \`functionPath\` is
  * the \`namespace:fn\` dispatch ref (matches \`__lunoraRef\`), invoked on the
- * shard; \`workflow\` is a \`WORKFLOW_*\` binding name whose durable workflow is
+ * shard; \`workflow\` is a workflow class name (its \`ctx.exports\` key) whose durable workflow is
  * started fresh per fire. \`args\` are forwarded verbatim (a workflow's become
  * its \`params\`).
  */
@@ -201,4 +234,4 @@ export const LUNORA_VECTOR_INDEXES: ReadonlyArray<LunoraVectorIndex> = [${body}]
  */
 const emitWranglerCronTriggers = (crons: ReadonlyArray<CronJobIR>): string[] => [...new Set(crons.map((cron) => cron.cron))];
 
-export { emitCrons, emitScheduler, emitVectors, emitWranglerCronTriggers };
+export { emitCrons, emitScheduler, emitShardRegistry, emitVectors, emitWranglerCronTriggers };

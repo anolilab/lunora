@@ -89,6 +89,7 @@ const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-ad
 const AgentsPanel = lazy(() => import("../features/agents/agents-panel"));
 const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
 const ApiTab = lazy(() => import("../features/api/api-tab"));
+const ArchitecturePanel = lazy(() => import("../features/architecture/architecture-panel"));
 const AuthAuditPanel = lazy(() => import("../features/auth/auth-audit-panel"));
 const AuthConfigPanel = lazy(() => import("../features/auth/auth-config-panel"));
 const AuthSessionsPanel = lazy(() => import("../features/auth/auth-sessions-panel"));
@@ -150,6 +151,7 @@ const FileBrowser = lazyNamed(() => import("../features/storage/file-browser"), 
 const StorageRulesPanel = lazy(() => import("../features/storage/storage-rules-panel"));
 const TracesPanel = lazy(() => import("../features/traces/traces-panel"));
 const EvalsPanel = lazy(() => import("../features/evals/evals-panel"));
+const AiUsagePanel = lazy(() => import("../features/ai-usage/ai-usage-panel"));
 const VectorBrowser = lazyNamed(() => import("../features/vectors/vector-browser"), "VectorBrowser");
 const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"));
 
@@ -310,6 +312,7 @@ const StudioChromeContext = createContext<StudioChrome | null>(null);
 const TAB_ICONS: Record<StudioTab, ReactNode> = {
     analytics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     api: <path d="m9 8-4 4 4 4m6-8 4 4-4 4M13 5l-2 14" />,
+    architecture: <path d="M4 4h6v5H4V4Zm10 0h6v5h-6V4ZM9 15h6v5H9v-5ZM7 9v3h10V9M12 12v3" />,
     audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
     authAudit: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8h6m-6 3h6" />,
     authConfig: (
@@ -334,6 +337,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     flags: <path d="M6 21V4m0 0h11l-2 3 2 3H6" />,
     functions: <path d="m9 8-4 4 4 4m6-8 4 4-4 4" />,
     evals: <path d="M4 19V5m0 14h16M8 15l3-4 3 3 4-6M8 15v.01" />,
+    aiUsage: <path d="M12 3v3m0 12v3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M3 12h3m12 0h3M5.6 18.4l2.1-2.1m8.6-8.6 2.1-2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" />,
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
     home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
@@ -380,7 +384,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
-    { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues"] },
+    { key: "functions", tabs: ["functions", "api", "architecture", "workflows", "agents", "queues"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authAudit", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
     {
@@ -390,6 +394,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
             "logs",
             "traces",
             "evals",
+            "aiUsage",
             "audit",
             "realtime",
             "reactors",
@@ -438,6 +443,7 @@ const TABS = exhaustiveRouteTabs([
     "sql",
     "functions",
     "api",
+    "architecture",
     "workflows",
     "agents",
     "queues",
@@ -469,6 +475,7 @@ const TABS = exhaustiveRouteTabs([
     "logs",
     "traces",
     "evals",
+    "aiUsage",
     "reactors",
     "realtime",
     "fanout",
@@ -1052,6 +1059,7 @@ const buildRouter = ({
         agents: <AgentsPanel initialShardKey={initialShardKey} />,
         analytics: <AnalyticsPanel runQuery={analyticsQuery} />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
+        architecture: <ArchitecturePanel />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         authAudit: <AuthAuditPanel />,
         authConfig: <AuthConfigPanel />,
@@ -1084,6 +1092,7 @@ const buildRouter = ({
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         traces: <TracesPanel initialShardKey={initialShardKey} />,
         evals: <EvalsPanel initialShardKey={initialShardKey} />,
+        aiUsage: <AiUsagePanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsRoutePanel initialShardKey={initialShardKey} />,
         notifications: <NotificationsPanel />,

@@ -1,11 +1,12 @@
 export type { QueueCaptureOptions, QueueEnv } from "./capture";
 export { createQueueCaptureSink, shouldCaptureQueue } from "./capture";
 export { createQueueContext } from "./create-queue-context";
-export { default as createQueues } from "./create-queues";
+export { createQueues } from "./create-queues";
 export { defineQueue, isQueueDefinition, queueBindingName, queueDefaultName } from "./define-queue";
 export type { CapturedQueueMessage, QueueCaptureSink, QueueRegistry, QueueRegistryEntry } from "./dispatch";
 export { dispatchQueueBatch } from "./dispatch";
 export { createQueueRunContext } from "./run-context";
+export { createTopicContext, defineSubscription, defineTopic } from "./topics";
 export type {
     ArgsOf,
     FunctionReference,
@@ -32,4 +33,10 @@ export type {
     QueueSendBatchOptions,
     QueueSendOptions,
     RunFunctionOptions,
+    SubscriptionConfig,
+    SubscriptionDefinition,
+    TopicBindingSpec,
+    TopicDefinition,
+    TopicPublisher,
+    Topics,
 } from "./types";

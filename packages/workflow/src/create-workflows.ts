@@ -9,6 +9,7 @@ import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch
 import { eventDefinitionProblem } from "./define-event";
 import type {
     LunoraWorkflowsOptions,
+    WorkflowBatchDeleteResult,
     WorkflowBindingLike,
     WorkflowCreateOptions,
     WorkflowEventDefinition,
@@ -47,6 +48,7 @@ const handleFor = (binding: WorkflowBindingLike): WorkflowHandle => {
 
             return binding.createBatch(batch);
         },
+        deleteBatch: async (instanceIds: ReadonlyArray<string>): Promise<WorkflowBatchDeleteResult> => binding.deleteBatch(instanceIds),
         get: async (id: string): Promise<WorkflowInstanceLike> => binding.get(id),
         sendEvent: async <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload): Promise<void> => {
             // The trust boundary, mirroring `rejectReservedParams` above: the brand

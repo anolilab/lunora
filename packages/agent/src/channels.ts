@@ -25,6 +25,7 @@ import { isDuplicateInstanceError } from "@lunora/workflow";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { fnv1a64Hex } from "../../../shared/fnv1a";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import type { AgentChannelRun, AgentDefinition, AgentInboundChannelKind, AgentWorkflowBindingLike, InboundChannelEvent } from "./types";
 
 /** Max age (seconds) of a signed request before it is rejected as a replay. */
@@ -157,15 +158,22 @@ const verifyDiscord = async (options: {
 interface AgentChannelTarget {
     /** The agent definition — only its `onInbound` config is read. */
     agent: Pick<AgentDefinition, "onInbound">;
-    /** The `AGENT_*` Workflow binding name (off `env`) that starts a run. */
-    binding: string;
+    /** The agent's export key (its generated class name), resolved off `ctx.exports` or `env`. */
+    className: string;
 }
 
 /**
  * The HTTP handler `dispatchAgentChannel` returns — mount it on a webhook route.
  * @experimental
  */
-type InboundChannelHandler = (request: Request, env: Record<string, unknown>) => Promise<Response>;
+
+/**
+ * A Worker `fetch`-shaped handler. The Worker `ctx` is required: on Cloudflare
+ * the agent is reached as `ctx.exports.<Class>`, so a handler mounted without it
+ * could never start a run (from an `httpRouter` route: `handler(c.req.raw,
+ * c.env, c.executionCtx)`).
+ */
+type InboundChannelHandler = (request: Request, env: Record<string, unknown>, context: { exports?: unknown }) => Promise<Response>;
 
 /** Detect the channel from the request's signature headers (route-agnostic). */
 const detectChannel = (headers: Headers): AgentInboundChannelKind | undefined => {
@@ -331,7 +339,7 @@ const startChannelRun = async (workflow: AgentWorkflowBindingLike, run: AgentCha
  */
 const dispatchAgentChannel =
     (targets: ReadonlyArray<AgentChannelTarget>): InboundChannelHandler =>
-    async (request, env) => {
+    async (request, env, context) => {
         const body = await request.text();
         const channel = detectChannel(request.headers);
 
@@ -374,12 +382,12 @@ const dispatchAgentChannel =
                 continue;
             }
 
-            const workflow = env[target.binding] as AgentWorkflowBindingLike | undefined;
+            const workflow = resolveWorkflowHandle<AgentWorkflowBindingLike>(env, context.exports, target.className, ["create"]);
 
-            if (!workflow || typeof workflow.create !== "function") {
+            if (workflow === undefined) {
                 throw new LunoraError(
                     "INTERNAL",
-                    `@lunora/agent: no Workflow binding "${target.binding}" on env for an inbound-channel agent — run codegen/dev so wrangler.jsonc declares it`,
+                    `@lunora/agent: no "${target.className}" on ctx.exports or env for an inbound-channel agent — run codegen/dev so wrangler.jsonc declares it`,
                 );
             }
 

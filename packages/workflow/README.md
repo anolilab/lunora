@@ -192,7 +192,9 @@ export const checkout = mutation.input({ orderId: v.string() }).mutation(async (
 });
 ```
 
-A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `get(id)`, and `sendEvent(instanceId, event, payload)` — the typed delivery of a declared event (see above). `create`/`get` return the native Cloudflare instance, which exposes its own lifecycle: `status()`, `pause()`, `resume()`, `restart()`, `terminate()`, and the untyped `sendEvent({ type, payload })`.
+A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `deleteBatch([...ids])` (up to 100), `get(id)`, and `sendEvent(instanceId, event, payload)` — the typed delivery of a declared event (see above). `create`/`get` return the native Cloudflare instance, which exposes its own lifecycle: `status()`, `pause()`, `resume()`, `restart()`, `terminate()`, `delete()`, `subscribe({ cursor?, filter? })` (streams the instance's event history, then new events), and the untyped `sendEvent({ type, payload })`.
+
+`defineWorkflow` also takes deploy settings, which codegen writes into the workflow's `wrangler.jsonc` entry: `schedules` (cron expressions that each start an instance), `limits: { steps }`, and `defaultRetention: { successRetention, errorRetention }`. Scheduled workflows are refused on the Node and celld targets.
 
 ### Runtime requirements
 
@@ -204,7 +206,7 @@ A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `
 ### Manual wiring (without codegen)
 
 1. Author `lunora/workflows.ts` as above.
-2. Re-export the generated class from your worker entry — wrangler requires every `workflows[].class_name` to be exported:
+2. Re-export the generated class from your worker entry — wrangler requires every workflow export to be a class the worker exports:
 
     ```ts
     import LunoraWorkflow from "@lunora/workflow/do";
@@ -217,17 +219,17 @@ A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `
     }
     ```
 
-3. Add the binding to `wrangler.jsonc`:
+3. Declare it in `wrangler.jsonc`'s `exports` (Wrangler 4.142.0+):
 
     ```jsonc
     {
-        "workflows": [{ "name": "order-pipeline", "binding": "WORKFLOW_ORDER_PIPELINE", "class_name": "OrderPipelineWorkflow" }],
+        "exports": { "OrderPipelineWorkflow": { "type": "workflow", "name": "order-pipeline" } },
     }
     ```
 
-4. Build `ctx.workflows` from the binding: `createWorkflows({ bindings: { orderPipeline: env.WORKFLOW_ORDER_PIPELINE } })`.
+4. Build `ctx.workflows` from the invoking context's exports: `createWorkflows({ bindings: { orderPipeline: ctx.exports.OrderPipelineWorkflow } })`.
 
-The `workflowClassName` / `workflowBindingName` / `workflowDefaultName` helpers produce exactly these names so codegen and config never disagree.
+The `workflowClassName` / `workflowDefaultName` helpers produce exactly these names so codegen and config never disagree.
 
 ### Observing instances (REST client)
 

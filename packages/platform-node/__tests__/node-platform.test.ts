@@ -77,7 +77,7 @@ describe("createNodePlatform", () => {
 
             const workflows = platform.workflows!;
 
-            expect(workflows.env.WORKFLOW_ORDER_PIPELINE).toBe(workflows.bindings.orderPipeline);
+            expect(workflows.env.OrderPipelineWorkflow).toBe(workflows.bindings.orderPipeline);
 
             // Nothing declared, nothing bound — an empty host would suggest
             // `ctx.workflows` / `ctx.storage` work with no workflow to trigger

@@ -166,14 +166,14 @@ describe("schedulerDO", () => {
         const now = Date.now();
 
         // A workflow/agent schedule carries a `workflow` binding instead of a functionPath.
-        const response = await scheduler.fetch(post("/schedule", { args: { prompt: "digest" }, scheduledFor: now - 1000, workflow: "AGENT_SUPPORT" }));
+        const response = await scheduler.fetch(post("/schedule", { args: { prompt: "digest" }, scheduledFor: now - 1000, workflow: "SupportAgentWorkflow" }));
 
         expect(response.status).toBe(200);
 
         await scheduler.alarm();
 
         expect(scheduler.dispatched).toHaveLength(1);
-        expect(scheduler.dispatched[0]?.workflow).toBe("AGENT_SUPPORT");
+        expect(scheduler.dispatched[0]?.workflow).toBe("SupportAgentWorkflow");
         // The stored record carries no functionPath — the two targets are exclusive.
         expect(scheduler.dispatched[0]?.functionPath).toBeUndefined();
     });

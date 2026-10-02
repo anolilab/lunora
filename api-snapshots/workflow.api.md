@@ -185,12 +185,28 @@ interface WaitForEventOptions {
 }
 ```
 
+### `WorkflowBatchDeleteResult` (interface)
+
+```ts
+interface WorkflowBatchDeleteResult {
+    deleted: {
+        id: string;
+    }[];
+    errors: {
+        code: number;
+        id: string;
+        message: string;
+    }[];
+}
+```
+
 ### `WorkflowBindingLike` (interface)
 
 ```ts
 interface WorkflowBindingLike<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
 }
 ```
@@ -199,7 +215,7 @@ interface WorkflowBindingLike<Params = Record<string, unknown>> {
 
 ```ts
 interface WorkflowBindingSpec {
-    binding: string;
+    className: string;
     exportName: string;
 }
 ```
@@ -229,8 +245,13 @@ type WorkflowBranchOutputs<B extends ReadonlyArray<WorkflowBranch>> = {
 
 ```ts
 interface WorkflowConfig<Params = Record<string, unknown>, Output = unknown> {
+    defaultRetention?: WorkflowRetention;
     handler: WorkflowHandler<Params, Output>;
+    limits?: {
+        steps?: number;
+    };
     name?: string;
+    schedules?: ReadonlyArray<string>;
 }
 ```
 
@@ -240,10 +261,7 @@ interface WorkflowConfig<Params = Record<string, unknown>, Output = unknown> {
 interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     id?: string;
     params?: Params;
-    retention?: {
-        errorRetention?: string;
-        successRetention?: string;
-    };
+    retention?: WorkflowRetention;
 }
 ```
 
@@ -255,6 +273,15 @@ interface WorkflowDefinition<Params = Record<string, unknown>, Output = unknown>
     readonly __params?: Params;
     readonly isLunoraWorkflow: true;
 }
+```
+
+### `WorkflowDelayFunctionLike` (type)
+
+```ts
+type WorkflowDelayFunctionLike = (input: {
+    ctx: WorkflowStepContextLike;
+    error: Error;
+}) => number | string | Promise<number | string>;
 ```
 
 ### `WorkflowEventDefinition` (interface)
@@ -284,6 +311,7 @@ interface WorkflowEventLike<Params = Record<string, unknown>> {
 interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
     sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
@@ -312,10 +340,23 @@ interface WorkflowInstanceDetail extends WorkflowInstanceSummary {
 }
 ```
 
+### `WorkflowInstanceEventLike` (interface)
+
+```ts
+interface WorkflowInstanceEventLike {
+    [field: string]: unknown;
+    eventId: number;
+    instanceId: string;
+    timestamp: number;
+    type: string;
+}
+```
+
 ### `WorkflowInstanceLike` (interface)
 
 ```ts
 interface WorkflowInstanceLike {
+    delete: () => Promise<void>;
     readonly id: string;
     pause: () => Promise<void>;
     restart: () => Promise<void>;
@@ -325,6 +366,7 @@ interface WorkflowInstanceLike {
         type: string;
     }) => Promise<void>;
     status: () => Promise<WorkflowStatusResult>;
+    subscribe: (options?: WorkflowInstanceSubscribeOptionsLike) => Promise<WorkflowInstanceSubscriptionLike>;
     terminate: () => Promise<void>;
 }
 ```
@@ -344,6 +386,23 @@ interface WorkflowInstancePage {
 
 ```ts
 type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+```
+
+### `WorkflowInstanceSubscribeOptionsLike` (interface)
+
+```ts
+interface WorkflowInstanceSubscribeOptionsLike {
+    cursor?: number;
+    filter?: string[];
+}
+```
+
+### `WorkflowInstanceSubscriptionLike` (interface)
+
+```ts
+interface WorkflowInstanceSubscriptionLike {
+    next: () => Promise<IteratorResult<WorkflowInstanceEventLike, void>>;
+}
 ```
 
 ### `WorkflowInstanceSummary` (interface)
@@ -375,6 +434,15 @@ interface WorkflowLogger {
 type WorkflowParallelFunction = <const B extends ReadonlyArray<WorkflowBranch>>(branches: B) => Promise<WorkflowBranchOutputs<B>>;
 ```
 
+### `WorkflowRetention` (interface)
+
+```ts
+interface WorkflowRetention {
+    errorRetention?: string;
+    successRetention?: string;
+}
+```
+
 ### `WorkflowRollbackContextLike` (interface)
 
 ```ts
@@ -398,6 +466,7 @@ type WorkflowRollbackHandlerLike<T = unknown> = (context: WorkflowRollbackContex
 interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly env: Record<string, unknown>;
     readonly event: WorkflowEventLike<Params>;
+    readonly exports?: unknown;
     readonly fetchImpl?: typeof fetch;
     readonly log: WorkflowLogger;
     readonly parallel: WorkflowParallelFunction;
@@ -455,7 +524,7 @@ interface WorkflowStatusResult {
 interface WorkflowStepConfigLike {
     retries?: {
         backoff?: "constant" | "exponential" | "linear";
-        delay?: number | string;
+        delay?: number | string | WorkflowDelayFunctionLike;
         limit: number;
     };
     timeout?: number | string;
@@ -606,7 +675,7 @@ const createWaitForEvent: (deps: WaitForEventDeps) => WorkflowWaitForEventFuncti
 ### `createWorkflowContext` (const)
 
 ```ts
-const createWorkflowContext: (env: Record<string, unknown>, specs: ReadonlyArray<WorkflowBindingSpec>) => Workflows;
+const createWorkflowContext: (env: Record<string, unknown>, specs: ReadonlyArray<WorkflowBindingSpec>, exports?: unknown) => Workflows;
 ```
 
 ### `createWorkflowRunContext` (const)
@@ -687,12 +756,6 @@ const toNativeNonRetryableError: (error: NonRetryableError, NativeNonRetryableEr
 const validateStepArgs: (validators: StepArgsValidator, source: Record<string, unknown>) => Record<string, unknown>;
 ```
 
-### `workflowBindingName` (const)
-
-```ts
-const workflowBindingName: (exportName: string) => string;
-```
-
 ### `workflowClassName` (const)
 
 ```ts
@@ -730,6 +793,7 @@ interface RunContextOptions<Params> {
     env: Record<string, unknown>;
     event: WorkflowEventLike<Params>;
     exportName: string;
+    exports?: unknown;
     fetchImpl?: typeof fetch;
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
     step: WorkflowStepLike;

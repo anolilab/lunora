@@ -119,7 +119,7 @@ describe("containerHandle.exec", () => {
         expect(result).toStrictEqual({ code: 0, stderr: "", stdout: "hello\n" });
         expect(requests[0]!.method).toBe("POST");
         expect(new URL(requests[0]!.url).pathname).toBe("/__lunora/exec");
-        await expect(requests[0]!.json()).resolves.toStrictEqual({ args: ["hello"], command: "echo" });
+        await expect(requests[0]!.json()).resolves.toStrictEqual({ args: ["hello"], command: "echo", maxOutputBytes: 1_000_000 });
         expect(requests[0]!.headers.get("content-type")).toBe("application/json");
     });
 
@@ -134,6 +134,7 @@ describe("containerHandle.exec", () => {
 
         await expect(requests[0]!.json()).resolves.toStrictEqual({
             args: ["install"],
+            maxOutputBytes: 1_000_000,
             command: "pnpm",
             cwd: "/app",
             env: { CI: "1" },
@@ -141,7 +142,7 @@ describe("containerHandle.exec", () => {
         });
         // No `cwd`/`env`/`timeoutMs` keys at all, rather than explicit undefineds
         // a runner would have to special-case.
-        await expect(requests[1]!.json()).resolves.toStrictEqual({ args: [], command: "node" });
+        await expect(requests[1]!.json()).resolves.toStrictEqual({ args: [], command: "node", maxOutputBytes: 1_000_000 });
     });
 
     it("returns a non-zero exit code as a result rather than throwing", async () => {

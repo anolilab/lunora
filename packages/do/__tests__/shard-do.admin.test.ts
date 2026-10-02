@@ -87,9 +87,9 @@ const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof S
 /**
  * Canonical key set of `QueueMetadata`, duplicated by `@lunora/studio`'s hand
  * mirror the same way as `StudioFeaturesResult`. Forces both packages' copies of
- * the `listQueues` wire shape to move together. `deadLetterQueue` is optional.
+ * the `listQueues` wire shape to move together. `deadLetterQueue` and `topic` are optional.
  */
-const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name"] as const;
+const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"] as const;
 
 const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_METADATA_KEYS)[number]> = true;
 
@@ -259,7 +259,7 @@ class DeclaredWorkflowShard extends AdminShard {
     // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
     protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
         return {
-            workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+            workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
         };
     }
 }
@@ -749,7 +749,7 @@ describe("shardDO admin introspection", () => {
         expect.assertions(2);
 
         expect(QUEUE_METADATA_KEY_GUARD).toBe(true);
-        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name"]);
+        expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name", "topic"]);
     });
 
     it("keeps the getTraces wire shapes in lockstep with the studio's hand-mirror", () => {
@@ -875,7 +875,7 @@ describe("shardDO admin introspection", () => {
 
         await expect(response.json()).resolves.toEqual({
             result: {
-                workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+                workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
             },
         });
     });
@@ -1183,7 +1183,7 @@ describe("shardDO admin introspection", () => {
         expect(read.result.entries).toHaveLength(0);
     });
 
-    it("starts a workflow instance through the declared binding", async () => {
+    it("starts a workflow instance through the declared workflow on ctx.exports", async () => {
         expect.assertions(2);
 
         const created: { id?: string; params?: unknown }[] = [];
@@ -1197,9 +1197,9 @@ describe("shardDO admin introspection", () => {
             get: () => Promise.reject(new Error("get must not run for create")),
         };
 
-        // A shard whose env carries a fake `WORKFLOW_*` binding and whose
-        // codegen hook declares the matching workflow.
-        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        // A shard whose `ctx.exports` carries the exported workflow (as Cloudflare
+        // exposes it) and whose codegen hook declares the matching workflow.
+        const shard = new DeclaredWorkflowShard({ ...state, exports: { OrderPipelineWorkflow: binding } }, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(
             tokenAdminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline", params: { orderId: "o1" } }, ADMIN_TOKEN),
         );
@@ -1224,13 +1224,13 @@ describe("shardDO admin introspection", () => {
 
         // Admin-token-gated, but rejected for uniformity with every other create
         // surface — a forged marker must never reach `create()`.
-        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
         const response = await shard.fetch(
             tokenAdminRequest(
                 ADMIN_FUNCTIONS.createWorkflowInstance,
                 {
                     exportName: "orderPipeline",
-                    params: { __lunoraBranch: { eventType: "lunora:branch:x", index: 0, parentBinding: "WORKFLOW_X", parentId: "p" }, orderId: "o1" },
+                    params: { __lunoraBranch: { eventType: "lunora:branch:x", index: 0, parentBinding: "XWorkflow", parentId: "p" }, orderId: "o1" },
                 },
                 ADMIN_TOKEN,
             ),
@@ -1253,7 +1253,7 @@ describe("shardDO admin introspection", () => {
             get: (id: string) => Promise.resolve({ id, status: () => Promise.resolve({ output: { total: 42 }, status: "complete" }) }),
         };
 
-        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
         const response = await shard.fetch(
             tokenAdminRequest(ADMIN_FUNCTIONS.getWorkflowInstanceStatus, { exportName: "orderPipeline", id: "wf-1" }, ADMIN_TOKEN),
         );

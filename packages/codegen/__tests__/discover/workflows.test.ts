@@ -52,14 +52,12 @@ describe("discover/workflows", () => {
 
         expect(discoverWorkflows(newProject(), workdir)).toEqual([
             {
-                bindingName: "WORKFLOW_ETL",
                 className: "EtlWorkflow",
                 exportName: "etl",
                 name: "nightly-etl",
                 steps: [],
             },
             {
-                bindingName: "WORKFLOW_ORDER_PIPELINE",
                 className: "OrderPipelineWorkflow",
                 exportName: "orderPipeline",
                 name: "order-pipeline",
@@ -242,6 +240,48 @@ describe("discover/workflows", () => {
 
         expect(() => discoverWorkflows(newProject(), workdir)).toThrow("`name` must be a static string literal");
     });
+
+    it("lifts the static deploy settings", () => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            export const etl = defineWorkflow({
+                handler: async () => undefined,
+                schedules: ["0 * * * *", "0 9 * * MON-FRI"],
+                limits: { steps: 25_000 },
+                defaultRetention: { successRetention: "3 days" },
+            });
+        `);
+
+        const [workflow] = discoverWorkflows(newProject(), workdir);
+
+        expect([workflow?.schedules, workflow?.limits, workflow?.defaultRetention]).toStrictEqual([
+            ["0 * * * *", "0 9 * * MON-FRI"],
+            { steps: 25_000 },
+            { successRetention: "3 days" },
+        ]);
+    });
+
+    it.each([
+        [`schedules: ["not a cron"]`, `schedule "not a cron" is not a valid cron expression`],
+        [`schedules: []`, "`schedules` must be a non-empty inline array"],
+        [`limits: { steps: max }`, "`limits.steps` must be a static number literal"],
+        [`limits: { steps: 0 }`, "`limits.steps` must be a positive integer (got 0)"],
+        [`limits: { steps: 1.5 }`, "`limits.steps` must be a positive integer (got 1.5)"],
+        [`defaultRetention: retention`, "`defaultRetention` must be an inline object literal"],
+    ])("rejects a non-static or invalid setting (%s)", (setting, message) => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            const max = 5;
+            const retention = {};
+            export const etl = defineWorkflow({ handler: async () => undefined, ${setting} });
+        `);
+
+        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(message);
+    });
 });
 
 describe("emit (workflows)", () => {
@@ -305,8 +345,8 @@ describe("emit (workflows)", () => {
         const shard = emitShard({ schema: EMPTY_SCHEMA, workflows: discover() });
 
         expect(shard).toContain('import { createWorkflowContext } from "@lunora/workflow";');
-        expect(shard).toContain('{ binding: "WORKFLOW_ORDER_PIPELINE", exportName: "orderPipeline" },');
-        expect(shard).toContain("const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS);");
+        expect(shard).toContain('{ className: "OrderPipelineWorkflow", exportName: "orderPipeline" },');
+        expect(shard).toContain("const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS, this.state.exports);");
         expect(shard).toContain("workflows,");
     });
 
@@ -329,16 +369,16 @@ describe("emit (workflows)", () => {
         expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow name "shared"/u);
     });
 
-    it("rejects two workflow exports that collapse to the same binding name", () => {
+    it("rejects two workflow exports that collapse to the same generated class", () => {
         expect.assertions(1);
 
         writeWorkflows(`
             import { defineWorkflow } from "@lunora/workflow";
 
             export const myFlow = defineWorkflow({ name: "one", handler: async () => undefined });
-            export const myFLOW = defineWorkflow({ name: "two", handler: async () => undefined });
+            export const MyFlow = defineWorkflow({ name: "two", handler: async () => undefined });
         `);
 
-        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow binding "WORKFLOW_MY_FLOW"/u);
+        expect(() => discoverWorkflows(newProject(), workdir)).toThrow(/Duplicate workflow class "MyFlowWorkflow"/u);
     });
 });

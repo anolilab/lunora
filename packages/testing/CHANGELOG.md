@@ -1,3 +1,66 @@
+## @lunora/testing [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.214...@lunora/testing@1.0.0-alpha.215) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.158
+* **@lunora/server:** upgraded to 1.0.0-alpha.165
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.98
+
+## @lunora/testing [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.213...@lunora/testing@1.0.0-alpha.214) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.157
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.101
+* **@lunora/server:** upgraded to 1.0.0-alpha.164
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.103
+* **@lunora/observability:** upgraded to 1.0.0-alpha.112
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.97
+
+## @lunora/testing [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.212...@lunora/testing@1.0.0-alpha.213) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.156
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/mail:** upgraded to 1.0.0-alpha.94
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.100
+* **@lunora/server:** upgraded to 1.0.0-alpha.163
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.102
+* **@lunora/observability:** upgraded to 1.0.0-alpha.111
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.96
+
+## @lunora/testing [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.211...@lunora/testing@1.0.0-alpha.212) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.155
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.99
+* **@lunora/server:** upgraded to 1.0.0-alpha.162
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.101
+* **@lunora/observability:** upgraded to 1.0.0-alpha.110
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.95
+
+## @lunora/testing [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.210...@lunora/testing@1.0.0-alpha.211) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.154
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.98
+* **@lunora/server:** upgraded to 1.0.0-alpha.161
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.100
+* **@lunora/observability:** upgraded to 1.0.0-alpha.109
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.94
+
 ## @lunora/testing [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.209...@lunora/testing@1.0.0-alpha.210) (2026-09-29)
 
 

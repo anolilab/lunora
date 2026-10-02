@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { MessageBatchLike } from "@lunora/platform";
-import { defineQueue } from "@lunora/queue";
+import { createTopicContext, defineQueue, defineSubscription, defineTopic, queueBindingName } from "@lunora/queue";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -60,6 +60,39 @@ describe("createNodeQueueHost", () => {
         // Undecided messages are implicitly acked when the handler returns, so
         // the second poll has nothing left.
         await expect(host.poll()).resolves.toBe(0);
+    });
+
+    it("delivers one topic publish to every subscription queue", async () => {
+        expect.hasAssertions();
+
+        const signups = defineTopic<{ userId: string }>();
+        const welcome = defineSubscription(signups, { handler: () => undefined, maxBatchTimeout: 0 });
+        const audit = defineSubscription(signups, { handler: () => undefined, maxBatchTimeout: 0 });
+        const seen: MessageBatchLike[] = [];
+        const host = createNodeQueueHost(freshDatabase(), {
+            onBatch: (batch) => {
+                seen.push(batch);
+            },
+            queues: { audit, welcome },
+        });
+        // The spec codegen emits for this topic, resolved against the host's env.
+        const topics = createTopicContext(host.env, [
+            {
+                exportName: "signups",
+                subscriptions: ["audit", "welcome"].map((exportName) => {
+                    return { binding: queueBindingName(exportName), exportName };
+                }),
+            },
+        ]);
+
+        await topics.signups!.publish({ userId: "u1" });
+
+        await expect(host.poll()).resolves.toBe(2);
+
+        expect(seen.map((batch) => [batch.queue, batch.messages[0]?.body])).toStrictEqual([
+            ["audit", { userId: "u1" }],
+            ["welcome", { userId: "u1" }],
+        ]);
     });
 
     it("derives the QUEUE_* env and rejects a non-defineQueue value", () => {

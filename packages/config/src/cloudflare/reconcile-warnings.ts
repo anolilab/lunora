@@ -8,6 +8,8 @@ import { join } from "node:path";
 
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
 import type { InferredBindings } from "../infer-bindings";
+import { packageNamesFromBindings } from "../infer-bindings";
+import { requiredSecrets } from "../scaffold-dev-variables";
 import type { ExportGap } from "./reconcile-bindings";
 import type { WranglerShape } from "./wrangler-shape";
 
@@ -50,7 +52,7 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
         ],
         [
             pipelinesBindingMissing,
-            `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", pipeline }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
+            `ctx.pipelines is used but no "${PIPELINES_BINDING}" pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding: "${PIPELINES_BINDING}", stream }) — codegen resolves this one name, and the pipeline resource can't be auto-provisioned.`,
         ],
         [
             flagshipBindingMissing,
@@ -103,7 +105,7 @@ const unexportedDeclarationWarnings = (
                 `${kind} "${declaration.exportName}" is declared but ${declaration.className} is not exported by the worker entry; add \`export * from "./lunora/_generated/${module}"\` so its binding can be provisioned.`,
         );
 
-/** Workflow/agent `class_name` entries the emitted bundle no longer exports. */
+/** Workflow/agent `exports.<Class>` (or legacy `workflows[]`) entries the emitted bundle no longer exports. */
 const orphanedWorkflowWarnings = (inferred: InferredBindings, parsed: WranglerShape): string[] => {
     const declaredClasses = new Set([...inferred.workflows, ...inferred.agents].map((declaration) => declaration.className));
 
@@ -111,18 +113,20 @@ const orphanedWorkflowWarnings = (inferred: InferredBindings, parsed: WranglerSh
         return [];
     }
 
+    const exportedClasses = Object.entries(parsed.exports ?? {}).flatMap(([className, entry]) => (entry?.type === "workflow" ? [className] : []));
     // `flatMap` with an in-body guard rather than `filter().map()`: a filter
-    // predicate does not narrow the element type for the map that follows, so the
-    // template literal would still see `string | undefined`.
-    return (parsed.workflows ?? []).flatMap((entry) => {
-        const className = entry.class_name;
+    // predicate does not narrow the element type for the map that follows.
+    // A binding with `script_name` targets another Worker's workflow, not ours.
+    const boundClasses = (parsed.workflows ?? []).flatMap((entry) =>
+        entry.class_name === undefined || entry.script_name !== undefined ? [] : [entry.class_name],
+    );
 
-        return className === undefined || declaredClasses.has(className)
-            ? []
-            : [
-                  `wrangler.jsonc declares workflows[] entry "${className}" but no defineWorkflow/defineAgent export generates that class — a leftover from a rename will fail the deploy (wrangler rejects a class_name the worker does not export). Remove it if it is not hand-wired.`,
-              ];
-    });
+    return [...new Set([...exportedClasses, ...boundClasses])]
+        .filter((className) => !declaredClasses.has(className))
+        .map(
+            (className) =>
+                `wrangler.jsonc declares workflow "${className}" but no defineWorkflow/defineAgent export generates that class — a leftover from a rename will fail the deploy (wrangler rejects a class the worker does not export). Remove it if it is not hand-wired.`,
+        );
 };
 
 /** Queue consumer/producer entries no `defineQueue` export declares. */
@@ -236,6 +240,32 @@ const hasConfiguredPaymentProvider = (projectRoot: string): boolean => {
     return PAYMENT_PROVIDER_SECRETS.some(({ keys }) => keys.every((key) => (values.get(key) ?? "") !== ""));
 };
 
+/**
+ * A declared `secrets.required` list is an allow-list, not documentation:
+ * `wrangler dev` loads only the listed keys from `.dev.vars`, and `wrangler
+ * deploy` checks only those. A secret the detected packages need but the list
+ * omits is therefore stripped in dev — the worker then throws on its first read
+ * of it. Only checked when the list exists; without one wrangler loads every key.
+ */
+const missingRequiredSecretWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
+    const required = parsed?.secrets?.required;
+
+    if (!Array.isArray(required)) {
+        return [];
+    }
+
+    const declared = new Set<unknown>(required);
+    const missing = requiredSecrets(packageNamesFromBindings(inferred))
+        .map((entry) => entry.key)
+        .filter((key) => !declared.has(key));
+
+    return missing.length === 0
+        ? []
+        : [
+              `wrangler.jsonc declares secrets.required without ${missing.join(", ")}, which this app needs — wrangler dev loads only the listed keys from .dev.vars, so add ${missing.length === 1 ? "it" : "them"} to secrets.required.`,
+          ];
+};
+
 const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed?: WranglerShape): string[] => {
     const exported = new Set(inferred.durableObjects.map((object) => object.className));
     const warnings: string[] = [];
@@ -283,7 +313,7 @@ const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed
         warnings.push(`@lunora/payment is used; set one provider's secret pair in .dev.vars — ${describePaymentProviders()}.`);
     }
 
-    warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed));
+    warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed), ...missingRequiredSecretWarnings(inferred, parsed));
 
     if (parsed !== undefined) {
         warnings.push(...orphanedEntryWarnings(inferred, parsed));

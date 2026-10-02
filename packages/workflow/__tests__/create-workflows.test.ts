@@ -6,6 +6,7 @@ import type { WorkflowBindingLike, WorkflowCreateOptions, WorkflowInstanceLike }
 
 const fakeInstance = (id: string): WorkflowInstanceLike => {
     return {
+        delete: async () => undefined,
         id,
         pause: async () => undefined,
         restart: async () => undefined,
@@ -13,6 +14,13 @@ const fakeInstance = (id: string): WorkflowInstanceLike => {
         sendEvent: async () => undefined,
         status: async () => {
             return { status: "running" };
+        },
+        subscribe: async () => {
+            return {
+                next: async () => {
+                    return { done: true, value: undefined };
+                },
+            };
         },
         terminate: async () => undefined,
     };
@@ -25,13 +33,21 @@ const fakeBinding = (): WorkflowBindingLike => {
             async (batch: ReadonlyArray<WorkflowCreateOptions>) =>
                 batch.map((_: WorkflowCreateOptions, index: number) => fakeInstance(`inst-${String(index)}`)),
         ),
+        deleteBatch: async (ids: ReadonlyArray<string>) => {
+            return {
+                deleted: ids.map((id) => {
+                    return { id };
+                }),
+                errors: [],
+            };
+        },
         get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async (id: string) => fakeInstance(id)),
     };
 };
 
 describe("createWorkflows", () => {
-    it("resolves a handle and forwards create/get/createBatch", async () => {
-        expect.assertions(5);
+    it("resolves a handle and forwards create/get/createBatch/deleteBatch", async () => {
+        expect.assertions(6);
 
         const binding = fakeBinding();
         const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
@@ -51,6 +67,7 @@ describe("createWorkflows", () => {
         const batch = await handle.createBatch([{ params: {} }, { params: {} }]);
 
         expect(batch).toHaveLength(2);
+        await expect(handle.deleteBatch(["inst-1"])).resolves.toStrictEqual({ deleted: [{ id: "inst-1" }], errors: [] });
     });
 
     it("throws a helpful error for an unknown workflow", () => {
@@ -74,7 +91,7 @@ describe("createWorkflows", () => {
 
         const binding = fakeBinding();
         const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
-        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "victim" };
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentClassName: "ParentWorkflow", parentId: "victim" };
 
         const error = await workflows
             .get("orderPipeline")
@@ -95,7 +112,7 @@ describe("createWorkflows", () => {
 
         const binding = fakeBinding();
         const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
-        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "victim" };
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentClassName: "ParentWorkflow", parentId: "victim" };
 
         const error = await workflows
             .get("orderPipeline")

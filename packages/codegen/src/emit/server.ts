@@ -2,7 +2,8 @@ import { LunoraError } from "@lunora/errors";
 
 import type { CapabilityKey, CapabilityTier } from "../capabilities";
 import { SERVER_CTX_FIELDS } from "../capabilities";
-import type { AgentIR, ContainerIR, EnvIR, IdentityIR, QueueIR, SchemaIR, WorkflowIR } from "../ir";
+import type { AgentIR, ContainerIR, EnvIR, IdentityIR, QueueIR, SchemaIR, TopicIR, WorkflowIR } from "../ir";
+import { plainQueues } from "../ir";
 import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, unwrapOptional } from "./shared";
 
 /**
@@ -116,6 +117,8 @@ interface EmitServerOptions {
     queues?: ReadonlyArray<QueueIR>;
     schema?: SchemaIR;
     storageRuleBuckets?: ReadonlyArray<string>;
+    /** Topics declared via `defineTopic` exports — wires the typed `ctx.topics` publishers onto Mutation/Action contexts. */
+    topics?: ReadonlyArray<TopicIR>;
     /** The project depends on the `lunora` umbrella — import base packages via its subpaths. */
     useUmbrella?: boolean;
     workflows?: ReadonlyArray<WorkflowIR>;
@@ -144,6 +147,7 @@ const emitServer = ({
     queues = [],
     schema,
     storageRuleBuckets = [],
+    topics = [],
     useUmbrella = false,
     workflows = [],
 }: EmitServerOptions = {}): string => {
@@ -185,9 +189,8 @@ const emitServer = ({
     // `env.<BINDING>` and service-binding access become typed at the seam every
     // handler reaches `env` through. Codegen can only see the bindings it
     // discovers from source (the `CONTAINER_*` Durable Object namespaces a
-    // `defineContainer` declares, the `WORKFLOW_*` namespaces a `defineWorkflow`
-    // declares, and the conventional `AI` binding when the project uses Workers
-    // AI) — the rest of wrangler's bindings (R2/KV/D1/service/queue/etc.) are
+    // `defineContainer` declares, and the conventional `AI` binding when the
+    // project uses Workers AI; workflows live on `ctx.exports`, not `env`) — the rest of wrangler's bindings (R2/KV/D1/service/queue/etc.) are
     // user-named and reconciled by the config layer, so the interface keeps an
     // open `[binding: string]: unknown` index signature: a known binding is
     // narrowed, an unknown one is still reachable (cast at the use site). This is
@@ -200,20 +203,10 @@ const emitServer = ({
 
             return `    /** Durable Object namespace for the \`${container.exportName}\` container. */\n    readonly ${container.bindingName}?: unknown;`;
         }),
-        ...workflows.map((workflow) => {
-            assertIdentifier(workflow.bindingName, `workflow binding "${workflow.bindingName}"`);
-
-            return `    /** Workflow binding for the \`${workflow.exportName}\` workflow. */\n    readonly ${workflow.bindingName}?: unknown;`;
-        }),
         ...queues.map((queue) => {
             assertIdentifier(queue.bindingName, `queue binding "${queue.bindingName}"`);
 
             return `    /** Queue producer binding for the \`${queue.exportName}\` queue. */\n    readonly ${queue.bindingName}?: unknown;`;
-        }),
-        ...agents.map((agent) => {
-            assertIdentifier(agent.bindingName, `agent binding "${agent.bindingName}"`);
-
-            return `    /** Workflow binding for the \`${agent.exportName}\` agent. */\n    readonly ${agent.bindingName}?: unknown;`;
         }),
     ].join("\n");
     const envBlock = `
@@ -360,22 +353,43 @@ ${workflows.map((workflow) => `    get(name: ${JSON.stringify(workflow.exportNam
     // — like `ctx.scheduler` / `ctx.workflows` — never the deterministic QueryCtx).
     // Each declared queue becomes a typed `QueueProducer<Body>`, the body inferred
     // from the `defineQueue` definition's phantom carrier.
-    const hasQueues = queues.length > 0;
-    const queuesTypeImport = hasQueues
-        ? `import type { QueueProducer } from "@lunora/queue";\nimport type * as lunoraQueueDefinitions from "../queues.js";\n`
-        : "";
-    const queuesTypeBlock = hasQueues
-        ? `
+    // A subscription is published to through its topic, so it stays off `ctx.queues`.
+    // Topics ride the same contexts and read their payload off the same phantom
+    // `__lunoraBody`, so both share the `QueueBodyOf` helper and the module import.
+    const sendableQueues = plainQueues(queues);
+    const hasQueues = sendableQueues.length > 0;
+    const hasTopics = topics.length > 0;
+    const queueTypeNames = [...(hasQueues ? ["QueueProducer"] : []), ...(hasTopics ? ["TopicPublisher"] : [])];
+    const queuesTypeImport =
+        queueTypeNames.length > 0
+            ? `import type { ${queueTypeNames.join(", ")} } from "@lunora/queue";\nimport type * as lunoraQueueDefinitions from "../queues.js";\n`
+            : "";
+    const queueBodyHelper =
+        queueTypeNames.length > 0
+            ? `
 
-/** Message body type carried by a \`defineQueue\` definition (its phantom \`__lunoraBody\`). */
-type QueueBodyOf<Definition> = Definition extends { __lunoraBody?: infer Body } ? (unknown extends Body ? unknown : NonNullable<Body>) : unknown;
+/** Message body type carried by a \`defineQueue\` / \`defineTopic\` definition (its phantom \`__lunoraBody\`). */
+type QueueBodyOf<Definition> = Definition extends { __lunoraBody?: infer Body } ? (unknown extends Body ? unknown : NonNullable<Body>) : unknown;`
+            : "";
+    const queuesInterface = hasQueues
+        ? `
 
 /** This project's declared queues, addressable from \`ctx.queues\` by their \`lunora/queues.ts\` export name. */
 export interface LunoraQueues {
-${queues.map((queue) => `    readonly ${queue.exportName}: QueueProducer<QueueBodyOf<typeof lunoraQueueDefinitions.${queue.exportName}>>;`).join("\n")}
+${sendableQueues.map((queue) => `    readonly ${queue.exportName}: QueueProducer<QueueBodyOf<typeof lunoraQueueDefinitions.${queue.exportName}>>;`).join("\n")}
 }`
         : "";
+    const topicsInterface = hasTopics
+        ? `
+
+/** This project's declared topics, addressable from \`ctx.topics\` by their \`lunora/queues.ts\` export name. */
+export interface LunoraTopics {
+${topics.map((topic) => `    readonly ${topic.exportName}: TopicPublisher<QueueBodyOf<typeof lunoraQueueDefinitions.${topic.exportName}>>;`).join("\n")}
+}`
+        : "";
+    const queuesTypeBlock = `${queueBodyHelper}${queuesInterface}${topicsInterface}`;
     const queuesContextField = hasQueues ? `\n    readonly queues: LunoraQueues;` : "";
+    const topicsContextField = hasTopics ? `\n    readonly topics: LunoraTopics;` : "";
 
     // Agents live on BOTH MutationCtx and ActionCtx (an agent run is kicked off
     // from a mutation or an action — like `ctx.workflows` / `ctx.queues`). Each
@@ -644,13 +658,13 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${vectorsOm
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: MutationStorage<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: MutationStorage<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${kvContextField}${flagsContextField}${notifyContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${notifyContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
 }
 
 /**
