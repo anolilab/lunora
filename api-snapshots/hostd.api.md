@@ -391,10 +391,40 @@ const encodeMessage: (message: HostdMessage) => string;
 const isAlias: (value: string) => boolean;
 ```
 
+### `isErrorCode` (const)
+
+```ts
+const isErrorCode: (value: unknown) => value is string;
+```
+
 ### `isHostname` (const)
 
 ```ts
 const isHostname: (value: string) => boolean;
+```
+
+### `isNonce` (const)
+
+```ts
+const isNonce: (value: unknown) => value is string;
+```
+
+### `isProtocolId` (const)
+
+```ts
+const isProtocolId: (value: unknown) => value is string;
+```
+
+### `isSignature` (const)
+
+```ts
+const isSignature: (value: unknown) => value is string;
+```
+
+### `isVersion` (const)
+
+```ts
+const isVersion: (value: unknown) => value is string;
 ```
 
 ### `negotiateProtocolVersion` (const)
@@ -589,7 +619,27 @@ Re-exported from `@lunora/hostd` — signature tracked in that section.
 
 Re-exported from `@lunora/hostd` — signature tracked in that section.
 
+### `isErrorCode` (const)
+
+Re-exported from `@lunora/hostd` — signature tracked in that section.
+
 ### `isHostname` (const)
+
+Re-exported from `@lunora/hostd` — signature tracked in that section.
+
+### `isNonce` (const)
+
+Re-exported from `@lunora/hostd` — signature tracked in that section.
+
+### `isProtocolId` (const)
+
+Re-exported from `@lunora/hostd` — signature tracked in that section.
+
+### `isSignature` (const)
+
+Re-exported from `@lunora/hostd` — signature tracked in that section.
+
+### `isVersion` (const)
 
 Re-exported from `@lunora/hostd` — signature tracked in that section.
 
@@ -719,6 +769,40 @@ type ReleaseValidationResult<T> = {
 };
 ```
 
+### `ReleaseVerifyError` (interface)
+
+```ts
+interface ReleaseVerifyError {
+    code: ReleaseVerifyErrorCode;
+    message: string;
+    path?: string;
+}
+```
+
+### `ReleaseVerifyErrorCode` (type)
+
+```ts
+type ReleaseVerifyErrorCode = "BAD_SIGNATURE" | "INVALID_ENVELOPE" | "INVALID_TRUSTED_KEY" | "PLACEHOLDER_KEY" | "UNKNOWN_KEY";
+```
+
+### `ReleaseVerifyResult` (type)
+
+```ts
+type ReleaseVerifyResult = {
+    envelope: HostdReleaseEnvelope;
+    ok: true;
+} | {
+    error: ReleaseVerifyError;
+    ok: false;
+};
+```
+
+### `TrustedReleaseKey` (type)
+
+```ts
+type TrustedReleaseKey = string | Uint8Array;
+```
+
 ### `canonicalManifestBytes` (const)
 
 ```ts
@@ -743,6 +827,12 @@ const validateReleaseEnvelope: (value: unknown) => ReleaseValidationResult<Hostd
 const validateReleaseManifest: (value: unknown) => ReleaseValidationResult<HostdReleaseManifest>;
 ```
 
+### `verifyReleaseManifest` (const)
+
+```ts
+const verifyReleaseManifest: (envelope: unknown, trustedKeys: Readonly<Record<string, TrustedReleaseKey>>) => Promise<ReleaseVerifyResult>;
+```
+
 ## `@lunora/hostd/release/verify`
 
 ### `ArtifactVerifyErrorCode` (type)
@@ -765,40 +855,6 @@ type ArtifactVerifyResult = {
 };
 ```
 
-### `ReleaseVerifyError` (interface)
-
-```ts
-interface ReleaseVerifyError {
-    code: ReleaseVerifyErrorCode;
-    message: string;
-    path?: string;
-}
-```
-
-### `ReleaseVerifyErrorCode` (type)
-
-```ts
-type ReleaseVerifyErrorCode = "BAD_SIGNATURE" | "INVALID_ENVELOPE" | "INVALID_TRUSTED_KEY" | "PLACEHOLDER_KEY" | "UNKNOWN_KEY";
-```
-
-### `ReleaseVerifyResult` (type)
-
-```ts
-type ReleaseVerifyResult = {
-    error: ReleaseVerifyError;
-    ok: false;
-} | {
-    manifest: HostdReleaseManifest;
-    ok: true;
-};
-```
-
-### `TrustedReleaseKey` (type)
-
-```ts
-type TrustedReleaseKey = string | Uint8Array;
-```
-
 ### `releaseKeyId` (const)
 
 ```ts
@@ -815,10 +871,4 @@ const signReleaseManifest: (manifest: HostdReleaseManifest, privateKey: KeyObjec
 
 ```ts
 const verifyArtifact: (source: string | Uint8Array, expectedSha256: string, expectedSize: number) => Promise<ArtifactVerifyResult>;
-```
-
-### `verifyReleaseManifest` (const)
-
-```ts
-const verifyReleaseManifest: (envelope: unknown, trustedKeys: Readonly<Record<string, TrustedReleaseKey>>) => ReleaseVerifyResult;
 ```

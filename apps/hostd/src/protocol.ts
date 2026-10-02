@@ -44,4 +44,4 @@ export type {
     RoutesMessage,
     UpgradeJob,
 } from "./wire/types";
-export { isAlias, isHostname } from "./wire/validate";
+export { isAlias, isErrorCode, isHostname, isNonce, isProtocolId, isSignature, isVersion } from "./wire/validate";

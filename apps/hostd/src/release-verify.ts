@@ -1,35 +1,20 @@
 /**
- * `@lunora/hostd/release/verify` — signs and verifies `hostd` release
- * manifests and checks downloaded artifacts against them (plan 458 W7, §9 Q2).
+ * `@lunora/hostd/release/verify` — signs `hostd` release manifests and checks
+ * downloaded artifacts against them (plan 458 W7, §9 Q2).
  *
  * Node only: it uses `node:crypto` (Ed25519, SHA-256) and `node:fs`, nothing
- * else. The manifest types, validator and canonical bytes it builds on are in
- * `@lunora/hostd/release`, which also runs in workerd.
+ * else. Verifying a signed envelope runs on WebCrypto and lives in
+ * `@lunora/hostd/release`, with the manifest types, validator and canonical
+ * bytes, so workerd and Node share one implementation.
  */
 import type { KeyObject } from "node:crypto";
-import { createHash, createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
-import type { HostdReleaseEnvelope, HostdReleaseManifest } from "./release";
-import { releaseSigningPayload, validateReleaseEnvelope, validateReleaseManifest } from "./release";
-import { HOSTD_RELEASE_KEY_PLACEHOLDER } from "./trusted-release-keys";
-
-/** A trusted release key: an SPKI PEM string, or the raw 32-byte Ed25519 public key. */
-type TrustedReleaseKey = string | Uint8Array;
-
-/** Why a signed manifest was refused. */
-type ReleaseVerifyErrorCode = "BAD_SIGNATURE" | "INVALID_ENVELOPE" | "INVALID_TRUSTED_KEY" | "PLACEHOLDER_KEY" | "UNKNOWN_KEY";
-
-interface ReleaseVerifyError {
-    code: ReleaseVerifyErrorCode;
-    message: string;
-    /** The offending field, for `INVALID_ENVELOPE`. */
-    path?: string;
-}
-
-/** Outcome of {@link verifyReleaseManifest}. Verification never throws. */
-type ReleaseVerifyResult = { error: ReleaseVerifyError; ok: false } | { manifest: HostdReleaseManifest; ok: true };
+import type { HostdReleaseEnvelope, HostdReleaseManifest } from "./release-manifest";
+import { releaseSigningPayload, validateReleaseManifest } from "./release-manifest";
+import type { TrustedReleaseKey } from "./release-signature";
 
 /** Why a downloaded artifact was refused. */
 type ArtifactVerifyErrorCode = "HASH_MISMATCH" | "INVALID_EXPECTATION" | "READ_FAILED" | "SIZE_MISMATCH";
@@ -42,13 +27,7 @@ const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 const ED25519_KEY_BYTES = 32;
 
-const ED25519_SIGNATURE_BYTES = 64;
-
 const SHA256_PATTERN = /^[\da-f]{64}$/u;
-
-const refuse = (code: ReleaseVerifyErrorCode, message: string, path?: string): { error: ReleaseVerifyError; ok: false } => {
-    return { error: path === undefined ? { code, message } : { code, message, path }, ok: false };
-};
 
 /** Parses a trusted key into an Ed25519 public `KeyObject`; throws when it is not one. */
 const toPublicKey = (key: KeyObject | TrustedReleaseKey): KeyObject => {
@@ -113,58 +92,6 @@ const signReleaseManifest = (manifest: HostdReleaseManifest, privateKey: KeyObje
     };
 };
 
-/**
- * Verifies a signed release envelope against a set of trusted keys.
- *
- * In order: the envelope must validate strictly; its `keyId` must name a key
- * in `trustedKeys`; that key must not be a placeholder and must be Ed25519;
- * and the signature must verify over `releaseSigningPayload(manifest)`.
- * @param envelope untrusted input, e.g. `JSON.parse` of a downloaded `manifest.json`
- * @param trustedKeys `{ [keyId]: SPKI PEM | raw 32-byte key }`, normally `HOSTD_TRUSTED_RELEASE_KEYS`
- * @returns the validated manifest, or why it was refused
- */
-const verifyReleaseManifest = (envelope: unknown, trustedKeys: Readonly<Record<string, TrustedReleaseKey>>): ReleaseVerifyResult => {
-    const validated = validateReleaseEnvelope(envelope);
-
-    if (!validated.ok) {
-        return refuse("INVALID_ENVELOPE", validated.error.message, validated.error.path);
-    }
-
-    const { keyId, manifest, signature } = validated.value;
-
-    if (!Object.hasOwn(trustedKeys, keyId)) {
-        return refuse("UNKNOWN_KEY", `release key ${JSON.stringify(keyId)} is not trusted`);
-    }
-
-    const trusted = trustedKeys[keyId] as TrustedReleaseKey;
-
-    if (typeof trusted === "string" && trusted.includes(HOSTD_RELEASE_KEY_PLACEHOLDER)) {
-        return refuse("PLACEHOLDER_KEY", `release key ${JSON.stringify(keyId)} is a placeholder, not a key; no release can verify against it`);
-    }
-
-    let publicKey: KeyObject;
-
-    try {
-        publicKey = toPublicKey(trusted);
-    } catch (error: unknown) {
-        return refuse("INVALID_TRUSTED_KEY", `trusted key ${JSON.stringify(keyId)} is not an Ed25519 public key: ${(error as Error).message}`);
-    }
-
-    // The trusted-key map is keyed by the derived id; a key filed under the wrong
-    // id would let one key answer for another's name.
-    if (releaseKeyId(publicKey) !== keyId) {
-        return refuse("INVALID_TRUSTED_KEY", `trusted key filed as ${JSON.stringify(keyId)} has key id ${releaseKeyId(publicKey)}`);
-    }
-
-    const signatureBytes = Buffer.from(signature, "base64url");
-
-    if (signatureBytes.byteLength !== ED25519_SIGNATURE_BYTES || !verify(undefined, releaseSigningPayload(manifest), publicKey, signatureBytes)) {
-        return refuse("BAD_SIGNATURE", "the release signature does not verify");
-    }
-
-    return { manifest, ok: true };
-};
-
 const hashFile = async (filePath: string): Promise<string> => {
     const hash = createHash("sha256");
 
@@ -220,5 +147,5 @@ const verifyArtifact = async (source: string | Uint8Array, expectedSha256: strin
     return { ok: true };
 };
 
-export type { ArtifactVerifyErrorCode, ArtifactVerifyResult, ReleaseVerifyError, ReleaseVerifyErrorCode, ReleaseVerifyResult, TrustedReleaseKey };
-export { releaseKeyId, signReleaseManifest, verifyArtifact, verifyReleaseManifest };
+export type { ArtifactVerifyErrorCode, ArtifactVerifyResult };
+export { releaseKeyId, signReleaseManifest, verifyArtifact };

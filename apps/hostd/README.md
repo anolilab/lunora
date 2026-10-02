@@ -42,26 +42,28 @@ A box installs `hostd`, celld and Caddy from a **signed release manifest**
 **Ed25519** over its canonical bytes, and the public key that verifies it is
 compiled into `hostd` and the control plane
 ([`src/trusted-release-keys.ts`](./src/trusted-release-keys.ts)). Verifying
-needs only `node:crypto`; nothing like minisign or Sigstore runs on the box.
+needs only WebCrypto; nothing like minisign or Sigstore runs on the box.
 GitHub artifact attestations add build provenance on top
 (`gh attestation verify <file> --repo anolilab/lunora`), but a box does not
 need them. The byte-level format, for implementations in any language, is §8 of
 [`protocol/hostd/README.md`](../../protocol/hostd/README.md).
 
 ```ts
-import { HOSTD_TRUSTED_RELEASE_KEYS } from "@lunora/hostd/release";
-import { verifyArtifact, verifyReleaseManifest } from "@lunora/hostd/release/verify";
+import { HOSTD_TRUSTED_RELEASE_KEYS, verifyReleaseManifest } from "@lunora/hostd/release";
+import { verifyArtifact } from "@lunora/hostd/release/verify";
 
-const verified = verifyReleaseManifest(JSON.parse(manifestJson), HOSTD_TRUSTED_RELEASE_KEYS);
+const verified = await verifyReleaseManifest(JSON.parse(manifestJson), HOSTD_TRUSTED_RELEASE_KEYS);
 
 if (verified.ok) {
-    const [artifact] = verified.manifest.hostd.artifacts;
+    const [artifact] = verified.envelope.manifest.hostd.artifacts;
     const checked = await verifyArtifact(downloadedPath, artifact.sha256, artifact.size);
 }
 ```
 
-`@lunora/hostd/release` (types, validator, canonical bytes) has no Node
-imports and runs in workerd; `@lunora/hostd/release/verify` is Node only.
+`@lunora/hostd/release` (types, validator, canonical bytes, and
+`verifyReleaseManifest` on WebCrypto) has no Node imports and runs in workerd —
+the control plane verifies a release with the same function a box does.
+`@lunora/hostd/release/verify` (signing, artifact hashing) is Node only.
 
 ### Building
 

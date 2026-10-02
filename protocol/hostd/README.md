@@ -317,7 +317,9 @@ A release is the set of binaries a box installs: `hostd`, celld and Caddy, one
 artifact per platform each. An `upgrade` job names it by `releaseId` and points
 at its signed manifest with `manifestUrl` (§5.2); `install.sh` starts from the
 same file. Reference implementation: `@lunora/hostd/release` (types, validator,
-canonical bytes; runs in workerd) and `@lunora/hostd/release/verify` (Node).
+canonical bytes and signature verification on WebCrypto; runs in Node and
+workerd alike) and `@lunora/hostd/release/verify` (signing and artifact
+hashing; Node only).
 
 ### 8.1 Envelope
 

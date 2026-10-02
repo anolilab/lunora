@@ -13,8 +13,9 @@ import {
     releaseSigningPayload,
     validateReleaseEnvelope,
     validateReleaseManifest,
+    verifyReleaseManifest,
 } from "../src/release";
-import { releaseKeyId, signReleaseManifest, verifyArtifact, verifyReleaseManifest } from "../src/release-verify";
+import { releaseKeyId, signReleaseManifest, verifyArtifact } from "../src/release-verify";
 
 const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
@@ -165,16 +166,16 @@ describe(canonicalManifestBytes, () => {
 });
 
 describe(verifyReleaseManifest, () => {
-    it("verifies a round trip through pretty-printed JSON with a PEM key", () => {
+    it("verifies a round trip through pretty-printed JSON with a PEM key", async () => {
         const { envelope, trusted } = signed();
 
-        expect(verifyReleaseManifest(JSON.parse(JSON.stringify(envelope, undefined, 4)), trusted)).toStrictEqual({ manifest: makeManifest(), ok: true });
+        await expect(verifyReleaseManifest(JSON.parse(JSON.stringify(envelope, undefined, 4)), trusted)).resolves.toStrictEqual({ envelope, ok: true });
     });
 
-    it("verifies against a raw 32-byte key", () => {
+    it("verifies against a raw 32-byte key", async () => {
         const { envelope, keys } = signed();
 
-        expect(verifyReleaseManifest(envelope, { [envelope.keyId]: keys.publicRaw }).ok).toBe(true);
+        await expect(verifyReleaseManifest(envelope, { [envelope.keyId]: keys.publicRaw })).resolves.toMatchObject({ ok: true });
     });
 
     it("derives the key id from the public key", () => {
@@ -185,16 +186,16 @@ describe(verifyReleaseManifest, () => {
         expect(releaseKeyId(keys.publicRaw)).toBe(envelope.keyId);
     });
 
-    it("refuses a manifest changed after signing", () => {
+    it("refuses a manifest changed after signing", async () => {
         const { envelope, trusted } = signed();
         const tampered = clone(envelope);
 
         (tampered.manifest.hostd.artifacts[0] as { sha256: string }).sha256 = "c".repeat(64);
 
-        expect(verifyReleaseManifest(tampered, trusted)).toMatchObject({ error: { code: "BAD_SIGNATURE" }, ok: false });
+        await expect(verifyReleaseManifest(tampered, trusted)).resolves.toMatchObject({ error: { code: "BAD_SIGNATURE" }, ok: false });
     });
 
-    it("refuses a changed signature", () => {
+    it("refuses a changed signature", async () => {
         const { envelope, trusted } = signed();
         const tampered = clone(envelope);
         const bytes = Buffer.from(tampered.signature, "base64url");
@@ -202,40 +203,40 @@ describe(verifyReleaseManifest, () => {
         bytes[0] = ((bytes[0] ?? 0) + 1) % 256;
         tampered.signature = bytes.toString("base64url");
 
-        expect(verifyReleaseManifest(tampered, trusted)).toMatchObject({ error: { code: "BAD_SIGNATURE" }, ok: false });
+        await expect(verifyReleaseManifest(tampered, trusted)).resolves.toMatchObject({ error: { code: "BAD_SIGNATURE" }, ok: false });
     });
 
-    it("refuses a signature from another trusted key filed under the signer's id", () => {
+    it("refuses a signature from another trusted key filed under the signer's id", async () => {
         const { envelope } = signed();
         const other = keyPair();
 
-        expect(verifyReleaseManifest(envelope, { [envelope.keyId]: other.publicPem })).toMatchObject({
+        await expect(verifyReleaseManifest(envelope, { [envelope.keyId]: other.publicPem })).resolves.toMatchObject({
             error: { code: "INVALID_TRUSTED_KEY" },
             ok: false,
         });
     });
 
-    it("refuses a wrong key id", () => {
+    it("refuses a wrong key id", async () => {
         const { envelope, trusted } = signed();
         const other = keyPair();
         const relabelled = { ...clone(envelope), keyId: releaseKeyId(other.publicPem) };
 
-        expect(verifyReleaseManifest(relabelled, { ...trusted, [relabelled.keyId]: other.publicPem })).toMatchObject({
+        await expect(verifyReleaseManifest(relabelled, { ...trusted, [relabelled.keyId]: other.publicPem })).resolves.toMatchObject({
             error: { code: "BAD_SIGNATURE" },
             ok: false,
         });
     });
 
-    it("refuses an unknown key", () => {
+    it("refuses an unknown key", async () => {
         const { envelope } = signed();
 
-        expect(verifyReleaseManifest(envelope, {})).toMatchObject({ error: { code: "UNKNOWN_KEY" }, ok: false });
-        expect(verifyReleaseManifest({ ...envelope, keyId: "toString" }, {})).toMatchObject({ error: { code: "UNKNOWN_KEY" }, ok: false });
+        await expect(verifyReleaseManifest(envelope, {})).resolves.toMatchObject({ error: { code: "UNKNOWN_KEY" }, ok: false });
+        await expect(verifyReleaseManifest({ ...envelope, keyId: "toString" }, {})).resolves.toMatchObject({ error: { code: "UNKNOWN_KEY" }, ok: false });
     });
 
-    it("refuses a placeholder key", () => {
+    it("refuses a placeholder key", async () => {
         const { envelope } = signed();
-        const result = verifyReleaseManifest({ ...envelope, keyId: "ed25519-placeholder" }, HOSTD_TRUSTED_RELEASE_KEYS);
+        const result = await verifyReleaseManifest({ ...envelope, keyId: "ed25519-placeholder" }, HOSTD_TRUSTED_RELEASE_KEYS);
 
         expect(result).toMatchObject({ error: { code: "PLACEHOLDER_KEY" }, ok: false });
     });
@@ -246,20 +247,23 @@ describe(verifyReleaseManifest, () => {
         }
     });
 
-    it("refuses a trusted key that is not Ed25519", () => {
+    it("refuses a trusted key that is not Ed25519", async () => {
         const { envelope } = signed();
         const ecdsa = generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ format: "pem", type: "spki" });
 
-        expect(verifyReleaseManifest(envelope, { [envelope.keyId]: ecdsa })).toMatchObject({ error: { code: "INVALID_TRUSTED_KEY" }, ok: false });
+        await expect(verifyReleaseManifest(envelope, { [envelope.keyId]: ecdsa })).resolves.toMatchObject({
+            error: { code: "INVALID_TRUSTED_KEY" },
+            ok: false,
+        });
     });
 
-    it("refuses an invalid envelope with its path", () => {
+    it("refuses an invalid envelope with its path", async () => {
         const { envelope, trusted } = signed();
         const broken = clone(envelope);
 
         (broken.manifest as unknown as Record<string, unknown>).extra = 1;
 
-        expect(verifyReleaseManifest(broken, trusted)).toStrictEqual({
+        await expect(verifyReleaseManifest(broken, trusted)).resolves.toStrictEqual({
             error: { code: "INVALID_ENVELOPE", message: "$.manifest.extra is not a known field", path: "$.manifest.extra" },
             ok: false,
         });

@@ -14,7 +14,12 @@ import {
     HOSTD_PROTOCOL_VERSION,
     HOSTD_REQUEST_DOMAIN,
     isAlias,
+    isErrorCode,
     isHostname,
+    isNonce,
+    isProtocolId,
+    isSignature,
+    isVersion,
     negotiateProtocolVersion,
     peekProtocolVersion,
     requestSigningPayload,
@@ -357,6 +362,27 @@ describe("aliases and hostnames", () => {
         `${"a.".repeat(127)}com`,
     ])("rejects hostname %s", (hostname) => {
         expect(isHostname(hostname)).toBe(false);
+    });
+});
+
+describe("field predicates", () => {
+    it("matches exactly what the decoders accept", () => {
+        expect([isProtocolId("box_1-A"), isProtocolId("a".repeat(128)), isProtocolId("a".repeat(129)), isProtocolId("a.b"), isProtocolId(1)]).toStrictEqual([
+            true,
+            true,
+            false,
+            false,
+            false,
+        ]);
+        expect([isNonce("n".repeat(22)), isNonce("n".repeat(21)), isNonce("n".repeat(129)), isNonce(`${"n".repeat(21)}=`)]).toStrictEqual([
+            true,
+            false,
+            false,
+            false,
+        ]);
+        expect([isErrorCode("BOX_OFFLINE"), isErrorCode("box_offline"), isErrorCode(`A${"B".repeat(64)}`)]).toStrictEqual([true, false, false]);
+        expect([isSignature("s".repeat(86)), isSignature("s".repeat(85)), isSignature(`${"s".repeat(85)}+`)]).toStrictEqual([true, false, false]);
+        expect([isVersion("v2.8.4"), isVersion("1.0.0-alpha.1+abc"), isVersion("1 0"), isVersion("")]).toStrictEqual([true, true, false, false]);
     });
 });
 

@@ -37,8 +37,8 @@ if (!existsSync(join(packageDirectory, "dist", "release-verify.mjs"))) {
     throw new Error("dist/ is missing: run `pnpm --filter @lunora/hostd run build` first");
 }
 
-const { HOSTD_RELEASE_PLATFORMS, HOSTD_TRUSTED_RELEASE_KEYS, validateReleaseManifest } = await import("../dist/release.mjs");
-const { signReleaseManifest, verifyArtifact, verifyReleaseManifest } = await import("../dist/release-verify.mjs");
+const { HOSTD_RELEASE_PLATFORMS, HOSTD_TRUSTED_RELEASE_KEYS, validateReleaseManifest, verifyReleaseManifest } = await import("../dist/release.mjs");
+const { signReleaseManifest, verifyArtifact } = await import("../dist/release-verify.mjs");
 
 const { values } = parseArgs({
     options: {
@@ -152,13 +152,13 @@ const hashArtifacts = (directory, base, name, extra = {}) =>
     });
 
 const verifyMode = async (envelopePath) => {
-    const verified = verifyReleaseManifest(JSON.parse(readFileSync(envelopePath, "utf8")), HOSTD_TRUSTED_RELEASE_KEYS);
+    const verified = await verifyReleaseManifest(JSON.parse(readFileSync(envelopePath, "utf8")), HOSTD_TRUSTED_RELEASE_KEYS);
 
     if (!verified.ok) {
         fail(`${envelopePath}: ${verified.error.code}: ${verified.error.message}`);
     }
 
-    const { manifest } = verified;
+    const { manifest } = verified.envelope;
 
     if (values["artifacts-dir"] !== undefined) {
         const directory = resolve(values["artifacts-dir"]);
@@ -184,7 +184,7 @@ const verifyMode = async (envelopePath) => {
     );
 };
 
-const makeMode = () => {
+const makeMode = async () => {
     const { version } = values;
     const baseUrl = values["base-url"];
 
@@ -227,7 +227,7 @@ const makeMode = () => {
     }
 
     const envelope = signReleaseManifest(validated.value, signingKey);
-    const check = verifyReleaseManifest(envelope, HOSTD_TRUSTED_RELEASE_KEYS);
+    const check = await verifyReleaseManifest(envelope, HOSTD_TRUSTED_RELEASE_KEYS);
 
     if (!check.ok) {
         fail(

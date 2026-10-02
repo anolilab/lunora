@@ -58,10 +58,9 @@ const utf8 = new TextEncoder();
 const utf8ByteLength = (value: string): number => utf8.encode(value).byteLength;
 
 /**
- * A deployment alias. Duplicated from `ALIAS_PATTERN` in
- * `apps/cloud/src/provision-contract.ts` on purpose: `hostd` is public and
- * `apps/cloud` is private, so the dependency may only run cloud → hostd.
- * Keep the two in step.
+ * A deployment alias: dash-separated runs of `[a-z0-9]`, so it never contains
+ * `--`. The one definition — `apps/cloud` imports {@link isAlias} from here
+ * (the dependency may only run cloud → hostd).
  */
 const ALIAS_PATTERN = /^[a-z\d]+(?:-[a-z\d]+)*$/u;
 
@@ -196,6 +195,22 @@ const readId = (value: unknown, path: string): string => readMatching(value, pat
 
 /** True when `value` is a valid deployment alias. */
 const isAlias = (value: string): boolean => value.length <= HOSTD_PROTOCOL_LIMITS.maxAliasLength && ALIAS_PATTERN.test(value);
+
+/** True when `value` is a protocol id (box, job, deployment, release): 1-128 characters of `[A-Za-z0-9_-]`. */
+const isProtocolId = (value: unknown): value is string => typeof value === "string" && ID_PATTERN.test(value);
+
+/** True when `value` is a challenge or request nonce: 22-128 base64url characters. */
+const isNonce = (value: unknown): value is string =>
+    typeof value === "string" && value.length >= MIN_NONCE_LENGTH && value.length <= MAX_NONCE_LENGTH && BASE64URL_PATTERN.test(value);
+
+/** True when `value` is an upper-snake-case error code of at most 64 characters. */
+const isErrorCode = (value: unknown): value is string => typeof value === "string" && ERROR_CODE_PATTERN.test(value);
+
+/** True when `value` has the shape of an Ed25519 signature: 86 base64url characters. Shape only — it is not verified. */
+const isSignature = (value: unknown): value is string => typeof value === "string" && value.length === SIGNATURE_LENGTH && BASE64URL_PATTERN.test(value);
+
+/** True when `value` is a version string as `hello` reports one: 1-64 characters of `[A-Za-z0-9_.+~-]`. */
+const isVersion = (value: unknown): value is string => typeof value === "string" && VERSION_PATTERN.test(value);
 
 const readAlias = (value: unknown, path: string): string => {
     const alias = readString(value, path);
@@ -613,7 +628,12 @@ export {
     fail,
     InvalidField,
     isAlias,
+    isErrorCode,
     isHostname,
+    isNonce,
+    isProtocolId,
+    isSignature,
+    isVersion,
     readArray,
     readBoxId,
     readId,
