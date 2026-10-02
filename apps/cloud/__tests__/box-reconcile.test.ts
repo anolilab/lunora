@@ -1,7 +1,7 @@
 /* eslint-disable sonarjs/no-hardcoded-ip -- the records under test point at fixture addresses */
 import { describe, expect, it } from "vitest";
 
-import { runBoxSweep } from "../src/boxes/reconcile";
+import { runBoxSweep, sixHourlyTickRunsBoxSweep } from "../src/boxes/reconcile";
 import type { CloudflareApi, DnsRecord } from "../src/cloudflare/api";
 import { createHttpCloudflareApi, MAX_DNS_LIST_PAGES } from "../src/cloudflare/api";
 import { DELETION_RETENTION_MS } from "../src/lib/deletion-retention";
@@ -94,7 +94,7 @@ describe(reconcileBoxDns, () => {
 
         const result = await reconcileBoxDns(zone.api, {
             domain: DOMAIN,
-            live: [{ boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE }],
+            live: () => Promise.resolve([{ boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE }]),
             maxWrites: 100,
             zoneId: "zone",
         });
@@ -114,7 +114,12 @@ describe(reconcileBoxDns, () => {
     it("repoints a live box whose address changed", async () => {
         const zone = memoryZone(boxRecords(LIVE, "198.51.100.7"));
 
-        await reconcileBoxDns(zone.api, { domain: DOMAIN, live: [{ boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE }], maxWrites: 100, zoneId: "zone" });
+        await reconcileBoxDns(zone.api, {
+            domain: DOMAIN,
+            live: () => Promise.resolve([{ boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE }]),
+            maxWrites: 100,
+            zoneId: "zone",
+        });
 
         expect(zone.records.map((candidate) => `${candidate.name} ${candidate.content}`).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
             `*.${LIVE}.${DOMAIN} 203.0.113.9`,
@@ -127,7 +132,7 @@ describe(reconcileBoxDns, () => {
 
         const result = await reconcileBoxDns(zone.api, {
             domain: DOMAIN,
-            live: [{ boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE }],
+            live: () => Promise.resolve([{ boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE }]),
             maxWrites: 100,
             zoneId: "zone",
         });
@@ -139,7 +144,7 @@ describe(reconcileBoxDns, () => {
     it("stops at its write budget", async () => {
         const zone = memoryZone([...boxRecords(REVOKED), ...boxRecords(PURGED)]);
 
-        const result = await reconcileBoxDns(zone.api, { domain: DOMAIN, live: [], maxWrites: 3, zoneId: "zone" });
+        const result = await reconcileBoxDns(zone.api, { domain: DOMAIN, live: () => Promise.resolve([]), maxWrites: 3, zoneId: "zone" });
 
         expect(result).toMatchObject({ deleted: 3, writesCapped: true });
         expect(zone.records).toHaveLength(1);
@@ -156,7 +161,7 @@ describe(reconcileBoxDns, () => {
 
         const result = await reconcileBoxDns(truncatedApi, {
             domain: DOMAIN,
-            live: [{ boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE }],
+            live: () => Promise.resolve([{ boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE }]),
             maxWrites: 100,
             zoneId: "zone",
         });
@@ -219,6 +224,32 @@ describe(runBoxSweep, () => {
         expect(patches).toStrictEqual([{ id: "box_erased", patch: { revokedAt: NOW, status: "revoked" } }]);
         expect(closed).toStrictEqual(["box_erased"]);
         expect(zone.records.map((candidate) => candidate.name)).toStrictEqual([`*.${LIVE}.${DOMAIN}`, `${LIVE}.${DOMAIN}`]);
+    });
+
+    it("keeps the records of a box enrolled while the sweep runs", async () => {
+        const fresh = "bfresh00001";
+        const zone = memoryZone([...boxRecords(LIVE)]);
+        const boxes: Record<string, unknown>[] = [box({})];
+        const { listDnsRecordsUnder } = zone.api;
+
+        // Enrolment lands after the sweep's first read of the boxes and before the
+        // zone is listed: the row first, then its records — as the enrol route does.
+        zone.api.listDnsRecordsUnder = (input) => {
+            boxes.push(box({ _id: "box_fresh", slug: fresh }));
+            zone.records.push(...boxRecords(fresh));
+
+            return listDnsRecordsUnder(input);
+        };
+
+        const { run } = sweep({ boxes, organizations: [] }, zone);
+
+        await expect(run).resolves.toMatchObject({ dns: { deleted: 0 } });
+        expect(zone.records.map((candidate) => candidate.name)).toStrictEqual([
+            `*.${LIVE}.${DOMAIN}`,
+            `${LIVE}.${DOMAIN}`,
+            `*.${fresh}.${DOMAIN}`,
+            `${fresh}.${DOMAIN}`,
+        ]);
     });
 
     it("keeps a box in its organization's grace window untouched", async () => {
@@ -335,5 +366,12 @@ describe("listing the box sub-domain over HTTP", () => {
         });
 
         await expect(api.listDnsRecordsUnder({ domain: DOMAIN, zoneId: "z" })).rejects.toThrow("Authentication error");
+    });
+});
+
+describe(sixHourlyTickRunsBoxSweep, () => {
+    it("hands the box sweep to the six-hourly invocation on the hours both triggers fire", () => {
+        expect([0, 6, 12, 18].map((hour) => sixHourlyTickRunsBoxSweep(Date.UTC(2026, 9, 2, hour)))).toStrictEqual([true, true, true, true]);
+        expect([1, 5, 7, 23].map((hour) => sixHourlyTickRunsBoxSweep(Date.UTC(2026, 9, 2, hour)))).toStrictEqual([false, false, false, false]);
     });
 });

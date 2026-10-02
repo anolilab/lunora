@@ -208,15 +208,23 @@ const applyOperation = async (api: CloudflareApi, zoneId: string, operation: Dns
  * `maxWrites` creates and deletes happen per pass. When the listing was cut at
  * its page bound nothing is created, since a "missing" record may sit on a page
  * not read; deletes of listed orphans are still safe.
+ *
+ * `live` is read AFTER the zone is listed, and that order is what keeps a box
+ * enrolled mid-pass from losing its records: enrolment inserts the box row
+ * before it writes the records, so any record the listing saw belongs to a row
+ * that already existed when `live` was read. Read the other way round, a box
+ * enrolled between the two reads has records in the listing and no row in the
+ * live set — an orphan, deleted.
  */
 export const reconcileBoxDns = async (
     api: CloudflareApi,
-    input: { domain: string; live: ReadonlyArray<LiveBoxDns>; maxWrites: number; zoneId: string },
+    input: { domain: string; live: () => Promise<ReadonlyArray<LiveBoxDns>>; maxWrites: number; zoneId: string },
 ): Promise<BoxDnsReconcileResult> => {
     const { records, truncated } = await api.listDnsRecordsUnder({ domain: input.domain, zoneId: input.zoneId });
-    const operations = planBoxDns(records, input.domain, input.live, !truncated);
+    const live = await input.live();
+    const operations = planBoxDns(records, input.domain, live, !truncated);
     const executed = operations.slice(0, input.maxWrites);
-    const failures = new Map<string, string[]>(input.live.map((box) => [box.boxId, []]));
+    const failures = new Map<string, string[]>(live.map((box) => [box.boxId, []]));
     const result: BoxDnsReconcileResult = {
         created: 0,
         deleted: 0,

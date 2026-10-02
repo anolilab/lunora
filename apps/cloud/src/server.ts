@@ -27,7 +27,7 @@ import { reconcileAllOverages } from "./billing/overage";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
 import { runOutdatedBoxAlerts } from "./boxes/outdated";
-import { runBoxSweep } from "./boxes/reconcile";
+import { runBoxSweep, sixHourlyTickRunsBoxSweep } from "./boxes/reconcile";
 import { manifestUrlOf, resumeHostdRollouts, upgradeDispatch } from "./boxes/rollout";
 import { boxSession } from "./boxes/session-client";
 import { buildExec, controlPlaneDatabase } from "./d1-store";
@@ -691,7 +691,7 @@ const sweepOutdatedBoxes = async (env: Env): Promise<void> => {
  * tenant cron fan-out is *not* here — it needs a driver's in-network `dispatch`
  * and stays a separate branch in scheduled().
  */
-const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
+const SCHEDULED_SWEEPS: { cron: string; run: (env: Env, controller: ScheduledControllerLike) => Promise<void> }[] = [
     { cron: EVERY_HOUR, run: sweepTeardown },
     { cron: EVERY_HOUR, run: sweepUsageRollback },
     { cron: EVERY_SIX_HOURS, run: sweepOverageReconciliation },
@@ -703,9 +703,17 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     // because the sweep only takes projects that are due.
     { cron: EVERY_HOUR, run: sweepTenantBackups },
     // Box DNS reconcile (plan 458 G13): the backstop that removes any box record
-    // a revoke or an org purge left behind, within the hour. It also runs ahead
-    // of the six-hourly code crons — see scheduled().
-    { cron: EVERY_HOUR, run: sweepBoxes },
+    // a revoke or an org purge left behind, within the hour. On the hours the
+    // six-hourly trigger also fires, that invocation runs it instead, ahead of
+    // the org purge — see scheduled() — so the two never overlap.
+    {
+        cron: EVERY_HOUR,
+        run: async (env, controller) => {
+            if (!sixHourlyTickRunsBoxSweep(controller.scheduledTime)) {
+                await sweepBoxes(env);
+            }
+        },
+    },
     // hostd rollouts the admin route's request-scoped run did not finish (plan 458 W7).
     { cron: EVERY_HOUR, run: sweepHostdRollouts },
     // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
@@ -946,7 +954,8 @@ export default {
         // hard-deletes an erased organization's boxes, but a mutation cannot close
         // their sessions or remove their DNS records. The box sweep does both for
         // every organization past the same cutoff, so it runs first; its hourly run
-        // is the backstop for anything this pass could not finish.
+        // is the backstop for anything this pass could not finish, and stands down
+        // on this tick's hour so the two invocations never sweep at once.
         if (controller.cron === EVERY_SIX_HOURS) {
             await sweepBoxes(env).catch((error: unknown) => {
                 // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
@@ -972,7 +981,7 @@ export default {
         // it, which is safe because every one of them is idempotent by design.
         const swept = await Promise.allSettled(
             SCHEDULED_SWEEPS.filter((sweep) => sweep.cron === controller.cron).map(async (sweep) => {
-                await sweep.run(env);
+                await sweep.run(env, controller);
             }),
         );
 

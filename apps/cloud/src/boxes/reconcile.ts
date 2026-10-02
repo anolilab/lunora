@@ -11,8 +11,9 @@
  *    sessions first; pass 2 then removes their records. The Worker runs this
  *    sweep right before its own crons on the six-hourly tick the purge rides,
  *    so the rows are retired before they are erased.
- * 2. **Reconcile the zone** (`reconcileBoxDns`): every box record whose slug
- *    has no box that is not revoked is deleted — a revoke made through any
+ * 2. **Reconcile the zone** (`reconcileBoxDns`): the zone is listed, THEN the
+ *    boxes are read again (so a box enrolled mid-sweep is live, not an orphan),
+ *    and every box record whose slug has no box that is not revoked is deleted — a revoke made through any
  *    path, a purge, a record a failed revoke left behind — and every live box's
  *    records are (re)written, with the outcome recorded on its `dnsError`.
  *
@@ -24,6 +25,15 @@ import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { BoxDnsReconcileResult, BoxDnsZone } from "../targets/celld-vps/dns";
 import { reconcileBoxDns } from "../targets/celld-vps/dns";
+
+/**
+ * Whether an hourly tick at `scheduledTime` is one the six-hourly trigger
+ * (`0 *\/6 * * *`) also fires on. Cloudflare delivers the two expressions as
+ * separate, concurrent `scheduled()` invocations, and the six-hourly one runs
+ * this sweep ahead of the org purge — so the hourly one stands down on those
+ * hours rather than run a second, overlapping pass against the same zone.
+ */
+export const sixHourlyTickRunsBoxSweep = (scheduledTime: number): boolean => new Date(scheduledTime).getUTCHours() % 6 === 0;
 
 /** Creates and deletes one pass may issue against the zone — well inside Cloudflare's API rate limit. */
 export const MAX_DNS_WRITES_PER_SWEEP = 200;
@@ -56,13 +66,16 @@ export interface BoxSweepResult {
     retired: number;
 }
 
-/** Pass 1: revoke and disconnect every live box of an organization whose deletion passed the retention window. */
-const retireBoxesOfErasedOrganizations = async (ports: BoxSweepPorts, boxes: SweepBoxRow[]): Promise<number> => {
+/**
+ * Pass 1: revoke and disconnect every live box of an organization whose
+ * deletion passed the retention window. Answers the ids it revoked.
+ */
+const retireBoxesOfErasedOrganizations = async (ports: BoxSweepPorts, boxes: SweepBoxRow[]): Promise<Set<string>> => {
     const due = await drainTable<{ _id: string }>(ports.database, "organizations", {
         where: { deletionRequestedAt: { lt: ports.now - DELETION_RETENTION_MS } },
     });
     const erased = new Set(due.map((organization) => organization._id));
-    let retired = 0;
+    const retired = new Set<string>();
 
     for (const box of boxes) {
         if (box.status === "revoked" || !erased.has(box.organizationId)) {
@@ -71,8 +84,7 @@ const retireBoxesOfErasedOrganizations = async (ports: BoxSweepPorts, boxes: Swe
 
         // eslint-disable-next-line no-await-in-loop -- one patch per box of an erased org; small
         await ports.database.patch(box._id, { revokedAt: ports.now, status: "revoked" }, "boxes");
-        box.status = "revoked";
-        retired += 1;
+        retired.add(box._id);
 
         // eslint-disable-next-line no-await-in-loop -- see above
         await ports.closeSession(box._id).catch((error: unknown) => {
@@ -85,8 +97,8 @@ const retireBoxesOfErasedOrganizations = async (ports: BoxSweepPorts, boxes: Swe
 };
 
 export const runBoxSweep = async (ports: BoxSweepPorts): Promise<BoxSweepResult> => {
-    const boxes = await drainTable<SweepBoxRow>(ports.database, "boxes");
-    const retired = await retireBoxesOfErasedOrganizations(ports, boxes);
+    const retiredIds = await retireBoxesOfErasedOrganizations(ports, await drainTable<SweepBoxRow>(ports.database, "boxes"));
+    const retired = retiredIds.size;
 
     if ("unavailable" in ports.dns) {
         ports.log(`[boxes] box DNS reconcile skipped: ${ports.dns.unavailable}`);
@@ -94,16 +106,29 @@ export const runBoxSweep = async (ports: BoxSweepPorts): Promise<BoxSweepResult>
         return { retired };
     }
 
-    const live = boxes
-        .filter((box) => box.status !== "revoked")
-        .map((box) => {
-            return { boxId: box._id, slug: box.slug, ...(box.ipv4 == null ? {} : { ipv4: box.ipv4 }), ...(box.ipv6 == null ? {} : { ipv6: box.ipv6 }) };
-        });
+    // Read again, AFTER the zone listing (`reconcileBoxDns` calls this once it has
+    // listed): a box enrolled since pass 1 must be in the live set, or its fresh
+    // records read as an orphan's. Pass 1's revokes count whatever the re-read says.
+    let boxes: SweepBoxRow[] = [];
+    const readLive = async () => {
+        boxes = await drainTable<SweepBoxRow>(ports.database, "boxes");
+
+        return boxes
+            .filter((box) => box.status !== "revoked" && !retiredIds.has(box._id))
+            .map((box) => {
+                return { boxId: box._id, slug: box.slug, ...(box.ipv4 == null ? {} : { ipv4: box.ipv4 }), ...(box.ipv6 == null ? {} : { ipv6: box.ipv6 }) };
+            });
+    };
 
     let reconciled: BoxDnsReconcileResult;
 
     try {
-        reconciled = await reconcileBoxDns(ports.dns.api, { domain: ports.dns.domain, live, maxWrites: MAX_DNS_WRITES_PER_SWEEP, zoneId: ports.dns.zoneId });
+        reconciled = await reconcileBoxDns(ports.dns.api, {
+            domain: ports.dns.domain,
+            live: readLive,
+            maxWrites: MAX_DNS_WRITES_PER_SWEEP,
+            zoneId: ports.dns.zoneId,
+        });
     } catch (error) {
         // The listing itself failed: nothing was changed, and the next tick tries again.
         ports.log(`[boxes] box DNS reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
