@@ -10,7 +10,7 @@
  * - `GET /v1/boxes/releases/:deploymentId` — `boxKey`: a box downloads a stored
  *   release, with a request signed by its key (plan 458 D6).
  */
-import { api, internal } from "../../../lunora/_generated/api.js";
+import { internal } from "../../../lunora/_generated/api.js";
 import type { EnrolResult } from "../../../lunora/boxes";
 import { isEnrolmentTokenShape } from "../../boxes/enrolment";
 import type { BoxSessionNamespace } from "../../boxes/session-client";
@@ -18,7 +18,7 @@ import { boxSession } from "../../boxes/session-client";
 import type { VerifiedBoxRequest } from "../../boxes/signed-request";
 import { verifyBoxRequest } from "../../boxes/signed-request";
 import type { BoxDnsEnvironment } from "../../targets/celld-vps/dns";
-import { boxDnsFromEnv, removeBoxDns, syncBoxDns } from "../../targets/celld-vps/dns";
+import { boxDnsFromEnv, MAX_DNS_ERROR, removeBoxDns, syncBoxDns } from "../../targets/celld-vps/dns";
 import { sha256Hex } from "../keys";
 import { createReleaseStore } from "../release-store";
 import { matchRoutePath } from "../route-path";
@@ -34,9 +34,6 @@ export type BoxRouteEnvironment = {
 };
 
 type BoxRouterEnv = BoxDnsEnvironment & BoxRouteEnvironment & RouterEnv;
-
-/** Longest DNS failure kept on a box row (`boxes.recordDns`'s bound). */
-const MAX_DNS_ERROR = 256;
 
 /**
  * Converge (or remove) a box's records in the platform's box zone (plan 458
@@ -178,10 +175,12 @@ interface RevokeBody {
 }
 
 /**
- * `POST /v1/boxes/revoke` — revoke a box under the caller's session (the
- * mutation asserts owner/admin and the org), then close its session with
- * `BOX_REVOKED`. Closing is best-effort: a box that is offline is cut off the
- * moment it reconnects, and a live one within a liveness tick regardless.
+ * `POST /v1/boxes/revoke` — the one way to revoke a box: under the caller's
+ * session (the internal mutation asserts owner/admin and the org), then close
+ * its session with `BOX_REVOKED` and remove its DNS records. Closing is
+ * best-effort: a box that is offline is cut off the moment it reconnects, and a
+ * live one within a liveness tick regardless. A record removal that fails is
+ * recorded on the box and retried by the box sweep.
  */
 export const handleBoxRevokeRoute = async (request: Request, environment: BoxRouterEnv): Promise<Response> => {
     const context = requireContext(environment);
@@ -194,7 +193,8 @@ export const handleBoxRevokeRoute = async (request: Request, environment: BoxRou
     let revoked: { ipv4?: string; ipv6?: string; slug: string };
 
     try {
-        revoked = await context.runMutation<{ ipv4?: string; ipv6?: string; slug: string }>(api.boxes.revoke, {
+        // Internal: this route is the only way to revoke, so a revoke always closes the session and removes the records.
+        revoked = await context.runMutation<{ ipv4?: string; ipv6?: string; slug: string }>(internal.boxes.revoke, {
             id: body.id,
             organizationId: body.organizationId,
         });

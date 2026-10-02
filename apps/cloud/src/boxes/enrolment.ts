@@ -22,6 +22,9 @@ export const isEnrolmentTokenShape = (value: unknown): value is string => typeof
 /** Characters after the leading `b`: 36^10 ≈ 3.7e15, so a collision on the unique index is a retry, not a design concern. */
 const SLUG_RANDOM_LENGTH = 10;
 
+/** The shape of every slug {@link mintBoxSlug} mints — what tells a box record in the zone from anything else there. */
+export const BOX_SLUG_PATTERN = /^b[\da-z]{10}$/u;
+
 /**
  * A new box's DNS label: `b` + ten random `[a-z0-9]`. Random rather than
  * derived from the box's name, because it becomes a public hostname

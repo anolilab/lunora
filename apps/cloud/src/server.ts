@@ -26,6 +26,10 @@ import { createCreemCreditsLedger } from "./billing/creem-credits";
 import { reconcileAllOverages } from "./billing/overage";
 import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { buildOverageReconcileData, overageFleetPorts } from "./billing/reconcile";
+import { runOutdatedBoxAlerts } from "./boxes/outdated";
+import { runBoxSweep } from "./boxes/reconcile";
+import { manifestUrlOf, resumeHostdRollouts, upgradeDispatch } from "./boxes/rollout";
+import { boxSession } from "./boxes/session-client";
 import { buildExec, controlPlaneDatabase } from "./d1-store";
 import { resolveAdminToken } from "./deploy/admin-token";
 import type { ReleaseBucket } from "./deploy/release-store";
@@ -43,6 +47,7 @@ import type { TargetId } from "./provision-contract";
 import { BINDING_SUPPORT } from "./provision-contract";
 import readJson from "./read-json";
 import type { ControlPlaneDatabase } from "./store";
+import { boxDnsFromEnv } from "./targets/celld-vps/dns";
 import type { TargetDriver } from "./targets/driver";
 import type { TargetEnvironment } from "./targets/registry";
 import { registeredTargets, resolveTargetDriver, storedTarget, targetCanConverge } from "./targets/registry";
@@ -601,6 +606,81 @@ const sweepTenantBackups = async (env: Env): Promise<void> => {
 };
 
 /**
+ * Keep the box zone and the boxes' sessions in step with the `boxes` table
+ * (plan 458 G13, `src/boxes/reconcile.ts`): retire the boxes of organizations
+ * due for erasure (revoked, sessions closed), then delete every box DNS record
+ * whose box is revoked or gone and rewrite the live boxes' records. Reconciling
+ * the zone no-ops, with a log line, without `LUNORA_BOX_ZONE_ID` and a token.
+ */
+const sweepBoxes = async (env: Env): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const namespace = env.BOX_SESSION;
+    const result = await runBoxSweep({
+        closeSession: (boxId) =>
+            namespace === undefined
+                ? Promise.resolve()
+                : boxSession(namespace, boxId).close("BOX_REVOKED", "this box's organization was deleted; the box is no longer managed"),
+        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        dns: boxDnsFromEnv(env),
+        log: (line) => {
+            // eslint-disable-next-line no-console -- the sweep's skips and failures are only visible here, in Workers Logs
+            console.warn(line);
+        },
+        now: Date.now(),
+    });
+
+    // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+    console.log("[boxes]", JSON.stringify(result));
+};
+
+/**
+ * Resume `lunora-hostd` rollouts (plan 458 W7, `src/boxes/rollout.ts`): every
+ * release a box still desires is re-planned and run, canary first, skipping
+ * boxes already on it. `POST /v1/hostd/rollout` starts a run on its request's
+ * `waitUntil`, which the runtime cuts off ~30 s after the response; this is
+ * what carries a fleet the rest of the way. No-ops without the box bindings.
+ */
+const sweepHostdRollouts = async (env: Env): Promise<void> => {
+    const namespace = env.BOX_SESSION;
+    const origin = env.LUNORA_ORIGIN_URL;
+
+    if (!env.DB || namespace === undefined || origin === undefined) {
+        return;
+    }
+
+    const results = await resumeHostdRollouts({
+        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        dispatch: upgradeDispatch(namespace),
+        manifestUrlFor: (releaseId) => manifestUrlOf(origin, releaseId),
+    });
+
+    // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+    console.log("[hostd-rollout]", JSON.stringify(results));
+};
+
+/**
+ * Raise the outdated-box alerts (plan 458 W7, `src/boxes/outdated.ts`): a box
+ * a week behind the newest stable `lunora-hostd` release's celld fires its org's
+ * `deploy` rules, once per box per release. The rows are delivered by the
+ * every-minute alert drain, as the release path's own alerts are.
+ */
+const sweepOutdatedBoxes = async (env: Env): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const { fired } = await runOutdatedBoxAlerts(controlPlaneDatabase(env.DB as D1DatabaseLike), { now: Date.now() });
+
+    if (fired > 0) {
+        // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+        console.log("[boxes] outdated-box alerts fired", fired);
+    }
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -622,6 +702,14 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: Env) => Promise<void> }[] = [
     // (`MAX_BACKUPS_PER_TICK`); each project is still snapshotted once a day,
     // because the sweep only takes projects that are due.
     { cron: EVERY_HOUR, run: sweepTenantBackups },
+    // Box DNS reconcile (plan 458 G13): the backstop that removes any box record
+    // a revoke or an org purge left behind, within the hour. It also runs ahead
+    // of the six-hourly code crons — see scheduled().
+    { cron: EVERY_HOUR, run: sweepBoxes },
+    // hostd rollouts the admin route's request-scoped run did not finish (plan 458 W7).
+    { cron: EVERY_HOUR, run: sweepHostdRollouts },
+    // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
+    { cron: EVERY_HOUR, run: sweepOutdatedBoxes },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —
@@ -853,6 +941,18 @@ export default {
     },
     async scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
         worker ??= buildWorker(env);
+
+        // The org purge (`organizations.purgeDeleted`, a code cron on this tick)
+        // hard-deletes an erased organization's boxes, but a mutation cannot close
+        // their sessions or remove their DNS records. The box sweep does both for
+        // every organization past the same cutoff, so it runs first; its hourly run
+        // is the backstop for anything this pass could not finish.
+        if (controller.cron === EVERY_SIX_HOURS) {
+            await sweepBoxes(env).catch((error: unknown) => {
+                // eslint-disable-next-line no-console -- a swallowed sweep failure would be invisible; this is the only record
+                console.error("[sweep] box sweep before the org purge failed", error);
+            });
+        }
 
         // The control plane's own code crons fire on their declared expression.
         await worker.scheduled(controller, env, context);

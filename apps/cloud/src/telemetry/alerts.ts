@@ -23,8 +23,10 @@ export type MetricTarget = "error_rate" | "latency_p95" | "llm_cost";
 
 /**
  * Event targets — something that happened once, with no quantity to compare.
- * `deploy` covers the release path's bad outcomes: a build failed or a
- * deployment failed.
+ * `deploy` covers the release path's bad outcomes: a build failed, a
+ * deployment failed, or a customer box has run a celld other than the newest
+ * stable `lunora-hostd` release's for over a week (plan 458 W7) — celld patches
+ * only its latest release, so the box is what the next deploy lands on.
  *
  * Separate from {@link CountTarget} because a count target fires when a running
  * total crosses a line and therefore needs a threshold; a failed release has no
@@ -123,15 +125,16 @@ export interface DeployAlertSource {
     /** What went wrong, in the operator's words — a build error, a status, an abort reason. */
     detail: string;
     /** Which part of the release path produced it. */
-    kind: "build" | "deployment";
-    /** The project the release belongs to. */
+    kind: "box" | "build" | "deployment";
+    /** The project the release belongs to — for `box`, the box's name. */
     project: string;
-    /** What identifies the failing thing — a branch, a commit, a script name. */
+    /** What identifies the failing thing — a branch, a commit, a script name, a box's slug. */
     reference: string;
 }
 
 /** The human label for each part of the release path, used in the notification. */
 const DEPLOY_KIND_LABEL: Record<DeployAlertSource["kind"], string> = {
+    box: "Box outdated",
     build: "Build failed",
     deployment: "Deployment failed",
 };

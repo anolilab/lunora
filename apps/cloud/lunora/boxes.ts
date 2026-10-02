@@ -3,6 +3,8 @@ import { LunoraError } from "@lunora/server";
 import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
 import { isBoxPublicKey } from "../src/boxes/encoding";
 import { ENROLMENT_TTL_MS, installCommandFor, mintBoxSlug, mintEnrolmentToken } from "../src/boxes/enrolment";
+import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
+import { newestStableRelease } from "../src/boxes/hostd-releases";
 import { sha256Hex } from "../src/deploy/keys";
 import { DEFAULT_BOX_DOMAIN } from "../src/targets/celld-vps/driver";
 import type { Id } from "./_generated/dataModel.js";
@@ -24,7 +26,8 @@ import { boundedString, LIMITS } from "./validators";
  * `BoxSessionDO` (`src/boxes/session-do.ts`), which keeps `status`,
  * `lastSeenAt`, `versions` and `resources` current. {@link revoke} ends it for
  * good — the session closes and the box's DNS records go
- * (`POST /v1/boxes/revoke`).
+ * (`POST /v1/boxes/revoke`, its only caller); the box sweep
+ * (`src/boxes/reconcile.ts`) removes any record a revoke or an org purge left.
  */
 
 /** The protocol's version-string format (`protocol/hostd/README.md` §4.1). */
@@ -102,9 +105,8 @@ const present = <T>(key: string, value: null | T | undefined): Record<string, T>
 /** The newest stable release's versions, which boxes are measured against; `null` before any release is stored. */
 const latestStableVersions = async (context: QueryContext): Promise<BoxVersions | null> => {
     const { page } = await context.db.hostdReleases.findMany({});
-    const stable = (page as { channel?: null | string; createdAt: number; versions: BoxVersions }[]).filter((row) => row.channel !== "canary");
 
-    return stable.toSorted((a, b) => b.createdAt - a.createdAt).at(0)?.versions ?? null;
+    return newestStableRelease(page as StoredReleaseSummary[])?.versions ?? null;
 };
 
 export const toBoxView = (row: BoxRow, latest: BoxVersions | null = null): BoxView => {
@@ -235,16 +237,18 @@ export const rename = mutation
     });
 
 /**
- * Revoke a box for good (owner/admin). The row stays, `revoked`, so its
- * history and audit trail survive; the machine enrols again as a new box.
+ * Revoke a box for good (owner/admin, checked against the caller's session).
+ * The row stays, `revoked`, so its history and audit trail survive; the machine
+ * enrols again as a new box. Idempotent.
  *
- * A mutation cannot reach the box's session or Cloudflare's DNS API, so the
- * studio calls `POST /v1/boxes/revoke`, which runs this and then closes the
- * session and removes the DNS records with what it returns. A box revoked
- * through this mutation alone is still cut off: its session re-reads the row on
- * every liveness tick and closes with `BOX_REVOKED`. Idempotent.
+ * Internal on purpose: revoking is only complete with the box's session closed
+ * and its DNS records removed, which a mutation cannot do. `POST /v1/boxes/revoke`
+ * is the one path — it runs this under the caller's identity, then closes the
+ * session and removes the records with what it returns. Were this callable over
+ * RPC, a revoke made that way would leave `*.{slug}` pointing at an address the
+ * customer may release (until the box sweep's next pass removed it).
  */
-export const revoke = mutation
+export const revoke = internalMutation
     .use(rateLimit("sensitive"))
     .input({ id: v.id("boxes"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ ipv4?: string; ipv6?: string; slug: string }> => {

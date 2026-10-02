@@ -101,7 +101,7 @@ const KNOWN_NON_LUNORA_CODES = new Map<string, string>([
     ["BAD_RESPONSE", "apps/cloud/src/boxes/session-client.ts"],
     ["BOX_BUSY", "apps/cloud/src/boxes/session-do.ts"],
     ["BOX_OFFLINE", "apps/cloud/src/boxes/session-do.ts"],
-    ["DISPATCH_FAILED", "apps/cloud/src/deploy/routes/hostd.ts"],
+    ["DISPATCH_FAILED", "apps/cloud/src/boxes/rollout.ts"],
     // `verifyArtifact`'s result codes — returned as `{ ok: false, error }`
     // values by the hostd release verifier, never a `LunoraError` construction.
     ["HASH_MISMATCH", "apps/hostd/src/release-verify.ts"],

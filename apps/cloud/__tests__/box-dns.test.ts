@@ -30,6 +30,7 @@ const memoryZone = (records: DnsRecord[] = []) => {
         },
         exportD1Database: () => Promise.reject(new Error("unused")),
         listDnsRecords: ({ name }) => Promise.resolve(records.filter((record) => record.name === name)),
+        listDnsRecordsUnder: () => Promise.reject(new Error("unused")),
     };
 
     return { api, records, writes };

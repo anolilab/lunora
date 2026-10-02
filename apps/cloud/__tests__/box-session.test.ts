@@ -328,6 +328,17 @@ describe("boxSessionDO", () => {
         expect(store.tables["boxes"]?.[0]).toMatchObject({ status: "revoked" });
     });
 
+    it("cuts a box off on the next tick once its row is gone — its organization was purged", async () => {
+        const { key, session, state, store } = await setup();
+        const socket = await handshake(session, state, key, "box_1");
+
+        await store.delete("box_1", "boxes");
+        await session.alarm();
+
+        expect(socket.received().at(-1)).toMatchObject({ code: "BOX_REVOKED", type: "error" });
+        expect(socket.closedWith?.reason).toBe("BOX_REVOKED");
+    });
+
     it("claims a request nonce once and refuses its replay", async () => {
         const { session } = await setup();
         const client = boxSession(namespaceOver(session), "box_1");

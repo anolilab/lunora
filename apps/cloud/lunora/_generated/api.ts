@@ -31,7 +31,6 @@ export interface ApiTypes {
         get: FunctionReference<"query", { id: Id<"boxes">; organizationId: Id<"organizations"> }, null | { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"boxes">; createdAt: number; desiredReleaseId?: string; dnsError?: string; enrolledAt?: number; ipv4?: string; ipv6?: string; lastSeenAt?: number; name: string; organizationId: Id<"organizations">; outdated: boolean; publicKey: string; resources?: { diskFreeMb: number; memMb: number; }; revokedAt?: number; singleTrust: boolean; slug: string; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }[]>;
         rename: FunctionReference<"mutation", { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }, void>;
-        revoke: FunctionReference<"mutation", { id: Id<"boxes">; organizationId: Id<"organizations"> }, { ipv4?: string; ipv6?: string; slug: string; }>;
         setProjectTarget: FunctionReference<"mutation", { boxId?: Id<"boxes">; organizationId: Id<"organizations">; projectId: Id<"projects">; target: "celld-vps" | "cloudflare-wfp" }, void>;
     };
     builds: {
@@ -188,6 +187,7 @@ export interface InternalApiTypes {
         identity: FunctionReference<"query", { boxId: Id<"boxes"> }, { organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string; } | null>;
         ownsDeployment: FunctionReference<"query", { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }, boolean>;
         recordDns: FunctionReference<"mutation", { boxId: Id<"boxes">; dnsError: null | unknown }, void>;
+        revoke: FunctionReference<"mutation", { id: Id<"boxes">; organizationId: Id<"organizations"> }, { ipv4?: string; ipv6?: string; slug: string; }>;
         setDesiredRelease: FunctionReference<"mutation", { boxIds?: Array<Id<"boxes">>; releaseId: unknown }, { boxId: Id<"boxes">; status: "pending" | "online" | "offline" | "revoked"; versions?: { caddy: string; celld: string; hostd: string } }[]>;
     };
     builds: {

@@ -266,6 +266,10 @@ describe("boxes reads and writes are org-scoped", () => {
         expect(ops).toContainEqual({ id: "box_1", kind: "patch", patch: { revokedAt: NOW, status: "revoked" } });
     });
 
+    it("is internal: only POST /v1/boxes/revoke, which also closes the session and removes the DNS records, may call it", () => {
+        expect(revoke.visibility).toBe("internal");
+    });
+
     it("does not re-revoke a revoked box", async () => {
         const { ctx, ops } = makeCtx({ boxes: [box({ status: "revoked" })], members: [owner("org_1")] });
 
