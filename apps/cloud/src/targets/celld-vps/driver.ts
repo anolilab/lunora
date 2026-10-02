@@ -98,7 +98,7 @@ export const createCelldVpsDriver = (ports: CelldVpsPorts): TargetDriver => {
         },
         domains: {
             // A box serves a custom domain once its routing table names it (plan 458 W5).
-            onVerified: async () => {
+            onVerified: async (): Promise<undefined> => {
                 await session()
                     .pushRoutes()
                     .catch(() => false);

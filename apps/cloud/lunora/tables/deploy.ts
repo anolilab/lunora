@@ -241,7 +241,15 @@ export const deployTables = {
     // deployment once DNS-verified; cert issuance (Cloudflare for SaaS) is only
     // requested for verified rows — DB-gated on-demand TLS.
     domains: defineTable({
-        // Cloudflare for SaaS custom-hostname id, once provisioned (🌐 path).
+        // Why the certificate is not issued, as the issuer last said it.
+        certificateError: v.optional(v.string()),
+        // The certificate's status as last read (`cloudflare-wfp`: the custom
+        // hostname's `ssl.status` — `pending_validation`, …, `active` — or
+        // `unconfigured` when this control plane has no SaaS zone). Refreshed by
+        // the hourly certificate sweep until `active`.
+        certificateStatus: v.optional(v.string()),
+        // Cloudflare-for-SaaS custom-hostname id, once the driver's `onVerified`
+        // requested it (`src/targets/cloudflare-wfp/certificates.ts`).
         customHostnameId: v.optional(v.string()),
         createdAt: v.number(),
         hostname: v.string(),

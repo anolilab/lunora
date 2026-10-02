@@ -11,12 +11,15 @@
  * ports are read off the control plane's Worker env.
  */
 import { tenantSender } from "../../backup/tenant-transport";
+import { createHttpCloudflareApi } from "../../cloudflare/api";
 import { BINDING_SUPPORT } from "../../provision-contract";
 import type { ProgressLine, TargetDriver, TargetFleet, UsageRow } from "../driver";
 import type { ProvisionBox } from "../provision-box/client";
 import { deployJobSpec, provisionBoxFrom, runProvisionJob } from "../provision-box/client";
 import type { AnalyticsUsageReader } from "./analytics";
 import { createHttpAnalyticsReader } from "./analytics";
+import type { SaasZone } from "./certificates";
+import { issueCertificate, refreshCertificate, removeCertificate } from "./certificates";
 import type { DispatchNamespaceLike } from "./dispatch";
 import { dispatchTenantSender } from "./dispatch";
 
@@ -39,7 +42,16 @@ export interface CloudflareWfpPorts {
      * account and its resources, which are the platform's, not the tenant's.
      */
     log?: ProgressLine;
+
+    /** The SaaS zone custom domains get their certificates in (`LUNORA_SAAS_ZONE_ID`); absent → none are issued. */
+    saasZone?: SaasZone;
 }
+
+/** What a verified domain records when this control plane cannot request its certificate. */
+export const UNCONFIGURED_CERTIFICATE = {
+    error: "custom-domain certificates are not configured on this control plane (LUNORA_SAAS_ZONE_ID is unset)",
+    sslStatus: "unconfigured",
+} as const;
 
 export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriver => {
     return {
@@ -70,7 +82,16 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
                 ports.log,
             );
         },
-        domains: { platformTargets: () => [ports.appDomain] },
+        domains: {
+            onRemoved: async (domain) => {
+                if (ports.saasZone !== undefined && domain.customHostnameId !== undefined) {
+                    await removeCertificate(ports.saasZone, domain.customHostnameId);
+                }
+            },
+            // A verified hostname gets its certificate — and its route into the SaaS zone — here, never before.
+            onVerified: async (domain) => (ports.saasZone === undefined ? { ...UNCONFIGURED_CERTIFICATE } : issueCertificate(ports.saasZone, domain)),
+            platformTargets: () => [ports.appDomain],
+        },
         id: "cloudflare-wfp",
     };
 };
@@ -80,12 +101,14 @@ export interface CloudflareWfpFleetPorts {
     cell: string;
     /** The bound dispatch namespace (`DISPATCHER`); absent → no in-network fan-out, and backups go over the public URL. */
     dispatcher?: DispatchNamespaceLike;
+    /** The SaaS zone this cell issues custom-domain certificates in; absent → nothing to refresh. */
+    saasZone?: SaasZone;
     /** The Analytics-Engine request-count reader; absent without account credentials. */
     usage?: AnalyticsUsageReader;
 }
 
 export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): TargetFleet => {
-    const { cell, dispatcher, usage } = ports;
+    const { cell, dispatcher, saasZone, usage } = ports;
     const dispatch = dispatcher ? (tenant: { adminToken: string; resourceRef: string }) => dispatchTenantSender(dispatcher, tenant) : undefined;
 
     return {
@@ -94,6 +117,7 @@ export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): Target
         // The dispatch namespace when bound — the call never leaves Cloudflare —
         // else the deployment's public URL (local dev, where namespaces are not emulated).
         reach: (tenant) => (dispatch ? dispatch(tenant) : tenantSender(tenant)),
+        ...(saasZone === undefined ? {} : { refreshCertificate: (customHostnameId: string) => refreshCertificate(saasZone, customHostnameId) }),
         ...(usage
             ? {
                   usage: {
@@ -131,8 +155,22 @@ export type CloudflareWfpEnvironment = {
     LUNORA_APP_DOMAIN?: string;
     LUNORA_CELL?: string;
     LUNORA_DISPATCH_NAMESPACE?: string;
+
+    /**
+     * The Cloudflare-for-SaaS zone (the zone of `LUNORA_APP_DOMAIN`, which custom
+     * domains CNAME to) whose custom hostnames carry custom-domain certificates.
+     * Unset → verified domains record that no certificate could be requested.
+     */
+    LUNORA_SAAS_ZONE_ID?: string;
     /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
     USAGE_ANALYTICS_DATASET?: string;
+};
+
+/** The SaaS zone off the env, when the zone and the cell's credentials are all set. */
+const saasZoneOf = (environment: CloudflareWfpEnvironment): SaasZone | undefined => {
+    const { CLOUDFLARE_ACCOUNT_ID: accountId, CLOUDFLARE_API_TOKEN: apiToken, LUNORA_SAAS_ZONE_ID: zoneId } = environment;
+
+    return accountId && apiToken && zoneId ? { api: createHttpCloudflareApi({ accountId, apiToken }), zoneId } : undefined;
 };
 
 /**
@@ -148,8 +186,10 @@ export const dispatchNamespaceOf = (environment: { LUNORA_DISPATCH_NAMESPACE?: s
 export const cloudflareWfpCanConverge = (environment: CloudflareWfpEnvironment): boolean => environment.CONTAINER_PROVISION_BOX != null;
 
 /** Build the driver off the Worker env. Lazy: nothing is touched until a member is called. */
-export const cloudflareWfpDriverFromEnv = (environment: CloudflareWfpEnvironment): TargetDriver =>
-    createCloudflareWfpDriver({
+export const cloudflareWfpDriverFromEnv = (environment: CloudflareWfpEnvironment): TargetDriver => {
+    const saasZone = saasZoneOf(environment);
+
+    return createCloudflareWfpDriver({
         appDomain: environment.LUNORA_APP_DOMAIN ?? "lunora.app",
         box: () => provisionBoxFrom(environment),
         cell: environment.LUNORA_CELL ?? "default",
@@ -158,16 +198,20 @@ export const cloudflareWfpDriverFromEnv = (environment: CloudflareWfpEnvironment
             // eslint-disable-next-line no-console -- the provision box's log is the platform's; Workers Logs is its only reader
             console.log("[provision]", line);
         },
+        ...(saasZone === undefined ? {} : { saasZone }),
     });
+};
 
 /** Build the fleet off the Worker env. */
 export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment): TargetFleet => {
     const accountId = environment.CLOUDFLARE_ACCOUNT_ID;
     const apiToken = environment.CLOUDFLARE_API_TOKEN;
+    const saasZone = saasZoneOf(environment);
 
     return createCloudflareWfpFleet({
         cell: environment.LUNORA_CELL ?? "default",
         ...(environment.DISPATCHER ? { dispatcher: environment.DISPATCHER } : {}),
+        ...(saasZone === undefined ? {} : { saasZone }),
         ...(accountId && apiToken
             ? { usage: createHttpAnalyticsReader({ accountId, apiToken, dataset: environment.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage" }) }
             : {}),

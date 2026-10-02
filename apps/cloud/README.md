@@ -17,8 +17,9 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 > entitlements, metering ingestion), and **hardened better-auth** (mail-backed
 > verification/reset, optional OAuth, 2FA/passkeys, rate limiting). Still open
 > (needs live infra/services): end-to-end deploy validation, the billing-provider
-> charge wiring against a real Creem account, cell bring-up IaC, custom domains,
-> and the items still marked infrastructure-blocked in [`GAPS.md`](./GAPS.md).
+> charge wiring against a real Creem account, cell bring-up IaC, custom-domain
+> certificates against a real Cloudflare-for-SaaS zone, and the items still
+> marked infrastructure-blocked in [`GAPS.md`](./GAPS.md).
 
 ## Layout
 
@@ -80,7 +81,8 @@ src/
                      usage reports, hostd releases + rollout, urls.ts (box domain + paths)
   cloudflare/
     api.ts           Cloudflare REST port: D1 export (the control plane's own
-                     backup), custom hostnames, and the box zone's DNS records
+                     backup), custom hostnames (create / find / read / delete), and
+                     the box zone's DNS records
     billable-usage.ts an org's own Cloudflare billing, for the cost overview
   secrets/
     crypto.ts        AES-256-GCM envelope encryption for tenant secrets (§7)
@@ -397,6 +399,41 @@ drift guard covers `apps/*` as well as `packages/*`. The session's hot paths —
 frame decode, `receiveFrame`, job correlation, a liveness tick over 1,000
 attachments — are benched in plain node (`__bench__/box-session.bench.ts`,
 `pnpm run test:bench`; CodSpeed runs it with every package's benches).
+
+### Custom domains (`lunora/domains.ts`, GAPS.md B1)
+
+A project's own hostname: `POST /v1/domains` adds it (minting the
+`_lunora.<hostname>` TXT token), `POST /v1/domains/verify` checks the TXT record
+and that the hostname CNAMEs at the project's placement
+(`domains.platformTargets()`: the app apex on `cloudflare-wfp`, the box's own
+hostname on `celld-vps`), and the dispatcher (or the box's routing table) serves
+it once verified.
+
+- **Certificates (`cloudflare-wfp`).** Once a domain verifies, the driver's
+  `domains.onVerified` creates a Cloudflare-for-SaaS custom hostname for it on
+  the SaaS zone — the zone of `LUNORA_APP_DOMAIN`, `LUNORA_SAAS_ZONE_ID` — with
+  a DV certificate over HTTP validation
+  (`src/targets/cloudflare-wfp/certificates.ts`). It is never requested before
+  the domain verified, and never twice: an existing hostname is found by id or
+  by name. The row keeps `customHostnameId`, `certificateStatus` (the
+  hostname's `ssl.status`) and `certificateError`; the hourly certificate sweep
+  (`src/domains/certificate-sweep.ts`, at most 50 a tick) re-reads each one
+  until it is `active`. Without `LUNORA_SAAS_ZONE_ID` a verified domain records
+  `unconfigured` and says why. A box terminates its own TLS (Caddy), so a
+  `celld-vps` domain records no certificate.
+- **Removal.** `POST /v1/domains/remove` (owner/admin; `domains.removalTarget`
+  asserts it before anything is touched) has the driver delete the custom
+  hostname (`domains.onRemoved`) and only then deletes the row — a failure
+  answers 502 and keeps the domain, so no certificate outlives it.
+- **Studio.** The Domains tab shows each verified domain's certificate state
+  and, while it is pending or failed, what the issuer said; Verify re-requests
+  a certificate that failed.
+
+| Route                     | Auth      |
+| ------------------------- | --------- |
+| `POST /v1/domains`        | `session` |
+| `POST /v1/domains/verify` | `session` |
+| `POST /v1/domains/remove` | `session` |
 
 ### Billing & metering (`lunora/billing.ts`, `src/billing/`, §4)
 
@@ -919,7 +956,10 @@ once per cell with `wrangler secret put <NAME> --env <cell>`:
   Platforms:Edit, Account Analytics:Read, and Zone → Workers Routes:Edit for the
   routed zone. The cell's own `CLOUDFLARE_API_TOKEN` secret additionally needs
   Zone → DNS:Edit on the box zone (`LUNORA_BOX_ZONE_ID`) once boxes are enrolled
-  there: every box gets its A/AAAA records at enrolment (plan 458 G13). Scoping them per environment is what lets production carry a
+  there: every box gets its A/AAAA records at enrolment (plan 458 G13), and
+  Zone → SSL and Certificates:Edit on the SaaS zone (`LUNORA_SAAS_ZONE_ID`, the
+  zone of `LUNORA_APP_DOMAIN`) to create, read and delete the custom hostnames
+  that carry custom-domain certificates (GAPS.md B1). Scoping them per environment is what lets production carry a
   required reviewer.
 - The gates run as `lunora verify` (wrangler validation, codegen dry-run, the
   ERROR-advisory gate, the schema-drift gate, `tsc --noEmit`) before anything is

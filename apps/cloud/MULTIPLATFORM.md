@@ -516,8 +516,10 @@ Deviations from the §5.1 sketch, and why:
   had inlined — and the per-target `TARGETS` descriptor.
 - **`src/cloudflare/api.ts` did not move.** What is left in it is the control
   plane's own D1 export (its host, not a target — now behind
-  `src/backup/control-plane-export.ts`) and `createCustomHostname`, which still
-  has no caller (so no driver issues certificates). `billable-usage.ts` is the
+  `src/backup/control-plane-export.ts`) and the custom-hostname methods, which
+  the `cloudflare-wfp` driver's `domains.onVerified` / `onRemoved` and fleet
+  `refreshCertificate` now call for custom-domain certificates (GAPS.md B1,
+  `feat/cloud-followups`). `billable-usage.ts` is the
   BYO cost overview. All three are named exceptions in the boundary.
 - **Not added from §5.2:** `cells.credentialsRef` and
   `deployments.convergeState` have no consumer until Phases 2–3;

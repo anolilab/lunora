@@ -57,10 +57,10 @@ stays here and never lands in a customer's account.
 
 Two tokens, both scoped to this account:
 
-| Token                            | Where it goes                                                            | Permissions                                                                                                                                                        |
-| -------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **CI deploy token**              | GitHub Environment `cloud-staging` → secret `CLOUDFLARE_API_TOKEN`       | Workers Scripts:Edit, Workers KV:Edit, D1:Edit, R2:Edit, Queues:Edit, Workers for Platforms:Edit, Account Analytics:Read, Zone → Workers Routes:Edit (routed zone) |
-| **Cell token** (provision + DNS) | Worker secret `CLOUDFLARE_API_TOKEN` on `lunora-cloud` (`--env staging`) | the provision box's set (Workers Scripts incl. WfP, D1, R2, KV, Queues, Secrets Store, Workers subdomain read) **plus Zone → DNS:Edit on the box zone** (step 6)   |
+| Token                            | Where it goes                                                            | Permissions                                                                                                                                                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **CI deploy token**              | GitHub Environment `cloud-staging` → secret `CLOUDFLARE_API_TOKEN`       | Workers Scripts:Edit, Workers KV:Edit, D1:Edit, R2:Edit, Queues:Edit, Workers for Platforms:Edit, Account Analytics:Read, Zone → Workers Routes:Edit (routed zone)                                                                   |
+| **Cell token** (provision + DNS) | Worker secret `CLOUDFLARE_API_TOKEN` on `lunora-cloud` (`--env staging`) | the provision box's set (Workers Scripts incl. WfP, D1, R2, KV, Queues, Secrets Store, Workers subdomain read) **plus Zone → DNS:Edit on the box zone** (step 6) **and Zone → SSL and Certificates:Edit on the SaaS zone** (step 6a) |
 
 Also set `CLOUDFLARE_ACCOUNT_ID` on the GitHub Environment.
 
@@ -132,6 +132,28 @@ blocked from deploying.
 
 **Check:** after a box enrols, `<slug>.<domain>` and `*.<slug>.<domain>` resolve
 to its address; the hourly box sweep logs no orphan deletions.
+
+## 6a. Custom-domain certificates (Cloudflare for SaaS)
+
+Custom domains on `cloudflare-wfp` get their certificates as Cloudflare-for-SaaS
+custom hostnames on the zone tenants are served under (`LUNORA_APP_DOMAIN`,
+e.g. `lunora.app` — customers CNAME their hostnames to it). Once per cell:
+
+- Enable **SSL for SaaS** on that zone and set its **fallback origin** to a
+  proxied hostname in it that the dispatcher Worker's route covers (e.g.
+  `fallback.lunora.app`), so a custom hostname's traffic reaches the
+  dispatcher, which routes it by hostname (`domains.routeForHostname`).
+- Worker var or secret `LUNORA_SAAS_ZONE_ID` = that zone's id.
+- Give the cell token **Zone → SSL and Certificates:Edit** on it (step 2): the
+  control plane creates a custom hostname when a domain verifies, reads its
+  certificate status hourly, and deletes it when the domain is removed.
+
+Unset, verified domains record that no certificate could be requested
+(`certificateStatus: "unconfigured"`) and a cell still deploys.
+
+**Check:** verify a test domain in the studio's Domains tab; its row shows
+"certificate pending", then "certificate active" within the hour, and
+`https://<that hostname>` serves the project.
 
 ## 7. `hostd` release signing key
 

@@ -237,6 +237,8 @@ export const buildLogs = sqliteTable("buildLogs", {
 export const domains = sqliteTable("domains", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
+    certificateError: text("certificateError"),
+    certificateStatus: text("certificateStatus"),
     customHostnameId: text("customHostnameId"),
     createdAt: real("createdAt").notNull(),
     hostname: text("hostname").notNull(),

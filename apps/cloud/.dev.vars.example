@@ -25,6 +25,14 @@ CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 # in its `dnsError`.
 # LUNORA_BOX_ZONE_ID=replace-with-the-box-zone-id
 
+# ── Custom-domain certificates (GAPS.md B1, cloudflare-wfp) ──────────────────
+# A verified custom domain gets a Cloudflare-for-SaaS custom hostname (and a DV
+# certificate) on the zone of LUNORA_APP_DOMAIN. Set that zone's id;
+# CLOUDFLARE_API_TOKEN above then also needs Zone → SSL and Certificates:Edit on
+# it. Unset → domains still verify and route, and each records that no
+# certificate could be requested (`certificateStatus: "unconfigured"`).
+# LUNORA_SAAS_ZONE_ID=replace-with-the-saas-zone-id
+
 # Control-plane backups (GAPS.md D1). The export REST call addresses the database
 # by uuid, and a binding cannot answer its own id, so it is configured here.
 # Unset -> the six-hourly backup sweep no-ops. Pair with a PRIVATE R2 bucket

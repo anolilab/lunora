@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, v } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -12,14 +12,19 @@ import { boundedString, LIMITS } from "./validators";
  * Custom domains (GAPS.md B1). A hostname is added (minting a TXT verification
  * token), verified by the edge (`POST /v1/domains/verify` does the DNS lookups
  * via `src/domains/verify.ts`, then calls {@link markVerified}), and routed by
- * the dispatcher through {@link routeForHostname}. Cert issuance (Cloudflare
- * for SaaS) is only requested for verified rows.
+ * the dispatcher through {@link routeForHostname}. Its certificate is requested
+ * by the project's target driver once it verified (`domains.onVerified`;
+ * Cloudflare for SaaS on `cloudflare-wfp`) and recorded by
+ * {@link recordCertificate}; removing a domain (`POST /v1/domains/remove`)
+ * releases it first.
  */
 
 interface DomainRow {
     _id: Id<"domains">;
+    certificateError?: null | string;
+    certificateStatus?: null | string;
     createdAt: number;
-    customHostnameId?: string;
+    customHostnameId?: null | string;
     hostname: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
@@ -121,8 +126,33 @@ export const list = query
         return page;
     });
 
-/** Remove a domain (owner/admin). */
-export const remove = mutation
+/**
+ * What removing a domain must release first (owner/admin, under the caller's
+ * session): its hostname, project and the certificate its target issued. SYSTEM
+ * only — `POST /v1/domains/remove` asks before it deletes the certificate, so a
+ * caller who may not remove the domain cannot delete its certificate either.
+ */
+export const removalTarget = internalQuery
+    .input({ id: v.id("domains"), organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { id, organizationId } }): Promise<{ customHostnameId?: string; hostname: string; projectId: Id<"projects"> }> => {
+        await assertMember(context, organizationId, ["owner", "admin"]);
+        await assertRowInOrg(context, id, organizationId, "domain");
+
+        const domain = (await context.db.get(id)) as DomainRow;
+
+        return {
+            ...(domain.customHostnameId == null ? {} : { customHostnameId: domain.customHostnameId }),
+            hostname: domain.hostname,
+            projectId: domain.projectId, // secret-scanner:allow -- domain field name
+        };
+    });
+
+/**
+ * Remove a domain (owner/admin). Internal: only `POST /v1/domains/remove` calls
+ * it, once the project's target released the domain's certificate — removed any
+ * other way, a Cloudflare-for-SaaS custom hostname would outlive its row.
+ */
+export const remove = internalMutation
     .use(rateLimit("api"))
     .input({ id: v.id("domains"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
@@ -177,6 +207,30 @@ export const markVerified = internalMutation
             // `null`, not `undefined`: the store refuses an explicitly-undefined patch
             // outright, so a FAILED re-verification threw instead of clearing the stamp.
             verifiedAt: verified ? context.now : null,
+        });
+    });
+
+/**
+ * Record a domain's certificate as its target reported it (SYSTEM — the verify
+ * route, after the driver's `onVerified`). `customHostnameId` is kept once known;
+ * a missing `error` clears an earlier one.
+ */
+export const recordCertificate = internalMutation
+    .input({
+        customHostnameId: v.optional(boundedString(LIMITS.id)),
+        error: v.optional(boundedString(LIMITS.token)),
+        id: v.id("domains"),
+        organizationId: v.id("organizations"),
+        sslStatus: boundedString(LIMITS.name),
+    })
+    .mutation(async ({ ctx: context, args: { customHostnameId, error, id, organizationId, sslStatus } }): Promise<void> => {
+        await assertRowInOrg(context, id, organizationId, "domain");
+
+        await context.db.patch(id, {
+            certificateError: error ?? null,
+            certificateStatus: sslStatus,
+            ...(customHostnameId === undefined ? {} : { customHostnameId }),
+            updatedAt: context.now,
         });
     });
 

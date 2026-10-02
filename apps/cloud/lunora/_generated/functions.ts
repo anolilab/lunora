@@ -166,6 +166,8 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "domains:get": lunora_domains_11.get as unknown as RegisteredLunoraFunction,
     "domains:list": lunora_domains_11.list as unknown as RegisteredLunoraFunction,
     "domains:markVerified": lunora_domains_11.markVerified as unknown as RegisteredLunoraFunction,
+    "domains:recordCertificate": lunora_domains_11.recordCertificate as unknown as RegisteredLunoraFunction,
+    "domains:removalTarget": lunora_domains_11.removalTarget as unknown as RegisteredLunoraFunction,
     "domains:remove": lunora_domains_11.remove as unknown as RegisteredLunoraFunction,
     "domains:routeForHostname": lunora_domains_11.routeForHostname as unknown as RegisteredLunoraFunction,
     "fanout:tick": lunora_fanout_12.tick as unknown as RegisteredLunoraFunction,
@@ -524,6 +526,13 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_domains_11.removalTarget.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_domains_11.remove.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -1005,9 +1014,11 @@ export interface Caller {
     };
     domains: {
         add: (args: { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
-        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; createdAt: number; customHostnameId?: string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
+        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
         markVerified: (args: { customHostnameId?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
+        recordCertificate: (args: { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; sslStatus: unknown }) => Promise<void>;
+        removalTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ customHostnameId?: string; hostname: string; projectId: Id<"projects">; }>;
         remove: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<void>;
         routeForHostname: (args: { hostname: unknown }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };
@@ -1275,6 +1286,8 @@ export const createCaller = (context: CallerCtx): Caller => ({
         get: (args) => callRegistered(context, "domains:get", args),
         list: (args) => callRegistered(context, "domains:list", args),
         markVerified: (args) => callRegistered(context, "domains:markVerified", args),
+        recordCertificate: (args) => callRegistered(context, "domains:recordCertificate", args),
+        removalTarget: (args) => callRegistered(context, "domains:removalTarget", args),
         remove: (args) => callRegistered(context, "domains:remove", args),
         routeForHostname: (args) => callRegistered(context, "domains:routeForHostname", args),
     },

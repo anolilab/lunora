@@ -21,6 +21,9 @@ const memoryZone = (records: DnsRecord[], fail: { create?: string; delete?: stri
     const writes: string[] = [];
     const api: CloudflareApi = {
         createCustomHostname: () => Promise.reject(new Error("unused")),
+        deleteCustomHostname: () => Promise.reject(new Error("unused")),
+        findCustomHostname: () => Promise.reject(new Error("unused")),
+        getCustomHostname: () => Promise.reject(new Error("unused")),
         createDnsRecord: ({ content, name, type }) => {
             if (fail.create !== undefined && name.includes(fail.create)) {
                 return Promise.reject(new Error("rate limited"));

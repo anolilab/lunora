@@ -2,9 +2,9 @@ import type { HostdJob } from "@lunora/hostd/protocol";
 import { describe, expect, it } from "vitest";
 
 import type { BoxSession } from "../src/boxes/session-client";
+import { createDeployPacer } from "../src/deploy/pacing";
 import type { DeployBackend } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
-import { createDeployPacer } from "../src/deploy/pacing";
 import { teardownPorts } from "../src/deploy/sweeps";
 import { runTeardownSweep } from "../src/deploy/teardown";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
@@ -113,7 +113,8 @@ describe("the celld-vps driver", () => {
 
         expect(driver.domains.platformTargets()).toStrictEqual(["bslug000001.boxes.test"]);
 
-        await driver.domains.onVerified?.();
+        // A box terminates its own TLS (Caddy), so there is no certificate for the control plane to record.
+        await expect(driver.domains.onVerified?.({ hostname: "www.example.com" })).resolves.toBeUndefined();
 
         expect(pushes()).toBe(1);
     });

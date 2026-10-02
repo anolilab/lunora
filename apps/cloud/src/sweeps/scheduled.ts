@@ -26,6 +26,7 @@ import { resolveAdminToken } from "../deploy/admin-token";
 import { createReleaseStore } from "../deploy/release-store";
 import { teardownPorts, usageRollbackPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
+import { runCertificateSweep } from "../domains/certificate-sweep";
 import type { CronTarget, CronTick } from "../fanout/cron";
 import { fanOutCron } from "../fanout/cron";
 import type { LiveDeploymentRow } from "../fanout/live";
@@ -422,6 +423,32 @@ const sweepOutdatedBoxes = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Follow custom-domain certificates until they are issued (GAPS.md B1,
+ * `src/domains/certificate-sweep.ts`), through the fleet that issues them —
+ * `cloudflare-wfp`'s, when this cell has a SaaS zone. No-ops otherwise.
+ */
+const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
+    const refresh = registeredFleets(env).find((fleet) => fleet.refreshCertificate !== undefined)?.refreshCertificate;
+
+    if (!env.DB || refresh === undefined) {
+        return;
+    }
+
+    const result = await runCertificateSweep({
+        database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        log: (line) => {
+            // eslint-disable-next-line no-console -- a failed certificate read is only visible here, in Workers Logs
+            console.warn(line);
+        },
+        now: Date.now(),
+        refresh,
+    });
+
+    // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+    console.log("[certificates]", JSON.stringify(result));
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -459,6 +486,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     { cron: EVERY_HOUR, run: sweepHostdRollouts },
     // Boxes a week behind the newest stable celld (plan 458 W7's security floor).
     { cron: EVERY_HOUR, run: sweepOutdatedBoxes },
+    // Custom-domain certificates still validating or deploying (GAPS.md B1).
+    { cron: EVERY_HOUR, run: sweepCertificates },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —

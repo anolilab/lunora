@@ -225,6 +225,8 @@ export interface Doc_buildLogs {
 export interface Doc_domains {
     _id: Id<"domains">;
     _creationTime: number;
+    certificateError?: string;
+    certificateStatus?: string;
     customHostnameId?: string;
     createdAt: number;
     hostname: string;
@@ -1057,6 +1059,8 @@ export interface Insert_buildLogs {
 export interface Insert_domains {
     _id?: Id<"domains">;
     _creationTime?: number;
+    certificateError?: string;
+    certificateStatus?: string;
     customHostnameId?: string;
     createdAt: number;
     hostname: string;

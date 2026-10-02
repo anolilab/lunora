@@ -31,7 +31,7 @@ import { assertRoutesClassified } from "./route-registry";
 import { handleBoxConnectRoute, handleBoxDiagnoseRoute, handleBoxEnrolRoute, handleBoxReleaseRoute, handleBoxRevokeRoute } from "./routes/boxes";
 import { handleCloudflareAccountConnectRoute } from "./routes/cloudflare-accounts";
 import { createDeployRoutes } from "./routes/deploy";
-import { handleDomainAddRoute, handleDomainVerifyRoute } from "./routes/domains";
+import { handleDomainAddRoute, handleDomainRemoveRoute, handleDomainVerifyRoute } from "./routes/domains";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "./routes/hostd";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
@@ -750,6 +750,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleDownloadRoute, method: "POST", path: "/v1/backups/download", spec: { auth: "session" } },
         { handler: handleDomainAddRoute, method: "POST", path: "/v1/domains", spec: { auth: "session" } },
         { handler: handleDomainVerifyRoute, method: "POST", path: "/v1/domains/verify", spec: { auth: "session" } },
+        // session — the removal query asserts owner/admin before the target releases the certificate.
+        { handler: handleDomainRemoveRoute, method: "POST", path: "/v1/domains/remove", spec: { auth: "session" } },
         { handler: handleInviteRoute, method: "POST", path: "/v1/invitations/send", spec: { auth: "session" } },
         { handler: handleSecretRoute, method: "POST", path: "/v1/secrets", spec: { auth: "session" } },
         { handler: handleCloudflareBillingRoute, method: "POST", path: "/v1/cloudflare-billing", spec: { auth: "session" } },

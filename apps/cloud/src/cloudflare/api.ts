@@ -1,6 +1,7 @@
 /**
  * Cloudflare REST API port for the control plane's own account work: D1 export
- * for backups, Cloudflare-for-SaaS custom hostnames, and the DNS records of the
+ * for backups, Cloudflare-for-SaaS custom hostnames (the platform's SaaS zone,
+ * `LUNORA_SAAS_ZONE_ID`), and the DNS records of the
  * platform's own box zone (`LUNORA_BOX_ZONE_ID`, plan 458 G13). Tenant
  * provisioning is not here — it runs through Alchemy in the provision box (the
  * `cloudflare-wfp` driver, `src/targets/cloudflare-wfp/`).
@@ -11,6 +12,20 @@
 
 import stripTrailingSlashes from "../lib/strip-trailing-slashes";
 
+/**
+ * A Cloudflare-for-SaaS custom hostname as the API reports it: its id, the
+ * hostname's own status, and its certificate's (`ssl.status` — `initializing`,
+ * `pending_validation`, `pending_issuance`, `pending_deployment`, `active`, …).
+ * `errors` are the validation errors Cloudflare reports for either, verbatim.
+ */
+export interface CustomHostname {
+    errors: string[];
+    hostname: string;
+    id: string;
+    sslStatus: string;
+    status: string;
+}
+
 /** One DNS record of a zone, as the API lists it. */
 export interface DnsRecord {
     content: string;
@@ -20,11 +35,14 @@ export interface DnsRecord {
 }
 
 export interface CloudflareApi {
-    /** Create a Cloudflare-for-SaaS custom hostname for a tenant domain (§4). */
-    createCustomHostname: (input: { hostname: string; zoneId: string }) => Promise<{ id: string }>;
+    /** Create a Cloudflare-for-SaaS custom hostname for a tenant domain (GAPS.md B1): DV certificate, HTTP validation. */
+    createCustomHostname: (input: { hostname: string; zoneId: string }) => Promise<CustomHostname>;
 
     /** Create one DNS-only (unproxied) record. */
     createDnsRecord: (input: { content: string; name: string; type: "A" | "AAAA"; zoneId: string }) => Promise<{ id: string }>;
+
+    /** Delete a custom hostname (and with it its certificate). `false` when there was none to delete. */
+    deleteCustomHostname: (input: { id: string; zoneId: string }) => Promise<boolean>;
 
     /** Delete one DNS record by id. */
     deleteDnsRecord: (input: { id: string; zoneId: string }) => Promise<void>;
@@ -34,6 +52,12 @@ export interface CloudflareApi {
      * answer the presigned URL of the dump. The URL is valid for one hour.
      */
     exportD1Database: (databaseId: string) => Promise<{ signedUrl: string }>;
+
+    /** The custom hostname named exactly `hostname`, or `null` — what makes issuing one idempotent. */
+    findCustomHostname: (input: { hostname: string; zoneId: string }) => Promise<CustomHostname | null>;
+
+    /** One custom hostname by id, or `null` once it is gone. */
+    getCustomHostname: (input: { id: string; zoneId: string }) => Promise<CustomHostname | null>;
 
     /** The records named exactly `name` (any type) — what makes the box DNS writes idempotent. */
     listDnsRecords: (input: { name: string; zoneId: string }) => Promise<DnsRecord[]>;
@@ -69,6 +93,33 @@ interface CloudflareEnvelope {
 
 const DEFAULT_BASE = "https://api.cloudflare.com/client/v4";
 
+/** A custom hostname as the API returns it — only the fields the port reads. */
+interface CustomHostnameResult {
+    hostname?: string;
+    id?: string;
+    ssl?: { status?: string; validation_errors?: { message?: string }[] };
+    status?: string;
+    verification_errors?: string[];
+}
+
+/** The port's view of an API custom hostname. */
+const toCustomHostname = (result: CustomHostnameResult, fallbackHostname: string): CustomHostname => {
+    if (!result.id) {
+        throw new Error("cloudflare custom hostname answer carried no id");
+    }
+
+    return {
+        errors: [
+            ...(result.verification_errors ?? []),
+            ...(result.ssl?.validation_errors ?? []).flatMap((error) => (error.message === undefined ? [] : [error.message])),
+        ],
+        hostname: result.hostname ?? fallbackHostname,
+        id: result.id,
+        sslStatus: result.ssl?.status ?? "initializing",
+        status: result.status ?? "pending",
+    };
+};
+
 /** D1's export endpoint answers a progress report inside the account envelope, not the dump. */
 interface D1ExportResponse {
     at_bookmark?: string;
@@ -92,6 +143,26 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
     const apiRoot = stripTrailingSlashes(options.baseUrl ?? DEFAULT_BASE);
     const base = `${apiRoot}/accounts/${options.accountId}`;
     const authHeader = `Bearer ${options.apiToken}`;
+
+    /** A call that answers `null` on 404 rather than throwing — for reads and deletes of something that may be gone. */
+    const callOrMissing = async (fullUrl: string, method: string): Promise<unknown> => {
+        const response = await fetchImpl(fullUrl, { headers: { authorization: authHeader, "content-type": "application/json" }, method });
+
+        if (response.status === 404) {
+            return null;
+        }
+
+        const data: unknown = await response.json();
+        const envelope = data as CloudflareEnvelope;
+
+        if (!response.ok || envelope.success === false) {
+            const message = envelope.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`;
+
+            throw new Error(`cloudflare ${method} ${fullUrl} failed: ${message}`);
+        }
+
+        return envelope.result ?? {};
+    };
 
     const callAt = async (fullUrl: string, method: string, body?: unknown): Promise<unknown> => {
         const response = await fetchImpl(fullUrl, {
@@ -146,16 +217,15 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
 
     return {
         createCustomHostname: async ({ hostname, zoneId }) => {
-            const result = (await callAt(`${apiRoot}/zones/${zoneId}/custom_hostnames`, "POST", { hostname, ssl: { method: "http", type: "dv" } })) as {
-                id?: string;
-            };
+            const result = (await callAt(`${apiRoot}/zones/${zoneId}/custom_hostnames`, "POST", {
+                hostname,
+                ssl: { method: "http", type: "dv" },
+            })) as CustomHostnameResult;
 
-            if (!result.id) {
-                throw new Error("cloudflare custom hostname create returned no id");
-            }
-
-            return { id: result.id };
+            return toCustomHostname(result, hostname);
         },
+        deleteCustomHostname: async ({ id, zoneId }) =>
+            (await callOrMissing(`${apiRoot}/zones/${zoneId}/custom_hostnames/${encodeURIComponent(id)}`, "DELETE")) !== null,
         createDnsRecord: async ({ content, name, type, zoneId }) => {
             // DNS-only: a box terminates its own TLS (Caddy), so the record must
             // resolve to the box, not to a Cloudflare proxy in front of it.
@@ -211,6 +281,18 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             }
 
             throw new Error(`cloudflare D1 export did not complete within ${String(MAX_EXPORT_POLLS)} polls`);
+        },
+        findCustomHostname: async ({ hostname, zoneId }) => {
+            const result = (await callAt(`${apiRoot}/zones/${zoneId}/custom_hostnames?hostname=${encodeURIComponent(hostname)}`, "GET")) as
+                CustomHostnameResult[] | undefined;
+            const match = (result ?? []).find((candidate) => candidate.hostname?.toLowerCase() === hostname.toLowerCase());
+
+            return match === undefined ? null : toCustomHostname(match, hostname);
+        },
+        getCustomHostname: async ({ id, zoneId }) => {
+            const result = (await callOrMissing(`${apiRoot}/zones/${zoneId}/custom_hostnames/${encodeURIComponent(id)}`, "GET")) as CustomHostnameResult | null;
+
+            return result === null ? null : toCustomHostname(result, "");
         },
         listDnsRecords: async ({ name, zoneId }) => {
             const result = (await callAt(`${apiRoot}/zones/${zoneId}/dns_records?name=${encodeURIComponent(name)}&per_page=100`, "GET")) as DnsRecord[];

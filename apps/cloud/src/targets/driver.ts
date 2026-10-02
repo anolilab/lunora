@@ -57,14 +57,39 @@ export interface TenantHandle {
     url: string;
 }
 
-/** Custom-domain hooks (`src/domains/verify.ts`, `POST /v1/domains/verify`). */
+/** A custom domain as the domain hooks see it. */
+export interface CustomDomain {
+    /** The certificate the target issued for it earlier, when it issues any (`domains.customHostnameId`). */
+    customHostnameId?: string;
+    hostname: string;
+}
+
+/** A custom domain's certificate, as the target that issues it reports it (`cloudflare-wfp`: a Cloudflare-for-SaaS custom hostname). */
+export interface DomainCertificate {
+    /** The issuer's handle on it; absent when none could be requested (`sslStatus: "unconfigured"`). */
+    customHostnameId?: string;
+    /** Why the certificate is not issued yet, as the issuer says it. */
+    error?: string;
+    /** The issuer's certificate status (`initializing`, `pending_validation`, …, `active`), or `unconfigured`. */
+    sslStatus: string;
+}
+
+/** Custom-domain hooks (`src/domains/verify.ts`, `POST /v1/domains/verify`, `POST /v1/domains/remove`). */
 export interface DomainOps {
+    /**
+     * Release what {@link onVerified} set up for a domain being removed.
+     * `cloudflare-wfp` deletes its custom hostname (and certificate); absent
+     * where a domain holds nothing outside the control plane.
+     */
+    onRemoved?: (domain: CustomDomain) => Promise<void>;
+
     /**
      * Run once a hostname of this placement's project verifies. `celld-vps`
      * pushes the box's routing table, since a box serves a custom domain only
-     * once its table names it; absent where serving needs nothing more.
+     * once its table names it; `cloudflare-wfp` requests the hostname's
+     * certificate and answers it. Absent where serving needs nothing more.
      */
-    onVerified?: () => Promise<void>;
+    onVerified?: (domain: CustomDomain) => Promise<DomainCertificate | undefined>;
     /** The CNAME targets a custom hostname must point at to count as routed here (`verifyDomain`'s `platformTargets`). */
     platformTargets: () => string[];
 }
@@ -105,6 +130,13 @@ export interface TargetFleet {
      * backups and restores. From `tenantSender` (`src/backup/tenant-transport.ts`).
      */
     reach: (tenant: TenantHandle) => TenantSend;
+
+    /**
+     * Re-read a custom domain certificate this target issued (`onVerified`), for
+     * the hourly certificate sweep: its status, or `null` once it is gone.
+     * Absent on a target that issues none, or a deployment not configured to.
+     */
+    refreshCertificate?: (customHostnameId: string) => Promise<DomainCertificate | null>;
 
     /**
      * The metering readback of a `metering: "readback"` target, when this
