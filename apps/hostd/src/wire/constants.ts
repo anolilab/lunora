@@ -71,7 +71,7 @@ const HOSTD_PROTOCOL_LIMITS = {
     /** Most entries in one `report.perAlias`. */
     maxReportAliases: 500,
     /** Most entries in one `routes.table`. */
-    maxRoutes: 10_000,
+    maxRoutes: 2000,
     /** Longest URL (`releaseUrl`, `manifestUrl`, `result.url`). */
     maxUrlLength: 2048,
 } as const;

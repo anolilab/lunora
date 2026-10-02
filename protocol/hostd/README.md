@@ -97,7 +97,7 @@ array entry) has a missing required field, a field of the wrong type, or an
 | `result.error.message`, `error.message` | 8 192 UTF-8 bytes       |
 | `hello.fleets`                          | 500 entries             |
 | `report.perAlias`                       | 500 entries             |
-| `routes.table`                          | 10 000 entries          |
+| `routes.table`                          | 2 000 entries           |
 | `job.crons` (deploy)                    | 64 entries, ≤ 256 chars |
 | URLs                                    | 2 048 characters        |
 | alias                                   | 63 characters           |
@@ -108,12 +108,11 @@ that because nothing large belongs on the socket. **Releases never travel over
 the socket** (D6): a deploy job carries a URL, and the box fetches the release
 over signed HTTPS (§6.2).
 
-The frame cap binds before the `routes.table` cap: 10 000 entries cannot fit in
-256 KiB even with three-character hostnames, and a table of default hostnames
-(`<alias>.<box>.boxes.lunora.app`) tops out near 3 800 entries with short
-aliases, fewer with longer ones. The entry cap is
-a guard against a pathological table, not a promise of capacity; a box that
-needs more routes needs a protocol version that splits the table.
+The `routes.table` cap is set so that a full table of default hostnames
+(`<alias>.<box>.boxes.lunora.app`) still fits one frame with room to spare. A
+box serves one organization (plan 458 §3 rule 6), so 2 000 routes is far above
+any real box; a box that needs more needs a protocol version that splits the
+table.
 
 Rejection reasons, as the reference decoder reports them:
 
@@ -213,7 +212,7 @@ a signed request (§6.2); a box MUST refuse a `releaseUrl` or `manifestUrl`
 whose origin is not the control plane it enrolled with, since it would
 otherwise sign requests for a third party.
 
-**`routes`** — `{type, table}`: the full routing table, ≤ 10 000 entries
+**`routes`** — `{type, table}`: the full routing table, ≤ 2 000 entries
 (§4), each `{hostname, alias}`, hostnames unique.
 
 **`ping`** — `{type}`.

@@ -172,7 +172,7 @@ const HOSTD_PROTOCOL_LIMITS: {
     readonly maxFrameBytes: 262144;
     readonly maxLineBytes: 8192;
     readonly maxReportAliases: 500;
-    readonly maxRoutes: 10000;
+    readonly maxRoutes: 2000;
     readonly maxUrlLength: 2048;
 };
 ```

@@ -258,26 +258,22 @@ describe("size caps", () => {
         expect(decodeBoxMessage(report(HOSTD_PROTOCOL_LIMITS.maxReportAliases + 1))).toMatchObject(rejected("INVALID_MESSAGE", "$.perAlias"));
     });
 
-    it("caps routes.table at 10 000 entries", () => {
+    it("caps routes.table at 2000 entries", () => {
         const table = (count: number): { alias: string; hostname: string }[] =>
             Array.from({ length: count }, (_, index) => {
-                return { alias: "a", hostname: `h${index.toString(36)}` };
+                return { alias: `app-${String(index)}`, hostname: `app-${String(index)}.box-7f3a.boxes.lunora.app` };
             });
 
-        // The array cap is checked before the frame is encoded, so encodeMessage
-        // reaches it; on the decode side the frame cap always binds first, since
-        // even 10 000 minimal entries exceed 256 KiB (see README section 4).
-        expect(() => encodeMessage({ table: table(HOSTD_PROTOCOL_LIMITS.maxRoutes + 1), type: "routes" })).toThrow(
-            /\$\.table must have at most 10000 entries/u,
-        );
-        expect(() => encodeMessage({ table: table(HOSTD_PROTOCOL_LIMITS.maxRoutes), type: "routes" })).toThrow(RangeError);
-        expect(decodeCloudMessage(JSON.stringify({ table: table(HOSTD_PROTOCOL_LIMITS.maxRoutes), type: "routes" }))).toMatchObject(
-            rejected("FRAME_TOO_LARGE"),
-        );
+        expect(() => encodeMessage({ table: table(HOSTD_PROTOCOL_LIMITS.maxRoutes + 1), type: "routes" })).toThrow(/\$\.table must have at most 2000 entries/u);
+
+        // The cap is set so a full table of default hostnames still fits one frame.
+        const frame = encodeMessage({ table: table(HOSTD_PROTOCOL_LIMITS.maxRoutes), type: "routes" });
+
+        expect(decodeCloudMessage(frame).ok).toBe(true);
     });
 
     it("fits a realistic routes table of a few thousand default hostnames in one frame", () => {
-        const table = Array.from({ length: 3000 }, (_, index) => {
+        const table = Array.from({ length: 2000 }, (_, index) => {
             return {
                 alias: `app-${String(index)}`,
                 hostname: `app-${String(index)}.box-7f3a.boxes.lunora.app`,
