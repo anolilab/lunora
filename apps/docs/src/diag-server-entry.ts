@@ -3,6 +3,24 @@
 const instanceId = Math.random().toString(36).slice(2, 10);
 const evalAt = performance.now();
 let count = 0;
+
+for (const event of ["unhandledRejection", "uncaughtException"] as const) {
+    process.on(event, (error: unknown) => {
+        console.error(`[diag] ${event} on instance ${instanceId}:`, error);
+    });
+}
+
+process.on("beforeExit", (code) => console.error(`[diag] beforeExit ${code} on instance ${instanceId}`));
+process.on("exit", (code) => console.error(`[diag] exit ${code} on instance ${instanceId}`));
+
+const runtimeInfo = [
+    `node=${process.version}`,
+    `mem=${process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? "?"}`,
+    `exec=${process.env.AWS_EXECUTION_ENV ?? "?"}`,
+    `init=${process.env.AWS_LAMBDA_INITIALIZATION_TYPE ?? "?"}`,
+    `region=${process.env.AWS_REGION ?? "?"}`,
+    `pid=${process.pid}`,
+].join(" ");
 let bootMs = -1;
 
 const handlerPromise = import("@tanstack/react-start/server-entry").then((module_) => {
@@ -26,6 +44,10 @@ export default {
         headers.set("x-diag-boot-ms", String(bootMs));
         headers.set("x-diag-handler-ms", String(Math.round(performance.now() - start)));
         headers.set("x-diag-uptime-ms", String(Math.round(performance.now())));
+        headers.set("x-diag-eval-at-ms", String(Math.round(evalAt)));
+        headers.set("x-diag-process-uptime-s", process.uptime().toFixed(2));
+        headers.set("x-diag-runtime", runtimeInfo);
+        headers.set("x-diag-pending", process.getActiveResourcesInfo().join(","));
 
         return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
     },
