@@ -2,6 +2,7 @@ import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 /**
  * The wide-event API (`ctx.span`) under the test harness.
@@ -50,21 +51,19 @@ const resilient = query.query(({ ctx }) => {
     return "fell back";
 });
 
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 const start = (): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema);
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
 
 describe("ctx.span wide events", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("accumulates attributes across a dispatch into one event", async () => {

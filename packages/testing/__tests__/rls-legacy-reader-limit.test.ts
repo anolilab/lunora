@@ -19,6 +19,7 @@ import { definePolicies, definePolicy, defineSchema, defineTable, initLunora, rl
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 /**
  * Whether this Node build's `node:sqlite` carries FTS5. It was switched on in
@@ -182,7 +183,7 @@ const rowsRead = async <T>(
     }
 };
 
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 /**
  * 500 `active` rows for u1 (every 7th hidden), then 200 `shared` rows
@@ -192,7 +193,7 @@ const open: ReturnType<typeof lunoraTest>[] = [];
 const seed = async (): Promise<ReturnType<typeof lunoraTest>> => {
     const t = lunoraTest(schema);
 
-    open.push(t);
+    harnesses.track(t);
 
     const location = { lat: 52.52, lng: 13.405 };
 
@@ -258,9 +259,7 @@ const expectTerminals = async (u1: ReturnType<ReturnType<typeof lunoraTest>["wit
 
 describe("rls() legacy reader keeps its LIMIT (#822)", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("reads about n rows for a guarded take / paginate / first, like the unguarded read", async () => {
@@ -392,7 +391,7 @@ const itemPolicy = (where: Record<string, unknown>) =>
 const seedItems = async (): Promise<ReturnType<typeof lunoraTest>> => {
     const t = lunoraTest(itemSchema);
 
-    open.push(t);
+    harnesses.track(t);
 
     await t.run(async (ctx) => {
         await ctx.db.insertMany(
@@ -458,9 +457,7 @@ const nullParentReads = query
 
 describe("rls() legacy reader edge cases (#822 review)", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("a suspended iterator never strips the policy from other terminals on the same reader", async () => {

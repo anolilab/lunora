@@ -203,7 +203,7 @@ the throwing stub with your own implementation:
 ```ts
 import { vi } from "vitest";
 
-const fakeFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ ok: true }));
+const fakeFetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ ok: true }));
 
 const t = lunoraTest(schema, { fetch: fakeFetch });
 // `ctx.fetch` inside any action now calls `fakeFetch`.
@@ -220,7 +220,7 @@ throws on use, naming the option:
 
 ```ts
 const t = lunoraTest(schema, {
-    services: { documentParser: { fetch: vi.fn().mockResolvedValue(Response.json({ text: "…" })) } },
+    services: { documentParser: { fetch: vi.fn(async () => Response.json({ text: "…" })) } },
 });
 ```
 

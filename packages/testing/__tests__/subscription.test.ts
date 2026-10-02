@@ -2,6 +2,7 @@ import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 const { mutation, query } = initLunora.dataModel().create();
 
@@ -46,21 +47,19 @@ const countMessages = query.query(async ({ ctx }) => {
     return rows.length;
 });
 
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 const start = (): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema);
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
 
 describe("harness.subscribe", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("emits the current query result on first next()", async () => {

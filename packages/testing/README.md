@@ -109,7 +109,7 @@ Each `lunoraTest(...)` opens an in-memory SQLite database; call `t.close()`
 Pass a `fetch` option to replace the throwing stub in action contexts:
 
 ```ts
-const fakeFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ ok: true }));
+const fakeFetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ ok: true }));
 const t = lunoraTest(schema, { fetch: fakeFetch });
 // ctx.fetch inside any action now calls fakeFetch
 ```
@@ -118,15 +118,9 @@ Without the option, `ctx.fetch` still throws the v1 error on first access.
 
 #### Injectable `ctx.services`
 
-Pass a `services` option with a fake per `lunora.config` service an action
-calls. Like at runtime, only actions get `ctx.services`; a service with no fake
-throws on use, naming the option:
-
-```ts
-const t = lunoraTest(schema, {
-    services: { documentParser: { fetch: vi.fn().mockResolvedValue(Response.json({ text: "…" })) } },
-});
-```
+Pass a `services` option with a fake per `lunora.config` service an action calls
+(`{ documentParser: { fetch } }`). See the [package docs](https://lunora.sh/docs/packages/testing#injectable-ctxservices)
+for an example.
 
 #### Fixed `ctx.now`
 
