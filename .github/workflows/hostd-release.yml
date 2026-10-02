@@ -212,7 +212,8 @@
                   "cache": "false"
 
             - "name": "Install xcaddy"
-              "run": 'go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"'
+              "run": |
+                  go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
 
             - "name": "Build Caddy"
               "shell": "bash"
