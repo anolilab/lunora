@@ -7,6 +7,7 @@ import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import bindingsProvisionPlugin from "./bindings-provision-plugin";
+import { celldDevPlugin, celldDevSupport, withoutDevWhen } from "./celld-dev-plugin";
 import codegenPlugin from "./codegen-plugin";
 import containerLogsPlugin from "./container-logs-plugin";
 import devStatePlugin from "./dev-state-plugin";
@@ -211,20 +212,24 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     }
 
     if (cloudflareOptions !== undefined) {
+        // A host with its own dev server (celld): `vite dev` runs the Worker on
+        // it when it can — the Cloudflare plugin then builds only — and falls back
+        // to workerd, saying why, when it can't (a Vite virtual `main`).
+        const ownDevServer = targetRunsOwnDevServer(resolved.target);
+        const celld = celldDevSupport(resolved.projectRoot, resolved.target);
+        const onCelld = (): boolean => ownDevServer && celld().runs;
+
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
         // failure (e.g. a circular import in `lunora/`) surfaces an actionable
         // hint instead of a bare, file-less `runner-worker` TypeError.
-        plugins.push(...withWorkerStartupHint(cloudflare(cloudflareOptions)));
+        plugins.push(...withoutDevWhen(withWorkerStartupHint(cloudflare(cloudflareOptions)), onCelld));
 
-        // A host with its own dev server (celld) deploys the Vite BUILD output,
-        // so composing the Cloudflare plugin is right for `vite build` — but
-        // `vite dev` then serves the worker in workerd, not on the target. Say
-        // so instead of letting it pass for the target.
-        if (targetRunsOwnDevServer(resolved.target)) {
-            plugins.push({
+        if (ownDevServer) {
+            plugins.push(celldDevPlugin(resolved.projectRoot, onCelld), {
+                apply: (_config, env) => env.command === "serve" && !onCelld(),
                 configureServer(server) {
                     server.config.logger.warn(
-                        `[lunora] target "${resolved.target}": vite dev serves the worker in workerd, not on ${resolved.target}. \`vite build\` then \`lunora deploy\` ships it to ${resolved.target}.`,
+                        `[lunora] target "${resolved.target}": vite dev serves the worker in workerd, not on ${resolved.target} — ${celld().reason ?? "it cannot run this project"}. \`vite build\` then \`lunora deploy\` ships it to ${resolved.target}.`,
                     );
                 },
                 name: "lunora:target-runtime-notice",

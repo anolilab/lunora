@@ -177,6 +177,32 @@ const CODEGEN_ENV = "LUNORA_CODEGEN";
 const COMPOSED_WORKER_ENTRY = "src/worker.ts";
 ```
 
+### `CelldDevSession` (interface)
+
+```ts
+interface CelldDevSession {
+    restartService: (worker: string) => Promise<void>;
+    stop: () => Promise<void>;
+}
+```
+
+### `CelldDevSessionOptions` (interface)
+
+```ts
+interface CelldDevSessionOptions {
+    log: (line: string, source: string) => void;
+    port: number;
+    projectRoot: string;
+    spawn?: CelldSpawner;
+}
+```
+
+### `CelldSpawner` (type)
+
+```ts
+type CelldSpawner = (args: ReadonlyArray<string>, cwd: string) => ChildProcess;
+```
+
 ### `ClaimDevServerStateResult` (interface)
 
 ```ts
@@ -1587,6 +1613,12 @@ const scaffoldPolicyFile: (edit: ScaffoldPolicyEdit, serverModule: string) => Sc
 
 ```ts
 const secretsForPackages: (packageNames: ReadonlyArray<string>) => SecretEntry[];
+```
+
+### `startCelldDevSession` (const)
+
+```ts
+const startCelldDevSession: (options: CelldDevSessionOptions) => Promise<CelldDevSession>;
 ```
 
 ### `streamContainerLogs` (const)

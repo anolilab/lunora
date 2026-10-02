@@ -8,6 +8,25 @@ import { lunoraRsbuild, withLunoraProxy } from "../src/rsbuild";
 import { startWorker } from "../src/worker";
 import { createFixture } from "./fixture";
 
+// The celld dev session is stubbed: the routing decision is what is under test,
+// and the session itself has its own suite in `@lunora/config`.
+const { celldStop, startCelldDevSession } = vi.hoisted(() => {
+    const stop = vi.fn<() => Promise<void>>(async () => {});
+
+    return {
+        celldStop: stop,
+        startCelldDevSession: vi.fn<() => Promise<{ restartService: () => Promise<void>; stop: () => Promise<void> }>>(async () => {
+            return { restartService: async () => {}, stop };
+        }),
+    };
+});
+
+vi.mock(import("@lunora/config"), async (importOriginal) => {
+    const original = await importOriginal();
+
+    return { ...original, startCelldDevSession: startCelldDevSession as unknown as typeof original.startCelldDevSession };
+});
+
 /** The actionable message a missing wrangler must produce. */
 const WRANGLER_MISSING_RE = /wrangler` was not found on PATH/u;
 
@@ -229,5 +248,40 @@ describe(startWorker, () => {
         } finally {
             process.env.PATH = path;
         }
+    }, 45_000);
+
+    it("runs the Worker on a celld dev session, not wrangler dev, for the celld target", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "info").mockImplementation(() => {});
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const root = fixture();
+        let beforeStart: ((params: { server: DevServerLike }) => Promise<void> | void) | undefined;
+        let close: (() => Promise<void> | void) | undefined;
+
+        lunoraRsbuild({ projectRoot: root, studio: false, target: "celld", validateWrangler: false, workerPort: 8799 }).setup({
+            getRsbuildConfig: () => {
+                return {};
+            },
+            modifyRsbuildConfig: (callback) => callback({}),
+            modifyRspackConfig: (callback) => callback({}),
+            onAfterStartDevServer: () => {},
+            onBeforeStartDevServer: (callback) => {
+                beforeStart = callback;
+            },
+            onCloseDevServer: (callback) => {
+                close = callback;
+            },
+        });
+
+        await beforeStart?.({ server: { middlewares: { use: () => {} } } });
+
+        expect(startCelldDevSession).toHaveBeenCalledWith(expect.objectContaining({ port: 8799, projectRoot: root }));
+        expect(celldStop).not.toHaveBeenCalled();
+
+        await close?.();
+
+        expect(celldStop).toHaveBeenCalledTimes(1);
     }, 45_000);
 });
