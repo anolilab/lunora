@@ -22,8 +22,8 @@ const fakeBucket = (): R2BucketLike & { deletes: string[]; puts: { body: unknown
     const deletes: string[] = [];
 
     return {
-        delete: vi.fn<R2BucketLike["delete"]>(async (key) => {
-            deletes.push(key);
+        delete: vi.fn<R2BucketLike["delete"]>(async (keys) => {
+            deletes.push(...(typeof keys === "string" ? [keys] : keys));
         }),
         deletes,
         get: vi.fn<R2BucketLike["get"]>(async (key) => {

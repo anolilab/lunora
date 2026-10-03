@@ -69,7 +69,7 @@ import { mkdir, open, readdir, rename, rmdir, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
-import type { R2BucketLike, R2ObjectBodyLike, R2ObjectLike, R2RangeLike } from "@lunora/platform";
+import type { R2BucketLike, R2ConditionalLike, R2ObjectBodyLike, R2ObjectLike, R2PutBodyLike, R2PutOptionsLike, R2RangeLike } from "@lunora/platform";
 
 import { hasControlChar } from "../../../shared/hmac-url";
 import { toArrayBuffer } from "./to-array-buffer";
@@ -738,6 +738,76 @@ const pruneEmptyDirectories = async (path: string, root: string): Promise<void> 
 };
 
 /**
+ * Move a staged object file into place: the one operation that publishes it.
+ * Body and metadata are in this file together, so there is no window where
+ * they disagree.
+ */
+const publish = async (temporaryPath: string, filePath: string, key: string): Promise<void> => {
+    try {
+        await rename(temporaryPath, filePath);
+    } catch {
+        // Two recoverable states, both left by an object that is gone: an
+        // EMPTY directory sitting where this key goes (the husk of a
+        // deleted key under this prefix — R2 has no directories, so it
+        // cannot be a real collision), and a parent a concurrent
+        // `delete`'s prune removed between the `mkdir` above and here.
+        // Clear both and publish once more; a prefix still holding
+        // objects fails `rmdir` and then fails the retry, which is the
+        // genuine collision `asKeyCollision` is there to name.
+        try {
+            await rmdir(filePath);
+        } catch {
+            // Not an empty directory — the retry reports what it is.
+        }
+
+        try {
+            await mkdir(dirname(filePath), { recursive: true });
+            await rename(temporaryPath, filePath);
+        } catch (retryError: unknown) {
+            await unlinkIfPresent(temporaryPath);
+
+            throw asKeyCollision(key, retryError);
+        }
+    }
+};
+
+/** The tail of the conditional puts queued per key; each waits for the one before it. */
+const keyLocks = new Map<string, Promise<unknown>>();
+
+const withKeyLock = async <T>(key: string, function_: () => Promise<T>): Promise<T> => {
+    const previous = keyLocks.get(key) ?? Promise.resolve();
+    const run = previous.then(function_, function_);
+    const settled = run.catch(() => undefined);
+
+    keyLocks.set(key, settled);
+
+    try {
+        return await run;
+    } finally {
+        if (keyLocks.get(key) === settled) {
+            keyLocks.delete(key);
+        }
+    }
+};
+
+/**
+ * R2's etag preconditions against the object at `filePath`: `etagMatches` needs
+ * the object to exist with that etag, `etagDoesNotMatch` needs it absent or
+ * carrying another etag, and `"*"` stands for any etag.
+ */
+const meetsCondition = async (filePath: string, condition: R2ConditionalLike): Promise<boolean> => {
+    const stored = await readTrailer(filePath);
+    const etag = stored?.meta.sha256Hex;
+    const matches = (expected: string): boolean => etag !== undefined && (expected === "*" || expected === etag);
+
+    if (condition.etagMatches !== undefined && !matches(condition.etagMatches)) {
+        return false;
+    }
+
+    return condition.etagDoesNotMatch === undefined || !matches(condition.etagDoesNotMatch);
+};
+
+/**
  * Create an `R2BucketLike` over the local filesystem. Any object shape
  * `createStorage({ bucket, bucketName })` accepts — `put`/`get`/`head`/`delete`/`list` —
  * maps directly onto a file operation.
@@ -746,16 +816,25 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
     const { directory } = options;
 
     return {
-        delete: async (key: string): Promise<void> => {
-            validateKey(key);
+        delete: async (keys: string | string[]): Promise<void> => {
+            const all = typeof keys === "string" ? [keys] : keys;
 
-            const filePath = join(directory, encodeKey(key));
+            // Validated up front, so a bad key in a batch deletes nothing.
+            for (const key of all) {
+                validateKey(key);
+            }
 
-            await unlinkIfPresent(filePath);
-            // Starting at the key's own path, not its parent: the key may itself
-            // be an empty directory left by an earlier prefix, and the unlink
-            // above reads that as "no object here" rather than removing it.
-            await pruneEmptyDirectories(filePath, directory);
+            for (const key of all) {
+                const filePath = join(directory, encodeKey(key));
+
+                // eslint-disable-next-line no-await-in-loop -- one file at a time, as the prune below walks shared parents
+                await unlinkIfPresent(filePath);
+                // Starting at the key's own path, not its parent: the key may itself
+                // be an empty directory left by an earlier prefix, and the unlink
+                // above reads that as "no object here" rather than removing it.
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await pruneEmptyDirectories(filePath, directory);
+            }
         },
 
         get: async (key: string, getOptions?: { range?: R2RangeLike }): Promise<R2ObjectBodyLike | null> => {
@@ -923,11 +1002,7 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             return { cursor: truncated ? page.at(-1) : undefined, delimitedPrefixes, objects, truncated };
         },
 
-        put: async (
-            key: string,
-            body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null,
-            putOptions?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string }; sha256?: ArrayBuffer | string },
-        ): Promise<R2ObjectLike> => {
+        put: (async (key: string, body: R2PutBodyLike, putOptions?: R2PutOptionsLike & { onlyIf?: R2ConditionalLike }): Promise<R2ObjectLike | null> => {
             validateKey(key);
             validateCustomMetadata(putOptions?.customMetadata);
 
@@ -994,37 +1069,28 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                 throw error;
             }
 
-            // The one operation that publishes the object — body and metadata are
-            // in this file together, so there is no window where they disagree.
-            try {
-                await rename(temporaryPath, filePath);
-            } catch {
-                // Two recoverable states, both left by an object that is gone: an
-                // EMPTY directory sitting where this key goes (the husk of a
-                // deleted key under this prefix — R2 has no directories, so it
-                // cannot be a real collision), and a parent a concurrent
-                // `delete`'s prune removed between the `mkdir` above and here.
-                // Clear both and publish once more; a prefix still holding
-                // objects fails `rmdir` and then fails the retry, which is the
-                // genuine collision `asKeyCollision` is there to name.
-                try {
-                    await rmdir(filePath);
-                } catch {
-                    // Not an empty directory — the retry reports what it is.
-                }
+            const onlyIf = putOptions?.onlyIf;
 
-                try {
-                    await mkdir(dirname(filePath), { recursive: true });
-                    await rename(temporaryPath, filePath);
-                } catch (retryError: unknown) {
-                    await unlinkIfPresent(temporaryPath);
+            if (onlyIf !== undefined) {
+                // A conditional put is checked and published under a per-key lock,
+                // so two of them in this process cannot both pass the check.
+                return withKeyLock(key, async () => {
+                    if (!(await meetsCondition(filePath, onlyIf))) {
+                        await unlinkIfPresent(temporaryPath);
 
-                    throw asKeyCollision(key, retryError);
-                }
+                        return null; // eslint-disable-line unicorn/no-null
+                    }
+
+                    await publish(temporaryPath, filePath, key);
+
+                    return toObject(key, meta);
+                });
             }
 
+            await publish(temporaryPath, filePath, key);
+
             return toObject(key, meta);
-        },
+        }) as R2BucketLike["put"],
     };
 };
 

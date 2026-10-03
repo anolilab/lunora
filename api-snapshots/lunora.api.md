@@ -3653,6 +3653,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `R2ConditionalLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `R2MultipartUploadLike` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -3662,6 +3666,14 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `R2ObjectLike` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `R2PutBodyLike` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `R2PutOptionsLike` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
