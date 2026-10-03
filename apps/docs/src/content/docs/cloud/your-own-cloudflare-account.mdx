@@ -1,0 +1,188 @@
+---
+title: Deploy into your own Cloudflare account
+description: Connect your Cloudflare account to Lunora Cloud with a scoped API token, and deploy into it as plain Workers. Your data stays in your account, and Cloudflare bills you for it directly.
+---
+
+A Lunora Cloud project can deploy into a **Cloudflare account your organization
+connects**, instead of Lunora Cloud's own. Each project becomes a plain Worker in
+your account, at `https://<alias>.<your subdomain>.workers.dev`. Its Durable
+Objects, D1 databases, KV namespaces and R2 buckets live in your account, where
+you can see them. Lunora Cloud orchestrates deploys and rollbacks, and Cloudflare
+bills you for usage directly.
+
+<Callout type="warn">
+    **Private early access.** Lunora Cloud is in private early access, and nothing on this page is generally available. See the
+    [roadmap](https://github.com/anolilab/lunora/blob/alpha/apps/cloud/ROADMAP.md).
+</Callout>
+
+You deploy the same way as on any other target. `lunora cloud deploy` and
+push-to-deploy send the same release. The deploy target is a setting of the
+project, not a flag (see [CLI](/docs/cloud/cli)).
+
+## Connect an account
+
+<Steps>
+<Step>
+
+### Create an API token
+
+In your Cloudflare dashboard, create an **account API token**, either under My
+Profile → API Tokens or under the account's own API Tokens page. Scope it to
+this one account. Give it these permissions:
+
+{/* generated:cloudflare-token-permissions — written from apps/cloud/src/provision-contract.ts by apps/docs/scripts/generate-target-capabilities.js. Do not edit by hand. */}
+
+| Permission               | Needed   | Used for                                                                                           |
+| ------------------------ | -------- | -------------------------------------------------------------------------------------------------- |
+| Workers Scripts: Edit    | Required | uploading the Worker, its cron triggers and queue consumers, and reading the workers.dev subdomain |
+| Account Analytics: Read  | Optional | request counts for the Usage tab                                                                   |
+| D1: Edit                 | Optional | d1 bindings                                                                                        |
+| Queues: Edit             | Optional | queue bindings                                                                                     |
+| Workers KV Storage: Edit | Optional | kv bindings                                                                                        |
+| Workers R2 Storage: Edit | Optional | r2 bindings                                                                                        |
+
+{/* /generated:cloudflare-token-permissions */}
+
+No zone permission is needed. Lunora Cloud does not add routes on your zones yet
+(see [Limits](#limits)).
+
+</Step>
+<Step>
+
+### Connect it in the studio
+
+In the studio, open your organization's **Cloudflare accounts** tab and choose
+**Connect a Cloudflare account**. Only owners and admins can do this. Enter the
+account ID, an optional name, and the token.
+
+Lunora Cloud checks the token before it stores anything. The token must be
+active and must reach the account with Workers Scripts, and the account must
+already have a `workers.dev` subdomain. If it doesn't, open Workers & Pages in
+the account's dashboard once to claim one. The optional permissions are probed
+with read-only calls, and the account's card lists any that were not granted.
+
+The token is encrypted before it is stored, and it is never shown again. To
+replace it, rotate the token from the same card. A rotation only accepts a token
+for the same account.
+
+</Step>
+<Step>
+
+### Put a project on the account
+
+In a project's **Deploy target** card, choose **Your Cloudflare account** and
+pick the account. Then deploy as usual.
+
+</Step>
+</Steps>
+
+## What gets created in your account
+
+- **A Worker for each of the project's deployment aliases.** The same Worker is
+  updated in place on every deploy and every rollback, so its Durable Object
+  data carries over. It
+  runs its own cron triggers and consumes its own queues.
+- **One resource per binding that needs one.** This covers D1 databases, KV
+  namespaces, R2 buckets, queues and Analytics Engine datasets. Each is named
+  `<alias>--<binding>`. It is created on the first deploy, reused by every
+  release after that, and deleted only when the project itself is torn down.
+
+Every other binding your app declares is either bound as-is or refused before
+the deploy starts (see [What works](#what-works-and-what-doesnt)). One thing to
+watch on this target: a deploy that stops binding a Durable Object class deletes
+that class's data. For this reason, Lunora Cloud refuses a rollback to a release
+that does not bind a class the live release binds.
+
+## What Lunora Cloud keeps
+
+- **Your token**, encrypted.
+- **The convergence state.** Lunora Cloud tracks what it has created in your
+  account, so that a later deploy updates those resources instead of creating
+  them again. It keeps that state in its own store, not in your account.
+- **Your releases**, as it does on every target, so that a rollback can restore
+  an earlier one without a rebuild.
+
+Your app's data is not on this list. It stays in your account.
+
+## Usage and billing
+
+Once an hour, Lunora Cloud reads your Worker's request counts from your account's
+GraphQL Analytics API, and shows them in the studio's **Usage** tab. To do this, the
+token needs **Account Analytics: Read**. Without it, the Usage tab shows no requests
+for this account. Nothing else changes.
+
+Lunora Cloud shows these counts but **never bills them**. Cloudflare bills your
+account for what your Workers use. Lunora Cloud charges for the control plane,
+which is your plan. Each plan caps how many Cloudflare accounts an organization
+can connect. The Free plan allows one.
+
+## What works, and what doesn't
+
+When you deploy, Lunora Cloud checks the bindings in your `wrangler.jsonc`
+against the table below. If your app uses a binding this target cannot provide,
+the deploy is refused by name before anything is created. The table is generated
+from that same check, so it shows what the deploy actually enforces.
+
+{/* generated:capabilities:cloudflare-workers — written from apps/cloud/src/provision-contract.ts by apps/docs/scripts/generate-target-capabilities.js. Do not edit by hand. */}
+
+| Binding               | `wrangler` type    | Available             | Why not                                                                                                                                       |
+| --------------------- | ------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analytics Engine      | `analytics_engine` | Yes — created for you |                                                                                                                                               |
+| D1                    | `d1`               | Yes — created for you |                                                                                                                                               |
+| KV                    | `kv`               | Yes — created for you |                                                                                                                                               |
+| Queue producers       | `queue_producer`   | Yes — created for you |                                                                                                                                               |
+| R2                    | `r2`               | Yes — created for you |                                                                                                                                               |
+| Browser Rendering     | `browser`          | Yes                   |                                                                                                                                               |
+| Durable Objects       | `durable_object`   | Yes                   |                                                                                                                                               |
+| Images                | `images`           | Yes                   |                                                                                                                                               |
+| Queue consumers       | `queue_consumer`   | Yes                   |                                                                                                                                               |
+| Static assets         | `assets`           | Yes                   |                                                                                                                                               |
+| Workers AI            | `ai`               | Yes                   |                                                                                                                                               |
+| Artifacts             | `artifacts`        | No                    | an Artifacts namespace is an account resource the provision box does not create or bind yet.                                                  |
+| Containers            | `container`        | No                    | a container needs its image built and pushed to your account's registry on every deploy, which the provision box does not do yet.             |
+| Hyperdrive            | `hyperdrive`       | No                    | a Hyperdrive config needs your database's connection string, which the binding manifest does not carry; connect to it from an action instead. |
+| Media Transformations | `media`            | No                    | the provision box does not bind Media Transformations yet.                                                                                    |
+| Pipelines             | `pipeline`         | No                    | a pipeline needs its stream and sink configured, which wrangler.jsonc does not carry.                                                         |
+| Stream                | `stream`           | No                    | the provision box does not bind Stream yet.                                                                                                   |
+| Vectorize             | `vectorize`        | No                    | an index needs its dimensions and metric, which wrangler.jsonc does not carry.                                                                |
+| VPC networks          | `vpc_network`      | No                    | the provision box does not bind a VPC network yet.                                                                                            |
+| VPC services          | `vpc_service`      | No                    | the provision box does not bind a VPC service yet.                                                                                            |
+| Workflows             | `workflow`         | No                    | a plain Worker can run Workflows, but the provision box does not register a prebuilt bundle's Workflow class yet.                             |
+
+Beyond bindings, this target does not have:
+
+- **Per-plan runtime limits.** The CPU-time and subrequest caps your plan sets are applied by Lunora Cloud's dispatcher, which does not sit in front of a Worker in your account. Your account's own Workers limits apply instead.
+- **Custom domains.** Your Worker answers on your account's workers.dev subdomain. Attaching your own zone's hostnames to it from Lunora Cloud is not wired yet; add a Custom Domain to the Worker in your Cloudflare dashboard meanwhile.
+- **Runtime logs.** Lunora Cloud's tail consumer runs in its own account and cannot be attached to a Worker in yours, so runtime logs stay in your account's Workers Logs.
+
+{/* /generated:capabilities:cloudflare-workers */}
+
+## Limits
+
+The list above is generated from the same contract the deploy checks. In plain
+terms, and with what is planned:
+
+- **Custom domains on your zone are not wired yet.** Your Worker answers on your
+  account's `workers.dev` subdomain. To use your own hostname for now, add a
+  Custom Domain to the Worker in your Cloudflare dashboard.
+- **Runtime logs stay in your account.** Lunora Cloud's log tail runs in its own
+  account and cannot be attached to a Worker in yours, so use your account's
+  Workers Logs.
+- **Connecting uses a pasted token.** Connecting through Cloudflare's OAuth for
+  third-party apps, instead of pasting a token, is planned.
+
+## Disconnecting
+
+Disconnect the account from its card in the **Cloudflare accounts** tab.
+
+- **It is refused while the account is in use.** If a project or a deployment
+  that has not been torn down still uses the account, move those projects to
+  another target first.
+- **Lunora Cloud deletes its copy of the token.** Nothing in your account is
+  deleted, so the Workers and their data stay yours.
+- **The token stays valid** until you revoke it in your Cloudflare dashboard. Do
+  that too.
+
+Everything already runs in your account, so leaving needs no data export. Your
+Workers keep serving after you disconnect. Lunora Cloud just stops deploying to
+them.

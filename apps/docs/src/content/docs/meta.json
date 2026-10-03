@@ -103,6 +103,8 @@
         "versioning",
         "---Lunora Cloud---",
         "cloud/cli",
+        "cloud/your-own-cloudflare-account",
+        "cloud/your-own-server",
         "cloud/monitoring",
         "---Reference---",
         "errors",

@@ -4,7 +4,8 @@
  * Several files in this repo are written by a script and committed:
  * `labeler-config.yml`, each package's `__assets__/package-og.svg` + README block,
  * `apps/docs/src/data/packages.ts`, the error-code reference in
- * `apps/docs/src/content/docs/errors.mdx`, and every example's `lunora/_generated` tree.
+ * `apps/docs/src/content/docs/errors.mdx`, the capability tables on the Lunora
+ * Cloud bring-your-own pages, and every example's `lunora/_generated` tree.
  * Nothing re-ran the generators in CI and compared, so a committed output could
  * drift from what the generator produces and no gate noticed.
  *
@@ -130,6 +131,9 @@ const GENERATORS = [
     // `--experimental-strip-types` because it imports `packages/errors/src/catalog.ts`
     // directly; the flag is still required on the 22.15 this job pins.
     ["node", ["--experimental-strip-types", "apps/docs/scripts/generate-error-reference.js"]],
+    // Reads `apps/cloud/src/provision-contract.ts` as source (an AST, not an import),
+    // so it needs neither the flag nor a build.
+    ["node", ["apps/docs/scripts/generate-target-capabilities.js"]],
     // Its own declared `codegen` script, not a hand-rolled CLI call: that is the
     // script discovery keys on, and it is what the workspace actually runs, so a
     // flag added there is honoured here instead of silently diverging.
