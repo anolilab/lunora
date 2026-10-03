@@ -85,6 +85,7 @@ interface PullSourceOptions extends ProjectOptions {
 
 ```ts
 interface SqlClient {
+    readonly dbSystem?: "mysql" | "postgresql";
     query: <Row = Record<string, unknown>>(text: string, params?: ReadonlyArray<unknown>) => Promise<Row[]>;
 }
 ```

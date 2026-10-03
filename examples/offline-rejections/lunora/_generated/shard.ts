@@ -95,13 +95,22 @@ const schedulerStub = {
 };
 
 const storageStub = {
+    createMultipartUpload: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
+    },
     delete: async () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
     download: async () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
+    generateUploadUrl: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
+    },
     getMetadata: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
+    },
+    getPresignedUrl: async () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
     getSignedUrl: async () => {
@@ -114,6 +123,12 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
     list: async () => {
+        throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
+    },
+    resumeMultipartUpload: () => {
+        throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
+    },
+    store: async () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
     upload: async () => {

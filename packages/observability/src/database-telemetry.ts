@@ -1,5 +1,6 @@
 /**
- * Automatic instrumentation for `ctx.db`.
+ * Automatic instrumentation for `ctx.db` and the action-only `ctx.sql`
+ * (Hyperdrive, `@lunora/hyperdrive`).
  *
  * Database work is the single largest unexplained gap in a typical trace: a
  * handler that spends 300ms in SQLite shows one opaque bar, because the only way
@@ -17,12 +18,21 @@
  * count). That answers "was this request database-bound, and doing what?" at
  * flat cost, however many calls it made. `"spans"` opts into the full waterfall
  * when you are actually chasing a specific slow query.
+ *
+ * **`ctx.sql` shares all of it but the tally.** Same three levels, same knob,
+ * same span cap and the same best-effort settle ({@link observeCall}) — but its
+ * own tally, folded as `sql.*` keys rather than merged into `db.*`. The two are
+ * different cost classes: a `ctx.db` call is a local SQLite read inside the
+ * Durable Object, a `ctx.sql` call is a network round trip to an external
+ * Postgres/MySQL. Summing them into one `db.duration_ms` would hide exactly what
+ * the summary exists to say — which of the two the request was bound on.
  */
 import type { LogFields } from "../../../shared/log-fields";
 import { otlpRandomHex } from "../../../shared/otlp";
 import type { SpanEvent } from "../../../shared/span-event";
 import type { TraceAnchor } from "./context-telemetry";
 import { redactArgs } from "./request-log";
+import { sqlOperationName, sqlSystemOf } from "./sql-operation";
 import { toErrorType } from "./trace-context";
 
 /**
@@ -30,10 +40,13 @@ import { toErrorType } from "./trace-context";
  * a loop would otherwise bury its own trace under thousands of near-identical
  * bars and evict every other trace from the bounded buffer. Past the cap the
  * calls still run and still count toward the summary tally — only their
- * individual spans are dropped, and `db.spans_truncated` says so rather than
- * leaving a silently partial waterfall.
+ * individual spans are dropped, and `db.spans_truncated` (`sql.spans_truncated`
+ * for `ctx.sql`) says so rather than leaving a silently partial waterfall.
+ *
+ * Counted per tally, so `ctx.db` and `ctx.sql` each get the full allowance — a
+ * loop over one surface cannot starve the other's waterfall.
  */
-const MAX_DB_SPANS_PER_CTX = 100;
+const MAX_CLIENT_SPANS_PER_TALLY = 100;
 
 /**
  * The `DatabaseWriterLike` methods worth instrumenting: the ones that reach
@@ -134,47 +147,6 @@ const describeFailure = (failure: unknown): string => {
     return json ?? String(failure);
 };
 
-/**
- * Build the CLIENT span for one instrumented database call.
- *
- * Extracted from the proxy trap so that trap stays a readable dispatch — the
- * span's shape is a data-mapping concern, not control flow.
- */
-const buildDatabaseSpan = (input: {
-    deps: DatabaseTelemetryDeps;
-    durationMs: number;
-    failure: unknown;
-    operation: string;
-    startTs: number;
-    table: string | undefined;
-}): SpanEvent => {
-    const { deps, durationMs, failure, operation, startTs, table } = input;
-
-    return {
-        attributes: {
-            "db.operation.name": operation,
-            ...(table === undefined ? {} : { "db.collection.name": table }),
-            "db.system.name": "sqlite",
-        },
-        durationMs,
-        ...(failure === undefined ? {} : { error: { message: redactArgs(describeFailure(failure), deps.captureRaw) as string, type: toErrorType(failure) } }),
-        functionPath: deps.functionPath,
-        // CLIENT: from the handler's point of view this is a call OUT to a
-        // datastore, which is what lets a collector render it as a dependency
-        // rather than as internal computation.
-        kind: "client",
-        name: table === undefined ? `db.${operation}` : `db.${operation} ${table}`,
-        ok: failure === undefined,
-        parentSpanId: deps.anchor.rootSpanId,
-        ...(deps.anchor.rayId === undefined ? {} : { rayId: deps.anchor.rayId }),
-        shardKey: deps.shardKey,
-        spanId: otlpRandomHex(8),
-        startTs,
-        traceId: deps.anchor.traceId,
-        userId: deps.userId(),
-    };
-};
-
 /** Running totals for `"summary"` mode; created by the caller, read once at the dispatch boundary. */
 interface DatabaseTally {
     calls: number;
@@ -186,7 +158,13 @@ interface DatabaseTally {
 }
 
 /**
- * How much detail `ctx.db` auto-instrumentation produces.
+ * Which instrumented surface a tally belongs to, and the key prefix
+ * {@link formatTally} folds it under: `db` for `ctx.db`, `sql` for `ctx.sql`.
+ */
+type TallySurface = "db" | "sql";
+
+/**
+ * How much detail `ctx.db` / `ctx.sql` auto-instrumentation produces.
  *
  * `"summary"` (default) — aggregate counters on the dispatch's wide event: no
  * extra spans, no extra log records, and a cost that does not grow with call count.
@@ -198,17 +176,26 @@ interface DatabaseTally {
  */
 type DatabaseInstrumentation = "off" | "spans" | "summary";
 
-/** What {@link instrumentDatabase} needs to record what it observes. */
+/**
+ * The structural slice of `@lunora/hyperdrive`'s `SqlClient` the `ctx.sql`
+ * instrumenter needs — declared here so this package takes no dependency on
+ * hyperdrive.
+ */
+interface SqlClientLike {
+    /** OTel `db.system.name` the driver adapter stamped; `other_sql` when absent. */
+    readonly dbSystem?: string;
+    query: (text: string, params?: ReadonlyArray<unknown>) => Promise<unknown>;
+}
+
+/** What {@link instrumentDatabase} / {@link instrumentSqlClient} need to record what they observe. */
 interface DatabaseTelemetryDeps {
     /** The trace produced spans belong to (`"spans"` mode only). */
     anchor: TraceAnchor;
 
     /**
-     * Whether to record a failed call's error message verbatim rather than
-     * redacted (`"spans"` mode only) — the same dev-only escape hatch as
-     * `TracerDeps.captureRaw`. A constraint-error message quotes the
-     * conflicting row, so this CLIENT span gets the same default-redacted
-     * posture as the request log and function-metrics sinks.
+     * Whether to record a failed call's error message verbatim (`"spans"` mode
+     * only) — the same dev-only escape hatch as `TracerDeps.captureRaw`. See
+     * {@link failureMessage} for what each surface records without it.
      */
     captureRaw?: boolean;
 
@@ -236,9 +223,196 @@ interface DatabaseTelemetryDeps {
      */
     tally: DatabaseTally;
 
-    /** Read lazily — the acting user is resolved per span. */
+    /**
+     * The acting user, read when a span is built. Callers resolve it ONCE, when
+     * they instrument the client, and return that captured value: a span is
+     * built after the call's await, and per-request shared state read by then
+     * may already belong to a concurrent request.
+     */
     userId: () => string | undefined;
 }
+
+/** How one observed call ended — what a span builder needs beyond its own operation. */
+interface CallOutcome {
+    durationMs: number;
+    failure: unknown;
+    result: unknown;
+    startTs: number;
+}
+
+/**
+ * The two error-message policies, side by side.
+ *
+ * `"redact"` (`ctx.db`): the message, PII-redacted unless `captureRaw` — the
+ * request log's posture. A constraint-error message quotes the conflicting
+ * row, but Lunora owns the store, so a redaction pass is trustworthy enough.
+ *
+ * `"type-only"` (`ctx.sql`): the error TYPE, unless `captureRaw` keeps the
+ * driver's message verbatim. An external database's error text routinely
+ * quotes the offending row (Postgres's `Key (email)=(…) already exists`) —
+ * data Lunora never owned and a PII pattern will not reliably catch.
+ */
+const failureMessage = (failure: unknown, deps: DatabaseTelemetryDeps, policy: "redact" | "type-only"): string => {
+    if (policy === "redact") {
+        return redactArgs(describeFailure(failure), deps.captureRaw) as string;
+    }
+
+    return deps.captureRaw === true ? describeFailure(failure) : toErrorType(failure);
+};
+
+/**
+ * The fields every auto-instrumented span shares, whichever surface made the
+ * call.
+ *
+ * CLIENT: from the handler's point of view the call goes OUT to a datastore,
+ * which is what lets a collector render it as a dependency rather than as
+ * internal computation.
+ */
+const clientSpanBase = (
+    deps: DatabaseTelemetryDeps,
+    outcome: CallOutcome,
+    policy: "redact" | "type-only",
+): Pick<
+    SpanEvent,
+    "durationMs" | "error" | "functionPath" | "kind" | "ok" | "parentSpanId" | "rayId" | "shardKey" | "spanId" | "startTs" | "traceId" | "userId"
+> => {
+    const { durationMs, failure, startTs } = outcome;
+
+    return {
+        durationMs,
+        ...(failure === undefined ? {} : { error: { message: failureMessage(failure, deps, policy), type: toErrorType(failure) } }),
+        functionPath: deps.functionPath,
+        kind: "client",
+        ok: failure === undefined,
+        parentSpanId: deps.anchor.rootSpanId,
+        ...(deps.anchor.rayId === undefined ? {} : { rayId: deps.anchor.rayId }),
+        shardKey: deps.shardKey,
+        spanId: otlpRandomHex(8),
+        startTs,
+        traceId: deps.anchor.traceId,
+        userId: deps.userId(),
+    };
+};
+
+/**
+ * Run one storage call under telemetry: time it, re-throw its failure
+ * untouched, then bump the tally and — in `"spans"` mode and under
+ * {@link MAX_CLIENT_SPANS_PER_TALLY} — record its span.
+ *
+ * The ONE place that enforces "telemetry never changes the outcome": the
+ * caller gets exactly the value or the error `run` produced, and nothing the
+ * accounting does after the call settled can turn a succeeded query into a
+ * failed one or replace the real error with a telemetry one. `buildSpan` is a
+ * callback so `"summary"` mode never allocates a span it would discard.
+ */
+const observeCall = async (
+    deps: DatabaseTelemetryDeps,
+    operation: string,
+    run: () => unknown,
+    buildSpan: (outcome: CallOutcome) => SpanEvent,
+): Promise<unknown> => {
+    const startTs = Date.now();
+    let failure: unknown;
+    let result: unknown;
+
+    try {
+        result = await run();
+
+        return result;
+    } catch (error) {
+        failure = error;
+
+        // Re-thrown untouched: this is instrumentation, never flow control.
+        throw error;
+    } finally {
+        const durationMs = Date.now() - startTs;
+        const { tally } = deps;
+
+        tally.calls += 1;
+        tally.durationMs += durationMs;
+        tally.perOperation[operation] = (tally.perOperation[operation] ?? 0) + 1;
+
+        if (failure !== undefined) {
+            tally.errors += 1;
+        }
+
+        // Guarded as a whole — see the note above.
+        try {
+            if (deps.mode === "spans") {
+                if (tally.spansEmitted >= MAX_CLIENT_SPANS_PER_TALLY) {
+                    tally.spansTruncated = true;
+                } else {
+                    tally.spansEmitted += 1;
+
+                    deps.record(buildSpan({ durationMs, failure, result, startTs }));
+                }
+            }
+        } catch {
+            // Best-effort throughout.
+        }
+    }
+};
+
+type AnyMethod = (...arguments_: unknown[]) => unknown;
+
+/**
+ * A view of `source` whose methods passing `shouldWrap` are replaced by
+ * `wrap(name, original)`; every other member passes through.
+ *
+ * Proxies a throwaway target rather than `source`, and reads every member with
+ * `source` as the receiver.
+ *
+ * A `get` trap on a frozen `source` (or any non-configurable, non-writable
+ * method) may not return a different value — the Proxy invariant would make
+ * every wrapped call throw a `TypeError`. The throwaway target has no such
+ * properties to violate.
+ *
+ * A class-based client's `#private` accessors and methods need `this` to be
+ * the real instance, never a proxy of it. `original` is bound to `source` for
+ * the same reason.
+ *
+ * The prototype, `in`, and own-key enumeration are forwarded, so `instanceof`,
+ * spread and `Object.keys` still see the real object. Wrapped methods are
+ * memoized, so repeated access returns a stable function identity.
+ */
+const instrumentMethods = <T extends object>(source: T, shouldWrap: (name: string) => boolean, wrap: (name: string, original: AnyMethod) => AnyMethod): T => {
+    const wrapped = new Map<string, AnyMethod>();
+
+    return new Proxy({} as T, {
+        get(_target, property) {
+            const value = Reflect.get(source, property, source) as unknown;
+
+            if (typeof property !== "string" || typeof value !== "function" || !shouldWrap(property)) {
+                return value;
+            }
+
+            let instrumented = wrapped.get(property);
+
+            if (instrumented === undefined) {
+                instrumented = wrap(property, (value as AnyMethod).bind(source));
+                wrapped.set(property, instrumented);
+            }
+
+            return instrumented;
+        },
+        getOwnPropertyDescriptor(_target, property) {
+            const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
+
+            // Reported configurable: the throwaway target lacks the property, and
+            // the invariant forbids reporting a missing one as non-configurable.
+            return descriptor === undefined ? undefined : { ...descriptor, configurable: true };
+        },
+        getPrototypeOf() {
+            return Reflect.getPrototypeOf(source);
+        },
+        has(_target, property) {
+            return Reflect.has(source, property);
+        },
+        ownKeys() {
+            return Reflect.ownKeys(source);
+        },
+    });
+};
 
 /**
  * Wrap a `ctx.db` writer so its storage-touching methods are instrumented.
@@ -246,87 +420,93 @@ interface DatabaseTelemetryDeps {
  * Returns the database unchanged when `mode` is `"off"`, so the default-disabled
  * path costs nothing — not even a proxy indirection.
  *
- * Implemented as a `Proxy` rather than by enumerating and rebinding methods:
- * `DatabaseWriterLike` has optional members that a given backend may or may not
- * implement, plus properties (`system`) and builder factories (`query`) that
- * must pass through untouched. A proxy instruments exactly what it is asked to
- * and is transparently correct for everything else, including members added
- * later — an enumeration would silently stop covering them.
+ * A proxy rather than an enumerated, rebound copy: `DatabaseWriterLike` has
+ * optional members that a given backend may or may not implement, plus
+ * properties (`system`) and builder factories (`query`) that must pass through
+ * untouched. A proxy instruments exactly what it is asked to and is
+ * transparently correct for everything else, including members added later —
+ * an enumeration would silently stop covering them.
  */
 const instrumentDatabase = <T extends object>(database: T, deps: DatabaseTelemetryDeps): T => {
     if (deps.mode === "off") {
         return database;
     }
 
-    const { tally } = deps;
+    return instrumentMethods(
+        database,
+        (name) => INSTRUMENTED_METHODS.has(name),
+        (operation, original) =>
+            async (...arguments_: unknown[]) => {
+                const table = tableOf(operation, arguments_);
 
-    /** Wrapped methods are memoized so repeated property access returns a stable function identity. */
-    const wrapped = new Map<string, unknown>();
+                return observeCall(
+                    deps,
+                    operation,
+                    () => original(...arguments_),
+                    (outcome) => {
+                        return {
+                            ...clientSpanBase(deps, outcome, "redact"),
+                            attributes: {
+                                "db.operation.name": operation,
+                                ...(table === undefined ? {} : { "db.collection.name": table }),
+                                "db.system.name": "sqlite",
+                            },
+                            name: table === undefined ? `db.${operation}` : `db.${operation} ${table}`,
+                        };
+                    },
+                );
+            },
+    );
+};
 
-    return new Proxy(database, {
-        get(target, property, receiver) {
-            const value = Reflect.get(target, property, receiver) as unknown;
+/**
+ * Wrap the action-only `ctx.sql` client so every `query` is instrumented — the
+ * `ctx.sql` twin of {@link instrumentDatabase}, at the same levels and through
+ * the same {@link observeCall}. `deps.tally` must be a tally of its own (folded
+ * as `sql.*`), never `ctx.db`'s.
+ *
+ * Its span carries no statement text and no parameters — only the
+ * leading-keyword operation, the system, and the returned row count. No
+ * `db.collection.name` either: naming the table means parsing past
+ * `FROM`/`INTO` through joins, CTEs and quoting, which is neither cheap nor
+ * safe. A failure records its TYPE (see {@link failureMessage}).
+ *
+ * `query` is the whole `SqlClient` surface: there is no transaction or batch
+ * method to cover. Everything else on the client passes through untouched, and
+ * `"off"` returns the client itself.
+ */
+const instrumentSqlClient = <T extends SqlClientLike>(client: T, deps: DatabaseTelemetryDeps): T => {
+    if (deps.mode === "off") {
+        return client;
+    }
 
-            if (typeof property !== "string" || typeof value !== "function" || !INSTRUMENTED_METHODS.has(property)) {
-                return value;
-            }
+    const system = sqlSystemOf(client.dbSystem);
 
-            const cached = wrapped.get(property);
+    return instrumentMethods(
+        client,
+        (name) => name === "query",
+        (_name, original) =>
+            async (...arguments_: unknown[]) => {
+                const operation = sqlOperationName(arguments_[0]);
 
-            if (cached !== undefined) {
-                return cached;
-            }
-
-            const original = value as (...arguments_: unknown[]) => unknown;
-
-            const instrumented = async (...arguments_: unknown[]): Promise<unknown> => {
-                const startTs = Date.now();
-                const table = tableOf(property, arguments_);
-                let failure: unknown;
-
-                try {
-                    return await original.apply(target, arguments_);
-                } catch (error) {
-                    failure = error;
-
-                    // Re-thrown untouched: this is instrumentation, never flow control.
-                    throw error;
-                } finally {
-                    const durationMs = Date.now() - startTs;
-
-                    tally.calls += 1;
-                    tally.durationMs += durationMs;
-                    tally.perOperation[property] = (tally.perOperation[property] ?? 0) + 1;
-
-                    if (failure !== undefined) {
-                        tally.errors += 1;
-                    }
-
-                    // Guarded as a whole: telemetry runs after the call already
-                    // settled, so letting it throw would turn a succeeded query
-                    // into a failed one — and replace the real error with a
-                    // telemetry one on the failure path.
-                    try {
-                        if (deps.mode === "spans") {
-                            if (tally.spansEmitted >= MAX_DB_SPANS_PER_CTX) {
-                                tally.spansTruncated = true;
-                            } else {
-                                tally.spansEmitted += 1;
-
-                                deps.record(buildDatabaseSpan({ deps, durationMs, failure, operation: property, startTs, table }));
-                            }
-                        }
-                    } catch {
-                        // Best-effort throughout — see the note above.
-                    }
-                }
-            };
-
-            wrapped.set(property, instrumented);
-
-            return instrumented;
-        },
-    });
+                return observeCall(
+                    deps,
+                    operation,
+                    () => original(...arguments_),
+                    (outcome) => {
+                        return {
+                            ...clientSpanBase(deps, outcome, "type-only"),
+                            attributes: {
+                                "db.operation.name": operation,
+                                ...(Array.isArray(outcome.result) ? { "db.response.returned_rows": outcome.result.length } : {}),
+                                "db.system.name": system,
+                            },
+                            name: `sql.${operation}`,
+                        };
+                    },
+                );
+            },
+    );
 };
 
 /** A zero'd tally for one dispatch. */
@@ -335,32 +515,33 @@ const createDatabaseTally = (): DatabaseTally => {
 };
 
 /**
- * Render the running tally as span attributes.
+ * Render the running tally as span attributes, under its surface's prefix
+ * ({@link TallySurface}).
  *
  * Called ONCE per dispatch, from the shard's root-span recorder — not per query.
- * Building this object on every call was pure waste on a hot path. It is a handful of keys, so the per-call cost is a small object
- * assignment — the property that makes `"summary"` mode scale to any call count.
+ * It is a handful of keys, so the per-call cost is a small object assignment —
+ * the property that makes `"summary"` mode scale to any call count.
  */
-const formatTally = (tally: DatabaseTally): LogFields => {
+const formatTally = (tally: DatabaseTally, surface: TallySurface = "db"): LogFields => {
     const fields: LogFields = {
-        "db.calls": tally.calls,
-        "db.duration_ms": tally.durationMs,
+        [`${surface}.calls`]: tally.calls,
+        [`${surface}.duration_ms`]: tally.durationMs,
     };
 
     if (tally.errors > 0) {
-        fields["db.errors"] = tally.errors;
+        fields[`${surface}.errors`] = tally.errors;
     }
 
     if (tally.spansTruncated) {
-        fields["db.spans_truncated"] = true;
+        fields[`${surface}.spans_truncated`] = true;
     }
 
     for (const [operation, count] of Object.entries(tally.perOperation)) {
-        fields[`db.op.${operation}`] = count;
+        fields[`${surface}.op.${operation}`] = count;
     }
 
     return fields;
 };
 
-export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps };
-export { createDatabaseTally, formatTally, instrumentDatabase };
+export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps, SqlClientLike, TallySurface };
+export { createDatabaseTally, formatTally, instrumentDatabase, instrumentSqlClient };

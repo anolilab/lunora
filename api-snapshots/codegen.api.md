@@ -1925,6 +1925,7 @@ const CAPABILITY_ROWS: readonly [
         readonly serverCtxField: "\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Lunora live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import(\"@lunora/hyperdrive\").SqlClient;";
         readonly shardBinding: {
             readonly clientType: "SqlClient";
+            readonly instrument: "instrumentSql";
             readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))`.";
             readonly stubMethods: readonly [
                 "query"

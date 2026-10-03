@@ -70,7 +70,10 @@
  * observe it (`createDroppedTraceNotice` in `@lunora/runtime`).
  *
  * The rest of the telemetry pipeline — `ctx.log`, `ctx.trace`, `ctx.span`,
- * `ctx.metrics`, traced `ctx.fetch`, and W3C trace propagation — deliberately
+ * `ctx.metrics`, traced `ctx.fetch`, automatic `ctx.db` / `ctx.sql` database
+ * instrumentation (a wrapper over the client the target already rates, so it
+ * follows `hyperdrive`'s rating rather than needing its own), and W3C trace
+ * propagation — deliberately
  * has NO key: it is sink callbacks over the `fetch` global, needs no host
  * primitive, and a key every target must rate `native` forever is paperwork, not
  * a control.

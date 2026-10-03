@@ -1,3 +1,27 @@
+## @lunora/runtime [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.173...@lunora/runtime@1.0.0-alpha.174) (2026-10-03)
+
+### Features
+
+* **observability:** instrument ctx.sql with database telemetry ([#944](https://github.com/anolilab/lunora/issues/944)) ([2fd04d0](https://github.com/anolilab/lunora/commit/2fd04d07bbbb458d64e501f02cd353f79888aa3a)), closes [#private](https://github.com/anolilab/lunora/issues/private) [#private](https://github.com/anolilab/lunora/issues/private)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.191
+
+## @lunora/runtime [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.172...@lunora/runtime@1.0.0-alpha.173) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.93
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/observability:** upgraded to 1.0.0-alpha.117
+* **@lunora/platform:** upgraded to 1.0.0-alpha.52
+* **@lunora/do:** upgraded to 1.0.0-alpha.190
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.108
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.71
+
 ## @lunora/runtime [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.171...@lunora/runtime@1.0.0-alpha.172) (2026-10-03)
 
 ### Features
