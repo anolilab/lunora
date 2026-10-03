@@ -404,3 +404,17 @@ upload's current one, ahead of it or overlapping bytes already stored, is a
 towards completion, so the upload is not reported complete until every byte is
 stored. Re-read the offset with `HEAD` and continue from there. The bundled
 chunked-REST clients send in order.
+
+That last guarantee is the provider's own. Upstream, the chunked-REST handler
+counts a chunk as received before the provider stores it, so a refused chunk
+would still count
+([visulima/visulima#892](https://github.com/visulima/visulima/issues/892)). The
+provider works around it by answering the received-chunk list from the offset it
+has stored, and the workaround can go once #892 is fixed upstream.
+
+`MemoryStorage` from `@visulima/storage` cannot be trusted with out-of-order
+chunked REST: its `write` ignores the chunk's offset, so it answers `202` and
+the stored file loses bytes
+([visulima/visulima#893](https://github.com/visulima/visulima/issues/893)). Test
+out-of-order behavior against the provider you deploy, not against
+`MemoryStorage`.

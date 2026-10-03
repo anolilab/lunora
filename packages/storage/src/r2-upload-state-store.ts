@@ -23,7 +23,9 @@ const PROVIDER_OWNED_FIELDS = ["bytesWritten", "ETag", "id", "name", "size", "st
  * received chunks under. The handler adds a chunk to it BEFORE the provider
  * stores (or refuses) the chunk, and decides from the list alone whether the
  * upload is complete. So the provider never stores the list, and answers it
- * from its own offset instead: see {@link withStoredChunks}.
+ * from its own offset instead: see {@link withStoredChunks}. This works around
+ * visulima/visulima#892 (https://github.com/visulima/visulima/issues/892) and
+ * can go once that is fixed upstream.
  */
 const CHUNKS_KEY = "_chunks";
 
