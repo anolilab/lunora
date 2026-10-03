@@ -1609,6 +1609,12 @@ const resolveDeployDriver: (target?: string) => DeployDriver;
 const resolveProjectTarget: (projectRoot: string, explicit?: string) => string;
 ```
 
+### `resolveSchemaDirectory` (const)
+
+```ts
+const resolveSchemaDirectory: (projectRoot: string) => string;
+```
+
 ### `resolveServerModule` (const)
 
 ```ts

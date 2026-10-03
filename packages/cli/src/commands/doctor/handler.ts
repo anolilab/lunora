@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries } from "@lunora/config";
+import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries, resolveSchemaDirectory } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { collectExportGaps, findWranglerFile, readWranglerJsonc, UNEXPORTED_CLASS_MARKER, validateWranglerProject } from "@lunora/config/cloudflare";
 
@@ -456,7 +456,7 @@ type InferredBindings = Awaited<ReturnType<typeof inferLunoraBindings>>;
  */
 const inferBindings = async (cwd: string, findings: Finding[]): Promise<InferredBindings | undefined> => {
     try {
-        return await inferLunoraBindings({ projectRoot: cwd });
+        return await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
     } catch (error: unknown) {
         // Best-effort — other checks own the real failures, so this does not fail
         // the run. It is still SAID: a silent return made a skipped check
