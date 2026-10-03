@@ -578,7 +578,7 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
 // ── OTLP metrics ────────────────────────────────────────────────────────────
 // The tenant `otlpSink` POSTs `ctx.metrics.*` measurements as an OTLP
 // `ExportMetricsServiceRequest` to `/v1/metrics`. We flatten each data point to
-// a `MetricPoint` the store writes to Analytics Engine (queryable via AE SQL) —
+// a `MetricPoint` the store writes to Analytics Engine (queryable via the Analytics SQL API) —
 // so a measurement lands somewhere rather than 404-ing.
 
 /** One OTLP numeric data point (gauge/sum) — the variants Lunora emits. */

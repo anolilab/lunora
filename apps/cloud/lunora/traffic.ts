@@ -67,7 +67,7 @@ const EMPTY_VIEW: TrafficSnapshotView = { countries: [], hostnames: [], routes: 
  * script it does not own, so cross-tenant leakage is structurally impossible here
  * rather than depending on a `WHERE` clause staying correct through future edits.
  *
- * An **action**, not a query: the read is a `fetch` over the AE SQL API and the
+ * An **action**, not a query: the read is a `fetch` over the Analytics SQL API and the
  * account id / API token live on `ctx.env`, both action-only. Members only.
  */
 export const snapshot = action
@@ -132,7 +132,7 @@ export const snapshot = action
             // field-for-field `map`s in between were indirection, not a boundary.
             return result;
         } catch {
-            // AE SQL unreachable / dataset absent — degrade to an empty view.
+            // Analytics SQL unreachable / dataset absent — degrade to an empty view.
             return EMPTY_VIEW;
         }
     });

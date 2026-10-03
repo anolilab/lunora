@@ -2,13 +2,16 @@
  * Platform metering source — a thin domain layer over
  * `@lunora/bindings/analytics`. The dispatcher emits one request data point per tenant
  * request to a Cloudflare Analytics Engine dataset (the cheap, fire-and-forget
- * request-path source); a control-plane rollup reads it back through the AE SQL
- * API and folds it into the `platformUsage` ledger. The write helper no-ops when
- * the binding is absent; the reader is a port with an HTTP impl (built on
- * `createAnalyticsSqlClient`) so the rollup is unit-testable with a fake fetch.
+ * request-path source); a control-plane rollup reads it back through the
+ * Analytics SQL API and folds it into the `platformUsage` ledger. The write helper
+ * no-ops when the binding is absent; the reader is a port with an HTTP impl (built
+ * on `@lunora/bindings/analytics-sql`'s REST transport) so the rollup is
+ * unit-testable with a fake fetch.
  */
 import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
-import { createAnalytics, createAnalyticsSqlClient } from "@lunora/bindings/analytics";
+import { createAnalytics } from "@lunora/bindings/analytics";
+
+import { analyticsEngineTable, createRestAnalyticsSql, isoSeconds } from "../../telemetry/ae-sql";
 
 export type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 
@@ -137,35 +140,34 @@ interface AnalyticsReaderOptions {
 }
 
 /**
- * HTTP `AnalyticsUsageReader` over the Analytics Engine SQL API (via
- * `@lunora/bindings/analytics`'s read client). Runs at the edge (needs the account API
- * token); the SQL groups request counts per script over the window.
+ * HTTP `AnalyticsUsageReader` over Cloudflare's Analytics SQL API (via
+ * `@lunora/bindings/analytics-sql`'s REST transport, scoped to the platform
+ * account by `scope.accountTag`). Runs at the edge (needs the account API token);
+ * the SQL counts requests per script over the window.
  *
- * **The aggregation must be `SUM(_sample_interval)`, not `SUM(double1)`.**
+ * **The aggregation must be the sample-weighted `COUNT(*)`, not `SUM(double1)`.**
  * Analytics Engine applies weighted adaptive sampling at write time: past a
- * write rate it keeps one row in place of many, and each retained row carries
- * the `_sample_interval` it stands in for. Summing `double1` bare therefore
- * under-counts by the sample factor — and sampling engages precisely when a
- * tenant's request rate spikes, i.e. in the runaway/compromised-account case
- * the spend cap downstream of this ledger exists to stop. Cloudflare's own
- * usage-based-billing recipe uses exactly this form.
+ * write rate it keeps one row in place of many, each standing in for its sample
+ * interval. Summing `double1` bare therefore under-counts by the sample factor —
+ * and sampling engages precisely when a tenant's request rate spikes, i.e. in the
+ * runaway/compromised-account case the spend cap downstream of this ledger exists
+ * to stop. The Analytics SQL dialect weights `COUNT`, `SUM` and `AVG` by the
+ * sample interval itself, so `COUNT(*)` is the old `SUM(_sample_interval)`.
  *
  * Because the dispatcher writes `index1 = scriptName` and one data point per
- * request, summing the sample interval grouped by that index is not an
- * approximation — it is the exact request count. Grouping on `blob1` would have
- * been the sampled-and-therefore-approximate form; the index is also what makes
+ * request, the weighted count grouped by that index is not an approximation — it
+ * is the exact request count. Grouping on `blob1` would have been the
+ * sampled-and-therefore-approximate form; the index is also what makes
  * per-tenant sampling equitable, so one enormous tenant cannot sample a small
  * tenant's rows down to zero.
  */
 export const createHttpAnalyticsReader = (options: AnalyticsReaderOptions): AnalyticsUsageReader => {
-    const sql = createAnalyticsSqlClient({ accountId: options.accountId, apiToken: options.apiToken, fetch: options.fetch });
+    const sql = createRestAnalyticsSql(options);
+    const query = `SELECT index1 AS scriptName, COUNT(*) AS requests FROM ${analyticsEngineTable(options.dataset)} WHERE timestamp > $since GROUP BY scriptName`;
 
     return {
         readRequestUsage: async (sinceMs) => {
-            const sinceSeconds = Math.floor(sinceMs / 1000);
-            const result = await sql.query(
-                `SELECT index1 AS scriptName, SUM(_sample_interval) AS requests FROM ${options.dataset} WHERE timestamp > toDateTime(${String(sinceSeconds)}) GROUP BY scriptName`,
-            );
+            const result = await sql.query(query, { since: isoSeconds(sinceMs / 1000) });
 
             return result.rows.map((row) => {
                 return {

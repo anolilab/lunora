@@ -4,21 +4,25 @@ import { buildMetricSeriesQuery, foldMetricRows, MAX_METRIC_SERIES } from "../sr
 
 describe(buildMetricSeriesQuery, () => {
     it("buckets by the given width, scopes to the org, and bounds the window", () => {
-        const sql = buildMetricSeriesQuery({ bucketSec: 900, dataset: "TELEMETRY", organizationId: "org_1", sinceSec: 1000, toSec: 2000 });
+        const { params, query } = buildMetricSeriesQuery({ bucketSec: 900, dataset: "TELEMETRY", organizationId: "org_1", sinceSec: 1000, toSec: 2000 });
 
-        expect(sql).toContain("intDiv(toUInt32(timestamp), 900) * 900 AS bucket");
-        expect(sql).toContain("FROM TELEMETRY");
-        expect(sql).toContain("timestamp > toDateTime(1000)");
-        expect(sql).toContain("timestamp <= toDateTime(2000)");
-        expect(sql).toContain("blob4 = 'org_1'");
-        expect(sql).toContain("GROUP BY name, kind, functionPath, bucket");
+        expect(query).toContain("toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '900' SECOND)) AS bucket");
+        expect(query).toContain('FROM events.analyticsEngine."TELEMETRY"');
+        expect(query).toContain("AVG(double1) AS value");
+        expect(query).toContain("timestamp > $since");
+        expect(query).toContain("timestamp <= $to");
+        expect(query).toContain("blob4 = $organizationId");
+        expect(query).toContain("GROUP BY name, kind, functionPath, bucket");
+        expect(params).toStrictEqual({ organizationId: "org_1", since: "1970-01-01T00:16:40Z", to: "1970-01-01T00:33:20Z" });
     });
 
-    it("omits the upper bound when `toSec` is absent and escapes the org id", () => {
-        const sql = buildMetricSeriesQuery({ bucketSec: 60, dataset: "TELEMETRY", organizationId: "o'1", sinceSec: 5 });
+    /** The org id is a bound value: a quote in it can never reach the SQL text. */
+    it("omits the upper bound when `toSec` is absent and binds the org id rather than splicing it", () => {
+        const { params, query } = buildMetricSeriesQuery({ bucketSec: 60, dataset: "TELEMETRY", organizationId: "o'1", sinceSec: 5 });
 
-        expect(sql).not.toContain("timestamp <=");
-        expect(sql).toContain("blob4 = 'o''1'");
+        expect(query).not.toContain("timestamp <=");
+        expect(query).not.toContain("o'1");
+        expect(params).toStrictEqual({ organizationId: "o'1", since: "1970-01-01T00:00:05Z" });
     });
 });
 

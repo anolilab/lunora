@@ -12,25 +12,31 @@
  * **Org scoping is by script name, and that is deliberate.** The dataset carries
  * no organization dimension — it is the billing meter, keyed on `index1=script`.
  * So every read here takes the caller's resolved script names and filters
- * `index1 IN (…)`. A caller that cannot name a script cannot read a row, which
+ * `index1 IN ($script0, …)`, each name a bound parameter. A caller that cannot name a script cannot read a row, which
  * makes cross-tenant leakage a property of the query shape rather than something
  * a `WHERE` clause has to be trusted to remember. It is also what makes a
  * single-deployment health chart free: pass one script name.
  *
  * **Sampling — the honest limit.** AE retains one row in place of many past a
- * write rate, each carrying the `_sample_interval` it stands in for. Every
- * aggregate below is therefore sample-weighted: counts are `SUM(_sample_interval)`
- * (exact, because the dispatcher writes exactly one point per request), summed
- * values are `SUM(value * _sample_interval)`, and averages divide the two. What
+ * write rate, each carrying the sample interval it stands in for. Every
+ * aggregate below is therefore sample-weighted — the Analytics SQL dialect applies
+ * the weight to `COUNT`, `SUM` and `AVG` itself: counts are `COUNT(*)` (exact,
+ * because the dispatcher writes exactly one point per request), summed values are
+ * `SUM(value)`, and averages are the weighted `AVG(value)`. What
  * you cannot get from here is a true percentile — a p95 over sampled rows is a
  * number nobody should page on, so latency percentiles are read from the
  * unsampled `observations` span store instead (see `lunora/traffic.ts`).
  *
- * Query building and row folding are pure and unit-tested; the AE SQL client is
- * injected so the read path never touches the network in tests.
+ * Query building and row folding are pure and unit-tested; `fetch` is injected
+ * so the read path never touches the network in tests. Every value a request
+ * supplies — script names, the hostname, the window — is a bound `$name`
+ * parameter, never SQL text.
+ * @see https://developers.cloudflare.com/analytics/sql-api/sql-reference/functions/#adaptive-sampling
  */
-import type { AnalyticsSqlClient } from "@lunora/bindings/analytics";
-import { createAnalyticsSqlClient } from "@lunora/bindings/analytics";
+import type { AnalyticsSqlRequest } from "@lunora/bindings/analytics-sql";
+
+import type { AnalyticsSqlCredentials } from "./ae-sql";
+import { analyticsEngineTable, bucketExpression, createRestAnalyticsSql, isoSeconds } from "./ae-sql";
 
 /** Default look-back when the caller gives no `from` (24 h) — matches the metrics reader. */
 export const DEFAULT_TRAFFIC_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -43,20 +49,6 @@ export const MAX_TRAFFIC_ROWS = 40;
 
 /** Ceiling on script names accepted in one read — bounds the generated `IN (…)` list. */
 export const MAX_TRAFFIC_SCRIPTS = 200;
-
-/**
- * Escape a string for single-quoted SQL — the AE SQL API takes raw text, no bound
- * params.
- *
- * Backslash first, then the quote. The AE SQL API is ClickHouse, which honours
- * backslash escapes inside string literals, so doubling the quote alone leaves a
- * value ending in a backslash able to escape its own closing quote. That is not
- * reachable today — the only caller-supplied term (`hostname`) is last in the
- * WHERE clause, with no following quote to break into — but that is an accident
- * of clause order, not a property, and the next predicate appended here would
- * turn it into a real injection.
- */
-const quote = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
 
 /**
  * The dimension a breakdown groups on, mapped to its blob position.
@@ -89,36 +81,60 @@ export interface TrafficFilter {
     toSec: number;
 }
 
-/** The `WHERE` shared by every query here: window, org scope, optional domain. */
-const whereClause = (filter: TrafficFilter): string => {
-    const scripts = filter.scriptNames
-        .slice(0, MAX_TRAFFIC_SCRIPTS)
-        .map((name) => quote(name))
-        .join(", ");
-    const domain = filter.hostname === undefined ? "" : ` AND blob6 = ${quote(filter.hostname)}`;
+/** One traffic statement plus its bound values — what `ctx.analyticsSql.query` takes. */
+export type TrafficQuery = AnalyticsSqlRequest & { params: Record<string, string> };
 
-    return `WHERE timestamp > toDateTime(${String(filter.sinceSec)}) AND timestamp <= toDateTime(${String(filter.toSec)}) AND index1 IN (${scripts})${domain}`;
+/**
+ * The `WHERE` shared by every query here — window, org scope, optional domain —
+ * with the values it binds. Each script name gets its own `$scriptN` placeholder,
+ * capped at {@link MAX_TRAFFIC_SCRIPTS}.
+ */
+const whereClause = (filter: TrafficFilter): { params: Record<string, string>; sql: string } => {
+    const params: Record<string, string> = { since: isoSeconds(filter.sinceSec), to: isoSeconds(filter.toSec) };
+    const placeholders = filter.scriptNames.slice(0, MAX_TRAFFIC_SCRIPTS).map((name, index) => {
+        params[`script${String(index)}`] = name;
+
+        return `$script${String(index)}`;
+    });
+
+    let domain = "";
+
+    if (filter.hostname !== undefined) {
+        params.hostname = filter.hostname;
+        domain = " AND blob6 = $hostname";
+    }
+
+    return { params, sql: `WHERE timestamp > $since AND timestamp <= $to AND index1 IN (${placeholders.join(", ")})${domain}` };
 };
+
+/** A positive integer `LIMIT` literal — the dialect takes no parameter there. */
+const limitClause = (limit: number): string => `LIMIT ${String(Math.max(Math.floor(limit), 1))}`;
 
 /**
  * Build the breakdown query for one dimension — request count per distinct value,
  * biggest first.
  *
- * `SUM(_sample_interval)` rather than `SUM(double1)`: the dispatcher writes one
- * point per request, so summing the interval each retained row stands in for is
+ * The sample-weighted `COUNT(*)` rather than `SUM(double1)`: the dispatcher writes
+ * one point per request, so counting the events each retained row stands in for is
  * the exact count, while summing the bare count under-reports by the sample
  * factor — and sampling engages precisely during the traffic spikes an operator
  * opened this page to look at.
  */
-export const buildTrafficDimensionQuery = (filter: TrafficFilter, dimension: TrafficDimension, limit = MAX_TRAFFIC_ROWS): string =>
-    [
-        `SELECT ${TRAFFIC_DIMENSIONS[dimension]} AS key, SUM(_sample_interval) AS requests`,
-        `FROM ${filter.dataset}`,
-        whereClause(filter),
-        "GROUP BY key",
-        "ORDER BY requests DESC",
-        `LIMIT ${String(Math.max(Math.floor(limit), 1))}`,
-    ].join(" ");
+export const buildTrafficDimensionQuery = (filter: TrafficFilter, dimension: TrafficDimension, limit = MAX_TRAFFIC_ROWS): TrafficQuery => {
+    const where = whereClause(filter);
+
+    return {
+        params: where.params,
+        query: [
+            `SELECT ${TRAFFIC_DIMENSIONS[dimension]} AS key, COUNT(*) AS requests`,
+            `FROM ${analyticsEngineTable(filter.dataset)}`,
+            where.sql,
+            "GROUP BY key",
+            "ORDER BY requests DESC",
+            limitClause(limit),
+        ].join(" "),
+    };
+};
 
 /**
  * Build the response-code query — grouped on class AND exact code, so the UI can
@@ -128,39 +144,47 @@ export const buildTrafficDimensionQuery = (filter: TrafficFilter, dimension: Tra
  * `recordRequestUsage` writes both, and grouping on a stored low-cardinality
  * value beats a string expression over every row.
  */
-export const buildTrafficStatusQuery = (filter: TrafficFilter, limit = MAX_TRAFFIC_ROWS): string =>
-    [
-        "SELECT blob3 AS class, blob7 AS code, SUM(_sample_interval) AS requests",
-        `FROM ${filter.dataset}`,
-        whereClause(filter),
-        "GROUP BY class, code",
-        "ORDER BY requests DESC",
-        `LIMIT ${String(Math.max(Math.floor(limit), 1))}`,
-    ].join(" ");
+export const buildTrafficStatusQuery = (filter: TrafficFilter, limit = MAX_TRAFFIC_ROWS): TrafficQuery => {
+    const where = whereClause(filter);
+
+    return {
+        params: where.params,
+        query: [
+            "SELECT blob3 AS class, blob7 AS code, COUNT(*) AS requests",
+            `FROM ${analyticsEngineTable(filter.dataset)}`,
+            where.sql,
+            "GROUP BY class, code",
+            "ORDER BY requests DESC",
+            limitClause(limit),
+        ].join(" "),
+    };
+};
 
 /**
  * Build the volume-over-time query — requests, bytes and mean duration per bucket.
  *
- * Both summed doubles are multiplied by `_sample_interval` before summing, and the
- * mean is the weighted `SUM(v * i) / SUM(i)` rather than `avg(v)`: a plain average
- * over retained rows silently weights a heavily-sampled minute the same as a quiet
- * one, which inverts exactly the spike an operator is looking for.
+ * The dialect sample-weights `SUM` and `AVG` itself, so `SUM(double3)` is the
+ * old `SUM(double3 * _sample_interval)` and `AVG(double2)` the weighted mean
+ * `SUM(v * i) / SUM(i)`: a plain average over retained rows would silently weight
+ * a heavily-sampled minute the same as a quiet one, which inverts exactly the
+ * spike an operator is looking for.
  */
-export const buildTrafficSeriesQuery = (filter: TrafficFilter, bucketSec: number): string => {
-    const width = Math.max(Math.floor(bucketSec), 1);
-    const bucket = `intDiv(toUInt32(timestamp), ${String(width)}) * ${String(width)}`;
+export const buildTrafficSeriesQuery = (filter: TrafficFilter, bucketSec: number): TrafficQuery => {
+    const where = whereClause(filter);
 
-    return [
-        `SELECT ${bucket} AS bucket, SUM(_sample_interval) AS requests, SUM(double3 * _sample_interval) AS bytes,`,
-        "SUM(double2 * _sample_interval) / SUM(_sample_interval) AS avgDurationMs",
-        `FROM ${filter.dataset}`,
-        whereClause(filter),
-        "GROUP BY bucket",
-        "ORDER BY bucket",
-    ].join(" ");
+    return {
+        params: where.params,
+        query: [
+            `SELECT ${bucketExpression(bucketSec)} AS bucket, COUNT(*) AS requests, SUM(double3) AS bytes, AVG(double2) AS avgDurationMs`,
+            `FROM ${analyticsEngineTable(filter.dataset)}`,
+            where.sql,
+            "GROUP BY bucket",
+            "ORDER BY bucket",
+        ].join(" "),
+    };
 };
 
-/** Coerce an AE cell (AE returns numbers as numeric strings over the SQL API) to a finite number. */
+/** Coerce an AE cell (the SQL API can return 64-bit numbers as numeric strings) to a finite number. */
 const asNumber = (value: unknown): number => {
     if (typeof value === "number" && Number.isFinite(value)) {
         return value;
@@ -254,7 +278,7 @@ export interface TrafficSeriesPoint {
     t: number;
 }
 
-/** Fold series rows; AE returns the bucket as epoch **seconds**. */
+/** Fold series rows; the bucket comes back as epoch **seconds** (`toUnixTimestamp`). */
 export const foldTrafficSeries = (rows: ReadonlyArray<Record<string, unknown>>): TrafficSeriesPoint[] =>
     rows.map((row) => {
         return {
@@ -281,22 +305,19 @@ export interface TrafficReader {
     readSnapshot: (input: { from: number; hostname?: string; scriptNames: ReadonlyArray<string>; to: number }) => Promise<TrafficSnapshot>;
 }
 
-/** Options for {@link createTrafficReader}: AE account creds + dataset (+ injectable `fetch`/bucket). */
-export interface TrafficReaderOptions {
-    accountId: string;
-    apiToken: string;
+/** Options for {@link createTrafficReader}: account creds + dataset (+ injectable `fetch`/bucket). */
+export interface TrafficReaderOptions extends AnalyticsSqlCredentials {
     /** Bucket width in ms; defaults to {@link DEFAULT_TRAFFIC_BUCKET_MS}. */
     bucketMs?: number;
     /** The metering dataset the dispatcher writes to. */
     dataset: string;
-    fetch?: typeof globalThis.fetch;
 }
 
 /** An empty snapshot — the shape every degraded path returns rather than throwing. */
 const EMPTY_SNAPSHOT: TrafficSnapshot = { countries: [], hostnames: [], routes: [], series: [], statuses: [], totalRequests: 0 };
 
 /**
- * HTTP {@link TrafficReader} over the AE SQL API (the same read path as the usage
+ * HTTP {@link TrafficReader} over the Analytics SQL API (the same read path as the usage
  * and metrics readers). Runs at the edge — it needs the account API token.
  *
  * The five reads are issued together rather than sequentially: they share a
@@ -304,17 +325,14 @@ const EMPTY_SNAPSHOT: TrafficSnapshot = { countries: [], hostnames: [], routes: 
  * multiply the tab's latency by five for no benefit.
  */
 export const createTrafficReader = (options: TrafficReaderOptions): TrafficReader => {
-    const sql: AnalyticsSqlClient = createAnalyticsSqlClient({
-        accountId: options.accountId,
-        apiToken: options.apiToken,
-        ...(options.fetch ? { fetch: options.fetch } : {}),
-    });
+    const sql = createRestAnalyticsSql(options);
+    const run = async (request: TrafficQuery) => sql.query(request.query, request.params);
     const bucketSec = Math.max(Math.floor((options.bucketMs ?? DEFAULT_TRAFFIC_BUCKET_MS) / 1000), 1);
 
     return {
         readSnapshot: async ({ from, hostname, scriptNames, to }) => {
             // No scripts means the org has deployed nothing, and `index1 IN ()` is
-            // not valid SQL — answer without a round trip rather than building it.
+            // not valid SQL (`IN` takes a non-empty list) — answer without a round trip rather than building it.
             if (scriptNames.length === 0) {
                 return EMPTY_SNAPSHOT;
             }
@@ -335,11 +353,11 @@ export const createTrafficReader = (options: TrafficReaderOptions): TrafficReade
             const unfiltered: TrafficFilter = { dataset: filter.dataset, scriptNames, sinceSec: filter.sinceSec, toSec: filter.toSec };
 
             const [countries, routes, hostnames, statuses, series] = await Promise.all([
-                sql.query(buildTrafficDimensionQuery(filter, "country")),
-                sql.query(buildTrafficDimensionQuery(filter, "route")),
-                sql.query(buildTrafficDimensionQuery(unfiltered, "hostname")),
-                sql.query(buildTrafficStatusQuery(filter)),
-                sql.query(buildTrafficSeriesQuery(filter, bucketSec)),
+                run(buildTrafficDimensionQuery(filter, "country")),
+                run(buildTrafficDimensionQuery(filter, "route")),
+                run(buildTrafficDimensionQuery(unfiltered, "hostname")),
+                run(buildTrafficStatusQuery(filter)),
+                run(buildTrafficSeriesQuery(filter, bucketSec)),
             ]);
 
             const countryRows = foldTrafficBreakdown(countries.rows);

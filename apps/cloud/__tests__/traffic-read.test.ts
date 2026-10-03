@@ -22,10 +22,14 @@ const FILTER: TrafficFilter = {
 
 describe(buildTrafficDimensionQuery, () => {
     it("groups on the blob the dimension maps to", () => {
-        expect(buildTrafficDimensionQuery(FILTER, "country")).toContain("blob5 AS key");
-        expect(buildTrafficDimensionQuery(FILTER, "route")).toContain("blob4 AS key");
-        expect(buildTrafficDimensionQuery(FILTER, "hostname")).toContain("blob6 AS key");
-        expect(buildTrafficDimensionQuery(FILTER, "status")).toContain("blob7 AS key");
+        expect(buildTrafficDimensionQuery(FILTER, "country").query).toContain("blob5 AS key");
+        expect(buildTrafficDimensionQuery(FILTER, "route").query).toContain("blob4 AS key");
+        expect(buildTrafficDimensionQuery(FILTER, "hostname").query).toContain("blob6 AS key");
+        expect(buildTrafficDimensionQuery(FILTER, "status").query).toContain("blob7 AS key");
+    });
+
+    it("reads the dataset as its Analytics Engine table", () => {
+        expect(buildTrafficDimensionQuery(FILTER, "country").query).toContain('FROM events.analyticsEngine."lunora_tenant_usage"');
     });
 
     /**
@@ -33,13 +37,13 @@ describe(buildTrafficDimensionQuery, () => {
      * dashboard shows a human: `SUM(double1)` counts RETAINED rows, not the
      * requests they stand in for, and AE only starts sampling once traffic
      * spikes — so the bare sum reads lowest exactly when an operator has opened
-     * the page because something spiked.
+     * the page because something spiked. The dialect's `COUNT(*)` is weighted.
      */
-    it("counts by sample interval, never by the raw double", () => {
-        const sql = buildTrafficDimensionQuery(FILTER, "country");
+    it("counts sample-weighted events, never the raw double", () => {
+        const { query } = buildTrafficDimensionQuery(FILTER, "country");
 
-        expect(sql).toContain("SUM(_sample_interval)");
-        expect(sql).not.toContain("SUM(double1)");
+        expect(query).toContain("COUNT(*) AS requests");
+        expect(query).not.toContain("SUM(double1)");
     });
 
     /**
@@ -49,65 +53,74 @@ describe(buildTrafficDimensionQuery, () => {
      * the whole platform's traffic and would look perfectly healthy doing it.
      */
     it("scopes every read to the caller's own script names", () => {
-        const sql = buildTrafficDimensionQuery(FILTER, "country");
+        const { params, query } = buildTrafficDimensionQuery(FILTER, "country");
 
-        expect(sql).toContain("index1 IN ('acme-app-v3', 'acme-app-v2')");
+        expect(query).toContain("index1 IN ($script0, $script1)");
+        expect(params).toMatchObject({ script0: "acme-app-v3", script1: "acme-app-v2" });
     });
 
     it("bounds the script list so a huge org cannot build an unbounded query", () => {
         const many = Array.from({ length: MAX_TRAFFIC_SCRIPTS + 50 }, (_, index) => `script-${String(index)}`);
-        const sql = buildTrafficDimensionQuery({ ...FILTER, scriptNames: many }, "country");
+        const { params, query } = buildTrafficDimensionQuery({ ...FILTER, scriptNames: many }, "country");
 
-        expect(sql).toContain("'script-0'");
-        expect(sql).not.toContain(`'script-${String(MAX_TRAFFIC_SCRIPTS)}'`);
+        expect(params.script0).toBe("script-0");
+        expect(params[`script${String(MAX_TRAFFIC_SCRIPTS - 1)}`]).toBe(`script-${String(MAX_TRAFFIC_SCRIPTS - 1)}`);
+        expect(params).not.toHaveProperty(`script${String(MAX_TRAFFIC_SCRIPTS)}`);
+        expect(query).not.toContain(`$script${String(MAX_TRAFFIC_SCRIPTS)}`);
     });
 
-    it("escapes quotes in a script name rather than letting it close the literal", () => {
-        const sql = buildTrafficDimensionQuery({ ...FILTER, scriptNames: ["ac'me"] }, "country");
+    it("binds a script name rather than splicing it into the statement", () => {
+        const { params, query } = buildTrafficDimensionQuery({ ...FILTER, scriptNames: ["ac'me"] }, "country");
 
-        expect(sql).toContain("'ac''me'");
+        expect(query).not.toContain("ac'me");
+        expect(params.script0).toBe("ac'me");
     });
 
     it("applies the domain filter only when one is given", () => {
-        expect(buildTrafficDimensionQuery(FILTER, "route")).not.toContain("blob6 =");
-        expect(buildTrafficDimensionQuery({ ...FILTER, hostname: "app.acme.com" }, "route")).toContain("blob6 = 'app.acme.com'");
+        expect(buildTrafficDimensionQuery(FILTER, "route").query).not.toContain("blob6 =");
+        expect(buildTrafficDimensionQuery(FILTER, "route").params).not.toHaveProperty("hostname");
+
+        const filtered = buildTrafficDimensionQuery({ ...FILTER, hostname: "app.acme.com" }, "route");
+
+        expect(filtered.query).toContain("blob6 = $hostname");
+        expect(filtered.params.hostname).toBe("app.acme.com");
     });
 
     it("bounds the window at both ends", () => {
-        const sql = buildTrafficDimensionQuery(FILTER, "country");
+        const { params, query } = buildTrafficDimensionQuery(FILTER, "country");
 
-        expect(sql).toContain("timestamp > toDateTime(1700000000)");
-        expect(sql).toContain("timestamp <= toDateTime(1700086400)");
+        expect(query).toContain("timestamp > $since AND timestamp <= $to");
+        expect(params).toMatchObject({ since: "2023-11-14T22:13:20Z", to: "2023-11-15T22:13:20Z" });
     });
 });
 
 describe(buildTrafficStatusQuery, () => {
     it("groups on class AND exact code so one read fills the nested view", () => {
-        const sql = buildTrafficStatusQuery(FILTER);
+        const { query } = buildTrafficStatusQuery(FILTER);
 
-        expect(sql).toContain("blob3 AS class");
-        expect(sql).toContain("blob7 AS code");
-        expect(sql).toContain("GROUP BY class, code");
+        expect(query).toContain("blob3 AS class");
+        expect(query).toContain("blob7 AS code");
+        expect(query).toContain("GROUP BY class, code");
     });
 });
 
 describe(buildTrafficSeriesQuery, () => {
-    it("buckets on the requested width", () => {
-        expect(buildTrafficSeriesQuery(FILTER, 900)).toContain("intDiv(toUInt32(timestamp), 900) * 900 AS bucket");
+    it("buckets on the requested width as epoch seconds", () => {
+        expect(buildTrafficSeriesQuery(FILTER, 900).query).toContain("toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '900' SECOND)) AS bucket");
     });
 
     /**
      * A summed value under sampling has to be weighted the same way a count is,
-     * and a mean has to be the weighted mean. Plain `SUM(double3)` / `avg(double2)`
-     * would weight a heavily-sampled busy minute the same as a quiet one — which
-     * inverts precisely the spike the chart exists to show.
+     * and a mean has to be the weighted mean. The Analytics SQL dialect weights
+     * `SUM` and `AVG` itself, so the statement must use them — and must not reach
+     * for the old AE SQL API's `_sample_interval`, which this dialect does not have
+     * and would double-weight if it did.
      */
-    it("sample-weights the summed bytes and the mean duration", () => {
-        const sql = buildTrafficSeriesQuery(FILTER, 900);
+    it("sample-weights the summed bytes and the mean duration through the dialect", () => {
+        const { query } = buildTrafficSeriesQuery(FILTER, 900);
 
-        expect(sql).toContain("SUM(double3 * _sample_interval) AS bytes");
-        expect(sql).toContain("SUM(double2 * _sample_interval) / SUM(_sample_interval) AS avgDurationMs");
-        expect(sql).not.toContain("avg(double2)");
+        expect(query).toContain("COUNT(*) AS requests, SUM(double3) AS bytes, AVG(double2) AS avgDurationMs");
+        expect(query).not.toContain("_sample_interval");
     });
 });
 
@@ -187,6 +200,8 @@ describe(createTrafficReader, () => {
         const fetchMock = vi.fn<typeof globalThis.fetch>().mockImplementation(async (_url, init) => {
             const body = (init as undefined | { body?: string })?.body ?? "";
 
+            expect(JSON.parse(body)).toMatchObject({ scope: { accountTag: "acc" } });
+
             if (body.includes("blob5 AS key")) {
                 return okResponse([
                     { key: "US", requests: "60" },
@@ -228,9 +243,9 @@ describe(createTrafficReader, () => {
      * dead end a reader of the reader alone would not spot.
      */
     it("reads the hostname breakdown unfiltered while every other view honours the domain filter", async () => {
-        const queries: string[] = [];
+        const queries: { params: Record<string, string>; query: string }[] = [];
         const fetchMock = vi.fn<typeof globalThis.fetch>().mockImplementation(async (_url, init) => {
-            queries.push((init as undefined | { body?: string })?.body ?? "");
+            queries.push(JSON.parse((init as undefined | { body?: string })?.body ?? "{}") as { params: Record<string, string>; query: string });
 
             return okResponse([]);
         });
@@ -239,14 +254,17 @@ describe(createTrafficReader, () => {
 
         await reader.readSnapshot({ from: 0, hostname: "app.acme.com", scriptNames: ["acme-app"], to: 1_000_000 });
 
-        const hostnameQuery = queries.find((query) => query.includes("blob6 AS key")) ?? "";
-        const countryQuery = queries.find((query) => query.includes("blob5 AS key")) ?? "";
+        const hostnameQuery = queries.find((request) => request.query.includes("blob6 AS key"));
+        const countryQuery = queries.find((request) => request.query.includes("blob5 AS key"));
 
-        expect(hostnameQuery).not.toContain("blob6 = 'app.acme.com'");
-        expect(countryQuery).toContain("blob6 = 'app.acme.com'");
+        expect(hostnameQuery?.query).not.toContain("blob6 = $hostname");
+        expect(hostnameQuery?.params).not.toHaveProperty("hostname");
+        expect(countryQuery?.query).toContain("blob6 = $hostname");
+        expect(countryQuery?.params.hostname).toBe("app.acme.com");
         // The org scope still applies to the unfiltered read — dropping the domain
         // filter must never mean dropping the tenant boundary with it.
-        expect(hostnameQuery).toContain("index1 IN ('acme-app')");
+        expect(hostnameQuery?.query).toContain("index1 IN ($script0)");
+        expect(hostnameQuery?.params.script0).toBe("acme-app");
     });
 
     /**

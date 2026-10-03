@@ -1,3 +1,4 @@
+import { AnalyticsSqlQueryError } from "@lunora/bindings/analytics-sql";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AnalyticsEngineDatasetLike } from "../src/targets/cloudflare-wfp/analytics";
@@ -120,13 +121,37 @@ describe(normalizeHostname, () => {
 });
 
 describe(createHttpAnalyticsReader, () => {
-    it("maps the AE SQL response into usage rows", async () => {
+    it("maps the Analytics SQL response into usage rows", async () => {
         const fetchMock = vi
             .fn<typeof globalThis.fetch>()
-            .mockResolvedValue(Response.json({ data: [{ requests: "42", scriptName: "acme-app" }] }, { status: 200 }));
+            .mockResolvedValue(Response.json({ data: [{ requests: "42", scriptName: "acme-app" }], rows: 1 }, { status: 200 }));
         const reader = createHttpAnalyticsReader({ accountId: "acc", apiToken: "tok", dataset: "usage", fetch: fetchMock });
 
         await expect(reader.readRequestUsage(0)).resolves.toStrictEqual([{ requests: 42, scriptName: "acme-app" }]);
+    });
+
+    /**
+     * The request shape: the Analytics SQL endpoint, the platform account as the
+     * request-level scope (so the statement carries no tenancy predicate), the AE
+     * dataset as its `events.analyticsEngine` table, and the window bound as a
+     * parameter rather than spliced into the text.
+     */
+    it("posts a parameterised statement scoped to the platform account", async () => {
+        const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ data: [], rows: 0 }, { status: 200 }));
+        const reader = createHttpAnalyticsReader({ accountId: "acc", apiToken: "tok", dataset: "lunora_tenant_usage", fetch: fetchMock });
+
+        await reader.readRequestUsage(1_700_000_000_000);
+
+        const [url, init] = fetchMock.mock.calls[0] ?? [];
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { params: unknown; query: string; scope: unknown };
+
+        expect(url).toBe("https://api.cloudflare.com/client/v4/analytics/sql");
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer tok");
+        expect(body.scope).toStrictEqual({ accountTag: "acc" });
+        expect(body.params).toStrictEqual({ since: "2023-11-14T22:13:20Z" });
+        expect(body.query).toBe(
+            'SELECT index1 AS scriptName, COUNT(*) AS requests FROM events.analyticsEngine."lunora_tenant_usage" WHERE timestamp > $since GROUP BY scriptName',
+        );
     });
 
     /**
@@ -134,23 +159,23 @@ describe(createHttpAnalyticsReader, () => {
      * and `SUM(double1)` counts retained rows rather than the requests they
      * stand in for. Since sampling engages exactly when a tenant's traffic
      * spikes, an unsampled sum under-counts hardest in the runaway case the
-     * spend cap downstream exists to catch — so the query must aggregate the
-     * sample interval over the per-tenant index.
+     * spend cap downstream exists to catch — so the query must use the dialect's
+     * sample-weighted `COUNT(*)` over the per-tenant index.
      */
-    it("aggregates the sample interval over the per-tenant index, not the raw double", async () => {
-        const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ data: [] }, { status: 200 }));
+    it("counts sample-weighted events over the per-tenant index, not the raw double", async () => {
+        const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ data: [], rows: 0 }, { status: 200 }));
         const reader = createHttpAnalyticsReader({ accountId: "acc", apiToken: "tok", dataset: "usage", fetch: fetchMock });
 
         await reader.readRequestUsage(1_700_000_000_000);
 
         const body = (fetchMock.mock.calls[0]?.[1] as undefined | { body?: string })?.body ?? "";
 
-        expect(body).toContain("SUM(_sample_interval)");
+        expect(body).toContain("COUNT(*) AS requests");
         expect(body).toContain("index1 AS scriptName");
         expect(body).not.toContain("SUM(double1)");
     });
 
-    it("throws on a non-ok response", async () => {
+    it("throws an AnalyticsSqlQueryError on a non-ok response", async () => {
         const reader = createHttpAnalyticsReader({
             accountId: "acc",
             apiToken: "tok",
@@ -158,7 +183,6 @@ describe(createHttpAnalyticsReader, () => {
             fetch: async () => new Response("nope", { status: 500 }),
         });
 
-        // @lunora/bindings' analytics SQL client throws AnalyticsSqlError on a non-2xx.
-        await expect(reader.readRequestUsage(0)).rejects.toThrow(Error);
+        await expect(reader.readRequestUsage(0)).rejects.toThrow(AnalyticsSqlQueryError);
     });
 });

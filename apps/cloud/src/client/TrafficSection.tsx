@@ -53,7 +53,7 @@ interface SnapshotState {
 /**
  * Poll `traffic.snapshot` for one org over a window and domain.
  *
- * An action, not a reactive query — the read is a `fetch` over the AE SQL API —
+ * An action, not a reactive query — the read is a `fetch` over the Analytics SQL API —
  * so this re-fetches when the org, window or domain changes, writing state only
  * in the async callbacks with an out-of-order guard. Same shape as
  * `useMetricsSeries`, which exists for the same reason.

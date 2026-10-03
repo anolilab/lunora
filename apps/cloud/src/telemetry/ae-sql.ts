@@ -1,19 +1,63 @@
-/** Shared primitives for building Analytics Engine SQL, used by every AE reader. */
+/**
+ * Shared primitives for reading Analytics Engine, used by every AE reader.
+ *
+ * Every reader speaks Cloudflare's **Analytics SQL** dialect through
+ * `@lunora/bindings/analytics-sql` — `POST /client/v4/analytics/sql` with
+ * `{ query, params, scope: { accountTag } }` — so every value a request
+ * supplies is a bound `$name` parameter and never SQL text.
+ * @see https://developers.cloudflare.com/analytics/sql-api/query-api/
+ */
+import type { AnalyticsSql } from "@lunora/bindings/analytics-sql";
+import { createAnalyticsSql, createAnalyticsSqlRest } from "@lunora/bindings/analytics-sql";
+
+/** The account credentials an AE reader queries with (+ an injectable `fetch` for tests). */
+export interface AnalyticsSqlCredentials {
+    accountId: string;
+    /** API token with Account Analytics Read. */
+    apiToken: string;
+    fetch?: typeof globalThis.fetch;
+}
 
 /**
- * Escape a string for a single-quoted SQL literal.
- *
- * The AE SQL API takes raw text — there are no bound parameters — so this is the
- * entire defence against injection on every read that interpolates a value.
- *
- * Backslash FIRST, then the quote. The AE SQL API is ClickHouse, which honours
- * backslash escapes inside string literals, so doubling the quote alone leaves a
- * value ending in a backslash able to escape its own closing quote. Whether that
- * is currently reachable depends on whether another predicate follows the
- * interpolated one — an accident of clause order, not a property, and the next
- * appended `AND` turns it into a live injection.
+ * An Analytics SQL client over the REST endpoint, scoped to `accountId` by the
+ * request's `scope.accountTag` — so no statement here carries a tenancy predicate,
+ * which the SQL API rejects alongside a request-level scope.
  */
-export const quote = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
+export const createRestAnalyticsSql = (credentials: AnalyticsSqlCredentials): AnalyticsSql =>
+    createAnalyticsSql({
+        binding: createAnalyticsSqlRest({
+            accountId: credentials.accountId,
+            apiToken: credentials.apiToken,
+            ...(credentials.fetch === undefined ? {} : { fetch: credentials.fetch }),
+        }),
+    });
+
+/**
+ * The Analytics SQL table for an AE dataset: `events.analyticsEngine."DATASET"`.
+ *
+ * The dataset names the table, so it cannot be a bound parameter; it is quoted as
+ * an identifier (an embedded `"` doubled), which also admits the hyphenated names
+ * a bare identifier cannot. It comes from deployment config, never from a request.
+ */
+export const analyticsEngineTable = (dataset: string): string => `events.analyticsEngine."${dataset.replaceAll('"', '""')}"`;
+
+/** The `.000Z` tail `toISOString` always writes. */
+const MILLISECONDS_SUFFIX = /\.\d{3}Z$/u;
+
+/**
+ * Epoch seconds as the ISO-8601 UTC timestamp the dialect compares `timestamp`
+ * against (`2026-09-15T08:30:00Z`). Second precision, matching AE's `DateTime`.
+ */
+export const isoSeconds = (epochSec: number): string => new Date(Math.floor(epochSec) * 1000).toISOString().replace(MILLISECONDS_SUFFIX, "Z");
+
+/**
+ * A time-bucket expression: `timestamp` rounded down to a `bucketSec` boundary,
+ * as epoch **seconds** (what the folds read back). `bucketSec` is a positive
+ * integer from our own config, never a request value, and the dialect's
+ * `INTERVAL` takes a literal.
+ */
+export const bucketExpression = (bucketSec: number): string =>
+    `toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '${String(Math.max(Math.floor(bucketSec), 1))}' SECOND))`;
 
 /**
  * The separator for composite accumulator keys folded out of AE rows.

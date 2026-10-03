@@ -14,7 +14,7 @@ import { boundedString, LIMITS } from "./validators";
  * `recordMetrics`) with no UI; this action reads them back as per-metric time
  * series for the dashboard Metrics tab's sparklines.
  *
- * An **action**, not a query: the read is a `fetch` over the AE SQL API, and the
+ * An **action**, not a query: the read is a `fetch` over the Analytics SQL API, and the
  * account id / API token live in `ctx.env` (the `lunora/env.ts` contract) — both
  * action-only. Fails **open** to `[]` when AE creds aren't configured (the common
  * case until a cell provisions them) or on any read failure, so the tab shows an
@@ -93,7 +93,7 @@ export const list = action
 
             return series.map((point) => toView(point));
         } catch {
-            // AE SQL unreachable / dataset absent — degrade to an empty trend view.
+            // Analytics SQL unreachable / dataset absent — degrade to an empty trend view.
             return [];
         }
     });
