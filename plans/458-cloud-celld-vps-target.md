@@ -884,6 +884,37 @@ directory becomes 0711. The self-check gains a fourth check, "edge user". The
 lane asserts Caddy's uid and that `lunora-edge` reads neither the key, the
 bucket credentials nor the state (CI, systemd variant).
 
+**Fixed (2026-10-03, after the root/systemd lane's first CI run):** that run
+(job 111121913134) refused every fleet with `ISOLATION_FAILED` on two real
+bugs, which the user-namespace runs could not show:
+
+- _nft from stdin._ `nft -f -` exited 1 with "Not a regular file:
+  /dev/stdin". Node hands a child its stdin as a socket (libuv's socketpair),
+  and nft 1.0.9 — the version Ubuntu 24.04 ships, and the only release with
+  the check (1.0.8 lacks it, 1.1.0 exempts stdin) — accepts stdin only as a
+  regular file, FIFO or character device; the local runs used nft 1.1.7.
+  hostd now writes each script to a 0600 file in a fresh 0700 directory under
+  the data directory (in the unit's `ReadWritePaths`, written by
+  `lunora-hostd` alone), runs `nft -f` on it and deletes it. Reproduced and
+  verified against nft 1.0.9 built from source, in a user+network namespace.
+- _Caddy's set-group-ID directories._ `chmod 2750 caddy/` failed with
+  `EPERM`: the unit's `RestrictSUIDSGID=yes` installs a seccomp filter that
+  refuses any chmod/mkdir/open setting a set-user-ID or set-group-ID bit.
+  `install.sh`'s `create_directories` now creates `caddy/`
+  (`lunora-hostd:lunora-edge` 2750), `caddy/state/` (`lunora-edge` 0700) and
+  `caddy/log/` (`lunora-edge:lunora-hostd` 2750) as root, refusing a link in
+  their place; the daemon no longer creates, chowns or chmods them — the
+  edge-user check verifies owner, group, mode and that each is a real
+  directory (`EDGE_DIRECTORIES` in `edge.ts`; a test keeps install.sh equal to
+  it). "hostd never writes into a directory Caddy can write" is unchanged.
+  `CAP_CHOWN` stays, for the fleet directories.
+
+The other failures in that run followed from these, except one the fake
+control plane caused: it never pinged, so the box dropped a socket silent for
+120 s and reconnected, and a `destroy` dispatched in that window was lost
+("stops cleanly" timed out at 180 s). It now pings every 30 s, as the session
+DO does.
+
 ### W9 — Studio (M)
 
 - **Boxes page:** enrol (shows the one-time install command), status, versions,
