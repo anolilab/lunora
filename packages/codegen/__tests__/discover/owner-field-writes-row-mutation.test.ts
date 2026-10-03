@@ -331,4 +331,32 @@ describe("discoverOwnerFieldWrites: ctx rows changed after they are read", () =>
 
         expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
     });
+
+    // A `throw` hands the row to whatever `catch` receives it, which the walk
+    // does not follow, so throwing the row itself counts as handing it on (fail
+    // closed). Throwing a value READ off the row hands on only that value.
+    it.each([
+        [
+            "a `catch` that writes args into it",
+            `${read}\n        try {\n            throw row;\n        } catch (e) {\n            e.ownerId = args.targetUserId;\n        }`,
+        ],
+        // No `catch` here changes it, but the walk does not prove that: reported, fail closed.
+        ["a `throw` no `catch` changes", `${read}\n        if (args.abort) throw row;`],
+    ])("reports a ctx row's owner after %s", (_label, body) => {
+        expect.assertions(2);
+
+        const source = ownerMutator(`        ${body}\n        await ${insert("row.ownerId")}; // @write`);
+
+        expectReported(rowAt(discover(source), markerLine(source, "write")));
+    });
+
+    it("keeps a ctx row server-scoped when only a member read of it is thrown", () => {
+        expect.assertions(1);
+
+        const source = ownerMutator(
+            `        ${read}\n        if (!row.published) throw new Error(row.ownerId);\n        await ${insert("row.ownerId")}; // @write`,
+        );
+
+        expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
+    });
 });
