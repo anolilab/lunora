@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callSiteScopeOf } from "../../src/discover/attribution";
 import discoverCallEdges from "../../src/discover/call-edges";
 import discoverInserts from "../../src/discover/inserts";
+import discoverKvKeyAccesses from "../../src/discover/kv-key-accesses";
 import discoverQueries from "../../src/discover/queries";
 import discoverTableWrites from "../../src/discover/table-writes";
 import discoverWorkflowCalls from "../../src/discover/workflow-calls";
@@ -76,6 +77,56 @@ export const table = { create: property };
             b: { callers: ["run"], kind: "helper", name: "argument" },
             c: { callers: ["table"], kind: "helper", name: "property" },
         });
+    });
+
+    it("marks a helper reached from module scope, a class, or a destructured declaration as untracked", () => {
+        expect.assertions(1);
+
+        write(
+            "a.ts",
+            `const viaRoute = (ctx) => ctx.db.insert("route", {});
+const viaClass = (ctx) => ctx.db.insert("klass", {});
+const viaDestructured = (ctx) => ctx.db.insert("destructured", {});
+const viaMixin = (ctx) => ctx.db.insert("mixin", {});
+export const internalOnly = internalQuery({ handler: (ctx) => viaRoute(ctx) });
+http.route({ path: "/r", method: "POST", handler: httpAction(async (ctx) => viaRoute(ctx)) });
+export class Svc { run(ctx) { return viaClass(ctx); } }
+export const { run } = { run: (ctx) => viaDestructured(ctx) };
+class Base extends mixin(viaMixin) {}
+`,
+        );
+
+        // Callers attribution cannot follow make the caller list incomplete, so
+        // a caller-folding rule (visibility) must not trust it.
+        expect(insertScopes(new Project({ skipAddingFilesFromTsConfig: true }))).toStrictEqual({
+            destructured: { callers: [], kind: "helper", name: "viaDestructured", untracked: true },
+            klass: { callers: [], kind: "helper", name: "viaClass", untracked: true },
+            // `extends mixin(viaMixin)` runs: a heritage expression is a value, not a type.
+            mixin: { callers: [], kind: "helper", name: "viaMixin", untracked: true },
+            route: { callers: ["internalOnly"], kind: "helper", name: "viaRoute", untracked: true },
+        });
+    });
+
+    it("keeps a helper an internal export and an inline HTTP route share at full severity", () => {
+        expect.assertions(1);
+
+        write(
+            "files.ts",
+            `import { httpAction, httpRouter, internalQuery } from "@lunora/server";
+const read = (ctx, args) => ctx.kv.get(args.key);
+export const internalRead = internalQuery({ handler: (ctx, args) => read(ctx, args) });
+const http = httpRouter();
+http.route({ path: "/r", method: "POST", handler: httpAction(async (ctx, req) => read(ctx, await req.json())) });
+export class Svc { run(ctx, args) { return read(ctx, args); } }
+`,
+        );
+
+        const accesses = discoverKvKeyAccesses(new Project({ skipAddingFilesFromTsConfig: true }), join(workdir, "lunora"), [
+            { args: {}, exportName: "internalRead", filePath: "files", kind: "query", returnType: "unknown", visibility: "internal" },
+        ]);
+
+        // Not stamped `internal`: the route and the class reach the key too, so the lint keeps ERROR.
+        expect(accesses.map((access) => access.visibility)).toStrictEqual([undefined]);
     });
 
     it("names the exported name of a renamed or default export, and module scope as module", () => {

@@ -1,7 +1,5 @@
-import type { CallSiteScope } from "../src/ir";
-
 /** The export or helper a scope names — `<module>` at module scope — for picking records in a test. */
-export const scopeName = (scope: CallSiteScope): string => (scope.kind === "module" ? "<module>" : scope.name);
+export { callSiteLabel as scopeName } from "@lunora/advisor";
 
 /**
  * The 1-based line of the fixture line carrying `// @<marker>`, so a test asserts

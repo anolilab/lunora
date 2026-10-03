@@ -2,7 +2,7 @@ import type { Project } from "ts-morph";
 
 import type { FunctionIR, KvKeyAccessIR } from "../ir";
 import { discoverArgumentDerivedAccesses } from "./argument-derived-accesses";
-import { callerVisibilityOf } from "./attribution";
+import { withCallerVisibility } from "./attribution";
 
 /**
  * The `ctx.kv` methods whose first argument is a per-entry namespace key. `list`
@@ -30,20 +30,13 @@ const KV_KEY_METHODS = new Set(["delete", "get", "getRaw", "getWithMetadata", "p
  * is still the real vector.
  */
 const discoverKvKeyAccesses = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR> = []): KvKeyAccessIR[] => {
-    // Keyed on file + export because two modules may export the same name.
-    const visibilityByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.visibility]));
-
     const accesses = discoverArgumentDerivedAccesses(project, lunoraDirectory, {
         argIndex: 0,
         matchReceiver: (receiver) => receiver === "ctx.kv" || receiver.startsWith("ctx.kv."),
         methods: KV_KEY_METHODS,
     });
 
-    return accesses.map((access) => {
-        const visibility = callerVisibilityOf(access.scope, (exportName) => visibilityByKey.get(`${access.file}:${exportName}`));
-
-        return visibility === undefined ? access : { ...access, visibility };
-    });
+    return withCallerVisibility(accesses, functions);
 };
 
 export default discoverKvKeyAccesses;

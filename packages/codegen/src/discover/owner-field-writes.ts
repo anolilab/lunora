@@ -1,10 +1,10 @@
-import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
-import { callerVisibilityOf, callSiteScopeOf, exportedCallersOf } from "./attribution";
+import { collectCallRows, propertyKeyName } from "./ast";
+import { callSiteScopeOf, withCallerVisibility } from "./attribution";
 
 /**
  * Ownership / identity columns whose value must come from the server-trusted
@@ -89,14 +89,6 @@ const documentObjectLiterals = (documentArgument: TsNode, method: string): Objec
 
     return objectLiterals;
 };
-
-/** What discovery knows about the exported procedure or mutator a write sits inside. */
-interface EnclosingDeclaration {
-    /** The ownership column a `defineMutator({ owner })` declares, when it is one. */
-    owner?: string;
-    /** Procedure visibility, when the write sits in a registered procedure. */
-    visibility?: "internal" | "public";
-}
 
 /** True when `node` is `args.<field>` or `args["<field>"]` — that exact property, nothing else. */
 const isArgsProperty = (node: TsNode, field: string): boolean => {
@@ -244,14 +236,17 @@ const identityWritesInObjectLiteral = (
         // `args`, so it is not flagged — mirrors the shared taint convention.
         if (isArgumentDerived(value) && !isScopedByContext(value)) {
             const scope = callSiteScopeOf(call);
-            const callers = exportedCallersOf(scope);
             // Recorded either way — the lint decides what to do with it. Dropping it
             // here would make the feeder the only place that knows the write
-            // happened, and the sibling `visibility` stamp two lines down is the
-            // precedent for annotating rather than discarding. A write in a shared
-            // helper is owner-scoped only when EVERY caller declares this field its
-            // owner, failing toward reporting.
-            const ownerScoped = callers.length > 0 && callers.every((caller) => ownerFieldOf(caller) === name) && resolvesToOwnerArgument(value, name);
+            // happened, and the `visibility` stamp is the precedent for annotating
+            // rather than discarding.
+            //
+            // Owner-scoped ONLY in the mutator's own body. The runtime's
+            // `applyOwnerScope` verifies the mutator's `args[owner]`; inside a
+            // helper `args` is the HELPER's parameter, which a mutator can fill
+            // from anything (`persist(ctx, { userId: args.targetUserId })`), so a
+            // helper's write is never owner-scoped.
+            const ownerScoped = scope.kind === "export" && ownerFieldOf(scope.name) === name && resolvesToOwnerArgument(value, name);
 
             rows.push({
                 field: name,
@@ -286,25 +281,6 @@ const ownerFieldWritesInCall = (call: CallExpression, relativePath: string, owne
     );
 };
 
-/** Identity columns written from `args` across one source file's `ctx.db` writes. */
-const ownerFieldWritesInSourceFile = (
-    sourceFile: SourceFile,
-    relativePath: string,
-    declarationOf: (exportName: string) => EnclosingDeclaration,
-): OwnerFieldWriteIR[] => {
-    const found: OwnerFieldWriteIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        for (const write of ownerFieldWritesInCall(call, relativePath, (exportName) => declarationOf(exportName).owner)) {
-            const visibility = callerVisibilityOf(write.scope, (exportName) => declarationOf(exportName).visibility);
-
-            found.push(visibility === undefined ? write : { ...write, visibility });
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover `ctx.db` writes (`insert`, `replace`, `patch`, `insertManyUnsafe`) in
  * `lunora/` that set an ownership / identity column — `userId`, `ownerId`,
@@ -322,32 +298,13 @@ const discoverOwnerFieldWrites = (
     functions: ReadonlyArray<FunctionIR> = [],
     mutators: ReadonlyArray<MutatorIR> = [],
 ): OwnerFieldWriteIR[] => {
-    const writes: OwnerFieldWriteIR[] = [];
-    // ONE map, keyed on file + export because two modules may export the same
-    // name. Two parallel maps threaded as two same-shaped positional callbacks is
-    // a silent-transposition hazard: `"internal" | "public" | undefined` is
-    // assignable to `string | undefined`, so swapping them type-checks.
-    const declarations = new Map<string, EnclosingDeclaration>();
+    // Keyed on file + export because two modules may export the same name.
+    const ownerByKey = new Map(mutators.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.owner]));
+    const writes = collectCallRows(project, lunoraDirectory, (call, relativePath) =>
+        ownerFieldWritesInCall(call, relativePath, (exportName) => ownerByKey.get(`${relativePath}:${exportName}`)),
+    );
 
-    for (const entry of functions) {
-        declarations.set(`${entry.filePath}:${entry.exportName}`, { visibility: entry.visibility });
-    }
-
-    for (const entry of mutators) {
-        const key = `${entry.filePath}:${entry.exportName}`;
-
-        declarations.set(key, { ...declarations.get(key), owner: entry.owner });
-    }
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
-
-        writes.push(...ownerFieldWritesInSourceFile(sourceFile, relativePath, (exportName) => declarations.get(`${relativePath}:${exportName}`) ?? {}));
-    }
-
-    return writes;
+    return withCallerVisibility(writes, functions);
 };
 
 export default discoverOwnerFieldWrites;

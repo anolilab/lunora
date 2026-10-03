@@ -2,7 +2,7 @@ import type { Project } from "ts-morph";
 
 import type { FunctionIR, StorageKeyAccessIR } from "../ir";
 import { discoverArgumentDerivedAccesses } from "./argument-derived-accesses";
-import { callerVisibilityOf } from "./attribution";
+import { withCallerVisibility } from "./attribution";
 
 /**
  * The `ctx.storage.<bucket>.<method>(...)` bucket methods whose first argument is a
@@ -56,9 +56,6 @@ const KEY_TAKING_METHODS = new Set<string>([
  * procedure that forwards raw `args` into one is still the real vector.
  */
 const discoverStorageKeyAccesses = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR> = []): StorageKeyAccessIR[] => {
-    // Keyed on file + export because two modules may export the same name.
-    const visibilityByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.visibility]));
-
     const accesses = discoverArgumentDerivedAccesses(project, lunoraDirectory, {
         argIndex: 0,
         matchReceiver: (receiver) => receiver === "ctx.storage" || receiver.startsWith("ctx.storage."),
@@ -66,11 +63,7 @@ const discoverStorageKeyAccesses = (project: Project, lunoraDirectory: string, f
         requireUnmodifiedReach: true,
     });
 
-    return accesses.map((access) => {
-        const visibility = callerVisibilityOf(access.scope, (exportName) => visibilityByKey.get(`${access.file}:${exportName}`));
-
-        return visibility === undefined ? access : { ...access, visibility };
-    });
+    return withCallerVisibility(accesses, functions);
 };
 
 export default discoverStorageKeyAccesses;

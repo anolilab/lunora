@@ -10,7 +10,7 @@ import { Node } from "ts-morph";
 
 import type { HandlerSiteIR } from "../ir";
 import { lunoraRelativePath, unwrapExpression } from "./ast";
-import { exportedNameOf } from "./attribution";
+import { exportedNameOf, referencedSymbolOf } from "./attribution";
 
 /** A `handler:` reference resolved to the function it names. */
 interface HandlerReference {
@@ -49,8 +49,7 @@ const resolveHandlerReference = (property: ObjectLiteralElementLike | undefined,
         return undefined;
     }
 
-    const parent = reference.getParent();
-    const symbol = Node.isShorthandPropertyAssignment(parent) ? parent.getValueSymbol() : reference.getSymbol();
+    const symbol = referencedSymbolOf(reference);
     const target = symbol?.getAliasedSymbol() ?? symbol;
 
     for (const declaration of target?.getDeclarations() ?? []) {

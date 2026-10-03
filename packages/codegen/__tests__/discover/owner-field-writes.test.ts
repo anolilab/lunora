@@ -52,6 +52,41 @@ describe("discoverOwnerFieldWrites", () => {
         expect(found[0]).toMatchObject({ field: "userId", ownerScoped: true });
     });
 
+    // Inside a helper `args` is the HELPER's parameter: the mutator can fill it
+    // from anything, and `applyOwnerScope` only verified the mutator's own
+    // `args.userId`. The act-as-any-user write must stay reported.
+    it("never marks a write inside a helper owner-scoped, even when the mutator forwards another arg", () => {
+        expect.assertions(1);
+
+        write(
+            "mutators.ts",
+            `async function persist(ctx, args) { await ctx.db.insert("posts", { userId: args.userId }); }
+export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await persist(ctx, { userId: args.targetUserId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+
+        expect(discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory))).toStrictEqual([
+            { field: "userId", file: "mutators", line: 1, method: "insert", scope: { callers: ["createPost"], kind: "helper", name: "persist" } },
+        ]);
+    });
+
+    it("still reports a helper's write when every caller forwards its own verified owner arg", () => {
+        expect.assertions(1);
+
+        write(
+            "mutators.ts",
+            `async function persist(ctx, args) { await ctx.db.insert("posts", { userId: args.userId }); }
+export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await persist(ctx, { userId: args.userId }); } });`,
+        );
+
+        const lunoraDirectory = join(workdir, "lunora");
+        const [found] = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+
+        // Conservative: proving the helper's `args.userId` is the verified one needs data flow.
+        expect(found?.ownerScoped).toBeUndefined();
+    });
+
     // `applyOwnerScope` overwrites exactly `args[owner]` with the verified
     // identity, so ONLY that argument is laundered. Matching on the column name
     // alone would suppress a genuine act-as-any-user IDOR.

@@ -1,9 +1,9 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import { Node } from "ts-morph";
 
 import { isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough } from "../argument-taint";
 import type { CallSiteScope } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 
 /**
@@ -56,21 +56,6 @@ const accessInCall = (call: CallExpression, relativePath: string, config: Argume
     }
 
     return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber(), method };
-};
-
-/** Arg-derived, unscoped sink accesses matching `config` in one source file. */
-const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, config: ArgumentDerivedAccessConfig): ArgumentDerivedAccessIR[] => {
-    const found: ArgumentDerivedAccessIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const access = accessInCall(call, relativePath, config);
-
-        if (access) {
-            found.push(access);
-        }
-    }
-
-    return found;
 };
 
 /**
@@ -131,14 +116,5 @@ export interface ArgumentDerivedAccessConfig {
  * whose callee is not a property access don't fit this shape and keep their own
  * hand-written feeder.
  */
-export const discoverArgumentDerivedAccesses = (project: Project, lunoraDirectory: string, config: ArgumentDerivedAccessConfig): ArgumentDerivedAccessIR[] => {
-    const accesses: ArgumentDerivedAccessIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        accesses.push(...accessesInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath), config));
-    }
-
-    return accesses;
-};
+export const discoverArgumentDerivedAccesses = (project: Project, lunoraDirectory: string, config: ArgumentDerivedAccessConfig): ArgumentDerivedAccessIR[] =>
+    collectCallRows(project, lunoraDirectory, (call, file) => accessInCall(call, file, config));

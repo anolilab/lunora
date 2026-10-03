@@ -112,10 +112,11 @@ const edgeRecord = (site: TsNode, file: string, edge: CallSiteEdge | undefined):
  * function call (`ctx.run*`), scheduled dispatch (`ctx.scheduler.runAfter/runAt`),
  * enqueue (`ctx.queues.<q>.send`), topic publish (`ctx.topics.<t>.publish`) and
  * service use (`ctx.services.<s>.<member>`; a destructured `ctx.services` is not seen) in
- * `lunora/`, one record per site with its `CallSiteScope`. Purely syntactic
- * — no type checker — so a reference held in a variable is recorded with a
- * `reason` instead of a `target`; the manifest builder reports it, and a site no
- * export reaches, rather than guessing.
+ * `lunora/`, one record per site with its `CallSiteScope`. A target is read off
+ * the reference's syntax, not resolved through the type checker (the scope's
+ * helper attribution does use it), so a reference held in a variable is recorded
+ * with a `reason` instead of a `target`; the manifest builder reports it, and a
+ * site no export reaches, rather than guessing.
  */
 const discoverCallEdges = (project: Project, lunoraDirectory: string): CallEdgeIR[] => [
     ...collectCallRows(project, lunoraDirectory, (call, file) => edgeRecord(call, file, edgeOf(call))),

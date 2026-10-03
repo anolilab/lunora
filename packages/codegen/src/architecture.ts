@@ -7,7 +7,6 @@
  */
 import type { ArchitectureEdge, ArchitectureEdgeKind, ArchitectureManifest, ArchitectureNode, UnresolvedEdge } from "../../../shared/architecture-manifest";
 import { moduleOf } from "../../../shared/architecture-manifest";
-import { exportedCallersOf } from "./discover/attribution";
 import { QUEUES_FILENAME } from "./discover/queues";
 import { WORKFLOWS_FILENAME } from "./discover/workflows";
 import { GENERATED_HEADER } from "./emit";
@@ -118,24 +117,32 @@ const callSites = (input: ArchitectureInput): CallSite[] => [
 ];
 
 /** Why a site no export reaches cannot be drawn. */
-const UNATTRIBUTED_REASON: Readonly<Record<Exclude<CallSiteScope["kind"], "export">, string>> = {
-    helper: "inside a non-exported helper",
-    module: "at module scope",
+const unattributedReason = (scope: Extract<CallSiteScope, { kind: "helper" }>): string =>
+    scope.untracked === true ? "inside a helper only code outside any export calls" : "inside a non-exported helper";
+
+/** One call site as a pending edge per exported caller — or one unattributed edge when no export reaches it. */
+const pendingEdgesOf = (site: CallSite): PendingEdge[] => {
+    const { scope } = site;
+
+    switch (scope.kind) {
+        case "export": {
+            return [{ ...site, exportName: scope.name }];
+        }
+        case "helper": {
+            return scope.callers.length === 0
+                ? [{ ...site, unattributed: unattributedReason(scope) }]
+                : scope.callers.map((exportName) => {
+                      return { ...site, exportName };
+                  });
+        }
+        default: {
+            return [{ ...site, unattributed: "at module scope" }];
+        }
+    }
 };
 
-/** Every call site as one pending edge per exported caller — or one unattributed edge when no export reaches it. */
-const callSiteEdges = (input: ArchitectureInput): PendingEdge[] =>
-    callSites(input).flatMap(({ scope, ...site }): PendingEdge[] => {
-        const callers = exportedCallersOf(scope);
-
-        if (callers.length === 0) {
-            return [{ ...site, unattributed: UNATTRIBUTED_REASON[scope.kind === "export" ? "module" : scope.kind] }];
-        }
-
-        return callers.map((exportName) => {
-            return { ...site, exportName };
-        });
-    });
+/** Every call site, fanned out over its callers. */
+const callSiteEdges = (input: ArchitectureInput): PendingEdge[] => callSites(input).flatMap((site) => pendingEdgesOf(site));
 
 /** Subscription and cron-target edges, which come from declarations rather than call sites. */
 const declarationEdges = (input: ArchitectureInput): PendingEdge[] => [

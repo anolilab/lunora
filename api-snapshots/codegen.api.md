@@ -2128,16 +2128,7 @@ const CAPABILITY_ROWS: readonly [
 ### `CallSiteScope` (type)
 
 ```ts
-type CallSiteScope = {
-    callers: ReadonlyArray<string>;
-    kind: "helper";
-    name: string;
-} | {
-    kind: "export";
-    name: string;
-} | {
-    kind: "module";
-};
+type CallSiteScope = AdvisorCallSiteScope;
 ```
 
 ### `ColumnMetaIR` (interface)

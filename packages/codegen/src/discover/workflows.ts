@@ -8,9 +8,8 @@ import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, P
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
-import type { WorkflowIR, WorkflowStepIR } from "../ir";
+import type { HandlerSiteIR, WorkflowIR, WorkflowStepIR } from "../ir";
 import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
-import type { HandlerReference } from "./handler-reference";
 import { resolveHandlerReference } from "./handler-reference";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
@@ -264,11 +263,18 @@ const resolveWorkflowConfig = (argument: Node | undefined): ObjectLiteralExpress
     return undefined;
 };
 
+/** A workflow's handler as discovery reads it: the function, and — for one passed by reference — where it is declared. */
+interface WorkflowHandler {
+    body: Node | undefined;
+    file?: string;
+    site?: HandlerSiteIR;
+}
+
 /**
  * The `handler` property's function: the inline one, or — for a reference — the
  * function it resolves to (see `resolveHandlerReference`).
  */
-const handlerOfWorkflow = (argument: ObjectLiteralExpression, lunoraDirectory: string): Partial<HandlerReference> => {
+const handlerOfWorkflow = (argument: ObjectLiteralExpression, lunoraDirectory: string): WorkflowHandler => {
     const property = findObjectProperty(argument, "handler");
     const resolved = resolveHandlerReference(property, lunoraDirectory);
 

@@ -9,27 +9,38 @@
  * cached on the compiler `SourceFile`, so the collectors share it and a file
  * re-parsed in watch mode (a new compiler node) is re-indexed.
  */
-import type { FunctionDeclaration, Identifier, Node as TsNode, SourceFile, VariableDeclaration } from "ts-morph";
+import { callSiteCallers } from "@lunora/advisor";
+import type { FunctionDeclaration, Identifier, Node as TsNode, SourceFile, Symbol as TsSymbol, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind, ts } from "ts-morph";
 
-import type { CallSiteScope } from "../ir";
+import type { CallSiteScope, FunctionIR } from "../ir";
 
 type TopLevelDeclaration = FunctionDeclaration | VariableDeclaration;
 
-/** What a node lexically sits in: an `export default` expression, a top-level declaration, or neither. */
-type LexicalContainer = { declaration: TopLevelDeclaration; kind: "declaration" } | { kind: "default" } | { kind: "module" };
+/**
+ * What code lexically belongs to: an export (by its exported name), a same-file
+ * helper, or something attribution cannot follow — module scope (an inline
+ * `http.route({ handler })`), a class body, a destructured declaration.
+ */
+type Owner = { declaration: TopLevelDeclaration; kind: "helper" } | { kind: "export"; name: string } | { kind: "untracked" };
+
+/** How a helper is reached: the exports calling it, and whether untracked code also does. */
+interface HelperReach {
+    callers: ReadonlyArray<string>;
+    untracked: boolean;
+}
 
 /** The per-file attribution index, keyed by compiler nodes so it never outlives a re-parse. */
 interface FileAttribution {
     /** Exported top-level declaration → the name it is exported under. */
     exportNames: ReadonlyMap<ts.Node, string>;
-    /** Non-exported top-level declaration (a helper) → the exports reaching it, sorted. */
-    helperCallers: ReadonlyMap<ts.Node, ReadonlyArray<string>>;
+    /** Non-exported top-level declaration (a helper) → how it is reached. */
+    helperReach: ReadonlyMap<ts.Node, HelperReach>;
 }
 
 const INDEX_CACHE = new WeakMap<ts.SourceFile, FileAttribution>();
 
-/** The top-level `function` / `const` an identifier-named declaration statement holds. */
+/** The top-level `function` / identifier-named `const` declarations of a file. */
 const topLevelDeclarations = (sourceFile: SourceFile): TopLevelDeclaration[] =>
     sourceFile.getStatements().flatMap((statement): TopLevelDeclaration[] => {
         if (Node.isFunctionDeclaration(statement)) {
@@ -38,29 +49,6 @@ const topLevelDeclarations = (sourceFile: SourceFile): TopLevelDeclaration[] =>
 
         return Node.isVariableStatement(statement) ? statement.getDeclarations().filter((declaration) => Node.isIdentifier(declaration.getNameNode())) : [];
     });
-
-/**
- * The innermost top-level container of `node`: the top-level declaration it sits
- * in, the `export default <expression>` it sits in, or module scope.
- */
-const lexicalContainerOf = (node: TsNode): LexicalContainer => {
-    for (const ancestor of node.getAncestors()) {
-        if (Node.isFunctionDeclaration(ancestor) && Node.isSourceFile(ancestor.getParent())) {
-            return { declaration: ancestor, kind: "declaration" };
-        }
-
-        if (Node.isVariableDeclaration(ancestor) && Node.isSourceFile(ancestor.getVariableStatement()?.getParent())) {
-            return Node.isIdentifier(ancestor.getNameNode()) ? { declaration: ancestor, kind: "declaration" } : { kind: "module" };
-        }
-
-        // `export default query(...)` registers as `<namespace>:default`.
-        if (Node.isExportAssignment(ancestor) && !ancestor.isExportEquals()) {
-            return { kind: "default" };
-        }
-    }
-
-    return { kind: "module" };
-};
 
 /** The name an `export`-keyword declaration exports itself under, or `undefined` without the keyword. */
 const keywordExportName = (declaration: TopLevelDeclaration): string | undefined => {
@@ -123,37 +111,66 @@ const exportNamesOf = (sourceFile: SourceFile, declarations: ReadonlyArray<TopLe
 };
 
 /**
- * A reference that only names the helper's TYPE — `typeof helper`,
- * `Parameters<typeof helper>`, an annotation, a heritage clause — not a use of
- * its value, so it is not a call. A value passed on (`run(helper)`, `{ helper }`)
- * is kept: a helper handed off is plausibly invoked.
+ * The ONE mapping from where code sits to who owns it. Walks to the top-level
+ * container: an `export default <expression>` is the `default` export; a
+ * top-level `function` / identifier-named `const` is its export or a helper;
+ * anything else — module scope, a class, a destructured declaration — is
+ * untracked.
  */
-const isTypePosition = (identifier: Identifier): boolean => identifier.getAncestors().some((ancestor) => ts.isTypeNode(ancestor.compilerNode));
+const ownerOf = (node: TsNode, exportNames: ReadonlyMap<ts.Node, string>): Owner => {
+    for (const ancestor of node.getAncestors()) {
+        if (Node.isExportAssignment(ancestor) && !ancestor.isExportEquals()) {
+            return { kind: "export", name: "default" };
+        }
 
-/** The symbol an identifier refers to — a shorthand property (`{ helper }`) names its value, not the property. */
-const referencedSymbolOf = (identifier: Identifier): ts.Symbol | undefined => {
-    const parent = identifier.getParent();
+        const isTopLevel =
+            (Node.isFunctionDeclaration(ancestor) && Node.isSourceFile(ancestor.getParent())) ||
+            (Node.isVariableDeclaration(ancestor) &&
+                Node.isSourceFile(ancestor.getVariableStatement()?.getParent()) &&
+                Node.isIdentifier(ancestor.getNameNode()));
 
-    return (Node.isShorthandPropertyAssignment(parent) && parent.getNameNode() === identifier ? parent.getValueSymbol() : identifier.getSymbol())
-        ?.compilerSymbol;
+        if (isTopLevel && (Node.isFunctionDeclaration(ancestor) || Node.isVariableDeclaration(ancestor))) {
+            const name = exportNames.get(ancestor.compilerNode);
+
+            return name === undefined ? { declaration: ancestor, kind: "helper" } : { kind: "export", name };
+        }
+    }
+
+    return { kind: "untracked" };
 };
 
-/** Where a helper is referenced from: an export (by name), another helper, or module scope (ignored). */
-type ReferenceSource = { helper: ts.Node; kind: "helper" } | { kind: "export"; name: string };
+/**
+ * A reference that only names the helper's TYPE — `typeof helper`,
+ * `Parameters<typeof helper>`, an annotation, an `implements` / interface
+ * heritage clause — not a use of its value, so it is not a call. A value passed
+ * on (`run(helper)`, `{ helper }`) is kept, and so is a class's `extends`
+ * expression (`extends mixin(helper)`), which runs.
+ */
+const isTypePosition = (identifier: Identifier): boolean => {
+    for (const ancestor of identifier.getAncestors()) {
+        if (Node.isExpressionWithTypeArguments(ancestor)) {
+            const clause = ancestor.getParent();
+            const isClassExtends =
+                Node.isHeritageClause(clause) &&
+                clause.getToken() === SyntaxKind.ExtendsKeyword &&
+                (Node.isClassDeclaration(clause.getParent()) || Node.isClassExpression(clause.getParent()));
 
-/** What a reference made from `container` counts as: an export's, a helper's, or — at module scope — nothing. */
-const referenceSourceOf = (container: LexicalContainer, exportNames: ReadonlyMap<ts.Node, string>): ReferenceSource | undefined => {
-    if (container.kind === "default") {
-        return { kind: "export", name: "default" };
+            return !isClassExtends;
+        }
+
+        if (ts.isTypeNode(ancestor.compilerNode)) {
+            return true;
+        }
     }
 
-    if (container.kind === "module") {
-        return undefined;
-    }
+    return false;
+};
 
-    const exportName = exportNames.get(container.declaration.compilerNode);
+/** The symbol an identifier refers to — a shorthand property (`{ helper }`) names its value, not the property. */
+const referencedSymbolOf = (identifier: Identifier): TsSymbol | undefined => {
+    const parent = identifier.getParent();
 
-    return exportName === undefined ? { helper: container.declaration.compilerNode, kind: "helper" } : { kind: "export", name: exportName };
+    return Node.isShorthandPropertyAssignment(parent) && parent.getNameNode() === identifier ? parent.getValueSymbol() : identifier.getSymbol();
 };
 
 /** The symbols and spellings of the helpers' own names, for the one identifier pass. */
@@ -177,35 +194,28 @@ const helperNamesOf = (helpers: ReadonlyArray<TopLevelDeclaration>): { bySymbol:
 };
 
 /**
- * Every value reference to each helper, as the export or helper it is made from —
- * ONE identifier pass over the file, with the type checker consulted only for
- * identifiers spelled like a helper.
+ * Every value reference to each helper, as the {@link Owner} of the code making
+ * it — ONE identifier pass over the file, with the type checker consulted only
+ * for identifiers spelled like a helper.
  */
 const helperReferencesOf = (
     sourceFile: SourceFile,
     helpers: ReadonlyArray<TopLevelDeclaration>,
     exportNames: ReadonlyMap<ts.Node, string>,
-): Map<ts.Node, ReferenceSource[]> => {
+): Map<ts.Node, Owner[]> => {
     const { bySymbol, nameNodes, spellings } = helperNamesOf(helpers);
-    const references = new Map<ts.Node, ReferenceSource[]>();
+    const references = new Map<ts.Node, Owner[]>();
 
     for (const identifier of sourceFile.getDescendantsOfKind(SyntaxKind.Identifier)) {
         if (!spellings.has(identifier.getText()) || nameNodes.has(identifier.compilerNode) || isTypePosition(identifier)) {
             continue;
         }
 
-        const symbol = referencedSymbolOf(identifier);
+        const symbol = referencedSymbolOf(identifier)?.compilerSymbol;
         const helper = symbol === undefined ? undefined : bySymbol.get(symbol);
 
-        if (helper === undefined) {
-            continue;
-        }
-
-        const source = referenceSourceOf(lexicalContainerOf(identifier), exportNames);
-
-        // A module-scope reference (`helper(boot)` at the top level) reaches no export.
-        if (source !== undefined) {
-            references.set(helper, [...(references.get(helper) ?? []), source]);
+        if (helper !== undefined) {
+            references.set(helper, [...(references.get(helper) ?? []), ownerOf(identifier, exportNames)]);
         }
     }
 
@@ -213,32 +223,50 @@ const helperReferencesOf = (
 };
 
 /**
- * Helper → the exports reaching it: the fixed point of "an export referencing a
- * helper calls it; a helper referencing a helper passes its callers on". Cycles
- * converge because the sets only grow.
+ * Helper → how it is reached: the fixed point of "an export referencing a helper
+ * calls it; untracked code referencing it makes it untracked; a helper
+ * referencing a helper passes its callers (and untracked-ness) on". Cycles
+ * converge because both only grow.
  */
-const helperCallersOf = (helpers: ReadonlyArray<TopLevelDeclaration>, references: ReadonlyMap<ts.Node, ReferenceSource[]>): Map<ts.Node, string[]> => {
+const helperReachOf = (helpers: ReadonlyArray<TopLevelDeclaration>, references: ReadonlyMap<ts.Node, Owner[]>): Map<ts.Node, HelperReach> => {
     const callers = new Map<ts.Node, Set<string>>(helpers.map((helper) => [helper.compilerNode, new Set<string>()]));
-    // The names one reference passes on: its export's, or everything its helper has reached so far.
-    const namesFrom = (source: ReferenceSource): Iterable<string> => (source.kind === "export" ? [source.name] : (callers.get(source.helper) ?? []));
+    const untracked = new Set<ts.Node>();
+    const sizeOf = (helper: ts.Node): number => (callers.get(helper)?.size ?? 0) + (untracked.has(helper) ? 1 : 0);
+    // Fold one reference into `helper`'s reach; true when that grew it.
+    const absorb = (helper: ts.Node, owner: Owner): boolean => {
+        const before = sizeOf(helper);
+        const reached = callers.get(helper);
+        const inherited = owner.kind === "helper" ? owner.declaration.compilerNode : undefined;
+
+        if (owner.kind === "export") {
+            reached?.add(owner.name);
+        }
+
+        for (const name of inherited === undefined ? [] : (callers.get(inherited) ?? [])) {
+            reached?.add(name);
+        }
+
+        if (owner.kind === "untracked" || (inherited !== undefined && untracked.has(inherited))) {
+            untracked.add(helper);
+        }
+
+        return sizeOf(helper) !== before;
+    };
     let changed = true;
 
     while (changed) {
         changed = false;
 
-        for (const [helper, sources] of references) {
-            const reached = callers.get(helper) ?? new Set<string>();
-            const before = reached.size;
-
-            for (const name of sources.flatMap((source) => [...namesFrom(source)])) {
-                reached.add(name);
+        for (const [helper, owners] of references) {
+            for (const owner of owners) {
+                changed = absorb(helper, owner) || changed;
             }
-
-            changed ||= reached.size !== before;
         }
     }
 
-    return new Map([...callers].map(([helper, names]) => [helper, [...names].toSorted((a, b) => a.localeCompare(b))]));
+    return new Map(
+        [...callers].map(([helper, names]) => [helper, { callers: [...names].toSorted((a, b) => a.localeCompare(b)), untracked: untracked.has(helper) }]),
+    );
 };
 
 /** Build (or reuse) the attribution index of one parsed file. */
@@ -254,7 +282,7 @@ const attributionOf = (sourceFile: SourceFile): FileAttribution => {
     const helpers = declarations.filter((declaration) => !exportNames.has(declaration.compilerNode));
     const index: FileAttribution = {
         exportNames,
-        helperCallers: helpers.length === 0 ? new Map() : helperCallersOf(helpers, helperReferencesOf(sourceFile, helpers, exportNames)),
+        helperReach: helpers.length === 0 ? new Map() : helperReachOf(helpers, helperReferencesOf(sourceFile, helpers, exportNames)),
     };
 
     INDEX_CACHE.set(sourceFile.compilerNode, index);
@@ -264,66 +292,71 @@ const attributionOf = (sourceFile: SourceFile): FileAttribution => {
 
 /**
  * The {@link CallSiteScope} of a call site: the export it sits in, the same-file
- * helper it sits in together with the exports reaching that helper, or module
- * scope.
+ * helper it sits in together with how that helper is reached, or module scope
+ * (which covers every container attribution cannot follow).
  */
 const callSiteScopeOf = (node: TsNode): CallSiteScope => {
-    const container = lexicalContainerOf(node);
-
-    if (container.kind === "default") {
-        return { kind: "export", name: "default" };
-    }
-
-    if (container.kind === "module") {
-        return { kind: "module" };
-    }
-
     const index = attributionOf(node.getSourceFile());
-    const key = container.declaration.compilerNode;
-    const exportName = index.exportNames.get(key);
+    const owner = ownerOf(node, index.exportNames);
 
-    if (exportName !== undefined) {
-        return { kind: "export", name: exportName };
-    }
-
-    return { callers: index.helperCallers.get(key) ?? [], kind: "helper", name: container.declaration.getName() ?? "" };
-};
-
-/** The exports a site runs on behalf of: its own export, its helper's callers, or none. */
-const exportedCallersOf = (scope: CallSiteScope): ReadonlyArray<string> => {
-    switch (scope.kind) {
+    switch (owner.kind) {
         case "export": {
-            return [scope.name];
+            return { kind: "export", name: owner.name };
         }
         case "helper": {
-            return scope.callers;
+            const name = owner.declaration.getName();
+            const reach = index.helperReach.get(owner.declaration.compilerNode);
+
+            // A helper is never an unnamed `function` (that only parses as `export default`).
+            if (name === undefined || reach === undefined) {
+                throw new Error(`call-site attribution: helper at ${owner.declaration.getSourceFile().getFilePath()} is not indexed`);
+            }
+
+            return { callers: reach.callers, kind: "helper", name, ...(reach.untracked ? { untracked: true as const } : {}) };
         }
         default: {
-            return [];
+            return { kind: "module" };
         }
     }
 };
+
+type Visibility = FunctionIR["visibility"];
 
 /**
  * The visibility a site is reachable at through its callers, failing toward
- * reporting: `public` when any caller is public, `undefined` when any caller is
- * not a registered function (or there are none), else `internal`.
+ * reporting: `public` when any caller is public; `undefined` — report as if
+ * public — when any caller is not a registered function, when untracked code
+ * reaches the helper, or when nothing does; else `internal`.
  */
-const callerVisibilityOf = (
-    scope: CallSiteScope,
-    visibilityOf: (exportName: string) => "internal" | "public" | undefined,
-): "internal" | "public" | undefined => {
-    const visibilities = exportedCallersOf(scope).map((exportName) => visibilityOf(exportName));
+const callerVisibilityOf = (scope: CallSiteScope, visibilityOf: (exportName: string) => Visibility | undefined): Visibility | undefined => {
+    const visibilities = callSiteCallers(scope).map((exportName) => visibilityOf(exportName));
 
     if (visibilities.includes("public")) {
         return "public";
     }
 
-    return visibilities.length === 0 || visibilities.includes(undefined) ? undefined : "internal";
+    const incomplete = visibilities.length === 0 || visibilities.includes(undefined) || (scope.kind === "helper" && scope.untracked === true);
+
+    return incomplete ? undefined : "internal";
+};
+
+/** Stamp each row with its {@link callerVisibilityOf} visibility, read off the registered functions of its file. */
+const withCallerVisibility = <Row extends { file: string; scope: CallSiteScope }>(
+    rows: ReadonlyArray<Row>,
+    functions: ReadonlyArray<Pick<FunctionIR, "exportName" | "filePath" | "visibility">>,
+): (Row & { visibility?: Visibility })[] => {
+    // Keyed on file + export because two modules may export the same name.
+    const visibilityByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.visibility]));
+
+    return rows.map((row) => {
+        const visibility = callerVisibilityOf(row.scope, (exportName) => visibilityByKey.get(`${row.file}:${exportName}`));
+
+        return visibility === undefined ? row : { ...row, visibility };
+    });
 };
 
 /** The name a top-level declaration is exported under (`export { run as start }` → `start`), or `undefined`. */
 const exportedNameOf = (declaration: TopLevelDeclaration): string | undefined =>
     attributionOf(declaration.getSourceFile()).exportNames.get(declaration.compilerNode);
 
-export { callerVisibilityOf, callSiteScopeOf, exportedCallersOf, exportedNameOf };
+export { callSiteScopeOf, exportedNameOf, referencedSymbolOf, withCallerVisibility };

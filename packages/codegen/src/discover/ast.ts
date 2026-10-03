@@ -265,18 +265,6 @@ const collectNodeRowsFrom = <Row extends object, Kind extends SyntaxKind>(
     return rows;
 };
 
-/**
- * The {@link collectNodeRowsFrom} walk over every `CallExpression`.
- *
- * The file set is the caller's choice: {@link collectCallRows} passes the
- * function file set, {@link collectSecurityCallRows} the wider security one.
- */
-const collectRowsFrom = <Row extends object>(
-    project: Project,
-    files: ReadonlyArray<ScannedSourceFile>,
-    rowOf: (call: CallExpression, relativePath: string) => RowsOf<Row>,
-): Row[] => collectNodeRowsFrom(project, files, SyntaxKind.CallExpression, rowOf);
-
 /** The lunora source files ({@link listLunoraSourceFiles}) with their lunora-relative display paths. */
 const lunoraScanFiles = (lunoraDirectory: string): ScannedSourceFile[] =>
     listLunoraSourceFiles(lunoraDirectory).map((filePath) => {
@@ -284,23 +272,23 @@ const lunoraScanFiles = (lunoraDirectory: string): ScannedSourceFile[] =>
     });
 
 /**
- * Shared driver for the per-call-site feeders: walk every lunora source file
- * (via {@link listLunoraSourceFiles}) and map every `CallExpression` descendant
- * through `rowOf` with the file's lunora-relative path.
+ * Shared driver for the per-site feeders: walk every lunora source file (via
+ * {@link listLunoraSourceFiles}) and map every descendant of `kind` through
+ * `rowOf` with the file's lunora-relative path.
  */
-const collectCallRows = <Row extends object>(
-    project: Project,
-    lunoraDirectory: string,
-    rowOf: (call: CallExpression, relativePath: string) => RowsOf<Row>,
-): Row[] => collectRowsFrom(project, lunoraScanFiles(lunoraDirectory), rowOf);
-
-/** The {@link collectCallRows} walk over every descendant of `kind` rather than every call. */
 const collectNodeRows = <Row extends object, Kind extends SyntaxKind>(
     project: Project,
     lunoraDirectory: string,
     kind: Kind,
     rowOf: (node: KindToNodeMappings[Kind], relativePath: string) => RowsOf<Row>,
 ): Row[] => collectNodeRowsFrom(project, lunoraScanFiles(lunoraDirectory), kind, rowOf);
+
+/** The {@link collectNodeRows} walk over every `CallExpression` — what most feeders scan. */
+const collectCallRows = <Row extends object>(
+    project: Project,
+    lunoraDirectory: string,
+    rowOf: (call: CallExpression, relativePath: string) => RowsOf<Row>,
+): Row[] => collectNodeRows(project, lunoraDirectory, SyntaxKind.CallExpression, rowOf);
 
 /**
  * The {@link collectCallRows} driver over the *security* file set — `lunora/`
@@ -311,7 +299,7 @@ const collectSecurityCallRows = <Row extends object>(
     project: Project,
     lunoraDirectory: string,
     rowOf: (call: CallExpression, relativePath: string) => RowsOf<Row>,
-): Row[] => collectRowsFrom(project, listSecurityScanFiles(lunoraDirectory), rowOf);
+): Row[] => collectNodeRowsFrom(project, listSecurityScanFiles(lunoraDirectory), SyntaxKind.CallExpression, rowOf);
 
 /**
  * The runtime key a property-name node spells, with the quotes a string-literal

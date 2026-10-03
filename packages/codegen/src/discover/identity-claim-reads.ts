@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import type { Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import type { Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { IdentityClaimReadIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { collectNodeRows, propertyKeyName } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 import { IDENTITY_FILENAME } from "./identity";
@@ -104,27 +104,13 @@ const claimKeyRead = (node: TsNode): string | undefined => {
     return undefined;
 };
 
-/** Every `auth.identity.<key>` / `ctx.auth.identity.<key>` claim read in one source file, tagged with whether the key is in the declared allow-list. */
-const claimReadsInSourceFile = (sourceFile: SourceFile, relativePath: string, declared: Set<string>): IdentityClaimReadIR[] => {
-    const found: IdentityClaimReadIR[] = [];
+/** The claim read one access makes, tagged with whether the key is in the declared allow-list, or `undefined`. */
+const claimReadOf = (node: TsNode, file: string, declared: ReadonlySet<string>): IdentityClaimReadIR | undefined => {
+    const key = claimKeyRead(node);
 
-    for (const node of sourceFile.getDescendants()) {
-        const key = claimKeyRead(node);
-
-        if (key === undefined) {
-            continue;
-        }
-
-        found.push({
-            declared: key === ALWAYS_DECLARED_CLAIM || declared.has(key),
-            scope: callSiteScopeOf(node),
-            file: relativePath,
-            key,
-            line: node.getStartLineNumber(),
-        });
-    }
-
-    return found;
+    return key === undefined
+        ? undefined
+        : { declared: key === ALWAYS_DECLARED_CLAIM || declared.has(key), file, key, line: node.getStartLineNumber(), scope: callSiteScopeOf(node) };
 };
 
 /**
@@ -151,15 +137,11 @@ const discoverIdentityClaimReads = (project: Project, lunoraDirectory: string): 
         return [];
     }
 
-    const rows: IdentityClaimReadIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        rows.push(...claimReadsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath), declared));
-    }
-
-    return rows;
+    // `.identity.<key>` and `.identity["<key>"]` — the two access shapes `claimKeyRead` reads.
+    return [
+        ...collectNodeRows(project, lunoraDirectory, SyntaxKind.PropertyAccessExpression, (node, file) => claimReadOf(node, file, declared)),
+        ...collectNodeRows(project, lunoraDirectory, SyntaxKind.ElementAccessExpression, (node, file) => claimReadOf(node, file, declared)),
+    ];
 };
 
 export default discoverIdentityClaimReads;

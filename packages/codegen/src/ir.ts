@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "@lunora/advisor";
+
 /**
  * AST-observable subset of a column's modifier chain (`.unique()`, `.default()`,
  * …). Function-valued modifiers (`.$defaultFn`/`.$onUpdateFn`) can't be
@@ -855,13 +857,17 @@ export interface ModuleIR {
  * file. `callers` are the exports that reach it through same-file value
  * references (a call, or the helper passed on as a value), transitively and
  * sorted; a type-only reference (`typeof helper`) does not count. Empty for an
- * orphan helper no export reaches.
+ * orphan helper no export reaches. `untracked` is set when code attribution
+ * cannot follow — module scope, a class body, a destructured declaration — also
+ * reaches the helper, so `callers` is incomplete.
  *
- * `module`: at module scope, outside every top-level declaration.
+ * `module`: outside every top-level `function` / `const` — module scope, or a
+ * class body.
  *
- * A site is recorded once; consumers fan out over its callers.
+ * A site is recorded once; consumers fan out over its callers. The advisor's
+ * `AdvisorCallSiteScope` is the same type, so feeder rows pass straight through.
  */
-export type CallSiteScope = { callers: ReadonlyArray<string>; kind: "helper"; name: string } | { kind: "export"; name: string } | { kind: "module" };
+export type CallSiteScope = AdvisorCallSiteScope;
 
 /**
  * Where a queue or workflow `handler:` passed by reference is declared, when it is

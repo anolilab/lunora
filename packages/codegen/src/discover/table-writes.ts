@@ -65,28 +65,25 @@ const tablesOfIdArgument = (argument: TsNode, method: string): string[] => {
     return tablesOfIdType(type, argument);
 };
 
-/**
- * One table write: the method, and the tables it targets — `undefined` when they
- * cannot be read (an untyped id, a non-literal name).
- */
+/** The {@link TableWriteIR.table} an unreadable target (an untyped id, a non-literal name) is recorded under. */
+const UNREADABLE_TABLE = "";
+
+/** One table write: the method, and the tables it targets — `[UNREADABLE_TABLE]` when they cannot be read. */
 interface Write {
     method: string;
-    tables: ReadonlyArray<string> | undefined;
+    tables: ReadonlyArray<string>;
 }
-
-/** The {@link TableWriteIR.table} an unreadable target is recorded under. */
-const UNREADABLE_TABLE = "";
 
 /** The tables a `ctx.db.<method>(first, …)` write names, or `undefined` when `method` is not a write. */
 const databaseWrite = (method: string, first: TsNode | undefined): Write | undefined => {
     if (BY_NAME.has(method)) {
-        return { method, tables: first !== undefined && Node.isStringLiteral(first) ? [first.getLiteralText()] : undefined };
+        return { method, tables: [first !== undefined && Node.isStringLiteral(first) ? first.getLiteralText() : UNREADABLE_TABLE] };
     }
 
     if (BY_ID.has(method) || method === "deleteMany" || method === "patchMany") {
         const tables = first === undefined ? [] : tablesOfIdArgument(first, method);
 
-        return { method, tables: tables.length === 0 ? undefined : tables };
+        return { method, tables: tables.length === 0 ? [UNREADABLE_TABLE] : tables };
     }
 
     return undefined;
@@ -134,7 +131,7 @@ const discoverTableWrites = (project: Project, lunoraDirectory: string): TableWr
         const scope = callSiteScopeOf(call);
         const line = call.getStartLineNumber();
 
-        return (write.tables ?? [UNREADABLE_TABLE]).map((table) => {
+        return write.tables.map((table) => {
             return { file, line, method: write.method, scope, table };
         });
     });
