@@ -107,7 +107,7 @@ describe("issuing a certificate", () => {
         expect(hostnames.size).toBe(1);
     });
 
-    it("never creates a second one: it re-reads the one the row names, or finds the hostname's", async () => {
+    it("re-reads the custom hostname the row names, never creating a second one", async () => {
         const { hostnames, zone } = memoryZone([hostnameRow({ sslStatus: "active" })]);
 
         await expect(issueCertificate(zone, { customHostnameId: "ch_old", hostname: "app.example.com" })).resolves.toStrictEqual({
@@ -115,9 +115,22 @@ describe("issuing a certificate", () => {
             scope: ZONE,
             sslStatus: "active",
         });
-        // The row lost its id (a failed record), but the zone still has the hostname.
-        await expect(issueCertificate(zone, { hostname: "app.example.com" })).resolves.toMatchObject({ customHostnameId: "ch_old" });
         expect(hostnames.size).toBe(1);
+    });
+
+    it("refuses to adopt a custom hostname for the name that this row did not create", async () => {
+        // Another row's — a removed domain's, still queued for release — or one created outside Lunora.
+        const { hostnames, zone } = memoryZone([hostnameRow({ id: "ch_other", sslStatus: "active" })]);
+
+        await expect(issueCertificate(zone, { hostname: "app.example.com" })).rejects.toMatchObject({
+            code: "CONFLICT",
+            message: expect.stringContaining("already holds a certificate for app.example.com that this domain did not request") as unknown,
+        });
+        // A row naming an id the zone holds for ANOTHER hostname is not handed that one either.
+        await expect(issueCertificate(zone, { customHostnameId: "ch_other", hostname: "www.example.com" })).resolves.toMatchObject({
+            customHostnameId: "ch_1",
+        });
+        expect([...hostnames.keys()]).toStrictEqual(["ch_other", "ch_1"]);
     });
 
     it("requests a new one when the hostname the row names was deleted", async () => {

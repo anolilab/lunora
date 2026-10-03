@@ -9,14 +9,18 @@
  * A certificate is only ever requested for a hostname that already VERIFIED
  * (its TXT token and its CNAME — `POST /v1/domains/verify`), so nobody can make
  * the platform request certificates for hostnames they do not control
- * (Zeitwork's DB-gated on-demand TLS). Every call is idempotent: issuing
- * reuses a custom hostname the zone already has, and removing one that is gone
- * is done.
+ * (Zeitwork's DB-gated on-demand TLS). Issuing re-reads the custom hostname
+ * the domain row names and reuses nothing else — a hostname the zone holds for
+ * another row (a removed domain's, still queued for release) is refused, never
+ * adopted, so no two rows ever share a certificate and one release can never
+ * pull it from under the other. Removing one that is gone is done.
  *
  * The zone is the platform's own, so this is the one place the `cloudflare-wfp`
  * driver uses the REST port (the boundary fence in `eslint.config.js`). The
  * cell's `CLOUDFLARE_API_TOKEN` needs Zone → SSL and Certificates:Edit on it.
  */
+import { LunoraError } from "@lunora/server";
+
 import type { CloudflareApi, CustomHostname } from "../../cloudflare/api";
 import type { DomainCertificate } from "../driver";
 
@@ -37,15 +41,29 @@ export const certificateOf = (zone: SaasZone, hostname: CustomHostname): DomainC
 };
 
 /**
- * Request — or find — the certificate of a verified hostname. A row that
- * already names its custom hostname is re-read; one whose hostname vanished
- * (deleted in the dashboard) gets a new one.
+ * Request the certificate of a verified hostname, or re-read the one this row
+ * created. A row that names its custom hostname is re-read; one whose hostname
+ * vanished (deleted in the dashboard) gets a new one — unless the zone already
+ * holds a custom hostname for that name which this row did not create.
+ * @throws {LunoraError} `CONFLICT` when the zone holds another row's (or an outside) custom hostname for it.
  */
 export const issueCertificate = async (zone: SaasZone, domain: { customHostnameId?: string; hostname: string }): Promise<DomainCertificate> => {
     const known = domain.customHostnameId === undefined ? null : await zone.api.getCustomHostname({ id: domain.customHostnameId, zoneId: zone.zoneId });
-    const existing = known ?? (await zone.api.findCustomHostname({ hostname: domain.hostname, zoneId: zone.zoneId }));
 
-    return certificateOf(zone, existing ?? (await zone.api.createCustomHostname({ hostname: domain.hostname, zoneId: zone.zoneId })));
+    if (known?.hostname === domain.hostname) {
+        return certificateOf(zone, known);
+    }
+
+    const other = await zone.api.findCustomHostname({ hostname: domain.hostname, zoneId: zone.zoneId });
+
+    if (other !== null) {
+        throw new LunoraError(
+            "CONFLICT",
+            `the platform already holds a certificate for ${domain.hostname} that this domain did not request — most likely a removed domain's, which the hourly certificate sweep releases; verify again after it ran, and contact support if this persists`,
+        );
+    }
+
+    return certificateOf(zone, await zone.api.createCustomHostname({ hostname: domain.hostname, zoneId: zone.zoneId }));
 };
 
 /** Re-read a certificate's status for the sweep; `null` once its custom hostname is gone. */
