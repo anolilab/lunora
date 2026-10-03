@@ -778,7 +778,7 @@ export interface ShardDOConfig {
     /** \`origin\` is the origin the current \`/rpc\` request reached the worker on — the fallback base for signed object URLs when no \`publicBaseUrl\` is configured. \`undefined\` off the synchronous dispatch path. */
     storage?: (env: Record<string, unknown>, origin?: string) => unknown;${vectorsConfigField}${capabilityWiring.configFields}${flagsFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}${shardRegistryFragments.configField}
 }
-${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "head", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${capabilityWiring.stubs}${paymentStub}
+${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["createMultipartUpload", "delete", "download", "generateUploadUrl", "getMetadata", "getPresignedUrl", "getSignedUrl", "getUrl", "head", "list", "resumeMultipartUpload", "store", "upload"], { sync: ["getUrl", "resumeMultipartUpload"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${capabilityWiring.stubs}${paymentStub}
 ${DISPATCH_RUN_SOURCE}
 
 /**

@@ -34,17 +34,19 @@ The split is enforced by **TypeScript**, not by the runtime: one object is built
 per context and the type is what narrows it, so a `mutation` that casts past its
 type still reaches `delete`. Where you need the narrowing to hold against more
 than a compiler, add [`storageRules(...)`](/docs/packages/server) — it rebuilds
-`ctx.storage` as an allowlist of the gated surface and drops every ungated
-sibling, so nothing can route around a rule.
+`ctx.storage` as an allowlist of the gated surface and refuses the members no
+rule can gate (`getPresignedUrl`, `list`), so nothing can route around a rule.
 
-| Operation                           | Query | Mutation | Action |
-| ----------------------------------- | :---: | :------: | :----: |
-| `download` / `getMetadata` / `head` |   ✓   |    ✓     |   ✓    |
-| `getUrl` / `getSignedUrl`           |   ✓   |    ✓     |   ✓    |
-| `deleteAfterCommit`                 |   —   |    ✓     |   —    |
-| `generateUploadUrl`                 |   —   |    —     |   ✓    |
-| `store`                             |   —   |    —     |   ✓    |
-| `delete`                            |   —   |    —     |   ✓    |
+| Operation                                         | Query | Mutation | Action |
+| ------------------------------------------------- | :---: | :------: | :----: |
+| `download` / `getMetadata` / `head`               |   ✓   |    ✓     |   ✓    |
+| `getUrl` / `getSignedUrl`                         |   ✓   |    ✓     |   ✓    |
+| `deleteAfterCommit`                               |   —   |    ✓     |   —    |
+| `generateUploadUrl` / `getPresignedUrl`           |   —   |    —     |   ✓    |
+| `store` / `upload`                                |   —   |    —     |   ✓    |
+| `createMultipartUpload` / `resumeMultipartUpload` |   —   |    —     |   ✓    |
+| `list`                                            |   —   |    —     |   ✓    |
+| `delete`                                          |   —   |    —     |   ✓    |
 
 In short: serve and inspect files from anywhere; mint an **upload** URL or
 write and delete bytes only from an action. A mutation is not typed to delete
@@ -60,6 +62,7 @@ see [Deleting](#deleting).
 | Signed upload URL (`generateUploadUrl`)                                             | Small files from the browser: an avatar, an attachment            | One `PUT`         | No                      |
 | [Resumable uploads](#resumable-uploads-from-the-browser) (`@lunora/storage/upload`) | Large files from the browser, flaky connections, a progress bar   | One per chunk     | Yes (TUS, chunked REST) |
 | `store`                                                                             | Bytes the server already holds: fetched, generated or transformed | None (in-process) | —                       |
+| [Multipart](#large-objects-through-the-worker)                                      | Streaming a body above `store`'s 16 MiB stream cap into R2        | One per part      | Resumable by `uploadId` |
 | [Presigned S3 URL](#uploading-straight-to-r2)                                       | Large objects that should never pass through the Worker           | One `PUT`         | No                      |
 
 ### Signed upload URL
@@ -105,8 +108,59 @@ credentials (`s3: { accountId, accessKeyId, secretAccessKey, bucket }`) on the
 storage instance; without them the call throws. Because such a URL is a
 self-contained bearer credential that never touches your Worker, it cannot be
 gated by your app's storage rules and is deliberately absent from the
-rule-enforced `ctx.storage` surface. For very large uploads,
-`createMultipartUpload` wraps R2's native multipart API.
+rule-enforced `ctx.storage` surface.
+
+### Large objects through the Worker
+
+`store` buffers a streamed body under its `maxSize` cap, so a stream uploaded
+with `maxSize` is capped at 16 MiB. Above that, stream the body into R2 with a **multipart upload** from
+an action: `createMultipartUpload` wraps R2's native multipart API, and every
+part except the last must be at least 5 MiB and the same size. Persist
+`uploadId` and pick the upload back up in a later request with
+`resumeMultipartUpload(key, uploadId)`.
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const importVideo = action.input({ url: v.string() }).action(async ({ ctx, args: { url } }) => {
+    const upload = await ctx.storage.createMultipartUpload("videos/clip.mp4", { contentType: "video/mp4" });
+
+    try {
+        const parts = [];
+        let partNumber = 1;
+
+        for await (const chunk of fiveMiBChunks(url)) {
+            parts.push(await upload.uploadPart(partNumber++, chunk));
+        }
+
+        return (await upload.complete(parts)).key;
+    } catch (error) {
+        await upload.abort();
+        throw error;
+    }
+});
+```
+
+`fiveMiBChunks` stands for your own code that re-chunks a source into 5 MiB
+pieces. `list(prefix, { cursor, limit })` is action-only too. Use it to sweep
+staging objects an abandoned upload left behind, and paginate on `truncated`:
+
+```ts
+let cursor: string | undefined;
+
+do {
+    const page = await ctx.storage.list("staging/", { cursor, limit: 100 });
+
+    await Promise.all(page.objects.map(async (object) => ctx.storage.delete(object.key)));
+    cursor = page.truncated ? page.cursor : undefined;
+} while (cursor);
+```
+
+Under a procedure guarded by `storageRules(...)`, `createMultipartUpload` and
+`resumeMultipartUpload` are checked against the bucket's `write` rules like
+`store`. `list` enumerates keys no `read` rule has vetted, so it rejects with
+`FORBIDDEN` there; the rule-scoped enumeration is
+`ctx.db.system.query("_storage")`.
 
 ### Resumable uploads from the browser
 

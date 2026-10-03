@@ -94,6 +94,7 @@
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/observability": "1.0.0-alpha.117",
         "@lunora/search-core": "workspace:*",
+        "@lunora/storage": "1.0.0-alpha.99",
         "@opentelemetry/api": "catalog:otel",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
