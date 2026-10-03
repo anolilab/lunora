@@ -71,6 +71,7 @@ type Template =
     | "nuxt"
     | "react-router"
     | "rspack-react"
+    | "saas"
     | "solid-v2"
     | "standalone"
     | "sveltekit"
@@ -1499,6 +1500,10 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
         label: "TanStack Start · React · Rsbuild",
         value: "tanstack-start-react-rspack",
     },
+    // The only template that is an application rather than a starting point: it
+    // scaffolds with the SaaS kit already composed (organizations, projects,
+    // activity, admin), so `lunora dev` opens a running multi-tenant app.
+    { description: "SaaS kit — multi-tenant app on TanStack Start: organizations, projects, activity, admin", label: "SaaS kit", value: "saas" },
     { description: "TanStack Start (Solid)", label: "TanStack Start · Solid", value: "tanstack-start-solid" },
     { description: "Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental)", label: "vinext · App Router", value: "vinext" },
     { description: "Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)", label: "vinext · Pages Router", value: "vinext-pages" },

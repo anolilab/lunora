@@ -35,6 +35,12 @@ const VALID_JS_IDENTIFIER = /^[A-Za-z_$][\w$]*$/u;
 const startMarker = (key: string): string => `// lunora:add:${key}:start`;
 const endMarker = (key: string): string => `// lunora:add:${key}:end`;
 
+/** A managed end marker, for any item key. */
+const END_MARKER = /\/\/ lunora:add:[A-Za-z_$][\w$]*:end/gu;
+
+/** The run of whitespace, statement terminator and end markers directly after the chain. */
+const TRAILING_TERMINATOR_AND_END_MARKERS = /^(?:\s*(?:;|\/\/ lunora:add:[A-Za-z_$][\w$]*:end))*/u;
+
 /**
  * The default module specifier a freshly-added item is imported from. The item
  * ships `lunora/<key>/schema.ts` exporting `<key>` (the plugin object whose
@@ -162,10 +168,26 @@ const insertSchemaExtension = (source: string, key: string): InsertSchemaExtensi
     // here because re-printing a chained expression with trailing line-comments
     // confuses the parser on a second pass; raw splicing keeps the managed markers
     // as plain trivia. A trailing newline after the end-marker keeps the `;` on its own line.
-    const insertAt = outermostChainExpression(defineSchemaCall).getEnd();
-    const chainText = `\n    ${startMarker(key)}\n    .extend(${key}.extension)\n    ${endMarker(key)}\n`;
+    //
+    //
+    // The chain's AST end is the `)` of the previous item's `.extend(...)`, which
+    // sits BEFORE that item's own end marker (trivia is not part of the node), so
+    // splicing there nested every new block inside the last one. When end markers
+    // trail the chain — before the `;`, as this function writes them, or after
+    // it, where Prettier moves the last one — they are re-emitted ahead of the
+    // new block and the `;` goes last.
+    const chainEnd = outermostChainExpression(defineSchemaCall).getEnd();
+    const tail = TRAILING_TERMINATOR_AND_END_MARKERS.exec(sourceFile.getFullText().slice(chainEnd))?.[0] ?? "";
+    const trailingEndMarkers = tail.match(END_MARKER) ?? [];
+    const block = `\n    ${startMarker(key)}\n    .extend(${key}.extension)\n    ${endMarker(key)}`;
 
-    sourceFile.insertText(insertAt, chainText);
+    if (trailingEndMarkers.length === 0) {
+        sourceFile.insertText(chainEnd, `${block}\n`);
+    } else {
+        const closed = trailingEndMarkers.map((marker) => `\n    ${marker}`).join("");
+
+        sourceFile.replaceText([chainEnd, chainEnd + tail.length], `${closed}${block}${tail.includes(";") ? "\n;" : ""}`);
+    }
 
     // Add the managed import for the extension. Insert at the top, bracketed by
     // the same markers so it's clearly owned + removable.
