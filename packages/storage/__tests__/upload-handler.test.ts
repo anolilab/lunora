@@ -8,6 +8,8 @@
  * live progress, survives pause/resume, resumes after a dropped connection, and
  * is gated by RLS (denied uploads are rejected, no admin gating involved).
  */
+import { createHash } from "node:crypto";
+
 import { MemoryStorage } from "@visulima/storage/provider/memory";
 import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -457,6 +459,65 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         // The completing chunk answers 204, like a partial one.
         expect(finished.status).toBe(204);
         expect(Number(finished.headers.get("upload-offset"))).toBe(total);
+    });
+
+    describe("checksummed TUS chunks", () => {
+        const MiB = 1024 * 1024;
+
+        const checksummedPatch = (location: string, length: number, checksum: string, body: BodyInit): Request =>
+            new Request(location, {
+                body,
+                headers: {
+                    "Content-Length": String(length),
+                    "Content-Type": "application/offset+octet-stream",
+                    "Tus-Resumable": "1.0.0",
+                    "Upload-Checksum": `sha256 ${checksum}`,
+                    "Upload-Offset": "0",
+                },
+                method: "PATCH",
+                ...(body instanceof ReadableStream ? { duplex: "half" } : {}),
+            });
+
+        it("refuses a checksummed chunk just over 16 MiB (413) before reading any of it", async () => {
+            expect.hasAssertions();
+
+            const location = await rawTus(handler).create(32 * MiB, "big.bin");
+            const length = 16 * MiB + 1;
+            let pulled = 0;
+            const body = new ReadableStream<Uint8Array>({
+                pull(controller) {
+                    const sent = pulled * MiB;
+
+                    pulled += 1;
+                    controller.enqueue(new Uint8Array(Math.min(MiB, length - sent)));
+
+                    if (sent + MiB >= length) {
+                        controller.close();
+                    }
+                },
+            });
+
+            const response = await handler.fetch(checksummedPatch(location, length, "AAAA", body));
+
+            expect(response.status).toBe(413);
+            await expect(response.json()).resolves.toMatchObject({ error: { message: expect.stringMatching(/at most 16777216 bytes/) } });
+            // The stream may prefetch its first chunk, but nothing past it is read.
+            expect(pulled).toBeLessThanOrEqual(1);
+            await expect(rawTus(handler).head(location)).resolves.toBe(0);
+        });
+
+        it("verifies and stores a checksummed 5 MiB chunk", async () => {
+            expect.hasAssertions();
+
+            const bytes = new Uint8Array(5 * MiB).fill(42);
+            const location = await rawTus(handler).create(bytes.byteLength, "five.bin");
+            const checksum = createHash("sha256").update(bytes).digest("base64");
+
+            const response = await handler.fetch(checksummedPatch(location, bytes.byteLength, checksum, bytes));
+
+            expect(response.status).toBe(204);
+            expect(Number(response.headers.get("upload-offset"))).toBe(bytes.byteLength);
+        });
     });
 
     it("recovers a client-driven upload after the connection drops once", async () => {

@@ -364,7 +364,7 @@ the binding of that same bucket.
 - **Unsupported TUS extensions.** The binding provider does not offer
   `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`. A
   client that sends `Upload-Checksum` anyway has the chunk buffered and verified
-  by the handler, up to 64 MiB per chunk.
+  by the handler, up to 16 MiB per chunk (`413` above it).
 - **Method overrides.** A request carrying `X-HTTP-Method-Override` (or
   `X-HTTP-Method`, `X-Method-Override`) gets a `405`, so no request can pass the
   write gate as one method and run as another.

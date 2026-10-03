@@ -44,6 +44,16 @@ type UploadProtocol = "chunked-rest" | "multipart" | "tus";
  */
 const DEFAULT_MAX_UPLOAD_BYTES: number = 100 * 1024 * 1024;
 
+/**
+ * The largest TUS chunk `@visulima/storage` buffers in memory to verify an
+ * `Upload-Checksum` the storage cannot verify itself (16 MiB, or `maxFileSize`
+ * when that is smaller). Larger checksummed chunks are refused (`413`) before
+ * any byte is read. Upstream's default is 64 MiB, half a Worker isolate's
+ * 128 MB, so a few concurrent checksummed `PATCH`es could exhaust it. 16 MiB
+ * clears the TUS client's 5 MiB default chunk and the 10 MiB chunks apps use.
+ */
+const MAX_CHECKSUM_BUFFER_BYTES: number = 16 * 1024 * 1024;
+
 // Derive the visulima handler option/storage types from the class constructors
 // so we never import `@visulima/storage`'s internal `BaseStorage` / `UploadFile`
 // symbols (they are not part of the fetch-handler entry's public surface).
@@ -463,6 +473,8 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         // (`ctx.storage.delete`), not a `DELETE` any caller the upload gate
         // admits can send to the upload route.
         disableTerminationForFinishedUploads: true,
+        // Read only by the TUS handler; see MAX_CHECKSUM_BUFFER_BYTES.
+        maxChecksumBufferSize: Math.min(MAX_CHECKSUM_BUFFER_BYTES, maxFileSize),
         maxFileSize,
         storage: options.storage,
     };

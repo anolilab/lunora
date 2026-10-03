@@ -409,7 +409,11 @@ remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
   advertised either, but a TUS `PATCH` that sends `Upload-Checksum` anyway is
   verified by `@visulima/storage` before the provider sees it: the handler
   buffers the chunk in memory, so it needs a `Content-Length` (`411`) and may be
-  at most 64 MiB (`413`); a mismatch is a `460`.
+  at most 16 MiB, or `maxFileSize` when that is smaller (`413`, refused before
+  any byte is read); a mismatch is a `460`. `createUploadHandler` sets that cap
+  on every handler: upstream's default of 64 MiB is half a Worker isolate's
+  memory. Send checksummed chunks of 16 MiB or less (the TUS client's default
+  is 5 MiB).
 
 `createR2UploadStorage({ accountId, bucket, accessKeyId, secretAccessKey, endpoint?, partSize?, path? })`
 builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
