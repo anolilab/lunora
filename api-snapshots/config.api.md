@@ -468,6 +468,7 @@ interface DevServerState {
     readyAt?: string;
     startedAt?: string;
     studioUrl?: string;
+    tunnelUrl?: string;
     url: string;
 }
 ```

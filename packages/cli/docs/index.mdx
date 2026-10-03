@@ -38,6 +38,7 @@ lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen wat
             [--inspector-port n]
             [--remote | --local]
             [--no-studio] [--no-codegen]
+            [--tunnel [--allow-mail <email>…]]
 lunora codegen [--api-spec <spec>]      # one-shot codegen
             [--format <pretty|json>]
 lunora run <fn> [--args <json>]         # send a single RPC to a running worker
@@ -459,6 +460,64 @@ belongs to `@cloudflare/vite-plugin`: pass it through the plugin instead —
 `lunora({ cloudflare: { inspectorPort: 9235 } })` — and for the SvelteKit /
 Nuxt worker sidecar pin `dev.inspector_port` in `wrangler.dev.jsonc`, the
 config that sidecar runs. `lunora dev` says so rather than dropping the flag.
+
+#### Sharing the dev server: `--tunnel`
+
+`--tunnel` puts the Worker on a public `https://<random>.trycloudflare.com` URL
+through a [Cloudflare Quick Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)
+— for a webhook provider, a phone on another network, or a colleague. It needs
+[`cloudflared`](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/)
+**2026.9.3 or newer** on your `PATH`; no Cloudflare account is needed on either
+side. The URL is new on every run.
+
+```bash
+lunora dev --tunnel                                     # PUBLIC: anyone with the URL gets in
+lunora dev --tunnel --allow-mail you@example.com        # only you, after a one-time PIN
+lunora dev --tunnel --allow-mail a@example.com --allow-mail b@example.com
+lunora dev --tunnel --allow-mail 'a@example.com,b@example.com'
+lunora dev --tunnel --allow-mail '*@example.com'        # anyone at that domain
+```
+
+Protection is your call, and it is off unless you ask for it. Without
+`--allow-mail` the tunnel is public and `lunora dev` prints a warning saying so.
+With it, each `--allow-mail` value is passed to cloudflared as
+`--allowed-mail` (a single address, a comma-separated list, or `*@domain`, and
+the flag repeats). Values are trimmed and empty ones dropped, so
+`--allow-mail ""` does not count as protection; an entry without an `@` is
+refused. A visitor then proves one of those addresses with a one-time
+PIN sent to the inbox before any request reaches the dev server. Their session
+lasts up to four hours, and access ends for everyone when `lunora dev` stops.
+PIN sign-in needs a browser, so a webhook sender or other non-interactive
+client cannot get through a protected tunnel. Use a public one for that, and
+stop it when you are done.
+
+What gets tunneled:
+
+- **The Worker, never Studio.** On the wrangler flavor Studio has its own port,
+  and that port is not tunneled. On the Vite flavors Studio sits on the same
+  origin at `/__lunora`, and its transport guard refuses forwarded requests,
+  which is every request through a tunnel. Leave `LUNORA_STUDIO_ALLOW_FORWARDED`
+  unset.
+- **On the Vite flavors, the URL Vite actually listens on.** Vite blocks hosts
+  it does not know. If the tunnel URL answers 403 ("Blocked request"), add
+  `server: { allowedHosts: [".trycloudflare.com"] }` to `vite.config`.
+
+The tunnel is best-effort. If `cloudflared` is missing or older than 2026.9.3,
+`lunora dev` prints the install link and runs without a tunnel. It does the
+same if cloudflared exits before assigning a URL. cloudflared runs with
+`--output json`, and the URL is read from its log lines. cloudflared is
+started directly, without a shell wrapper, so stopping dev stops cloudflared
+itself on every platform, Windows included. Quick tunnels are for development: Cloudflare caps each one at
+200 in-flight requests, and they do not support Server-Sent Events.
+
+The URL is also recorded in `.lunora/dev.json` as `tunnelUrl`.
+`lunora dev status` shows it (and `--json` carries it), and
+`lunora dev --background --tunnel` prints it once cloudflared reports it. That
+includes a Vite project, which then runs through the `lunora dev` daemon, so
+there is a process that owns cloudflared.
+
+`lunora doctor` does not check the `cloudflared` version. `lunora dev --tunnel`
+checks it when it starts.
 
 #### Background mode (AI agents)
 

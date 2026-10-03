@@ -102,6 +102,14 @@ interface DevServerState {
     startedAt?: string;
     /** The embedded studio server's URL, when it runs. */
     studioUrl?: string;
+
+    /**
+     * The public quick-tunnel URL `lunora dev --tunnel` was assigned, once
+     * cloudflared reports it — absent without `--tunnel`, before the URL
+     * arrives, and after the tunnel closes. Lets a `--background` start and
+     * `lunora dev status` show a URL that otherwise only reaches the log.
+     */
+    tunnelUrl?: string;
     /** The primary URL serving the worker/app. */
     url: string;
 }
@@ -244,6 +252,7 @@ const readDevServerState = (projectRoot: string): DevServerState | undefined => 
         readyAt: stringField(parsed, "readyAt"),
         startedAt: stringField(parsed, "startedAt"),
         studioUrl: stringField(parsed, "studioUrl"),
+        tunnelUrl: stringField(parsed, "tunnelUrl"),
         url,
     };
 };
@@ -393,8 +402,11 @@ const resolveClaimConflict = (projectRoot: string, state: DevServerState, supers
         return { existing, ok: false };
     }
 
-    // Our own pid already owns the record (restart in-process) — refresh it.
-    return { ok: writeDevServerState(projectRoot, state) !== undefined };
+    // Our own pid already owns the record (restart in-process) — refresh it,
+    // keeping the tunnel URL another process (`lunora dev --tunnel`) wrote into
+    // it: the tunnel outlives the restart, and the refreshed record must not
+    // stop advertising it.
+    return { ok: writeDevServerState(projectRoot, { ...state, tunnelUrl: state.tunnelUrl ?? existing.tunnelUrl }) !== undefined };
 };
 
 const claimDevServerState = (projectRoot: string, state: DevServerState, options?: { supersedePid?: number }): ClaimDevServerStateResult => {

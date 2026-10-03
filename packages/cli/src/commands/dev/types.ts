@@ -6,7 +6,7 @@ import type { ApiSpec } from "../../util/api-spec";
 import type { startCodegenWatch } from "../../util/codegen-watch";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import type { Logger } from "../../util/logger";
-import type { SpawnDescriptor } from "../../util/spawn";
+import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import type { startStudioServer } from "../../util/studio-server";
 import type { DevFlavor } from "./lifecycle";
 
@@ -19,6 +19,33 @@ interface WorkerProcess {
 
 /** Spawns the worker child. Injectable so tests drive the orchestration without a real process. */
 type WorkerSpawner = (descriptor: SpawnDescriptor & { tag: string }, logger: Logger) => WorkerProcess;
+
+/** What a long-lived child runs: the one-shot descriptor's command/args/cwd/env, plus how to spawn it. */
+interface LongLivedDescriptor {
+    args: ReadonlyArray<string>;
+    command: string;
+    cwd?: string;
+    /** A real executable, never a package-manager shim — spawned without a shell, with stdin ignored. */
+    direct?: boolean;
+    env?: Readonly<Record<string, string>>;
+}
+
+/** Spawns a long-lived child and streams its output line by line. Injectable for tests. */
+type LongLivedSpawner = (
+    descriptor: LongLivedDescriptor,
+    onLine: (line: string, kind: "stderr" | "stdout") => void,
+    onError?: (error: Error) => void,
+) => WorkerProcess;
+
+/** A `--tunnel` request, built once from the parsed flags. */
+interface DevTunnelRequest {
+    /** Normalized `--allow-mail` entries, passed to cloudflared as `--allowed-mail`; empty opens a PUBLIC tunnel. */
+    allowMail: ReadonlyArray<string>;
+    /** Injection seam for tests — the one-shot spawner the `cloudflared --version` probe runs through. */
+    spawner?: Spawner;
+    /** Injection seam for tests — starts the long-lived `cloudflared tunnel` child. */
+    startChild?: LongLivedSpawner;
+}
 
 interface DevCommandOptions {
     /** Which API spec(s) the codegen watcher emits. Defaults to codegen's `"openapi"` when omitted. */
@@ -81,6 +108,9 @@ interface DevCommandOptions {
     studio?: boolean;
     /** Deploy target the emitted `ctx.*` surface is tailored to. Resolved by the caller; falls back to `"target"` in `lunora.config.*`, then `"cloudflare"`. */
     target?: string;
+
+    /** `--tunnel`: share the worker's origin through a Cloudflare quick tunnel. Absent means no tunnel. */
+    tunnel?: DevTunnelRequest;
 
     /**
      * Injection seam for tests — defaults to parking until SIGINT.
@@ -183,4 +213,4 @@ interface DevCommandPlan {
     wrangler: SpawnDescriptor & { tag: string };
 }
 
-export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, WorkerSpawner };
+export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, DevTunnelRequest, LongLivedDescriptor, LongLivedSpawner, WorkerProcess, WorkerSpawner };
