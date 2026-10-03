@@ -1079,7 +1079,7 @@ interface StudioI18nProviderProps {
 
 ```ts
 interface StudioProps {
-    readonly analyticsQuery?: AnalyticsPanelProps["runQuery"];
+    readonly analyticsSqlQuery?: AnalyticsPanelProps["runQuery"];
     readonly basePath?: string;
     readonly chrome?: StudioChrome;
     readonly dataEditable?: boolean;
@@ -1285,8 +1285,7 @@ interface AdvisorHealthPanelProps {
 
 ```ts
 interface AnalyticsPanelProps {
-    readonly dataset?: string;
-    readonly runQuery?: (sql: string) => Promise<AnalyticsSqlResult>;
+    readonly runQuery?: (panel: FunctionUsagePanel) => Promise<AnalyticsSqlQueryResult>;
 }
 ```
 
@@ -2450,7 +2449,7 @@ const MESSAGE_IDS: readonly [
     "Latency p50 / p95 per function",
     "No data points yet.",
     "Request volume per function",
-    "Analytics Engine reads need an account-scoped Cloudflare API token, which cannot be shipped to a browser. The host must pass studio.analyticsQuery — a runner that proxies the SQL through your worker — to enable these panels.",
+    "Analytics usage panels read through your worker, never from the browser. Pass studio.analyticsSqlQuery, a runner that calls an admin-only action running functionUsageQuery(panel) through ctx.analyticsSql, to enable these panels.",
     "Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards.",
     "(whole bucket)",
     "Access Rules",

@@ -29,7 +29,7 @@
  * something the app declares in its schema or a declaration file). The
  * gate-bearing keys are:
  *
- * `agents`, `ai`, `aiSearch`, `analytics`, `artifacts`, `browser`, `commitOrderedTables`,
+ * `agents`, `ai`, `aiSearch`, `analytics`, `analyticsSql`, `artifacts`, `browser`, `commitOrderedTables`,
  * `containerEgressPolicy`, `containerRuntimeScheduling`, `containerSandboxTools`, `containers`,
  * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
@@ -70,7 +70,10 @@
  * observe it (`createDroppedTraceNotice` in `@lunora/runtime`).
  *
  * The rest of the telemetry pipeline — `ctx.log`, `ctx.trace`, `ctx.span`,
- * `ctx.metrics`, traced `ctx.fetch`, and W3C trace propagation — deliberately
+ * `ctx.metrics`, traced `ctx.fetch`, automatic `ctx.db` / `ctx.sql` database
+ * instrumentation (a wrapper over the client the target already rates, so it
+ * follows `hyperdrive`'s rating rather than needing its own), and W3C trace
+ * propagation — deliberately
  * has NO key: it is sink callbacks over the `fetch` global, needs no host
  * primitive, and a key every target must rate `native` forever is paperwork, not
  * a control.
@@ -162,6 +165,20 @@ export interface PlatformCapabilities {
         aiSearch?: Capability;
         /** Analytics / observability sinks. */
         analytics?: Capability;
+
+        /**
+         * Read-only SQL over Cloudflare's Analytics SQL API through the Analytics
+         * SQL binding (wrangler `analytics` key) — `ctx.analyticsSql`, on
+         * ActionCtx only.
+         *
+         * Its own key rather than a facet of `analytics`: that one rates the
+         * write-only Analytics Engine sink (`ctx.analytics`, every ctx), a
+         * different binding a host could stand in for independently. No Lunora
+         * host contract carries this one — a second host would have to supply a
+         * `query({ query, params })` look-alike over its own analytics store.
+         * Gate-bearing through `CAPABILITY_TO_FEATURE`.
+         */
+        analyticsSql?: Capability;
         /** Git-backed versioned repos via an Artifacts binding (`ctx.artifacts`). */
         artifacts?: Capability;
 

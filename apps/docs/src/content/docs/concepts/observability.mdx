@@ -570,6 +570,56 @@ normally and a CPU-only span shows a plausible non-zero duration. The same span
 collapses to `0 ms` in production. A timing profile that looks fine locally is
 not evidence that it will hold.
 
+## Database telemetry (`ctx.db` and `ctx.sql`)
+
+With a sink configured, `ctx.db` and the action-only `ctx.sql`
+([Hyperdrive](/docs/packages/hyperdrive)) are instrumented automatically. One
+sink field, `instrumentDatabase`, sets the level for both:
+
+| Level                 | What you get                                                                                       |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| `"summary"` (default) | Aggregate counters on the dispatch's root span. Flat cost, however many queries the handler makes  |
+| `"spans"`             | One CLIENT span per call, OTel `db.*` semantic conventions. Capped at 100 per surface per dispatch |
+| `"off"`               | Nothing; the clients are handed to the handler untouched                                           |
+
+```ts
+export default createWorker({
+    // …schema, functions…
+    observability: { ...otlpSink({ endpoint: env.LUNORA_OTLP_ENDPOINT }), instrumentDatabase: "spans" },
+});
+```
+
+The two surfaces keep **separate tallies**, because they are different cost
+classes — a `ctx.db` call is a local SQLite read inside the Durable Object, a
+`ctx.sql` call is a network round trip to your own Postgres/MySQL. Merging them
+would hide which one a slow request was bound on.
+
+| Surface   | Summary keys                                                                            | Span name            | `db.system.name`                          |
+| --------- | --------------------------------------------------------------------------------------- | -------------------- | ----------------------------------------- |
+| `ctx.db`  | `db.calls`, `db.duration_ms`, `db.errors`, `db.op.<method>`, `db.spans_truncated`       | `db.findMany orders` | `sqlite`                                  |
+| `ctx.sql` | `sql.calls`, `sql.duration_ms`, `sql.errors`, `sql.op.<KEYWORD>`, `sql.spans_truncated` | `sql.SELECT`         | `postgresql` / `mysql` (from the adapter) |
+
+A `ctx.sql` span's `db.operation.name` is the statement's **leading keyword**
+only (`SELECT`, `INSERT`, `UPDATE`, …, or `OTHER`), parsed past leading
+comments and parentheses and nothing further. It also carries
+`db.response.returned_rows`. It never records the statement text or its
+parameters, and sets no `db.collection.name` — finding the table means parsing
+the statement, which is neither cheap nor safe. A failed call sets `error.type`
+(the error class, or the `LunoraError` code); outside development the span's
+error message is that type too, never the driver's message, because an external
+database's errors routinely quote the offending row.
+
+`fuseCloudflareTraces` treats the two surfaces identically: per-call database
+spans go to your sink but are not re-emitted as Cloudflare custom spans (only
+`ctx.trace` spans are), while the summary counters ride the dispatch root span,
+whose attributes are mirrored onto Cloudflare's invocation span.
+
+If you run your own Drizzle instance against Hyperdrive **outside** `ctx.sql`,
+Lunora does not see those queries.
+[`cloudflare-drizzle-tracing`](https://github.com/Cherry/cloudflare-drizzle-tracing)'s
+`instrumentDrizzle()` wraps such an instance in Cloudflare-native spans — note
+it records query text and parameters, which `ctx.sql` deliberately does not.
+
 ## Trace sampling
 
 At real traffic, exporting every trace is mostly paying to store the same

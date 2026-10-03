@@ -206,6 +206,7 @@ const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = 
     ai: "ai",
     aiSearch: "aiSearch",
     analytics: "analytics",
+    analyticsSql: "analyticsSql",
     artifacts: "artifacts",
     browser: "browser",
     container: "containers",

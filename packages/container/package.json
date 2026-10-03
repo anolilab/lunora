@@ -1,6 +1,6 @@
 {
     "name": "@lunora/container",
-    "version": "1.0.0-alpha.67",
+    "version": "1.0.0-alpha.68",
     "description": "Cloudflare Containers for Lunora: defineContainer, generated Container DO classes, and the ctx.containers action surface",
     "keywords": [
         "cloudflare",
@@ -75,7 +75,7 @@
     },
     "dependencies": {
         "@cloudflare/sandbox": "catalog:cloudflare",
-        "@lunora/errors": "1.0.0-alpha.49"
+        "@lunora/errors": "1.0.0-alpha.50"
     },
     "devDependencies": {
         "@cloudflare/containers": "catalog:cloudflare",

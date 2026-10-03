@@ -9,6 +9,7 @@ import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lun
 
 import { anyApi as sharedAnyApi } from "../../../shared/any-api";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
+import type { MutationStorage, ReadOnlyStorage, Storage, StorageMetadata } from "./storage/context";
 
 /** Map of validators describing a function's args record. Alias of `@lunora/values`' shared {@link ValidatorMap}. */
 type ArgsValidator = ValidatorMap;
@@ -1871,214 +1872,6 @@ interface TriggerBuilder<Shape extends Record<string, Validator> = Record<string
     beforeUpdate: (handler: TriggerHandler<TriggerUpdateEvent<Shape>>) => TriggerDefinition;
 }
 
-/**
- * Per-file metadata returned by {@link ReadOnlyStorage.getMetadata}. A clean
- * public mirror of `@lunora/storage`'s `ObjectMetadata` — re-declared here so
- * the ctx surface carries no dependency on the storage package's types. Matches
- * the columns Convex surfaces for `ctx.storage.getMetadata` / `_storage`.
- */
-interface StorageMetadata {
-    /** The object's `Content-Type`, when recorded. */
-    contentType?: string;
-    /** Custom metadata set at upload time, if any. */
-    customMetadata?: Record<string, string>;
-    /** The object's key. */
-    key: string;
-    /** Hex-encoded SHA-256 of the body, when R2 carries a checksum. */
-    sha256?: string;
-    /** Body length in bytes. */
-    size: number;
-    /** When the object was last written (epoch ms), when reported. */
-    uploaded?: number;
-}
-
-/**
- * The body-free object shape returned by {@link ReadOnlyStorage.head} — a clean
- * public mirror of `@lunora/storage`'s head projection, re-declared here for the
- * same reason as {@link StorageMetadata}: the ctx surface carries no dependency
- * on the storage package's types.
- *
- * Richer than {@link StorageMetadata} on purpose. `getMetadata` is the tidy
- * Convex-shaped summary; `head` is what an HTTP layer needs, so it keeps the
- * validator (`etag`) and the base64 digest RFC 9530 `Repr-Digest` requires, and
- * leaves `uploaded` as the `Date` the binding reports rather than epoch ms.
- */
-interface StorageObjectHead {
-    /** Custom metadata set at upload time, if any. */
-    customMetadata?: Record<string, string>;
-
-    /**
-     * R2's unquoted etag (the MD5 hex for a single-part upload). Required: R2
-     * reports one on every object, and an HTTP layer built on `head()` (the
-     * `serveStorageObject` helper) needs it to emit a validator.
-     */
-    etag: string;
-    /** The already-quoted form of {@link StorageObjectHead.etag}, when the binding reports one. */
-    httpEtag?: string;
-    /** Recorded HTTP metadata, notably the `Content-Type`. */
-    httpMetadata?: { contentType?: string };
-    /** The object's key. */
-    key: string;
-    /** Hex-encoded SHA-256 of the body, when R2 carries a checksum. */
-    sha256?: string;
-    /** Base64-encoded SHA-256 of the same checksum — the encoding RFC 9530 digest headers require. */
-    sha256Base64?: string;
-    /** The FULL object size in bytes: R2 reports the object's size, not a returned window's, which is what makes a head enough to resolve a `Range` against. */
-    size: number;
-    /** When the object was last written. */
-    uploaded?: Date;
-}
-
-/**
- * Byte window forwarded to {@link ReadOnlyStorage.download} so R2 resolves the
- * slice server-side and streams only those bytes back. Mirrors R2's own `range`
- * option (`@lunora/platform`'s `R2RangeLike`), restated structurally so
- * `@lunora/server` takes no dependency on the bindings package.
- */
-type StorageRange = { length?: number; offset: number } | { length: number; offset?: number } | { suffix: number };
-
-/**
- * A downloaded object: the same metadata {@link StorageObjectHead} carries, plus
- * the body stream. This is what `download()` resolves to — R2's object, NOT a
- * bare stream.
- */
-interface StorageObjectBody extends StorageObjectHead {
-    /** The object body stream. `null` for a zero-byte object. */
-    body: ReadableStream | null;
-}
-
-/**
- * Read-only projection of `Storage` exposed on `QueryCtx` / `MutationCtx`.
- *
- * Queries are pure reads, and mutations run inside a transactional scope —
- * neither is allowed to perform side-effectful R2 writes (`upload`) or
- * deletes (`delete`). They can, however, **read** existing objects and
- * resolve signed URLs (the URL signing itself is HMAC-only — no R2 round
- * trip), so the read-only surface keeps `download` and `getSignedUrl`. The
- * full {@link Storage} surface stays on `ActionCtx`.
- */
-interface ReadOnlyStorage<Buckets extends string = string> {
-    /**
-     * Select a named bucket (declared via `v.storage("name")`). The returned
-     * accessor's operations target that bucket — `ctx.storage.bucket("avatars")
-     * .download(key)`. The bare `ctx.storage` targets the default bucket.
-     */
-    bucket: (name: Buckets) => ReadOnlyStorage<Buckets>;
-
-    /** The bucket this accessor's operations target (the default for the bare `ctx.storage`). */
-    readonly bucketName: string;
-
-    /**
-     * Fetch an existing object. Returns the R2 object — metadata plus a `body`
-     * stream — or `null` when absent.
-     *
-     * NOT a bare stream: `new Response(await ctx.storage.download(key))` would
-     * stringify the object and serve the literal text `[object Object]`. Reach
-     * for the body explicitly:
-     *
-     * ```ts
-     * const object = await ctx.storage.download(key);
-     *
-     * return object ? new Response(object.body) : new Response("Not found", { status: 404 });
-     * ```
-     *
-     * (`serveStorageObject` from `@lunora/server` does this, plus range/ETag
-     * handling, for the common "serve a stored file over HTTP" case.)
-     *
-     * Pass `range` to have R2 resolve the byte window server-side, so the
-     * unwanted bytes never reach the worker.
-     */
-    download: (key: string, options?: { range?: StorageRange }) => Promise<StorageObjectBody | null>;
-
-    /**
-     * Read a file's metadata (size, content-type, sha256, upload time, custom
-     * metadata) without fetching its body. Returns `null` when the object is
-     * absent. Mirrors Convex's `ctx.storage.getMetadata`.
-     */
-    getMetadata: (key: string) => Promise<StorageMetadata | null>;
-    /** Resolve a short-lived signed URL for an existing object. */
-    getSignedUrl: (key: string, options?: { expiresInSeconds?: number }) => Promise<string>;
-    /** Public URL pointing at the configured base for `key`. */
-    getUrl: (key: string) => string;
-
-    /**
-     * Read an object's metadata with NO body transfer, as the raw object shape —
-     * `etag` and the base64 digest included, which is what an HTTP layer needs to
-     * answer a `Range` request. Returns `null` when the object is absent.
-     *
-     * {@link ReadOnlyStorage.getMetadata} is the tidier summary over the same
-     * read; reach for this one when building a response.
-     */
-    head: (key: string) => Promise<StorageObjectHead | null>;
-}
-
-/**
- * `ctx.storage` inside a **mutation**: the read surface, plus the one write a
- * transactional context can safely express. See `@lunora/server`'s
- * `deferred-deletes.ts` for why `delete` itself stays action-only.
- */
-interface MutationStorage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
-    /** Select a named bucket; deletes queued on it are flushed against that bucket. */
-    bucket: (name: Buckets) => MutationStorage<Buckets>;
-
-    /**
-     * Queue `key` for deletion once this mutation commits.
-     *
-     * Returns `void`, not a promise: nothing has been attempted yet, so the object
-     * is still there on the next line. A rolled-back mutation never flushes, so
-     * the row deletion and the object cleanup cannot disagree. A failed delete
-     * leaks the object rather than failing a mutation that already succeeded, and
-     * is logged with its key.
-     */
-    deleteAfterCommit: (key: string) => void;
-}
-
-interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
-    /** Select a named bucket; the returned accessor exposes the full read/write surface. */
-    bucket: (name: Buckets) => Storage<Buckets>;
-
-    delete: (key: string) => Promise<void>;
-
-    /**
-     * Mint a short-lived signed `PUT` URL a client can upload directly to,
-     * optionally pinning the `Content-Type` the uploader must send. Mirrors
-     * Convex's `storage.generateUploadUrl`.
-     */
-    generateUploadUrl: (key: string, options?: { contentType?: string; expiresInSeconds?: number }) => Promise<string>;
-
-    /**
-     * Mint a native S3 SigV4 URL that hits R2 **directly**, so the bytes never
-     * pass through the Worker — unlike {@link Storage.generateUploadUrl}, whose
-     * signed URL points back at this app so its storage rules still apply.
-     *
-     * Requires `s3` credentials on the `.storage({ s3 })` declaration; without
-     * them the call throws. That is the trade-off: no Worker in the path also
-     * means no rule enforcement in the path.
-     *
-     * Declared structurally rather than imported — `@lunora/server` does not
-     * depend on `@lunora/storage`, and this file mirrors that surface the same
-     * way `head` and `download` do.
-     */
-    getPresignedUrl: (key: string, options?: { expiresInSeconds?: number; method?: "GET" | "PUT" }) => Promise<string>;
-
-    /**
-     * Upload `body` to `key` from the server, returning the stored object's key
-     * and etag. Mirrors Convex's `storage.store`. Accepts the same guard fields
-     * as `@lunora/storage`'s `UploadOptions` so `maxSize` /
-     * `allowedContentTypes` enforcement isn't lost behind the Convex-style alias.
-     */
-    store: (
-        key: string,
-        body: ReadableStream | ArrayBuffer | Blob,
-        options?: {
-            allowedContentTypes?: ReadonlyArray<string>;
-            contentType?: string;
-            customMetadata?: Record<string, string>;
-            maxSize?: number;
-        },
-    ) => Promise<{ etag: string; key: string }>;
-}
-
 interface VectorMatch {
     id: string;
     metadata?: Record<string, unknown>;
@@ -2827,14 +2620,12 @@ export type {
     LunoraTracer,
     LunoraWideEvent,
     MutationCtx,
-    MutationStorage,
     OnDeleteAction,
     PaginationOptions,
     PaginationResult,
     QueryCtx,
     RankIndexDefinition,
     RankSortKey,
-    ReadOnlyStorage,
     RegisteredAction,
     RegisteredFunction,
     RegisteredLifecycleHook,
@@ -2868,11 +2659,6 @@ export type {
     SpanKind,
     SpanLink,
     SpanOptions,
-    Storage,
-    StorageMetadata,
-    StorageObjectBody,
-    StorageObjectHead,
-    StorageRange,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,
@@ -2923,4 +2709,21 @@ export type {
     X402ProcedureConfig,
 };
 
+export type {
+    MutationStorage,
+    ReadOnlyStorage,
+    Storage,
+    StorageListOptions,
+    StorageListResult,
+    StorageMetadata,
+    StorageMultipartUpload,
+    StorageMultipartUploadOptions,
+    StorageObjectBody,
+    StorageObjectHead,
+    StorageRange,
+    StorageUploadBody,
+    StorageUploadedPart,
+    StorageUploadOptions,
+    StorageUploadResult,
+} from "./storage/context";
 export type { SearchLanguage, SearchStrategy } from "@lunora/search-core";

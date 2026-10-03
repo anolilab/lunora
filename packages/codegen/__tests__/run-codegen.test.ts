@@ -4425,7 +4425,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("sql?: (env: Record<string, unknown>) => SqlClient;");
             expect(output).toContain("const sqlStub: SqlClient");
             // No auto-construct: the build is config-thunk-first (createHyperdrive returns connection info, not a SqlClient).
-            expect(output).toContain("const sql: SqlClient = config.sql ? config.sql(env) : sqlStub;");
+            // The configured client is wrapped in the same auto-instrumentation as `ctx.db`; the stub never is.
+            expect(output).toContain(
+                "const sql: SqlClient = config.sql ? this.instrumentSql(config.sql(env), logFunctionPath, traceAnchor, observability) : sqlStub;",
+            );
             expect(output).not.toContain("createHyperdrive");
             expect(output).toContain("ctx.sql = sql;");
             // A query composed from an action must not see it either.

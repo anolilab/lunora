@@ -155,6 +155,10 @@ interface WranglerConfig {
     // AI Search namespace bindings (`{ binding, namespace }`) — what `ctx.aiSearch`
     // reads. Wrangler creates a missing namespace on deploy.
     ai_search_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string; remote?: boolean } | null | undefined>;
+    // Analytics SQL binding (`env.ANALYTICS_SQL`, wrangler >= 4.145.0) — what
+    // `ctx.analyticsSql` reads. Self-describing { binding, remote? }; parsed from
+    // untrusted JSONC, so it may be `null`. Not `analytics_engine_datasets`.
+    analytics?: { binding?: unknown; remote?: boolean } | null;
     // Analytics Engine datasets (self-describing: { binding, dataset }, dataset
     // defaults to the binding name). See `validateAnalyticsBindings`.
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string } | null | undefined>;

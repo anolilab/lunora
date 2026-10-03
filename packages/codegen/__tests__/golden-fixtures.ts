@@ -85,6 +85,11 @@ const makeFixtureWorkdir = (fixtureRoot: string): string => {
  * annotated (never cast) throwing stub, and only a compiled tree proves both
  * type-check for a consumer.
  *
+ * `analytics-sql` is a one-action app reading `ctx.analyticsSql`, compiled the
+ * same way: the binding goes through the `createAnalyticsSql` factory, and the
+ * compiled tree proves the annotated stub and the ActionCtx-only field
+ * type-check for a consumer.
+ *
  * Shared by `capture-expected.ts` (which writes the goldens) and the tests that
  * assert them, so a new fixture is registered once. The optional third element
  * limits a fixture to those golden files.
@@ -96,6 +101,7 @@ const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string, ReadonlyArray<str
     ["sdk-surface", "expected/_generated", ["openrpc.json"]],
     ["artifacts", "expected/_generated", ["app.ts", "server.ts", "shard.ts"]],
     ["ai-search", "lunora/_generated"],
+    ["analytics-sql", "lunora/_generated"],
 ];
 
 /** Every emitted artifact captured into a golden directory, as `[filename, CodegenResult key]`. */

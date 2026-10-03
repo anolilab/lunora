@@ -178,7 +178,7 @@ export interface ObservabilitySink {
     fuseCloudflareTraces?: boolean;
 
     /**
-     * How much detail automatic `ctx.db` instrumentation produces.
+     * How much detail automatic `ctx.db` (and `ctx.sql`) instrumentation produces.
      *
      * `"summary"` (**default**) — aggregate counters (`db.calls`, `db.duration_ms`,
      * per-operation counts) folded onto the dispatch's own root span, and onto the
@@ -198,7 +198,14 @@ export interface ObservabilitySink {
      *
      * `"off"` — no database telemetry.
      *
-     * Applies only when a sink is configured; with none, `ctx.db` is untouched.
+     * The same level applies to the action-only `ctx.sql` (Hyperdrive), which
+     * keeps its own tally under `sql.*` keys (`sql.calls`, `sql.duration_ms`,
+     * `sql.op.SELECT`, `sql.spans_truncated`, …) so external-database time stays
+     * distinguishable from the shard's own SQLite. Its spans carry the leading
+     * SQL keyword and the system, never the statement text or parameters.
+     *
+     * Applies only when a sink is configured; with none, `ctx.db` and `ctx.sql`
+     * are untouched.
      */
     instrumentDatabase?: "off" | "spans" | "summary";
 

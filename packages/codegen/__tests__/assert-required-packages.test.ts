@@ -118,7 +118,7 @@ describe("requiredPackagesFor — ctx.* usage", () => {
     it("collapses the @lunora/bindings subpaths to one entry", () => {
         expect.assertions(1);
 
-        const usage = usageWith({ aiSearch: true, analytics: true, images: true, kv: true, pipelines: true, r2sql: true });
+        const usage = usageWith({ aiSearch: true, analytics: true, analyticsSql: true, images: true, kv: true, pipelines: true, r2sql: true });
 
         expect(names(...requiredPackagesFor(schemaWith(), { usage }))).toStrictEqual(["@lunora/bindings"]);
     });
@@ -131,6 +131,7 @@ describe("requiredPackagesFor — ctx.* usage", () => {
             ai: true,
             aiSearch: true,
             analytics: true,
+            analyticsSql: true,
             browser: true,
             hyperdrive: true,
             images: true,

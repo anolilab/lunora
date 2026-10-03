@@ -6,8 +6,7 @@
  * `…/r2-sql/query/{bucket}` with the bearer token and normalises the Cloudflare
  * envelope (`{ success, result, errors }`) into an {@link R2SqlResult}. The
  * factory deliberately lives in `@lunora/bindings/r2sql` (not Studio) so the Studio data
- * panel and the `@lunora/advisor` runtime lints can share one client — mirroring
- * `createAnalyticsSqlClient` in `@lunora/bindings/analytics`.
+ * panel and the `@lunora/advisor` runtime lints can share one client.
  *
  * Surfaces: `query(sql)` / `explain(sql)` (raw escape hatches, typed rows);
  * `from<Row>(table)` (the chainable {@link SelectBuilder} — window functions,
@@ -19,6 +18,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { capErrorBody } from "../../../../shared/cap-error-body";
+import { sqlRestPost } from "../../../../shared/sql-rest-post";
 import SelectBuilder from "./builder";
 import type { QueryExecutor } from "./query";
 import type { Sql } from "./sql";
@@ -116,77 +116,35 @@ export const createR2Sql = (config: R2SqlConfig): R2SqlClient => {
     const timeoutMs = config.timeoutMs ?? DEFAULT_SQL_TIMEOUT_MS;
 
     const exec: QueryExecutor = async (statement: string): Promise<R2SqlResult> => {
-        // Bound the fetch AND the body reads with one deadline — a hang after
-        // headers is the harder failure — so a stalled endpoint can't hold the
-        // calling action open to the platform limit.
-        const controller = new AbortController();
-        const timeout = setTimeout(() => {
-            controller.abort();
-        }, timeoutMs);
+        // One deadline bounds the fetch AND the body read, so a stalled endpoint
+        // can't hold the calling action open to the platform limit. A non-2xx
+        // keeps its status (401/403/429) even if the deadline fires mid-read.
+        const outcome = await sqlRestPost({ apiToken: config.apiToken, body: { query: statement, warehouse }, fetch: fetchImpl, timeoutMs, url: endpoint });
 
-        try {
-            const response = await fetchImpl(endpoint, {
-                body: JSON.stringify({ query: statement, warehouse }),
-                headers: {
-                    Authorization: `Bearer ${config.apiToken}`,
-                    "Content-Type": "application/json",
-                },
-                method: "POST",
-                signal: controller.signal,
-            });
-
-            if (!response.ok) {
-                // The status is the diagnosis (401/403/429); the body is detail.
-                // If the deadline fires mid-read, keep the status-derived error
-                // rather than letting the outer handler mask it as a 504.
-                throw new R2SqlError(
-                    response.status,
-                    await response.text().catch(() => "<error body unavailable: the request deadline fired before it was read>"),
-                );
-            }
-
-            let raw: unknown;
-
-            try {
-                raw = await response.json();
-            } catch (error) {
-                // Let a timeout mid-read reach the outer 504 mapping instead of
-                // being folded into the non-JSON-body normalisation below.
-                if (controller.signal.aborted) {
-                    throw error;
-                }
-
-                // A 2xx with a non-JSON body (e.g. an HTML error page from an
-                // intermediary) would surface as a bare SyntaxError; normalise it to
-                // the R2SqlError callers already handle.
-                throw new R2SqlError(response.status, "R2 SQL returned a non-JSON body.");
-            }
-
-            const body = raw as RawR2SqlResponse;
-
-            // The envelope can report a logical failure with a 2xx HTTP status; treat
-            // `success: false` (or a populated `errors` array) as an error.
-            if (body.success === false || (body.errors !== undefined && body.errors.length > 0)) {
-                throw new R2SqlError(response.status, JSON.stringify(body.errors ?? body));
-            }
-
-            // Rows and schema are nested under `result` (`{ result: { rows, schema } }`).
-            const rows = body.result?.rows ?? [];
-
-            return {
-                columns: body.result?.schema ?? inferColumns(rows),
-                rowCount: rows.length,
-                rows,
-            };
-        } catch (error) {
-            if (controller.signal.aborted && !(error instanceof R2SqlError)) {
-                throw new R2SqlError(504, `query timed out after ${String(timeoutMs)}ms (R2SqlConfig.timeoutMs)`);
-            }
-
-            throw error;
-        } finally {
-            clearTimeout(timeout);
+        if ("timedOut" in outcome) {
+            throw new R2SqlError(504, `query timed out after ${String(timeoutMs)}ms (R2SqlConfig.timeoutMs)`);
         }
+
+        if (!outcome.ok) {
+            throw new R2SqlError(outcome.status, outcome.text);
+        }
+
+        const body = outcome.json as RawR2SqlResponse;
+
+        // The envelope can report a logical failure with a 2xx HTTP status; treat
+        // `success: false` (or a populated `errors` array) as an error.
+        if (body.success === false || (body.errors !== undefined && body.errors.length > 0)) {
+            throw new R2SqlError(502, JSON.stringify(body.errors ?? body));
+        }
+
+        // Rows and schema are nested under `result` (`{ result: { rows, schema } }`).
+        const rows = body.result?.rows ?? [];
+
+        return {
+            columns: body.result?.schema ?? inferColumns(rows),
+            rowCount: rows.length,
+            rows,
+        };
     };
 
     return {

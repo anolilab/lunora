@@ -1,6 +1,6 @@
 ---
 title: "@lunora/bindings"
-description: The lightweight Cloudflare binding helpers for Lunora in one install — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts, ctx.aiSearch — with per-binding subpaths and tree-shaking.
+description: The lightweight Cloudflare binding helpers for Lunora in one install — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts, ctx.aiSearch, ctx.analyticsSql — with per-binding subpaths and tree-shaking.
 ---
 
 `@lunora/bindings` bundles the thin, zero-dependency Cloudflare binding helpers into a single install, exposed as **per-binding subpaths**. Each is a typed `ctx.*` facade over its Cloudflare binding; codegen wires the matching context helper when a `lunora/` source imports the subpath (or reads the `ctx.*` property).
@@ -9,16 +9,17 @@ description: The lightweight Cloudflare binding helpers for Lunora in one instal
 pnpm add @lunora/bindings
 ```
 
-| Subpath                      | Context helper  | Cloudflare binding      | Where                     |
-| ---------------------------- | --------------- | ----------------------- | ------------------------- |
-| `@lunora/bindings/kv`        | `ctx.kv`        | Workers KV              | Query / Mutation / Action |
-| `@lunora/bindings/images`    | `ctx.images`    | Cloudflare Images       | Action only               |
-| `@lunora/bindings/analytics` | `ctx.analytics` | Analytics Engine        | Query / Mutation / Action |
-| `@lunora/bindings/pipelines` | `ctx.pipelines` | Pipelines (R2-backed)   | Action only               |
-| `@lunora/bindings/vectors`   | `ctx.vectors`   | Vectorize               | Query / Mutation / Action |
-| `@lunora/bindings/r2sql`     | `ctx.r2sql`     | R2 SQL (Apache Iceberg) | Action only               |
-| `@lunora/bindings/artifacts` | `ctx.artifacts` | Artifacts (Git repos)   | Action only               |
-| `@lunora/bindings/ai-search` | `ctx.aiSearch`  | AI Search (types only)  | Action only               |
+| Subpath                          | Context helper     | Cloudflare binding      | Where                     |
+| -------------------------------- | ------------------ | ----------------------- | ------------------------- |
+| `@lunora/bindings/kv`            | `ctx.kv`           | Workers KV              | Query / Mutation / Action |
+| `@lunora/bindings/images`        | `ctx.images`       | Cloudflare Images       | Action only               |
+| `@lunora/bindings/analytics`     | `ctx.analytics`    | Analytics Engine        | Query / Mutation / Action |
+| `@lunora/bindings/analytics-sql` | `ctx.analyticsSql` | Analytics SQL           | Action only               |
+| `@lunora/bindings/pipelines`     | `ctx.pipelines`    | Pipelines (R2-backed)   | Action only               |
+| `@lunora/bindings/vectors`       | `ctx.vectors`      | Vectorize               | Query / Mutation / Action |
+| `@lunora/bindings/r2sql`         | `ctx.r2sql`        | R2 SQL (Apache Iceberg) | Action only               |
+| `@lunora/bindings/artifacts`     | `ctx.artifacts`    | Artifacts (Git repos)   | Action only               |
+| `@lunora/bindings/ai-search`     | `ctx.aiSearch`     | AI Search (types only)  | Action only               |
 
 `sideEffects: false` subpath exports keep tree-shaking per-binding: an app that imports only `@lunora/bindings/kv` bundles nothing from the other helpers. Heavier add-ons with framework/driver peer deps (`@lunora/browser`, `@lunora/hyperdrive`, `@lunora/ai`, `@lunora/payment`) stay separate installs.
 
@@ -64,7 +65,7 @@ import { buildImageDeliveryUrl, buildSignedImageUrl } from "@lunora/bindings/ima
 
 ## Analytics — `@lunora/bindings/analytics`
 
-Analytics Engine: typed `writeDataPoint` (and an ergonomic `track`) plus a SQL-API read client. Fire-and-forget writes ride **every** context. Add an `analytics_engine_datasets` binding (`env.ANALYTICS`):
+Analytics Engine: typed `writeDataPoint` (and an ergonomic `track`). Fire-and-forget writes ride **every** context. Add an `analytics_engine_datasets` binding (`env.ANALYTICS`):
 
 ```ts
 import { mutation } from "@/lunora/_generated/server";
@@ -74,11 +75,96 @@ export const recordSignup = mutation.mutation(async ({ ctx }) => {
 });
 ```
 
-The SQL-API read client is a separate import for dashboards/reports:
+Read the data back with [`ctx.analyticsSql`](#analytics-sql--lunorabindingsanalytics-sql).
+
+## Analytics SQL — `@lunora/bindings/analytics-sql`
+
+Read-only SQL over Cloudflare's [Analytics SQL API](https://developers.cloudflare.com/analytics/sql-api/) through the [Analytics SQL Workers binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/analytics-sql/). It reads your Analytics Engine datasets as `events.analyticsEngine."<dataset>"`, plus Cloudflare's own `events.`, `states.` and `logs.` datasets. The account comes from the Worker, so there is no token to manage. It is a separate surface from `ctx.analytics`: that one is a write-only sink on every context, while a query is billed, non-deterministic network I/O, so `ctx.analyticsSql` is **action only**.
+
+Add the binding. It needs wrangler **4.145.0** or later, which is the first release that accepts the `analytics` key. `lunora dev` writes it for you when a handler reads `ctx.analyticsSql`, unless the app chains `.analyticsSql(...)` onto `defineApp()` (see below):
+
+```jsonc
+{
+    "analytics": { "binding": "ANALYTICS_SQL" },
+}
+```
 
 ```ts
-import { createAnalyticsSqlClient } from "@lunora/bindings/analytics";
+import { action, v } from "@/lunora/_generated/server";
+
+export const callsSince = action.input({ since: v.string() }).action(async ({ args, ctx }) => {
+    assertAdmin(ctx); // your own admin check: this reads the account's analytics
+
+    const { rows } = await ctx.analyticsSql.query<{ calls: number; fn: string }>(
+        `SELECT blob2 AS fn, COUNT(*) AS calls
+         FROM events.analyticsEngine."ANALYTICS"
+         WHERE timestamp >= $since AND blob1 = 'function_call'
+         GROUP BY fn ORDER BY calls DESC LIMIT 25`,
+        { since: args.since },
+    );
+
+    return rows;
+});
 ```
+
+`query(sql, params?)` binds `$1` / `$name` placeholders from an array or an object of strings, numbers, booleans or `null`, and resolves `{ rows, rowCount, statistics }` (`statistics` holds `elapsed_ms`, `rows_read` and `bytes_read`). The dialect is the Analytics SQL API's, not the older Analytics Engine SQL API's:
+
+- one statement and one dataset per query, at most 10 KiB of SQL;
+- a lower `timestamp` bound is required;
+- `COUNT`, `SUM`, `AVG` and `topK` are sample-weighted for you; pass `sampleInterval` as the weight to `quantileWeighted(level, expr, weight)`.
+
+A failed query rejects with an `AnalyticsSqlQueryError` (`ANALYTICS_SQL_QUERY_ERROR`) whose `retryable` flag says whether repeating it may help. Nothing is retried automatically, so back off before retrying.
+
+The binding reads every dataset the account has, so treat an action that queries it like any other admin endpoint: gate it, and never pass SQL from the caller into `query`. Take a choice from the caller and build the statement on the server.
+
+**Without the binding** (wrangler older than 4.145.0, or code outside a Worker), `createAnalyticsSqlRest` runs the same dialect over the REST endpoint with an API token that has Account Analytics Read. It has the binding's shape, so point `ctx.analyticsSql` at it or use it directly. With the `.analyticsSql(...)` override in place, `lunora dev` stops adding the `analytics` binding, so an older wrangler keeps accepting the config:
+
+```ts
+import { createAnalyticsSql, createAnalyticsSqlRest } from "@lunora/bindings/analytics-sql";
+
+// In lunora/app.ts:
+defineApp().analyticsSql((env) => createAnalyticsSqlRest({ accountId: env.CF_ACCOUNT_ID as string, apiToken: env.CF_ANALYTICS_TOKEN as string }));
+
+// Or anywhere:
+const analyticsSql = createAnalyticsSql({ binding: createAnalyticsSqlRest({ accountId, apiToken }) });
+```
+
+The REST transport fails with the same error: a non-2xx status (`429`, `500`, `503` and `507` are retryable), the `timeoutMs` deadline (`504`, retryable, default 60 s), or a request that never reached the API, such as a DNS failure or a reset connection (retryable).
+
+The binding has no local simulator, so `lunora dev` queries the account's live analytics: miniflare proxies the binding to Cloudflare even without `--remote`, and every query is billed. On celld and Node the binding does not exist, so codegen omits `ctx.analyticsSql` and reports `platform_unsupported_feature`.
+
+### Studio usage panels
+
+The Studio Analytics tab (request volume, p50/p95 latency and hot shards per function) asks the host for each panel by key. Answer with an admin-gated action that builds the statement with `functionUsageQuery`:
+
+```ts
+import { functionUsageQuery, isFunctionUsagePanel } from "@lunora/bindings/analytics-sql";
+import { LunoraError } from "@lunora/errors";
+
+import { action, v } from "@/lunora/_generated/server";
+
+export const usagePanel = action.input({ panel: v.string() }).action(async ({ args, ctx }) => {
+    assertAdmin(ctx); // your own admin check
+
+    if (!isFunctionUsagePanel(args.panel)) {
+        throw new LunoraError("BAD_REQUEST", `unknown usage panel "${args.panel}"`);
+    }
+
+    const { params, query } = functionUsageQuery(args.panel); // last 24 hours of the ANALYTICS dataset
+
+    return ctx.analyticsSql.query(query, params);
+});
+```
+
+Then hand Studio a runner defined once, at module level, so it keeps its identity across renders:
+
+```tsx
+const usagePanel = async (panel: FunctionUsagePanel) => client.action(api.studioAnalytics.usagePanel, { panel });
+
+<Studio analyticsSqlQuery={usagePanel} />;
+```
+
+The panels read the `function_call` data points `ctx.analytics.track` writes.
 
 ## Pipelines — `@lunora/bindings/pipelines`
 

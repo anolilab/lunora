@@ -864,6 +864,21 @@ interface SpanOptions {
 }
 ```
 
+### `SqlClientLike` (interface)
+
+```ts
+interface SqlClientLike {
+    readonly dbSystem?: string;
+    query: (text: string, params?: ReadonlyArray<unknown>) => Promise<unknown>;
+}
+```
+
+### `TallySurface` (type)
+
+```ts
+type TallySurface = "db" | "sql";
+```
+
 ### `TraceAnchor` (interface)
 
 ```ts
@@ -1055,13 +1070,19 @@ const foldTraces: (spans: ReadonlyArray<SpanEvent>, limit?: number) => FoldedTra
 ### `formatTally` (const)
 
 ```ts
-const formatTally: (tally: DatabaseTally) => LogFields;
+const formatTally: (tally: DatabaseTally, surface?: TallySurface) => LogFields;
 ```
 
 ### `instrumentDatabase` (const)
 
 ```ts
 const instrumentDatabase: <T extends object>(database: T, deps: DatabaseTelemetryDeps) => T;
+```
+
+### `instrumentSqlClient` (const)
+
+```ts
+const instrumentSqlClient: <T extends SqlClientLike>(client: T, deps: DatabaseTelemetryDeps) => T;
 ```
 
 ### `mergeScanAttribution` (const)
