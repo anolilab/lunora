@@ -32,14 +32,14 @@ const inferred = (services: ServiceBindingIR[] | undefined): InferredBindings =>
         usesKv: false,
         usesMail: false,
         usesNotify: false,
-        usesPayment: false,
+        usesPayments: false,
         usesPipelines: false,
         usesR2sql: false,
         usesScheduler: false,
         usesStorage: false,
         usesWorkerLoader: false,
         usesX402Charge: false,
-        usesX402Pay: false,
+        usesX402: false,
         workflows: [],
     };
 };

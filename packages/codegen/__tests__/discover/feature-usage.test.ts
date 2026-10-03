@@ -6,7 +6,13 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { FeatureUsage } from "../../src/discover/feature-usage";
-import { discoverFeatureUsage } from "../../src/discover/feature-usage";
+import {
+    capabilitiesUsedBy,
+    discoverFeatureUsage,
+    foldCapabilitySignals,
+    mayReadCapabilityContext,
+    sourceCapabilitySignals,
+} from "../../src/discover/feature-usage";
 import hasPaymentStoreTables from "../../src/discover/payment-store-tables";
 import { buildStudioFeatures } from "../../src/discover/studio-features";
 import type { TableIR } from "../../src/ir";
@@ -318,6 +324,72 @@ describe("discover/feature-usage", () => {
 
         expect(viaImport.scheduler).toBe(true);
         expect(viaContext.scheduler).toBe(true);
+    });
+
+    it("counts a value re-export of a capability package, but not a type-only one", () => {
+        expect.assertions(2);
+
+        writeSource("barrel.ts", `export { createKv } from "@lunora/bindings/kv";\nexport * from "@lunora/mail";`);
+        writeSource("types.ts", `export type { PipelineRecord } from "@lunora/bindings/pipelines";\nexport { type Images } from "@lunora/bindings/images";`);
+
+        const usage = discoverFeatureUsage(newProject(), workdir);
+
+        expect(usage).toMatchObject({ kv: true, mail: true });
+        expect(usage).toMatchObject({ images: false, pipelines: false });
+    });
+
+    it("does not wire a helper off a dynamic import (only `@lunora/config` counts those)", () => {
+        expect.assertions(1);
+
+        writeSource("lazy.ts", `export const shot = async () => (await import("@lunora/browser")).createBrowser;`);
+
+        expect(discoverFeatureUsage(newProject(), workdir).browser).toBe(false);
+    });
+
+    describe("sourceCapabilitySignals", () => {
+        const signalsOf = (source: string, fileName = "file.ts") =>
+            sourceCapabilitySignals(new Project({ useInMemoryFileSystem: true }).createSourceFile(fileName, source));
+
+        it("reads dynamic-import literals, value sandbox tools and re-exports in one pass", () => {
+            expect.assertions(3);
+
+            const signals = signalsOf(
+                [
+                    `import { browserTool, type jsCodeTool } from "@lunora/agent";`,
+                    `export * from "@lunora/mail";`,
+                    `const load = () => import("@lunora/bindings/kv");`,
+                    "const computed = (name: string) => import(name);",
+                ].join("\n"),
+            );
+
+            expect([...signals.dynamicImports]).toStrictEqual(["@lunora/bindings/kv"]);
+            expect(signals.sandboxTools).toStrictEqual({
+                usesSandboxBrowser: true,
+                usesSandboxContainer: false,
+                usesSandboxFs: false,
+                usesSandboxLoader: false,
+            });
+            expect([...signals.valueImports].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["@lunora/agent", "@lunora/mail"]);
+        });
+
+        it("folds files into one signal set that capabilitiesUsedBy judges", () => {
+            expect.assertions(1);
+
+            const folded = foldCapabilitySignals([
+                signalsOf(`import { createKv } from "@lunora/bindings/kv";`),
+                signalsOf(`export const f = async ({ ctx }) => ctx.r2sql.query("select 1");`),
+            ]);
+
+            expect([...capabilitiesUsedBy(folded)].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["kv", "r2sql"]);
+        });
+    });
+
+    it("prefilters on `ctx` plus a helper name", () => {
+        expect.assertions(3);
+
+        expect(mayReadCapabilityContext("export const f = ({ ctx }) => ctx.kv.get('a');")).toBe(true);
+        expect(mayReadCapabilityContext("export const kv = 1;")).toBe(false);
+        expect(mayReadCapabilityContext("export const f = ({ ctx }) => ctx.db.get('a');")).toBe(false);
     });
 
     it("does not flag mail on an unrelated `mail` property read (import-only feature)", () => {

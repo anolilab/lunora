@@ -102,5 +102,5 @@ const discoverSandboxUsage = (project: Project, lunoraDirectory: string): Sandbo
     return usage;
 };
 
-export { discoverSandboxUsage };
+export { discoverSandboxUsage, noSandboxUsage, scanImportDeclaration };
 export type { SandboxUsage };

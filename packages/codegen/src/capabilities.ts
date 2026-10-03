@@ -525,16 +525,23 @@ const APP_METHOD_CAPABILITIES: ReadonlyArray<{ appMethod: AppMethodFacet; key: A
     "appMethod" in capability ? [{ appMethod: capability.appMethod, key: capability.key }] : [],
 );
 
+/** The usage-probe facets of one row: the package whose value import, and the `ctx.<property>` whose read, marks it used. */
+interface CapabilityProbe {
+    /** `undefined` for a capability with no ctx helper (`mail`). */
+    readonly contextProperty: string | undefined;
+    readonly moduleSpecifier: string;
+}
+
 /**
- * The usage-probe facets of every row, read-only — the view a consumer outside
- * codegen keys its own capability detection off (`@lunora/config`'s binding
- * inference), so the two cannot disagree on which import or `ctx.<property>`
- * read marks a capability used.
+ * The usage-probe facets of every row, keyed by capability — the view a consumer
+ * outside codegen reads (`@lunora/config` names a package and words a hint off
+ * it), so a lookup needs no existence check. Which signals mark a capability used
+ * is decided by `capabilitiesUsedBy` alone, never re-derived from these.
  */
-const CAPABILITY_PROBES: ReadonlyArray<{ readonly contextProperty: string | undefined; readonly key: CapabilityKey; readonly moduleSpecifier: string }> =
-    CAPABILITIES.map(({ contextProperty, key, moduleSpecifier }) => {
-        return { contextProperty, key, moduleSpecifier };
-    });
+// The one widening `Object.fromEntries` forces: its keys provably come from `CAPABILITIES`.
+const CAPABILITY_PROBES: Readonly<Record<CapabilityKey, CapabilityProbe>> = Object.fromEntries(
+    CAPABILITIES.map(({ contextProperty, key, moduleSpecifier }) => [key, { contextProperty, moduleSpecifier }] as const),
+) as Readonly<Record<CapabilityKey, CapabilityProbe>>;
 
 /**
  * The capabilities a usage record marks as used, as the set the emitters take
@@ -544,4 +551,14 @@ const usedCapabilities = (usage: Readonly<Record<CapabilityKey, boolean>>): Read
     new Set(CAPABILITIES.filter((capability) => usage[capability.key]).map((capability) => capability.key));
 
 export { APP_METHOD_CAPABILITIES, CAPABILITIES, CAPABILITY_PROBES, usedCapabilities };
-export type { AppMethodFacet, AppMethodKey, BespokeShardKey, CapabilityDescriptor, CapabilityKey, CapabilityTier, ShardBindingFacet, ShardEnvBinding };
+export type {
+    AppMethodFacet,
+    AppMethodKey,
+    BespokeShardKey,
+    CapabilityDescriptor,
+    CapabilityKey,
+    CapabilityProbe,
+    CapabilityTier,
+    ShardBindingFacet,
+    ShardEnvBinding,
+};

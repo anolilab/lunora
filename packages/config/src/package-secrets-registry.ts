@@ -106,7 +106,7 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "http://localhost:8787",
         },
     ],
-    // Keyed by the SUBPATH, because that is what `CAPABILITY_SOURCES` emits for
+    // Keyed by the SUBPATH, because that is what `FLAG_PACKAGES` reports for
     // `ctx.r2sql` (the surface is codegen-wired onto ActionCtx; nothing imports
     // the package). Without these three the emitted ctx-builder fell through to
     // `r2sqlStub` and every `ctx.r2sql` call threw on the deployed worker, with
