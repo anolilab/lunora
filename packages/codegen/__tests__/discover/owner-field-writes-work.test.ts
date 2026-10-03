@@ -106,4 +106,42 @@ describe("discoverOwnerFieldWrites work bound", () => {
         expect(capped.rows[0]).not.toHaveProperty("ownerScoped");
         expect(capped.lookups).toBeLessThan(500_000);
     });
+
+    // The Vite dev loop reuses one Project, so an unchanged impl keeps its cached
+    // taint model across runs. Its budget is per query and spends nothing on cache
+    // hits, so repeated runs never drift into spurious findings.
+    it("gives the same verdicts on every run over a reused project", () => {
+        expect.assertions(2);
+
+        const helpers = Array.from({ length: 6 }, (_, index) => `const h${index.toString()} = async (p) => ctx.db.insert("posts", { userId: p.userId });`);
+        const calls = Array.from({ length: 6 }, (_, index) => `await h${index.toString()}({ userId: ctx.auth.userId });`);
+        // Clean writes through a local: every run re-asks for their (cached) verdicts.
+        const locals = Array.from(
+            { length: 20 },
+            (_, index) => `const v${index.toString()} = me.userId; await ctx.db.insert("posts", { userId: v${index.toString()} });`,
+        );
+        const lunoraDirectory = join(workdir, "lunora");
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+        writeFileSync(
+            join(lunoraDirectory, "mutators.ts"),
+            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => {\nconst me = { userId: ctx.auth.userId };\n${[...helpers, ...calls, ...locals].join("\n")}\nawait ctx.db.insert("posts", { userId: args.userId });\n} });`,
+            "utf8",
+        );
+
+        const mutators = discoverMutators(project, lunoraDirectory);
+        const first = discoverOwnerFieldWrites(project, lunoraDirectory, [], mutators);
+        let drifted = 0;
+
+        for (let run = 0; run < 2000; run += 1) {
+            const rows = discoverOwnerFieldWrites(project, lunoraDirectory, [], mutators);
+
+            if (JSON.stringify(rows) !== JSON.stringify(first)) {
+                drifted += 1;
+            }
+        }
+
+        expect(first).toStrictEqual([expect.objectContaining({ ownerScoped: true })]);
+        expect(drifted).toBe(0);
+    });
 });

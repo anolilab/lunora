@@ -107,6 +107,14 @@ interface MutatorImplScope {
 /** Per-impl {@link isPristineArgsParameter} verdicts, keyed on the compiler node so a re-parse recomputes. */
 const PRISTINE_CACHE = new WeakMap<ts.Node, boolean>();
 
+/**
+ * `ctx` methods whose result echoes caller-chosen input: `ctx.db.asId(table, args.x)`
+ * returns that very id, and a `ctx.run*` result can hand its args straight
+ * back. A chain through one of these is not server-scoped; its taint is that
+ * of its arguments.
+ */
+const ECHOING_CONTEXT_METHODS = new Set<string>(["asId", "runAction", "runMutation", "runQuery"]);
+
 /** `Promise` combinators whose result is the settled values of their argument's elements. */
 const PROMISE_COMBINATORS = new Set<string>(["all", "allSettled", "any", "race"]);
 
@@ -179,6 +187,27 @@ const isCopiedOnly = (node: TsNode): boolean => {
     return Node.isTemplateSpan(parent) && !Node.isTaggedTemplateExpression(parent.getParent().getParent());
 };
 
+/** A TypeScript standard-library declaration file (`…/typescript/lib/lib.es2015.d.ts`). */
+const TYPESCRIPT_LIB_FILE = /\/typescript\/lib\/lib\.[^/]+\.d\.ts$/u;
+
+/**
+ * Whether `identifier` is the platform global it is spelled as: it resolves to
+ * no declaration, or only to one in a library `.d.ts` (TypeScript's `lib.*`,
+ * `@types/node`). A local `const JSON = { stringify: (a) => … }` does not.
+ */
+const isLibraryGlobal = (identifier: Identifier): boolean => {
+    const declaration = declarationOf(identifier);
+
+    if (declaration === undefined) {
+        return true;
+    }
+
+    const sourceFile = declaration.getSourceFile();
+    const path = sourceFile.getFilePath();
+
+    return sourceFile.isDeclarationFile() && (TYPESCRIPT_LIB_FILE.test(path) || path.includes("/@types/node/"));
+};
+
 /**
  * Whether `node` is an argument of a call that only reads, serializes or copies
  * it: `console.*`, `JSON.stringify`, `structuredClone`, any argument of
@@ -204,18 +233,30 @@ const isReadOnlyCallArgument = (node: TsNode, context: ParameterDeclaration | un
     }
 
     if (Node.isIdentifier(callee)) {
-        return callee.getText() === "structuredClone";
+        return callee.getText() === "structuredClone" && isLibraryGlobal(callee);
     }
 
     if (isContextReference(chainRootOf(callee), context)) {
-        return true;
+        // An echoing method may hand `args` straight back; only a discarded result keeps it unaliased.
+        const isEchoing = Node.isPropertyAccessExpression(callee) && ECHOING_CONTEXT_METHODS.has(callee.getName());
+
+        return (
+            !isEchoing ||
+            Node.isExpressionStatement(outermostValueWrapper(Node.isAwaitExpression(call.getParent()) ? call.getParentOrThrow() : call).getParent())
+        );
     }
 
-    if (!Node.isPropertyAccessExpression(callee) || !Node.isIdentifier(callee.getExpression())) {
+    if (!Node.isPropertyAccessExpression(callee)) {
         return false;
     }
 
-    const namespace = callee.getExpression().getText();
+    const root = callee.getExpression();
+
+    if (!Node.isIdentifier(root) || !isLibraryGlobal(root)) {
+        return false;
+    }
+
+    const namespace = root.getText();
     const method = callee.getName();
 
     switch (namespace) {
@@ -411,11 +452,13 @@ const RECEIVER_ITERATING_METHODS = new Set<string>([
 const MAX_VARIABLE_HOPS = 8;
 
 /**
- * How many identifiers one impl's taint model may resolve before every further
- * verdict fails closed. A cycle makes the verdicts on it uncachable, so a
- * recursive helper re-derived from many call sites could otherwise cost
- * exponential time. Realistic impls, and a depth-14 chain of helpers that each
- * call the next twice, stay far below it.
+ * How many uncached verdicts ONE top-level taint query may compute before every
+ * further verdict fails closed. A cycle makes the verdicts on it uncachable, so
+ * a recursive helper re-derived from many call sites could otherwise cost
+ * exponential time. The budget is reset per query and cache hits are free, so
+ * a long-lived model (a dev loop reusing the project) never drifts. Realistic
+ * impls, and a depth-14 chain of helpers that each call the next twice, stay far
+ * below it.
  */
 const WORK_BUDGET = 50_000;
 
@@ -466,6 +509,8 @@ class ImplTaint {
 
     private readonly verdicts = new Map<ts.Node, boolean>();
 
+    private queryDepth = 0;
+
     private work = 0;
 
     public constructor(scope: MutatorImplScope) {
@@ -484,13 +529,23 @@ class ImplTaint {
      * server-scoped.
      */
     public isTaintedValue(value: TsNode, rootedInContext: boolean): boolean {
-        if (rootedInContext && this.isRootedInContext(value, MAX_VARIABLE_HOPS)) {
-            return false;
+        if (this.queryDepth === 0) {
+            this.work = 0;
         }
 
-        const identifiers = Node.isIdentifier(value) ? [value] : value.getDescendantsOfKind(SyntaxKind.Identifier);
+        this.queryDepth += 1;
 
-        return identifiers.some((identifier) => isValueIdentifier(identifier) && this.isIdentifierTainted(identifier));
+        try {
+            if (rootedInContext && this.isRootedInContext(value, MAX_VARIABLE_HOPS)) {
+                return false;
+            }
+
+            const identifiers = Node.isIdentifier(value) ? [value] : value.getDescendantsOfKind(SyntaxKind.Identifier);
+
+            return identifiers.some((identifier) => isValueIdentifier(identifier) && this.isIdentifierTainted(identifier));
+        } finally {
+            this.queryDepth -= 1;
+        }
     }
 
     private flowsIntoTainted(parameter: ParameterDeclaration): boolean {
@@ -594,14 +649,6 @@ class ImplTaint {
     }
 
     private isIdentifierTainted(identifier: Identifier): boolean {
-        this.work += 1;
-
-        if (this.work > WORK_BUDGET) {
-            this.cuts += 1;
-
-            return true;
-        }
-
         const name = identifier.getText();
 
         if (name === "arguments") {
@@ -684,6 +731,21 @@ class ImplTaint {
         );
     }
 
+    /**
+     * What one call on a chain settles: `true` for a `Promise` combinator over
+     * ctx reads, `false` for an {@link ECHOING_CONTEXT_METHODS} call, otherwise
+     * nothing (keep walking).
+     */
+    private callChainVerdict(call: CallExpression, hops: number): boolean | undefined {
+        if (this.isContextRootedCombinator(call, hops)) {
+            return true;
+        }
+
+        const callee = unwrapExpression(call.getExpression());
+
+        return Node.isPropertyAccessExpression(callee) && ECHOING_CONTEXT_METHODS.has(callee.getName()) ? false : undefined;
+    }
+
     /** Whether `value`'s member / call chain is rooted, by symbol, in the impl's `ctx` parameter (directly or through `const`s). */
     private isRootedInContext(value: TsNode, hops: number): boolean {
         let current: TsNode | undefined = unwrapExpression(value);
@@ -694,8 +756,10 @@ class ImplTaint {
             Node.isElementAccessExpression(current) ||
             Node.isCallExpression(current)
         ) {
-            if (Node.isCallExpression(current) && this.isContextRootedCombinator(current, hops)) {
-                return true;
+            const verdict = Node.isCallExpression(current) ? this.callChainVerdict(current, hops) : undefined;
+
+            if (verdict !== undefined) {
+                return verdict;
             }
 
             current = unwrapExpression(current.getExpression());
@@ -778,6 +842,14 @@ class ImplTaint {
             this.cuts += 1;
 
             return false;
+        }
+
+        this.work += 1;
+
+        if (this.work > WORK_BUDGET) {
+            this.cuts += 1;
+
+            return true;
         }
 
         const cutsBefore = this.cuts;

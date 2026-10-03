@@ -647,6 +647,11 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
             ["an unknown validator", `assertValid(args);`],
             ["`Reflect.set`", `Reflect.set(args, "userId", args.targetUserId);`],
             ["a tagged template", `tag\`\${args}\`;`],
+            // The read-only allowlist matches the platform globals by symbol, not by spelling.
+            ["a local `JSON` that rewrites it", `const JSON = { stringify: (a) => { a.userId = a.targetUserId; } };\n        JSON.stringify(args);`],
+            ["a local `structuredClone`", `const structuredClone = (a) => { a.userId = a.targetUserId; return a; };\n        structuredClone(args);`],
+            // An echoing `ctx` call may hand `args` back; keeping its result aliases it.
+            ["an aliasing `ctx.db.asId` result", `const alias = ctx.db.asId("users", args);\n        alias.userId = args.targetUserId;`],
         ])("reports the owner write after %s", (_label, statement) => {
             expect.assertions(2);
 
@@ -686,6 +691,17 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
         });
 
         it.each([
+            // `ctx.db.asId` and the `ctx.run*` results echo caller-chosen input: rooted in ctx, but not server-scoped.
+            ["a `ctx.db.asId` of an arg", `await ${insert('ctx.db.asId("users", args.targetUserId)')}; // @write`],
+            [
+                "a const chain from `ctx.db.asId`",
+                `const a = ctx.db.asId("users", args.targetUserId);\n        const b = a;\n        const c = b;\n        await ${insert("c")}; // @write`,
+            ],
+            [
+                "a `ctx.runQuery` result",
+                `const r = await ctx.runQuery("users:get", { id: args.targetUserId });\n        await ${insert("r.userId")}; // @write`,
+            ],
+            ["a `ctx.runMutation` result", `const r = await ctx.runMutation("users:make", args);\n        await ${insert("r.userId")}; // @write`],
             [
                 "a helper's result",
                 `const members = await getMembers(ctx, args.orgId);\n        for (const m of members) {\n            await ${insert("m.userId")}; // @write\n        }`,
