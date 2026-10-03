@@ -302,9 +302,16 @@ walks through mounting the handler, authenticating the route, and the size limit
 
 The **upload** hooks (`useUpload`, `useMultipartUpload`, `useTusUpload`,
 `useChunkedRestUpload`, `useFileInput`, `usePasteUpload`) hold their own state and
-need **no** `QueryClientProvider`. The `@visulima/storage-client` _data_ hooks
-(`useGetFileList` …) do use TanStack Query, and `LunoraProvider` already mounts a
-`QueryClient`, so they coexist with Lunora's own `useQuery` without extra wiring.
+need **no** `QueryClientProvider`, so they coexist with Lunora's own `useQuery`.
+The `@visulima/storage-client` _data_ hooks (`useGetFileList` …) are not
+re-exported and do not work against a Lunora upload route: they read files over
+`GET`, which the route refuses (`405`). Read stored files with `ctx.storage` or a
+signed URL.
+
+For resumable uploads use `useTusUpload` (or `useUpload` with TUS).
+`useChunkedRestUpload` sends four chunks in parallel, which the binding-backed
+provider refuses, so it can only upload a file as one chunk; see
+[Chunked REST](/docs/packages/storage#chunked-rest).
 
 ### Drag-and-drop uploader with a progress bar
 
