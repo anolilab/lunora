@@ -148,16 +148,18 @@ describe("buildBindingManifest", () => {
         ]);
     });
 
-    it("reports an unmodelled wrangler section instead of dropping it", () => {
+    // `k2` (K2 producer bindings, wrangler >= 4.145.0) is tracked, not supported:
+    // no runtime type or local simulator, so it is surfaced by name only.
+    it.each(["mtls_certificates", "k2"])("reports an unmodelled wrangler section (%s) instead of dropping it", (section) => {
         expect.assertions(2);
 
         // Silence here is the dangerous outcome: a consumer would under-provision
         // and find out at runtime. A binding type added to wrangler before it is
         // added here must degrade to a name, not vanish.
-        const config = { mtls_certificates: [{ binding: "CERT" }], name: "app" } as unknown as ManifestConfigShape;
+        const config = { [section]: [{ binding: "BINDING" }], name: "app" } as unknown as ManifestConfigShape;
         const manifest = buildBindingManifest(config);
 
-        expect(manifest.unknown).toStrictEqual(["mtls_certificates"]);
+        expect(manifest.unknown).toStrictEqual([section]);
         expect(manifest.bindings).toStrictEqual([]);
     });
 

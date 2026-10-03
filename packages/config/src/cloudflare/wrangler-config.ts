@@ -218,6 +218,12 @@ interface WranglerConfig {
     hyperdrive?: ReadonlyArray<{ binding?: string; id?: string; localConnectionString?: string } | null | undefined>;
     // Cloudflare Images binding (`env.IMAGES`). Self-describing { binding }.
     images?: { binding?: string };
+    // K2 producer bindings (wrangler >= 4.145.0). Tracked, not supported:
+    // workers-types has no runtime type for it and there is no local simulator,
+    // so Lunora models no shape. Declared only so the `--env` merge can treat it
+    // as non-inheritable; it is never validated and passes through
+    // `wrangler.jsonc` untouched.
+    k2?: ReadonlyArray<unknown>;
     // Workers KV namespaces. The namespace `id` is a remote resource Lunora
     // can't mint — warn, don't fail. See `validateKvNamespaces`.
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;

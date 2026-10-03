@@ -180,10 +180,11 @@ const collectVariables = (config: WranglerConfigShape, bindings: string[]): void
  * Every wrangler field this translation drops, named individually so the message
  * is actionable.
  *
- * The list is the set Lunora itself can write into `wrangler.jsonc` minus the
- * kinds emitted above — because a field that is dropped AND unreported is the
- * exact failure `unsupported` exists to prevent, and this list once held only
- * the fields with a top-level array. `queues` is the awkward one: the producers
+ * The list is every binding-shaped wrangler field this translation drops —
+ * whether Lunora writes it into `wrangler.jsonc` or a user declares it by hand
+ * (`k2`, which Lunora does not model) — because a field that is dropped AND
+ * unreported is the exact failure `unsupported` exists to prevent, and this
+ * list once held only the fields with a top-level array. `queues` is the awkward one: the producers
  * ARE emitted, so only a `consumers` entry is dropped, and it is reported under
  * its own path.
  */
@@ -200,6 +201,7 @@ const UNSUPPORTED_FIELDS = [
     "flagship",
     "hyperdrive",
     "images",
+    "k2",
     "pipelines",
     "secrets_store_secrets",
     "send_email",

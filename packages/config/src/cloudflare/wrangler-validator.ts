@@ -67,9 +67,8 @@ const DO_IO_KEEPALIVE_DATE: string = "2026-10-01";
 
 const DO_IO_KEEPALIVE_FLAG: string = "durable_object_io_tasks_prevent_eviction";
 
-// Only a workerd that ships the 2026-10-01 default knows the opt-out flag
-// (wrangler 4.143's 1.20260926 refuses to boot with it); it is still an explicit decision, so it silences
-// the warning.
+// Only a workerd at 1.20261001 or newer knows the opt-out flag (an older one refuses to boot with
+// it); it is still an explicit decision, so it silences the warning.
 const DO_IO_KEEPALIVE_OPT_OUT_FLAG: string = "durable_object_io_tasks_do_not_prevent_eviction";
 
 // Hoisted to module scope so the literal isn't re-compiled on every call.

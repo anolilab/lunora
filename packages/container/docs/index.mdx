@@ -225,7 +225,7 @@ await ctx.containers.agentComputer.get(otherTaskId).start({ snapshot: saved }); 
   replaces every instance.
 
 <Callout type="warn">
-    Needs wrangler 4.145.0 or newer: older releases reject `scheduling_policy: "durable_object"` and the `images` map at `wrangler deploy`. Only Cloudflare
+    Needs wrangler 4.131.0 or newer: older releases reject `scheduling_policy: "durable_object"` and the `images` map at `wrangler deploy`. Only Cloudflare
     supports this. Codegen refuses `schedulingPolicy: "durable_object"` with a `platform_unsupported_feature` diagnostic on the Node and celld targets.
 </Callout>
 
