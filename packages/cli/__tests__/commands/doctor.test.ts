@@ -868,6 +868,45 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("cloudflare cli config", () => {
+        const cfFinding = (result: Awaited<ReturnType<typeof runDoctor>>) => result.findings.find((finding) => finding.code === "cf-config-present");
+
+        it("warns when a cloudflare.config.ts sits beside wrangler.jsonc, without failing the run", async () => {
+            expect.assertions(6);
+
+            seed(workdir, CLEAN_WRANGLER);
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = cfFinding(result);
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("cloudflare.config.ts found next to wrangler.jsonc");
+            expect(finding?.message).toContain("Lunora manages wrangler.jsonc");
+            expect(finding?.fix).toContain("resource commands");
+            expect(finding?.fix).toContain("https://github.com/anolilab/lunora/issues/964");
+            expect(result.code).toBe(0);
+        });
+
+        it("reports every run, even after a once-per-process warning was already printed", async () => {
+            expect.assertions(2);
+
+            seed(workdir, CLEAN_WRANGLER);
+            writeFileSync(join(workdir, "cloudflare.config.mjs"), "export default {};\n", "utf8");
+
+            expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))?.message).toContain("cloudflare.config.mjs");
+            expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeDefined();
+        });
+
+        it("says nothing for a project without one", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+    });
+
     describe("observability sampling", () => {
         const wranglerWith = (extra: Record<string, unknown>): string => JSON.stringify({ ...(JSON.parse(CLEAN_WRANGLER) as object), ...extra }, null, 4);
 

@@ -1797,6 +1797,29 @@ interface BindingRequirement {
 }
 ```
 
+### `CLOUDFLARE_CLI_CONFIG_ADVICE` (const)
+
+```ts
+const CLOUDFLARE_CLI_CONFIG_ADVICE: string;
+```
+
+### `CLOUDFLARE_CLI_CONFIG_FILES` (const)
+
+```ts
+const CLOUDFLARE_CLI_CONFIG_FILES: readonly [
+    "cloudflare.config.ts",
+    "cloudflare.config.mts",
+    "cloudflare.config.js",
+    "cloudflare.config.mjs"
+];
+```
+
+### `CLOUDFLARE_CLI_CONFIG_WARNING_ENV` (const)
+
+```ts
+const CLOUDFLARE_CLI_CONFIG_WARNING_ENV = "LUNORA_CF_CONFIG_WARNING_SHOWN";
+```
+
 ### `CLOUDFLARE_DRIVER` (const)
 
 ```ts
@@ -2530,10 +2553,22 @@ const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 const collectWranglerSecretVariables: (projectRoot: string) => WranglerVariableIR[];
 ```
 
+### `describeCloudflareCliConfig` (const)
+
+```ts
+const describeCloudflareCliConfig: (configPath: string) => string;
+```
+
 ### `describePreservedCrons` (const)
 
 ```ts
 const describePreservedCrons: (preserved: ReadonlyArray<string>) => string | undefined;
+```
+
+### `findCloudflareCliConfig` (const)
+
+```ts
+const findCloudflareCliConfig: (projectRoot: string) => string | undefined;
 ```
 
 ### `findWranglerFile` (const)
@@ -2657,6 +2692,12 @@ const validateWranglerConfig: (wranglerInput: WranglerConfig | undefined, schema
 
 ```ts
 const validateWranglerProject: (options: WranglerProjectValidationOptions) => WranglerProjectValidationResult;
+```
+
+### `warnCloudflareCliConfigOnce` (const)
+
+```ts
+const warnCloudflareCliConfigOnce: (projectRoot: string, warn: (message: string) => void) => boolean;
 ```
 
 ### `withTailConsumer` (const)

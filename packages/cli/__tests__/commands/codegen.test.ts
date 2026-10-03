@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { inferLunoraBindings } from "@lunora/config";
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CodegenCommandData } from "../../src/commands/codegen/handler";
@@ -324,6 +325,28 @@ describe("lunora codegen", () => {
             expect(output).not.toMatch(/is not exported by the worker entry/u);
             // …and the actual validation error is still reported.
             expect(output).not.toBe("");
+        });
+
+        it("warns about a cloudflare.config.ts once per process, not on every run", async () => {
+            expect.assertions(3);
+
+            Reflect.deleteProperty(process.env, CLOUDFLARE_CLI_CONFIG_WARNING_ENV);
+
+            seedWorkflow(
+                'import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\nexport * from "../lunora/_generated/workflows.js";\n',
+            );
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            try {
+                const first = await captureExecuteStderr();
+                const second = await captureExecuteStderr();
+
+                expect(first).toContain("cloudflare.config.ts found next to wrangler.jsonc");
+                expect(first).toContain("https://github.com/anolilab/lunora/issues/964");
+                expect(second).not.toContain("cloudflare.config.ts");
+            } finally {
+                Reflect.deleteProperty(process.env, CLOUDFLARE_CLI_CONFIG_WARNING_ENV);
+            }
         });
 
         it("stays quiet when the worker entry re-exports the generated module", async () => {

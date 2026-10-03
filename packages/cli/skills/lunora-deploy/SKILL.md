@@ -167,6 +167,12 @@ secret put` for every prod secret.
    with no migration — stage the change (`lunora-migration-helper`) instead.
 5. **Deploying with uncommitted codegen.** Commit `lunora/_generated/` and
    `lunora/.lunora-schema.json` so CI and the gate see the same baseline.
+6. **Using the Cloudflare CLI (`cf`) lifecycle commands.** Lunora manages
+   `wrangler.jsonc` and doesn't support `cf` yet
+   ([#964](https://github.com/anolilab/lunora/issues/964)). `cf` resource
+   commands (zones, DNS, KV, …) are fine, but never `cf dev` / `cf build` /
+   `cf deploy`: they read `cloudflare.config.ts`, which Lunora never updates.
+   `lunora doctor` reports one as `cf-config-present`; deploy/codegen/dev warn.
 
 ## Checklist
 

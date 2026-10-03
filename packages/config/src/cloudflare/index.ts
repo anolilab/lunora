@@ -19,6 +19,14 @@ export type { AssertWranglerOptions } from "./assert-wrangler";
 export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
 export type { BindingManifest, BindingRequirement, ManifestConfigShape } from "./binding-manifest";
 export { BINDING_MANIFEST_VERSION, buildBindingManifest } from "./binding-manifest";
+export {
+    CLOUDFLARE_CLI_CONFIG_ADVICE,
+    CLOUDFLARE_CLI_CONFIG_FILES,
+    CLOUDFLARE_CLI_CONFIG_WARNING_ENV,
+    describeCloudflareCliConfig,
+    findCloudflareCliConfig,
+    warnCloudflareCliConfigOnce,
+} from "./cloudflare-cli-config";
 export { default as CLOUDFLARE_DRIVER } from "./cloudflare-driver";
 export { default as GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG } from "./compatibility-flags";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";

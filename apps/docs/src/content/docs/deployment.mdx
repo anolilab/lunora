@@ -281,6 +281,23 @@ types:
 - **`lunora verify`** writes nothing and adds `tsc --noEmit`, so it is the
   lighter gate for a pull-request check.
 
+### Cloudflare CLI (`cf`)
+
+Cloudflare's `cf` CLI is in beta, and Lunora doesn't support it yet
+([#964](https://github.com/anolilab/lunora/issues/964)). Lunora manages
+`wrangler.jsonc` and deploys with Wrangler.
+
+- `cf` **resource** commands (zones, DNS, KV, …) are fine next to a Lunora project.
+- Don't run `cf dev`, `cf build` or `cf deploy` on a Lunora project. They read
+  `cloudflare.config.ts` (which `cf migrate` writes), and Lunora never updates
+  that file, so the bindings, Durable Object classes and migrations it adds
+  later would be silently missing from those deploys.
+
+When a `cloudflare.config.{ts,mts,js,mjs}` sits beside `wrangler.jsonc`,
+`lunora deploy`, `lunora codegen` and the dev server print this warning once per
+process, and `lunora doctor` reports it as `cf-config-present`. The warning never
+blocks: `lunora deploy` itself goes through Wrangler, which ignores the file.
+
 ## Worker size
 
 Cloudflare caps a Worker at

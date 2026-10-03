@@ -25,7 +25,7 @@ import {
     resolveSchemaDirectory,
     updateDevServerState,
 } from "@lunora/config";
-import { resolveRemoteEnabled } from "@lunora/config/cloudflare";
+import { resolveRemoteEnabled, warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
@@ -508,6 +508,12 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         await offerDevVariablesScaffold(options, cwd);
 
         logger.info(startBanner(plan));
+
+        // Before anything is spawned: the claim rides the env into the Vite /
+        // wrangler children, so the plugin inside them stays quiet (#964).
+        warnCloudflareCliConfigOnce(cwd, (message) => {
+            logger.warn(message);
+        });
 
         if (plan.ipv4LoopbackForced) {
             logger.info(

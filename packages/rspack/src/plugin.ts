@@ -16,7 +16,7 @@ import {
     lunoraLine,
     runPostCodegenHook,
 } from "@lunora/config";
-import { assertWranglerSatisfiesSchema, findWranglerFile, reconcileBindingsSafely } from "@lunora/config/cloudflare";
+import { assertWranglerSatisfiesSchema, findWranglerFile, reconcileBindingsSafely, warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
 import type { CodegenLogger } from "./codegen";
 import { createReusableProject, runCodegenPass } from "./codegen";
@@ -398,6 +398,11 @@ class LunoraRspackPlugin {
         if (this.#options.validateWrangler) {
             assertWranglerSatisfiesSchema(this.#options, consoleLogger.warn, "Update your wrangler.jsonc and rebuild.");
         }
+
+        // Every pass asks; only the first in the process tree prints (#964).
+        warnCloudflareCliConfigOnce(this.#options.projectRoot, (message) => {
+            consoleLogger.warn(lunoraLine(message));
+        });
 
         const blockingMessage = runCodegenPass(this.#options, consoleLogger, this.#project.get());
         const hook = await runPostCodegenHook({ cwd: this.#options.projectRoot, logger: consoleLogger });

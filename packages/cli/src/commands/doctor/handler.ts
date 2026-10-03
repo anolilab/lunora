@@ -3,7 +3,16 @@ import { join } from "node:path";
 
 import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries, resolveSchemaDirectory } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { collectExportGaps, findWranglerFile, readWranglerJsonc, UNEXPORTED_CLASS_MARKER, validateWranglerProject } from "@lunora/config/cloudflare";
+import {
+    CLOUDFLARE_CLI_CONFIG_ADVICE,
+    collectExportGaps,
+    describeCloudflareCliConfig,
+    findCloudflareCliConfig,
+    findWranglerFile,
+    readWranglerJsonc,
+    UNEXPORTED_CLASS_MARKER,
+    validateWranglerProject,
+} from "@lunora/config/cloudflare";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
@@ -37,6 +46,7 @@ const DOCTOR_CODES = [
     "ai-binding-missing",
     "ai-gateway-default",
     "ai-gateway-token-unused",
+    "cf-config-present",
     "cimd-fetch-not-strictly-public",
     "cli-shadowed",
     "cpu-limit-missing",
@@ -242,6 +252,28 @@ const checkStaleProjectConfig = (cwd: string, findings: Finding[]): void => {
         level: "warn",
         message: "lunora.json is present but no longer read — lunora.config.* replaced it, so any `target` or `remote` in it is being ignored.",
     });
+};
+
+/**
+ * A Cloudflare CLI config (`cloudflare.config.{ts,mts,js,mjs}`) beside
+ * `wrangler.jsonc` → WARN.
+ *
+ * Lunora reconciles `wrangler.jsonc` and never touches the `cf` config, so `cf
+ * dev` / `cf build` / `cf deploy` would ship without whatever Lunora adds after
+ * `cf migrate` wrote it. WARN rather than FAIL: `lunora deploy` goes through
+ * wrangler, which ignores the file, and `cf` resource commands are fine — the
+ * risk is a separate `cf` lifecycle command. Reported on every run, unlike the
+ * once-per-process warning codegen and deploy print: listing what it found is
+ * doctor's job. See https://github.com/anolilab/lunora/issues/964.
+ */
+const checkCloudflareCliConfig = (cwd: string, findings: Finding[]): void => {
+    const configPath = findCloudflareCliConfig(cwd);
+
+    if (configPath === undefined) {
+        return;
+    }
+
+    findings.push({ code: "cf-config-present", fix: CLOUDFLARE_CLI_CONFIG_ADVICE, level: "warn", message: describeCloudflareCliConfig(configPath) });
 };
 
 /**
@@ -723,6 +755,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     const { parsed, path } = readWrangler(cwd);
 
     checkWrangler(cwd, parsed, path, findings);
+    checkCloudflareCliConfig(cwd, findings);
     checkD1Placeholders(parsed, findings);
     checkEmailDestination(parsed, findings);
     checkCpuLimit(parsed, findings);

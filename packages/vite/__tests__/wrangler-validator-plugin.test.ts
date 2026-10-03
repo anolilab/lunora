@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import bindingsProvisionPlugin from "../src/bindings-provision-plugin";
@@ -135,6 +136,33 @@ describe("wrangler-validator-plugin", () => {
             const plugin = wranglerValidatorPlugin(makeOptions(workdir));
 
             await expect(runHooks(plugin)).resolves.toBeUndefined();
+        });
+
+        it("warns about a cloudflare.config.ts once per process, not on every config reload", async () => {
+            expect.assertions(3);
+
+            Reflect.deleteProperty(process.env, CLOUDFLARE_CLI_CONFIG_WARNING_ENV);
+
+            writeSchema(SCHEMA_WITH_GLOBAL);
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                // A Vite restart re-resolves the config and runs the hook again.
+                await runHooks(wranglerValidatorPlugin(makeOptions(workdir)));
+                await runHooks(wranglerValidatorPlugin(makeOptions(workdir)));
+
+                const cfWarnings = warn.mock.calls.filter(([message]) => String(message).includes("cloudflare.config.ts"));
+
+                expect(cfWarnings).toHaveLength(1);
+                expect(String(cfWarnings[0]?.[0])).toContain("cf deploy");
+                expect(String(cfWarnings[0]?.[0])).toContain("https://github.com/anolilab/lunora/issues/964");
+            } finally {
+                warn.mockRestore();
+                Reflect.deleteProperty(process.env, CLOUDFLARE_CLI_CONFIG_WARNING_ENV);
+            }
         });
 
         it("throws when wrangler.jsonc is missing entirely", async () => {
