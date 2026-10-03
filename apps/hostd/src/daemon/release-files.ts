@@ -30,9 +30,16 @@ interface ReleaseAsset {
     path: string;
 }
 
+/** The root files celld's asset layer reads as rules, as the release's `assets.config` carries them. */
+interface ReleaseRulesFiles {
+    _headers?: string;
+    _redirects?: string;
+}
+
 /** A downloaded release, checked. */
 interface StoredRelease {
-    assets?: { config?: CelldReleaseAssetsConfig; files: ReleaseAsset[] };
+    /** `config` is what the celld config takes; `rules` are written as files into the assets directory. */
+    assets?: { config?: CelldReleaseAssetsConfig; files: ReleaseAsset[]; rules?: ReleaseRulesFiles };
     bundle: string;
     manifest: CelldReleaseManifest;
 }
@@ -54,6 +61,34 @@ const isAssetPath = (path: string): boolean =>
 const HTML_HANDLING = new Set(["auto-trailing-slash", "drop-trailing-slash", "force-trailing-slash", "none"]);
 
 const NOT_FOUND_HANDLING = new Set(["404-page", "none", "single-page-application"]);
+
+/**
+ * Root files the asset layer reads as config. A release carries `_headers` /
+ * `_redirects` as `assets.config` strings, never as files, so one among the
+ * files is refused rather than left to shadow (or be shadowed by) the config.
+ */
+const RESERVED_ASSET_PATHS = new Set(["/.assetsignore", "/_headers", "/_redirects"]);
+
+/** `_headers` / `_redirects` from the release's asset config, each a string or absent. */
+const pickRulesFiles = (config: Record<string, unknown>): ReleaseRulesFiles => {
+    const rules: ReleaseRulesFiles = {};
+
+    for (const name of ["_headers", "_redirects"] as const) {
+        const value = config[name];
+
+        if (value === undefined) {
+            continue;
+        }
+
+        if (typeof value !== "string") {
+            throw invalid(`assets.config.${name} is not a string`);
+        }
+
+        rules[name] = value;
+    }
+
+    return rules;
+};
 
 /**
  * Only the three serving options the deploy request carries, each checked —
@@ -84,11 +119,20 @@ const parseAssets = (source: unknown): NonNullable<StoredRelease["assets"]> => {
         if (!isAssetPath(file.path) || !BASE64_PATTERN.test(file.content)) {
             throw invalid(`asset ${JSON.stringify(file.path.slice(0, 200))} has an unsafe path or non-base64 content`);
         }
+
+        if (RESERVED_ASSET_PATHS.has(file.path)) {
+            throw invalid(`asset ${file.path} is a config file, not a served one`);
+        }
     }
 
     const config = isRecord(source) ? source["config"] : undefined;
+    const rules = isRecord(config) ? pickRulesFiles(config) : {};
 
-    return { files: files as ReleaseAsset[], ...(isRecord(config) ? { config: pickAssetsConfig(config) } : {}) };
+    return {
+        files: files as ReleaseAsset[],
+        ...(isRecord(config) ? { config: pickAssetsConfig(config) } : {}),
+        ...(Object.keys(rules).length > 0 ? { rules } : {}),
+    };
 };
 
 /** Check the shape of a release's JSON. Only what the box uses is read; unknown fields are ignored. */
@@ -181,7 +225,8 @@ const fetchRelease = async (signedFetch: SignedFetch, releaseUrl: string): Promi
 
 /**
  * Lay `release` out in `directory` (replacing anything there): the bundle as
- * `worker.js`, the assets under `assets/`, and the celld config.
+ * `worker.js`, the assets under `assets/` with its `_headers` / `_redirects`
+ * at that root, and the celld config.
  * @returns the config written
  * @throws {JobError} `RELEASE_INVALID` when the release cannot run on celld.
  */
@@ -226,6 +271,16 @@ const writeReleaseDirectory = (directory: string, release: StoredRelease, job: D
     // celld refuses an assets directory it cannot find, even an empty one.
     if (release.assets !== undefined) {
         mkdirSync(assetsRoot, { mode: 0o750, recursive: true });
+    }
+
+    // celld reads `_headers` / `_redirects` at the assets root as Cloudflare's
+    // asset layer does (custom headers, redirects) and never serves them.
+    for (const name of ["_headers", "_redirects"] as const) {
+        const content = release.assets?.rules?.[name];
+
+        if (content !== undefined) {
+            writeFileSync(join(assetsRoot, name), content, { mode: 0o640 });
+        }
     }
 
     // Mode 0600: the vars carry the app's secrets (plan 458 D10).

@@ -202,7 +202,11 @@ s3://<bucket>/fleets/<alias> [--endpoint] [--region] --listen
   listeners are loopback; ports come in pairs from `ports` (default
   20000–20999). A `deploy` runs `celld deploy` on the release directory; a
   running node adopts the new version at its next pointer poll, without a
-  restart;
+  restart. The release's static assets go under `assets/`, and its
+  `assets.config._headers` / `._redirects` are written back to that root as
+  `_headers` / `_redirects`, which celld applies as Cloudflare's asset layer
+  does — the app's own cache headers and redirects, never served as files.
+  Caddy adds no asset headers of its own;
 - **Caddy**, configured through its JSON admin API on loopback from the
   `routes` the control plane pushes: each alias's hostnames proxy to its
   node, readiness-gated on `/.well-known/celld/health`, compressed (never an

@@ -382,6 +382,50 @@ describe("lunora cloud", () => {
         }
     });
 
+    it("deploy --out carries root _headers and _redirects in the asset config and says so", async () => {
+        expect.assertions(3);
+
+        const root = mkdtempSync(join(tmpdir(), "lunora-cloud-deploy-"));
+
+        try {
+            mkdirSync(join(root, "dist"), { recursive: true });
+            writeFileSync(join(root, "dist", "index.html"), "hi");
+            writeFileSync(join(root, "dist", "_headers"), "/assets/*\n  Cache-Control: immutable\n");
+            writeFileSync(join(root, "dist", "_redirects"), "/old /new 301\n");
+
+            let written = "";
+            const { infos, logger } = capturingLogger();
+
+            const result = await runCloudCommand({
+                argument: ["deploy"],
+                bundlePath: "b",
+                cwd: root,
+                deps: deps({
+                    env: {},
+                    readWrangler: () => {
+                        return { config: { assets: { binding: "ASSETS", directory: "./dist" }, name: "app" }, path: join(root, "wrangler.jsonc") };
+                    },
+                    writeDeployBody: (_path, content) => {
+                        written = content;
+
+                        return Promise.resolve();
+                    },
+                }),
+                logger,
+                out: "release.json",
+            });
+
+            expect(result.code).toBe(0);
+            expect((JSON.parse(written) as { assets: unknown }).assets).toStrictEqual({
+                config: { _headers: "/assets/*\n  Cache-Control: immutable\n", _redirects: "/old /new 301\n" },
+                files: [{ content: "aGk=", path: "/index.html" }],
+            });
+            expect(infos).toContain("cloud deploy: _headers and _redirects ride in the asset config, not as files — the asset layer applies their rules");
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
+    });
+
     it("deploys: an assets binding whose directory is missing tells the user to build first", async () => {
         expect.assertions(3);
 

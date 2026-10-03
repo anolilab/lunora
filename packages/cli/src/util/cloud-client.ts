@@ -36,9 +36,18 @@ interface AssetFile {
     path: string;
 }
 
-/** The static files behind an `assets` binding, plus the subset of wrangler's `assets` config that changes serving. */
+/**
+ * The static files behind an `assets` binding, plus the subset of wrangler's `assets` config that changes serving.
+ *
+ * `_headers` / `_redirects` are the raw contents of those files at the assets
+ * root. They are never served as files: like wrangler, the upload carries them
+ * in the asset config (Cloudflare's script-upload `metadata.assets.config`
+ * fields of the same names), and the asset layer applies their rules.
+ */
 interface AssetsUpload {
     config?: {
+        _headers?: string;
+        _redirects?: string;
         html_handling?: "auto-trailing-slash" | "drop-trailing-slash" | "force-trailing-slash" | "none";
         not_found_handling?: "404-page" | "none" | "single-page-application";
         run_worker_first?: boolean | string[];
@@ -259,8 +268,119 @@ const LEADING_SLASH = /^\//u;
 /** The wrangler `assets` keys that change how files are served — the only ones the upload carries. */
 const SERVING_CONFIG_KEYS = ["html_handling", "not_found_handling", "run_worker_first"] as const;
 
-/** Files wrangler reads as config rather than serving; never uploaded. */
+/** Files at the assets root that wrangler reads as config rather than serving; never uploaded as files. */
 const RESERVED_ASSET_FILES = new Set([".assetsignore", "_headers", "_redirects"]);
+
+/**
+ * Cloudflare's documented `_headers` limits: 100 rules, 2,000 characters a line
+ * (https://developers.cloudflare.com/workers/static-assets/headers/).
+ */
+const MAX_HEADER_RULES = 100;
+const MAX_HEADERS_LINE_LENGTH = 2000;
+
+/**
+ * Cloudflare's documented `_redirects` limits: 2,000 static and 100 dynamic
+ * rules, 1,000 characters a line
+ * (https://developers.cloudflare.com/workers/static-assets/redirects/).
+ */
+const MAX_STATIC_REDIRECT_RULES = 2000;
+const MAX_DYNAMIC_REDIRECT_RULES = 100;
+const MAX_REDIRECTS_LINE_LENGTH = 1000;
+
+/** The control plane's cap on either file's raw contents. */
+const MAX_RULES_FILE_BYTES = 2 * 1024 * 1024;
+
+/** A `_headers` line that starts a rule: a path (`/…`) or an absolute URL (`https://…`) — workers-shared's `parseHeaders`. */
+const HEADERS_RULE_LINE = /^(?:\S+:\/\/|\/)/u;
+
+/** A dynamic redirect source carries a splat or a `:placeholder` — workers-shared's `parseRedirects`. */
+const DYNAMIC_REDIRECT_SOURCE = /\*|:[A-Za-z]\w*/u;
+
+const WHITESPACE = /\s+/u;
+
+/** The lines of a rules file that carry a rule, numbered from 1: neither blank nor a `#` comment. */
+const ruleLines = (content: string): { line: string; number: number }[] =>
+    content
+        .split(LINE_BREAK)
+        .map((line, index) => {
+            return { line, number: index + 1 };
+        })
+        .filter(({ line }) => line.trim() !== "" && !line.trim().startsWith("#"));
+
+/**
+ * Refuse a `_headers` / `_redirects` file over Cloudflare's documented limits.
+ * Cloudflare's own parsers (workers-shared `parseHeaders` / `parseRedirects`)
+ * skip the lines past a limit rather than fail, so an over-long file would
+ * deploy green and half-applied; here it fails the deploy instead. Syntax is the
+ * asset layer's to judge, not ours.
+ */
+const checkRulesFile = (name: "_headers" | "_redirects", content: string): void => {
+    if (Buffer.byteLength(content) > MAX_RULES_FILE_BYTES) {
+        throw new Error(`${name} is ${String(Buffer.byteLength(content))} bytes; the upload caps it at 2 MiB`);
+    }
+
+    const maxLength = name === "_headers" ? MAX_HEADERS_LINE_LENGTH : MAX_REDIRECTS_LINE_LENGTH;
+    const lines = ruleLines(content);
+    const long = lines.find(({ line }) => line.length > maxLength);
+
+    if (long !== undefined) {
+        throw new Error(`${name} line ${String(long.number)} is ${String(long.line.length)} characters; Cloudflare allows ${String(maxLength)}`);
+    }
+
+    if (name === "_headers") {
+        const rules = lines.filter(({ line }) => HEADERS_RULE_LINE.test(line.trim())).length;
+
+        if (rules > MAX_HEADER_RULES) {
+            throw new Error(`_headers has ${String(rules)} rules; Cloudflare allows ${String(MAX_HEADER_RULES)}`);
+        }
+
+        return;
+    }
+
+    // Counted as Cloudflare counts them: once a dynamic rule appears, every
+    // later rule is dynamic too, so static rules belong at the top.
+    let staticRules = 0;
+    let dynamicRules = 0;
+
+    for (const { line } of lines) {
+        // The source is the first token; an inline `# comment` can only follow it.
+        const [source = ""] = line.trim().split(WHITESPACE);
+
+        if (dynamicRules === 0 && !DYNAMIC_REDIRECT_SOURCE.test(source)) {
+            staticRules += 1;
+        } else {
+            dynamicRules += 1;
+        }
+    }
+
+    if (staticRules > MAX_STATIC_REDIRECT_RULES) {
+        throw new Error(`_redirects has ${String(staticRules)} static rules; Cloudflare allows ${String(MAX_STATIC_REDIRECT_RULES)}`);
+    }
+
+    if (dynamicRules > MAX_DYNAMIC_REDIRECT_RULES) {
+        throw new Error(
+            `_redirects has ${String(dynamicRules)} dynamic rules (a splat or :placeholder source, and every rule after the first of those); Cloudflare allows ${String(MAX_DYNAMIC_REDIRECT_RULES)}`,
+        );
+    }
+};
+
+/** The root `_headers` / `_redirects` files, read and checked, as asset-config fields. */
+const readRulesFiles = (directory: string): Pick<NonNullable<AssetsUpload["config"]>, "_headers" | "_redirects"> => {
+    const rules: Pick<NonNullable<AssetsUpload["config"]>, "_headers" | "_redirects"> = {};
+
+    for (const name of ["_headers", "_redirects"] as const) {
+        const file = join(directory, name);
+
+        if (existsSync(file) && statSync(file).isFile()) {
+            const content = readFileSync(file, "utf8");
+
+            checkRulesFile(name, content);
+            rules[name] = content;
+        }
+    }
+
+    return rules;
+};
 
 /** The wrangler `assets` section, as far as a deploy reads it. */
 interface WranglerAssets {
@@ -314,9 +434,11 @@ const readAssetsIgnore = (directory: string): ((path: string) => boolean) => {
 
 /**
  * Walk the `assets.directory` (already resolved against the wrangler file) into
- * the upload body. Throws with a user-facing message when the directory is
- * missing or empty, or a size cap is exceeded — those are all "fix your build"
- * errors the control plane would otherwise answer much later.
+ * the upload body. A root `_headers` / `_redirects` rides in the config rather
+ * than as a file, as wrangler sends it. Throws with a user-facing message when
+ * the directory is missing or empty, or a size cap or rules limit is exceeded —
+ * those are all "fix your build" errors the control plane would otherwise answer
+ * much later.
  */
 const collectAssets = (directory: string, wranglerAssets: WranglerAssets): AssetsUpload => {
     if (!existsSync(directory) || !statSync(directory).isDirectory()) {
@@ -353,9 +475,10 @@ const collectAssets = (directory: string, wranglerAssets: WranglerAssets): Asset
         throw new Error(`assets directory "${directory}" is empty — build the app first`);
     }
 
-    const config: NonNullable<AssetsUpload["config"]> = Object.fromEntries(
-        SERVING_CONFIG_KEYS.filter((key) => wranglerAssets[key] !== undefined).map((key) => [key, wranglerAssets[key]]),
-    );
+    const config: NonNullable<AssetsUpload["config"]> = {
+        ...Object.fromEntries(SERVING_CONFIG_KEYS.filter((key) => wranglerAssets[key] !== undefined).map((key) => [key, wranglerAssets[key]])),
+        ...readRulesFiles(directory),
+    };
 
     return { ...(Object.keys(config).length > 0 ? { config } : {}), files };
 };

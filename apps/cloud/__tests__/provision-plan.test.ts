@@ -190,10 +190,30 @@ describe("provision plan: deploy", () => {
         const assets = { config: { not_found_handling: "single-page-application" as const }, files: [{ content: "aGk=", path: "/index.html" }] };
 
         expect(plan(deployJob([{ binding: "ASSETS", type: "assets" }], { assets })).worker?.assets).toStrictEqual({
-            config: { htmlHandling: undefined, notFoundHandling: "single-page-application", runWorkerFirst: undefined },
+            config: {
+                headers: undefined,
+                htmlHandling: undefined,
+                notFoundHandling: "single-page-application",
+                redirects: undefined,
+                runWorkerFirst: undefined,
+            },
         });
 
         refuse(deployJob([{ binding: "STATIC", type: "assets" }], { assets }), /must be named ASSETS/u);
+    });
+
+    it("hands _headers and _redirects to Alchemy's headers and redirects props", () => {
+        expect.assertions(1);
+
+        const assets = {
+            config: { _headers: "/assets/*\n  Cache-Control: immutable\n", _redirects: "/old /new 301\n" },
+            files: [{ content: "aGk=", path: "/index.html" }],
+        };
+
+        expect(plan(deployJob([{ binding: "ASSETS", type: "assets" }], { assets })).worker?.assets?.config).toMatchObject({
+            headers: "/assets/*\n  Cache-Control: immutable\n",
+            redirects: "/old /new 301\n",
+        });
     });
 
     it("refuses an ASSETS binding with no uploaded files", () => {

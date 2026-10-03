@@ -159,7 +159,14 @@ const deployPayload = (
     }
 
     try {
-        return { ...payload, assets: collectAssets(resolve(dirname(wrangler.path), directory), wrangler.config.assets) };
+        const assets = collectAssets(resolve(dirname(wrangler.path), directory), wrangler.config.assets);
+        const rulesFiles = (["_headers", "_redirects"] as const).filter((name) => assets.config?.[name] !== undefined);
+
+        if (rulesFiles.length > 0) {
+            logger.info(`cloud deploy: ${rulesFiles.join(" and ")} ride in the asset config, not as files — the asset layer applies their rules`);
+        }
+
+        return { ...payload, assets };
     } catch (error) {
         logger.error(`cloud deploy: ${error instanceof Error ? error.message : String(error)}`);
 

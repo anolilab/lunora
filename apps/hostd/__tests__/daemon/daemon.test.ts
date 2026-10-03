@@ -20,7 +20,11 @@ import { FakeControlPlane } from "./helpers/fake-control-plane";
 const storedRelease = (): string =>
     JSON.stringify({
         assets: {
-            config: { not_found_handling: "single-page-application" },
+            config: {
+                _headers: "/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n",
+                _redirects: "/old /new 301\n",
+                not_found_handling: "single-page-application",
+            },
             files: [
                 { content: Buffer.from("<h1>hi</h1>").toString("base64"), path: "/index.html" },
                 { content: Buffer.from("body{}").toString("base64"), path: "/assets/app.css" },
@@ -127,7 +131,7 @@ describe("the daemon", () => {
     });
 
     it("deploys a release end to end", async () => {
-        expect.assertions(15);
+        expect.assertions(18);
 
         plane.pushRoutes([{ alias: "my-app", hostname: `my-app.${plane.hostname}` }]);
 
@@ -147,6 +151,11 @@ describe("the daemon", () => {
 
         expect(readFileSync(join(directory, "worker.js"), "utf8")).toContain("new Response('ok')");
         expect(readFileSync(join(directory, "assets", "assets", "app.css"), "utf8")).toBe("body{}");
+        // `_headers` / `_redirects` land at the assets root, where celld's asset layer reads them…
+        expect(readFileSync(join(directory, "assets", "_headers"), "utf8")).toBe("/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n");
+        expect(readFileSync(join(directory, "assets", "_redirects"), "utf8")).toBe("/old /new 301\n");
+        // …and never in the Wrangler config, which has no such keys.
+        expect(config["assets"]).toStrictEqual({ binding: "ASSETS", directory: "./assets", not_found_handling: "single-page-application" });
         expect(config).toMatchObject({
             d1_databases: [{ binding: "DB", database_name: "my-app--db" }],
             name: "my-app",
@@ -298,6 +307,23 @@ describe("the daemon", () => {
         const { result } = await plane.dispatch(deployJob(plane, { deploymentId: "dep_3", releaseUrl: `${plane.origin}/v1/boxes/releases/dep_3` }));
 
         expect(result.error?.code).toBe("RELEASE_INVALID");
+    });
+
+    it("refuses a _headers file among the assets: the rules travel as assets.config", async () => {
+        expect.assertions(1);
+
+        plane.releases.set(
+            "dep_4",
+            JSON.stringify({
+                assets: { files: [{ content: "AA==", path: "/_headers" }] },
+                bundle: "AA==",
+                manifest: { bindings: [{ binding: "ASSETS", type: "assets" }] },
+            }),
+        );
+
+        const { result } = await plane.dispatch(deployJob(plane, { deploymentId: "dep_4", releaseUrl: `${plane.origin}/v1/boxes/releases/dep_4` }));
+
+        expect(result.error).toMatchObject({ code: "RELEASE_INVALID", message: "the release asset /_headers is a config file, not a served one" });
     });
 
     it("destroys a fleet and keeps its data unless told to delete it", async () => {

@@ -27,6 +27,13 @@ const MAX_ASSET_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_ASSETS_BYTES = 50 * 1024 * 1024;
 const MAX_RUN_WORKER_FIRST_RULES = 100;
 
+/**
+ * Each of `_headers` / `_redirects`. Cloudflare documents rule-count and
+ * line-length limits but no file size; the CLI enforces those, and this bounds
+ * what a hand-made body can put into the release.
+ */
+const MAX_RULES_FILE_BYTES = 2 * 1024 * 1024;
+
 /** Binding names become `env` keys and resource-name suffixes, so they stay identifier-shaped. */
 const IDENTIFIER = /^[A-Za-z_]\w{0,63}$/u;
 const COMPATIBILITY_DATE = /^\d{4}-\d{2}-\d{2}$/u;
@@ -37,7 +44,10 @@ const RESOURCE_NAME = /^[\w.-]{1,63}$/u;
 
 const HTML_HANDLING = ["auto-trailing-slash", "drop-trailing-slash", "force-trailing-slash", "none"] as const;
 const NOT_FOUND_HANDLING = ["404-page", "none", "single-page-application"] as const;
-const ASSETS_CONFIG_KEYS = new Set(["html_handling", "not_found_handling", "run_worker_first"]);
+const ASSETS_CONFIG_KEYS = new Set(["_headers", "_redirects", "html_handling", "not_found_handling", "run_worker_first"]);
+
+/** Root files the asset layer reads as config; they travel as `assets.config` strings, never as served files. */
+const RESERVED_ASSET_PATHS = new Set(["/.assetsignore", "/_headers", "/_redirects"]);
 
 /** Validation outcome: the parsed value, or the 400 message. */
 type Parsed<T> = { error: string } | { value: T };
@@ -216,6 +226,31 @@ const parseManifest = (raw: unknown, target: TargetId): Parsed<DeployManifest> =
 /** Decoded byte length of a base64 string, without decoding it. */
 const base64Bytes = (encoded: string): number => (encoded.length / 4) * 3 - (Number(encoded.endsWith("=")) + Number(encoded.endsWith("==")));
 
+/** `config` plus `_headers` / `_redirects`: the raw file contents, each a string under {@link MAX_RULES_FILE_BYTES}. */
+const withRulesFiles = (raw: Record<string, unknown>, config: NonNullable<AssetsUpload["config"]>): Parsed<AssetsUpload["config"]> => {
+    const rules = { ...config };
+
+    for (const name of ["_headers", "_redirects"] as const) {
+        const content = raw[name];
+
+        if (content === undefined) {
+            continue;
+        }
+
+        if (typeof content !== "string") {
+            return { error: `assets.config.${name} must be the file's contents as a string` };
+        }
+
+        if (new TextEncoder().encode(content).byteLength > MAX_RULES_FILE_BYTES) {
+            return { error: `assets.config.${name} exceeds the ${String(MAX_RULES_FILE_BYTES)}-byte limit` };
+        }
+
+        rules[name] = content;
+    }
+
+    return { value: rules };
+};
+
 const parseAssetsConfig = (raw: unknown): Parsed<AssetsUpload["config"]> => {
     if (raw === undefined) {
         return { value: undefined };
@@ -265,7 +300,7 @@ const parseAssetsConfig = (raw: unknown): Parsed<AssetsUpload["config"]> => {
             typeof runWorkerFirst === "boolean" ? runWorkerFirst : runWorkerFirst.filter((rule): rule is string => typeof rule === "string");
     }
 
-    return { value: config };
+    return withRulesFiles(raw, config);
 };
 
 /** One asset file: a rooted path with no traversal, and base64 content under the per-file cap. */
@@ -278,6 +313,10 @@ const parseAssetFile = (entry: unknown, index: number): Parsed<AssetFile> => {
 
     if (!path.startsWith("/") || path.includes("\0") || path.split("/").includes("..")) {
         return { error: `asset path ${JSON.stringify(path)} must start with / and contain no .. segment or NUL` };
+    }
+
+    if (RESERVED_ASSET_PATHS.has(path)) {
+        return { error: `asset ${path} is read as config, never served: send _headers / _redirects as assets.config strings and leave .assetsignore out` };
     }
 
     if (content.length % 4 !== 0 || !BASE64.test(content)) {

@@ -183,6 +183,19 @@ action context (`env.__lunoraCtx.runMutation`); they stay **public** (not
 function would 404 at the RPC visibility gate — so authorization is enforced
 inside each mutation (deploy key or membership).
 
+**Static assets** ride in the body as `assets: { files, config? }`
+(`AssetsUpload`, `src/provision-contract.ts`), validated by
+`src/deploy/manifest-parse.ts` (50 MiB / 20,000 files, 25 MiB a file). Caching
+and redirects are the app's, exactly as on Cloudflare: the CLI reads
+`_headers` / `_redirects` from the assets root into `assets.config._headers` /
+`._redirects` — the fields wrangler sends in the script upload's
+`metadata.assets.config` — and never as files (a `/_headers`, `/_redirects` or
+`/.assetsignore` among `files` is refused; each string is capped at 2 MiB). The
+stored release keeps them, and every target applies them: the provision box
+passes them to Alchemy's `headers` / `redirects` assets props
+(`cloudflare-wfp`, `cloudflare-workers`), and hostd writes them back to the
+release's assets root, where celld applies them (`celld-vps`).
+
 ### The target seam (`src/targets/`)
 
 The control plane's coupling to the deploy substrate is two interfaces in

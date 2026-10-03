@@ -39,9 +39,18 @@ export interface AssetFile {
     path: string;
 }
 
-/** The static files behind an `assets` binding, plus the subset of wrangler's `assets` config that changes serving. */
+/**
+ * The static files behind an `assets` binding, plus the subset of wrangler's `assets` config that changes serving.
+ *
+ * `_headers` / `_redirects` are the raw contents of those files at the app's
+ * assets root — never among `files`. Like wrangler, the upload carries them as
+ * config: Cloudflare's script-upload `metadata.assets.config` takes fields of
+ * the same names, and every target applies their rules to static responses.
+ */
 export interface AssetsUpload {
     config?: {
+        _headers?: string;
+        _redirects?: string;
         html_handling?: "auto-trailing-slash" | "drop-trailing-slash" | "force-trailing-slash" | "none";
         not_found_handling?: "404-page" | "none" | "single-page-application";
         run_worker_first?: boolean | string[];

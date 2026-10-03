@@ -73,6 +73,19 @@ settings. Build first: a missing or empty directory is an error. A
 leading `/` anchors to the directory, and `!` re-includes are not supported). A
 single file over 25 MiB, or more than 50 MiB in total, is refused.
 
+Custom headers and redirects work as they do on Cloudflare: put a
+[`_headers`](https://developers.cloudflare.com/workers/static-assets/headers/)
+or [`_redirects`](https://developers.cloudflare.com/workers/static-assets/redirects/)
+file at the root of `assets.directory` — for example
+`Cache-Control: public, max-age=31536000, immutable` for `/assets/*`. Neither is
+served as a file; their contents travel with the deploy (the command says so)
+and every Lunora Cloud target applies them to static-asset responses, not to
+responses your Worker returns. Cloudflare's limits are checked before anything
+is sent: 100 header rules and 2,000 characters a line in `_headers`; 2,000
+static and 100 dynamic rules and 1,000 characters a line in `_redirects` (a
+rule with a splat or `:placeholder` source, and every rule after the first such
+one, counts as dynamic).
+
 The command exits non-zero unless the deployment reaches `live`.
 
 `--out <file>` stops short of the upload: it writes the exact request body —

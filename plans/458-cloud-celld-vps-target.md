@@ -550,8 +550,14 @@ per alias, on-demand TLS whose `permission` endpoint is hostd's loopback `ask`
 (routed hostnames and the box's own only), a JSON access log. The generated
 config validates with `caddy validate` (v2.11.6) in both TLS modes and served
 an alias in the smoke run above over plain HTTP; HTTPS against Pebble (the W5
-gate) is not run yet. Not built: immutable cache headers for hashed asset
-paths (§6).
+gate) is not run yet. Caddy sets no asset headers: caching and redirects are
+the app's, through `_headers` / `_redirects` at its assets root exactly as on
+Cloudflare. The release carries them as `assets.config._headers` /
+`._redirects`, hostd writes them back to the release's assets root, and celld
+applies them — checked with celld v0.6.0 (`celld deploy` + a node) on a
+hostd-written release: `/assets/*` answered `cache-control: public,
+max-age=31536000, immutable`, a `301` rule redirected, and neither file was
+served.
 
 ### W6 — Telemetry, usage and logs (M)
 
@@ -938,24 +944,24 @@ deploy target. The per-binding support table becomes per-target (W3).
 `celld-vps` derives its row from `capabilities/celld.ts`, so the matrix stays
 the single source of truth:
 
-| Binding type (`BindingRequirement["type"]`) | `cloudflare-wfp` (today) | `celld-vps`          | Notes                                                                                                                   |
-| ------------------------------------------- | ------------------------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `durable_object`                            | bound                    | native               | SQLite-backed classes only; celld refuses KV-backed migrations                                                          |
-| `d1`                                        | provisioned              | native               | fleet SQLite; 100k rows / 32 MiB result cap; no read replicas                                                           |
-| `kv`                                        | provisioned              | native               | no edge cache; single writer per namespace                                                                              |
-| `r2`                                        | provisioned              | native               | served from the fleet bucket under `r2/<name>/`; no SSE-C or jurisdiction                                               |
-| `queue_producer`                            | provisioned              | native               | one writer per queue; four-day retention                                                                                |
-| `queue_consumer`                            | routed (fan-out)         | native               | push consumers on the `fetch` worker; pull mode refused                                                                 |
-| `workflow`                                  | unsupported              | native               | celld implements Workflows (exercised by the TCK)                                                                       |
-| `assets`                                    | bound                    | native               | `ASSETS` binding must be explicit; celld serves `max-age=0`, so `hostd`'s Caddy sets immutable headers for hashed paths |
-| `container`                                 | unsupported              | **unsupported (v1)** | celld supports it with Docker on the node; deferred to keep the box Docker-free (§9 Q5)                                 |
-| `ai`                                        | bound                    | unsupported          | not a celld binding                                                                                                     |
-| `analytics_engine`                          | provisioned              | unsupported          | not a celld binding                                                                                                     |
-| `browser`                                   | bound                    | unsupported          | not a celld binding                                                                                                     |
-| `images`                                    | bound                    | unsupported          | not a celld binding                                                                                                     |
-| `hyperdrive`                                | unsupported              | unsupported          | not a celld binding                                                                                                     |
-| `vectorize`                                 | unsupported              | unsupported          | not a celld binding                                                                                                     |
-| `pipeline`                                  | unsupported              | unsupported          | not a celld binding                                                                                                     |
+| Binding type (`BindingRequirement["type"]`) | `cloudflare-wfp` (today) | `celld-vps`          | Notes                                                                                                        |
+| ------------------------------------------- | ------------------------ | -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `durable_object`                            | bound                    | native               | SQLite-backed classes only; celld refuses KV-backed migrations                                               |
+| `d1`                                        | provisioned              | native               | fleet SQLite; 100k rows / 32 MiB result cap; no read replicas                                                |
+| `kv`                                        | provisioned              | native               | no edge cache; single writer per namespace                                                                   |
+| `r2`                                        | provisioned              | native               | served from the fleet bucket under `r2/<name>/`; no SSE-C or jurisdiction                                    |
+| `queue_producer`                            | provisioned              | native               | one writer per queue; four-day retention                                                                     |
+| `queue_consumer`                            | routed (fan-out)         | native               | push consumers on the `fetch` worker; pull mode refused                                                      |
+| `workflow`                                  | unsupported              | native               | celld implements Workflows (exercised by the TCK)                                                            |
+| `assets`                                    | bound                    | native               | `ASSETS` binding must be explicit; celld applies the app's `_headers` / `_redirects` as Cloudflare does (W5) |
+| `container`                                 | unsupported              | **unsupported (v1)** | celld supports it with Docker on the node; deferred to keep the box Docker-free (§9 Q5)                      |
+| `ai`                                        | bound                    | unsupported          | not a celld binding                                                                                          |
+| `analytics_engine`                          | provisioned              | unsupported          | not a celld binding                                                                                          |
+| `browser`                                   | bound                    | unsupported          | not a celld binding                                                                                          |
+| `images`                                    | bound                    | unsupported          | not a celld binding                                                                                          |
+| `hyperdrive`                                | unsupported              | unsupported          | not a celld binding                                                                                          |
+| `vectorize`                                 | unsupported              | unsupported          | not a celld binding                                                                                          |
+| `pipeline`                                  | unsupported              | unsupported          | not a celld binding                                                                                          |
 
 Cron triggers: WfP fans out through the dispatcher; on `celld-vps` they are
 native (`triggers.crons`) — see D11.
@@ -1219,6 +1225,14 @@ v.id("cloudflareAccounts")` union), its table implied by
   (`MODULE_SOURCES`) and knows exactly those calls; anything else still throws.
   The working check then caught real drift (Billing Read was missing from the
   BYO-Cloudflare permissions table). The docs build passes.
+- **`_headers` / `_redirects` reach every target** (W5, §6): the CLI read and
+  dropped both files, so an app's custom headers and redirects vanished on
+  every Lunora Cloud target. They now travel as `assets.config._headers` /
+  `._redirects` — the field names wrangler puts in Cloudflare's script-upload
+  `metadata.assets.config` — with Cloudflare's documented rule and line limits
+  enforced by the CLI; the provision box hands them to Alchemy's `headers` /
+  `redirects` assets props, and hostd writes them into the release's assets
+  root for celld. See W5.
 
 **Still open after this branch:**
 
@@ -1231,4 +1245,3 @@ v.id("cloudflareAccounts")` union), its table implied by
 - **Gates not yet run:** the conformance run through a real `hostd` (W4);
   HTTPS against Pebble (W5); the studio Traffic and Logs panels for a
   `celld-vps` project in `test:hostd` (W6).
-- **Not built:** immutable cache headers for hashed asset paths (W5, §6).

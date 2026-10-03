@@ -33,7 +33,7 @@
  * @typedef {{ id: string, queueId: string, scriptName: string }} QueueConsumer
  * @typedef {{ consumers: QueueConsumer[], resources: ProjectResource[], stackName: string }} ProjectStack
  * @typedef {{ binding: string, id: string, kind: "ref", resource: ProjectResourceKind } | { binding: string, kind: "ai" | "browser" | "images" } | { binding: string, className: string, kind: "durable_object" } | { binding: string, dataset: string, kind: "analytics_engine" }} WorkerBinding
- * @typedef {{ htmlHandling?: string, notFoundHandling?: string, runWorkerFirst?: boolean | string[] }} AssetsConfig
+ * @typedef {{ headers?: string, htmlHandling?: string, notFoundHandling?: string, redirects?: string, runWorkerFirst?: boolean | string[] }} AssetsConfig
  * @typedef {{ id: string, queueId: string }} WorkerConsumer
  * @typedef {{ assets?: { config: AssetsConfig }, bindings: WorkerBinding[], compatibility: { date: string, flags: string[] }, consumers: WorkerConsumer[], crons: string[], namespace?: string, secretNames: string[], stackName: string, tags: string[], tailConsumers: string[], vars: Record<string, string>, workerName: string }} WorkerStack
  * @typedef {{ kind: "project" | "worker", op: "deploy" | "destroy", stackName: string }} Step
@@ -387,7 +387,7 @@ const planDeploy = (spec, controlPlaneScript, target) => {
 
         return claim(name);
     });
-    const assetsConfig = spec.assets?.config;
+    const { _headers: headers, _redirects: redirects, ...assetsConfig } = spec.assets?.config ?? {};
 
     return {
         project,
@@ -396,10 +396,16 @@ const planDeploy = (spec, controlPlaneScript, target) => {
                 ? {}
                 : {
                       assets: {
+                          // Alchemy's `Workers.Worker` assets props: `headers` / `redirects`
+                          // are the raw `_headers` / `_redirects` contents, which its
+                          // Cloudflare client sends as `metadata.assets.config._headers` /
+                          // `._redirects` — what wrangler sends for those files.
                           config: {
-                              htmlHandling: assetsConfig?.html_handling,
-                              notFoundHandling: assetsConfig?.not_found_handling,
-                              runWorkerFirst: assetsConfig?.run_worker_first,
+                              headers,
+                              htmlHandling: assetsConfig.html_handling,
+                              notFoundHandling: assetsConfig.not_found_handling,
+                              redirects,
+                              runWorkerFirst: assetsConfig.run_worker_first,
                           },
                       },
                   }),

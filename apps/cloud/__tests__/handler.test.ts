@@ -558,7 +558,32 @@ describe("deploy assets validation", () => {
         ).resolves.toContain("the limit is 20000");
     });
 
+    it("stores _headers and _redirects in the release and hands them to the target", async () => {
+        const { provisioner, specs } = capture();
+        const releases = memoryReleaseStore();
+        const assets = {
+            config: { _headers: "/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n", _redirects: "/old /new 301\n" },
+            files: [{ content: b64("x"), path: "/x" }],
+        };
+        const response = await handleDeployRequest(request("k", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s", ...withAssets(assets) }), {
+            ...deps(backendWith({}), provisioner),
+            releases: releases.store,
+        });
+
+        await response.text();
+
+        expect(response.status).toBe(200);
+        expect(specs[0]?.assets).toStrictEqual(assets);
+        await expect(releases.store.get("dep_1")).resolves.toMatchObject({ assets });
+    });
+
+    it.each(["/_headers", "/_redirects", "/.assetsignore"])("refuses %s as a served file", async (path) => {
+        await expect(refusal(withAssets({ files: [{ content: b64("x"), path }] }))).resolves.toContain("is read as config, never served");
+    });
+
     it.each([
+        [{ _headers: 1 }, "assets.config._headers must be the file's contents as a string"],
+        [{ _redirects: "x".repeat(2 * 1024 * 1024 + 1) }, "assets.config._redirects exceeds the 2097152-byte limit"],
         [{ serve_directly: true }, "assets.config.serve_directly is not supported"],
         [{ html_handling: "sometimes" }, "html_handling must be one of"],
         [{ not_found_handling: "teapot" }, "not_found_handling must be one of"],

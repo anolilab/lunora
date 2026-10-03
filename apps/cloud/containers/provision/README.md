@@ -82,7 +82,9 @@ Two stacks per project:
   Workers. Releases are bundles the control plane stores in R2; a rollback is a `deploy` job carrying
   an older one. The Worker declares: the prebuilt bundle
   uploaded as-is (`main` + `bundle: false`), compatibility date/flags (defaults `2026-06-10` /
-  `["nodejs_compat"]`), `tags`, `tailConsumers`, assets, and `env` — project resources by typed
+  `["nodejs_compat"]`), `tags`, `tailConsumers`, assets (the release's `_headers` / `_redirects` as Alchemy's
+  `headers` / `redirects` props, which it sends as Cloudflare's `metadata.assets.config._headers` /
+  `._redirects`), and `env` — project resources by typed
   reference into the project stack's state (`Resource.ref(id, { stack, stage })`), `ai`/`browser`/
   `images`, Durable Objects (new classes are created SQLite-backed), Analytics Engine datasets (binding
   metadata only, so declared here), `vars` as `plain_text`, secrets as `Redacted` → `secret_text`.
