@@ -215,15 +215,16 @@ catalogs:
     # bring-your-own (declared as optional peers on @lunora/ai) so an app stays
     # Workers-AI-only unless it opts into another provider.
     #
-    # EXACT-pinned (no caret): v7 shipped inside the 1440-minute maturity window,
-    # so each version is allow-listed by exact name@version in
-    # `minimumReleaseAgeExclude` below. A caret would let pnpm drift to a newer
-    # patch that is NOT excluded and would then be gated. To bump: update the
-    # version here AND its matching exclude entry together.
-    ai: 7.0.93
+    # EXACT-pinned (no caret), and bumped together: `ai` and the `@ai-sdk/*`
+    # providers each pin exact `@ai-sdk/provider` / `provider-utils` versions, so
+    # moving one alone installs a second copy of both. `workers-ai-provider` only
+    # peers on them. A version still inside the 1440-minute maturity window needs
+    # an exact name@version entry in `minimumReleaseAgeExclude`, dropped once it
+    # ages out.
+    ai: 7.0.127
     workers-ai-provider: 4.0.0
-    "@ai-sdk/anthropic": 4.0.49
-    "@ai-sdk/openai": 4.0.60
+    "@ai-sdk/anthropic": 4.0.71
+    "@ai-sdk/openai": 4.0.83
   build:
     "@babel/core": ^8.0.1
     "@babel/preset-react": ^8.0.1
@@ -362,8 +363,8 @@ catalogs:
     # That leg has never been run — it was outstanding at 1.3.5 too, so 1.3.6 does not
     # cross a line 1.3.5 was on the safe side of. Types and the 89 local specs pass.
     "@cloudflare/playwright": 1.3.6
-    "@cloudflare/vitest-plugin": ^1.3.2
-    # PATCHED (patches/@cloudflare__workers-types@5.20260929.1.patch), and the patch
+    "@cloudflare/vitest-plugin": ^1.3.5
+    # PATCHED (patches/@cloudflare__workers-types@5.20261002.1.patch), and the patch
     # is version-pinned in `patchedDependencies` — so this range must be exact, not a
     # caret: upstream publishes daily, and any drift makes the patch unused, which is
     # a hard install failure (ERR_PNPM_UNUSED_PATCH). Regenerate the patch when bumping.
@@ -373,11 +374,14 @@ catalogs:
     # alone). That makes every `process.*` and `Buffer.*` read an untyped `any`,
     # silently disabling `no-unsafe-*` on exactly the two globals most likely to be
     # absent at runtime. The patch drops both declarations so @types/node wins.
-    "@cloudflare/workers-types": 5.20260929.1
-    miniflare: ^4.20260730.0
-    # >= 4.142.0 for Workflows declared in `exports` (and run on `ctx.exports`
-    # locally), >= 4.143 for the containers `durable_object` scheduling policy.
-    wrangler: ^4.143.1
+    "@cloudflare/workers-types": 5.20261002.1
+    # >= 4.131.0 for the containers `durable_object` scheduling policy and its
+    # `images` map, >= 4.142.0 for Workflows declared in `exports` (and run on
+    # `ctx.exports` locally), >= 4.145.0 for the Analytics SQL `analytics` binding
+    # that `ctx.analyticsSql` emits (older releases reject the key). Scaffolded
+    # apps get their range from `CLOUDFLARE_TOOLCHAIN_VERSIONS` in
+    # `@lunora/config/cloudflare`; bump it with this entry.
+    wrangler: ^4.146.0
   e2e:
     "@playwright/test": ^1.63.0
     playwright: ^1.63.0
@@ -452,10 +456,12 @@ catalogs:
     # worker is the backend — so `pnpm run e2e` covers it. (There is no
     # `@lunora/vite dev` script; an earlier revision of this note named one.)
     #
-    # 1.62.1 (>= 1.61.0 runs Workflows declared in `exports` on `ctx.exports`
-    # locally) — see the e2e note in the commit that bumped it. The alpha-tagged
-    # miniflare is how this plugin pins its own runtime.
-    "@cloudflare/vite-plugin": 1.62.1
+    # 1.62.4 (>= 1.61.0 runs Workflows declared in `exports` on `ctx.exports`
+    # locally; 1.62.4 embeds wrangler 4.146.0, which accepts the `analytics`
+    # binding) — see the e2e note in the commit that bumped it. The alpha-tagged
+    # miniflare (5.20261001.0-alpha, workerd 1.20261001.1) is how this plugin pins
+    # its own runtime.
+    "@cloudflare/vite-plugin": 1.62.4
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3
     "@visulima/vite-overlay": 2.0.20
@@ -625,7 +631,7 @@ catalogs:
   # adapters (React/Vue/Solid/Svelte) with progress, pause/resume and per-part
   # retry. Both follow the repo's exact-pinned `@visulima/*` convention.
   storage:
-    "@visulima/storage": 2.0.8
+    "@visulima/storage": 2.0.22
     "@visulima/storage-client": 1.0.3
     # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional
     # peer pulled in by the `aws-light` provider that backs `createR2UploadStorage`.
@@ -979,8 +985,6 @@ allowBuilds:
 #   - 'better-auth@1.6.13 || 1.6.14'
 # When bumping a dependency, UPDATE its existing line — do not append a new one.
 minimumReleaseAgeExclude:
-  - '@ai-sdk/gateway@3.0.128'
-  - '@ai-sdk/provider-utils@4.0.28'
   - '@better-fetch/fetch@1.2.2'
   - '@cloudflare/flagship@0.4.2'
   - '@cloudflare/vite-plugin@1.40.1'
@@ -1106,6 +1110,6 @@ packageExtensions:
 
 patchedDependencies:
   '@cloudflare/containers@0.3.7': patches/@cloudflare__containers@0.3.7.patch
-  '@cloudflare/workers-types@5.20260929.1': patches/@cloudflare__workers-types@5.20260929.1.patch
+  '@cloudflare/workers-types@5.20261002.1': patches/@cloudflare__workers-types@5.20261002.1.patch
   gray-matter@4.0.3: patches/gray-matter@4.0.3.patch
   recast@0.23.11: patches/recast@0.23.11.patch

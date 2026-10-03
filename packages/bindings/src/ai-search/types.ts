@@ -6,7 +6,7 @@
  * aliased from `@cloudflare/workers-types`: `AiSearchNamespace` only ships in
  * workers-types 4.20260331.1+, and an alias resolved against an older (or
  * absent) install would silently degrade to `any` under `skipLibCheck`. The
- * mirror follows workers-types 5.20260929.1; a type test pins that the real
+ * mirror follows workers-types 5.20261002.1; a type test pins that the real
  * binding still satisfies it, so drift fails CI instead of the consumer.
  */
 

@@ -372,6 +372,8 @@ remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
 - **Not supported:** the TUS `checksum`, `concatenation` and
   `creation-defer-length` extensions (they are not advertised), and chunked-REST
   chunks sent out of order (`409`). `copy`/`move` on the provider are refused.
+- **Chunked REST** is broken upstream; see
+  [below](#chunked-rest-is-broken-upstream).
 
 `createR2UploadStorage({ accountId, bucket, accessKeyId, secretAccessKey, endpoint?, partSize?, path? })`
 builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
@@ -381,3 +383,11 @@ multipart upload, and R2 rejects parts under 5 MiB except the last (and parts
 of unequal size), so a TUS client must send equal chunks of at least 5 MiB. The
 binding provider above has neither restriction. The constructor throws on a missing
 credential: build it on first use rather than at module scope.
+
+### Chunked REST is broken upstream
+
+`protocol: "chunked-rest"` does not work on any provider: `@visulima/storage`'s
+chunked-REST create never marks the upload as chunked, so the first chunk
+`PATCH` answers `400` ("File is not a chunked upload"). See
+[visulima/visulima#884](https://github.com/visulima/visulima/issues/884). Use
+TUS, the default, until it is fixed upstream.

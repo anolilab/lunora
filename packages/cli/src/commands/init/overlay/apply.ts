@@ -11,7 +11,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
-import { DEFAULT_OBSERVABILITY } from "@lunora/config/cloudflare";
+import { CLOUDFLARE_TOOLCHAIN_VERSIONS, DEFAULT_OBSERVABILITY } from "@lunora/config/cloudflare";
 import { dirname, join } from "@visulima/path";
 
 import type { Logger } from "../../../util/logger";
@@ -231,11 +231,24 @@ const ENV_EXAMPLE = `# Lunora endpoint for the browser client.
 `;
 /* eslint-enable no-secrets/no-secrets */
 
-/** The dev-time deps every overlaid project needs on top of the framework adapter. */
+/**
+ * The dev-time deps every overlaid project needs on top of the framework adapter.
+ * Ranges come from `CLOUDFLARE_TOOLCHAIN_VERSIONS`, the same source the templates
+ * are asserted against.
+ *
+ * Trade-off of workers-types v5 (v4 is dead and wrangler >= 4.146 peers on v5):
+ * its root `index.d.ts` declares `declare const process: any` and
+ * `declare const Buffer: any`, which the monorepo patches out but a scaffolded
+ * app cannot. There, `process.*` / `Buffer.*` are `any` — even with `@types/node`
+ * loaded, since the workers-types declaration wins — rather than
+ * `NodeJS.Process` / `BufferConstructor`. No tsconfig `types` entry avoids it
+ * cleanly: the dated and `latest` entrypoints lack the current runtime types
+ * (AI Search, Artifacts, Analytics SQL), and `/experimental` also types APIs
+ * that only exist behind experimental compatibility flags.
+ */
 const COMMON_DEV_DEPENDENCIES: Record<string, string> = {
-    "@cloudflare/workers-types": "^4.20260611.1",
-    // >= 4.142 declares and runs Workflows in `exports`, which codegen now writes.
-    wrangler: "^4.143.1",
+    "@cloudflare/workers-types": CLOUDFLARE_TOOLCHAIN_VERSIONS["@cloudflare/workers-types"],
+    wrangler: CLOUDFLARE_TOOLCHAIN_VERSIONS.wrangler,
 };
 
 const writeFile = (target: string, relativePath: string, contents: string, written: string[]): void => {
