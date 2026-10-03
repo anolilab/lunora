@@ -70,6 +70,7 @@ const BINDING_LABELS = {
     ai_search: "AI Search",
     ai_search_namespace: "AI Search namespaces",
     analytics_engine: "Analytics Engine",
+    analytics_sql: "Analytics SQL",
     artifacts: "Artifacts",
     assets: "Static assets",
     browser: "Browser Rendering",
