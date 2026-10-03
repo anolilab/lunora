@@ -197,25 +197,17 @@ it. So record the owner when the upload is created. In an
 
 ```ts
 // lunora/http.ts
-import { createR2UploadStorage, createUploadHandler } from "@lunora/storage/upload";
+import { createR2BindingUploadStorage, createUploadHandler } from "@lunora/storage/upload";
 import { httpAction, httpRouter } from "lunorash/server";
 import { env } from "cloudflare:workers";
 import { internal } from "@/lunora/_generated/api";
 
-// R2 over its S3 API (`aws4fetch`, no AWS SDK). Needs R2 S3 API credentials and
-// `nodejs_compat` in wrangler.jsonc. Built on first use, not at import: the
-// constructor throws on a missing credential, and at module scope that would
-// take down every route of the Worker, not just this one.
-let storage: ReturnType<typeof createR2UploadStorage> | undefined;
+// Writes through the Worker's R2 binding (`UPLOADS` in wrangler.jsonc): no S3
+// credentials, and the same under `lunora dev` / miniflare as in production.
+// Needs `nodejs_compat`.
+const storage = createR2BindingUploadStorage(env.UPLOADS);
 
-const uploadStorage = () =>
-    (storage ??= createR2UploadStorage({
-        accountId: env.CF_ACCOUNT_ID,
-        bucket: "user-uploads",
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-        path: "/uploads", // must match the routes below
-    }));
+const MiB = 1024 * 1024;
 
 /** The upload id in `/uploads/<id>`. */
 const uploadId = (url: URL) => url.pathname.split("/").pop() ?? "";
@@ -228,8 +220,10 @@ const upload = httpAction(async (ctx, request) => {
     }
 
     const handler = createUploadHandler({
-        storage: uploadStorage(),
-        maxFileSize: 2 * 1024 * 1024 * 1024, // 2 GiB
+        storage,
+        maxFileSize: 2048 * MiB, // 2 GiB, the ceiling for any upload
+        // Lower it per upload from the type the client declares.
+        maxFileSizeFor: ({ contentType }) => (contentType?.startsWith("image/") ? 10 * MiB : undefined),
         authorize: async ({ method, url }) => method === "POST" || (await ctx.runQuery(internal.uploads.isOwner, { uploadId: uploadId(url), userId })),
     });
     const response = await handler.fetch(request);
@@ -258,11 +252,25 @@ export default app;
 one inserts `{ uploadId, userId }`, the other reports whether that row exists.
 The same table is where you check ownership before you serve the file.
 
-An upload's progress lives in the storage provider, which is built once and
-shared, so building the handler per request is fine; that is what lets the gate
-see this request's `ctx.auth`. The provider also names the object, and
-`createR2UploadStorage` takes no naming function, so you cannot put each user's
-uploads under their own key prefix. Ownership lives in your table instead.
+An upload's progress lives in the bucket, not in the Worker: one small state
+object per upload under `_lunora/uploads/`, written with conditional puts, so a
+chunk can land on any isolate and two requests for the same upload cannot both
+write it (the second gets a `409`, and the client re-reads its offset and
+continues). Building the handler per request is therefore fine, and it is what
+lets the gate see this request's `ctx.auth`. The provider names the object from
+the upload id alone, so it cannot put each user's uploads under their own key
+prefix. Ownership lives in your table instead.
+
+`maxFileSizeFor` caps one upload below `maxFileSize`, from the MIME type and
+metadata its create request declares. It runs after `authorize`, on creates
+only: TUS and chunked REST fix the total when the upload starts, and a chunk
+past it is refused. What the client declares is not proof of what it sends, so
+pair a type-based cap with `allowMIME` on the provider
+(`createR2BindingUploadStorage(env.UPLOADS, { allowMIME: ["image/*", "video/*"] })`).
+
+`createR2UploadStorage` is the other R2 provider: it writes over R2's S3 API
+with S3 credentials and no binding. Use it when the Worker that mounts the
+route has no binding to the bucket.
 
 #### Upload from the client
 
@@ -273,8 +281,6 @@ export function VideoUpload({ token }: { token: string }) {
     const { upload, progress, isUploading, isPaused, pause, resume, error } = useUpload({
         endpointTus: "/uploads",
         method: "tus",
-        // R2 rejects multipart parts under 5 MiB; TUS defaults to 1 MiB chunks.
-        chunkSize: 5 * 1024 * 1024,
         // Sent on every request, so the route's `ctx.auth` resolves the caller.
         headers: { authorization: `Bearer ${token}` },
         restrictions: { allowedFileTypes: ["video/*"], maxFileSize: 2 * 1024 * 1024 * 1024 },
@@ -328,8 +334,8 @@ prefix, so a `GET` route that streams stored objects with
 `serveStorageObject(ctx, key, request, authorize)`, or that checks a signed URL,
 cannot shadow them. Each route keeps its own gate: the upload `authorize` decides
 who may write, the serving route's `authorize` who may read. `serveStorageObject`
-reads through the Worker's `.storage()` R2 binding, while the upload handler
-writes over the S3 API, so point that binding at the same bucket.
+reads through the Worker's `.storage()` R2 binding, so pass the upload provider
+the binding of that same bucket.
 
 #### Limits
 
@@ -338,10 +344,14 @@ writes over the S3 API, so point that binding at the same bucket.
   for your plan (100 MB on Free and Pro). TUS and chunked REST send the file as
   chunks of `chunkSize` bytes, one request each. A multipart upload is a single
   request, so the whole file has to fit.
-- **R2 part size.** Over `createR2UploadStorage` each chunk becomes one part of
-  an R2 multipart upload, and R2 rejects parts under 5 MiB (except the last).
-  Set `chunkSize` to at least 5 MiB for TUS, whose default is 1 MiB. Chunked
-  REST's 5 MiB default already fits.
+- **R2 part size.** R2 requires every multipart part but the last to be at
+  least 5 MiB and all of them the same size. `createR2BindingUploadStorage`
+  coalesces chunks of any size into 5 MiB parts, so the client's `chunkSize` is
+  free. Over `createR2UploadStorage` each chunk becomes one part, so set
+  `chunkSize` to the same 5 MiB or more on every chunk (TUS defaults to 1 MiB).
+- **Unsupported TUS extensions.** The binding provider does not offer
+  `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`, and
+  chunked REST has to send its chunks in order, as the bundled clients do.
 - **`maxFileSize`** defaults to 100 MiB, has no unlimited setting, and must be a
   finite, non-negative number. Uploads over it get a `413`.
   [@lunora/storage](/docs/packages/storage#end-user-uploads-rls-gated) covers how

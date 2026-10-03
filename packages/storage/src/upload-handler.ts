@@ -11,7 +11,8 @@
  * The wire protocol is spoken end-to-end with `@visulima/storage-client`
  * (`useUpload` / `createTusAdapter` …) — Lunora does not hand-roll the uploader.
  * Point the client's endpoint at the route the app mounts this handler on; the
- * bytes flow through the Worker → the configured provider (R2 in production via
+ * bytes flow through the Worker → the configured provider (R2 through the
+ * Worker's binding via `createR2BindingUploadStorage`, R2's S3 API via
  * {@link createR2UploadStorage}, an in-memory provider in tests).
  *
  * The `authorize` callback is the RLS decision: it runs before every request
@@ -60,6 +61,25 @@ interface UploadAuthzContext {
     url: URL;
 }
 
+/**
+ * The context handed to {@link CreateUploadHandlerOptions.maxFileSizeFor}: the
+ * authorization context plus what the create request declares about the file.
+ * Everything here comes from the client, so it caps an upload by what the
+ * client SAYS it is; `allowMIME` on the provider is what checks the type.
+ */
+interface UploadSizeContext extends UploadAuthzContext {
+    /**
+     * The declared MIME type: TUS `Upload-Metadata` `filetype` (or `type` /
+     * `contentType` / `mimeType`), chunked-REST `X-File-Metadata` likewise, else
+     * the request's `Content-Type`.
+     */
+    contentType: string | undefined;
+    /** The largest size the request declares (`Upload-Length`, `X-Total-Size`, `Content-Length`). */
+    declaredSize: number | undefined;
+    /** The decoded TUS `Upload-Metadata`, or the chunked-REST `X-File-Metadata` JSON, as strings. */
+    metadata: Record<string, string>;
+}
+
 /** Options for {@link createUploadHandler}. */
 interface CreateUploadHandlerOptions {
     /**
@@ -86,6 +106,23 @@ interface CreateUploadHandlerOptions {
      * construction rather than disabling the cap.
      */
     maxFileSize?: number;
+
+    /**
+     * A per-upload size cap, below `maxFileSize`: return the most bytes this
+     * upload may hold (say 10 MiB for `image/*`, 2 GiB for `video/*`), or
+     * `undefined` to leave `maxFileSize` as the only cap. It can only lower the
+     * cap, never raise it past `maxFileSize`.
+     *
+     * Runs after `authorize`, on the requests that create an upload (`POST`,
+     * and the chunked-REST `PUT`) of the `"tus"` and `"chunked-rest"`
+     * protocols; later chunks are bounded by the size declared at creation.
+     * Not applied to `"multipart"`, whose size is only known once the form is
+     * parsed. A create that declares no size is refused (`413`) when this
+     * returns a cap, since there is nothing to check it against. Throwing, or
+     * returning something that is not a finite, non-negative number, denies the
+     * request (`403`), fail-closed like `authorize`.
+     */
+    maxFileSizeFor?: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>;
     /** Which protocol to speak. Default `"tus"` (the resumable, pause/resume-capable one). */
     protocol?: UploadProtocol;
 
@@ -240,6 +277,93 @@ const declaredUploadSize = (request: Request, protocol: UploadProtocol): number 
     return largest;
 };
 
+const decodeBase64 = (value: string): string => {
+    try {
+        return new TextDecoder().decode(Uint8Array.from(atob(value), (character) => character.codePointAt(0) ?? 0));
+    } catch {
+        return "";
+    }
+};
+
+/** What a create request declares about its file: metadata as strings, and a MIME type. */
+/** TUS `Upload-Metadata`: `key base64value,key2 base64value2`, where a key may carry no value. */
+const tusMetadata = (header: string): Record<string, string> => {
+    const metadata: Record<string, string> = {};
+
+    for (const pair of header.split(",")) {
+        const [key, value] = pair.trim().split(" ");
+
+        if (key !== undefined && key !== "") {
+            metadata[key] = value === undefined ? "" : decodeBase64(value);
+        }
+    }
+
+    return metadata;
+};
+
+/** Chunked-REST `X-File-Metadata`: a JSON object. Malformed metadata declares nothing. */
+const restMetadata = (header: string): Record<string, string> => {
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(header);
+    } catch {
+        return {};
+    }
+
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {};
+    }
+
+    const metadata: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+            metadata[key] = String(value);
+        }
+    }
+
+    return metadata;
+};
+
+/** What a create request declares about its file: metadata as strings, and a MIME type. */
+const declaredFile = (request: Request, protocol: UploadProtocol): { contentType: string | undefined; metadata: Record<string, string> } => {
+    const metadata =
+        protocol === "tus" ? tusMetadata(request.headers.get("Upload-Metadata") ?? "") : restMetadata(request.headers.get("X-File-Metadata") ?? "{}");
+    const contentType = metadata.filetype ?? metadata.type ?? metadata.contentType ?? metadata.mimeType ?? request.headers.get("Content-Type") ?? undefined;
+
+    return { contentType, metadata };
+};
+
+/**
+ * Apply {@link CreateUploadHandlerOptions.maxFileSizeFor} to a create request.
+ * Returns the response that refuses it, or `undefined` to let it through.
+ */
+const checkSizeFor = async (
+    maxFileSizeFor: NonNullable<CreateUploadHandlerOptions["maxFileSizeFor"]>,
+    context: UploadAuthzContext,
+    maxFileSize: number,
+): Promise<Response | undefined> => {
+    const declaredSize = declaredUploadSize(context.request, context.protocol);
+    let cap: unknown;
+
+    try {
+        cap = await maxFileSizeFor({ ...context, ...declaredFile(context.request, context.protocol), declaredSize });
+    } catch {
+        return denyResponse(context.protocol);
+    }
+
+    if (cap === undefined) {
+        return undefined;
+    }
+
+    if (typeof cap !== "number" || !Number.isFinite(cap) || cap < 0) {
+        return denyResponse(context.protocol);
+    }
+
+    return declaredSize === undefined || declaredSize > Math.min(cap, maxFileSize) ? tooLargeResponse(context.protocol) : undefined;
+};
+
 const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHandlerOptions): { fetch: (request: Request) => Promise<Response> } => {
     if (protocol === "chunked-rest") {
         return new Rest(handlerOptions);
@@ -283,7 +407,7 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
 
     const handler = instantiateHandler(protocol, handlerOptions);
 
-    const { authorize } = options;
+    const { authorize, maxFileSizeFor } = options;
 
     if (authorize === undefined && !options.silent && !options.public) {
         // One-time warning per handler instance — mirrors `@lunora/notify`'s
@@ -305,6 +429,8 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
             return tooLargeResponse(protocol);
         }
 
+        const context: UploadAuthzContext = { method: request.method, protocol, request, url: new URL(request.url) };
+
         if (authorize !== undefined) {
             try {
                 // Read back as `unknown` and compared to `true`, never tested for
@@ -315,7 +441,7 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
                 // TRUTHY. This is the WRITE path, so passing that through is an
                 // attacker putting bytes in the bucket. Mirrors
                 // `@lunora/server`'s `isServeAuthorized` on the read path.
-                const allowed: unknown = await authorize({ method: request.method, protocol, request, url: new URL(request.url) });
+                const allowed: unknown = await authorize(context);
 
                 if (allowed !== true) {
                     return denyResponse(protocol);
@@ -323,6 +449,14 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
             } catch {
                 // A throwing RLS callback is a denial, never a 500 — fail closed.
                 return denyResponse(protocol);
+            }
+        }
+
+        if (maxFileSizeFor !== undefined && protocol !== "multipart" && (request.method === "POST" || request.method === "PUT")) {
+            const refused = await checkSizeFor(maxFileSizeFor, context, maxFileSize);
+
+            if (refused !== undefined) {
+                return refused;
             }
         }
 
@@ -353,5 +487,5 @@ const createR2UploadStorage = (options: R2UploadStorageOptions & { secretAccessK
         ...(options.partSize === undefined ? {} : { partSize: options.partSize }),
     });
 
-export type { CreateUploadHandlerOptions, R2UploadStorageOptions, UploadAuthzContext, UploadHandler, UploadProtocol, UploadStorage };
+export type { CreateUploadHandlerOptions, R2UploadStorageOptions, UploadAuthzContext, UploadHandler, UploadProtocol, UploadSizeContext, UploadStorage };
 export { createR2UploadStorage, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES };

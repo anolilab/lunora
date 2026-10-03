@@ -285,13 +285,14 @@ client side, and the request-size limits. This is the reference.
 `fetch` on the route your client uploads to; one handler speaks one protocol, so
 each protocol needs its own route.
 
-| Option        | Meaning                                                                                                                                                                                                                              |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `storage`     | The `@visulima/storage` provider the bytes land in: `createR2UploadStorage(...)` in production, `@visulima/storage/provider/memory` in tests.                                                                                        |
-| `authorize`   | `({ method, protocol, request, url }) => boolean \| Promise<boolean>`. Runs on every request (`POST` create, `PATCH` chunk, `HEAD` resume, `DELETE` cancel on TUS). Only `true` allows it; anything else, or a throw, answers `403`. |
-| `protocol`    | `"tus"` (default, resumable), `"chunked-rest"` (resumable), or `"multipart"` (one request per file).                                                                                                                                 |
-| `maxFileSize` | Bytes. Default 100 MiB, no unlimited setting; a value that is not a finite, non-negative number throws at construction.                                                                                                              |
-| `public`      | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                           |
+| Option           | Meaning                                                                                                                                                                                                                                 |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `storage`        | The `@visulima/storage` provider the bytes land in: `createR2BindingUploadStorage(env.BUCKET)` (the Worker's R2 binding), `createR2UploadStorage(...)` (R2's S3 API), or `@visulima/storage/provider/memory` in tests.                  |
+| `authorize`      | `({ method, protocol, request, url }) => boolean \| Promise<boolean>`. Runs on every request (`POST` create, `PATCH` chunk, `HEAD` resume, `DELETE` cancel on TUS). Only `true` allows it; anything else, or a throw, answers `403`.    |
+| `protocol`       | `"tus"` (default, resumable), `"chunked-rest"` (resumable), or `"multipart"` (one request per file).                                                                                                                                    |
+| `maxFileSize`    | Bytes. Default 100 MiB, no unlimited setting; a value that is not a finite, non-negative number throws at construction.                                                                                                                 |
+| `maxFileSizeFor` | `({ contentType, metadata, declaredSize, method, request, … }) => number \| undefined`. A per-upload cap below `maxFileSize`, from what the create request declares (TUS `Upload-Metadata`, chunked-REST `X-File-Metadata`). See below. |
+| `public`         | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                              |
 
 A finished upload cannot be deleted through the handler. On TUS, `DELETE` only
 cancels an upload in progress. The chunked-REST and multipart handlers would
@@ -307,10 +308,60 @@ multipart the handler does not read `Content-Length`, which covers the whole for
 body including boundaries and would reject a file within the cap; the multipart
 parser enforces the cap on the file itself.
 
+`maxFileSizeFor` lowers the cap per upload, say 10 MiB for images and 2 GiB for
+video. It runs after `authorize`, on the requests that create an upload (`POST`,
+and the chunked-REST `PUT`) of TUS and chunked REST, and gets the decoded
+metadata, the declared MIME type (`filetype`, else `type` / `contentType` /
+`mimeType`, else the request's `Content-Type`) and the declared size. Return a
+byte count, or `undefined` to leave `maxFileSize` as the only cap; the result
+never raises the cap past `maxFileSize`. A create that declares no size is
+answered `413` once a cap applies, and a throw, or anything that is not a
+finite, non-negative number, is a `403`. The type is what the client says the
+file is: check it with the provider's `allowMIME` too. Multipart forms are not
+covered, since their size is only known once the form is parsed.
+
+```ts
+const handler = createUploadHandler({
+    storage: createR2BindingUploadStorage(env.UPLOADS),
+    authorize,
+    maxFileSize: 2 * 1024 * 1024 * 1024,
+    maxFileSizeFor: ({ contentType }) => (contentType?.startsWith("image/") ? 10 * 1024 * 1024 : undefined),
+});
+```
+
+`createR2BindingUploadStorage(bucket, { statePrefix?, ...options })` writes
+uploads through the Worker's R2 binding, so it needs no S3 credentials and works
+the same under `wrangler dev` / miniflare, in tests and in production. The
+remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
+`filename`, `onComplete`, …).
+
+- **Parts.** R2 requires every multipart part but the last to be at least 5 MiB
+  and all of them the same size. Chunks of any size are coalesced into parts of
+  exactly 5 MiB (`R2_PART_SIZE`); what does not fill a part waits in the bucket
+  as a small segment object until a later chunk completes it. A request holds at
+  most about two parts in memory. A file under 5 MiB never starts a multipart
+  upload and is written with one `put`.
+- **State.** Each upload's offset, metadata, multipart upload id, stored parts
+  and waiting segments are a JSON object under `statePrefix` (default
+  `"_lunora/uploads/"`) in the same bucket, so a request can land on any
+  isolate. They appear in listings of the bucket; add an R2 lifecycle rule on
+  the prefix to expire uploads that were started and never finished.
+- **Concurrency.** A chunk at an offset other than the stored one is a `409`. A
+  chunk also takes a lease on the upload with a conditional put, so a second
+  request for the same upload while one is streaming gets a `409`, and the
+  client re-reads the offset with `HEAD` and continues. A lease left behind by a
+  request that died expires after a minute.
+- **Interrupted chunks.** When the client drops mid-chunk, the bytes that
+  arrived are kept and `HEAD` reports them, as TUS expects.
+- **Not supported:** the TUS `checksum`, `concatenation` and
+  `creation-defer-length` extensions (they are not advertised), and chunked-REST
+  chunks sent out of order (`409`). `copy`/`move` on the provider are refused.
+
 `createR2UploadStorage({ accountId, bucket, accessKeyId, secretAccessKey, endpoint?, partSize?, path? })`
 builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
 `nodejs_compat`). `path` must match the route the handler is mounted on, and
 `endpoint` pins a jurisdiction. Each upload chunk becomes one part of an R2
-multipart upload, and R2 rejects parts under 5 MiB except the last, so a TUS
-client must send chunks of at least 5 MiB. The constructor throws on a missing
+multipart upload, and R2 rejects parts under 5 MiB except the last (and parts
+of unequal size), so a TUS client must send equal chunks of at least 5 MiB. The
+binding provider above has neither restriction. The constructor throws on a missing
 credential: build it on first use rather than at module scope.

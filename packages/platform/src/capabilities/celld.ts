@@ -137,7 +137,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         objectStorage: {
             level: "native",
-            note: "R2 bindings served from the fleet bucket under `r2/<bucket_name>/`. Gaps: no `ssecKey`, no `jurisdiction`, a conditional write cannot use a streamed body above 8 MiB, `createMultipartUpload()` takes no checksum, and a multipart upload cannot resume on another node or across a restart. `list()` orders keys, and compares `startAfter`, by their percent-encoded form, so a key with a non-ASCII or reserved character (`%`, `~`, `#`, `*`, …) can list in a different position than on R2 — harmless for the CDC archive, whose keys vary only in zero-padded digits under a fixed prefix",
+            note: "R2 bindings served from the fleet bucket under `r2/<bucket_name>/`. Gaps: no `ssecKey`, no `jurisdiction`, a conditional write cannot use a streamed body above 8 MiB, `createMultipartUpload()` takes no checksum, and a multipart upload cannot resume on another node or across a restart, so the binding-backed resumable upload provider (`@lunora/storage/upload`) only finishes a file of 5 MiB or more when its requests stay on one node; smaller files never start a multipart upload and work anywhere. `list()` orders keys, and compares `startAfter`, by their percent-encoded form, so a key with a non-ASCII or reserved character (`%`, `~`, `#`, `*`, …) can list in a different position than on R2 — harmless for the CDC archive, whose keys vary only in zero-padded digits under a fixed prefix",
         },
         objectStorageBackups: {
             level: "emulated",
