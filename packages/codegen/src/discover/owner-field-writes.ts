@@ -513,24 +513,75 @@ const isReadOnlyParameter = (parameter: ParameterDeclaration, depth = 0): boolea
 /** Whether `node` is `other`: the same compiler node. */
 const isSameNode = (node: TsNode | undefined, other: TsNode): boolean => node?.compilerNode === other.compilerNode;
 
-/** The identifier-named `const` that `node` (through wrappers) is the whole initializer of: `const alias = row`. */
-const constAliasOf = (node: TsNode): VariableDeclaration | undefined => {
-    const value = outermostValueWrapper(node);
-    const declaration = value.getParent();
+/** A binding whose object a later statement may change: a variable, a parameter, or one element of a destructuring. */
+type ObjectBinding = BindingElement | ParameterDeclaration | VariableDeclaration;
 
-    return isConstDeclaration(declaration) && isSameNode(declaration.getInitializer(), value) && Node.isIdentifier(declaration.getNameNode())
-        ? declaration
-        : undefined;
+/** The identifier-named elements of a destructuring pattern, nested ones included. */
+const bindingIdentifiersOf = (binding: ObjectBinding): BindingElement[] =>
+    binding
+        .getNameNode()
+        .getDescendantsOfKind(SyntaxKind.BindingElement)
+        .filter((element) => Node.isIdentifier(element.getNameNode()));
+
+/**
+ * The outermost member path over `node` (`row` → `row.meta.inner`,
+ * `row["meta"]`), seen through wrappers. With `stopAtMethod`, the walk stops
+ * at the receiver of a method call (`row.members` in `row.members.forEach(cb)`).
+ */
+const memberPathOf = (node: TsNode, stopAtMethod: boolean): TsNode => {
+    let top = outermostValueWrapper(node);
+    let parent = top.getParent();
+
+    while ((Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent)) && parent.getExpression() === top) {
+        const holder = parent.getParent();
+
+        if (stopAtMethod && Node.isCallExpression(holder) && holder.getExpression() === parent) {
+            break;
+        }
+
+        top = outermostValueWrapper(parent);
+        parent = top.getParent();
+    }
+
+    return top;
 };
 
-/** The identifier-named loop variable of a `for…of` that iterates `node`: each element it binds is an element of `node`. */
-const forOfVariableOf = (node: TsNode): VariableDeclaration | undefined => {
+/** The variable declaration `node` (through wrappers) is the whole initializer of, or the loop variable of a `for…of` over it. */
+const receivingDeclarationOf = (node: TsNode): VariableDeclaration | undefined => {
     const value = outermostValueWrapper(node);
-    const loop = value.getParent();
-    const initializer = Node.isForOfStatement(loop) && loop.getExpression() === value ? loop.getInitializer() : undefined;
-    const [variable] = Node.isVariableDeclarationList(initializer) ? initializer.getDeclarations() : [];
+    const parent = value.getParent();
 
-    return variable !== undefined && Node.isIdentifier(variable.getNameNode()) ? variable : undefined;
+    if (Node.isVariableDeclaration(parent)) {
+        return isSameNode(parent.getInitializer(), value) ? parent : undefined;
+    }
+
+    const initializer = Node.isForOfStatement(parent) && parent.getExpression() === value ? parent.getInitializer() : undefined;
+
+    return Node.isVariableDeclarationList(initializer) ? initializer.getDeclarations()[0] : undefined;
+};
+
+/**
+ * The bindings that take (part of) `node`'s object, which the flow walk follows
+ * as aliases: a `const` bound to it (`const alias = row`, `const m = row.meta`),
+ * the loop variable of a `for…of` over it, and every element of a destructuring
+ * of it (`const { meta } = row`, `const { meta: { inner } } = row`,
+ * `for (const { meta } of rows)`), whose object-valued members are the row's own
+ * nested objects. `undefined` when `node` is no such initializer. A `let` /
+ * `var` bound to it whole is not followed (see `escapesAsOperand`).
+ */
+const aliasBindingsOf = (node: TsNode): ObjectBinding[] | undefined => {
+    const declaration = receivingDeclarationOf(node);
+    const isLoopVariable = declaration !== undefined && Node.isForOfStatement(declaration.getParent().getParent());
+
+    if (declaration === undefined) {
+        return undefined;
+    }
+
+    if (!Node.isIdentifier(declaration.getNameNode())) {
+        return bindingIdentifiersOf(declaration);
+    }
+
+    return isLoopVariable || isConstDeclaration(declaration) ? [declaration] : undefined;
 };
 
 /** Whether every value of `type` is a primitive, which no call can change in place. `any` / `unknown` are not. */
@@ -763,22 +814,12 @@ interface VerdictTable {
     verdicts: Map<ts.Node, boolean>;
 }
 
-/** A binding whose object a later statement may change: a variable, a parameter, or one element of a destructuring. */
-type ObjectBinding = BindingElement | ParameterDeclaration | VariableDeclaration;
-
 /**
  * Hands {@link ImplTaint}'s flow walk the next binding an object flows into;
  * `isAlias` counts it against the alias hop bound. `true` when that bound is
  * exceeded, which the caller reports as a finding (fail-closed).
  */
 type Follow = (next: ObjectBinding, isAlias: boolean) => boolean;
-
-/** The identifier-named elements of a destructuring pattern, nested ones included. */
-const bindingIdentifiersOf = (binding: ObjectBinding): BindingElement[] =>
-    binding
-        .getNameNode()
-        .getDescendantsOfKind(SyntaxKind.BindingElement)
-        .filter((element) => Node.isIdentifier(element.getNameNode()));
 
 /**
  * How taint flows inside one mutator impl, resolved by symbol. Caller-controlled
@@ -1034,20 +1075,24 @@ class ImplTaint {
 
     /** One use of {@link isChangedUnseen}: whether it hands the object to code that may plant caller data in it. */
     private escapesThrough(reference: Identifier, follow: Follow): boolean {
-        const value = outermostValueWrapper(reference);
+        // The row itself, or a member path of it (`row.meta`): its nested objects are the row's own.
+        const value = memberPathOf(reference, true);
         const parent = value.getParent();
-        const alias = constAliasOf(reference) ?? forOfVariableOf(reference);
+        const aliases = aliasBindingsOf(value);
 
-        if (alias !== undefined) {
-            return follow(alias, true);
+        if (aliases !== undefined) {
+            return aliases.filter((alias) => !isPrimitiveType(alias.getType())).some((alias) => follow(alias, true));
         }
+
+        // A primitive member is a copy: nothing done with it reaches the row. Asked last, as it costs a type.
+        const isObjectValued = (): boolean => value === outermostValueWrapper(reference) || !isPrimitiveType(value.getType());
 
         if (Node.isCallExpression(parent) && parent.getArguments().includes(value)) {
-            return this.escapesAsArgument(parent, value, follow);
+            return this.escapesAsArgument(parent, value, follow) && isObjectValued();
         }
 
-        if (this.escapesAsOperand(reference)) {
-            return true;
+        if (this.escapesAsOperand(value)) {
+            return isObjectValued();
         }
 
         const method = Node.isPropertyAccessExpression(parent) && parent.getExpression() === value ? parent : undefined;
@@ -1075,17 +1120,18 @@ class ImplTaint {
     }
 
     /**
-     * Whether `reference` is aliased by a binding this does not follow
-     * (`let alias = row`, `alias = row`; a destructuring only copies members
-     * out), or spread into a call, handed to a constructor or to a template tag
-     * that caller data also reaches (see {@link isChangedUnseen}).
+     * Whether `node` (the row or a member path of it) is aliased whole by a
+     * binding this does not follow (`let alias = row`, `alias = row`; `const`
+     * aliases and destructurings are followed by {@link aliasBindingsOf} before
+     * this is asked), or spread into a call, handed to a constructor or to a
+     * template tag that caller data also reaches (see {@link isChangedUnseen}).
      */
-    private escapesAsOperand(reference: Identifier): boolean {
-        const value = outermostValueWrapper(reference);
+    private escapesAsOperand(node: TsNode): boolean {
+        const value = outermostValueWrapper(node);
         const parent = value.getParent();
 
         if (Node.isVariableDeclaration(parent)) {
-            return isSameNode(parent.getInitializer(), value) && !Node.isObjectBindingPattern(parent.getNameNode());
+            return isSameNode(parent.getInitializer(), value);
         }
 
         if (Node.isBinaryExpression(parent)) {
@@ -1102,7 +1148,7 @@ class ImplTaint {
             return this.isOpaqueCallTainted(parent.getExpression(), parent.getArguments(), value);
         }
 
-        if (!Node.isTemplateSpan(parent) || isCopiedOnly(reference)) {
+        if (!Node.isTemplateSpan(parent) || isCopiedOnly(value)) {
             return false;
         }
 
@@ -1178,10 +1224,11 @@ class ImplTaint {
             return !Node.isBinaryExpression(parent) || this.isTaintedValue(parent.getRight(), false);
         }
 
-        const alias = top === value ? (constAliasOf(reference) ?? forOfVariableOf(reference)) : undefined;
+        // A binding of the row or of a member path of it (`const { meta } = row`) shares its objects.
+        const aliases = aliasBindingsOf(top);
 
-        if (alias !== undefined) {
-            return follow(alias, true);
+        if (aliases !== undefined) {
+            return aliases.some((alias) => follow(alias, true));
         }
 
         if (!Node.isCallExpression(parent)) {

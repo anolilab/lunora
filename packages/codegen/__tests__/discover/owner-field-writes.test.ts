@@ -962,6 +962,35 @@ const cache = {};
             expectReported(rowAt(discover(source), markerLine(source, "write")));
         });
 
+        // A binding of a member path of the row holds the row's own nested object.
+        it.each([
+            ["a destructured nested object", `const { meta } = row;\n        meta.ownerId = args.targetUserId;`, "row.meta.ownerId"],
+            ["a `const` bound to a member", `const m = row.meta;\n        m.ownerId = args.targetUserId;`, "row.meta.ownerId"],
+            ["a `const` bound to an element access", `const m = row["meta"];\n        m.ownerId = args.targetUserId;`, "row.meta.ownerId"],
+            ["a nested destructuring", `const { meta: { inner } } = row;\n        inner.ownerId = args.targetUserId;`, "row.meta.inner.ownerId"],
+            ["a deep member path", `const inner = row.meta.inner;\n        inner.ownerId = args.targetUserId;`, "row.meta.inner.ownerId"],
+            ["a `for…of` over a member", `for (const m of row.members) {\n            m.ownerId = args.targetUserId;\n        }`, "row.members[0].ownerId"],
+            ["a destructured member handed to an imported call with args", `const { meta } = row;\n        merge(meta, args);`, "row.meta.ownerId"],
+            ["a member handed to an imported call with args", `merge(row.meta, args);`, "row.meta.ownerId"],
+        ])("reports a ctx row's nested owner changed through %s", (_label, statement, value) => {
+            expect.assertions(2);
+
+            const source = `import { merge } from "./helpers";\n${ownerMutator(`        ${read}\n        ${statement}\n        await ${insert(value)}; // @write`)}`;
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it.each([["a reassigned primitive member destructure", `let { ownerId } = row;\n        ownerId = args.targetUserId;`]])(
+            "keeps a ctx row's owner server-scoped after %s",
+            (_label, statement) => {
+                expect.assertions(1);
+
+                const source = `import { merge } from "./helpers";\n${ownerMutator(`        ${read}\n        ${statement}\n        await ${insert("row.ownerId")}; // @write`)}`;
+
+                expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
+            },
+        );
+
         it.each([
             ["`JSON.stringify`", `JSON.stringify(row);`],
             ["`console.log`", `console.log("post", row);`],
