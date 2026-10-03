@@ -2,14 +2,14 @@
  * Whether a mutator `server` impl's `args` parameter is still exactly the
  * object `applyOwnerScope` verified.
  */
-import type { CallExpression, Node as TsNode, ParameterDeclaration, ts, VariableDeclaration } from "ts-morph";
+import type { CallExpression, Identifier, ParameterDeclaration, ts, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isWriteTarget } from "../ast";
 import { declarationOf } from "../attribution";
 import type { MutatorServerImpl } from "../mutators";
 import { mutatorServerImplOf } from "../mutators";
-import { isCopiedOnly, isDestructuringRead, isMemberRead, isReadOnlyCallArgument, isReadOnlyParameter, visibleArgumentTarget } from "./read-only-use";
+import { isReadOnlyUse } from "./read-only-use";
 
 /**
  * The mutator `server` impl `call` runs in, plus its own `ctx` and `args`
@@ -68,13 +68,13 @@ const canReenterUnverified = (impl: MutatorServerImpl, mutatorDeclaration: Varia
  * - the impl can re-enter itself unverified (see {@link canReenterUnverified});
  * - `arguments` anywhere in the impl reaches the parameter without naming it;
  * - a `var` redeclaration of a parameter binding is a second declaration of it;
- * - an `args` parameter used as anything but a member read, a destructuring
- * initializer, a copy ({@link isCopiedOnly}), a read-only call argument
- * ({@link isReadOnlyCallArgument}), or an argument to a function declared in
- * this file that only reads it ({@link isReadOnlyParameter}, e.g. a local
- * `assertValid(args)`): written through, passed to another call (`fix(args)`,
- * an imported validator, `Object.assign(args, …)`), or aliased
- * (`const a = args`), it may be changed where this cannot see;
+ * - an `args` parameter used other than as {@link isReadOnlyUse} allows (a
+ * member read, a destructuring initializer, a copy, a read-only call argument,
+ * an argument to a same-file function that only reads it such as a local
+ * `assertValid(args)`, or a type position): written through, passed to another
+ * call (`fix(args)`, an imported validator, `Object.assign(args, …)`), aliased
+ * (`const a = args`), or read for an accessor-defining member (`__defineGetter__`), it may be
+ * changed where this cannot see;
  * - a destructured binding of the parameter that is written (`userId = …`).
  */
 const isPristineArgsParameter = (
@@ -98,20 +98,8 @@ const isPristineArgsParameter = (
               return Node.isIdentifier(name) ? [name] : [];
           });
     const declarationByName = new Map(bindings.map((binding) => [binding.getText(), binding.getParentOrThrow().compilerNode]));
-    const isAllowedUse = (reference: TsNode): boolean => {
-        if (!Node.isIdentifier(nameNode)) {
-            return !isWriteTarget(reference);
-        }
-
-        if (isMemberRead(reference) || isDestructuringRead(reference) || isCopiedOnly(reference) || isReadOnlyCallArgument(reference, context)) {
-            return true;
-        }
-
-        // A validator this can read (`assertValid(args)` declared in this file) that only reads it.
-        const target = visibleArgumentTarget(reference);
-
-        return target === null || (target !== undefined && isReadOnlyParameter(target));
-    };
+    // The same read-only rule as a validator's parameter; a destructured binding only must not be written.
+    const isAllowedUse = (reference: Identifier): boolean => (Node.isIdentifier(nameNode) ? isReadOnlyUse(reference, context) : !isWriteTarget(reference));
     const pristine =
         !canReenterUnverified(impl, mutatorDeclaration) &&
         bindings.every((binding) => (binding.getSymbol()?.getDeclarations().length ?? 0) === 1) &&

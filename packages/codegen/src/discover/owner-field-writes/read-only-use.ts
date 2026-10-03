@@ -6,7 +6,7 @@ import type { ArrowFunction, CallExpression, FunctionDeclaration, FunctionExpres
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isConstDeclaration, isWriteTarget, outermostValueWrapper, unwrapExpression } from "../ast";
-import { declarationOf } from "../attribution";
+import { declarationOf, isTypePosition } from "../attribution";
 
 /**
  * `ctx` methods whose result echoes caller-chosen input: `ctx.db.asId(table, args.x)`
@@ -37,7 +37,7 @@ const chainRootOf = (value: TsNode): TsNode | undefined => {
 };
 
 /** Whether `node` resolves, by symbol, to the impl's `ctx` parameter or to a binding destructured out of it (`{ db }`). */
-const isContextReference = (node: TsNode | undefined, context: ParameterDeclaration | undefined): boolean => {
+const isImplContextReference = (node: TsNode | undefined, context: ParameterDeclaration | undefined): boolean => {
     const declaration = Node.isIdentifier(node) && context !== undefined ? declarationOf(node) : undefined;
 
     if (declaration === undefined || context === undefined) {
@@ -134,7 +134,7 @@ const isReadOnlyCallArgument = (node: TsNode, context: ParameterDeclaration | un
         return callee.getText() === "structuredClone" && isLibraryGlobal(callee);
     }
 
-    if (isContextReference(chainRootOf(callee), context)) {
+    if (isImplContextReference(chainRootOf(callee), context)) {
         // An echoing method may hand `args` straight back; only a discarded result keeps it unaliased.
         const isEchoing = Node.isPropertyAccessExpression(callee) && ECHOING_CONTEXT_METHODS.has(callee.getName());
 
@@ -177,6 +177,18 @@ const isReadOnlyCallArgument = (node: TsNode, context: ParameterDeclaration | un
 /** A function whose body this analysis reads: see {@link visibleFunctionOf}. */
 type VisibleFunction = ArrowFunction | FunctionDeclaration | FunctionExpression;
 
+/**
+ * Which parameter of a {@link VisibleFunction} receives a call argument:
+ * `parameter`; `unreached` when none does, so the function cannot see it; or
+ * `opaque` when that cannot be told (an unreadable callee, a spread argument at
+ * or before it, a rest parameter, `arguments` read in the function).
+ */
+type ArgumentTarget = { kind: "opaque" } | { kind: "parameter"; parameter: ParameterDeclaration } | { kind: "unreached" };
+
+const OPAQUE: ArgumentTarget = { kind: "opaque" };
+
+const UNREACHED: ArgumentTarget = { kind: "unreached" };
+
 /** Per-declaration verdicts of {@link isReassignedFunction}, keyed on the compiler node so a re-parse recomputes. */
 const REASSIGNED_FUNCTION_CACHE = new WeakMap<ts.Node, boolean>();
 
@@ -202,11 +214,26 @@ const isReassignedFunction = (declaration: FunctionDeclaration): boolean => {
 };
 
 /**
+ * The implementation a same-file `function` binding runs: the declaration with
+ * a body among its overloads, when every declaration of the name is a
+ * `function` overload in this file and exactly one has a body.
+ */
+const functionImplementationOf = (declaration: FunctionDeclaration): FunctionDeclaration | undefined => {
+    const declarations = declaration.getSymbol()?.getDeclarations() ?? [];
+    const implementations = declarations.filter((candidate) => Node.isFunctionDeclaration(candidate) && candidate.hasBody());
+    const [implementation] = implementations;
+    const isOverloadSet = declarations.every((candidate) => Node.isFunctionDeclaration(candidate) && candidate.getSourceFile() === declaration.getSourceFile());
+
+    return isOverloadSet && implementations.length === 1 && Node.isFunctionDeclaration(implementation) ? implementation : undefined;
+};
+
+/**
  * The function `callee` runs when this analysis can read its body: an inline
  * arrow / function expression (an IIFE), or an identifier bound IN THE SAME
- * FILE to a `function` declaration (with a body, declared once, never
- * reassigned) or to a `const` initialized with an arrow / function expression.
- * Anything else — an import, a parameter, a `let`, a method — is `undefined`.
+ * FILE to a `function` declaration (the one implementation of its overloads,
+ * never reassigned) or to a `const` initialized with an arrow / function
+ * expression. Anything else — an import, a parameter, a `let`, a method — is
+ * `undefined`.
  */
 const visibleFunctionOf = (callee: TsNode): VisibleFunction | undefined => {
     const value = unwrapExpression(callee);
@@ -222,9 +249,9 @@ const visibleFunctionOf = (callee: TsNode): VisibleFunction | undefined => {
     }
 
     if (Node.isFunctionDeclaration(declaration)) {
-        const isSingle = (declaration.getSymbol()?.getDeclarations().length ?? 0) === 1;
+        const implementation = functionImplementationOf(declaration);
 
-        return declaration.hasBody() && isSingle && !isReassignedFunction(declaration) ? declaration : undefined;
+        return implementation === undefined || isReassignedFunction(implementation) ? undefined : implementation;
     }
 
     const initializer = isConstDeclaration(declaration) ? unwrapExpression(declaration.getInitializer()) : undefined;
@@ -232,42 +259,34 @@ const visibleFunctionOf = (callee: TsNode): VisibleFunction | undefined => {
     return Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer) ? initializer : undefined;
 };
 
-/**
- * The parameter of `target` that receives `argument` of `call`. `null` when
- * no parameter does, so `target` cannot see it; `undefined` when that cannot be told:
- * a spread argument at or before it, a rest parameter, or `arguments` read
- * anywhere in `target`.
- */
-const receivingParameter = (target: VisibleFunction, call: CallExpression, argument: TsNode): ParameterDeclaration | null | undefined => {
+/** The {@link ArgumentTarget} of `argument` in `call` to `target`. */
+const receivingParameter = (target: VisibleFunction, call: CallExpression, argument: TsNode): ArgumentTarget => {
     const callArguments = call.getArguments();
     const position = callArguments.indexOf(argument);
     const isOpaque =
         position === -1 ||
         callArguments.slice(0, position + 1).some((candidate) => Node.isSpreadElement(candidate)) ||
         target.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => identifier.getText() === "arguments");
-
-    if (isOpaque) {
-        return undefined;
-    }
-
     const parameters = target.getParameters();
     const parameter = parameters[position];
 
-    if (parameter === undefined) {
-        // eslint-disable-next-line unicorn/no-null -- `null` (no receiver) and `undefined` (unknown) are distinct verdicts
-        return parameters.some((candidate) => candidate.isRestParameter()) ? undefined : null;
+    if (isOpaque) {
+        return OPAQUE;
     }
 
-    return parameter.isRestParameter() ? undefined : parameter;
+    if (parameter === undefined) {
+        return parameters.some((candidate) => candidate.isRestParameter()) ? OPAQUE : UNREACHED;
+    }
+
+    return parameter.isRestParameter() ? OPAQUE : { kind: "parameter", parameter };
 };
 
 /**
- * The parameter of a {@link visibleFunctionOf} function that `node` is handed to
- * as a call argument (`validate(args)`), `null` when the function takes no
- * parameter there, and `undefined` when `node` is no call argument or the callee
- * cannot be read.
+ * The {@link ArgumentTarget} of `node` as an argument of the call it is passed
+ * to (`validate(args)`): `opaque` when the callee is not a
+ * {@link visibleFunctionOf} function; `undefined` when `node` is no call argument.
  */
-const visibleArgumentTarget = (node: TsNode): ParameterDeclaration | null | undefined => {
+const visibleArgumentTarget = (node: TsNode): ArgumentTarget | undefined => {
     const value = outermostValueWrapper(node);
     const call = value.getParent();
 
@@ -277,21 +296,89 @@ const visibleArgumentTarget = (node: TsNode): ParameterDeclaration | null | unde
 
     const target = visibleFunctionOf(call.getExpression());
 
-    return target === undefined ? undefined : receivingParameter(target, call, value);
+    return target === undefined ? OPAQUE : receivingParameter(target, call, value);
+};
+
+/**
+ * Members whose READ hands out a way to rewrite the object: legacy accessor
+ * definers (`args.__defineGetter__("userId", …)`) and the prototype.
+ */
+const MUTATING_MEMBERS = new Set<string>(["__defineGetter__", "__defineSetter__", "__proto__"]);
+
+/**
+ * Whether `node` is only tested or compared: a condition (`if (!input)`), a
+ * `!` / `typeof` / `void` operand, or an operand of a comparison or arithmetic
+ * operator. `??` / `||` / `&&` hand the value itself on, so they are not.
+ */
+const isOperandRead = (node: TsNode): boolean => {
+    const value = outermostValueWrapper(node);
+    const parent = value.getParent();
+
+    if (Node.isIfStatement(parent) || Node.isWhileStatement(parent) || Node.isTypeOfExpression(parent) || Node.isVoidExpression(parent)) {
+        return true;
+    }
+
+    if (Node.isPrefixUnaryExpression(parent)) {
+        return parent.getOperatorToken() === SyntaxKind.ExclamationToken;
+    }
+
+    if (!Node.isBinaryExpression(parent)) {
+        return false;
+    }
+
+    const operator = parent.getOperatorToken().getKind();
+    const isAssignment = operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment;
+    const isLogical = operator === SyntaxKind.QuestionQuestionToken || operator === SyntaxKind.BarBarToken || operator === SyntaxKind.AmpersandAmpersandToken;
+
+    return !isAssignment && !isLogical;
 };
 
 /** How many nested {@link isReadOnlyParameter} hand-offs (`validate` → `check` → …) are followed before failing closed. */
 const MAX_READ_ONLY_DEPTH = 4;
 
 /**
+ * Whether `reference` only READS the object it names: a member read (not of a
+ * {@link MUTATING_MEMBERS} member), a destructuring initializer, a copy
+ * ({@link isCopiedOnly}), a read-only call argument ({@link isReadOnlyCallArgument},
+ * with `context` the impl's own `ctx`), an argument to a visible function that
+ * is read-only for it ({@link isReadOnlyParameter}), or a TYPE position
+ * (`typeof args`), which is no use of the value at all.
+ */
+const isReadOnlyUse = (reference: Identifier, context: ParameterDeclaration | undefined, depth = 0): boolean => {
+    if (isTypePosition(reference)) {
+        return true;
+    }
+
+    if (isMemberRead(reference)) {
+        const access = outermostValueWrapper(reference).getParent();
+        const key = Node.isElementAccessExpression(access) ? access.getArgumentExpression() : undefined;
+        const literalKey = Node.isStringLiteral(key) ? key.getLiteralValue() : undefined;
+        const member = Node.isPropertyAccessExpression(access) ? access.getName() : literalKey;
+
+        return member === undefined || !MUTATING_MEMBERS.has(member);
+    }
+
+    if (isDestructuringRead(reference) || isCopiedOnly(reference) || isOperandRead(reference) || isReadOnlyCallArgument(reference, context)) {
+        return true;
+    }
+
+    const target = visibleArgumentTarget(reference);
+
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with isReadOnlyParameter
+    return target?.kind === "unreached" || (target?.kind === "parameter" && isReadOnlyParameter(target.parameter, depth + 1));
+};
+
+/** Per-parameter {@link isReadOnlyParameter} verdicts (keyed on the compiler node), kept when they did not hit the depth bound. */
+const READ_ONLY_PARAMETER_CACHE = new WeakMap<ts.Node, boolean>();
+
+/**
  * Whether the function `parameter` belongs to only READS what it is handed
- * there: every use of the parameter is a member read, a destructuring
- * initializer, a copy ({@link isCopiedOnly}), a read-only call argument
- * ({@link isReadOnlyCallArgument}), or an argument to another visible function
- * that is read-only for it, up to {@link MAX_READ_ONLY_DEPTH} hand-offs. Never
- * written through, returned, stored or aliased, and never passed to a function
- * this cannot read. A destructured parameter only copies members out, so it is
- * read-only; a rest parameter never reaches here ({@link receivingParameter}).
+ * there: declared once (no `var` redeclaration), and every use of it
+ * {@link isReadOnlyUse}, following hand-offs to further visible functions up to
+ * {@link MAX_READ_ONLY_DEPTH}. Never written through, returned, stored or
+ * aliased, and never passed to a function this cannot read. A destructured
+ * parameter only copies members out, so it is read-only; a rest parameter never
+ * reaches here ({@link receivingParameter}).
  */
 const isReadOnlyParameter = (parameter: ParameterDeclaration, depth = 0): boolean => {
     const name = parameter.getNameNode();
@@ -300,65 +387,56 @@ const isReadOnlyParameter = (parameter: ParameterDeclaration, depth = 0): boolea
         return true;
     }
 
+    const cached = READ_ONLY_PARAMETER_CACHE.get(parameter.compilerNode);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
     if (depth > MAX_READ_ONLY_DEPTH) {
         return false;
     }
 
-    const isReadOnlyUse = (reference: TsNode): boolean => {
-        if (isMemberRead(reference) || isDestructuringRead(reference) || isCopiedOnly(reference) || isReadOnlyCallArgument(reference, undefined)) {
-            return true;
-        }
+    const isSingle = (name.getSymbol()?.getDeclarations().length ?? 0) === 1;
+    const readOnly =
+        isSingle &&
+        parameter
+            .getParentOrThrow()
+            .getDescendantsOfKind(SyntaxKind.Identifier)
+            .every(
+                (identifier) =>
+                    identifier === name ||
+                    identifier.getText() !== name.getText() ||
+                    declarationOf(identifier)?.compilerNode !== parameter.compilerNode ||
+                    isReadOnlyUse(identifier, undefined, depth),
+            );
 
-        const target = visibleArgumentTarget(reference);
+    // A verdict reached with depth to spare holds at any depth; a refusal at depth may only be the bound.
+    if (readOnly || depth === 0) {
+        READ_ONLY_PARAMETER_CACHE.set(parameter.compilerNode, readOnly);
+    }
 
-        return target === null || (target !== undefined && isReadOnlyParameter(target, depth + 1));
-    };
-
-    return parameter
-        .getParentOrThrow()
-        .getDescendantsOfKind(SyntaxKind.Identifier)
-        .every(
-            (identifier) =>
-                identifier === name ||
-                identifier.getText() !== name.getText() ||
-                declarationOf(identifier)?.compilerNode !== parameter.compilerNode ||
-                isReadOnlyUse(identifier),
-        );
+    return readOnly;
 };
 
 /** Whether `node` is `other`: the same compiler node. */
 const isSameNode = (node: TsNode | undefined, other: TsNode): boolean => node?.compilerNode === other.compilerNode;
 
-/** Whether `call` is `Object.assign(<node>, …)` on the platform `Object`: it writes into `node` only what its other arguments carry. */
-const isObjectAssignTarget = (call: CallExpression, node: TsNode): boolean => {
-    const callee = unwrapExpression(call.getExpression());
-    const root = Node.isPropertyAccessExpression(callee) ? callee.getExpression() : undefined;
-
-    return (
-        Node.isPropertyAccessExpression(callee) &&
-        callee.getName() === "assign" &&
-        Node.isIdentifier(root) &&
-        root.getText() === "Object" &&
-        isLibraryGlobal(root) &&
-        call.getArguments()[0] === node
-    );
-};
-
 export {
     chainRootOf,
     ECHOING_CONTEXT_METHODS,
-    isContextReference,
     isCopiedOnly,
     isDestructuringRead,
+    isImplContextReference,
     isLibraryGlobal,
     isMemberRead,
-    isObjectAssignTarget,
     isReadOnlyCallArgument,
     isReadOnlyParameter,
+    isReadOnlyUse,
     isReassignedFunction,
     isSameNode,
     receivingParameter,
     visibleArgumentTarget,
     visibleFunctionOf,
 };
-export type { VisibleFunction };
+export type { ArgumentTarget, VisibleFunction };

@@ -1,28 +1,21 @@
 /** How caller-controlled data flows inside one mutator `server` impl: {@link ImplTaint}. */
-import type { BindingElement, CallExpression, Identifier, Node as TsNode, ParameterDeclaration, ts, Type, VariableDeclaration } from "ts-morph";
+import type { CallExpression, Identifier, Node as TsNode, ParameterDeclaration, ts, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isConstDeclaration, isWriteTarget, outermostValueWrapper, unwrapExpression } from "../ast";
 import { declarationOf } from "../attribution";
 import type { MutatorImplScope } from "./args-pristine";
+import type { ObjectBinding } from "./object-flow";
 import {
-    chainRootOf,
-    ECHOING_CONTEXT_METHODS,
-    isContextReference,
-    isCopiedOnly,
-    isObjectAssignTarget,
-    isReadOnlyCallArgument,
-    isReadOnlyParameter,
-    isSameNode,
-    receivingParameter,
-    visibleFunctionOf,
-} from "./read-only-use";
-
-/**
- * Methods whose RESULT is built from their callback's return value (or a seed
- * argument): a ctx-rooted receiver does not make that result server-scoped.
- */
-const CALLBACK_RESULT_METHODS = new Set<string>(["catch", "flatMap", "map", "reduce", "reduceRight", "then"]);
+    aliasBindingsOf,
+    bindingIdentifiersOf,
+    CALLBACK_RESULT_METHODS,
+    isMethodCall,
+    isPrimitiveType,
+    objectContinuation,
+    RECEIVER_ITERATING_METHODS,
+} from "./object-flow";
+import { chainRootOf, ECHOING_CONTEXT_METHODS, isImplContextReference, isReadOnlyCallArgument, receivingParameter, visibleFunctionOf } from "./read-only-use";
 
 /**
  * Methods whose result is their receiver, one of its elements, or a value
@@ -99,90 +92,6 @@ const isFunctionReference = (node: TsNode): boolean => {
 /** `Promise` combinators whose result is the settled values of their argument's elements. */
 const PROMISE_COMBINATORS = new Set<string>(["all", "allSettled", "any", "race"]);
 
-/** A binding whose object a later statement may change: a variable, a parameter, or one element of a destructuring. */
-type ObjectBinding = BindingElement | ParameterDeclaration | VariableDeclaration;
-
-/** The identifier-named elements of a destructuring pattern, nested ones included. */
-const bindingIdentifiersOf = (binding: ObjectBinding): BindingElement[] =>
-    binding
-        .getNameNode()
-        .getDescendantsOfKind(SyntaxKind.BindingElement)
-        .filter((element) => Node.isIdentifier(element.getNameNode()));
-
-/**
- * The outermost member path over `node` (`row` → `row.meta.inner`,
- * `row["meta"]`), seen through wrappers. With `stopAtMethod`, the walk stops
- * at the receiver of a method call (`row.members` in `row.members.forEach(cb)`).
- */
-const memberPathOf = (node: TsNode, stopAtMethod: boolean): TsNode => {
-    let top = outermostValueWrapper(node);
-    let parent = top.getParent();
-
-    while ((Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent)) && parent.getExpression() === top) {
-        const holder = parent.getParent();
-
-        if (stopAtMethod && Node.isCallExpression(holder) && holder.getExpression() === parent) {
-            break;
-        }
-
-        top = outermostValueWrapper(parent);
-        parent = top.getParent();
-    }
-
-    return top;
-};
-
-/** The variable declaration `node` (through wrappers) is the whole initializer of, or the loop variable of a `for…of` over it. */
-const receivingDeclarationOf = (node: TsNode): VariableDeclaration | undefined => {
-    const value = outermostValueWrapper(node);
-    const parent = value.getParent();
-
-    if (Node.isVariableDeclaration(parent)) {
-        return isSameNode(parent.getInitializer(), value) ? parent : undefined;
-    }
-
-    const initializer = Node.isForOfStatement(parent) && parent.getExpression() === value ? parent.getInitializer() : undefined;
-
-    return Node.isVariableDeclarationList(initializer) ? initializer.getDeclarations()[0] : undefined;
-};
-
-/**
- * The bindings that take (part of) `node`'s object, which the flow walk follows
- * as aliases: a `const` bound to it (`const alias = row`, `const m = row.meta`),
- * the loop variable of a `for…of` over it, and every element of a destructuring
- * of it (`const { meta } = row`, `const { meta: { inner } } = row`,
- * `for (const { meta } of rows)`), whose object-valued members are the row's own
- * nested objects. `undefined` when `node` is no such initializer. A `let` /
- * `var` bound to it whole is not followed (see `escapesAsOperand`).
- */
-const aliasBindingsOf = (node: TsNode): ObjectBinding[] | undefined => {
-    const declaration = receivingDeclarationOf(node);
-    const isLoopVariable = declaration !== undefined && Node.isForOfStatement(declaration.getParent().getParent());
-
-    if (declaration === undefined) {
-        return undefined;
-    }
-
-    if (!Node.isIdentifier(declaration.getNameNode())) {
-        return bindingIdentifiersOf(declaration);
-    }
-
-    return isLoopVariable || isConstDeclaration(declaration) ? [declaration] : undefined;
-};
-
-/** Whether every value of `type` is a primitive, which no call can change in place. `any` / `unknown` are not. */
-const isPrimitiveType = (type: Type): boolean => {
-    if (type.isUnion()) {
-        return type.getUnionTypes().every((member) => isPrimitiveType(member));
-    }
-
-    if (type.isIntersection()) {
-        return type.getIntersectionTypes().some((member) => isPrimitiveType(member));
-    }
-
-    return !type.isAny() && !type.isUnknown() && !type.isObject() && !type.isTypeParameter();
-};
-
 /** The parameter `declaration` binds: the parameter itself, or the one whose destructuring pattern holds it. */
 const parameterOf = (declaration: TsNode | undefined): ParameterDeclaration | undefined => {
     if (Node.isParameterDeclaration(declaration)) {
@@ -203,32 +112,6 @@ const isValueIdentifier = (identifier: Identifier): boolean => {
     return !((Node.isPropertyAssignment(parent) || Node.isMethodDeclaration(parent)) && parent.getNameNode() === identifier);
 };
 
-/**
- * Methods that call their callback with the elements, or the settled value, of
- * their RECEIVER, plus their other arguments (`reduce`'s seed). Only for these
- * does a callback's taint come from the receiver; any other callee — a static
- * or namespace function (`Array.from(list, cb)`, `_.map(list, cb)`), `.call` —
- * fails closed.
- */
-const RECEIVER_ITERATING_METHODS = new Set<string>([
-    "catch",
-    "every",
-    "filter",
-    "finally",
-    "find",
-    "findIndex",
-    "findLast",
-    "findLastIndex",
-    "flatMap",
-    "forEach",
-    "map",
-    "reduce",
-    "reduceRight",
-    "some",
-    "sort",
-    "then",
-]);
-
 /** How many variable hops (`const a = b; const b = c`) taint is followed through before failing closed. */
 const MAX_VARIABLE_HOPS = 8;
 
@@ -247,6 +130,24 @@ const WORK_BUDGET = 50_000;
 interface VerdictTable {
     inProgress: Set<ts.Node>;
     verdicts: Map<ts.Node, boolean>;
+}
+
+/**
+ * The function nested in `impl` whose return value `node` is (`return node`, an
+ * arrow's expression body); `undefined` for the impl's own return or no return.
+ */
+const returningFunctionOf = (node: TsNode, impl: TsNode): TsNode | undefined => {
+    const parent = node.getParent();
+    const isReturned = Node.isReturnStatement(parent) || (Node.isArrowFunction(parent) && parent.getBody() === node);
+    const owner = isReturned ? node.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor)) : undefined;
+
+    return owner === undefined || owner === impl ? undefined : owner;
+};
+
+/** One binding queued by {@link ImplTaint}'s flow walk, with the alias hops spent to reach it. */
+interface FlowStep {
+    binding: ObjectBinding;
+    hops: number;
 }
 
 /**
@@ -273,10 +174,8 @@ type Follow = (next: ObjectBinding, isAlias: boolean) => boolean;
  * `ctx.db`, even when the query filters on `args`. So is a `Promise`
  * combinator over such reads (`Promise.all(ids.map((id) => ctx.db.get(id)))`).
  * A helper result (`getMembers(ctx, args.orgId)`) is not. Neither is a row that
- * may have been changed since: see {@link ImplTaint.isMutatedWithTaint} and
- * {@link ImplTaint.isChangedUnseen}, which follow the row through `const`
- * aliases, `for…of` variables, iterating callbacks and the parameters of the
- * nested functions it is handed to.
+ * may have been changed since: see {@link ImplTaint.isCompromised}, which
+ * follows the row wherever it flows inside the impl.
  *
  * A parameter of a function NESTED in the impl is caller-controlled only when
  * what flows into it is. A function called by name (`const persist = …;
@@ -297,11 +196,8 @@ type Follow = (next: ObjectBinding, isAlias: boolean) => boolean;
 class ImplTaint {
     private cuts = 0;
 
-    /** {@link ImplTaint.isChangedUnseen} verdicts, kept apart: they key on the same bindings as the mutation verdicts. */
-    private readonly escapes: VerdictTable = { inProgress: new Set(), verdicts: new Map() };
-
-    /** {@link ImplTaint.isMutatedWithTaint} verdicts, keyed on the binding like the variable verdicts are. */
-    private readonly mutations: VerdictTable = { inProgress: new Set(), verdicts: new Map() };
+    /** {@link ImplTaint.isCompromised} verdicts, kept apart: they key on the same bindings as the variable verdicts. */
+    private readonly compromised: VerdictTable = { inProgress: new Set(), verdicts: new Map() };
 
     private readonly referencesByDeclaration = new Map<string, Map<ts.Node, Identifier[]>>();
 
@@ -470,7 +366,7 @@ class ImplTaint {
         }
 
         // A destructured element is an object of its own, which a later statement may change.
-        if (Node.isBindingElement(declaration) && (this.isMutatedWithTaint(declaration) || this.isChangedUnseen(declaration))) {
+        if (Node.isBindingElement(declaration) && this.isCompromised(declaration)) {
             return true;
         }
 
@@ -486,299 +382,316 @@ class ImplTaint {
     }
 
     /**
-     * Whether `binding` may have absorbed caller-controlled data in code this
-     * cannot read. The attacker controls `args`, not a helper's code, so an
-     * opaque call (an import, a method, a parameter) can only plant caller data
-     * in the row when caller data reaches that call too: the row (or a `const`
-     * alias of it, or the loop variable of a `for…of` over it) is handed to an
-     * opaque call that also receives a caller-controlled argument
-     * (`merge(user, args)`, `apply(user, { owner: args.x })`), or whose callee is
-     * itself caller-controlled (`args.fn(user)`, `handlers[args.kind](user)`).
-     * Spreading it into such a call, handing it to such a constructor or
-     * template tag, counts the same. A `let` / assignment alias, past which its
-     * uses are not followed, fails closed. Read-only calls
-     * ({@link isReadOnlyCallArgument}) and `Object.assign`'s target (judged by
-     * what it stores, in {@link isMutatedWithTaint}) never count; a nested
-     * function, or an iterating callback over it (`rows.forEach(cb)`), is
-     * followed into its parameters, and a same-file function outside the impl
-     * must only read it ({@link isReadOnlyParameter}). A binding whose type is a
-     * primitive cannot be changed in place and never counts.
+     * Whether `binding`'s object may hold caller-controlled data stored into it
+     * after its initializer. One walk over every binding the object flows into
+     * ({@link reaches}): `const` aliases, destructured elements, `for…of`
+     * variables, the parameters of nested functions and iterating callbacks it is
+     * handed to. Each use of it is first climbed to where its value ends up
+     * ({@link objectContinuation}: member paths, `await`, `??`, `?:`,
+     * containers, element-returning methods), then judged there
+     * ({@link isCompromisingUse}). A binding whose type is a primitive cannot be
+     * changed in place and never counts.
      */
-    private isChangedUnseen(binding: ObjectBinding): boolean {
-        return this.reaches(binding, this.escapes, (reference, follow) => this.escapesThrough(reference, follow)) && !isPrimitiveType(binding.getType());
-    }
-
-    /** One use of {@link isChangedUnseen}: whether it hands the object to code that may plant caller data in it. */
-    private escapesThrough(reference: Identifier, follow: Follow): boolean {
-        // The row itself, or a member path of it (`row.meta`): its nested objects are the row's own.
-        const value = memberPathOf(reference, true);
-        const parent = value.getParent();
-        const aliases = aliasBindingsOf(value);
-
-        if (aliases !== undefined) {
-            return aliases.filter((alias) => !isPrimitiveType(alias.getType())).some((alias) => follow(alias, true));
-        }
-
-        // A primitive member is a copy: nothing done with it reaches the row. Asked last, as it costs a type.
-        const isObjectValued = (): boolean => value === outermostValueWrapper(reference) || !isPrimitiveType(value.getType());
-
-        if (Node.isCallExpression(parent) && parent.getArguments().includes(value)) {
-            return this.escapesAsArgument(parent, value, follow) && isObjectValued();
-        }
-
-        if (this.escapesAsOperand(value)) {
-            return isObjectValued();
-        }
-
-        const method = Node.isPropertyAccessExpression(parent) && parent.getExpression() === value ? parent : undefined;
-        const call = method?.getParent();
-
-        if (method === undefined || !Node.isCallExpression(call) || call.getExpression() !== method || !RECEIVER_ITERATING_METHODS.has(method.getName())) {
-            return false;
-        }
-
-        const callback = call.getArguments()[0];
-        const target = callback === undefined ? undefined : visibleFunctionOf(callback);
-
-        if (callback === undefined) {
-            return false;
-        }
-
-        if (target === undefined) {
-            // An opaque callback sees the elements; it can only plant caller data that reaches it.
-            return this.isTaintedValue(callback, false) || this.hasTaintedOperand(call.getArguments(), callback);
-        }
-
-        return this.isInImpl(target)
-            ? target.getParameters().some((parameter) => follow(parameter, false))
-            : !target.getParameters().every((parameter) => isReadOnlyParameter(parameter));
+    private isCompromised(binding: ObjectBinding): boolean {
+        return this.reaches(binding) && !isPrimitiveType(binding.getType());
     }
 
     /**
-     * Whether `node` (the row or a member path of it) is aliased whole by a
-     * binding this does not follow (`let alias = row`, `alias = row`; `const`
-     * aliases and destructurings are followed by {@link aliasBindingsOf} before
-     * this is asked), or spread into a call, handed to a constructor or to a
-     * template tag that caller data also reaches (see {@link isChangedUnseen}).
+     * Whether one use of an object may store caller-controlled data into it.
+     * Compromising (fail-closed):
+     *
+     * - a member write of a caller-controlled value (`o.k = args.x`), or any
+     * non-assignment write (`delete o.k`, `o.n++`);
+     * - a method call on it with a caller-controlled argument (`list.push(args.x)`);
+     * - handing it to a call this cannot see into (an import, a method, a
+     * parameter, or a same-file function outside the impl) that caller data
+     * also reaches — a caller-controlled operand (`merge(user, args)`) or callee
+     * (`args.fn(user)`) — the same for a spread argument, a constructor, a tag;
+     * - binding it whole to a `let` / assignment, or any position not recognised
+     * below.
+     *
+     * Followed instead: aliases ({@link aliasBindingsOf}), the parameter of a
+     * nested function it is handed to, the parameters of an iterating callback
+     * over it. Plain reads are not compromising: member reads that end in a
+     * read, read-only calls ({@link isReadOnlyCallArgument}), conditions,
+     * comparisons and arithmetic, untagged templates, an index, a `throw`, and
+     * the impl's own `return`. A member path whose type is a primitive is a copy
+     * and never compromising.
      */
-    private escapesAsOperand(node: TsNode): boolean {
-        const value = outermostValueWrapper(node);
-        const parent = value.getParent();
-
-        if (Node.isVariableDeclaration(parent)) {
-            return isSameNode(parent.getInitializer(), value);
-        }
-
-        if (Node.isBinaryExpression(parent)) {
-            return isSameNode(parent.getRight(), value) && isWriteTarget(parent.getLeft());
-        }
-
-        const holder = parent?.getParent();
-
-        if (Node.isSpreadElement(parent) && Node.isCallExpression(holder)) {
-            return !isReadOnlyCallArgument(parent, this.scope.context) && this.isOpaqueCallTainted(holder.getExpression(), holder.getArguments(), parent);
-        }
-
-        if (Node.isNewExpression(parent)) {
-            return this.isOpaqueCallTainted(parent.getExpression(), parent.getArguments(), value);
-        }
-
-        if (!Node.isTemplateSpan(parent) || isCopiedOnly(value)) {
-            return false;
-        }
-
-        const template = parent.getParent();
-        const tagged = template.getParent();
-
-        return (
-            Node.isTaggedTemplateExpression(tagged) &&
-            this.isOpaqueCallTainted(
-                tagged.getTag(),
-                template.getTemplateSpans().map((span) => span.getExpression()),
-                value,
-            )
-        );
-    }
-
-    /** Whether handing `value` to `call` may plant caller data in it: see {@link isChangedUnseen}. */
-    private escapesAsArgument(call: CallExpression, value: TsNode, follow: Follow): boolean {
-        if (isReadOnlyCallArgument(value, this.scope.context) || isObjectAssignTarget(call, value)) {
-            return false;
-        }
-
-        const target = visibleFunctionOf(call.getExpression());
-        const parameter = target === undefined ? undefined : receivingParameter(target, call, value);
-
-        if (target === undefined || parameter === undefined) {
-            return this.isOpaqueCallTainted(call.getExpression(), call.getArguments(), value);
-        }
-
-        if (parameter === null) {
-            return false;
-        }
-
-        // A nested function's writes are judged by their values (`isMutatedWithTaint`); one outside the impl must only read.
-        return this.isInImpl(target) ? follow(parameter, false) : !isReadOnlyParameter(parameter);
-    }
-
-    /** Whether caller data reaches an opaque call: its callee is caller-controlled, or an operand other than `value` is. */
-    private isOpaqueCallTainted(callee: TsNode, operands: ReadonlyArray<TsNode>, value: TsNode): boolean {
-        return this.isTaintedValue(callee, false) || this.hasTaintedOperand(operands, value);
-    }
-
-    /** Whether any of `operands` other than `value` is caller-controlled (a spread `...args` included). */
-    private hasTaintedOperand(operands: ReadonlyArray<TsNode>, value: TsNode): boolean {
-        return operands.some((operand) => operand !== value && this.isTaintedValue(operand, false));
+    private isCompromisingUse(reference: Identifier, follow: Follow): boolean {
+        return this.valueCompromises(outermostValueWrapper(reference), true, follow, 0);
     }
 
     /**
-     * Whether a caller-controlled value is stored INTO `binding`'s object after
-     * its initializer: a member write (`o.k = args.x`), a method call on it with
-     * a tainted argument (`list.push(args.x)`, `map.set(k, args.x)`), a call it
-     * is passed to alongside a tainted argument (`Object.assign(o, args)`), or —
-     * through a `const` alias of it, the loop variable of a `for…of` over it,
-     * an iterating callback over it (`rows.forEach((r) => …)`), or the parameter
-     * of a nested function it is handed to (`set(row)`) — any of the same.
+     * The {@link isCompromisingUse} verdict from any expression `start` holding the object:
+     * a reference to its binding (`isBindingReference`), or the result of a
+     * nested function that returns it, judged at each of its call sites.
      */
-    private isMutatedWithTaint(binding: ObjectBinding): boolean {
-        return this.reaches(binding, this.mutations, (reference, follow) => this.storesTaintThrough(reference, follow));
-    }
+    private valueCompromises(start: TsNode, isBindingReference: boolean, follow: Follow, depth: number): boolean {
+        let end = start;
 
-    /** One use of {@link isMutatedWithTaint}: whether it stores a caller-controlled value into the object. */
-    private storesTaintThrough(reference: Identifier, follow: Follow): boolean {
-        const value = outermostValueWrapper(reference);
-        let top = value;
-        let parent = top.getParent();
+        for (let next = objectContinuation(end); next !== undefined; next = objectContinuation(end)) {
+            if (Node.isCallExpression(next) && this.callbackCompromises(next, follow)) {
+                return true;
+            }
 
-        while ((Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent)) && parent.getExpression() === top) {
-            top = outermostValueWrapper(parent);
-            parent = top.getParent();
+            end = outermostValueWrapper(next);
         }
 
-        if (top !== value && isWriteTarget(top)) {
-            return !Node.isBinaryExpression(parent) || this.isTaintedValue(parent.getRight(), false);
+        const parent = end.getParent();
+        const isBinding = end === start && isBindingReference;
+        const isCopy = (): boolean => !isBinding && isPrimitiveType(end.getType());
+
+        if (isWriteTarget(end)) {
+            // `row = other` rebinds the name; a write through a member stores into the object.
+            return !isBinding && (!Node.isBinaryExpression(parent) || this.isTaintedValue(parent.getRight(), false));
         }
 
-        // A binding of the row or of a member path of it (`const { meta } = row`) shares its objects.
-        const aliases = aliasBindingsOf(top);
+        const aliases = aliasBindingsOf(end);
 
         if (aliases !== undefined) {
             return aliases.some((alias) => follow(alias, true));
         }
 
-        if (!Node.isCallExpression(parent)) {
-            return false;
+        const method = Node.isPropertyAccessExpression(parent) && parent.getExpression() === end ? parent.getParent() : undefined;
+
+        if (Node.isCallExpression(method) && method.getExpression() === parent) {
+            return this.methodCallCompromises(method, follow);
         }
 
-        const callArguments = parent.getArguments();
+        const returnedFrom = returningFunctionOf(end, this.scope.impl);
 
-        if (this.nestedParametersReceiving(parent, top).some((parameter) => follow(parameter, false))) {
-            return true;
+        if (returnedFrom !== undefined) {
+            return this.resultCompromises(returnedFrom, follow, depth) && !isCopy();
         }
 
-        // A callback (`rows.filter((r) => r.org === args.org)`) reads the object; it stores nothing into it.
-        const others = callArguments.filter((argument) => {
-            const unwrapped = unwrapExpression(argument);
-
-            return argument !== top && !Node.isArrowFunction(unwrapped) && !Node.isFunctionExpression(unwrapped);
-        });
-
-        return (parent.getExpression() === top || callArguments.includes(top)) && others.some((argument) => this.isTaintedValue(argument, false));
+        return this.positionCompromises(end, follow) && !isCopy();
     }
 
     /**
-     * The parameters of functions nested in the impl that receive `node`'s
-     * object in `call`: `node` handed to one as an argument (`set(row)`), or the
-     * receiver of an iterating method one is the callback of
-     * (`rows.forEach((r) => …)`).
+     * Whether the object, returned from the nested function `returnedFrom`, is
+     * compromised where that function's result goes: each call site of a named
+     * or immediately invoked function is judged as a value of its own. A
+     * predicate or comparator of an iterating method (`rows.filter((r) => r)`)
+     * only hands its result to that method. A function used any other way, or
+     * past {@link MAX_VARIABLE_HOPS} nested results, fails closed.
      */
-    private nestedParametersReceiving(call: CallExpression, node: TsNode): ParameterDeclaration[] {
-        if (call.getArguments().includes(node)) {
-            const target = visibleFunctionOf(call.getExpression());
-            const parameter = target !== undefined && this.isInImpl(target) ? receivingParameter(target, call, node) : undefined;
+    private resultCompromises(returnedFrom: TsNode, follow: Follow, depth: number): boolean {
+        const holder = outermostValueWrapper(returnedFrom).getParent();
 
-            return parameter === undefined || parameter === null ? [] : [parameter];
+        if (depth >= MAX_VARIABLE_HOPS) {
+            this.cuts += 1;
+
+            return true;
         }
 
-        const method = Node.isPropertyAccessExpression(node) && call.getExpression() === node ? node.getName() : undefined;
-        const callback = method !== undefined && RECEIVER_ITERATING_METHODS.has(method) ? call.getArguments()[0] : undefined;
-        const target = callback === undefined ? undefined : visibleFunctionOf(callback);
+        if (Node.isCallExpression(holder)) {
+            const isInvoked = holder.getExpression() === outermostValueWrapper(returnedFrom);
 
-        return target !== undefined && this.isInImpl(target) ? target.getParameters() : [];
+            return isInvoked ? this.valueCompromises(holder, false, follow, depth + 1) : !isMethodCall(holder, RECEIVER_ITERATING_METHODS);
+        }
+
+        const binding = Node.isFunctionDeclaration(returnedFrom) ? returnedFrom : holder;
+        const nameNode = Node.isFunctionDeclaration(binding) || isConstDeclaration(binding) ? binding.getNameNode() : undefined;
+
+        if (binding === undefined || !Node.isIdentifier(nameNode)) {
+            return true;
+        }
+
+        return this.referencesTo(binding, nameNode.getText()).some((reference) => {
+            const callee = outermostValueWrapper(reference);
+            const call = callee.getParent();
+
+            return !Node.isCallExpression(call) || call.getExpression() !== callee || this.valueCompromises(call, false, follow, depth + 1);
+        });
+    }
+
+    /** A method called on the object (`list.push(x)`, `rows.forEach(cb)`): see {@link isCompromisingUse}. */
+    private methodCallCompromises(call: CallExpression, follow: Follow): boolean {
+        // A callback (`rows.filter((r) => r.org === args.org)`) reads the object; it stores nothing into it.
+        const stored = call.getArguments().filter((argument) => callbackResults(argument) === undefined);
+
+        return stored.some((argument) => this.isTaintedValue(argument, false)) || this.callbackCompromises(call, follow);
+    }
+
+    /**
+     * Whether the callback of an iterating method over the object
+     * (`rows.forEach(cb)`, also when the call's result is climbed through) may
+     * store caller data into its elements: a callback nested in the impl is
+     * followed into its parameters; any other is opaque, and compromises when it
+     * is itself caller-controlled.
+     */
+    private callbackCompromises(call: CallExpression, follow: Follow): boolean {
+        const callback = isMethodCall(call, RECEIVER_ITERATING_METHODS) ? call.getArguments()[0] : undefined;
+
+        if (callback === undefined) {
+            return false;
+        }
+
+        const target = visibleFunctionOf(callback);
+
+        return target !== undefined && this.isInImpl(target)
+            ? target.getParameters().some((parameter) => follow(parameter, false))
+            : this.isTaintedValue(callback, false);
+    }
+
+    /** Where the climb of {@link isCompromisingUse} ends: an argument, an operand, a statement. */
+    private positionCompromises(end: TsNode, follow: Follow): boolean {
+        const parent = end.getParent();
+
+        if (Node.isCallExpression(parent) && parent.getArguments().includes(end)) {
+            return this.argumentCompromises(parent, end, follow);
+        }
+
+        if (Node.isSpreadElement(parent) && Node.isCallExpression(parent.getParent())) {
+            const call = parent.getParentOrThrow() as CallExpression;
+
+            return !isReadOnlyCallArgument(parent, this.scope.context) && this.isOpaqueCallTainted(call.getExpression(), call.getArguments(), parent);
+        }
+
+        if (Node.isNewExpression(parent)) {
+            return this.isOpaqueCallTainted(parent.getExpression(), parent.getArguments(), end);
+        }
+
+        if (Node.isTemplateSpan(parent)) {
+            const template = parent.getParent();
+            const tagged = template.getParent();
+            const spans = template.getTemplateSpans().map((span) => span.getExpression());
+
+            return Node.isTaggedTemplateExpression(tagged) && this.isOpaqueCallTainted(tagged.getTag(), spans, end);
+        }
+
+        return !this.isReadPosition(end);
+    }
+
+    /** Handing the object to `call`: see {@link isCompromisingUse}. */
+    private argumentCompromises(call: CallExpression, value: TsNode, follow: Follow): boolean {
+        if (isReadOnlyCallArgument(value, this.scope.context)) {
+            return false;
+        }
+
+        const target = visibleFunctionOf(call.getExpression());
+        const receiver = target === undefined ? undefined : receivingParameter(target, call, value);
+
+        if (receiver?.kind === "unreached") {
+            return false;
+        }
+
+        // A function nested in the impl sees caller data, so its writes are judged by their values.
+        if (receiver?.kind === "parameter" && target !== undefined && this.isInImpl(target)) {
+            return follow(receiver.parameter, false);
+        }
+
+        // Anything else — an import, a same-file function outside the impl — only plants caller data that reaches it.
+        return this.isOpaqueCallTainted(call.getExpression(), call.getArguments(), value);
+    }
+
+    /** Positions where a value is only read: a condition, a comparison or arithmetic operand, an index, a `throw`, the impl's own `return`. */
+    private isReadPosition(end: TsNode): boolean {
+        const parent = end.getParent();
+
+        if (parent === undefined || Node.isExpressionStatement(parent) || Node.isThrowStatement(parent) || Node.isForInStatement(parent)) {
+            return true;
+        }
+
+        if (
+            Node.isIfStatement(parent) ||
+            Node.isWhileStatement(parent) ||
+            Node.isDoStatement(parent) ||
+            Node.isSwitchStatement(parent) ||
+            Node.isCaseClause(parent)
+        ) {
+            return true;
+        }
+
+        if (Node.isConditionalExpression(parent) || Node.isElementAccessExpression(parent) || Node.isComputedPropertyName(parent)) {
+            return true;
+        }
+
+        if (Node.isPrefixUnaryExpression(parent) || Node.isTypeOfExpression(parent) || Node.isVoidExpression(parent)) {
+            return true;
+        }
+
+        if (Node.isBinaryExpression(parent)) {
+            const operator = parent.getOperatorToken().getKind();
+
+            return operator < SyntaxKind.FirstAssignment || operator > SyntaxKind.LastAssignment;
+        }
+
+        if (Node.isTemplateSpan(parent) || Node.isForStatement(parent)) {
+            return true;
+        }
+
+        const returned = Node.isReturnStatement(parent) || (Node.isArrowFunction(parent) && parent.getBody() === end);
+        const owner = returned ? end.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor)) : undefined;
+
+        return owner !== undefined && owner === this.scope.impl;
+    }
+
+    /** Whether caller data reaches an opaque call: its callee is caller-controlled, or an operand other than `value` is. */
+    private isOpaqueCallTainted(callee: TsNode, operands: ReadonlyArray<TsNode>, value: TsNode): boolean {
+        return this.isTaintedValue(callee, false) || operands.some((operand) => operand !== value && this.isTaintedValue(operand, false));
     }
 
     /**
      * Whether any binding `root`'s object flows into — `root` itself, and every
-     * binding `visit` hands to `follow`, transitively — has a use `visit` judges
-     * bad. A breadth-first walk over that flow, not a recursion: a recursive
-     * helper (`walk(n)` calling `walk(n.child)`) puts its parameter on a cycle,
-     * and a recursion would have to leave every verdict on it uncached. Alias
-     * hops (`follow(next, true)`) are bounded by {@link MAX_VARIABLE_HOPS} per
-     * path, past which the walk fails closed. When nothing is found (and no cut
-     * cycle or bound was involved), every binding visited is clean too — its own
-     * flow is part of `root`'s — so each is cached as such.
+     * binding {@link isCompromisingUse} hands to `follow`, transitively — has a
+     * compromising use. A breadth-first walk over that flow, not a recursion: a
+     * recursive helper (`walk(n)` calling `walk(n.child)`) puts its parameter on
+     * a cycle, and a recursion would have to leave every verdict on it uncached.
+     * Alias hops are bounded by {@link MAX_VARIABLE_HOPS} per path, past which
+     * the walk fails closed. A binding reached through the flow whose type is a
+     * primitive is a copy, so its uses do not count. When nothing is found (and
+     * no cut cycle or bound was involved), every binding visited is clean too —
+     * its own flow is part of `root`'s — so each is cached as such.
      */
-    private reaches(root: ObjectBinding, table: VerdictTable, visit: (reference: Identifier, follow: Follow) => boolean): boolean {
+    private reaches(root: ObjectBinding): boolean {
         return this.memoized(
             root.compilerNode,
             () => {
                 const cutsBefore = this.cuts;
-                const queue: { binding: ObjectBinding; hops: number }[] = [{ binding: root, hops: 0 }];
-                const seen = new Set<ts.Node>([root.compilerNode]);
-                let found = false;
+                const queue: FlowStep[] = [];
+                const seen = new Set<ts.Node>();
                 const enqueue = (binding: ObjectBinding, hops: number): void => {
                     if (!seen.has(binding.compilerNode)) {
                         seen.add(binding.compilerNode);
                         queue.push({ binding, hops });
                     }
                 };
+                let found = false;
 
-                for (let index = 0; index < queue.length && !found; index += 1) {
-                    const { binding, hops } = queue[index] as { binding: ObjectBinding; hops: number };
-                    const known = binding === root ? undefined : table.verdicts.get(binding.compilerNode);
-                    const follow: Follow = (next, isAlias) => {
-                        if (isAlias && hops >= MAX_VARIABLE_HOPS) {
-                            this.cuts += 1;
+                enqueue(root, 0);
 
-                            return true;
-                        }
+                for (const step of queue) {
+                    const known = step.binding === root ? undefined : this.compromised.verdicts.get(step.binding.compilerNode);
 
-                        enqueue(next, isAlias ? hops + 1 : hops);
+                    found = known ?? this.visitBinding(step, root, enqueue);
 
-                        return false;
-                    };
-
-                    found = known ?? this.visitBinding(binding, visit, follow, enqueue, hops);
+                    if (found) {
+                        break;
+                    }
                 }
 
                 if (!found && this.cuts === cutsBefore) {
                     for (const node of seen) {
-                        table.verdicts.set(node, false);
+                        this.compromised.verdicts.set(node, false);
                     }
                 }
 
                 return found;
             },
-            table,
+            this.compromised,
         );
     }
 
-    /** Expand one binding of {@link reaches}: its references, or a destructured parameter's elements. */
-    private visitBinding(
-        binding: ObjectBinding,
-        visit: (reference: Identifier, follow: Follow) => boolean,
-        follow: Follow,
-        enqueue: (binding: ObjectBinding, hops: number) => void,
-        hops: number,
-    ): boolean {
+    /** Expand one binding of {@link reaches}: judge its references, or queue a destructured parameter's elements. */
+    private visitBinding({ binding, hops }: FlowStep, root: ObjectBinding, enqueue: (binding: ObjectBinding, hops: number) => void): boolean {
         const nameNode = binding.getNameNode();
 
         if (!Node.isIdentifier(nameNode)) {
             // A destructured parameter binds members of what it receives, each an object of its own.
-            if (Node.isParameterDeclaration(binding)) {
-                for (const element of bindingIdentifiersOf(binding)) {
-                    enqueue(element, hops);
-                }
+            for (const element of Node.isParameterDeclaration(binding) ? bindingIdentifiersOf(binding) : []) {
+                enqueue(element, hops);
             }
 
             return false;
@@ -792,7 +705,20 @@ class ImplTaint {
             return true;
         }
 
-        return this.referencesTo(binding, nameNode.getText()).some((reference) => visit(reference, follow));
+        const follow: Follow = (next, isAlias) => {
+            if (isAlias && hops >= MAX_VARIABLE_HOPS) {
+                this.cuts += 1;
+
+                return true;
+            }
+
+            enqueue(next, isAlias ? hops + 1 : hops);
+
+            return false;
+        };
+        const found = this.referencesTo(binding, nameNode.getText()).some((reference) => this.isCompromisingUse(reference, follow));
+
+        return found && (binding === root || !isPrimitiveType(binding.getType()));
     }
 
     /**
@@ -876,7 +802,7 @@ class ImplTaint {
             current = unwrapExpression(current.getExpression());
         }
 
-        if (isContextReference(current, this.scope.context)) {
+        if (isImplContextReference(current, this.scope.context)) {
             return true;
         }
 
@@ -889,8 +815,7 @@ class ImplTaint {
             hops > 0 &&
             initializer !== undefined &&
             (Node.isBindingElement(binding) || Node.isVariableDeclaration(binding)) &&
-            !this.isMutatedWithTaint(binding) &&
-            !this.isChangedUnseen(binding) &&
+            !this.isCompromised(binding) &&
             this.isRootedInContext(initializer, hops - 1)
         );
     }
@@ -906,9 +831,7 @@ class ImplTaint {
         return (
             parameter.getParent() !== impl &&
             this.isInImpl(parameter) &&
-            (this.memoized(parameter.compilerNode, () => this.flowsIntoTainted(parameter)) ||
-                this.isMutatedWithTaint(parameter) ||
-                this.isChangedUnseen(parameter))
+            (this.memoized(parameter.compilerNode, () => this.flowsIntoTainted(parameter)) || this.isCompromised(parameter))
         );
     }
 
@@ -916,7 +839,7 @@ class ImplTaint {
         return this.memoized(variable.compilerNode, () => {
             const holder = variable.getParent().getParent();
 
-            if (Node.isCatchClause(variable.getParent()) || this.isMutatedWithTaint(variable) || this.isChangedUnseen(variable)) {
+            if (Node.isCatchClause(variable.getParent()) || this.isCompromised(variable)) {
                 return true;
             }
 

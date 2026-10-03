@@ -3,7 +3,7 @@
  * spelling `ctx` alone misses `(c, args) => c.db.insert(…)`,
  * `({ db }, args) => db.insert(…)` and `const { db } = ctx`.
  */
-import type { Node as TsNode, ParameterDeclaration } from "ts-morph";
+import type { Node as TsNode, ParameterDeclaration, ts } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { bindingKeyName, handlerOf, isConstDeclaration, outermostValueWrapper, unwrapExpression } from "../ast";
@@ -21,7 +21,7 @@ const MAX_CONTEXT_HOPS = 8;
  * `{ ctx, args }` options object instead, which {@link isContextObject} reads by
  * its `ctx` key.
  */
-const isHandlerContextParameter = (parameter: ParameterDeclaration): boolean => {
+const isHandlerContextParameterUncached = (parameter: ParameterDeclaration): boolean => {
     const handler = parameter.getParent();
 
     if (!Node.isArrowFunction(handler) && !Node.isFunctionExpression(handler) && !Node.isMethodDeclaration(handler)) {
@@ -43,6 +43,21 @@ const isHandlerContextParameter = (parameter: ParameterDeclaration): boolean => 
     const classified = Node.isCallExpression(call) ? classifyProcedureCall(call) : undefined;
 
     return Node.isCallExpression(call) && classified !== undefined && classified.receiver === undefined && handlerOf(call, undefined) === handler;
+};
+
+/** Per-parameter {@link isHandlerContextParameterUncached} verdicts, keyed on the compiler node so a re-parse recomputes. */
+const HANDLER_CONTEXT_CACHE = new WeakMap<ts.Node, boolean>();
+
+/** The cached {@link isHandlerContextParameterUncached} verdict: it classifies the registration call, so once per parameter. */
+const isHandlerContextParameter = (parameter: ParameterDeclaration): boolean => {
+    let verdict = HANDLER_CONTEXT_CACHE.get(parameter.compilerNode);
+
+    if (verdict === undefined) {
+        verdict = isHandlerContextParameterUncached(parameter);
+        HANDLER_CONTEXT_CACHE.set(parameter.compilerNode, verdict);
+    }
+
+    return verdict;
 };
 
 /**
@@ -84,7 +99,7 @@ const isContextObject = (node: TsNode | undefined, hops = MAX_CONTEXT_HOPS): boo
  * from a `const` ctx (`const { db } = ctx`), or a `const` bound to one of these
  * (`const database = ctx.db`).
  */
-const isContextDatabase = (node: TsNode | undefined, hops = MAX_CONTEXT_HOPS): boolean => {
+const mayDenoteContextDatabase = (node: TsNode | undefined, hops = MAX_CONTEXT_HOPS): boolean => {
     const value = unwrapExpression(node);
 
     if (Node.isPropertyAccessExpression(value)) {
@@ -112,8 +127,11 @@ const isContextDatabase = (node: TsNode | undefined, hops = MAX_CONTEXT_HOPS): b
     }
 
     return (
-        hops > 0 && isConstDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) && isContextDatabase(declaration.getInitializer(), hops - 1)
+        hops > 0 &&
+        isConstDeclaration(declaration) &&
+        Node.isIdentifier(declaration.getNameNode()) &&
+        mayDenoteContextDatabase(declaration.getInitializer(), hops - 1)
     );
 };
 
-export default isContextDatabase;
+export default mayDenoteContextDatabase;

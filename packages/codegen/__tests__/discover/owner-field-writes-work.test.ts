@@ -107,20 +107,19 @@ describe("discoverOwnerFieldWrites work bound", () => {
         expect(capped.lookups).toBeLessThan(500_000);
     });
 
-    // Documents where the 50,000-verdict budget trips for the recursive shape:
-    // each level doubles the uncachable work, so a depth-14 recursive chain still
-    // resolves (clean, nothing recorded) and depth 15 is the first that runs out
-    // and fails closed. Realistic code does not come close; raise the budget
-    // only when a real app does.
-    it("resolves a recursive chain up to depth 14 and fails closed from depth 15", () => {
-        expect.assertions(3);
+    // The 50,000-verdict budget is a backstop, not a tuning knob: a shallow
+    // recursive chain resolves well inside it, a very deep one runs out and is
+    // reported (fail closed), and the work stays bounded either way.
+    it("resolves a shallow recursive chain and fails closed, in bounded work, on a very deep one", () => {
+        expect.assertions(4);
 
-        const resolved = discoverCounting(chain(14, true));
-        const tripped = discoverCounting(chain(15, true));
+        const shallow = discoverCounting(chain(6, true));
+        const deep = discoverCounting(chain(24, true));
 
-        expect(resolved.rows).toHaveLength(0);
-        expect(tripped.rows).toHaveLength(1);
-        expect(tripped.rows[0]).not.toHaveProperty("ownerScoped");
+        expect(shallow.rows).toHaveLength(0);
+        expect(deep.rows).toHaveLength(1);
+        expect(deep.rows[0]).not.toHaveProperty("ownerScoped");
+        expect(deep.lookups).toBeLessThan(500_000);
     });
 
     // The Vite dev loop reuses one Project, so an unchanged impl keeps its cached

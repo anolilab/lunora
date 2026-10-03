@@ -7,7 +7,7 @@ import { bindingKeyName, collectCallRows, isConstDeclaration, propertyKeyName, u
 import { callSiteScopeOf, declarationOf, withCallerVisibility } from "../attribution";
 import type { MutatorImplScope } from "./args-pristine";
 import { mutatorImplScopeOf } from "./args-pristine";
-import isContextDatabase from "./context-binding";
+import mayDenoteContextDatabase from "./context-binding";
 import implTaintOf from "./impl-taint";
 
 /**
@@ -44,7 +44,7 @@ const IDENTITY_WRITE_METHODS = new Set<string>(["insert", "insertManyUnsafe", "p
 /**
  * When `node` is a `<ctx>.db.<method>` member access for one of the
  * {@link IDENTITY_WRITE_METHODS}, return the method name; otherwise `undefined`.
- * The `ctx.db` receiver is resolved by symbol (see `isContextDatabase`), so a
+ * The `ctx.db` receiver is resolved by symbol (see `mayDenoteContextDatabase`), so a
  * renamed (`(c, args) => c.db.insert(…)`) or destructured
  * (`({ db }, args) => db.insert(…)`, `const { db } = ctx`) ctx still matches.
  */
@@ -55,7 +55,7 @@ const contextDatabaseWriteMethod = (node: TsNode): string | undefined => {
 
     const method = node.getName();
 
-    return IDENTITY_WRITE_METHODS.has(method) && isContextDatabase(node.getExpression()) ? method : undefined;
+    return IDENTITY_WRITE_METHODS.has(method) && mayDenoteContextDatabase(node.getExpression()) ? method : undefined;
 };
 
 /**

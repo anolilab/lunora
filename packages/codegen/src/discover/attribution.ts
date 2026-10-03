@@ -363,4 +363,4 @@ const withCallerVisibility = <Row extends { file: string; scope: CallSiteScope }
 const exportedNameOf = (declaration: TopLevelDeclaration): string | undefined =>
     attributionOf(declaration.getSourceFile()).exportNames.get(declaration.compilerNode);
 
-export { callSiteScopeOf, declarationOf, exportedNameOf, referencedSymbolOf, withCallerVisibility };
+export { callSiteScopeOf, declarationOf, exportedNameOf, isTypePosition, referencedSymbolOf, withCallerVisibility };
