@@ -51,7 +51,8 @@ release manifest's signature does not verify".
 the users `lunora-hostd`, `lunora-fleet` and `lunora-edge` (system users, no
 shell, no home);
 creates `/etc/lunora-hostd` (`lunora-hostd`, 0700), `/var/lib/lunora-hostd`
-(`lunora-hostd:lunora-fleet`, 0711) and `/opt/lunora-hostd`; downloads and
+(`lunora-hostd:lunora-fleet`, 0711) with Caddy's three directories in it (see
+[Files](#files)) and `/opt/lunora-hostd`; downloads and
 verifies the release (below), and has `lunora-hostd install-release` install it
 into `/opt/lunora-hostd/<releaseId>/` and point `/opt/lunora-hostd/current` at
 it; writes `/etc/systemd/system/lunora-hostd.service`; runs `lunora-hostd enrol`
@@ -188,6 +189,13 @@ credentials never leave the box. Every command takes `--config <path>`
 | `/opt/lunora-hostd/<releaseId>/`        | one release: `lunora-hostd`, `celld`, `caddy` and its `manifest.json`                            | 0755 |
 | `/opt/lunora-hostd/current`             | a link to the release that runs; the unit and every child start from it                          |      |
 
+`install.sh` creates Caddy's three directories, with exactly those owners and
+modes (`caddy/` `lunora-hostd:lunora-edge`, `state/` `lunora-edge:lunora-edge`,
+`log/` `lunora-edge:lunora-hostd`), and refuses to touch one that is a link.
+hostd cannot: the unit's `RestrictSUIDSGID=yes` makes setting a set-group-ID
+bit fail with `EPERM`. At start it only checks them, and the edge-user check
+fails — naming each directory that differs — until `install.sh` is run again.
+
 ### What runs, and how
 
 `lunora-hostd run` holds one WebSocket to the control plane and supervises
@@ -312,7 +320,7 @@ tenant sandbox):
 **The self-check.** At start hostd checks all four: a process started as
 `lunora-fleet` really has that uid, no capabilities and `no_new_privs`; one
 started as `lunora-edge` likewise, keeping `net_bind_service` at most (and
-Caddy's directories are laid out for it); the nftables table is loaded; the
+Caddy's directories are as `install.sh` laid them out); the nftables table is loaded; the
 delegated cgroup takes the memory controller.
 All pass: `enforced`. One fails on a box enrolled with `--single-trust`:
 `single-trust`, and fleets start with whatever does work. One fails otherwise:
@@ -324,7 +332,8 @@ failed check is logged, printed by `diagnose`, and sent in every `hello`
 adds `ProtectSystem=strict` with only `/var/lib/lunora-hostd` and
 `/opt/lunora-hostd` writable (not `/etc/lunora-hostd`: the running daemon never
 writes its key or config), `ProtectHome`, `PrivateTmp`, `PrivateDevices`,
-`RestrictSUIDSGID`, `RestrictNamespaces`, `LockPersonality`, the address
+`RestrictSUIDSGID` (hence Caddy's set-group-ID directories come from
+`install.sh`), `RestrictNamespaces`, `LockPersonality`, the address
 families it uses, `UMask=0027`, `KillMode=mixed` with `TimeoutStopSec=90` (fleets
 drain in parallel within 45 s, then Caddy within 10 s), `Restart=always`, and
 `RestartPreventExitStatus=2` so a revoked box stays down.

@@ -26,7 +26,7 @@
  * The outcome, with each failed check, goes to the control plane in every
  * `hello` and to `diagnose`.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { totalmem } from "node:os";
 
 import { HOSTD_PROTOCOL_LIMITS } from "../wire/constants";
@@ -38,7 +38,7 @@ import { CAPABILITY, dropCapabilitiesPrefix, hasCapability, parseProcessStatus }
 import { CgroupManager, fleetMemoryMax } from "./cgroups";
 import { describeFailure, runChild } from "./child";
 import type { HostdConfig } from "./config";
-import { prepareEdgeDirectories } from "./edge";
+import { checkEdgeDirectories } from "./edge";
 import { prepareDataDirectory } from "./fleet-directories";
 import { CHILD_PATH } from "./fleet-environment";
 import { truncateUtf8 } from "./job-error";
@@ -271,7 +271,8 @@ const setUpFleetUser = async (
 
 /**
  * The edge-user check: Caddy starts as its own user, keeping port binding at
- * most, and its directories are laid out for it; the account when it passed.
+ * most, and its directories are laid out for it — by install.sh, as root; the
+ * daemon only checks them (`edge.ts`). The account when it passed.
  */
 const setUpEdgeUser = async (
     config: HostdConfig,
@@ -296,9 +297,11 @@ const setUpEdgeUser = async (
     }
 
     try {
-        prepareEdgeDirectories(config.dataDir, account, system.daemon);
+        // The edge user passes through the data directory (the daemon's own) to Caddy's; others list nothing.
+        chmodSync(config.dataDir, 0o711);
+        checkEdgeDirectories(config.dataDir, account, system.daemon);
     } catch (error) {
-        return { check: failure(`cannot hand Caddy's directories to ${config.edgeUser}: ${errorText(error)}`) };
+        return { check: failure(`Caddy's directories are not laid out for ${config.edgeUser}: ${errorText(error)}`) };
     }
 
     return { account, check };

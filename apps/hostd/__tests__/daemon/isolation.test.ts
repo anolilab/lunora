@@ -6,7 +6,7 @@
  * table, switching uids and moving processes between cgroups for real is the
  * `test:hostd` lane's job (`__tests__/integration/`).
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { BlockList } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ import { lookupAccount } from "../../src/daemon/accounts";
 import { dropCapabilitiesPrefix, hasCapability, launchCommand, launchIdentity, parseProcessStatus } from "../../src/daemon/capabilities";
 import { CgroupManager, cgroupPathOf, delegatedServiceOf, fleetMemoryMax } from "../../src/daemon/cgroups";
 import { parseHostdConfig, permissionsOf } from "../../src/daemon/config";
+import { EDGE_DIRECTORIES } from "../../src/daemon/edge";
 import { ensureFleetDirectory, shareWithFleet } from "../../src/daemon/fleet-directories";
 import { allowlisted, FLEET_ENVIRONMENT_ALLOWLIST, fleetEnvironment } from "../../src/daemon/fleet-environment";
 import type { IsolationChecks, IsolationSystem } from "../../src/daemon/isolation";
@@ -511,10 +512,19 @@ describe(setUpIsolation, () => {
         };
     };
 
+    /** Caddy's directories as install.sh lays them out (both accounts are this test's own uid and gid). */
+    const layOutEdgeDirectories = (): void => {
+        for (const directory of EDGE_DIRECTORIES) {
+            mkdirSync(join(root, "data", directory.path), { recursive: true });
+            chmodSync(join(root, "data", directory.path), directory.mode);
+        }
+    };
+
     beforeEach(() => {
         root = mkdtempSync(join(tmpdir(), "lunora-hostd-isolation-"));
         mkdirSync(join(root, "cgroup", service), { recursive: true });
         writeFileSync(join(root, "cgroup", service, "cgroup.controllers"), "memory pids\n");
+        layOutEdgeDirectories();
     });
 
     afterEach(() => {
@@ -590,7 +600,7 @@ describe(setUpIsolation, () => {
         expect(isolation.caddy.prefix).toStrictEqual(dropCapabilitiesPrefix("/usr/bin/setpriv"));
     });
 
-    it("runs Caddy as the edge user with port binding alone, in directories laid out so neither can write the other's", async () => {
+    it("runs Caddy as the edge user with port binding alone, in the directories install.sh laid out so neither can write the other's", async () => {
         expect.assertions(6);
 
         const isolation = await setUpIsolation(
@@ -615,6 +625,56 @@ describe(setUpIsolation, () => {
         expect(mode("caddy")).toBe(0o2750);
         expect(mode("caddy/state")).toBe(0o700);
         expect(mode("caddy/log")).toBe(0o2750);
+    });
+
+    it("refuses when Caddy's directories are missing: the daemon never creates them, install.sh does", async () => {
+        expect.assertions(3);
+
+        rmSync(join(root, "data", "caddy"), { force: true, recursive: true });
+
+        const isolation = await setUpIsolation(configFor(false), silentLogger, system());
+
+        isolation.stop();
+
+        expect(isolation.report).toMatchObject({ startsFleets: false, status: "refused" });
+        expect(isolation.report.problems).toStrictEqual([
+            `edge user: Caddy's directories are not laid out for lunora-edge: ${join(root, "data", "caddy")} is missing; ${join(root, "data", "caddy", "state")} is missing; ${join(root, "data", "caddy", "log")} is missing (install.sh lays them out: run it again)`,
+        ]);
+        expect(existsSync(join(root, "data", "caddy"))).toBe(false);
+    });
+
+    it("refuses Caddy's directories with the wrong mode, owner or group, and leaves them as they are", async () => {
+        expect.assertions(3);
+
+        chmodSync(join(root, "data", "caddy", "log"), 0o750);
+
+        // The daemon in another group: caddy/log, which the access log takes its group from, is not its.
+        const isolation = await setUpIsolation(configFor(false), silentLogger, system({ daemon: { gid: gid + 1, uid } }));
+        const ids = `${String(uid)}:${String(gid)}`;
+
+        isolation.stop();
+
+        expect(isolation.report.status).toBe("refused");
+        expect(isolation.report.problems).toStrictEqual([
+            `edge user: Caddy's directories are not laid out for lunora-edge: ${join(root, "data", "caddy", "log")} is ${ids} 0750, not ${String(uid)}:${String(gid + 1)} 2750 (install.sh lays them out: run it again)`,
+        ]);
+        expect(statSync(join(root, "data", "caddy", "log")).mode % 0o1_0000).toBe(0o750);
+    });
+
+    it("refuses a link in place of one of Caddy's directories", async () => {
+        expect.assertions(1);
+
+        rmSync(join(root, "data", "caddy", "state"), { recursive: true });
+        mkdirSync(join(root, "elsewhere"), { mode: 0o700 });
+        symlinkSync(join(root, "elsewhere"), join(root, "data", "caddy", "state"));
+
+        const isolation = await setUpIsolation(configFor(false), silentLogger, system());
+
+        isolation.stop();
+
+        expect(isolation.report.problems).toStrictEqual([
+            `edge user: Caddy's directories are not laid out for lunora-edge: ${join(root, "data", "caddy", "state")} is not a directory (install.sh lays them out: run it again)`,
+        ]);
     });
 
     it("refuses when Caddy, started as the edge user, keeps more than port binding", async () => {

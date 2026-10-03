@@ -3,7 +3,7 @@
  * runs as its own user (`lunora-edge`), which must not reach the box key, the
  * bucket credentials, the state or a fleet's files.
  */
-import { chmodSync, chownSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 
 import type { Account } from "./accounts";
@@ -34,44 +34,74 @@ const edgePaths = (dataDirectory: string): EdgePaths => {
     return { accessLog: join(home, "log", "access.log"), config: join(home, "caddy.json"), home, log: join(home, "log"), state: join(home, "state") };
 };
 
-/**
- * Create `path` when it is missing and hand it to `uid`:`gid` with `mode`. The
- * mode is set while the daemon still owns the directory and it is in the
- * daemon's own group — the kernel drops a set-group-ID bit set on a directory
- * of a group the caller is not in — then chown (CAP_CHOWN) hands it over,
- * which keeps that bit on a directory.
- */
-const ownedDirectory = (path: string, mode: number, owner: { gid: number; uid: number }, daemon: { gid: number; uid: number }): void => {
-    if (!existsSync(path)) {
-        mkdirSync(path, { mode: 0o700 });
-    }
-
-    const stats = statSync(path);
-
-    if (stats.uid === daemon.uid && stats.mode % 0o1_0000 !== mode) {
-        chownSync(path, daemon.uid, daemon.gid);
-        chmodSync(path, mode);
-    }
-
-    chownSync(path, owner.uid, owner.gid);
-};
+/** One of Caddy's directories as install.sh lays it out: its owner, group and mode. */
+interface EdgeDirectory {
+    /** Whose group it has: the daemon's or the edge user's. */
+    group: "daemon" | "edge";
+    mode: number;
+    /** Whose uid owns it. */
+    owner: "daemon" | "edge";
+    /** Under the data directory. */
+    path: string;
+}
 
 /**
- * Lay Caddy's directories out for the edge user `edge` (see {@link EdgePaths}),
- * with `daemon` the daemon's own uid and gid, and let other users traverse —
- * never list — the data directory (0711), which the edge user must pass
- * through. Nothing else in it is open to other users.
+ * Caddy's directories exactly as `install.sh` creates them (`create_directories`;
+ * a test keeps the two equal). The daemon never creates or changes them: the
+ * set-group-ID bits are what make `caddy.json` take the edge group and the
+ * access log take the daemon's, and the unit's `RestrictSUIDSGID=yes` forbids
+ * the daemon from setting either bit (chmod fails with EPERM) — root sets them
+ * once, at install.
  */
-const prepareEdgeDirectories = (dataDirectory: string, edge: Account, daemon: { gid: number; uid: number }): void => {
-    const paths = edgePaths(dataDirectory);
+const EDGE_DIRECTORIES: ReadonlyArray<EdgeDirectory> = [
+    { group: "edge", mode: 0o2750, owner: "daemon", path: "caddy" },
+    { group: "edge", mode: 0o700, owner: "edge", path: join("caddy", "state") },
+    { group: "daemon", mode: 0o2750, owner: "edge", path: join("caddy", "log") },
+];
 
-    chmodSync(dataDirectory, 0o711);
-    // Set-group-ID: caddy.json, which the daemon writes, takes the edge group Caddy reads it through.
-    ownedDirectory(paths.home, 0o2750, { gid: edge.gid, uid: daemon.uid }, daemon);
-    ownedDirectory(paths.state, 0o700, edge, daemon);
-    // Set-group-ID: the access log Caddy writes takes the daemon's group, which reads it.
-    ownedDirectory(paths.log, 0o2750, { gid: daemon.gid, uid: edge.uid }, daemon);
+const octal = (mode: number): string => mode.toString(8).padStart(4, "0");
+
+/**
+ * Check that Caddy's directories are laid out for the edge user `edge` (see
+ * {@link EdgePaths}), with `daemon` the daemon's own uid and gid: each a real
+ * directory (never a link) with exactly the owner, group and mode install.sh
+ * gives it.
+ * @throws {Error} naming every directory that is not, and how to fix it.
+ */
+const checkEdgeDirectories = (dataDirectory: string, edge: Account, daemon: { gid: number; uid: number }): void => {
+    const ids = { daemon, edge: { gid: edge.gid, uid: edge.uid } };
+    const problems: string[] = [];
+
+    for (const directory of EDGE_DIRECTORIES) {
+        const path = join(dataDirectory, directory.path);
+        const want = { gid: ids[directory.group].gid, mode: directory.mode, uid: ids[directory.owner].uid };
+        let stats: ReturnType<typeof lstatSync>;
+
+        try {
+            stats = lstatSync(path);
+        } catch {
+            problems.push(`${path} is missing`);
+            continue;
+        }
+
+        if (!stats.isDirectory()) {
+            problems.push(`${path} is not a directory`);
+            continue;
+        }
+
+        const mode = stats.mode % 0o1_0000;
+
+        if (stats.uid !== want.uid || stats.gid !== want.gid || mode !== want.mode) {
+            problems.push(
+                `${path} is ${String(stats.uid)}:${String(stats.gid)} ${octal(mode)}, not ${String(want.uid)}:${String(want.gid)} ${octal(want.mode)}`,
+            );
+        }
+    }
+
+    if (problems.length > 0) {
+        throw new Error(`${problems.join("; ")} (install.sh lays them out: run it again)`);
+    }
 };
 
-export type { EdgePaths };
-export { edgePaths, prepareEdgeDirectories };
+export type { EdgeDirectory, EdgePaths };
+export { checkEdgeDirectories, EDGE_DIRECTORIES, edgePaths };

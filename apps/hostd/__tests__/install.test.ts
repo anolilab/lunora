@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { binaryPaths, DEFAULT_CONFIG_PATH, DEFAULT_DATA_DIR, DEFAULT_EDGE_USER, DEFAULT_FLEET_USER, DEFAULT_INSTALL_DIR } from "../src/daemon/config";
+import { EDGE_DIRECTORIES } from "../src/daemon/edge";
 import { NFT_TABLE } from "../src/daemon/nftables";
 import { CADDY_STOP_BUDGET_MS, CELLD_STOP_BUDGET_MS } from "../src/daemon/supervisor";
 import { HOSTD_TRUSTED_RELEASE_KEYS } from "../src/release";
@@ -58,6 +59,24 @@ describe("install.sh", () => {
         expect(assignment("FLEET_USER")).toBe(DEFAULT_FLEET_USER);
         expect(assignment("EDGE_USER")).toBe(DEFAULT_EDGE_USER);
         expect(assignment("NFT_TABLE")).toBe(NFT_TABLE);
+    });
+
+    it("lays Caddy's directories out exactly as the daemon checks them, set-group-ID bits included", () => {
+        expect.assertions(1);
+
+        const users = { EDGE_USER: "edge", HOSTD_USER: "daemon" } as const;
+        const created = [...script.matchAll(/^ {4}install -d -o "\$\{(\w+)\}" -g "\$\{(\w+)\}" -m (\d+) "\$\{DATA_DIR\}\/([\w/]+)"$/gmu)].map(
+            ([, owner, group, mode, path]) => {
+                return {
+                    group: users[group as keyof typeof users],
+                    mode: Number.parseInt(mode ?? "", 8),
+                    owner: users[owner as keyof typeof users],
+                    path,
+                };
+            },
+        );
+
+        expect(created).toStrictEqual([...EDGE_DIRECTORIES]);
     });
 });
 

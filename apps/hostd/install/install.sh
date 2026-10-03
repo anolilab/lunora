@@ -305,6 +305,22 @@ create_directories() {
     # The fleet group may pass through (to its working directory), and Caddy's user (to
     # its own directories), never list. Nothing below is open to other users.
     install -d -o "${HOSTD_USER}" -g "${FLEET_USER}" -m 0711 "${DATA_DIR}"
+    # Caddy's (apps/hostd/README.md, "Files"), laid out here because the daemon may not: the
+    # unit's RestrictSUIDSGID=yes forbids it the set-group-ID bits, and it only checks them.
+    # caddy/ is lunora-hostd's (caddy.json takes the edge group), state/ is Caddy's own, and
+    # log/ is Caddy's (the access log takes lunora-hostd's group). A link here is refused:
+    # lunora-hostd owns the data directory, and root must not follow one it planted.
+    local dir
+    for dir in caddy caddy/state caddy/log; do
+        if [ -L "${DATA_DIR}/${dir}" ] || { [ -e "${DATA_DIR}/${dir}" ] && [ ! -d "${DATA_DIR}/${dir}" ]; }; then
+            die "${DATA_DIR}/${dir} is not a directory; remove it and run install.sh again"
+        fi
+    done
+    install -d -o "${HOSTD_USER}" -g "${EDGE_USER}" -m 2750 "${DATA_DIR}/caddy"
+    # 00700, not 0700: a directory made in caddy/ inherits its set-group-ID bit, and install
+    # (like chmod) keeps that bit on a directory unless the mode clears it explicitly.
+    install -d -o "${EDGE_USER}" -g "${EDGE_USER}" -m 00700 "${DATA_DIR}/caddy/state"
+    install -d -o "${EDGE_USER}" -g "${HOSTD_USER}" -m 2750 "${DATA_DIR}/caddy/log"
     # Releases: lunora-hostd writes them (upgrade), everyone may execute them.
     install -d -o "${HOSTD_USER}" -g "${HOSTD_USER}" -m 0755 "${INSTALL_DIR}"
 }
@@ -601,6 +617,8 @@ ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectClock=yes
 ProtectHostname=yes
+# Also keeps hostd itself from setting a set-group-ID bit (chmod fails with EPERM): install.sh
+# lays out Caddy's set-group-ID directories as root, and hostd only checks them.
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes

@@ -52,6 +52,8 @@ ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectClock=yes
 ProtectHostname=yes
+# Also keeps hostd itself from setting a set-group-ID bit (chmod fails with EPERM): install.sh
+# lays out Caddy's set-group-ID directories as root, and hostd only checks them.
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
 RestrictNamespaces=yes
