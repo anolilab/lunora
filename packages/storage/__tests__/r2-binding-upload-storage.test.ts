@@ -514,26 +514,33 @@ describe(createR2BindingUploadStorage, () => {
     it("keeps a finished file when expiration sweeps its upload state (regression)", async () => {
         expect.hasAssertions();
 
-        const bucket = createFakeR2UploadBucket();
-        const handler = createUploadHandler({ silent: true, storage: createR2BindingUploadStorage(bucket, { expiration: { maxAge: 1 } }) });
-        const driver = tus(handler);
-        const location = await driver.create(5, "a.txt");
+        // Freeze the clock for the upload, then jump past the 1 ms max age. With a
+        // real clock, a slow runner (CI under coverage) could let the state expire
+        // between create and PATCH, answering 410 to the upload itself.
+        vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
 
-        await sendChunks(driver, location, pattern(5), 5);
-        await new Promise((resolve) => {
-            setTimeout(resolve, 10);
-        });
+        try {
+            const bucket = createFakeR2UploadBucket();
+            const handler = createUploadHandler({ silent: true, storage: createR2BindingUploadStorage(bucket, { expiration: { maxAge: 1 } }) });
+            const driver = tus(handler);
+            const location = await driver.create(5, "a.txt");
 
-        // The expired state answers "gone", and is dropped; the file stays.
-        const head = await driver.head(location);
+            await sendChunks(driver, location, pattern(5), 5);
+            vi.setSystemTime(Date.now() + 60_000);
 
-        expect([404, 410]).toContain(head.status);
+            // The expired state answers "gone", and is dropped; the file stays.
+            const head = await driver.head(location);
 
-        await vi.waitFor(() => {
-            expect(stateKeys(bucket)).toStrictEqual([]);
-        });
+            expect([404, 410]).toContain(head.status);
 
-        expect(sameBytes(storedObject(bucket, location)?.bytes, pattern(5))).toBe(true);
+            await vi.waitFor(() => {
+                expect(stateKeys(bucket)).toStrictEqual([]);
+            });
+
+            expect(sameBytes(storedObject(bucket, location)?.bytes, pattern(5))).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("stops a writer whose lease was taken over: it neither stores parts nor finishes (regression)", async () => {
