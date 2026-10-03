@@ -1,3 +1,27 @@
+## @lunora/cli [1.0.0-alpha.336](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.335...@lunora/cli@1.0.0-alpha.336) (2026-10-03)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+### Bug Fixes
+
+* cloudflare oct 2026 limits + observability block ([#942](https://github.com/anolilab/lunora/issues/942)) ([6145c8c](https://github.com/anolilab/lunora/commit/6145c8cfd7d5ca5fb7ff1eb1a862b93c8bc5657e))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.182
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.92
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.251
+* **@lunora/config:** upgraded to 1.0.0-alpha.294
+* **@lunora/container:** upgraded to 1.0.0-alpha.67
+* **@lunora/d1:** upgraded to 1.0.0-alpha.159
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.205
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.172
+* **@lunora/seed:** upgraded to 1.0.0-alpha.179
+* **@lunora/testing:** upgraded to 1.0.0-alpha.222
+
 ## @lunora/cli [1.0.0-alpha.335](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.334...@lunora/cli@1.0.0-alpha.335) (2026-10-02)
 
 ### Bug Fixes
