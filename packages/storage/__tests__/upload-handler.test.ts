@@ -261,14 +261,15 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
                 expect(authorize).not.toHaveBeenCalled();
             });
 
-            it("never lets a lowercase `patch` reach a protocol handler", async () => {
+            it.each(["patch", "Patch"])("refuses %j, which is not PATCH (405), before the gate", async (method) => {
                 expect.hasAssertions();
 
                 // `Request` upper-cases the standard methods but keeps `patch`
-                // as sent, and the handlers dispatch on the exact string.
+                // as sent; HTTP methods are case-sensitive.
                 const storage = new MemoryStorage({ path: "/upload" });
                 const write = vi.spyOn(storage, "write");
-                const response = await createUploadHandler({ protocol, silent: true, storage }).fetch(
+                const authorize = vi.fn<() => boolean>(() => true);
+                const response = await createUploadHandler({ authorize, protocol, storage }).fetch(
                     new Request(`${ENDPOINT}/abc`, {
                         body: new Uint8Array(4),
                         headers: {
@@ -278,11 +279,15 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
                             "Upload-Offset": "0",
                             "X-Chunk-Offset": "0",
                         },
-                        method: "patch",
+                        method,
                     }),
                 );
 
                 expect(response.status).toBe(405);
+                await expect(response.json()).resolves.toMatchObject({
+                    error: { code: "METHOD_NOT_ALLOWED", message: expect.stringMatching(new RegExp(`^${method} is not allowed`)) },
+                });
+                expect(authorize).not.toHaveBeenCalled();
                 expect(write).not.toHaveBeenCalled();
             });
 

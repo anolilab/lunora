@@ -464,9 +464,11 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
     }
 
     const fetch = async (request: Request): Promise<Response> => {
-        // `Request` upper-cases the standard methods but keeps `patch` as sent,
-        // and the handlers dispatch on the exact string, so compare upper-cased.
-        const method = request.method.toUpperCase();
+        // HTTP methods are case-sensitive, and the protocol handlers dispatch on
+        // the exact string. `Request` upper-cases the standard ones (`get`,
+        // `post`, …) but keeps `patch` as sent, so a lowercase `patch` is not
+        // `PATCH`: refused here, before the gate, like any other method.
+        const { method } = request;
 
         if (!ALLOWED_METHODS[protocol].has(method)) {
             return methodNotAllowedResponse(protocol, method);
