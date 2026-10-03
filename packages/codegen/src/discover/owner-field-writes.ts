@@ -604,9 +604,11 @@ const canReenterUnverified = (impl: MutatorServerImpl, mutatorDeclaration: Varia
  * - `arguments` anywhere in the impl reaches the parameter without naming it;
  * - a `var` redeclaration of a parameter binding is a second declaration of it;
  * - an `args` parameter used as anything but a member read, a destructuring
- * initializer, a copy ({@link isCopiedOnly}) or a read-only call argument
- * ({@link isReadOnlyCallArgument}): written through, passed to another call
- * (`fix(args)`, `assertValid(args)`, `Object.assign(args, …)`), or aliased
+ * initializer, a copy ({@link isCopiedOnly}), a read-only call argument
+ * ({@link isReadOnlyCallArgument}), or an argument to a function declared in
+ * this file that only reads it ({@link isReadOnlyParameter}, e.g. a local
+ * `assertValid(args)`): written through, passed to another call (`fix(args)`,
+ * an imported validator, `Object.assign(args, …)`), or aliased
  * (`const a = args`), it may be changed where this cannot see;
  * - a destructured binding of the parameter that is written (`userId = …`).
  */
@@ -636,7 +638,14 @@ const isPristineArgsParameter = (
             return !isWriteTarget(reference);
         }
 
-        return isMemberRead(reference) || isDestructuringRead(reference) || isCopiedOnly(reference) || isReadOnlyCallArgument(reference, context);
+        if (isMemberRead(reference) || isDestructuringRead(reference) || isCopiedOnly(reference) || isReadOnlyCallArgument(reference, context)) {
+            return true;
+        }
+
+        // A validator this can read (`assertValid(args)` declared in this file) that only reads it.
+        const target = visibleArgumentTarget(reference);
+
+        return target === null || (target !== undefined && isReadOnlyParameter(target));
     };
     const pristine =
         !canReenterUnverified(impl, mutatorDeclaration) &&

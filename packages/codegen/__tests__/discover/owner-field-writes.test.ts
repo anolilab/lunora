@@ -716,7 +716,54 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
             expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ ownerScoped: true });
         });
 
-        // Known noisy-but-safe: a validator could rewrite what it is handed.
+        // A validator whose body this can read, and which only reads what it is
+        // handed, leaves `args` verified. Anything it cannot read stays fail-closed.
+        const validators = `import { checkShape } from "./validation";
+function assertValid(input) {
+    if (typeof input.title !== "string" || input.title.length === 0) throw new Error("title");
+    checkLimits(input);
+}
+const checkLimits = (input) => {
+    if (JSON.stringify(input).length > 1000) throw new Error("too large");
+};
+function sanitize(input) { input.userId = input.targetUserId; }
+const identity = (input) => input;
+function relay(input) { checkShape(input); }
+function store(input) { cache.last = input; }
+const cache = {};
+`;
+
+        it.each([
+            ["a local `function` validator", `assertValid(args);`],
+            ["a local arrow validator", `checkLimits(args);`],
+            ["a nested validator", `const check = ({ title }) => { if (!title) throw new Error("title"); };\n        check(args);`],
+            ["a validator taking no parameter there", `const ping = () => true;\n        ping(args);`],
+        ])("keeps the owner write owner-scoped after %s", (_label, statement) => {
+            expect.assertions(1);
+
+            const source = `${validators}${ownerMutator(`        ${statement}\n        await ${insert("args.userId")}; // @write`)}`;
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ ownerScoped: true });
+        });
+
+        it.each([
+            ["a local validator that rewrites it", `sanitize(args);`],
+            ["an imported validator", `checkShape(args);`],
+            ["a local validator handing it to an imported one", `relay(args);`],
+            ["a local function returning it", `const same = identity(args);`],
+            ["a local function storing it", `store(args);`],
+            ["a nested validator that rewrites it", `const fix = (input) => { input.userId = input.targetUserId; };\n        fix(args);`],
+            ["a validator taking it through a rest parameter", `const check = (...inputs) => { inputs[0].userId = "x"; };\n        check(args);`],
+            ["a validator reading `arguments`", `function check() { arguments[0].userId = "x"; }\n        check(args);`],
+        ])("reports the owner write after %s", (_label, statement) => {
+            expect.assertions(2);
+
+            const source = `${validators}${ownerMutator(`        ${statement}\n        await ${insert("args.userId")}; // @write`)}`;
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        // Known noisy-but-safe: a validator this cannot read could rewrite what it is handed.
         it.each([
             ["an unknown validator", `assertValid(args);`],
             ["`Reflect.set`", `Reflect.set(args, "userId", args.targetUserId);`],
