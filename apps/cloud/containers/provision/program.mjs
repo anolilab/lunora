@@ -15,7 +15,7 @@
  * in a customer's account with the customer's token, so `state()` would find
  * (or bootstrap) a store in THEIR account; its state goes to the cell's store
  * over HTTP instead (`LUNORA_STATE_STORE_URL` / `LUNORA_STATE_STORE_TOKEN`, from the job,
- * `plan.state === "platform"`) — convergence state is platform state.
+ * `plan.target.kind === "account"`) — convergence state is platform state.
  */
 /* eslint-disable import/no-unresolved -- alchemy and effect are installed in the image from this directory's own lockfile, not in the pnpm workspace ESLint resolves against; the module is type-checked against them separately (see README). */
 import { readFileSync } from "node:fs";
@@ -301,7 +301,7 @@ const body = () => {
  * @returns {import("effect").Layer.Layer<State>} The state layer.
  */
 const stateStore = () =>
-    plan.state === "platform"
+    plan.target.kind === "account"
         ? Layer.effect(
               State,
               makeHttpStateStore({

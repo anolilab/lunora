@@ -40,25 +40,22 @@ const STEP_TIMEOUT_MS = 15 * 60 * 1000;
  * carries — but its state stays in the PLATFORM's store (the cell's
  * `alchemy-state-store`), reached over HTTP with the URL and bearer the job
  * also carries: a customer must never hold the record of what was converged
- * for them (MULTIPLATFORM.md §5.3). `plan.mjs` refuses an account job without
- * that store.
- * @param {import("./plan.mjs").ProvisionJob} job The planned job.
- * @param {import("./plan.mjs").Plan} plan Its plan.
+ * for them (MULTIPLATFORM.md §5.3). `plan.mjs` validates both and hands them
+ * back beside the plan (`PlannedJob.credentials`), refusing an account job
+ * without that store.
+ * @param {import("./plan.mjs").PlannedJob} planned The planned job.
  * @returns {Record<string, string>} The env entries the child needs for them.
  */
-const credentialsFor = (job, plan) => {
-    if (plan.target.kind !== "account") {
+const credentialsFor = ({ credentials, plan }) => {
+    if (plan.target.kind !== "account" || credentials === undefined) {
         return { CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID ?? "", CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN ?? "" };
     }
 
-    // plan.mjs validated the target, its token and its state store before this runs.
-    const target = /** @type {{ apiToken: string, state: { token: string, url: string } }} */ (job.action === "deploy" ? job.spec.target : job.target);
-
     return {
         CLOUDFLARE_ACCOUNT_ID: plan.target.accountId,
-        CLOUDFLARE_API_TOKEN: target.apiToken,
-        LUNORA_STATE_STORE_TOKEN: target.state.token,
-        LUNORA_STATE_STORE_URL: target.state.url,
+        CLOUDFLARE_API_TOKEN: credentials.apiToken,
+        LUNORA_STATE_STORE_TOKEN: credentials.stateStore.token,
+        LUNORA_STATE_STORE_URL: credentials.stateStore.url,
     };
 };
 
@@ -186,10 +183,11 @@ const writeInputs = async (workspace, job) => {
  * @returns {Promise<void>} Resolves once the terminal event is emitted.
  */
 const provision = async (job, emit) => {
-    const plan = planJob(/** @type {import("./plan.mjs").ProvisionJob} */ (job), { controlPlaneScript: process.env.LUNORA_CONTROL_PLANE_SCRIPT });
+    const planned = planJob(/** @type {import("./plan.mjs").ProvisionJob} */ (job), { controlPlaneScript: process.env.LUNORA_CONTROL_PLANE_SCRIPT });
+    const { plan } = planned;
     const deploy = /** @type {import("./plan.mjs").ProvisionJob} */ (job).action === "deploy";
     const secrets = deploy ? /** @type {import("./plan.mjs").ProvisionJob & { action: "deploy" }} */ (job).spec.secrets : {};
-    const credentials = credentialsFor(/** @type {import("./plan.mjs").ProvisionJob} */ (job), plan);
+    const credentials = credentialsFor(planned);
     // Every credential this job holds, the box's own included, is scrubbed from what leaves it.
     const scrub = scrubber([
         ...Object.values(secrets),

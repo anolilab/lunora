@@ -41,7 +41,7 @@ const deployJob = (bindings: BindingRequirement[], overrides: Partial<DeployJob[
     };
 };
 
-const plan = (job: ProvisionJob) => planJob(job, { controlPlaneScript: "lunora-cloud-production" });
+const plan = (job: ProvisionJob) => planJob(job, { controlPlaneScript: "lunora-cloud-production" }).plan;
 
 const refuse = (job: ProvisionJob, message: RegExp) => {
     expect(() => plan(job)).toThrow(PlanError);
@@ -332,7 +332,6 @@ describe("provision plan: destroy", () => {
             plan({ action: "destroy", alias: ALIAS, target: { cell: "cell-1", dispatchNamespace: "lunora-production", kind: "dispatch-namespace" } }),
         ).toStrictEqual({
             stage: "lunora-production",
-            state: "cell",
             steps: [
                 { kind: "worker", op: "destroy", stackName: "lunora-worker-acme" },
                 { kind: "project", op: "destroy", stackName: "lunora-project-acme" },
@@ -344,10 +343,14 @@ describe("provision plan: destroy", () => {
     it("destroys an account target's stacks on the account's stage, with the platform's state", () => {
         expect.assertions(1);
 
-        expect(plan({ action: "destroy", alias: ALIAS, target: { accountId: ACCOUNT, apiToken: "tok", kind: "account", state: STATE } })).toMatchObject({
-            stage: `account-${ACCOUNT}`,
-            state: "platform",
-            target: { accountId: ACCOUNT, kind: "account" },
+        expect(
+            planJob(
+                { action: "destroy", alias: ALIAS, target: { accountId: ACCOUNT, apiToken: "tok", kind: "account", state: STATE } },
+                { controlPlaneScript: undefined },
+            ),
+        ).toMatchObject({
+            credentials: { apiToken: "tok", stateStore: STATE },
+            plan: { stage: `account-${ACCOUNT}`, target: { accountId: ACCOUNT, kind: "account" } },
         });
     });
 });
@@ -359,12 +362,19 @@ describe("provision plan: a customer's own account (cloudflare-workers)", () => 
     it("plans a plain Worker on the account's stage: no namespace, its own crons, the platform's state", () => {
         expect.assertions(4);
 
-        const result = plan(accountJob([], { crons: ["*/5 * * * *", "0 3 * * 1"] }));
+        const { credentials, plan: result } = planJob(accountJob([], { crons: ["*/5 * * * *", "0 3 * * 1"] }), { controlPlaneScript: undefined });
 
         expect(result.stage).toBe(`account-${ACCOUNT}`);
-        expect(result.state).toBe("platform");
+        // The platform's state store, handed to the server beside the plan.
+        expect(credentials).toStrictEqual({ apiToken: "tok", stateStore: STATE });
         expect(result.worker).not.toHaveProperty("namespace");
         expect(result.worker?.crons).toStrictEqual(["*/5 * * * *", "0 3 * * 1"]);
+    });
+
+    it("carries no credentials for a job in the cell's own namespace", () => {
+        expect.assertions(1);
+
+        expect(planJob(deployJob([]), { controlPlaneScript: "lunora-cloud-production" })).not.toHaveProperty("credentials");
     });
 
     it("never writes the token or the state store's bearer into the plan", () => {

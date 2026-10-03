@@ -38,7 +38,9 @@
  * @typedef {{ assets?: { config: AssetsConfig }, bindings: WorkerBinding[], compatibility: { date: string, flags: string[] }, consumers: WorkerConsumer[], crons: string[], namespace?: string, secretNames: string[], stackName: string, tags: string[], tailConsumers: string[], vars: Record<string, string>, workerName: string }} WorkerStack
  * @typedef {{ kind: "project" | "worker", op: "deploy" | "destroy", stackName: string }} Step
  * @typedef {{ accountId: string, kind: "account" } | { kind: "dispatch-namespace", namespace: string }} PlanTarget
- * @typedef {{ project?: ProjectStack, stage: string, state: "cell" | "platform", steps: Step[], target: PlanTarget, worker?: WorkerStack }} Plan
+ * @typedef {{ project?: ProjectStack, stage: string, steps: Step[], target: PlanTarget, worker?: WorkerStack }} Plan
+ * @typedef {{ apiToken: string, stateStore: { token: string, url: string } }} AccountCredentials
+ * @typedef {{ credentials?: AccountCredentials, plan: Plan }} PlannedJob
  */
 
 /** Platform default, used when the manifest does not declare its own. */
@@ -104,10 +106,13 @@ const expectAlias = (value) => {
 };
 
 /**
- * Validate where a job lands. The token is only checked to be present: it is
- * the server's to hand to the Alchemy child, and never part of the plan.
+ * Validate where a job lands. An account job's token and platform state store
+ * are validated here and returned beside the plan, never in it: they are the
+ * server's to hand to the Alchemy child, and `plan.json` is written to disk.
+ * Whose state store holds a stack follows from the target: an account job's is
+ * the platform's (reached over HTTP), a namespace job's the cell's own.
  * @param {unknown} target The job's untrusted `ProvisionTarget`.
- * @returns {{ stage: string, state: "cell" | "platform", target: PlanTarget }} The stage, whose state store holds it, and the target as the program reads it.
+ * @returns {{ credentials?: AccountCredentials, stage: string, target: PlanTarget }} The stage, the target as the program reads it, and an account job's credentials.
  */
 const planTarget = (target) => {
     const candidate =
@@ -116,7 +121,7 @@ const planTarget = (target) => {
     if (candidate?.kind === "dispatch-namespace") {
         const namespace = expect(candidate.dispatchNamespace, LABEL, "dispatch namespace");
 
-        return { stage: namespace, state: "cell", target: { kind: "dispatch-namespace", namespace } };
+        return { stage: namespace, target: { kind: "dispatch-namespace", namespace } };
     }
 
     if (candidate?.kind === "account") {
@@ -134,7 +139,11 @@ const planTarget = (target) => {
             throw new PlanError("the job names no platform state store, and an account job never keeps its state in the customer's account");
         }
 
-        return { stage: `account-${accountId}`, state: "platform", target: { accountId, kind: "account" } };
+        return {
+            credentials: { apiToken: candidate.apiToken, stateStore: { token: state.token, url: state.url } },
+            stage: `account-${accountId}`,
+            target: { accountId, kind: "account" },
+        };
     }
 
     throw new PlanError(`unknown target ${JSON.stringify(candidate?.kind)}`);
@@ -420,18 +429,22 @@ const planDeploy = (spec, controlPlaneScript, target) => {
  * gone: it removes the Worker, then the project stack and its data.
  * @param {ProvisionJob} job The validated-by-the-handler, still-untrusted job.
  * @param {{ controlPlaneScript: string | undefined }} options `controlPlaneScript` consumes the producer queues.
- * @returns {Plan} The plan `program.mjs` interprets.
+ * @returns {PlannedJob} The plan `program.mjs` interprets, and the validated credentials an account job runs with — kept out of the plan.
  */
 const planJob = (job, options) => {
     if (job.action === "destroy") {
         const alias = expectAlias(job.alias);
+        const { credentials, ...placed } = planTarget(job.target);
 
         return {
-            ...planTarget(job.target),
-            steps: [
-                { kind: "worker", op: "destroy", stackName: workerStackName(alias) },
-                { kind: "project", op: "destroy", stackName: projectStackName(alias) },
-            ],
+            ...(credentials === undefined ? {} : { credentials }),
+            plan: {
+                ...placed,
+                steps: [
+                    { kind: "worker", op: "destroy", stackName: workerStackName(alias) },
+                    { kind: "project", op: "destroy", stackName: projectStackName(alias) },
+                ],
+            },
         };
     }
 
@@ -439,17 +452,20 @@ const planJob = (job, options) => {
         throw new PlanError(`unknown action ${JSON.stringify(/** @type {{ action: unknown }} */ (job).action)}`);
     }
 
-    const placed = planTarget(job.spec?.target);
+    const { credentials, ...placed } = planTarget(job.spec?.target);
     const { project, worker } = planDeploy(job.spec, options.controlPlaneScript, placed.target);
 
     return {
-        ...placed,
-        project,
-        steps: [
-            { kind: "project", op: "deploy", stackName: project.stackName },
-            { kind: "worker", op: "deploy", stackName: worker.stackName },
-        ],
-        worker,
+        ...(credentials === undefined ? {} : { credentials }),
+        plan: {
+            ...placed,
+            project,
+            steps: [
+                { kind: "project", op: "deploy", stackName: project.stackName },
+                { kind: "worker", op: "deploy", stackName: worker.stackName },
+            ],
+            worker,
+        },
     };
 };
 
