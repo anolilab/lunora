@@ -63,8 +63,10 @@ const utf8ByteLength = (value: string): number => utf8.encode(value).byteLength;
 
 /**
  * A deployment alias: dash-separated runs of `[a-z0-9]`, so it never contains
- * `--`. The one definition — `apps/cloud` imports {@link isAlias} from here
- * (the dependency may only run cloud → hostd).
+ * `--`. A copy of `@lunora/config/celld`'s `isReleaseAlias`, which the control
+ * plane deploys by: this protocol stays dependency-free and runs in workerd,
+ * so it cannot import `@lunora/config`. `apps/cloud`, which depends on both,
+ * pins the two to one answer (`__tests__/alias-rules.test.ts`).
  */
 const ALIAS_PATTERN = /^[a-z\d]+(?:-[a-z\d]+)*$/u;
 

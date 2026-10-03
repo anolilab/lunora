@@ -137,19 +137,19 @@ The decoder reports the offending field as a JSONPath-like `path`
 
 ### 4.1 Field formats
 
-| Name           | Format                                                                                                                                                                            |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| id             | `^[A-Za-z0-9_-]{1,128}$`. Used for `boxId`, `jobId`, `deploymentId`, `releaseId`. Never contains `:` or a newline, so it cannot break a signing payload.                          |
-| alias          | `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 63 characters: one DNS label. Same pattern as `ALIAS_PATTERN` in `apps/cloud/src/provision-contract.ts`.                                      |
-| hostname       | Lowercase DNS name: labels of `[a-z0-9-]`, 1–63 characters, no leading or trailing `-`; at most 253 characters; no trailing dot; no port; no wildcard; last label not all digits. |
-| nonce          | base64url without padding, 22–128 characters (at least 128 bits).                                                                                                                 |
-| signature      | Ed25519 signature, base64url without padding: exactly 86 characters.                                                                                                              |
-| version string | `^[A-Za-z0-9_.+~-]{1,64}$` (e.g. `v2.8.4`, `1.0.0-alpha.1+abc`). Displayed, never parsed.                                                                                         |
-| error code     | `^[A-Z][A-Z0-9_]{0,63}$`.                                                                                                                                                         |
-| URL            | Absolute `http:` or `https:` URL without user info.                                                                                                                               |
-| var name       | `^[A-Za-z_][A-Za-z0-9_]{0,255}$`, and never `__proto__`.                                                                                                                          |
-| date           | `YYYY-MM-DD`.                                                                                                                                                                     |
-| epoch ms       | Integer milliseconds since the Unix epoch.                                                                                                                                        |
+| Name           | Format                                                                                                                                                                                                               |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| id             | `^[A-Za-z0-9_-]{1,128}$`. Used for `boxId`, `jobId`, `deploymentId`, `releaseId`. Never contains `:` or a newline, so it cannot break a signing payload.                                                             |
+| alias          | `^[a-z0-9]+(-[a-z0-9]+)*$`, at most 63 characters: one DNS label. The rule of `isReleaseAlias` in `@lunora/config/celld`, which the control plane deploys by (pinned by `apps/cloud/__tests__/alias-rules.test.ts`). |
+| hostname       | Lowercase DNS name: labels of `[a-z0-9-]`, 1–63 characters, no leading or trailing `-`; at most 253 characters; no trailing dot; no port; no wildcard; last label not all digits.                                    |
+| nonce          | base64url without padding, 22–128 characters (at least 128 bits).                                                                                                                                                    |
+| signature      | Ed25519 signature, base64url without padding: exactly 86 characters.                                                                                                                                                 |
+| version string | `^[A-Za-z0-9_.+~-]{1,64}$` (e.g. `v2.8.4`, `1.0.0-alpha.1+abc`). Displayed, never parsed.                                                                                                                            |
+| error code     | `^[A-Z][A-Z0-9_]{0,63}$`.                                                                                                                                                                                            |
+| URL            | Absolute `http:` or `https:` URL without user info.                                                                                                                                                                  |
+| var name       | `^[A-Za-z_][A-Za-z0-9_]{0,255}$`, and never `__proto__`.                                                                                                                                                             |
+| date           | `YYYY-MM-DD`.                                                                                                                                                                                                        |
+| epoch ms       | Integer milliseconds since the Unix epoch.                                                                                                                                                                           |
 
 ## 5. Messages
 
