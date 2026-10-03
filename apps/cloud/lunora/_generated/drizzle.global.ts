@@ -317,6 +317,7 @@ export const tenantBackups = sqliteTable("tenantBackups", {
 export const boxes = sqliteTable("boxes", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
+    allowDowngrade: integer("allowDowngrade", { mode: "boolean" }),
     createdAt: real("createdAt").notNull(),
     desiredReleaseId: text("desiredReleaseId"),
     dnsError: text("dnsError"),

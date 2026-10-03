@@ -187,7 +187,7 @@ export interface InternalApiTypes {
         ownsDeployment: FunctionReference<"query", { boxId: Id<"boxes">; deploymentId: Id<"deployments"> }, boolean>;
         recordDns: FunctionReference<"mutation", { boxId: Id<"boxes">; dnsError: null | unknown }, void>;
         revoke: FunctionReference<"mutation", { id: Id<"boxes">; organizationId: Id<"organizations"> }, { ipv4?: string; ipv6?: string; slug: string; }>;
-        setDesiredRelease: FunctionReference<"mutation", { boxIds?: Array<Id<"boxes">>; releaseId: unknown }, { boxId: Id<"boxes">; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
+        setDesiredRelease: FunctionReference<"mutation", { allowDowngrade?: boolean; boxIds?: Array<Id<"boxes">>; releaseId: unknown }, { boxId: Id<"boxes">; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
     };
     builds: {
         appendLog: FunctionReference<"mutation", { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }, void>;

@@ -516,10 +516,16 @@ export interface RolloutBox {
  * Point boxes at a stored `lunora-hostd` release (SYSTEM — the admin-token
  * rollout route): the named boxes, or every box that is not revoked. Revoked
  * boxes are never touched. Answers the boxes it set, for the rollout to plan.
+ *
+ * `allowDowngrade` makes it a rollback: the release may be older than what a
+ * box runs, which the box refuses unless its `upgrade` job says so. Never
+ * inferred from the versions — only an operator asking for it sets it, and
+ * each box it is set on gets an audit-log entry in its organization. Any other
+ * rollout clears it.
  */
 export const setDesiredRelease = internalMutation
-    .input({ boxIds: v.optional(v.array(v.id("boxes"))), releaseId: boundedString(LIMITS.name) })
-    .mutation(async ({ ctx: context, args: { boxIds, releaseId } }): Promise<RolloutBox[]> => {
+    .input({ allowDowngrade: v.optional(v.boolean()), boxIds: v.optional(v.array(v.id("boxes"))), releaseId: boundedString(LIMITS.name) })
+    .mutation(async ({ ctx: context, args: { allowDowngrade = false, boxIds, releaseId } }): Promise<RolloutBox[]> => {
         const { page: releases } = await context.db.hostdReleases.findMany({ where: { releaseId } });
 
         if (releases.length === 0) {
@@ -535,7 +541,18 @@ export const setDesiredRelease = internalMutation
 
         for (const row of targets) {
             // eslint-disable-next-line no-await-in-loop -- one patch per box; a fleet rollout is an operator action
-            await context.db.patch(row._id, { desiredReleaseId: releaseId });
+            await context.db.patch(row._id, { allowDowngrade, desiredReleaseId: releaseId });
+
+            if (allowDowngrade) {
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await context.db.insert("auditLog", {
+                    action: "box.rollback",
+                    actorUserId: "system:admin-token",
+                    createdAt: context.now,
+                    organizationId: row.organizationId,
+                    target: `${row.slug} → ${releaseId}`,
+                });
+            }
         }
 
         return targets.map((row) => {

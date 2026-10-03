@@ -9,7 +9,7 @@ import { store } from "../lunora/hostd-releases";
 import { randomBase64Url } from "../src/boxes/encoding";
 import { versionKey, versionsOf } from "../src/boxes/hostd-releases";
 import type { RolloutTarget } from "../src/boxes/rollout";
-import { planHostdRollout, resumeHostdRollouts, runHostdRollout } from "../src/boxes/rollout";
+import { planHostdRollout, resumeHostdRollouts, runHostdRollout, withdrawDesiredRelease } from "../src/boxes/rollout";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "../src/deploy/routes/hostd";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -143,6 +143,19 @@ describe("rolling a release out", () => {
         expect(dispatched).toStrictEqual([`box_a upgrade hostd-v1_1_0 ${manifestUrl}`, `box_b upgrade hostd-v1_1_0 ${manifestUrl}`]);
     });
 
+    it("lets only a rollback's upgrade jobs install an older lunora-hostd", () => {
+        const boxes: RolloutTarget[] = [{ boxId: "box_a", status: "online", versions: { caddy: "v2.11.6", celld: "v0.8.0", hostd: "1.2.0" } }];
+
+        expect(rollout(boxes).job).toStrictEqual({ kind: "upgrade", manifestUrl, releaseId: "hostd-v1_1_0" });
+        expect(planHostdRollout({ allowDowngrade: false, boxes, manifestUrl, release }).job).not.toHaveProperty("allowDowngrade");
+        expect(planHostdRollout({ allowDowngrade: true, boxes, manifestUrl, release }).job).toStrictEqual({
+            allowDowngrade: true,
+            kind: "upgrade",
+            manifestUrl,
+            releaseId: "hostd-v1_1_0",
+        });
+    });
+
     it("halts when the canary fails, and withdraws the intent from every box it did not upgrade", async () => {
         const withdrawn: string[][] = [];
         const result = await runHostdRollout(
@@ -202,6 +215,41 @@ describe("rolling a release out", () => {
         });
     });
 
+    it("carries a rollback on from the store with allowDowngrade, apart from boxes rolled forward onto the same release", async () => {
+        const newer = { caddy: "v2.11.6", celld: "v0.8.0", hostd: "1.2.0" };
+        const records = memoryStore({
+            boxes: [
+                { _id: "box_back", allowDowngrade: true, desiredReleaseId: "hostd-v1_1_0", status: "online", versions: newer },
+                { _id: "box_fwd", allowDowngrade: false, desiredReleaseId: "hostd-v1_1_0", status: "online", versions: old },
+            ],
+            hostdReleases: [{ _id: "rel_1", releaseId: "hostd-v1_1_0", versions: release.versions }],
+        });
+        const jobs: Record<string, unknown> = {};
+        const results = await resumeHostdRollouts({
+            database: records,
+            dispatch: (boxId, job) => {
+                jobs[boxId] = job;
+
+                return Promise.resolve({ ok: true });
+            },
+            manifestUrlFor: () => manifestUrl,
+        });
+
+        expect(jobs).toStrictEqual({
+            box_back: { allowDowngrade: true, kind: "upgrade", manifestUrl, releaseId: "hostd-v1_1_0" },
+            box_fwd: { kind: "upgrade", manifestUrl, releaseId: "hostd-v1_1_0" },
+        });
+        expect(Object.keys(results).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["hostd-v1_1_0", "hostd-v1_1_0 (rollback)"]);
+    });
+
+    it("withdraws a halted rollback's flag with its intent", async () => {
+        const records = memoryStore({ boxes: [{ _id: "box_1", allowDowngrade: true, desiredReleaseId: "hostd-v1_1_0", status: "offline" }] });
+
+        await withdrawDesiredRelease(records, "hostd-v1_1_0")(["box_1"]);
+
+        expect(records.tables["boxes"]?.[0]).toMatchObject({ allowDowngrade: false, desiredReleaseId: null });
+    });
+
     it("points boxes at a stored release, never a revoked one", async () => {
         const { ctx, ops } = makeCtx({
             boxes: [
@@ -212,8 +260,43 @@ describe("rolling a release out", () => {
         });
 
         await expect(setDesiredRelease.handler(ctx, { releaseId: "hostd-v1_1_0" })).resolves.toStrictEqual([{ boxId: "box_1", status: "online" }]);
-        expect(ops).toStrictEqual([{ id: "box_1", kind: "patch", patch: { desiredReleaseId: "hostd-v1_1_0" } }]);
+        // A normal rollout clears a rollback's flag and audits nothing.
+        expect(ops).toStrictEqual([{ id: "box_1", kind: "patch", patch: { allowDowngrade: false, desiredReleaseId: "hostd-v1_1_0" } }]);
         await expect(setDesiredRelease.handler(ctx, { releaseId: "nope" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("marks a rollback on each box it points, and audits it in the box's organization", async () => {
+        const { ctx, ops } = makeCtx({
+            boxes: [
+                boxRow({ publicKey: "" } as never, { _id: "box_1", organizationId: "org_1", slug: "bslug000001", status: "online" }),
+                boxRow({ publicKey: "" } as never, { _id: "box_2", organizationId: "org_2", slug: "bslug000002", status: "offline" }),
+            ],
+            hostdReleases: [{ _id: "rel_1", releaseId: "hostd-v1_1_0" }],
+        });
+
+        await setDesiredRelease.handler(ctx, { allowDowngrade: true, releaseId: "hostd-v1_1_0" });
+
+        expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([
+            { id: "box_1", kind: "patch", patch: { allowDowngrade: true, desiredReleaseId: "hostd-v1_1_0" } },
+            { id: "box_2", kind: "patch", patch: { allowDowngrade: true, desiredReleaseId: "hostd-v1_1_0" } },
+        ]);
+        expect(ops.filter((op) => op.kind === "insert")).toStrictEqual([
+            {
+                document: expect.objectContaining({
+                    action: "box.rollback",
+                    actorUserId: "system:admin-token",
+                    organizationId: "org_1",
+                    target: "bslug000001 → hostd-v1_1_0",
+                }) as unknown,
+                kind: "insert",
+                table: "auditLog",
+            },
+            {
+                document: expect.objectContaining({ action: "box.rollback", organizationId: "org_2", target: "bslug000002 → hostd-v1_1_0" }) as unknown,
+                kind: "insert",
+                table: "auditLog",
+            },
+        ]);
     });
 
     it("hands a reconnecting box the upgrade it missed", async () => {
@@ -227,11 +310,28 @@ describe("rolling a release out", () => {
         const state = fakeState();
         const socket = await handshake(new TestBoxSession(state, records, { LUNORA_ORIGIN_URL: "https://cloud.test/" }), state, key, "box_1");
 
-        expect(socket.received().at(-1)).toMatchObject({
+        expect(socket.received().at(-1)).toStrictEqual({
             job: { kind: "upgrade", manifestUrl: "https://cloud.test/v1/hostd/releases/hostd-v1_1_0/manifest", releaseId: "hostd-v1_1_0" },
+            jobId: expect.any(String) as unknown,
             type: "job",
         });
         expect(versionKey(versionsOf(envelope))).toBe("hostd 1.1.0 / celld v0.7.0 / caddy v2.11.6");
+    });
+
+    it("hands a reconnecting box a rollback it missed with allowDowngrade", async () => {
+        const key = await boxKey();
+        const { envelope } = signedRelease();
+        const records = memoryStore({
+            boxes: [boxRow(key, { allowDowngrade: true, desiredReleaseId: "hostd-v1_1_0" })],
+            hostdReleases: [{ _id: "rel_1", envelope: JSON.stringify(envelope), releaseId: "hostd-v1_1_0", versions: versionsOf(envelope) }],
+            projects: [],
+        });
+        const state = fakeState();
+        const socket = await handshake(new TestBoxSession(state, records, { LUNORA_ORIGIN_URL: "https://cloud.test/" }), state, key, "box_1", {
+            hello: { versions: { caddy: "v2.11.6", celld: "v0.8.0", hostd: "1.2.0" } },
+        });
+
+        expect(socket.received().at(-1)).toMatchObject({ job: { allowDowngrade: true, kind: "upgrade", releaseId: "hostd-v1_1_0" }, type: "job" });
     });
 });
 
@@ -244,7 +344,12 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
         { boxId: "box_c", status: "offline", versions: old },
     ];
 
-    const environmentWith = (scheduled: Promise<unknown>[], dispatched: string[], boxes: unknown[] = DEFAULT_BOXES): Record<string, unknown> & RouterEnv => {
+    const environmentWith = (
+        scheduled: Promise<unknown>[],
+        dispatched: string[],
+        boxes: unknown[] = DEFAULT_BOXES,
+        seen?: { jobs: unknown[]; mutations: unknown[] },
+    ): Record<string, unknown> & RouterEnv => {
         return {
             __executionCtx: {
                 waitUntil: (promise: Promise<unknown>) => {
@@ -253,13 +358,18 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
             },
             __lunoraCtx: {
                 runAction: () => Promise.reject(new Error("unused")),
-                runMutation: <R>() => Promise.resolve(boxes as R),
+                runMutation: <R>(_reference: unknown, args: unknown) => {
+                    seen?.mutations.push(args);
+
+                    return Promise.resolve(boxes as R);
+                },
                 runQuery: <R>() => Promise.resolve(release as R),
             },
             BOX_SESSION: fakeSessionNamespace((boxId) => {
                 return {
                     dispatch: (job) => {
                         dispatched.push(`${boxId} ${job.kind}`);
+                        seen?.jobs.push(job);
 
                         return Promise.resolve({ ok: true });
                     },
@@ -281,6 +391,7 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
 
         expect(response.status).toBe(202);
         await expect(response.json()).resolves.toStrictEqual({
+            allowDowngrade: false,
             batches: [["box_a"], ["box_b"]],
             deferred: 1,
             releaseId: "hostd-v1_1_0",
@@ -304,6 +415,43 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
         expect(response.status).toBe(202);
         await expect(response.json()).resolves.toMatchObject({ batches: [], deferred: 1, started: false });
         expect(scheduled).toHaveLength(0);
+    });
+
+    it("rolls back only when asked: allowDowngrade reaches the intent and every upgrade job", async () => {
+        const scheduled: Promise<unknown>[] = [];
+        const seen = { jobs: [] as unknown[], mutations: [] as unknown[] };
+        const response = await handleHostdRolloutRoute(
+            rolloutRequest({ allowDowngrade: true, releaseId: "hostd-v1_1_0" }),
+            environmentWith(scheduled, [], DEFAULT_BOXES, seen),
+        );
+
+        await expect(response.json()).resolves.toMatchObject({ allowDowngrade: true, started: true });
+
+        await Promise.all(scheduled);
+
+        expect(seen.mutations).toStrictEqual([{ allowDowngrade: true, releaseId: "hostd-v1_1_0" }]);
+        expect(seen.jobs).toHaveLength(2);
+        expect(seen.jobs).toStrictEqual(seen.jobs.map(() => expect.objectContaining({ allowDowngrade: true, kind: "upgrade" }) as unknown));
+
+        const normal = { jobs: [] as unknown[], mutations: [] as unknown[] };
+        const forward: Promise<unknown>[] = [];
+
+        await handleHostdRolloutRoute(rolloutRequest({ releaseId: "hostd-v1_1_0" }), environmentWith(forward, [], DEFAULT_BOXES, normal));
+        await Promise.all(forward);
+
+        expect(normal.mutations).toStrictEqual([{ allowDowngrade: false, releaseId: "hostd-v1_1_0" }]);
+        expect(normal.jobs.filter((job) => Object.hasOwn(job as object, "allowDowngrade"))).toStrictEqual([]);
+    });
+
+    it("refuses an allowDowngrade that is not a boolean", async () => {
+        const seen = { jobs: [] as unknown[], mutations: [] as unknown[] };
+        const response = await handleHostdRolloutRoute(
+            rolloutRequest({ allowDowngrade: "yes", releaseId: "hostd-v1_1_0" }),
+            environmentWith([], [], DEFAULT_BOXES, seen),
+        );
+
+        expect(response.status).toBe(400);
+        expect(seen.mutations).toStrictEqual([]);
     });
 
     it("refuses without the admin token, and without the box bindings", async () => {

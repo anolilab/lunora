@@ -294,6 +294,7 @@ export interface Doc_tenantBackups {
 export interface Doc_boxes {
     _id: Id<"boxes">;
     _creationTime: number;
+    allowDowngrade?: boolean;
     createdAt: number;
     desiredReleaseId?: string;
     dnsError?: string;
@@ -1141,6 +1142,7 @@ export interface Insert_tenantBackups {
 export interface Insert_boxes {
     _id?: Id<"boxes">;
     _creationTime?: number;
+    allowDowngrade?: boolean;
     createdAt: number;
     desiredReleaseId?: string;
     dnsError?: string;

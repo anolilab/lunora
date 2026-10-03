@@ -7,7 +7,7 @@
  *   envelope an `upgrade` job names, with a request signed by its key.
  * - `POST /v1/hostd/rollout` — `adminToken`: point boxes (named, or all) at a
  *   release and roll it out over their sessions, canary first — 202, run after
- *   the response.
+ *   the response. With `allowDowngrade: true` it is a rollback (audited).
  */
 import type { D1DatabaseLike } from "@lunora/d1";
 import { HOSTD_TRUSTED_RELEASE_KEYS, verifyReleaseManifest } from "@lunora/hostd/release";
@@ -92,6 +92,7 @@ export const handleHostdManifestRoute = async (request: Request, environment: Ho
 };
 
 interface RolloutBody {
+    allowDowngrade?: unknown;
     batchSize?: unknown;
     boxIds?: unknown;
     canarySize?: unknown;
@@ -101,13 +102,18 @@ interface RolloutBody {
 const positiveInteger = (value: unknown): number | undefined => (typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined);
 
 /**
- * `POST /v1/hostd/rollout` — body `{ releaseId, boxIds?, canarySize?, batchSize? }`.
+ * `POST /v1/hostd/rollout` — body `{ releaseId, boxIds?, canarySize?, batchSize?, allowDowngrade? }`.
  * Sets `desiredReleaseId` on the named boxes (or every box that is not
  * revoked) — the durable intent — plans the upgrade of the ones online now,
  * and answers 202 with the batches, canary first. The run starts on the
  * request's `waitUntil`; the hourly sweep resumes whatever that run did not
  * reach, and boxes that are offline upgrade when they reconnect
  * (`src/boxes/rollout.ts`).
+ *
+ * `allowDowngrade: true` is a rollback onto an older release: its `upgrade`
+ * jobs carry `allowDowngrade`, without which a box refuses an older
+ * `lunora-hostd` (protocol §5.2). It is never inferred from the versions —
+ * the operator asks for it, and each box it reaches gets an audit-log entry.
  */
 export const handleHostdRolloutRoute = async (request: Request, environment: HostdRouterEnv): Promise<Response> => {
     const unauthorized = requireAdminToken(request, environment);
@@ -132,7 +138,12 @@ export const handleHostdRolloutRoute = async (request: Request, environment: Hos
         return jsonError(400, "releaseId is required; boxIds, when given, is a list of box ids");
     }
 
+    if (body.allowDowngrade !== undefined && typeof body.allowDowngrade !== "boolean") {
+        return jsonError(400, "allowDowngrade, when given, is a boolean");
+    }
+
     const { releaseId } = body;
+    const allowDowngrade = body.allowDowngrade === true;
 
     try {
         const release = await context.runQuery<HostdReleaseView | null>(internal.hostd_releases.get, { releaseId });
@@ -141,10 +152,15 @@ export const handleHostdRolloutRoute = async (request: Request, environment: Hos
             return jsonError(404, "no such hostd release");
         }
 
-        const boxes = await context.runMutation<RolloutBox[]>(internal.boxes.setDesiredRelease, { ...(boxIds === undefined ? {} : { boxIds }), releaseId });
+        const boxes = await context.runMutation<RolloutBox[]>(internal.boxes.setDesiredRelease, {
+            allowDowngrade,
+            ...(boxIds === undefined ? {} : { boxIds }),
+            releaseId,
+        });
         const canarySize = positiveInteger(body.canarySize);
         const batchSize = positiveInteger(body.batchSize);
         const planned = planHostdRollout({
+            allowDowngrade,
             ...(batchSize === undefined ? {} : { batchSize }),
             boxes,
             ...(canarySize === undefined ? {} : { canarySize }),
@@ -163,19 +179,22 @@ export const handleHostdRolloutRoute = async (request: Request, environment: Hos
                 }).then(
                     (result) => {
                         // eslint-disable-next-line no-console -- the run outlives the response; Workers Logs is its only record
-                        console.log("[hostd-rollout]", releaseId, JSON.stringify(result));
+                        console.log(allowDowngrade ? "[hostd-rollback]" : "[hostd-rollout]", releaseId, JSON.stringify(result));
 
                         return result;
                     },
                     (error: unknown) => {
                         // eslint-disable-next-line no-console -- see above
-                        console.error("[hostd-rollout]", releaseId, error);
+                        console.error(allowDowngrade ? "[hostd-rollback]" : "[hostd-rollout]", releaseId, error);
                     },
                 ),
             );
         }
 
-        return Response.json({ batches: planned.batches, deferred: planned.deferred, releaseId, skipped: planned.skipped, started }, { status: 202 });
+        return Response.json(
+            { allowDowngrade, batches: planned.batches, deferred: planned.deferred, releaseId, skipped: planned.skipped, started },
+            { status: 202 },
+        );
     } catch (error) {
         return rejected(error, "rollout failed");
     }

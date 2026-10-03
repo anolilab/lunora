@@ -31,6 +31,11 @@ export const boxesTables = {
     // control plane holds the box's PUBLIC key and nothing else from it (§3 rule
     // 5) — every session and every signed request is checked against it.
     boxes: defineTable({
+        // Set with `desiredReleaseId` by a rollback (`POST /v1/hostd/rollout`
+        // with `allowDowngrade`, audited): the `upgrade` jobs that carry the box
+        // to that release may install an OLDER `lunora-hostd`, which a box
+        // otherwise refuses (protocol §5.2). Any other rollout sets it false.
+        allowDowngrade: v.optional(v.boolean()),
         createdAt: v.number(),
         // The `hostdReleases.releaseId` this box should run (plan 458 W7); an
         // `upgrade` job moves it there. Absent → whatever it runs is fine.

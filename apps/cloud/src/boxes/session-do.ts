@@ -613,7 +613,8 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
 
     /**
      * Hand a box that just authenticated the `upgrade` it missed (plan 458 W2):
-     * when its row names a desired release whose versions it does not run yet.
+     * when its row names a desired release whose versions it does not run yet
+     * — with `allowDowngrade` when that intent is a rollback.
      * Fire-and-forget — the job settles on the box's `result` like any other,
      * and the next `hello` shows whether it took. It takes no job slot (nobody
      * waits on it, and a box that reconnects repeatedly would otherwise fill the
@@ -643,6 +644,7 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
                 kind: "upgrade",
                 manifestUrl: manifestUrlOf(origin, release.releaseId),
                 releaseId: release.releaseId,
+                ...(box.allowDowngrade === true ? { allowDowngrade: true } : {}),
             },
             jobId,
             type: "job",

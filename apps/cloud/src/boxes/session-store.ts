@@ -18,6 +18,7 @@ import type { SessionBox } from "./session";
 /** The `boxes` columns a session reads. `.global()` rows answer SQL NULL for an unset column. */
 export interface StoredBox {
     _id: string;
+    allowDowngrade?: boolean | null;
     desiredReleaseId?: null | string;
     fleets?: FleetSummary[] | null;
     organizationId: string;

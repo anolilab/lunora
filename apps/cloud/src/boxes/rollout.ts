@@ -23,6 +23,11 @@
  * - A halted run withdraws the intent from every box of the release it did not
  *   upgrade, so neither the sweep nor a reconnect spreads a release that failed
  *   its canary. Rolling it out again is a new `POST /v1/hostd/rollout`.
+ * - A rollback is the same rollout with `allowDowngrade` (`boxes.allowDowngrade`
+ *   beside the intent): its `upgrade` jobs carry `allowDowngrade: true`, which
+ *   is what lets a box install an older `lunora-hostd` (protocol §5.2). The
+ *   sweep and the reconnect replay carry the flag on; a normal rollout never
+ *   sets it.
  */
 import type { BoxVersions, UpgradeJob } from "@lunora/hostd/protocol";
 
@@ -74,6 +79,8 @@ export interface RolloutResult extends FleetUpgradeResult {
 }
 
 export const planHostdRollout = (input: {
+    /** A rollback: the jobs may install an older `lunora-hostd`. Only ever an operator's explicit choice. */
+    allowDowngrade?: boolean;
     batchSize?: number;
     boxes: ReadonlyArray<RolloutTarget>;
     canarySize?: number;
@@ -95,7 +102,12 @@ export const planHostdRollout = (input: {
     return {
         batches: plan.batches.map((batch) => batch.map((box) => box.deploymentId)),
         deferred: input.boxes.length - online.length,
-        job: { kind: "upgrade", manifestUrl: input.manifestUrl, releaseId: input.release.releaseId },
+        job: {
+            kind: "upgrade",
+            manifestUrl: input.manifestUrl,
+            releaseId: input.release.releaseId,
+            ...(input.allowDowngrade === true ? { allowDowngrade: true } : {}),
+        },
         plan,
         skipped: plan.skipped,
         stale: input.boxes.filter((box) => box.versions === undefined || versionKey(box.versions) !== target).map((box) => box.boxId),
@@ -148,13 +160,14 @@ export const withdrawDesiredRelease =
 
             if (row?.desiredReleaseId === releaseId) {
                 // eslint-disable-next-line no-await-in-loop -- see above
-                await database.patch(boxId, { desiredReleaseId: null }, "boxes");
+                await database.patch(boxId, { allowDowngrade: false, desiredReleaseId: null }, "boxes");
             }
         }
     };
 
 interface DesiringBoxRow {
     _id: string;
+    allowDowngrade?: boolean | null;
     desiredReleaseId?: null | string;
     status: string;
     versions?: null | BoxVersions;
@@ -164,6 +177,9 @@ interface DesiringBoxRow {
  * The scheduled continuation: re-plan and run every release a box that is not
  * revoked still desires. Idempotent — boxes already on their release are
  * skipped, and a release with nothing online left to upgrade runs nothing.
+ * Boxes rolled back onto a release run apart from boxes rolled forward onto
+ * it, each with its own `allowDowngrade`; a rollback's result is keyed by
+ * its release id followed by ` (rollback)`.
  */
 export const resumeHostdRollouts = async (ports: {
     database: ControlPlaneStore;
@@ -171,20 +187,22 @@ export const resumeHostdRollouts = async (ports: {
     manifestUrlFor: (releaseId: string) => string;
 }): Promise<Record<string, RolloutResult>> => {
     const rows = await drainTable<DesiringBoxRow>(ports.database, "boxes");
-    const byRelease = new Map<string, RolloutTarget[]>();
+    const byRelease = new Map<string, { allowDowngrade: boolean; boxes: RolloutTarget[]; releaseId: string }>();
 
     for (const row of rows) {
         if (row.status !== "revoked" && row.desiredReleaseId != null) {
-            byRelease.set(row.desiredReleaseId, [
-                ...(byRelease.get(row.desiredReleaseId) ?? []),
-                { boxId: row._id, status: row.status, ...(row.versions == null ? {} : { versions: row.versions }) },
-            ]);
+            const allowDowngrade = row.allowDowngrade === true;
+            const key = allowDowngrade ? `${row.desiredReleaseId} (rollback)` : row.desiredReleaseId;
+            const group = byRelease.get(key) ?? { allowDowngrade, boxes: [], releaseId: row.desiredReleaseId };
+
+            group.boxes.push({ boxId: row._id, status: row.status, ...(row.versions == null ? {} : { versions: row.versions }) });
+            byRelease.set(key, group);
         }
     }
 
     const results: Record<string, RolloutResult> = {};
 
-    for (const [releaseId, boxes] of byRelease) {
+    for (const [key, { allowDowngrade, boxes, releaseId }] of byRelease) {
         // eslint-disable-next-line no-await-in-loop -- one release at a time; rarely more than one is in flight
         const { page } = await ports.database.findMany("hostdReleases", { where: { releaseId } });
         const release = page[0] as undefined | { releaseId: string; versions: BoxVersions };
@@ -193,11 +211,11 @@ export const resumeHostdRollouts = async (ports: {
             continue;
         }
 
-        const planned = planHostdRollout({ boxes, manifestUrl: ports.manifestUrlFor(releaseId), release });
+        const planned = planHostdRollout({ allowDowngrade, boxes, manifestUrl: ports.manifestUrlFor(releaseId), release });
 
         if (planned.batches.length > 0) {
             // eslint-disable-next-line no-await-in-loop -- see above
-            results[releaseId] = await runHostdRollout(planned, { dispatch: ports.dispatch, withdraw: withdrawDesiredRelease(ports.database, releaseId) });
+            results[key] = await runHostdRollout(planned, { dispatch: ports.dispatch, withdraw: withdrawDesiredRelease(ports.database, releaseId) });
         }
     }
 

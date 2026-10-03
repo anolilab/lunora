@@ -944,7 +944,7 @@ export interface Caller {
         recordDns: (args: { boxId: Id<"boxes">; dnsError: null | unknown }) => Promise<void>;
         rename: (args: { id: Id<"boxes">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
         revoke: (args: { id: Id<"boxes">; organizationId: Id<"organizations"> }) => Promise<{ ipv4?: string; ipv6?: string; slug: string; }>;
-        setDesiredRelease: (args: { boxIds?: Array<Id<"boxes">>; releaseId: unknown }) => Promise<{ boxId: Id<"boxes">; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
+        setDesiredRelease: (args: { allowDowngrade?: boolean; boxIds?: Array<Id<"boxes">>; releaseId: unknown }) => Promise<{ boxId: Id<"boxes">; status: "pending" | "revoked" | "online" | "offline"; versions?: import("@lunora/hostd/protocol").BoxVersions }[]>;
     };
     builds: {
         appendLog: (args: { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }) => Promise<void>;
