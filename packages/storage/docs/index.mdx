@@ -310,9 +310,20 @@ anyone allowed to upload, or anyone at all on a `public` route, read any file by
 id. Serve files with `ctx.storage.download()` or a
 [signed URL](#signed-urls), which have their own read-side check.
 
+The `Allow` header on a `405` lists exactly these methods. The CORS preflight
+(`OPTIONS`) still answers `@visulima/storage`'s full method list in
+`Access-Control-Allow-Methods`; that is cosmetic, since the route refuses the
+rest whatever the preflight says.
+
 A finished upload cannot be deleted through the handler either. On TUS, `DELETE`
 only cancels an upload in progress. The chunked-REST and multipart handlers would
 delete any stored file by id, so they do not take `DELETE` at all.
+
+**Known issue (TUS):** `@visulima/storage` answers the `PATCH` that completes an
+upload with `200`, while its TUS client expects `204`. The client recovers with a
+`HEAD` after about a second, so the upload succeeds, but its progress never
+reports the last chunk
+([visulima/visulima#899](https://github.com/visulima/visulima/issues/899)).
 
 How `maxFileSize` is enforced depends on the protocol. For TUS and chunked REST
 the handler reads the largest size the request declares across `Upload-Length`
@@ -422,15 +433,20 @@ open:
 - A chunk at any offset other than the upload's current one, ahead of it or
   overlapping bytes already stored, is a `409` (`FileConflict`) and nothing of
   it is stored. So is a second chunk while one is still streaming.
-- A refused chunk never counts towards completion: the upload is reported
-  complete only once every byte is stored.
-- When a chunk is cut off mid-request, the bytes that arrived are kept. Re-read
-  the offset with `HEAD` and continue from there.
-- `X-Received-Chunks` always reports the one run the provider has stored,
-  `[{ "offset": 0, "length": <stored bytes> }]`.
+- A refused chunk never counts towards completion. `HEAD` is the authoritative
+  answer: it reports the upload complete only once every byte is stored. A
+  single `PATCH` response judges completion from the chunk it just took, so a
+  body shorter than its `Content-Length` could make that one response
+  over-report; check with `HEAD` before treating the upload as done.
+- When a chunk is cut off mid-request, the bytes that arrived are kept. A raw
+  protocol client re-reads the offset with `HEAD` and continues from there.
+- On `HEAD`, `X-Received-Chunks` reports the one run the provider has stored,
+  `[{ "offset": 0, "length": <stored bytes> }]`. A `PATCH` response carries
+  that run plus the chunk it just wrote.
 
-`createR2UploadStorage` (R2's S3 API) does not check chunk offsets at all, so do
-not use chunked REST with it (see above).
+`createUploadHandler` refuses `protocol: "chunked-rest"` over
+`createR2UploadStorage` (R2's S3 API) at construction (`VALIDATION_ERROR`): that
+provider does not check chunk offsets at all (see above).
 
 The bundled client (`useChunkedRestUpload`, `createChunkedRestAdapter`, and
 `useUpload` when it picks chunked REST) sends **four chunks in parallel**. Over
@@ -438,7 +454,8 @@ The bundled client (`useChunkedRestUpload`, `createChunkedRestAdapter`, and
 client does not retry, so the upload fails. It works only when `chunkSize` is at
 least the file size, which makes the upload a single `PATCH`. That chunk has to
 fit Cloudflare's request body limit, and `@visulima/storage` caps a chunk at
-100 MiB.
+100 MiB. For the same reason the bundled client cannot resume an interrupted
+upload over the R2 binding: use TUS.
 
 ### Upgrading
 

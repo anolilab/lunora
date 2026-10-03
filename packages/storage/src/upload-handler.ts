@@ -430,6 +430,17 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: maxFileSize must be a finite, non-negative number (received ${String(maxFileSize)})`);
     }
 
+    // The S3-API provider appends each chunked-REST chunk as the next multipart
+    // part without checking its `X-Chunk-Offset`, so a chunk that arrives out of
+    // order (the bundled client sends four in parallel) or twice is silently
+    // stored in the wrong place.
+    if (protocol === "chunked-rest" && options.storage instanceof AwsLightStorage) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            '@lunora/storage: chunked REST is not supported over createR2UploadStorage (R2\'s S3 API), which stores chunks in arrival order and can corrupt the file. Use protocol "tus", or createR2BindingUploadStorage',
+        );
+    }
+
     const handlerOptions: UploadHandlerOptions = {
         // A finished upload is a stored file; removing it is the app's call
         // (`ctx.storage.delete`), not a `DELETE` any caller the upload gate

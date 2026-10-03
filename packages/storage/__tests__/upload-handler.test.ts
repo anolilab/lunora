@@ -13,7 +13,7 @@ import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visu
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
-import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
+import { createR2UploadStorage, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
 
 const ENDPOINT = "https://test.local/upload";
@@ -133,8 +133,8 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         // Progress is live and monotonic. It stops one chunk short of 100:
         // `@visulima/storage`'s TUS handler answers the completing PATCH with
         // 200, the client accepts only 204, so it re-reads the offset with HEAD
-        // and finishes without a last progress event. (2.0.24's MemoryStorage
-        // marked an upload complete early and hid this.)
+        // and finishes without a last progress event: visulima/visulima#899.
+        // (2.0.24's MemoryStorage marked an upload complete early and hid this.)
         expect(progress.length).toBeGreaterThan(1);
         expect(progress).toStrictEqual(progress.toSorted((a, b) => a - b));
         expect(progress.at(-1)).toBeGreaterThan(90);
@@ -510,6 +510,22 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             const withinCap = await tight.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "512" }, method: "POST" }));
 
             expect(withinCap.status).toBe(201);
+        });
+
+        it("refuses chunked REST over createR2UploadStorage (S3 API), which stores chunks in arrival order", () => {
+            expect.hasAssertions();
+
+            const s3 = () => createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", path: "/upload", secretAccessKey: "secret" });
+
+            expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: s3() })).toThrow(
+                expect.objectContaining({
+                    code: "VALIDATION_ERROR",
+                    message: expect.stringMatching(/chunked REST is not supported over createR2UploadStorage.*"tus".*createR2BindingUploadStorage/),
+                }),
+            );
+            // TUS and multipart over the same provider are fine.
+            expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: s3() })).not.toThrow();
+            expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: s3() })).not.toThrow();
         });
 
         it("rejects a maxFileSize that is not a finite, non-negative number", async () => {
