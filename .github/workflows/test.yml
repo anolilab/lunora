@@ -58,7 +58,11 @@
         # this leg runs the whole suite under v8 coverage. That is ~25 min for
         # @lunora/codegen alone, which left no room for the studio step after it and
         # cancelled the job at 30 min with every test passing.
-        "timeout-minutes": 45
+        #
+        # 60, not 45: by 2026-10 a full-suite 22.15 leg took 41-43 min when it
+        # passed, so a slow runner hit 45 during the Codecov upload, after
+        # `test:coverage` had already succeeded for every project.
+        "timeout-minutes": 60
         "strategy":
             "fail-fast": false
             "matrix":
