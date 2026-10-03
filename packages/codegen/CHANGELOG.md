@@ -1,3 +1,22 @@
+## @lunora/codegen [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.255...@lunora/codegen@1.0.0-alpha.256) (2026-10-03)
+
+### Features
+
+* **observability:** set error status on failed host spans ([#953](https://github.com/anolilab/lunora/issues/953)) ([112ef1e](https://github.com/anolilab/lunora/commit/112ef1e8b2758dc6043a7470fa99a4e63a58bbd4)), closes [#939](https://github.com/anolilab/lunora/issues/939)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.186
+* **@lunora/agent:** upgraded to 1.0.0-alpha.169
+* **@lunora/platform:** upgraded to 1.0.0-alpha.55
+* **@lunora/queue:** upgraded to 1.0.0-alpha.91
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.109
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.96
+* **@lunora/do:** upgraded to 1.0.0-alpha.193
+* **@lunora/server:** upgraded to 1.0.0-alpha.175
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.111
+
 ## @lunora/codegen [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.254...@lunora/codegen@1.0.0-alpha.255) (2026-10-03)
 
 
