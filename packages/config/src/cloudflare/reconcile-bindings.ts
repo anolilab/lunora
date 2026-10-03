@@ -33,6 +33,7 @@ import { readOwnedServices, reconcileDevConfigServices, reconcileServices, recor
 import collectWarnings from "./reconcile-warnings";
 import { objectBindingEntries, stringEntries } from "./validate-bindings";
 import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
+import { DEFAULT_OBSERVABILITY } from "./wrangler-config";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import type { MigrationEntry, ReconcileStep, WranglerShape } from "./wrangler-shape";
 
@@ -537,8 +538,8 @@ const reconcileContainers = (text: string, parsed: WranglerShape, containers: Re
 /**
  * Switch Workers Observability on when the key is entirely absent, so every
  * Lunora worker ships with Workers Logs + Traces enabled by default (not just
- * container apps). `head_sampling_rate: 1` keeps all logs initially — a sensible
- * default users can dial down. An explicit `enabled: false` is a user billing
+ * container apps), writing {@link DEFAULT_OBSERVABILITY}: `head_sampling_rate: 1`
+ * keeps all logs initially — a sensible default users can dial down. An explicit `enabled: false` is a user billing
  * decision and is left untouched (`collectWarnings` flags the container case).
  * Pure.
  */
@@ -547,7 +548,7 @@ const reconcileObservability = (text: string, parsed: WranglerShape): ReconcileS
         return { added: [], text };
     }
 
-    const nextText = applyModify(text, ["observability"], { enabled: true, head_sampling_rate: 1 });
+    const nextText = applyModify(text, ["observability"], { ...DEFAULT_OBSERVABILITY });
 
     return { added: ["observability"], text: nextText };
 };

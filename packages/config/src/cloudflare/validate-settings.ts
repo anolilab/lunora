@@ -5,9 +5,23 @@
  */
 
 import { isEnvEnabled } from "../../../../shared/env-flag";
-import { isNonEmptyString, objectBindingEntries } from "./validate-bindings";
-import { isPlainObject } from "./workflow-settings";
+import { isNonEmptyString, isPlainObject } from "./guards";
+import { objectBindingEntries } from "./validate-bindings";
 import type { TailConsumer, WranglerConfig } from "./wrangler-config";
+
+/** Push an error when a set value is not a boolean; `hint` adds a parenthesised remedy. */
+const checkBoolean = (value: unknown, path: string, errors: string[], hint?: string): void => {
+    if (value !== undefined && typeof value !== "boolean") {
+        errors.push(`${path} must be a boolean${hint === undefined ? "" : ` (${hint})`}`);
+    }
+};
+
+/** Push an error when a set value is not a `head_sampling_rate`-style fraction in [0, 1]. */
+const checkSamplingRate = (rate: unknown, path: string, errors: string[]): void => {
+    if (rate !== undefined && (typeof rate !== "number" || Number.isNaN(rate) || rate < 0 || rate > 1)) {
+        errors.push(`${path} must be a number in [0, 1] (the fraction of requests sampled)`);
+    }
+};
 
 /**
  * `send_email[]` (Email Routing outbound, used for auto-reply/forward from an
@@ -47,9 +61,7 @@ const validateSendEmail = (wrangler: WranglerConfig, errors: string[], warnings:
  * a typo like `"logPush"` that wrangler would otherwise silently drop.
  */
 const validateLogpush = (wrangler: WranglerConfig, errors: string[]): void => {
-    if (wrangler.logpush !== undefined && typeof wrangler.logpush !== "boolean") {
-        errors.push('logpush must be a boolean (set "logpush": true to enable Cloudflare Logpush)');
-    }
+    checkBoolean(wrangler.logpush, "logpush", errors, 'set "logpush": true to enable Cloudflare Logpush');
 };
 
 /**
@@ -152,93 +164,114 @@ const validatePlacement = (wrangler: WranglerConfig, errors: string[]): void => 
 };
 
 /**
- * The keys wrangler documents for each level of the `observability` block
- * (developers.cloudflare.com/workers/wrangler/configuration/#observability and
- * …/observability/opentelemetry-export/). Anything else is almost always a typo
- * (`head_sample_rate`, `destination`) that wrangler would drop silently.
+ * What one key of an `observability` level holds: a boolean (with an optional
+ * remedy for the error), a 0–1 sampling rate, a list of OpenTelemetry export
+ * destination names, or a nested level.
  */
-const OBSERVABILITY_KEYS = new Set(["enabled", "head_sampling_rate", "issues", "logs", "traces"]);
-const OBSERVABILITY_TRACES_KEYS = new Set(["destinations", "enabled", "head_sampling_rate", "persist"]);
-const OBSERVABILITY_LOGS_KEYS = new Set([...OBSERVABILITY_TRACES_KEYS, "invocation_logs"]);
-const OBSERVABILITY_ISSUES_KEYS = new Set(["enabled"]);
-
-/** Shared sinks + helpers for one `observability` validation pass. */
-interface ObservabilityChecks {
-    errors: string[];
-    warnings: string[];
-}
+type ObservabilityField =
+    | { readonly hint?: string; readonly kind: "boolean" }
+    | { readonly kind: "destinations" }
+    | { readonly kind: "level"; readonly level: ObservabilityLevel }
+    | { readonly kind: "samplingRate" };
 
 /**
- * Unknown keys warn rather than fail: Cloudflare keeps adding keys to this
- * block (`traces`, `issues`), and a hard error would block a deploy on a key
- * wrangler accepts before this list catches up.
+ * One level of the `observability` block: every key wrangler documents for it,
+ * and what each holds. The descriptor IS the known-key set — anything not in it
+ * is almost always a typo (`head_sample_rate`, `destination`) that wrangler
+ * would drop silently.
  */
-const checkUnknownKeys = (block: Record<string, unknown>, known: ReadonlySet<string>, path: string, { warnings }: ObservabilityChecks): void => {
-    for (const key of Object.keys(block)) {
-        if (!known.has(key)) {
-            warnings.push(
-                `${path}.${key} is not a documented wrangler key (expected one of ${[...known].join(", ")}) — a typo is silently ignored by wrangler`,
-            );
+type ObservabilityLevel = Readonly<Record<string, ObservabilityField>>;
+
+const BOOLEAN_FIELD: ObservabilityField = { kind: "boolean" };
+const SAMPLING_RATE_FIELD: ObservabilityField = { kind: "samplingRate" };
+
+/**
+ * The documented `observability` block, one descriptor per level — mirrors
+ * wrangler's own config schema (`Observability` in `config-schema.json`;
+ * developers.cloudflare.com/workers/wrangler/configuration/#observability and
+ * …/observability/opentelemetry-export/). `traces` takes the export knobs
+ * (`destinations`, `persist`) and its own rate; `logs` adds `invocation_logs`,
+ * the per-invocation summary line (status, duration, outcome) the Workers Logs
+ * Query Builder groups on.
+ */
+const OBSERVABILITY_TRACES: ObservabilityLevel = {
+    destinations: { kind: "destinations" },
+    enabled: BOOLEAN_FIELD,
+    head_sampling_rate: SAMPLING_RATE_FIELD,
+    persist: BOOLEAN_FIELD,
+};
+
+const OBSERVABILITY_LOGS: ObservabilityLevel = {
+    ...OBSERVABILITY_TRACES,
+    invocation_logs: { hint: 'set "invocation_logs": true to keep per-invocation summaries', kind: "boolean" },
+};
+
+const OBSERVABILITY: ObservabilityLevel = {
+    enabled: BOOLEAN_FIELD,
+    head_sampling_rate: SAMPLING_RATE_FIELD,
+    issues: { kind: "level", level: { enabled: BOOLEAN_FIELD } },
+    logs: { kind: "level", level: OBSERVABILITY_LOGS },
+    redact_query_string: BOOLEAN_FIELD,
+    traces: { kind: "level", level: OBSERVABILITY_TRACES },
+};
+
+/** Type-check one non-level `observability` value against its descriptor field. */
+const checkObservabilityLeaf = (field: Exclude<ObservabilityField, { kind: "level" }>, value: unknown, path: string, errors: string[]): void => {
+    switch (field.kind) {
+        case "boolean": {
+            checkBoolean(value, path, errors, field.hint);
+            break;
+        }
+        case "destinations": {
+            if (value !== undefined && (!Array.isArray(value) || value.some((destination) => !isNonEmptyString(destination)))) {
+                errors.push(`${path} must be an array of destination names configured in the Cloudflare dashboard`);
+            }
+
+            break;
+        }
+        case "samplingRate": {
+            checkSamplingRate(value, path, errors);
+            break;
+        }
+        default: {
+            break;
         }
     }
 };
 
-const checkBoolean = (value: unknown, path: string, { errors }: ObservabilityChecks): void => {
-    if (value !== undefined && typeof value !== "boolean") {
-        errors.push(`${path} must be a boolean`);
-    }
-};
-
-const checkSamplingRate = (rate: unknown, path: string, { errors }: ObservabilityChecks): void => {
-    if (rate !== undefined && (typeof rate !== "number" || Number.isNaN(rate) || rate < 0 || rate > 1)) {
-        errors.push(`${path} must be a number in [0, 1] (the fraction of requests sampled)`);
-    }
-};
-
 /**
- * Validate an `observability.logs` / `observability.traces` sub-block: the
- * export knobs (`destinations`, `persist`) and the per-signal sampling rate.
+ * Walk one `observability` level against its descriptor: a known key is
+ * type-checked (recursing into a nested level), an unknown one warns.
+ *
+ * Unknown keys warn rather than fail: Cloudflare keeps adding keys to this
+ * block (`traces`, `issues`, `redact_query_string`), and a hard error would
+ * block a deploy on a key wrangler accepts before this descriptor catches up.
  */
-const validateObservabilitySignal = (
-    block: unknown,
-    path: string,
-    known: ReadonlySet<string>,
-    checks: ObservabilityChecks,
-): Record<string, unknown> | undefined => {
-    if (block === undefined) {
-        return undefined;
+const walkObservabilityLevel = (block: Record<string, unknown>, level: ObservabilityLevel, path: string, errors: string[], warnings: string[]): void => {
+    for (const [key, value] of Object.entries(block)) {
+        // `Object.hasOwn`, not a bare lookup: a hand-typed `"constructor"` key
+        // would otherwise resolve to `Object.prototype`'s and skip the warning.
+        const field = Object.hasOwn(level, key) ? level[key] : undefined;
+        const keyPath = `${path}.${key}`;
+
+        if (field === undefined) {
+            warnings.push(
+                `${keyPath} is not a documented wrangler key (expected one of ${Object.keys(level).join(", ")}) — a typo is silently ignored by wrangler`,
+            );
+        } else if (field.kind !== "level") {
+            checkObservabilityLeaf(field, value, keyPath, errors);
+        } else if (isPlainObject(value)) {
+            walkObservabilityLevel(value, field.level, keyPath, errors, warnings);
+        } else if (value !== undefined) {
+            errors.push(`${keyPath} must be an object`);
+        }
     }
-
-    if (!isPlainObject(block)) {
-        checks.errors.push(`${path} must be an object`);
-
-        return undefined;
-    }
-
-    checkUnknownKeys(block, known, path, checks);
-    checkBoolean(block.enabled, `${path}.enabled`, checks);
-    checkBoolean(block.persist, `${path}.persist`, checks);
-    checkSamplingRate(block.head_sampling_rate, `${path}.head_sampling_rate`, checks);
-
-    const { destinations } = block;
-
-    if (
-        destinations !== undefined &&
-        (!Array.isArray(destinations) || destinations.some((destination) => typeof destination !== "string" || destination.length === 0))
-    ) {
-        checks.errors.push(`${path}.destinations must be an array of destination names configured in the Cloudflare dashboard`);
-    }
-
-    return block;
 };
 
 /**
- * `observability` enables Workers Logs + Traces. Shape-check the block — the
- * top-level switch and sampling rate, the `logs` / `traces` sub-blocks (each
- * with `enabled`, `head_sampling_rate`, `destinations`, `persist`; `logs` adds
- * `invocation_logs`) and `issues` — so a mistyped value is an error and a
- * typo'd key a warning before deploy, instead of being silently ignored by
- * wrangler.
+ * `observability` enables Workers Logs + Traces. Shape-check the block against
+ * {@link OBSERVABILITY} so a mistyped value is an error and a typo'd key a
+ * warning before deploy, instead of being silently ignored by wrangler.
  */
 const validateObservability = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
     // `unknown`: hand-edited JSONC, not a value TypeScript has vouched for.
@@ -254,32 +287,7 @@ const validateObservability = (wrangler: WranglerConfig, errors: string[], warni
         return;
     }
 
-    const checks: ObservabilityChecks = { errors, warnings };
-
-    checkUnknownKeys(observability, OBSERVABILITY_KEYS, "observability", checks);
-    checkBoolean(observability.enabled, "observability.enabled", checks);
-    checkSamplingRate(observability.head_sampling_rate, "observability.head_sampling_rate", checks);
-
-    const logs = validateObservabilitySignal(observability.logs, "observability.logs", OBSERVABILITY_LOGS_KEYS, checks);
-
-    // `invocation_logs` is the per-invocation summary line (status, duration,
-    // outcome) that the Workers Logs Query Builder groups on.
-    if (logs?.invocation_logs !== undefined && typeof logs.invocation_logs !== "boolean") {
-        errors.push('observability.logs.invocation_logs must be a boolean (set "invocation_logs": true to keep per-invocation summaries)');
-    }
-
-    validateObservabilitySignal(observability.traces, "observability.traces", OBSERVABILITY_TRACES_KEYS, checks);
-
-    const { issues } = observability;
-
-    if (issues !== undefined) {
-        if (isPlainObject(issues)) {
-            checkUnknownKeys(issues, OBSERVABILITY_ISSUES_KEYS, "observability.issues", checks);
-            checkBoolean(issues.enabled, "observability.issues.enabled", checks);
-        } else {
-            errors.push("observability.issues must be an object");
-        }
-    }
+    walkObservabilityLevel(observability, OBSERVABILITY, "observability", errors, warnings);
 };
 
 /**
@@ -294,15 +302,13 @@ const validateCache = (wrangler: WranglerConfig, errors: string[]): void => {
         return;
     }
 
-    if (typeof cache !== "object" || cache === null || Array.isArray(cache)) {
+    if (!isPlainObject(cache)) {
         errors.push('cache must be an object (e.g. { "enabled": true })');
 
         return;
     }
 
-    if (cache.enabled !== undefined && typeof cache.enabled !== "boolean") {
-        errors.push("cache.enabled must be a boolean (true or false)");
-    }
+    checkBoolean(cache.enabled, "cache.enabled", errors);
 };
 
 /**

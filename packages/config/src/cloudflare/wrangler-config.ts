@@ -49,8 +49,53 @@ interface WranglerObservability {
     /** Workers Issues — detects and groups production failures. */
     issues?: { enabled?: boolean };
     logs?: WranglerObservabilityLogs;
+    /** Strip query strings from request URLs in logs and traces (wrangler's default is `false`). */
+    redact_query_string?: boolean;
     traces?: WranglerObservabilityTraces;
 }
+
+/**
+ * The `observability` block Lunora writes when a project has none — by
+ * `lunora dev`'s binding reconcile and by `lunora init`'s scaffold. Logs on,
+ * every request sampled: the right default while an app is small, and what
+ * `lunora doctor`'s `observability-full-sampling` advisory then flags once
+ * Workers Observability is billed. One constant so the writers and the doctor
+ * cannot drift apart.
+ */
+const DEFAULT_OBSERVABILITY: Readonly<{ enabled: true; head_sampling_rate: 1 }> = Object.freeze({ enabled: true, head_sampling_rate: 1 });
+
+/** Wrangler's own default `head_sampling_rate` for logs and traces: 1, every request. */
+const WRANGLER_DEFAULT_SAMPLING_RATE = 1;
+
+/** One signal's effective sampling, as {@link resolveObservabilitySampling} resolves it. */
+interface ObservabilitySignalSampling {
+    enabled: boolean;
+    /** Fraction of requests sampled, 0–1. */
+    headSamplingRate: number;
+}
+
+/**
+ * The effective logs / traces sampling an `observability` block deploys with,
+ * defaults applied. An absent block is {@link DEFAULT_OBSERVABILITY}, which is
+ * what Lunora reconciles it to. Inside a present block, logs are on unless the
+ * block (or its `logs` sub-block) turns them off; traces are opt-in
+ * (`traces.enabled: true`); and an unset rate is wrangler's own default of 1.
+ * `logs.*` overrides the top-level switch and rate.
+ */
+const resolveObservabilitySampling = (block: WranglerObservability | undefined): { logs: ObservabilitySignalSampling; traces: ObservabilitySignalSampling } => {
+    const effective: WranglerObservability = block ?? DEFAULT_OBSERVABILITY;
+
+    return {
+        logs: {
+            enabled: effective.logs?.enabled ?? effective.enabled ?? DEFAULT_OBSERVABILITY.enabled,
+            headSamplingRate: effective.logs?.head_sampling_rate ?? effective.head_sampling_rate ?? WRANGLER_DEFAULT_SAMPLING_RATE,
+        },
+        traces: {
+            enabled: effective.traces?.enabled === true,
+            headSamplingRate: effective.traces?.head_sampling_rate ?? WRANGLER_DEFAULT_SAMPLING_RATE,
+        },
+    };
+};
 
 /** A wrangler `containers[]` entry (parsed from untrusted JSONC). */
 interface WranglerContainerEntry {
@@ -273,6 +318,7 @@ interface WranglerValidationReport {
 }
 
 export type {
+    ObservabilitySignalSampling,
     TailConsumer,
     WranglerConfig,
     WranglerContainerEntry,
@@ -282,3 +328,4 @@ export type {
     WranglerValidationReport,
     WranglerWorkflowEntry,
 };
+export { DEFAULT_OBSERVABILITY, resolveObservabilitySampling };
