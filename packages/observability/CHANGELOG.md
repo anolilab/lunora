@@ -1,3 +1,14 @@
+## @lunora/observability [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.118...@lunora/observability@1.0.0-alpha.119) (2026-10-03)
+
+### Bug Fixes
+
+* follow-ups to the cloudflare limits and ray id reviews ([#942](https://github.com/anolilab/lunora/issues/942), [#943](https://github.com/anolilab/lunora/issues/943)) ([#949](https://github.com/anolilab/lunora/issues/949)) ([34a4597](https://github.com/anolilab/lunora/commit/34a4597a14128ea2e48d52d101d0fbbf9b61e932)), closes [#944](https://github.com/anolilab/lunora/issues/944) [#944](https://github.com/anolilab/lunora/issues/944)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.110
+
 ## @lunora/observability [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.117...@lunora/observability@1.0.0-alpha.118) (2026-10-03)
 
 ### Features
