@@ -915,6 +915,47 @@ control plane caused: it never pinged, so the box dropped a socket silent for
 ("stops cleanly" timed out at 180 s). It now pings every 30 s, as the session
 DO does.
 
+**Fixed (2026-10-03, the lane's second root/systemd run, job 111132173638):**
+isolation was `enforced`, but every child started as another user failed:
+`CELLD_FAILED: could not run /opt/lunora-hostd/current/celld: spawn
+/usr/bin/setpriv EACCES` (each `deploy`), Caddy never listened (`ECONNREFUSED
+127.0.0.1:80`), `destroy` failed with `EACCES … fleets/lane-other`, and the
+"stops cleanly" legs ended in systemd's SIGKILL after "caddy did not stop
+within 10000 ms".
+
+- _The child's `cwd`._ libuv's forked child calls `chdir(cwd)` _before_
+  `setgid`/`setuid`, so Node enters the directory as the daemon — and
+  `lunora-hostd` holds no `CAP_DAC_*`, so it may not enter a fleet's 0700
+  directory (`lunora-fleet`'s) or Caddy's `state/` (`lunora-edge`'s 0700). The
+  chdir's `EACCES` is reported as `spawn <file> EACCES`, naming setpriv. The
+  user-namespace runs never switched uid, so never saw it; the isolation probe
+  passes no `cwd`. `launchCommand` now hands a child started as another user
+  no `cwd`: it enters its directory itself, after the switch, through
+  `setpriv … -- /usr/bin/env --chdir=<dir> -- <binary>` (coreutils ≥ 8.28;
+  the same pid, so cgroup attach and Caddy's ambient `net_bind_service` are
+  unchanged). No mode was widened.
+- _Removing a fleet's directory._ `find -delete` ran as the fleet user, then
+  the daemon's recursive `rmSync` had to read the 0700 directory; it now
+  `rmdir`s the emptied directory, which needs only `fleets/`.
+- _A child that never started._ Node emits `error` and no `exit` for a spawn
+  that fails, so the supervisor counted Caddy as running forever: never
+  restarted, and `stop` waited on an `exit` that never came. Such a child now
+  counts as exited (logged, restarted with the backoff), and `stop` returns.
+
+Reproduced and verified with a real uid switch: in a user namespace with a
+subuid range (`unshare --user --map-root-user --map-auto --mount`, tmpfs data
+directory laid out as install.sh does), the daemon as uid 200 with exactly the
+unit's six capabilities as ambient + bounding set — the old spawn fails with
+`spawn /usr/bin/setpriv EACCES`; the new one runs the fleet as uid 100 in its
+0700 directory (no capabilities, `no_new_privs`), Caddy's stand-in as uid 300
+in `state/` keeping `CapAmb 0x400`, and `removeFleetDirectory` removes a
+populated fleet directory. `__tests__/access.test.ts` now computes, from
+install.sh's `install -d` lines and the modes hostd's code sets, what each
+user may enter, read, write and execute, checks every child spawn (the
+supervisor's, captured; `runChild`'s) against it, and keeps the isolation
+invariants (no fleet or edge access to the key, credentials or state; the
+daemon never writes where Caddy can) — failing, without root, on the old code.
+
 ### W9 — Studio (M)
 
 - **Boxes page:** enrol (shows the one-time install command), status, versions,
