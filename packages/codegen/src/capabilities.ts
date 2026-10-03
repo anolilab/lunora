@@ -67,6 +67,14 @@ interface ShardEnvBinding {
 }
 
 /**
+ * The protected `ShardDO` (`@lunora/do`) methods that instrument a binding
+ * client — the only names a generated `this.<method>(…)` call may use. A
+ * literal union rather than `string` so a typo is a compile error here, not a
+ * `this.x is not a function` in every generated app.
+ */
+type ShardInstrumentMethod = "instrumentSql";
+
+/**
  * The uniform ShardDO construction shape for a binding-backed `ctx.<prop>`
  * helper (`emitBindingClientFragments` in `emit/shard-bindings.ts`): a
  * `ShardDOConfig.<prop>` override thunk, the build in `buildCtx` (on every ctx
@@ -79,6 +87,8 @@ interface ShardBindingFacet {
     binding?: ShardEnvBinding;
     /** The exported client type the ctx local and the stub are typed as, imported type-only from the row's `moduleSpecifier`. */
     clientType: string;
+    /** The ShardDO method that wraps a configured client in automatic telemetry, called as `this.<method>(client, functionPath, traceAnchor, observability)`. Never applied to the stub. */
+    instrument?: ShardInstrumentMethod;
     /** The plain-text message of the stub's `throw new Error(…)` — name the wrangler key and the `createShardDO()` override. Rendered with `JSON.stringify`, so write it unescaped. */
     missingMessage: string;
     /** Every method of `clientType`, in emit order. Async (`async () => { throw }`) unless listed in `syncStubMethods`. */
@@ -340,6 +350,8 @@ const CAPABILITY_ROWS = [
         serverCtxField: `\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Lunora live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import("@lunora/hyperdrive").SqlClient;`,
         shardBinding: {
             clientType: "SqlClient",
+            // Same `instrumentDatabase` levels as `ctx.db`, under its own `sql.*` tally.
+            instrument: "instrumentSql",
             missingMessage:
                 "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))`.",
             stubMethods: ["query"],

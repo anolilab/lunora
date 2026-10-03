@@ -138,6 +138,22 @@ describe("fromMysql2", () => {
     });
 });
 
+describe("adapter dbSystem stamp (read by ctx.sql auto-instrumentation)", () => {
+    it("stamps postgresql on the postgres.js and node-postgres adapters, mysql on mysql2", () => {
+        expect.assertions(3);
+
+        const unsafe = vi.fn<PostgresJsLike["unsafe"]>();
+        const query = vi.fn<NodePgLike["query"]>();
+        const execute = vi.fn<Mysql2Like["execute"]>();
+
+        // The OTel `db.system.name` values: the span's system must be the real
+        // engine, decided by which adapter built the client.
+        expect(fromPostgresJs({ unsafe }).dbSystem).toBe("postgresql");
+        expect(fromNodePg({ query }).dbSystem).toBe("postgresql");
+        expect(fromMysql2({ execute }).dbSystem).toBe("mysql");
+    });
+});
+
 // Real-binding integration, CI-gated (real engines + wire servers are too slow
 // for the local fast path).
 //

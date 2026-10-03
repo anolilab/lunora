@@ -841,7 +841,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageListOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageListResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageMetadata` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageMultipartUpload` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageMultipartUploadOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -882,6 +898,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageServeAuthzContext` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadBody` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadedPart` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -3283,6 +3315,14 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `SqlClientLike` (interface)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `TallySurface` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `TraceAnchor` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -3372,6 +3412,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `instrumentDatabase` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `instrumentSqlClient` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -5723,7 +5767,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageListOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageListResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageMetadata` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageMultipartUpload` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageMultipartUploadOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5764,6 +5824,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageServeAuthzContext` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadBody` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadedPart` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7609,7 +7685,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageListOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageListResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageMetadata` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageMultipartUpload` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageMultipartUploadOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7622,6 +7714,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageRange` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadBody` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageUploadedPart` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

@@ -2217,6 +2217,7 @@ interface SpanOptions {
 ```ts
 interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
     bucket: (name: Buckets) => Storage<Buckets>;
+    createMultipartUpload: (key: string, options?: StorageMultipartUploadOptions) => Promise<StorageMultipartUpload>;
     delete: (key: string) => Promise<void>;
     generateUploadUrl: (key: string, options?: {
         contentType?: string;
@@ -2226,15 +2227,31 @@ interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Bucke
         expiresInSeconds?: number;
         method?: "GET" | "PUT";
     }) => Promise<string>;
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: {
-        allowedContentTypes?: ReadonlyArray<string>;
-        contentType?: string;
-        customMetadata?: Record<string, string>;
-        maxSize?: number;
-    }) => Promise<{
-        etag: string;
-        key: string;
-    }>;
+    list: (prefix?: string, options?: StorageListOptions) => Promise<StorageListResult>;
+    resumeMultipartUpload: (key: string, uploadId: string) => StorageMultipartUpload;
+    store: (key: string, body: StorageUploadBody, options?: StorageUploadOptions) => Promise<StorageUploadResult>;
+    upload: Storage<Buckets>["store"];
+}
+```
+
+### `StorageListOptions` (interface)
+
+```ts
+interface StorageListOptions {
+    cursor?: string;
+    delimiter?: string;
+    limit?: number;
+}
+```
+
+### `StorageListResult` (interface)
+
+```ts
+interface StorageListResult {
+    cursor?: string;
+    delimitedPrefixes?: string[];
+    objects: StorageObjectHead[];
+    truncated?: boolean;
 }
 ```
 
@@ -2248,6 +2265,27 @@ interface StorageMetadata {
     sha256?: string;
     size: number;
     uploaded?: number;
+}
+```
+
+### `StorageMultipartUpload` (interface)
+
+```ts
+interface StorageMultipartUpload {
+    abort: () => Promise<void>;
+    complete: (uploadedParts: StorageUploadedPart[]) => Promise<StorageObjectHead>;
+    readonly key: string;
+    readonly uploadId: string;
+    uploadPart: (partNumber: number, value: StorageUploadBody) => Promise<StorageUploadedPart>;
+}
+```
+
+### `StorageMultipartUploadOptions` (interface)
+
+```ts
+interface StorageMultipartUploadOptions {
+    contentType?: string;
+    customMetadata?: Record<string, string>;
 }
 ```
 
@@ -2349,6 +2387,43 @@ type StorageServeAuthorizer = (context: StorageServeAuthzContext) => boolean | P
 interface StorageServeAuthzContext {
     key: string;
     request: Request;
+}
+```
+
+### `StorageUploadBody` (type)
+
+```ts
+type StorageUploadBody = ArrayBuffer | ArrayBufferView | Blob | ReadableStream | string;
+```
+
+### `StorageUploadOptions` (interface)
+
+```ts
+interface StorageUploadOptions {
+    allowedContentTypes?: ReadonlyArray<string>;
+    contentType?: string;
+    customMetadata?: Record<string, string>;
+    maxSize?: number;
+    sha256?: ArrayBuffer | string;
+}
+```
+
+### `StorageUploadResult` (interface)
+
+```ts
+interface StorageUploadResult {
+    etag: string;
+    httpEtag: string;
+    key: string;
+}
+```
+
+### `StorageUploadedPart` (interface)
+
+```ts
+interface StorageUploadedPart {
+    etag: string;
+    partNumber: number;
 }
 ```
 
@@ -5152,7 +5227,23 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `StorageListOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageListResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `StorageMetadata` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageMultipartUpload` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageMultipartUploadOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
@@ -5165,6 +5256,22 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `StorageRange` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageUploadBody` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageUploadOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageUploadResult` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageUploadedPart` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
