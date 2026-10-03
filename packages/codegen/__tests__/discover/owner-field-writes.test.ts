@@ -223,6 +223,77 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
     // the impl declaring its own `args` laundered any value into an
     // "owner-scoped" write. `applyOwnerScope` verified the impl's parameter, not
     // the closure's.
+    // The `ctx.db` receiver is resolved by symbol: matching only the spelling
+    // `ctx.db` left every write through a renamed or destructured ctx invisible.
+    describe("resolves the `ctx.db` receiver by symbol, not by spelling", () => {
+        it.each([
+            ["a renamed impl ctx", "c, args", `await c.db.insert("posts", { userId: args.targetUserId }); // @write`],
+            ["a destructured impl `db`", "{ db }, args", `await db.insert("posts", { userId: args.targetUserId }); // @write`],
+            ["`const { db } = ctx`", "ctx, args", `const { db } = ctx;\n        await db.insert("posts", { userId: args.targetUserId }); // @write`],
+            [
+                "`const database = ctx.db`",
+                "ctx, args",
+                `const database = ctx.db;\n        await database.patch(args.id, { userId: args.targetUserId }); // @write`,
+            ],
+            [
+                "a `const` alias of a renamed ctx",
+                "c, args",
+                `const context = c;\n        await context.db.replace(args.id, { userId: args.targetUserId }); // @write`,
+            ],
+        ])("reports a caller-chosen owner written through %s", (_label, parameters, body) => {
+            expect.assertions(2);
+
+            const source = ownerMutator(`        ${body}`, parameters);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it.each([
+            ["a renamed impl ctx", "c, args", `await c.db.insert("posts", { userId: args.userId }); // @write`],
+            ["a destructured impl `db`", "{ db }, args", `await db.insert("posts", { userId: args.userId }); // @write`],
+            ["`const { db } = ctx`", "ctx, args", `const { db } = ctx;\n        await db.insert("posts", { userId: args.userId }); // @write`],
+        ])("keeps the verified owner written through %s owner-scoped", (_label, parameters, body) => {
+            expect.assertions(1);
+
+            const source = ownerMutator(`        ${body}`, parameters);
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ ownerScoped: true, scope: { kind: "export", name: "createPost" } });
+        });
+
+        it.each([
+            [
+                "a renamed `ctx` option",
+                `export const create = mutation({ handler: async ({ ctx: c, args }) => { await c.db.insert("posts", { userId: args.userId }); } }); // @write`,
+            ],
+            [
+                "a nested `{ ctx: { db } }` option",
+                `export const create = mutation({ handler: async ({ ctx: { db }, args }) => { await db.insert("posts", { userId: args.userId }); } }); // @write`,
+            ],
+            [
+                "a positional bare-factory handler",
+                `import { mutation } from "@lunora/server";\nexport const create = mutation({ handler: async (c, args) => { await c.db.insert("posts", { userId: args.userId }); } }); // @write`,
+            ],
+        ])("reports a procedure handler writing through %s", (_label, source) => {
+            expect.assertions(1);
+
+            expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toMatchObject({
+                field: "userId",
+                method: "insert",
+                scope: { kind: "export", name: "create" },
+            });
+        });
+
+        it("does not treat a helper's first parameter as ctx", () => {
+            expect.assertions(1);
+
+            // Not a handler, so `store` is not resolved as ctx; under the spelling rule
+            // a parameter named `ctx` still is.
+            const source = `const save = (store, args) => store.db.insert("posts", { userId: args.userId });\nexport const create = mutation({ handler: async (ctx, args) => save(ctx, args) });`;
+
+            expect(discover(source, "posts.ts")).toStrictEqual([]);
+        });
+    });
+
     describe("resolves the verified `args` by symbol, not by spelling", () => {
         it("reports a write laundered through a nested closure's own `args` parameter", () => {
             expect.assertions(4);
@@ -633,6 +704,9 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
             ["an untagged template", `const key = \`\${args}\`;`],
             ["`Object.keys`", `const keys = Object.keys(args);`],
             ["a copy via `Object.assign({}, args)`", `const copy = Object.assign({}, args);`],
+            // Freezing cannot rewrite a member, so `args` may sit in any position.
+            ["`Object.freeze(args)`", `Object.freeze(args);`],
+            ["`Object.isFrozen(args)`", `if (!Object.isFrozen(args)) throw new Error("mutable");`],
         ])("keeps the owner write owner-scoped next to %s", (_label, statement) => {
             expect.assertions(1);
 
@@ -642,7 +716,54 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
             expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ ownerScoped: true });
         });
 
-        // Known noisy-but-safe: a validator could rewrite what it is handed.
+        // A validator whose body this can read, and which only reads what it is
+        // handed, leaves `args` verified. Anything it cannot read stays fail-closed.
+        const validators = `import { checkShape } from "./validation";
+function assertValid(input) {
+    if (typeof input.title !== "string" || input.title.length === 0) throw new Error("title");
+    checkLimits(input);
+}
+const checkLimits = (input) => {
+    if (JSON.stringify(input).length > 1000) throw new Error("too large");
+};
+function sanitize(input) { input.userId = input.targetUserId; }
+const identity = (input) => input;
+function relay(input) { checkShape(input); }
+function store(input) { cache.last = input; }
+const cache = {};
+`;
+
+        it.each([
+            ["a local `function` validator", `assertValid(args);`],
+            ["a local arrow validator", `checkLimits(args);`],
+            ["a nested validator", `const check = ({ title }) => { if (!title) throw new Error("title"); };\n        check(args);`],
+            ["a validator taking no parameter there", `const ping = () => true;\n        ping(args);`],
+        ])("keeps the owner write owner-scoped after %s", (_label, statement) => {
+            expect.assertions(1);
+
+            const source = `${validators}${ownerMutator(`        ${statement}\n        await ${insert("args.userId")}; // @write`)}`;
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ ownerScoped: true });
+        });
+
+        it.each([
+            ["a local validator that rewrites it", `sanitize(args);`],
+            ["an imported validator", `checkShape(args);`],
+            ["a local validator handing it to an imported one", `relay(args);`],
+            ["a local function returning it", `const same = identity(args);`],
+            ["a local function storing it", `store(args);`],
+            ["a nested validator that rewrites it", `const fix = (input) => { input.userId = input.targetUserId; };\n        fix(args);`],
+            ["a validator taking it through a rest parameter", `const check = (...inputs) => { inputs[0].userId = "x"; };\n        check(args);`],
+            ["a validator reading `arguments`", `function check() { arguments[0].userId = "x"; }\n        check(args);`],
+        ])("reports the owner write after %s", (_label, statement) => {
+            expect.assertions(2);
+
+            const source = `${validators}${ownerMutator(`        ${statement}\n        await ${insert("args.userId")}; // @write`)}`;
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        // Known noisy-but-safe: a validator this cannot read could rewrite what it is handed.
         it.each([
             ["an unknown validator", `assertValid(args);`],
             ["`Reflect.set`", `Reflect.set(args, "userId", args.targetUserId);`],
@@ -772,6 +893,95 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
             const source = ownerMutator(`        ${body}`);
 
             expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        // A ctx row is server-scoped only while nothing could have changed it:
+        // followed through `const` aliases, `for…of` variables, iterating
+        // callbacks and nested functions, and failing closed on any call this
+        // cannot read.
+        const read = `const row = await ctx.db.get(args.postId);`;
+
+        it.each([
+            ["a write through a `const` alias", `${read}\n        const alias = row;\n        alias.ownerId = args.targetUserId;`],
+            ["a write through a two-hop alias", `${read}\n        const a = row;\n        const b = a;\n        b.ownerId = args.targetUserId;`],
+            ["a nested arrow writing its parameter", `${read}\n        const set = (r) => { r.ownerId = args.targetUserId; };\n        set(row);`],
+            ["a nested `function` writing its parameter", `${read}\n        function set(r) { r.ownerId = args.targetUserId; }\n        set(row);`],
+            ["an IIFE writing its parameter", `${read}\n        ((r) => { r.ownerId = args.targetUserId; })(row);`],
+            [
+                "a nested function handed an alias",
+                `${read}\n        const alias = row;\n        const set = (r) => { r.ownerId = args.targetUserId; };\n        set(alias);`,
+            ],
+            // An opaque call can plant caller data in the row only when caller data reaches it too.
+            ["an imported `merge(row, args)`", `${read}\n        merge(row, args);`],
+            ["an imported `apply(row, { ownerId: args.x })`", `${read}\n        apply(row, { ownerId: args.targetUserId });`],
+            ["an imported call spreading args", `${read}\n        apply(row, ...args.patches);`],
+            ["an imported call handed an alias and args", `${read}\n        const alias = row;\n        merge(alias, args);`],
+            ["a nested function passing it on with args", `${read}\n        const relay = (r) => merge(r, args);\n        relay(row);`],
+            ["a caller-chosen callee", `${read}\n        args.fn(row);`],
+            ["a computed callee keyed by args", `${read}\n        handlers[args.kind](row);`],
+            ["a same-file helper outside the impl that writes it", `${read}\n        stamp(row);`],
+            ["a `let` alias", `${read}\n        let alias = row;\n        alias.ownerId = args.targetUserId;`],
+            ["`Object.defineProperty`", `${read}\n        Object.defineProperty(row, "ownerId", { value: args.targetUserId });`],
+            ["a constructor handed args", `${read}\n        new Normalizer(row, args);`],
+            ["a template tag handed args", `${read}\n        normalize\`\${row}\${args.targetUserId}\`;`],
+            [
+                "a destructured element written later",
+                `const { meta } = await ctx.db.get(args.postId);\n        meta.ownerId = args.targetUserId;\n        await ${insert("meta.ownerId")}; // @write`,
+            ],
+        ])("reports a ctx row's owner after %s", (_label, body) => {
+            expect.assertions(2);
+
+            const write = body.includes("// @write") ? "" : `\n        await ${insert("row.ownerId")}; // @write`;
+            const source = `import { apply, handlers, merge, Normalizer, normalize } from "./helpers";\nfunction stamp(r) { r.ownerId = "fixed"; }\n${ownerMutator(`        ${body}${write}`)}`;
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it.each([
+            [
+                "a `for…of` variable written from args",
+                `const rows = await ctx.db.query("posts").collect();\n        for (const r of rows) {\n            r.ownerId = args.targetUserId;\n        }\n        await Promise.all(rows.map((r) => ${insert("r.ownerId")})); // @write`,
+            ],
+            [
+                "an iterating callback written from args",
+                `const rows = await ctx.db.query("posts").collect();\n        rows.forEach((r) => { r.ownerId = args.targetUserId; });\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
+            ],
+            [
+                "a callback parameter written before its own write",
+                `const rows = await ctx.db.query("posts").collect();\n        await Promise.all(rows.map((r) => { r.ownerId = args.targetUserId; return ${insert("r.ownerId")}; })); // @write`,
+            ],
+            [
+                "a spread into an unknown call",
+                `const rows = await ctx.db.query("posts").collect();\n        normalize(args.mode, ...rows);\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
+            ],
+        ])("reports ctx rows changed through %s", (_label, body) => {
+            expect.assertions(2);
+
+            const source = ownerMutator(`        ${body}`);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it.each([
+            ["`JSON.stringify`", `JSON.stringify(row);`],
+            ["`console.log`", `console.log("post", row);`],
+            ["a `ctx.*` call", `await ctx.scheduler.runAfter(0, "notify", row);`],
+            ["a local function that only reads it", `const title = (r) => r.title;\n        title(row);`],
+            ["a nested function writing a fixed value", `const touch = (r) => { r.seen = true; };\n        touch(row);`],
+            ["a same-file helper outside the impl that only reads it", `describe(row);`],
+            ["a `const` alias that is only read", `const alias = row;\n        console.log(alias.title);`],
+            // The attacker controls `args`, not an imported helper's code: with no caller data
+            // reaching the call, the helper has nothing of the caller's to plant.
+            ["an imported `sendWelcome(row)`", `await sendWelcome(row);`],
+            ["an imported call handed an alias and server data", `const alias = row;\n        await notify(alias, ctx.auth.userId);`],
+            ["an imported constructor", `new Mailer(row);`],
+            ["an imported callback over rows", `[row].forEach(sendWelcome);`],
+        ])("keeps a ctx row server-scoped next to %s", (_label, statement) => {
+            expect.assertions(1);
+
+            const source = `import { Mailer, notify, sendWelcome } from "./mail";\nfunction describe(r) { return \`\${r.title}\`; }\n${ownerMutator(`        ${read}\n        ${statement}\n        await ${insert("row.ownerId")}; // @write`)}`;
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
         });
 
         it("raises the laundered write as an ERROR through the advisor lint", () => {

@@ -710,6 +710,35 @@ const defaultExportExpression = (source: SourceFile): Expression | undefined => 
     return expression;
 };
 
+/**
+ * Local binding name → every name a local export specifier of `source` exports
+ * it under, read syntactically: `export { run as start }` maps `run` to
+ * `["start"]`, `export { run }` to `["run"]`, `export { run as default }` to
+ * `["default"]`. Re-exports (`export { x } from "./other"`) and type-only
+ * specifiers name no local value and are skipped.
+ */
+const localExportAliases = (source: SourceFile): Map<string, string[]> => {
+    const aliases = new Map<string, string[]>();
+
+    for (const declaration of source.getExportDeclarations()) {
+        if (declaration.hasModuleSpecifier() || declaration.isTypeOnly()) {
+            continue;
+        }
+
+        for (const specifier of declaration.getNamedExports()) {
+            if (specifier.isTypeOnly()) {
+                continue;
+            }
+
+            const local = specifier.getNameNode().getText();
+
+            aliases.set(local, [...(aliases.get(local) ?? []), specifier.getAliasNode()?.getText() ?? local]);
+        }
+    }
+
+    return aliases;
+};
+
 /** The string-literal value of a call's second (`name`) argument, or `""` when it isn't one. */
 const limitNameOf = (call: CallExpression): string => {
     const argument = call.getArguments()[1];
@@ -837,6 +866,7 @@ export {
     limitNameOf,
     listLunoraSourceFiles,
     listSecurityScanFiles,
+    localExportAliases,
     lunoraRelativePath,
     objectLiteralFromCallbackBody,
     optionsObjectLiteral,

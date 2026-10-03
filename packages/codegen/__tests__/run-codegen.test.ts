@@ -3015,22 +3015,65 @@ export const probeListed = query.input({}).query(async () => "x");
             expect(result.generated.shard).not.toContain("procedure_type_check_unavailable");
         });
 
-        it("flags a procedure exported by a separate export statement, under its exported name", () => {
+        it("registers a procedure exported by a separate export statement under its exported name", () => {
             expect.assertions(4);
 
-            // Discovery asks each variable statement whether it `isExported()`,
-            // which is false when the `export` is its own statement — so the
-            // procedure is dropped exactly like a factory-produced one. This
-            // shape is the nastiest of the family, because the binding it is
-            // dropped from is an ordinary builder chain with nothing to look at.
-            // `export { a as b }` is addressed by callers as `b`, so `b` is what
-            // the finding has to name.
+            // `export { a as b }` exports `b` and nothing called `a`. Discovery
+            // used to read only the `export` keyword, so the procedure was
+            // missing from `api.ts` and the dispatch table: not callable at all.
+            writeFileSync(
+                join(workdir, "lunora", "settings.ts"),
+                `import { query } from "@lunora/server";
+
+const listSettings = query.input({}).query(async () => "x");
+
+export { listSettings as listUserSettings };
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.api).toContain("listUserSettings: FunctionReference<");
+            expect(result.generated.api).not.toContain("listSettings:");
+            expect(result.generated.functions).toContain('"settings:listUserSettings": lunora_settings_');
+            expect(result.generated.functions).toMatch(/lunora_settings_\d+\.listUserSettings as unknown as RegisteredLunoraFunction/u);
+        });
+
+        it("dispatches a renamed mutator export by the name the module exports", () => {
+            expect.assertions(3);
+
+            // Mutator discovery registered `export { createPost as makePost }` as
+            // `createPost`, so the dispatch table read `mutators.createPost` — a
+            // name the module does not export — and wired `undefined`.
+            writeFileSync(
+                join(workdir, "lunora", "mutators.ts"),
+                `import { defineMutator } from "@lunora/server";
+
+const createPost = defineMutator({ owner: "userId", server: async () => {} });
+
+export { createPost as makePost };
+`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.functions).toMatch(/"mutators:makePost": lunora_mutators_\d+\.makePost as unknown as RegisteredLunoraFunction/u);
+            expect(result.generated.functions).not.toContain(".createPost");
+            expect(result.generated.api).toContain("makePost: FunctionReference<");
+        });
+
+        it("flags a factory-made procedure behind a separate export statement as an indirect initializer", () => {
+            expect.assertions(3);
+
+            // The specifier is registered now, so what still drops this one is
+            // the factory — and that is what the finding has to say.
             writeFileSync(join(workdir, "lunora", "builders.d.ts"), PROBE_BUILDERS);
             writeFileSync(
                 join(workdir, "lunora", "settings.ts"),
                 `import { probeQuery } from "./builders.js";
 
-const listSettings = probeQuery.input({}).query(async () => "x");
+const makeGetter = () => probeQuery.input({}).query(async () => "x");
+const listSettings = makeGetter();
 
 export { listSettings as listUserSettings };
 `,
@@ -3039,9 +3082,8 @@ export { listSettings as listUserSettings };
             const result = runCodegen({ projectRoot: workdir });
             const finding = result.advisories.find((entry) => entry.name === "procedure_not_registered");
 
-            expect(finding).toBeDefined();
             expect(finding?.detail).toContain("`listUserSettings`");
-            expect(finding?.detail).toContain("separate `export { … }` statement");
+            expect(finding?.detail).toContain("comes from a factory or an alias");
             // The local name is an implementation detail the caller never types.
             expect(finding?.metadata?.["exportName"]).toBe("listUserSettings");
         });

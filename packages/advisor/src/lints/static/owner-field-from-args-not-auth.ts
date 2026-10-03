@@ -27,7 +27,7 @@ const ownerFieldFromArgsNotAuth: Lint = {
     level: "ERROR",
     name: "owner_field_from_args_not_auth",
     remediation:
-        "Stamp the ownership column from the server-trusted identity (`ctx.auth.userId` / `ctx.identity`), never from request input. Drop the field from the accepted `args` so a caller cannot supply it. In an `owner`-scoped `defineMutator`, `args[owner]` is verified only while the `server` impl leaves `args` untouched: a `server` impl that uses `this` or refers to itself (its own name, or `<mutator>.server`) is reported, because it could re-enter with unverified args.",
+        "Stamp the ownership column from the server-trusted identity (`ctx.auth.userId` / `ctx.identity`), never from request input. Drop the field from the accepted `args` so a caller cannot supply it. In an `owner`-scoped `defineMutator`, `args[owner]` is verified only while the `server` impl leaves `args` untouched: a `server` impl that uses `this` or refers to itself (its own name, or `<mutator>.server`) is reported, because it could re-enter with unverified args. Handing `args` to a function codegen cannot read (an imported validator) also counts as touching it; validate in a function declared in the same file that only reads its argument, or validate a copy (`{ ...args }`).",
     run: (context) => {
         if (context.ownerFieldWrites === undefined) {
             return [];
