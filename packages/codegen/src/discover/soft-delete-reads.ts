@@ -3,8 +3,9 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { isArgumentDerived } from "../argument-taint";
 import type { SoftDeleteReadIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, readTargetOf } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer } from "./ast";
 import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { readTargetOf } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**

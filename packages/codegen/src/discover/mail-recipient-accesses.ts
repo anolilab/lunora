@@ -5,6 +5,7 @@ import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { MailRecipientAccessIR } from "../ir";
 import { collectCallRows, propertyKeyName } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { isContextSurface } from "./context-root";
 
 /** The mailer methods whose first argument is an options object carrying recipient fields. */
 const MAIL_METHODS = new Set(["queue", "send"]);
@@ -30,9 +31,9 @@ const mailRecipientMethod = (node: TsNode): string | undefined => {
         return undefined;
     }
 
-    const receiver = node.getExpression().getText();
+    const receiver = node.getExpression();
 
-    return receiver === "ctx.mail" || receiver === "ctx.email" ? method : undefined;
+    return isContextSurface(receiver, ["mail"]) || isContextSurface(receiver, ["email"]) ? method : undefined;
 };
 
 /**

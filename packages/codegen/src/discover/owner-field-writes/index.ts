@@ -5,9 +5,9 @@ import { isArgumentDerived, isScopedByContext } from "../../argument-taint";
 import type { CallSiteScope, FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../../ir";
 import { bindingKeyName, collectCallRows, isConstDeclaration, propertyKeyName, unwrapExpression } from "../ast";
 import { callSiteScopeOf, declarationOf, withCallerVisibility } from "../attribution";
+import { mayDenoteContextDatabase } from "../context-root";
 import type { MutatorImplScope } from "./args-pristine";
 import { mutatorImplScopeOf } from "./args-pristine";
-import mayDenoteContextDatabase from "./context-binding";
 import implTaintOf from "./impl-taint";
 
 /**

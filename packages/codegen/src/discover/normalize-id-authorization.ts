@@ -2,9 +2,10 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NormalizeIdAuthorizationIR } from "../ir";
-import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
 import { chainUsesWrappedCall } from "./builder-chain";
+import { contextPathOf, contextSurfaceNodesIn, isDatabaseAccessor } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
 import { procedureHandler } from "./functions/handler";
@@ -187,7 +188,9 @@ const rootIdentifierName = (node: TsNode): string | undefined => {
  * method call does NOT match: there `ctx` is the receiver, not an argument.
  */
 const delegatesContextToHelper = (handler: InspectableHandler): boolean =>
-    handler.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => call.getArguments().some((argument) => rootIdentifierName(argument) === "ctx"));
+    handler
+        .getDescendantsOfKind(SyntaxKind.CallExpression)
+        .some((call) => call.getArguments().some((argument) => rootIdentifierName(argument) === "ctx" || contextPathOf(argument) !== undefined));
 
 /**
  * True when the handler contains an equality comparison with a property-access
@@ -228,12 +231,9 @@ const handlerMentionsOwnership = (handler: InspectableHandler): boolean => {
         }
     }
 
-    for (const access of handler.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
-        const root = access.getExpression();
-
-        if (Node.isIdentifier(root) && root.getText() === "ctx" && IDENTITY_ACCESSORS.has(access.getName())) {
-            return true;
-        }
+    // `ctx.auth` read through any spelling of the ctx (renamed, destructured `{ auth }`).
+    if ([...IDENTITY_ACCESSORS].some((accessor) => contextSurfaceNodesIn(handler, accessor).length > 0)) {
+        return true;
     }
 
     return delegatesContextToHelper(handler) || comparesRowProperty(handler);

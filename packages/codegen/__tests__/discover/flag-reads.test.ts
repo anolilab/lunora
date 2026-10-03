@@ -148,16 +148,14 @@ describe("discoverFlagReads", () => {
         expect(discoverFlagReads(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
-    it("does NOT record a destructured `const { flags } = ctx` receiver", () => {
+    it("records a destructured `const { flags } = ctx` receiver", () => {
         expect.assertions(1);
 
-        // Deliberate parity with the precedent feeders, which match receivers by
-        // surface text and so miss `const { random } = Math` in exactly the same way.
-        // Resolving the binding would need the type checker; the shared blind spot is
-        // preferable to this one lint behaving differently from its siblings.
+        // The receiver resolves by symbol through the shared ctx resolver, so the
+        // destructured spelling reads the same flag as `ctx.flags.boolean(…)`.
         writeFileSync(join(workdir, "lunora", "destructured.ts"), QUERY_DESTRUCTURED_FLAGS, "utf8");
 
-        expect(discoverFlagReads(project, join(workdir, "lunora"))).toHaveLength(0);
+        expect(discoverFlagReads(project, join(workdir, "lunora"))).toMatchObject([{ callee: "ctx.flags.boolean", exportName: "listDestructured" }]);
     });
 
     it("records nothing for a query that never touches ctx.flags", () => {

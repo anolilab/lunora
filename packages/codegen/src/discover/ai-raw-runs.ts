@@ -5,6 +5,7 @@ import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { AiRawRunIR } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { isContextSurface } from "./context-root";
 
 /**
  * True when `node` is a `ctx.ai.run` call callee — the raw Workers AI binding
@@ -18,7 +19,7 @@ const isContextAiRunCallee = (node: TsNode): boolean => {
         return false;
     }
 
-    return node.getExpression().getText() === "ctx.ai";
+    return isContextSurface(node.getExpression(), ["ai"]);
 };
 
 /**

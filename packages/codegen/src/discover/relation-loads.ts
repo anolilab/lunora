@@ -2,8 +2,9 @@ import type { Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { RelationLoadIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, propertyKeyName, readTargetOf } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, propertyKeyName } from "./ast";
 import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { readTargetOf } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** The relation accessor names declared by a `with: { … }` object literal (`{ author: true }`, `{ author }`, `{ author() {} }`) — the keys matched against the schema's relation names. Spreads/computed keys yield nothing. */

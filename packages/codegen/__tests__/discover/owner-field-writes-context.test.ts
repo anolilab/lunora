@@ -78,5 +78,49 @@ describe("discoverOwnerFieldWrites: the ctx.db receiver", () => {
 
             expect(discover(source, "posts.ts")).toStrictEqual([]);
         });
+
+        // `let { db } = ctx`: discovery follows it either way; only trust needs it unreassigned.
+        it.each([
+            ["an unreassigned `let { db } = ctx`", `let { db } = ctx;\n        await db.insert("posts", { userId: args.userId }); // @write`],
+            [
+                "a reassigned `let { db } = ctx`",
+                `let { db } = ctx;\n        if (args.mirror) db = ctx.db;\n        await db.insert("posts", { userId: args.userId }); // @write`,
+            ],
+        ])("discovers the owner write through %s", (_label, body) => {
+            expect.assertions(1);
+
+            const source = ownerMutator(`        ${body}`);
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ field: "userId", ownerScoped: true });
+        });
+
+        it("discovers a write in a separately declared `server: impl` whose ctx is renamed", () => {
+            expect.assertions(2);
+
+            // The impl is not resolved for owner-scoping (it could be called elsewhere), so the write is reported.
+            const source = `const impl = async (c, args) => {
+    await c.db.insert("posts", { userId: args.userId }); // @write
+};
+export const createPost = defineMutator({ owner: "userId", server: impl });`;
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it.each(["mutation", "internalMutation", "query", "internalQuery"])(
+            "discovers a write in a method-shorthand `%s` handler with a renamed ctx",
+            (kind) => {
+                expect.assertions(1);
+
+                const source = `import { ${kind} } from "@lunora/server";
+export const create = ${kind}({
+    args: {},
+    async handler(c, args) {
+        await c.db.insert("posts", { userId: args.userId }); // @write
+    },
+});`;
+
+                expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toMatchObject({ field: "userId", method: "insert" });
+            },
+        );
     });
 });

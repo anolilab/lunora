@@ -2,6 +2,7 @@ import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { bindingKeyName } from "./discover/ast";
+import { referencesContext } from "./discover/context-root";
 
 /**
  * The parameter binding element that declares `name`, searched from the
@@ -118,8 +119,14 @@ const referencesBinding = (node: TsNode, name: string): boolean => {
     return node.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => isValueReference(identifier, name));
 };
 
-/** True when `node` is, or textually contains, a value reference to the `ctx` binding. */
-const textuallyReferencesContext = (node: TsNode): boolean => referencesBinding(node, "ctx");
+/**
+ * True when `node` is, or contains, a value reference to the handler's `ctx`:
+ * spelled `ctx` (or destructured from a `ctx` key) as before, or any binding
+ * the shared resolver proves denotes the ctx or a surface of it — a renamed
+ * `(c, args)` ctx, a destructured `{ auth }`, `const userId = ctx.auth.userId`
+ * (see `referencesContext`).
+ */
+const textuallyReferencesContext = (node: TsNode): boolean => referencesBinding(node, "ctx") || referencesContext(node);
 
 /**
  * The leftmost identifier of a member/element-access (and non-null) chain

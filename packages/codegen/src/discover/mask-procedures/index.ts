@@ -2,8 +2,9 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { MaskProcedureIR } from "../../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, tablesAccessedIn } from "../ast";
+import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
 import { exportedVariableDeclarationsOf, primaryExportName } from "../attribution";
+import { tablesAccessedIn } from "../context-root";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { maskCallsInChain, memberName } from "./internal/mask-call";
 

@@ -3,9 +3,10 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { singleHopInitializer } from "../argument-taint";
 import type { RawRowReturnIR } from "../ir";
-import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
 import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
 import { chainHasStep, chainUsesWrappedCall } from "./builder-chain";
+import { isDatabaseAccessor } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
 import { procedureHandler } from "./functions/handler";

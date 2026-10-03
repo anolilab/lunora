@@ -7,6 +7,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { defaultExportExpression, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { isContextSurface } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** The only file a `@lunora/notify` provider may be declared in — mirrors `lunora/flags.ts`. */
@@ -66,30 +67,17 @@ const proceduresInSourceFile = (sourceFile: SourceFile): ResolvedProcedure[] => 
 };
 
 /**
- * Resolve a `ctx.notify` / `ctx.push` / `ctx.notify.push` receiver chain to its
- * facade label, or `undefined` when the node isn't one. Anchored on a literal
- * `ctx` identifier (a destructured `const { notify } = ctx` binding is too
- * ambiguous to claim — mirrors the `ctx.flags` / `ctx.r2sql` feeders).
+ * Resolve a `ctx.notify` / `ctx.push` / `ctx.notify.push` receiver to its
+ * facade label, or `undefined` when the node isn't one. Resolved by symbol
+ * through the shared ctx resolver, so a renamed ctx (`c.notify`), a
+ * destructured `const { notify } = ctx` and a `const` alias resolve too.
  */
 const facadeOf = (node: TsNode): "notify" | "push" | undefined => {
-    if (!Node.isPropertyAccessExpression(node)) {
-        return undefined;
+    if (isContextSurface(node, ["notify"])) {
+        return "notify";
     }
 
-    const name = node.getName();
-    const receiver = node.getExpression();
-
-    // `ctx.notify` / `ctx.push`
-    if ((name === "notify" || name === "push") && Node.isIdentifier(receiver) && receiver.getText() === "ctx") {
-        return name;
-    }
-
-    // `ctx.notify.push` — the push sub-facade reachable off `ctx.notify`.
-    if (name === "push" && facadeOf(receiver) === "notify") {
-        return "push";
-    }
-
-    return undefined;
+    return isContextSurface(node, ["push"]) || isContextSurface(node, ["notify", "push"]) ? "push" : undefined;
 };
 
 /**

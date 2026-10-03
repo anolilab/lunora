@@ -5,6 +5,7 @@ import { isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough }
 import type { CallSiteScope } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { matchesContextReceiver } from "./context-root";
 
 /**
  * The sink method name when `node` is a `<receiver>.<method>` property access
@@ -25,7 +26,7 @@ const sinkMethod = (node: TsNode, config: ArgumentDerivedAccessConfig): string |
         return undefined;
     }
 
-    return config.matchReceiver(node.getExpression().getText()) ? method : undefined;
+    return matchesContextReceiver(node.getExpression(), config.matchReceiver) ? method : undefined;
 };
 
 /** The IR row for a sink call whose `config.argIndex` argument is arg-derived and unscoped, or `undefined`. */

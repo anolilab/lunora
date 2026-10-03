@@ -1,9 +1,10 @@
 import type { Node as TsNode, Project, PropertyAccessExpression, SourceFile, VariableDeclaration } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { FlagReadIR } from "../ir";
 import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { contextSurfaceNodesIn } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** One resolved query handler with its attribution. */
@@ -65,25 +66,11 @@ const memberOn = (node: TsNode): PropertyAccessExpression | undefined => {
  * evaluation performed rather than the namespace it came from; a bare `ctx.flags`
  * (aliased or passed on) yields `ctx.flags`.
  *
- * The receiver is matched by surface text — `ctx` must be an identifier — exactly
- * as `discoverR2sqlCalls` matches `ctx.r2sql` and as `receiverNameOf` in
- * `discoverNondeterministicCalls` matches `Math` / `crypto`. So a destructured
- * receiver (`const { flags } = ctx; flags.boolean(…)`) is NOT recorded, which is
- * the same blind spot the precedent has for `const { random } = Math`. Following
- * a binding would need the type checker and would be a behaviour this lint alone
- * has; the shared limitation is preferable to a one-off.
+ * `access` denotes `ctx.flags` (see `contextSurfaceNodesIn`): the receiver is
+ * resolved by symbol, so a renamed ctx (`c.flags`) and a destructured surface
+ * (`const { flags } = ctx; flags.boolean(…)`) are recorded too.
  */
-const flagReadCalleeOf = (access: TsNode): string | undefined => {
-    if (!Node.isPropertyAccessExpression(access) || access.getName() !== "flags") {
-        return undefined;
-    }
-
-    const receiver = access.getExpression();
-
-    if (!Node.isIdentifier(receiver) || receiver.getText() !== "ctx") {
-        return undefined;
-    }
-
+const flagReadCalleeOf = (access: TsNode): string => {
     const method = memberOn(access);
 
     // Bare `ctx.flags` — aliased into a local or handed to a helper. Recorded:
@@ -107,12 +94,9 @@ const flagReadCalleeOf = (access: TsNode): string | undefined => {
 const readsInHandler = (procedure: ResolvedQuery, file: string): FlagReadIR[] => {
     const found: FlagReadIR[] = [];
 
-    for (const access of procedure.handler.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
-        const callee = flagReadCalleeOf(access);
-
-        if (callee !== undefined) {
-            found.push({ callee, exportName: procedure.exportName, file, line: access.getStartLineNumber() });
-        }
+    // Renamed (`c.flags`) and destructured (`const { flags } = ctx`) surfaces resolve by symbol.
+    for (const access of contextSurfaceNodesIn(procedure.handler, "flags")) {
+        found.push({ callee: flagReadCalleeOf(access), exportName: procedure.exportName, file, line: access.getStartLineNumber() });
     }
 
     return found;

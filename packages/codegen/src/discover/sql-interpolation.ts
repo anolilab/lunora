@@ -4,6 +4,7 @@ import { Node } from "ts-morph";
 import type { SqlInterpolationIR } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { isContextSurface } from "./context-root";
 
 /** The `SqlClient` methods that splice their first (`text`) argument verbatim into the query. */
 const SQL_TEXT_METHODS = new Set(["query", "unsafe"]);
@@ -20,15 +21,7 @@ const isContextSqlTextCallee = (node: TsNode): boolean => {
         return false;
     }
 
-    const sqlAccess = node.getExpression();
-
-    if (!Node.isPropertyAccessExpression(sqlAccess) || sqlAccess.getName() !== "sql") {
-        return false;
-    }
-
-    const receiver = sqlAccess.getExpression();
-
-    return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
+    return isContextSurface(node.getExpression(), ["sql"]);
 };
 
 /**

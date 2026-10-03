@@ -6,6 +6,7 @@ import type { AiToolSideEffectIR } from "../ir";
 import { bindingKeyName, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
+import { contextSurfaceText } from "./context-root";
 
 /** The AI SDK text-generation entrypoints that accept a `tools` map — the injection sink surface. Matched by callee name, `import`-agnostic like the other feeders. */
 const GENERATION_CALLEES = new Set(["generateText", "streamText"]);
@@ -39,11 +40,15 @@ const sideEffectLabel = (call: CallExpression): string | undefined => {
     }
 
     const method = callee.getName();
-    const receiver = callee.getExpression().getText();
+    const written = callee.getExpression().getText();
+    // As written first (labels unchanged); then as the ctx surface it denotes (`c.db` → `ctx.db`).
+    const receivers = [written, contextSurfaceText(callee.getExpression())].filter((receiver): receiver is string => receiver !== undefined);
 
-    for (const sink of SIDE_EFFECT_SINKS) {
-        if (sink.methods.has(method) && sink.prefixes.some((prefix) => receiver === prefix || receiver.startsWith(`${prefix}.`))) {
-            return `${receiver}.${method}`;
+    for (const receiver of receivers) {
+        for (const sink of SIDE_EFFECT_SINKS) {
+            if (sink.methods.has(method) && sink.prefixes.some((prefix) => receiver === prefix || receiver.startsWith(`${prefix}.`))) {
+                return `${receiver}.${method}`;
+            }
         }
     }
 
