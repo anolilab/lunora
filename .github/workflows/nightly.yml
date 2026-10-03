@@ -58,13 +58,32 @@
 
     # Same design as test.yml's `test-workerd` job — see the comments there.
     "test-workerd":
-        "name": "Workerd integration (${{ matrix.package }})"
+        "name": "Workerd integration (${{ matrix.workspace }})"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20
         "strategy":
             "fail-fast": false
             "matrix":
-                "package": ["auth", "client", "container", "d1", "do", "queue", "runtime", "scheduler", "server", "sql-store", "storage", "workflow", "x402"]
+                # Workspace directories, not package names: an app's vis project name
+                # (`lunora-cloud`) is neither its directory nor its package name
+                # (`@lunora/cloud`), and a path selects it for pnpm and vis alike.
+                "workspace":
+                    [
+                        "apps/cloud",
+                        "packages/auth",
+                        "packages/client",
+                        "packages/container",
+                        "packages/d1",
+                        "packages/do",
+                        "packages/queue",
+                        "packages/runtime",
+                        "packages/scheduler",
+                        "packages/server",
+                        "packages/sql-store",
+                        "packages/storage",
+                        "packages/workflow",
+                        "packages/x402",
+                    ]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -85,38 +104,53 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of 13 packages, duplicated verbatim in
-            # test.yml and nightly.yml, with nothing tying either copy to the packages
-            # that actually declare a `workerd` vitest project. Drop a package from one
-            # and its workerd suites stop running with every check green. Each leg
-            # asserts its own package still declares the project, and that the leg count
-            # equals the number of packages that do — together that makes the matrix and
-            # the filesystem the same set, not merely the same size.
-            - "name": "Assert the matrix matches the packages declaring a workerd project"
+            # The matrix is a hand-typed list of 14 workspaces, duplicated verbatim in
+            # test.yml and nightly.yml, with nothing tying either copy to the workspaces
+            # that actually declare a `workerd` vitest project. Drop one from either and
+            # its workerd suites stop running with every check green. Each leg asserts
+            # its own workspace still declares the project, and that the leg count
+            # equals the number of workspaces that do — together that makes the matrix
+            # and the filesystem the same set, not merely the same size. Packages and
+            # apps both: `apps/cloud` holds the `BoxSessionDO` suite.
+            - "name": "Assert the matrix matches the workspaces declaring a workerd project"
+              "env":
+                  "WORKSPACE": "${{ matrix.workspace }}"
+                  "LEGS": "${{ strategy.job-total }}"
               "run": |
-                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts apps/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
                   count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
-                  if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
-                    echo "packages/${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                  if ! printf '%s\n' "$declared" | grep -qx "$WORKSPACE"; then
+                    echo "$WORKSPACE/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
                     echo "Declared: $(printf '%s ' $declared)" >&2
                     exit 1
                   fi
-                  if [ "$count" != "${{ strategy.job-total }}" ]; then
-                    echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
+                  if [ "$count" != "$LEGS" ]; then
+                    echo "$count workspaces declare a workerd project but the matrix has $LEGS legs." >&2
                     echo "Declared: $(printf '%s ' $declared)" >&2
                     echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
                     exit 1
                   fi
 
-            - "name": "Build package and dependencies"
+            # `vis run build` walks upstream deps via dependsOn, so the workspace's
+            # dist and everything it imports exists. `pnpm --filter "pkg..."` does not
+            # build deps reliably. A package's suites import its own dist; an app's
+            # suites import its source, so only its dependencies are built (`^...`) —
+            # its own build is a deploy artifact.
+            - "name": "Build workspace and dependencies"
+              "env":
+                  "WORKSPACE": "${{ matrix.workspace }}"
               "run": |
-                  pnpm exec vis run build --query "project=${{ matrix.package }}"
+                  case "$WORKSPACE" in
+                    apps/*) pnpm exec vis run build --filter "./$WORKSPACE^..." ;;
+                    *) pnpm exec vis run build --filter "./$WORKSPACE..." ;;
+                  esac
 
             - "name": "Run workerd suites"
               "env":
                   "LUNORA_WORKERD_TESTS": "1"
+                  "WORKSPACE": "${{ matrix.workspace }}"
               "run": |
-                  pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
+                  pnpm --filter "./$WORKSPACE" run test --project workerd
 
     # test.yml's `e2e` without the paths-filter gate.
     "e2e":
@@ -175,6 +209,59 @@
                   "path": |
                       tests/e2e/playwright-report
                       tests/e2e/playwright-report-examples
+                  "retention-days": 7
+
+    # The control-plane suite is separate from `e2e` above because it boots a
+    # different app (`apps/cloud`) behind its own Playwright config, and a cold
+    # Vite start for it is minutes rather than seconds. Nightly only: it is far
+    # too slow to gate a PR, and until now it ran nowhere at all, which is how a
+    # browser suite quietly rots.
+    "e2e-cloud":
+        "name": "E2E — control plane (Playwright)"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 45
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "e2e-cloud"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "parallel":
+                  - "name": "Build packages"
+                    "run": "pnpm run build:packages"
+
+                  - "name": "Install Playwright browsers"
+                    "run": "pnpm --filter @lunora/e2e exec playwright install chromium"
+
+            # The suite writes its own `.dev.vars` when the app has none and skips
+            # with a stated reason if it cannot boot — so a missing secret is a
+            # skipped run, never a false red.
+            - "name": "Run control-plane E2E"
+              "env":
+                  "CI": "true"
+                  "LUNORA_E2E": "true"
+              "run": "pnpm --filter @lunora/e2e run e2e:cloud"
+
+            - "name": "Upload Playwright report on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "playwright-report-cloud"
+                  "path": "tests/e2e/playwright-report-cloud"
                   "retention-days": 7
 
     # On PRs this matrix is path-gated, but the `templates` filter DOES include

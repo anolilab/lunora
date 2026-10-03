@@ -1,0 +1,67 @@
+import { cronJobs } from "@lunora/scheduler";
+
+import { internal } from "./_generated/api.js";
+
+/**
+ * Control-plane crons. The control-plane Worker is
+ * account-level (not in a dispatch namespace), so its cron triggers fire
+ * normally — unlike tenant Workers (§2.4). Codegen emits the `wrangler.jsonc`
+ * schedule + the dispatcher the `scheduled()` handler consumes.
+ */
+const crons = cronJobs();
+
+// Tear down expired preview deployments once an hour.
+crons.interval("cleanup expired previews", { hours: 1 }, internal.deployments.cleanupExpiredPreviews, {});
+
+// Compact closed-period platform-usage events once an hour (§4 metering rollup).
+crons.interval("rollup platform usage", { hours: 1 }, internal.usage.rollup, {});
+
+// Suspend orgs whose estimated period spend breached their cap; unsuspend the
+// recovered ones (GAPS.md C1 abuse/bill-shock control).
+crons.interval("enforce spend caps", { hours: 1 }, internal.usage.enforceSpendCaps, {});
+
+// Dunning (GAPS.md C2): payment failure → 14-day grace → suspend; recovery
+// lifts only dunning suspensions.
+crons.interval("enforce dunning", { hours: 6 }, internal.billing.enforceDunning, {});
+
+// Prune tenant runtime logs past the 48h retention window (GAPS.md B2).
+crons.interval("prune tenant logs", { hours: 6 }, internal.logs.prune, {});
+
+// Span observations backing Traces — 7-day hot window (older served from the archive).
+crons.interval("prune trace observations", { hours: 6 }, internal.telemetry.pruneObservations, {});
+
+// Exact metric points backing the Metrics tab — same 7-day hot window (older
+// served from the sampled AE mirror). Rides the shared 6h expression (no new
+// trigger — Cloudflare's 3-trigger cap).
+crons.interval("prune metric points", { hours: 6 }, internal.metrics.prune, {});
+
+// Prune superseded releases past the rollback retention (GAPS.md A1) so
+// dispatch namespaces never accumulate unboundedly.
+//
+// (The build queue is drained from the Worker's own `scheduled()` — see
+// `dispatchBuilds` in src/server.ts — not from a cron job here: releasing a
+// build needs the Worker's bindings, which a Lunora action's `ctx` does not carry.)
+crons.interval("prune superseded releases", { hours: 6 }, internal.deployments.pruneSuperseded, {});
+
+// Self-heal the build queue: fail never-claimed and lease-stuck builds (A3).
+crons.interval("expire stale builds", { hours: 1 }, internal.builds.expireStale, {});
+
+// Erase orgs whose deletion request aged past the 30-day retention window
+// (GAPS.md D3 right-to-erasure). Rides the 6h bucket — the purge itself gates
+// on the per-org retention cutoff, so cadence only affects erasure latency, and
+// reusing an existing expression keeps us within Cloudflare's 3-trigger cap.
+crons.interval("purge deleted organizations", { hours: 6 }, internal.organizations.purgeDeleted, {});
+
+// Prune synthetic-uptime probe rows past the retention window (§ Observability)
+// so the time series stays bounded. Rides the 6h bucket — cadence only affects
+// how promptly old rows clear — keeping within Cloudflare's 3-trigger cap.
+crons.interval("prune uptime checks", { hours: 6 }, internal.uptime.prune, {});
+
+// Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
+// fan-out, the uptime sweep, AND the metric-alert sweep (src/telemetry/sweep.ts —
+// re-evaluates error_rate/latency_p95/llm_cost rules so quiet windows still
+// fire/clear) all ride on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
+// Folding these onto this one trigger keeps us within Cloudflare's 3-trigger cap.
+crons.interval("tenant cron fan-out tick", { minutes: 1 }, internal.fanout.tick, {});
+
+export default crons;

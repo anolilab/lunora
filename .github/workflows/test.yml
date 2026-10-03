@@ -30,6 +30,7 @@
             "worker_size": "${{ steps.changes.outputs.worker_size }}"
             "sdks": "${{ steps.changes.outputs.sdks }}"
             "celld": "${{ steps.changes.outputs.celld }}"
+            "hostd": "${{ steps.changes.outputs.hostd }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -196,7 +197,7 @@
     # runner with it on — hence the plain `test` script here. One matrix leg per
     # package so a slow suite cannot starve the others.
     "test-workerd":
-        "name": "Workerd integration (${{ matrix.package }})"
+        "name": "Workerd integration (${{ matrix.workspace }})"
         "if": "needs.files-changed.outputs.packages == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
@@ -204,7 +205,26 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "package": ["auth", "client", "container", "d1", "do", "queue", "runtime", "scheduler", "server", "sql-store", "storage", "workflow", "x402"]
+                # Workspace directories, not package names: an app's vis project name
+                # (`lunora-cloud`) is neither its directory nor its package name
+                # (`@lunora/cloud`), and a path selects it for pnpm and vis alike.
+                "workspace":
+                    [
+                        "apps/cloud",
+                        "packages/auth",
+                        "packages/client",
+                        "packages/container",
+                        "packages/d1",
+                        "packages/do",
+                        "packages/queue",
+                        "packages/runtime",
+                        "packages/scheduler",
+                        "packages/server",
+                        "packages/sql-store",
+                        "packages/storage",
+                        "packages/workflow",
+                        "packages/x402",
+                    ]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -225,41 +245,53 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of 13 packages, duplicated verbatim in
-            # test.yml and nightly.yml, with nothing tying either copy to the packages
-            # that actually declare a `workerd` vitest project. Drop a package from one
-            # and its workerd suites stop running with every check green. Each leg
-            # asserts its own package still declares the project, and that the leg count
-            # equals the number of packages that do — together that makes the matrix and
-            # the filesystem the same set, not merely the same size.
-            - "name": "Assert the matrix matches the packages declaring a workerd project"
+            # The matrix is a hand-typed list of 14 workspaces, duplicated verbatim in
+            # test.yml and nightly.yml, with nothing tying either copy to the workspaces
+            # that actually declare a `workerd` vitest project. Drop one from either and
+            # its workerd suites stop running with every check green. Each leg asserts
+            # its own workspace still declares the project, and that the leg count
+            # equals the number of workspaces that do — together that makes the matrix
+            # and the filesystem the same set, not merely the same size. Packages and
+            # apps both: `apps/cloud` holds the `BoxSessionDO` suite.
+            - "name": "Assert the matrix matches the workspaces declaring a workerd project"
+              "env":
+                  "WORKSPACE": "${{ matrix.workspace }}"
+                  "LEGS": "${{ strategy.job-total }}"
               "run": |
-                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts apps/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
                   count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
-                  if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
-                    echo "packages/${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                  if ! printf '%s\n' "$declared" | grep -qx "$WORKSPACE"; then
+                    echo "$WORKSPACE/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
                     echo "Declared: $(printf '%s ' $declared)" >&2
                     exit 1
                   fi
-                  if [ "$count" != "${{ strategy.job-total }}" ]; then
-                    echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
+                  if [ "$count" != "$LEGS" ]; then
+                    echo "$count workspaces declare a workerd project but the matrix has $LEGS legs." >&2
                     echo "Declared: $(printf '%s ' $declared)" >&2
                     echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
                     exit 1
                   fi
 
-            # `vis run build` walks upstream deps via dependsOn, so the package's dist
-            # and everything it imports exists. `pnpm --filter "pkg..."` does not build
-            # deps reliably.
-            - "name": "Build package and dependencies"
+            # `vis run build` walks upstream deps via dependsOn, so the workspace's
+            # dist and everything it imports exists. `pnpm --filter "pkg..."` does not
+            # build deps reliably. A package's suites import its own dist; an app's
+            # suites import its source, so only its dependencies are built (`^...`) —
+            # its own build is a deploy artifact.
+            - "name": "Build workspace and dependencies"
+              "env":
+                  "WORKSPACE": "${{ matrix.workspace }}"
               "run": |
-                  pnpm exec vis run build --query "project=${{ matrix.package }}"
+                  case "$WORKSPACE" in
+                    apps/*) pnpm exec vis run build --filter "./$WORKSPACE^..." ;;
+                    *) pnpm exec vis run build --filter "./$WORKSPACE..." ;;
+                  esac
 
             - "name": "Run workerd suites"
               "env":
                   "LUNORA_WORKERD_TESTS": "1"
+                  "WORKSPACE": "${{ matrix.workspace }}"
               "run": |
-                  pnpm --filter "@lunora/${{ matrix.package }}" run test --project workerd
+                  pnpm --filter "./$WORKSPACE" run test --project workerd
 
     # The `@lunora/platform` and `@lunora/shard-engine` conformance suites against a
     # live single-node celld (`@lunora/platform-celld`, project `celld`), gated
@@ -331,6 +363,129 @@
                   "LUNORA_CELLD_CONTAINERS": "1"
               "run": |
                   pnpm --filter "@lunora/platform-celld" run test --project celld
+
+    # The `@lunora/hostd` lane (`pnpm run test:hostd`, project `integration`, gated
+    # behind LUNORA_HOSTD_TESTS=1): the daemon, built as the single executable a box
+    # runs, against the pinned celld release, a Caddy built from the pinned source
+    # exactly as hostd-release.yml builds it, moto, and an in-process fake control
+    # plane — enrol, session, deploy, HTTP through Caddy, a usage report, the target-
+    # driver conformance legs through the real daemon, log forwarding, destroy with
+    # deleteData — and the W7 gate: a live box upgraded from release N to N+1 (test
+    # builds trusting a key the test generates) with an alias serving before and
+    # after. With LUNORA_HOSTD_ISOLATION=1 it runs as root (sudo): install.sh's own
+    # functions create the users, directories and unit, hostd runs under the real
+    # systemd unit on port 80, and the W8 probe suite asserts the isolation (fleet uid
+    # without capabilities in its own memory cgroup, Caddy as lunora-edge with port
+    # binding alone and no reach to the box key, the nftables egress table blocking
+    # the celld operator API, Caddy's admin API, hostd's ask endpoint and the metadata
+    # address, the bucket still reachable). A missing binary fails the lane; it never
+    # skips. Keep CELLD_* in step with test-celld and release-pins.json, and Go/xcaddy
+    # in step with hostd-release.yml.
+    "test-hostd":
+        "name": "hostd integration (@lunora/hostd)"
+        "if": "needs.files-changed.outputs.hostd == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-24.04"
+        "timeout-minutes": 40
+        "env":
+            "CELLD_VERSION": "v0.6.0"
+            "CELLD_SHA256": "8f1e18072c234ab75459d4da104c13cebc9b29a3e4a4772086bf985829bea8aa"
+            "MOTO_VERSION": "5.2.3"
+            "XCADDY_VERSION": "v0.4.7"
+            "CGO_ENABLED": "0"
+            "GOFLAGS": "-buildvcs=false"
+            "GOTOOLCHAIN": "local"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # The single executable embeds this node: the line boxes run (hostd-release.yml).
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "24.16"
+                  "cache-prefix": "test-hostd"
+                  "install-node-gyp": "false"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Setup go"
+              "uses": "actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00" # v6.0.0
+              "with":
+                  "go-version": "1.26.8"
+                  "cache": "false"
+
+            - "name": "Install celld"
+              "run": |
+                  curl -fsSL -o celld.gz "https://github.com/denoland/celld/releases/download/${CELLD_VERSION}/celld-x86_64-unknown-linux-gnu.gz"
+                  echo "${CELLD_SHA256}  celld.gz" | sha256sum --check --strict
+                  gunzip celld.gz
+                  install -m 0755 celld "${RUNNER_TEMP}/celld"
+                  echo "LUNORA_CELLD_BIN=${RUNNER_TEMP}/celld" >> "$GITHUB_ENV"
+
+            # The Caddy version and module commits come from release-pins.json, as in
+            # the release build, so the lane runs the edge boxes run.
+            - "name": "Build Caddy"
+              "shell": "bash"
+              "run": |
+                  set -euo pipefail
+
+                  go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}"
+                  pins="apps/hostd/release-pins.json"
+                  with=()
+
+                  while IFS=$'\t' read -r path commit; do
+                      with+=(--with "${path}@${commit}")
+                  done < <(jq -r '.caddy.modules[] | [.path, .commit] | @tsv' "${pins}")
+
+                  "$(go env GOPATH)/bin/xcaddy" build "$(jq -r '.caddy.version' "${pins}")" "${with[@]}" --output "${RUNNER_TEMP}/caddy"
+                  "${RUNNER_TEMP}/caddy" list-modules | grep -qx 'http.handlers.rate_limit'
+                  echo "LUNORA_CADDY_BIN=${RUNNER_TEMP}/caddy" >> "$GITHUB_ENV"
+
+            - "name": "Start an S3-compatible endpoint"
+              "run": |
+                  pipx install "moto[server]==${MOTO_VERSION}"
+                  moto_server -p 19000 > "${RUNNER_TEMP}/moto.log" 2>&1 &
+                  for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:19000/ && exit 0; sleep 1; done
+                  cat "${RUNNER_TEMP}/moto.log" >&2
+                  exit 1
+
+            - "name": "Build @lunora/hostd and the single executable"
+              "run": |
+                  pnpm exec vis run build --query "project=hostd"
+                  pnpm --filter "@lunora/hostd" run build:sea
+                  echo "LUNORA_HOSTD_BIN=${GITHUB_WORKSPACE}/apps/hostd/dist/sea/lunora-hostd-linux-x64" >> "$GITHUB_ENV"
+
+            - "name": "Shellcheck install.sh"
+              "run": "shellcheck -x apps/hostd/install/install.sh"
+
+            # Root, for install.sh's functions, the unit, nft and the probes; the
+            # lane's own environment (and the runner's node) carried over. vitest
+            # runs directly, never through pnpm: as root, pnpm's pre-run deps check
+            # sees a foreign store and config, decides to reinstall, and aborts the
+            # modules purge for want of a TTY (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY)
+            # before a test starts.
+            - "name": "Run the hostd lane"
+              "working-directory": "apps/hostd"
+              "env":
+                  "LUNORA_HOSTD_TESTS": "1"
+                  "LUNORA_HOSTD_ISOLATION": "1"
+                  "LUNORA_HOSTD_S3_ENDPOINT": "http://127.0.0.1:19000"
+              "run": |
+                  sudo --preserve-env=LUNORA_HOSTD_TESTS,LUNORA_HOSTD_ISOLATION,LUNORA_HOSTD_S3_ENDPOINT,LUNORA_HOSTD_BIN,LUNORA_CELLD_BIN,LUNORA_CADDY_BIN \
+                      env "PATH=${PATH}" ./node_modules/.bin/vitest run --project integration
+
+            - "name": "Show hostd's journal"
+              "if": "failure()"
+              "run": |
+                  sudo journalctl --unit lunora-hostd --no-pager --output short-precise | tail -n 300
 
     # `@lunora/hyperdrive`'s MySQL suites — the only gate proving the SQL the store
     # core renders for a `.global()` MySQL backend actually executes. mysqld comes
@@ -881,7 +1036,18 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "test-celld", "test-mysql", "e2e", "templates", "templates-expo", "worker-size", "sdk-conformance"]
+        "needs":
+            - "files-changed"
+            - "test"
+            - "test-workerd"
+            - "test-celld"
+            - "test-hostd"
+            - "test-mysql"
+            - "e2e"
+            - "templates"
+            - "templates-expo"
+            - "worker-size"
+            - "sdk-conformance"
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

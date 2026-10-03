@@ -1,0 +1,293 @@
+---
+title: Run on your own server
+description: Run Lunora apps on a Linux server you own, managed by Lunora Cloud through an agent that dials out. Your app data stays in a bucket you own.
+---
+
+A Lunora Cloud project can run on a **box**, which is a Linux server your
+organization owns. Lunora Cloud deploys your apps onto it with
+[celld](https://github.com/denoland/celld), the open-source, self-hosted Workers
+runtime. It manages the box through a small agent, `lunora-hostd`, which you
+install once.
+
+The agent **dials out**. It holds a WebSocket to Lunora Cloud, so the server
+needs no inbound port for the control plane. The only ports it opens are 80 and
+443, for your apps' traffic. Lunora Cloud never holds an SSH key or a shell login
+for the box. It keeps the box's public key and nothing else from it.
+
+<Callout type="warn">
+    **Private early access.** Lunora Cloud is in private early access, and nothing on this page is generally available. The first signed `lunora-hostd` release
+    has not been published yet. Until it is, the install below cannot complete. See the
+    [roadmap](https://github.com/anolilab/lunora/blob/alpha/apps/cloud/ROADMAP.md).
+</Callout>
+
+You deploy the same way as on any other target. `lunora cloud deploy` and
+push-to-deploy send the same release. The deploy target is a setting of the
+project, not a flag (see [CLI](/docs/cloud/cli)). Builds still run on Lunora
+Cloud, and the box downloads the finished release. Nothing is built on your
+server.
+
+## Requirements
+
+| Need      | Detail                                                                                                                               |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| OS        | Debian or Ubuntu, or a derivative that declares itself one in `/etc/os-release`. The installer refuses anything else.                |
+| CPU       | amd64 (`x86_64`) or arm64 (`aarch64`).                                                                                               |
+| Memory    | 2 GB or more. The installer refuses a smaller machine.                                                                               |
+| Init      | systemd, running. `lunora-hostd` runs as a systemd service.                                                                          |
+| Access    | root, to run the installer.                                                                                                          |
+| Network   | A public address that your hostnames can point at, ports 80 and 443 reachable from the internet, and outbound HTTPS to Lunora Cloud. |
+| A bucket  | An S3-compatible bucket you own, with an access key for it. This is where your apps' data lives (see [Your data](#your-data)).       |
+| Your plan | Boxes are a paid add-on. The Free plan cannot enrol one, and each paid plan caps how many boxes an organization may enrol.           |
+
+The installer adds the few system packages it needs, if they are missing:
+`curl`, `jq`, `openssl`, `nftables`, `util-linux` and `gzip`.
+
+**The bucket.** `lunora-hostd` gives celld S3-style credentials
+(`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`) and an optional endpoint URL.
+The store therefore has to speak the S3 API: AWS S3, Cloudflare R2 or Tigris, or
+any other S3-compatible store that celld supports. Before enrolling, the agent
+checks that it can reach the bucket, so a wrong key fails before the enrolment
+token is used up.
+
+## Install
+
+<Steps>
+<Step>
+
+### Enrol the box in the studio
+
+In the studio, open your organization's **Boxes** tab and choose **Enrol a box**.
+Only owners and admins can do this. Give the box a name. The name is for you only:
+the box's public hostname uses a random label, so the name never appears in DNS.
+
+</Step>
+<Step>
+
+### Copy the install command
+
+The studio shows a three-line command with a one-time **enrolment token** in it.
+The token works once and expires after 15 minutes. It is shown once and is not
+stored, so it cannot be shown again. If it expires, enrol again.
+
+The command has this shape. The studio fills in the token, the control-plane
+origin and the release version for you:
+
+```sh
+curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
+sha256sum install.sh   # compare with the release notes
+sudo LUNORA_HOSTD_ENROL_TOKEN=<token> AWS_ACCESS_KEY_ID=<bucket key id> AWS_SECRET_ACCESS_KEY=<bucket secret> \
+    bash install.sh --control-plane <control plane origin> --bucket <bucket> --version <version>
+```
+
+</Step>
+<Step>
+
+### Run it on the server as root
+
+Fill in your bucket and its key. For a store other than AWS S3, add
+`--endpoint <s3 url>`, and add `--region <region>` if your store needs one. The
+token and the bucket credentials reach the agent through its environment, not
+its command line, and are never printed. The bucket credentials never leave the
+server.
+
+The installer then does the following:
+
+- It checks the machine against the [requirements](#requirements).
+- It creates two system users, `lunora-hostd` for the agent and `lunora-fleet`
+  for your apps. Neither has a shell or a home directory.
+- It downloads the agent, celld and Caddy, and verifies each one against a
+  signed release (see [Upgrades](#upgrades)).
+- It enrols the box, installs the systemd unit and starts it.
+
+When the service is running, the box shows as connected in the Boxes tab. To
+check it from the server, run `systemctl status lunora-hostd`, or
+`journalctl -u lunora-hostd -f` to follow its log.
+
+</Step>
+<Step>
+
+### Put a project on the box
+
+In a project's **Deploy target** card, choose **Your own server** and pick the
+box. Then deploy as usual. Each deployment gets a hostname under Lunora Cloud's
+box domain, `<alias>.<box label>.boxes.lunora.app` by default. Custom domains
+verify against the box's own hostname. Caddy, on the box, obtains their TLS
+certificates on demand, and only for hostnames Lunora Cloud has routed to that
+box.
+
+</Step>
+</Steps>
+
+If the box is offline when you deploy, the deploy fails straight away with
+`BOX_OFFLINE`. It is not queued to land later. The **Diagnose** action in the
+Boxes tab runs the agent's checks on a connected box and shows you the output.
+
+## Your data
+
+**Your apps' data lives in your bucket.** Each deployment runs as its own
+single-node celld fleet, and its data is stored under `fleets/<alias>/` in your
+bucket. This covers Durable Objects, D1, KV, R2 and queues. Lunora Cloud does not
+have the bucket's credentials. They stay on the box, in a file only the agent can
+read.
+
+What Lunora Cloud does hold:
+
+- the box's public key;
+- your releases, which it builds and stores, and which the box downloads with a
+  request signed by its key;
+- the box's reports: which fleets it runs, request counts for the studio, and
+  diagnostics output.
+
+<Callout type="warn">
+    **Your app's secrets are stored in your bucket.** celld has no secret store, so Lunora Cloud delivers a project's secrets as celld environment variables,
+    and celld keeps those in the bucket with the deployment. Anyone who can read the bucket can read the secrets. They also sit on the box, in the downloaded
+    release, readable only by the agent and your apps. This is a known property of the target, not a bug. Grant read access to the bucket accordingly.
+</Callout>
+
+## Isolation
+
+A box serves **one organization**, and a box belongs to that organization for
+good. Enrolling the same machine again creates a new box. Your apps still run
+third-party npm code, so the agent puts several walls between that code and the
+rest of the machine, in case it escapes celld's isolate:
+
+- **Separate users.** Your apps run as `lunora-fleet`. The agent and Caddy run as
+  `lunora-hostd`, which alone can read the box's key and the bucket credentials.
+- **No privileges.** Your apps start with no Linux capabilities and cannot gain
+  any (`no_new_privs`).
+- **A clean environment.** Your apps get only a short allowlist of environment
+  variables. They never see the agent's configuration, the control-plane address
+  or the enrolment token.
+- **Restricted network.** A firewall table (nftables) stops your apps from
+  reaching loopback, private and link-local ranges, including the cloud metadata
+  service at `169.254.169.254`. This keeps them away from celld's and Caddy's
+  admin interfaces. Your bucket's endpoint and DNS stay reachable.
+- **A memory limit.** Each deployment runs in its own cgroup with a memory cap
+  and no swap.
+- **A hardened service.** The systemd unit makes the system read-only except
+  for the agent's own directories, and adds the usual sandboxing options.
+
+The agent checks these walls each time it starts. If one is missing, it starts
+no apps, and deploys fail with `ISOLATION_FAILED`. The only exception is a box
+enrolled with `--single-trust`, which runs with whatever walls do work. Every
+failed check is logged and shown by **Diagnose**.
+
+### Known limits
+
+- **All of a box's apps share one user.** An app that escapes its isolate can
+  read another app's files on the same box, including its release, which holds
+  that app's secrets. This is why a box serves only one organization.
+- **Every app gets the whole bucket key.** The credentials can reach the whole
+  bucket, not only that deployment's `fleets/<alias>/` prefix. Per-prefix
+  credentials are not supported yet.
+- **The public internet is open.** Your apps can reach any public address,
+  including the box's own public IPs. Any service the box exposes publicly, such
+  as `sshd`, is as reachable from an app as from anywhere else.
+- **Memory is the only limit.** There is no CPU, process-count or I/O limit per
+  deployment yet.
+- **Caddy shares the agent's user.** It parses untrusted HTTP as the same user
+  that can read the box's key.
+- **One node per deployment.** A deployment runs on a single celld node, so an
+  upgrade costs a few seconds of downtime. celld's multi-node takeover is not
+  used yet.
+- **You have root.** Nothing on the box is hidden from you, and nothing you are
+  billed for depends on what the box reports.
+
+## What works, and what doesn't
+
+When you deploy, Lunora Cloud checks the bindings in your `wrangler.jsonc`
+against the table below. If your app uses a binding the target cannot provide,
+the deploy is refused by name before anything is created, so you never get a
+green deploy that later fails with an undefined `env.X`. The table is generated
+from that same check, so it shows what the deploy actually enforces. Cron
+triggers and queue consumers are run by celld on the box itself.
+
+{/* generated:capabilities:celld-vps — written from apps/cloud/src/provision-contract.ts by apps/docs/scripts/generate-target-capabilities.js. Do not edit by hand. */}
+
+| Binding               | `wrangler` type       | Available             | Why not                                                                                                                                                    |
+| --------------------- | --------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1                    | `d1`                  | Yes — created for you |                                                                                                                                                            |
+| KV                    | `kv`                  | Yes — created for you |                                                                                                                                                            |
+| Queue producers       | `queue_producer`      | Yes — created for you |                                                                                                                                                            |
+| R2                    | `r2`                  | Yes — created for you |                                                                                                                                                            |
+| Durable Objects       | `durable_object`      | Yes                   |                                                                                                                                                            |
+| Queue consumers       | `queue_consumer`      | Yes                   |                                                                                                                                                            |
+| Static assets         | `assets`              | Yes                   |                                                                                                                                                            |
+| Workflows             | `workflow`            | Yes                   |                                                                                                                                                            |
+| AI Search             | `ai_search`           | No                    | AI Search is not a celld binding type.                                                                                                                     |
+| AI Search namespaces  | `ai_search_namespace` | No                    | an AI Search namespace is a Cloudflare account resource with no celld equivalent.                                                                          |
+| Analytics Engine      | `analytics_engine`    | No                    | Analytics Engine is not a celld binding type.                                                                                                              |
+| Analytics SQL         | `analytics_sql`       | No                    | the Analytics SQL binding queries Cloudflare's analytics, which a celld fleet has no equivalent of.                                                        |
+| Artifacts             | `artifacts`           | No                    | an Artifacts namespace is a Cloudflare account resource with no celld equivalent.                                                                          |
+| Browser Rendering     | `browser`             | No                    | Browser Rendering is not a celld binding type.                                                                                                             |
+| Containers            | `container`           | No                    | celld runs containers only with Docker on the node, and Lunora Cloud keeps managed boxes Docker-free for now.                                              |
+| Hyperdrive            | `hyperdrive`          | No                    | Hyperdrive is not a celld binding type; connect to your database from an action instead.                                                                   |
+| Images                | `images`              | No                    | the Images binding is not a celld binding type.                                                                                                            |
+| Media Transformations | `media`               | No                    | the Media Transformations binding is not a celld binding type.                                                                                             |
+| Pipelines             | `pipeline`            | No                    | Pipelines is not a celld binding type.                                                                                                                     |
+| Service bindings      | `service`             | No                    | a service binding needs its sibling Worker in the same celld fleet, and a box runs one fleet per project.                                                  |
+| Stream                | `stream`              | No                    | Stream is not a celld binding type.                                                                                                                        |
+| Vectorize             | `vectorize`           | No                    | Vectorize is not a celld binding type.                                                                                                                     |
+| VPC networks          | `vpc_network`         | No                    | a VPC network is a Cloudflare account resource with no celld equivalent.                                                                                   |
+| VPC services          | `vpc_service`         | No                    | a VPC service is a Cloudflare account resource with no celld equivalent.                                                                                   |
+| Workers AI            | `ai`                  | No                    | Workers AI is not a celld binding; call a model over fetch instead (celld routes `<provider>/<model>` through LUNORA_AI_PROXY_URL, not an env.AI binding). |
+
+Beyond bindings, this target does not have:
+
+- **Per-plan runtime limits.** The CPU-time and subrequest caps your plan sets are applied by Lunora Cloud's dispatcher, which does not sit in front of your server. A request there is bounded by the machine's memory and celld's 128 MB isolate heap instead.
+- **Point-in-time recovery.** celld's Durable Object storage has no bookmark API (`getBookmarkForTime` / `onNextSessionRestoreBookmark`), so getPitrBookmark / pitrRestore answer PITR_UNAVAILABLE. The fleet bucket's epoch-fenced replication is for durability and takeover, not an addressable history; `lunora backup` (objectStorageBackups) is the recovery tier here.
+
+{/* /generated:capabilities:celld-vps */}
+
+**Traffic and logs.** The box reads Caddy's access log and reports request
+counts, errors and latency once a minute, and these show in the studio.
+Forwarding the box's own logs, from celld and Caddy, to Lunora Cloud is not built
+yet.
+
+## Upgrades
+
+Lunora Cloud keeps the box up to date. You do not upgrade it yourself.
+celld patches only its latest release, so Lunora Cloud decides which version of
+the agent, celld and Caddy each box runs, and pushes upgrades to it.
+
+- **Signed releases.** Each release is described by a manifest that pins every
+  binary by SHA-256 and size. The manifest is signed with Ed25519, and the agent
+  verifies it against public keys compiled into the agent itself, never a key
+  the manifest brings along. It verifies the manifest before it trusts any hash
+  in it, and runs each new binary once before switching over. The agent is
+  source-available under FSL-1.1-Apache-2.0, so you can audit what runs as root
+  on your server.
+- **Rolled out gradually.** A release goes to a canary box first, then out in
+  batches. A box that is offline gets the upgrade when it reconnects.
+- **Installed side by side.** The new release is installed next to the running
+  one, and the previous release is kept so the box can roll back to it.
+- **Flagged when behind.** A box whose celld is not the newest stable release is
+  marked `outdated`. After seven days, your organization's deploy alert rules
+  fire for it.
+
+Running the install command again also upgrades the box in place. It does not
+enrol the box again unless you pass `--force` together with a new token.
+
+## Leaving
+
+Nothing in this setup locks your data in. To stop using a box:
+
+1. **Revoke** the box in the Boxes tab. This cuts off its session and removes its
+   hostnames from Lunora Cloud's DNS.
+2. **Uninstall** the agent on the server with `sudo bash install.sh --uninstall`.
+   This removes the service, the firewall table, the agent's files and both
+   users. It never touches the bucket.
+3. **Keep the bucket.** Each deployment's data stays under `fleets/<alias>/`, and
+   [celld](https://github.com/denoland/celld) can run it directly, without
+   Lunora Cloud.
+
+The agent works only with Lunora Cloud. It has no standalone mode. To run a
+Lunora app on celld without Lunora Cloud, use the Lunora CLI's own celld deploy
+target.
+
+## Pricing
+
+A box is **billed per box, per month**, not per request. You pay your hosting
+provider for the machine and your storage provider for the bucket, and Lunora
+Cloud charges a flat amount for each box it manages. The box reports request
+counts, which the studio shows you, but they are never used for billing.

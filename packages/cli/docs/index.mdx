@@ -748,6 +748,27 @@ lunora deployments promote <version-id> --yes # send 100% of traffic to a versio
 
 `rollback` and `promote` change live traffic, so they require `--yes`.
 
+### `lunora cloud`
+
+Deploy, roll back or eject on the managed Lunora Cloud. Every subcommand
+authenticates with an org deploy key read from `LUNORA_DEPLOY_KEY` — never a
+flag or a file — against the control plane at `--url` or `LUNORA_CLOUD_URL`:
+
+```bash
+LUNORA_DEPLOY_KEY=… lunora cloud deploy --project prj_123 --bundle dist/index.js
+lunora cloud rollback dep_456 --org org_789 --yes   # re-provision a retained release
+lunora cloud eject dep_456 --out ./eject            # your data + BYO wrangler.jsonc + alchemy.run.ts
+```
+
+`deploy` sends the full binding manifest derived from your wrangler config (the
+same one `lunora info --bindings` prints), your crons, and — when wrangler has an
+`assets` section — the built files under `assets.directory`. It exits non-zero
+unless the deployment reaches `live`. `deploy --out <file>` writes that same request
+body to a file instead of uploading it, and needs no deploy key; `rollback` shifts
+live traffic, so it requires `--yes`; `eject` derives both configs from your own
+wrangler config, so run it from the project directory. The full reference is in the
+[Lunora Cloud CLI](/docs/cloud/cli) guide.
+
 ### `lunora prepare`
 
 Literally the same pipeline as `lunora deploy`, stopped before anything ships —

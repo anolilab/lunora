@@ -1743,6 +1743,136 @@ const writeDevVariablesFileAtomically: (path: string, content: string) => void;
 const writeLinkedProject: (projectRoot: string, link: LinkedProject) => string;
 ```
 
+## `@lunora/config/celld`
+
+### `CELLD_RELEASE_ASSETS_DIRECTORY` (const)
+
+```ts
+const CELLD_RELEASE_ASSETS_DIRECTORY = "assets";
+```
+
+### `CELLD_RELEASE_BINDINGS` (const)
+
+```ts
+const CELLD_RELEASE_BINDINGS: CelldReleaseBindings;
+```
+
+### `CELLD_RELEASE_BINDING_TYPES` (const)
+
+```ts
+const CELLD_RELEASE_BINDING_TYPES: ReadonlySet<BindingRequirement["type"]>;
+```
+
+### `CELLD_RELEASE_MAIN` (const)
+
+```ts
+const CELLD_RELEASE_MAIN = "worker.js";
+```
+
+### `CelldReleaseAssetsConfig` (interface)
+
+```ts
+interface CelldReleaseAssetsConfig {
+    html_handling?: "auto-trailing-slash" | "drop-trailing-slash" | "force-trailing-slash" | "none";
+    not_found_handling?: "404-page" | "none" | "single-page-application";
+    run_worker_first?: boolean | ReadonlyArray<string>;
+}
+```
+
+### `CelldReleaseBindings` (interface)
+
+```ts
+interface CelldReleaseBindings {
+    readonly assets: "bound";
+    readonly d1: "provisioned";
+    readonly durable_object: "bound";
+    readonly kv: "provisioned";
+    readonly queue_consumer: "bound";
+    readonly queue_producer: "provisioned";
+    readonly r2: "provisioned";
+    readonly workflow: "bound";
+}
+```
+
+### `CelldReleaseConfigError` (class)
+
+```ts
+class CelldReleaseConfigError extends Error {
+    readonly refused: ReadonlyArray<CelldReleaseRefusal>;
+    constructor(message: string, refused?: ReadonlyArray<CelldReleaseRefusal>);
+}
+```
+
+### `CelldReleaseManifest` (interface)
+
+```ts
+interface CelldReleaseManifest {
+    bindings: ReadonlyArray<BindingRequirement>;
+    compatibilityDate?: string;
+    compatibilityFlags?: ReadonlyArray<string>;
+}
+```
+
+### `CelldReleaseOptions` (interface)
+
+```ts
+interface CelldReleaseOptions {
+    alias: string;
+    assetsConfig?: CelldReleaseAssetsConfig;
+    compatibilityDate?: string;
+    compatibilityFlags?: ReadonlyArray<string>;
+    crons: ReadonlyArray<string>;
+    hasAssets: boolean;
+    vars: Readonly<Record<string, string>>;
+}
+```
+
+### `CelldReleaseRefusal` (interface)
+
+```ts
+interface CelldReleaseRefusal {
+    binding: string;
+    reason: string;
+    type: BindingRequirement["type"];
+}
+```
+
+### `MAX_RELEASE_ALIAS_LENGTH` (const)
+
+```ts
+const MAX_RELEASE_ALIAS_LENGTH = 63;
+```
+
+### `MAX_RESOURCE_NAME` (const)
+
+```ts
+const MAX_RESOURCE_NAME = 63;
+```
+
+### `RELEASE_ALIAS_PATTERN` (const)
+
+```ts
+const RELEASE_ALIAS_PATTERN: RegExp;
+```
+
+### `celldConfigFromRelease` (const)
+
+```ts
+const celldConfigFromRelease: (manifest: CelldReleaseManifest, options: CelldReleaseOptions) => Config;
+```
+
+### `isReleaseAlias` (const)
+
+```ts
+const isReleaseAlias: (alias: string) => boolean;
+```
+
+### `releaseResourceName` (const)
+
+```ts
+const releaseResourceName: (alias: string, binding: string) => string;
+```
+
 ## `@lunora/config/cloudflare`
 
 ### `AlchemyTranslation` (interface)
@@ -2225,7 +2355,7 @@ interface WranglerConfig {
         outbound?: unknown;
     } | null | undefined>;
     durable_objects?: {
-        bindings?: ReadonlyArray<WranglerDurableObjectBinding>;
+        bindings?: ReadonlyArray<WranglerDurableObjectBinding$1>;
     };
     env?: Record<string, WranglerConfig>;
     exports?: Record<string, {
@@ -2343,6 +2473,23 @@ interface WranglerConfig {
 
 ```ts
 interface WranglerConfigShape {
+    ai?: {
+        binding?: string;
+    };
+    analytics_engine_datasets?: ReadonlyArray<{
+        binding?: string;
+        dataset?: string;
+    }>;
+    assets?: {
+        binding?: string;
+        directory?: string;
+        html_handling?: string;
+        not_found_handling?: string;
+        run_worker_first?: boolean | ReadonlyArray<string>;
+    };
+    browser?: {
+        binding?: string;
+    };
     compatibility_date?: string;
     compatibility_flags?: ReadonlyArray<string>;
     d1_databases?: ReadonlyArray<{
@@ -2351,7 +2498,14 @@ interface WranglerConfigShape {
         database_name?: string;
     }>;
     durable_objects?: {
-        bindings?: ReadonlyArray<WranglerDurableObjectBinding$1>;
+        bindings?: ReadonlyArray<WranglerDurableObjectBinding>;
+    };
+    hyperdrive?: ReadonlyArray<{
+        binding?: string;
+        id?: string;
+    }>;
+    images?: {
+        binding?: string;
     };
     kv_namespaces?: ReadonlyArray<{
         binding?: string;
@@ -2361,12 +2515,11 @@ interface WranglerConfigShape {
     migrations?: ReadonlyArray<{
         new_classes?: ReadonlyArray<string>;
         new_sqlite_classes?: ReadonlyArray<string>;
+        tag?: string;
     }>;
     name?: string;
     queues?: {
-        consumers?: ReadonlyArray<{
-            queue?: string;
-        }>;
+        consumers?: ReadonlyArray<WranglerQueueConsumer>;
         producers?: ReadonlyArray<{
             binding?: string;
             queue?: string;
@@ -2376,10 +2529,24 @@ interface WranglerConfigShape {
         binding?: string;
         bucket_name?: string;
     }>;
+    tail_consumers?: ReadonlyArray<{
+        service?: string;
+    }>;
     triggers?: {
         crons?: ReadonlyArray<string>;
     };
     vars?: Readonly<Record<string, unknown>>;
+    vectorize?: ReadonlyArray<{
+        binding?: string;
+        index_name?: string;
+    }>;
+    workers_dev?: boolean;
+    workflows?: ReadonlyArray<{
+        binding?: string;
+        class_name?: string;
+        name?: string;
+        script_name?: string;
+    }>;
 }
 ```
 
@@ -3019,6 +3186,12 @@ interface BindingEntry {
 }
 ```
 
+### `Config` (type)
+
+```ts
+type Config = Record<string, unknown>;
+```
+
 ### `DockerLogStream` (interface)
 
 ```ts
@@ -3107,6 +3280,7 @@ interface WranglerQueueConsumer {
     dead_letter_queue?: string;
     max_batch_size?: number;
     max_batch_timeout?: number;
+    max_concurrency?: number;
     max_retries?: number;
     queue?: string;
     retry_delay?: number;
