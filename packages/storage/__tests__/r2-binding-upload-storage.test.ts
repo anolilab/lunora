@@ -932,6 +932,38 @@ describe("chunked REST over the R2 binding", () => {
         await expect(storage.getMeta(file.id)).resolves.toMatchObject({ metadata: { _chunks: "user value", name: "a.txt" } });
     });
 
+    it("reports X-Received-Chunks on PATCH as the stored run plus the chunk just written, and on HEAD as one run", async () => {
+        expect.hasAssertions();
+
+        const driver = chunkedRest(chunkedHandlerOver(createFakeR2UploadBucket()));
+        const bytes = pattern(15);
+        const location = await driver.create(15);
+        const receivedChunks = (response: Response): unknown => JSON.parse(response.headers.get("x-received-chunks") ?? "null");
+
+        // The handler records the chunk after the provider stored it, so the
+        // derived run already covers it, and the chunk is listed again.
+        const first = await driver.patch(location, 0, bytes.slice(0, 5));
+
+        expect(receivedChunks(first)).toStrictEqual([{ length: 5, offset: 0 }]);
+
+        const second = await driver.patch(location, 5, bytes.slice(5, 10));
+
+        expect(receivedChunks(second)).toStrictEqual([
+            { length: 10, offset: 0 },
+            { length: 5, offset: 5 },
+        ]);
+        expect(receivedChunks(await driver.head(location))).toStrictEqual([{ length: 10, offset: 0 }]);
+
+        const last = await driver.patch(location, 10, bytes.slice(10));
+
+        expect(last.headers.get("x-upload-complete")).toBe("true");
+        expect(receivedChunks(last)).toStrictEqual([
+            { length: 15, offset: 0 },
+            { length: 5, offset: 10 },
+        ]);
+        expect(receivedChunks(await driver.head(location))).toStrictEqual([{ length: 15, offset: 0 }]);
+    });
+
     describe("the bundled chunked-REST client (@visulima/storage-client)", () => {
         const clientOver = (bucket: ReturnType<typeof createFakeR2UploadBucket>, chunkSize: number) => {
             const route = routedFetch(chunkedHandlerOver(bucket));

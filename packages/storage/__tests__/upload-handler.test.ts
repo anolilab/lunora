@@ -245,6 +245,132 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             });
         });
 
+        describe.each(["chunked-rest", "multipart", "tus"] as const)("method edge cases on a %s route", (protocol) => {
+            it.each(["get", "Get", "gEt"])("refuses %j as GET (405) before the gate", async (method) => {
+                expect.hasAssertions();
+
+                const storage = new MemoryStorage({ path: "/upload" });
+                const id = await storeFile(storage);
+                const authorize = vi.fn<() => boolean>(() => true);
+                const response = await createUploadHandler({ authorize, protocol, storage }).fetch(
+                    new Request(`${ENDPOINT}/${id}`, { headers: { "Tus-Resumable": "1.0.0" }, method }),
+                );
+
+                expect(response.status).toBe(405);
+                await expect(response.text()).resolves.not.toContain("secret bytes");
+                expect(authorize).not.toHaveBeenCalled();
+            });
+
+            it("never lets a lowercase `patch` reach a protocol handler", async () => {
+                expect.hasAssertions();
+
+                // `Request` upper-cases the standard methods but keeps `patch`
+                // as sent, and the handlers dispatch on the exact string.
+                const storage = new MemoryStorage({ path: "/upload" });
+                const write = vi.spyOn(storage, "write");
+                const response = await createUploadHandler({ protocol, silent: true, storage }).fetch(
+                    new Request(`${ENDPOINT}/abc`, {
+                        body: new Uint8Array(4),
+                        headers: {
+                            "Content-Length": "4",
+                            "Content-Type": "application/offset+octet-stream",
+                            "Tus-Resumable": "1.0.0",
+                            "Upload-Offset": "0",
+                            "X-Chunk-Offset": "0",
+                        },
+                        method: "patch",
+                    }),
+                );
+
+                expect(response.status).toBe(405);
+                expect(write).not.toHaveBeenCalled();
+            });
+
+            it("refuses an unknown method (PROPFIND) before the gate (405)", async () => {
+                expect.hasAssertions();
+
+                const authorize = vi.fn<() => boolean>(() => true);
+                const response = await createUploadHandler({ authorize, protocol, storage: new MemoryStorage({ path: "/upload" }) }).fetch(
+                    new Request(`${ENDPOINT}/abc`, { method: "PROPFIND" }),
+                );
+
+                expect(response.status).toBe(405);
+                expect(authorize).not.toHaveBeenCalled();
+            });
+
+            it.each(["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"])(
+                "ignores a %s: GET header: no bytes or metadata are served",
+                async (header) => {
+                    expect.hasAssertions();
+
+                    const storage = new MemoryStorage({ path: "/upload" });
+                    const id = await storeFile(storage);
+                    const route = createUploadHandler({ protocol, silent: true, storage });
+
+                    for (const method of ["POST", "PATCH", "HEAD"]) {
+                        for (const path of [`${ENDPOINT}/${id}`, `${ENDPOINT}/${id}/metadata`]) {
+                            // eslint-disable-next-line no-await-in-loop -- one request at a time
+                            const response = await route.fetch(new Request(path, { headers: { [header]: "GET", "Tus-Resumable": "1.0.0" }, method }));
+                            // eslint-disable-next-line no-await-in-loop -- one request at a time
+                            const body = await response.text();
+
+                            expect(body).not.toContain("secret bytes");
+                            expect(body).not.toContain("secret.txt");
+                            expect(response.headers.get("content-disposition")).toBeNull();
+                        }
+                    }
+                },
+            );
+        });
+
+        describe("tus route", () => {
+            const tusRoute = (storage = new MemoryStorage({ path: "/upload" })) => createUploadHandler({ protocol: "tus", silent: true, storage });
+
+            it("answers HEAD with the upload's TUS headers only, and no body", async () => {
+                expect.hasAssertions();
+
+                const route = tusRoute();
+                const created = await route.fetch(
+                    new Request(ENDPOINT, {
+                        headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "4", "Upload-Metadata": `filename ${B64("a.txt")}` },
+                        method: "POST",
+                    }),
+                );
+                const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
+                const head = await route.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "HEAD" }));
+                const names = [...head.headers.keys()].filter((name) => name !== "access-control-expose-headers").toSorted((a, b) => a.localeCompare(b));
+
+                expect(head.status).toBe(200);
+                await expect(head.text()).resolves.toBe("");
+                expect(names).toStrictEqual(["cache-control", "tus-resumable", "upload-length", "upload-metadata", "upload-offset"]);
+                expect(head.headers.get("upload-length")).toBe("4");
+                expect(head.headers.get("upload-offset")).toBe("0");
+                expect(head.headers.get("upload-metadata")).toBe(`filename ${B64("a.txt")}`);
+            });
+
+            it("answers OPTIONS (CORS preflight) with 204 and the TUS capabilities", async () => {
+                expect.hasAssertions();
+
+                const response = await tusRoute().fetch(new Request(ENDPOINT, { method: "OPTIONS" }));
+
+                expect(response.status).toBe(204);
+                expect(response.headers.get("tus-resumable")).toBe("1.0.0");
+                expect(response.headers.get("tus-version")).toBe("1.0.0");
+            });
+
+            it("refuses GET on a stored upload (405), even with a valid Tus-Resumable header", async () => {
+                expect.hasAssertions();
+
+                const storage = new MemoryStorage({ path: "/upload" });
+                const id = await storeFile(storage);
+                const response = await tusRoute(storage).fetch(new Request(`${ENDPOINT}/${id}`, { headers: { "Tus-Resumable": "1.0.0" }, method: "GET" }));
+
+                expect(response.status).toBe(405);
+                expect(response.headers.get("tus-resumable")).toBe("1.0.0");
+                expect(response.headers.get("allow")).toBe("DELETE, HEAD, OPTIONS, PATCH, POST");
+            });
+        });
+
         it("still answers HEAD and OPTIONS, which resume and CORS need", async () => {
             expect.hasAssertions();
 

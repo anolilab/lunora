@@ -442,7 +442,8 @@ open:
   protocol client re-reads the offset with `HEAD` and continues from there.
 - On `HEAD`, `X-Received-Chunks` reports the one run the provider has stored,
   `[{ "offset": 0, "length": <stored bytes> }]`. A `PATCH` response carries
-  that run plus the chunk it just wrote.
+  that run, already including the chunk it just wrote, followed by that chunk
+  again.
 
 `createUploadHandler` refuses `protocol: "chunked-rest"` over
 `createR2UploadStorage` (R2's S3 API) at construction (`VALIDATION_ERROR`): that
