@@ -3099,6 +3099,14 @@ export const schema = defineSchema({
             expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS" }] })).errors.join(" ")).toContain('non-empty "namespace"');
         });
 
+        it("accepts a well-formed Analytics SQL binding and rejects one without a binding name", () => {
+            expect.assertions(3);
+
+            expect(validateWranglerConfig(validBase({ analytics: { binding: "ANALYTICS_SQL", remote: true } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ analytics: {} })).errors.join(" ")).toContain('analytics must be an object with a non-empty "binding"');
+            expect(validateWranglerConfig(validBase({ analytics: null })).errors.join(" ")).toContain('analytics must be an object with a non-empty "binding"');
+        });
+
         it("accepts well-formed AI Search bindings and rejects ones missing their namespace or instance", () => {
             expect.assertions(4);
 

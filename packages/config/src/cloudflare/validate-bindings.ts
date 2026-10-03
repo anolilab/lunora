@@ -676,6 +676,7 @@ const validateHintBinding = (wrangler: WranglerConfig, rule: (typeof HINT_BINDIN
  * with a non-empty `binding`. One table replaces the Browser/Images validators.
  */
 const SELF_DESCRIBING_BINDING_RULES = [
+    { key: "analytics", message: 'analytics must be an object with a non-empty "binding" (e.g. { "binding": "ANALYTICS_SQL" })' },
     { key: "browser", message: 'browser must be an object with a non-empty "binding" (e.g. { "binding": "BROWSER" })' },
     { key: "images", message: 'images must be an object with a non-empty "binding" (e.g. { "binding": "IMAGES" })' },
     { key: "media", message: 'media must be an object with a non-empty "binding" (e.g. { "binding": "MEDIA" })' },

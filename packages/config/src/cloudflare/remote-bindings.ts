@@ -59,6 +59,9 @@ const REMOTE_ELIGIBLE_KEYS = {
     // its "may incur usage charges" warning under `LUNORA_REMOTE`.
     ai_search: { label: "AI Search", shape: "array" },
     ai_search_namespaces: { label: "AI Search namespace", shape: "array" },
+    // Analytics SQL is likewise remote-only in plain `wrangler dev` (never a local
+    // simulator, wrangler >= 4.145.0); tagging it only silences the usage warning.
+    analytics: { label: "Analytics SQL", shape: "object" },
     d1_databases: { label: "D1", shape: "array" },
     kv_namespaces: { label: "KV", shape: "array" },
     queues: { label: "Queue", shape: "producers" },
@@ -68,6 +71,15 @@ const REMOTE_ELIGIBLE_KEYS = {
 } as const;
 
 type RemoteEligibleKey = keyof typeof REMOTE_ELIGIBLE_KEYS;
+
+/**
+ * The eligible sections of one structural `shape` — a mapped key type over the
+ * table, so a section narrowed by {@link hasShape} indexes
+ * {@link RemoteWranglerShape} at its real type, without a cast.
+ */
+type RemoteSectionOfShape<Shape> = {
+    [Key in RemoteEligibleKey]: (typeof REMOTE_ELIGIBLE_KEYS)[Key]["shape"] extends Shape ? Key : never;
+}[RemoteEligibleKey];
 
 const REMOTE_ELIGIBLE_KEY_LIST = Object.keys(REMOTE_ELIGIBLE_KEYS) as RemoteEligibleKey[];
 
@@ -100,6 +112,7 @@ interface RemoteWranglerShape {
     ai?: BindingEntry | null;
     ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
     ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
+    analytics?: BindingEntry | null;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: { producers?: ReadonlyArray<BindingEntry | null | undefined> } | null;
@@ -135,24 +148,28 @@ const planArrayEntries = (
     return plans;
 };
 
+/** Narrow `section` to the eligible sections of `shape`. */
+const hasShape = <Shape extends (typeof REMOTE_ELIGIBLE_KEYS)[RemoteEligibleKey]["shape"]>(
+    section: RemoteEligibleKey,
+    shape: Shape,
+): section is RemoteSectionOfShape<Shape> => REMOTE_ELIGIBLE_KEYS[section].shape === shape;
+
 /** Plans for one eligible section, dispatched on its declared structural shape. */
 const planSection = (section: RemoteEligibleKey, parsed: RemoteWranglerShape): RemoteBindingPlan[] => {
-    const { label, shape } = REMOTE_ELIGIBLE_KEYS[section];
+    const { label } = REMOTE_ELIGIBLE_KEYS[section];
 
-    if (shape === "array") {
-        const entries = (parsed[section] as ReadonlyArray<BindingEntry | null | undefined> | undefined) ?? [];
-
-        return planArrayEntries(section, entries, label, []);
+    if (hasShape(section, "array")) {
+        return planArrayEntries(section, parsed[section] ?? [], label, []);
     }
 
-    if (shape === "producers") {
-        return planArrayEntries(section, parsed.queues?.producers ?? [], label, ["producers"]);
+    if (hasShape(section, "object")) {
+        // Single-object section (`ai`, `analytics`): one binding, edit path is the section key itself.
+        const entry = parsed[section];
+
+        return entry === null || entry === undefined ? [] : [{ binding: entryName(entry, section), kind: label, path: [], section }];
     }
 
-    // Single-object section (`ai`): one binding, edit path is the section key itself.
-    const entry = parsed.ai;
-
-    return entry === null || entry === undefined ? [] : [{ binding: entryName(entry, section), kind: label, path: [], section }];
+    return planArrayEntries(section, parsed.queues?.producers ?? [], label, ["producers"]);
 };
 
 /**

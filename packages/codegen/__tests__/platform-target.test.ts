@@ -17,6 +17,7 @@ const ALL_OFF: FeatureUsage = {
     ai: false,
     aiSearch: false,
     analytics: false,
+    analyticsSql: false,
     artifacts: false,
     browser: false,
     container: false,
@@ -275,6 +276,23 @@ describe("gatePlatformFeatures", () => {
         const result = gatePlatformFeatures({ ...ALL_OFF, aiSearch: true }, target);
 
         expect(result.usage.aiSearch).toBe(kept);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(diagnostics);
+    });
+
+    // The Analytics SQL binding exists only on Cloudflare. Its REST transport is
+    // importable anywhere, but it reads Cloudflare-hosted data, so celld and node
+    // rate the ctx surface unsupported and must withhold it with a diagnostic.
+    it.each([
+        ["cloudflare", true, []],
+        ["celld", false, ["platform_unsupported_feature"]],
+        ["node", false, ["platform_unsupported_feature"]],
+    ])("gates ctx.analyticsSql against the %s matrix", async (target, kept, diagnostics) => {
+        expect.assertions(2);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures({ ...ALL_OFF, analyticsSql: true }, target);
+
+        expect(result.usage.analyticsSql).toBe(kept);
         expect(result.diagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(diagnostics);
     });
 });

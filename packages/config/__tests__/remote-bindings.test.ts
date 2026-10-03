@@ -78,6 +78,18 @@ describe("planRemoteBindings", () => {
         expect(plans[0]?.path).toEqual([]);
     });
 
+    it("remotes the single Analytics SQL binding with a section-level path", () => {
+        expect.assertions(2);
+
+        const plans = planRemoteBindings({ analytics: { binding: "ANALYTICS_SQL" } });
+
+        expect(plans).toStrictEqual([{ binding: "ANALYTICS_SQL", kind: "Analytics SQL", path: [], section: "analytics" }]);
+        expect(readJsonc(injectRemoteFlags(`{ "analytics": { "binding": "ANALYTICS_SQL" } }`, plans)).analytics).toStrictEqual({
+            binding: "ANALYTICS_SQL",
+            remote: true,
+        });
+    });
+
     it("remotes both AI Search sections by array index", () => {
         expect.assertions(2);
 

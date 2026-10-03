@@ -545,52 +545,6 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
-### `AnalyticsSqlClient` (interface)
-
-```ts
-interface AnalyticsSqlClient {
-    query: (sql: string) => Promise<AnalyticsSqlResult>;
-}
-```
-
-### `AnalyticsSqlColumnMeta` (interface)
-
-```ts
-interface AnalyticsSqlColumnMeta {
-    name: string;
-    type: string;
-}
-```
-
-### `AnalyticsSqlConfig` (interface)
-
-```ts
-interface AnalyticsSqlConfig {
-    accountId: string;
-    apiToken: string;
-    fetch?: typeof globalThis.fetch;
-    timeoutMs?: number;
-}
-```
-
-### `AnalyticsSqlError` (class)
-
-```ts
-class AnalyticsSqlError extends LunoraError {
-    constructor(status: number, body: string);
-}
-```
-
-### `AnalyticsSqlResult` (interface)
-
-```ts
-interface AnalyticsSqlResult {
-    columns: AnalyticsSqlColumnMeta[];
-    rowCount: number;
-    rows: Record<string, unknown>[];
-}
-```
-
 ### `TrackColumn` (interface)
 
 ```ts
@@ -627,10 +581,166 @@ interface TrackSchema {
 const createAnalytics: (binding: AnalyticsEngineDatasetLike) => AnalyticsClient;
 ```
 
-### `createAnalyticsSqlClient` (const)
+## `@lunora/bindings/analytics-sql`
+
+### `AnalyticsSql` (interface)
 
 ```ts
-const createAnalyticsSqlClient: (config: AnalyticsSqlConfig) => AnalyticsSqlClient;
+interface AnalyticsSql {
+    query: <T extends Record<string, unknown> = Record<string, unknown>>(sql: string, params?: AnalyticsSqlParams) => Promise<AnalyticsSqlQueryResult<T>>;
+}
+```
+
+### `AnalyticsSqlBindingLike` (interface)
+
+```ts
+interface AnalyticsSqlBindingLike {
+    query: <T extends Record<string, unknown> = Record<string, unknown>>(request: AnalyticsSqlRequest) => Promise<AnalyticsSqlRawResult<T>>;
+}
+```
+
+### `AnalyticsSqlOptions` (interface)
+
+```ts
+interface AnalyticsSqlOptions {
+    binding: AnalyticsSqlBindingLike;
+}
+```
+
+### `AnalyticsSqlParameter` (type)
+
+```ts
+type AnalyticsSqlParameter = boolean | number | string | null;
+```
+
+### `AnalyticsSqlParams` (type)
+
+```ts
+type AnalyticsSqlParams = Readonly<Record<string, AnalyticsSqlParameter>> | ReadonlyArray<AnalyticsSqlParameter>;
+```
+
+### `AnalyticsSqlQueryError` (class)
+
+```ts
+class AnalyticsSqlQueryError extends LunoraError {
+    readonly retryable: boolean;
+    constructor(detail: string, options: {
+        cause?: unknown;
+        retryable: boolean;
+        status?: number;
+    });
+}
+```
+
+### `AnalyticsSqlQueryErrorData` (interface)
+
+```ts
+interface AnalyticsSqlQueryErrorData {
+    retryable: boolean;
+}
+```
+
+### `AnalyticsSqlQueryResult` (interface)
+
+```ts
+interface AnalyticsSqlQueryResult<T extends Record<string, unknown> = Record<string, unknown>> {
+    rowCount: number;
+    rows: T[];
+    statistics?: AnalyticsSqlStatistics;
+}
+```
+
+### `AnalyticsSqlRawResult` (interface)
+
+```ts
+interface AnalyticsSqlRawResult<T extends Record<string, unknown> = Record<string, unknown>> {
+    data: T[];
+    rows: number;
+    statistics?: AnalyticsSqlStatistics;
+}
+```
+
+### `AnalyticsSqlRequest` (interface)
+
+```ts
+interface AnalyticsSqlRequest {
+    params?: AnalyticsSqlParams;
+    query: string;
+}
+```
+
+### `AnalyticsSqlRestConfig` (interface)
+
+```ts
+interface AnalyticsSqlRestConfig {
+    accountId: string;
+    apiToken: string;
+    fetch?: typeof globalThis.fetch;
+    timeoutMs?: number;
+}
+```
+
+### `AnalyticsSqlStatistics` (interface)
+
+```ts
+interface AnalyticsSqlStatistics {
+    bytes_read: number;
+    elapsed_ms: number;
+    rows_read: number;
+}
+```
+
+### `FUNCTION_USAGE_PANELS` (const)
+
+```ts
+const FUNCTION_USAGE_PANELS: readonly [
+    "volume",
+    "latency",
+    "hotShards"
+];
+```
+
+### `FunctionUsagePanel` (type)
+
+```ts
+type FunctionUsagePanel = (typeof FUNCTION_USAGE_PANELS)[number];
+```
+
+### `FunctionUsageQueryOptions` (interface)
+
+```ts
+interface FunctionUsageQueryOptions {
+    dataset?: string;
+    since?: string;
+}
+```
+
+### `createAnalyticsSql` (const)
+
+```ts
+const createAnalyticsSql: (options: AnalyticsSqlOptions) => AnalyticsSql;
+```
+
+### `createAnalyticsSqlRest` (const)
+
+```ts
+const createAnalyticsSqlRest: (config: AnalyticsSqlRestConfig) => AnalyticsSqlBindingLike;
+```
+
+### `functionUsageQuery` (const)
+
+```ts
+const functionUsageQuery: (panel: FunctionUsagePanel, options?: FunctionUsageQueryOptions) => AnalyticsSqlRequest & {
+    params: {
+        since: string;
+    };
+};
+```
+
+### `isFunctionUsagePanel` (const)
+
+```ts
+const isFunctionUsagePanel: (value: unknown) => value is FunctionUsagePanel;
 ```
 
 ## `@lunora/bindings/artifacts`

@@ -28,10 +28,16 @@ import type { WranglerConfig } from "./wrangler-config";
  * `ai_search` / `ai_search_namespaces` are not in the docs' list either; wrangler
  * 4.143.1's own config normaliser reads both through `notInheritable(...)`
  * (checked 2026-10-02), which is the behaviour this table models.
+ *
+ * `analytics` (the Analytics SQL binding) is read through `notInheritable(...)`
+ * by wrangler 4.145.0, and its config-schema description says so outright
+ * ("not automatically inherited from the top level environment", checked
+ * 2026-10-03).
  */
 const NON_INHERITABLE_KEYS = [
     "ai_search",
     "ai_search_namespaces",
+    "analytics",
     "artifacts",
     "containers",
     "d1_databases",

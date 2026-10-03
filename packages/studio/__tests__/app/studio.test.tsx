@@ -1,4 +1,4 @@
-import type { AnalyticsSqlResult } from "@lunora/bindings/analytics";
+import type { AnalyticsSqlQueryResult, FunctionUsagePanel } from "@lunora/bindings/analytics-sql";
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
@@ -281,17 +281,17 @@ describe("studio", () => {
         expect(scheduledJobs).toBeDefined();
     });
 
-    it("runs the Analytics tab against the host-supplied analyticsQuery", async () => {
+    it("runs the Analytics tab against the host-supplied analyticsSqlQuery", async () => {
         // `waitFor` retries the assertion, so the count is not fixed.
         expect.hasAssertions();
 
-        const analyticsQuery = vi.fn<(sql: string) => Promise<AnalyticsSqlResult>>(async () => {
-            return { columns: [], rowCount: 0, rows: [] };
+        const analyticsSqlQuery = vi.fn<(panel: FunctionUsagePanel) => Promise<AnalyticsSqlQueryResult>>(async () => {
+            return { rowCount: 0, rows: [] };
         });
 
         render(
             <LunoraProvider client={createClient().asClient}>
-                <Studio analyticsQuery={analyticsQuery} />
+                <Studio analyticsSqlQuery={analyticsSqlQuery} />
             </LunoraProvider>,
         );
 
@@ -301,7 +301,7 @@ describe("studio", () => {
         // never fetches — the tab had no prop path to one at all.
         await waitFor(
             () => {
-                expect(analyticsQuery).toHaveBeenCalledWith(expect.stringContaining("FROM ANALYTICS"));
+                expect(analyticsSqlQuery).toHaveBeenCalledWith("volume");
             },
             { timeout: 5000 },
         );

@@ -1,10 +1,11 @@
 {
     "name": "@lunora/bindings",
     "version": "1.0.0-alpha.92",
-    "description": "Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts, ctx.aiSearch — one install, per-binding subpaths",
+    "description": "Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts, ctx.aiSearch, ctx.analyticsSql — one install, per-binding subpaths",
     "keywords": [
         "ai-search",
         "analytics",
+        "analytics-sql",
         "artifacts",
         "cloudflare",
         "images",
@@ -47,6 +48,10 @@
         "./analytics": {
             "types": "./dist/analytics/index.d.ts",
             "import": "./dist/analytics/index.mjs"
+        },
+        "./analytics-sql": {
+            "types": "./dist/analytics-sql/index.d.ts",
+            "import": "./dist/analytics-sql/index.mjs"
         },
         "./pipelines": {
             "types": "./dist/pipelines/index.d.ts",

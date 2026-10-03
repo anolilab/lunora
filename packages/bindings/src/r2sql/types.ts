@@ -11,8 +11,8 @@
  *
  * Everything here is deliberately structural (no hard dependency on
  * `@cloudflare/workers-types`) so unit tests can inject a plain `fetch` double
- * and never touch the network — mirroring `AnalyticsSqlConfig` in
- * `@lunora/bindings/analytics`.
+ * and never touch the network — mirroring the REST transport config in
+ * `@lunora/bindings/analytics-sql`.
  */
 
 /**

@@ -1,7 +1,7 @@
 /**
  * How much of an upstream response body may be spliced into an error MESSAGE.
  *
- * The codes these errors carry (`ANALYTICS_SQL_ERROR`, `R2_SQL_ERROR`,
+ * The codes these errors carry (`ANALYTICS_SQL_QUERY_ERROR`, `R2_SQL_ERROR`,
  * `WORKFLOWS_REST_ERROR`) are catalogued and non-internal, so `toErrorBody`
  * echoes their `message` verbatim to whoever called the action — an uncapped
  * body puts upstream error text (which routinely quotes the query) or a multi-KB

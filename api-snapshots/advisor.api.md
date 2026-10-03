@@ -840,6 +840,7 @@ interface AnalyticsMetricsOptions {
         table: string;
     }>;
     group?: string;
+    since: string;
 }
 ```
 
@@ -847,7 +848,7 @@ interface AnalyticsMetricsOptions {
 
 ```ts
 interface AnalyticsMetricsSource {
-    query: (sql: string) => Promise<{
+    query: (sql: string, params: Readonly<Record<string, string>>) => Promise<{
         rows: ReadonlyArray<Record<string, unknown>>;
     }>;
 }

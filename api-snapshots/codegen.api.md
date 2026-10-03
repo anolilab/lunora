@@ -1809,6 +1809,34 @@ const CAPABILITY_ROWS: readonly [
     },
     {
         readonly appMethod: {
+            readonly configKey: "analyticsSql";
+            readonly doc: "Override the Analytics SQL binding backing `ctx.analyticsSql` (defaults to `env.ANALYTICS_SQL`), e.g. `(env) => createAnalyticsSqlRest({ accountId, apiToken })` where the Worker has no `analytics` binding.";
+            readonly method: "analyticsSql";
+        };
+        readonly contextProperty: "analyticsSql";
+        readonly key: "analyticsSql";
+        readonly moduleSpecifier: "@lunora/bindings/analytics-sql";
+        readonly requiredPackage: "@lunora/bindings";
+        readonly serverCtxField: "\n    /** Read-only SQL over Cloudflare's Analytics SQL API (Analytics Engine datasets and more) through the `analytics` binding. Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries. */\n    readonly analyticsSql: import(\"@lunora/bindings/analytics-sql\").AnalyticsSql;";
+        readonly shardBinding: {
+            readonly binding: {
+                readonly bindingType: "AnalyticsSqlBindingLike";
+                readonly envName: "ANALYTICS_SQL";
+                readonly factory: {
+                    readonly name: "createAnalyticsSql";
+                    readonly option: "binding";
+                };
+            };
+            readonly clientType: "AnalyticsSql";
+            readonly missingMessage: "ctx.analyticsSql: no Analytics SQL binding found. Add an `analytics` binding ({ binding: \"ANALYTICS_SQL\" }, wrangler >= 4.145.0) to wrangler.jsonc, or point ctx.analyticsSql at a token transport with defineApp().analyticsSql((env) => createAnalyticsSqlRest({ accountId, apiToken })).";
+            readonly stubMethods: readonly [
+                "query"
+            ];
+        };
+        readonly tier: "action";
+    },
+    {
+        readonly appMethod: {
             readonly configKey: "artifacts";
             readonly doc: "Override the Artifacts binding backing `ctx.artifacts` (defaults to `env.ARTIFACTS`).";
             readonly method: "artifacts";

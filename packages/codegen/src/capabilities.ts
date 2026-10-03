@@ -148,8 +148,8 @@ type CapabilityDescriptor = (
 /**
  * The canonical capability list. **Order is load-bearing** — every consumer
  * emits in row order (see the module doc). The `appMethod` rows reproduce the
- * original `LONG_TAIL` builder sequence (ai, aiSearch, analytics, artifacts, browser, hyperdrive,
- * images, kv, payment, x402, r2sql — `.vectors()` follows them, emitted off the
+ * original `LONG_TAIL` builder sequence (ai, aiSearch, analytics, analyticsSql, artifacts, browser,
+ * hyperdrive, images, kv, payment, x402, r2sql — `.vectors()` follows them, emitted off the
  * declaration), and the same order places the `ctx.*` fields and the ShardDO wiring.
  */
 const CAPABILITY_ROWS = [
@@ -234,6 +234,33 @@ const CAPABILITY_ROWS = [
             syncStubMethods: ["track", "writeDataPoint"],
         },
         tier: "every",
+    },
+    // `ctx.analyticsSql` — the Analytics SQL binding (wrangler `analytics` key):
+    // read-only SQL over Cloudflare's Analytics SQL API, Analytics Engine datasets
+    // included. A sibling of `ctx.analytics`, not a method on it: that one rides
+    // EVERY ctx as a write-only sink over a different binding, while a read is
+    // billed, non-deterministic network I/O — ActionCtx ONLY. A worker without
+    // the binding points `.analyticsSql()` at `createAnalyticsSqlRest(...)`, the
+    // API-token transport with the same binding shape.
+    {
+        appMethod: {
+            configKey: "analyticsSql",
+            doc: "Override the Analytics SQL binding backing `ctx.analyticsSql` (defaults to `env.ANALYTICS_SQL`), e.g. `(env) => createAnalyticsSqlRest({ accountId, apiToken })` where the Worker has no `analytics` binding.",
+            method: "analyticsSql",
+        },
+        contextProperty: "analyticsSql",
+        key: "analyticsSql",
+        moduleSpecifier: "@lunora/bindings/analytics-sql",
+        requiredPackage: "@lunora/bindings",
+        serverCtxField: `\n    /** Read-only SQL over Cloudflare's Analytics SQL API (Analytics Engine datasets and more) through the \`analytics\` binding. Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries. */\n    readonly analyticsSql: import("@lunora/bindings/analytics-sql").AnalyticsSql;`,
+        shardBinding: {
+            binding: { bindingType: "AnalyticsSqlBindingLike", envName: "ANALYTICS_SQL", factory: { name: "createAnalyticsSql", option: "binding" } },
+            clientType: "AnalyticsSql",
+            missingMessage:
+                'ctx.analyticsSql: no Analytics SQL binding found. Add an `analytics` binding ({ binding: "ANALYTICS_SQL" }, wrangler >= 4.145.0) to wrangler.jsonc, or point ctx.analyticsSql at a token transport with defineApp().analyticsSql((env) => createAnalyticsSqlRest({ accountId, apiToken })).',
+            stubMethods: ["query"],
+        },
+        tier: "action",
     },
     // `ctx.artifacts` — Cloudflare Artifacts (Git-backed repos). ActionCtx ONLY:
     // every call is remote, billed network I/O. Without a binding the stub's

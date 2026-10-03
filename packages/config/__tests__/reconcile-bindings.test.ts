@@ -25,6 +25,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesAi: false,
         usesAiSearch: false,
         usesAnalytics: false,
+        usesAnalyticsSql: false,
         usesArtifacts: false,
         usesAuth: false,
         usesBrowser: false,
@@ -688,6 +689,66 @@ describe("reconcileWranglerBindings", () => {
         const second = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
 
         expect(second.changed).toBe(false);
+    });
+
+    it("auto-writes the ANALYTICS_SQL binding when ctx.analyticsSql is inferred, idempotently", () => {
+        expect.assertions(4);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(first.added).toContain("ANALYTICS_SQL (Analytics SQL)");
+        // No `remote: true`: wrangler proxies the Analytics SQL binding remotely in plain dev already.
+        expect(readConfig().analytics).toStrictEqual({ binding: "ANALYTICS_SQL" });
+        // The write-only Analytics Engine dataset is a different binding and is untouched.
+        expect(readConfig().analytics_engine_datasets).toBeUndefined();
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("does not write the analytics binding when the app chains .analyticsSql() onto defineApp", () => {
+        expect.assertions(2);
+
+        // The override points ctx.analyticsSql at the REST transport, so an
+        // `analytics` binding would be dead config (and rejected by wrangler < 4.145.0).
+        mkdirSync(join(root, "src"), { recursive: true });
+        writeFileSync(
+            join(root, "src", "server.ts"),
+            `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().analyticsSql((env) => createAnalyticsSqlRest({ accountId: env.CF_ACCOUNT_ID, apiToken: env.CF_TOKEN }));\nexport default app;\n`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(result.added).not.toContain("ANALYTICS_SQL (Analytics SQL)");
+        expect(readConfig().analytics).toBeUndefined();
+    });
+
+    it("still writes the analytics binding when .analyticsSql( appears only in a comment", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(root, "src"), { recursive: true });
+        writeFileSync(
+            join(root, "src", "server.ts"),
+            `import { defineApp } from "../lunora/_generated/app";\n\n// Chain .analyticsSql(...) here to use the REST transport instead.\nconst app = defineApp();\nexport default app;\n`,
+            "utf8",
+        );
+
+        reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(readConfig().analytics).toStrictEqual({ binding: "ANALYTICS_SQL" });
+    });
+
+    it("leaves a hand-written analytics binding under another name alone", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "analytics": { "binding": "METRICS" },\n}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(result.added).not.toContain("ANALYTICS_SQL (Analytics SQL)");
+        expect(readConfig().analytics).toStrictEqual({ binding: "METRICS" });
     });
 
     it("leaves a hand-written ai_search_namespaces entry alone instead of adding AI_SEARCH beside it", () => {
