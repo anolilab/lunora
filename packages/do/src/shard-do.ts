@@ -8,6 +8,7 @@ import type {
     ContextTracer,
     DatabaseInstrumentation,
     DatabaseTally,
+    DatabaseTelemetryDeps,
     FunctionMetricBucket,
     FunctionMetricBucketsResult,
     FunctionMetricIndexHit,
@@ -22,6 +23,7 @@ import type {
     SpanCollection,
     SpanCollector,
     SqlClientLike,
+    TallySurface,
     TraceAnchor,
 } from "@lunora/observability";
 import {
@@ -1459,7 +1461,7 @@ const MAX_HELD_SPANS_PER_TRACE = 500;
 /**
  * Bound on distinct normalised statements folded into
  * {@link ShardDO.currentStmtSamples} per dispatch. Mirrors
- * `database-telemetry.ts`'s `MAX_DB_SPANS_PER_CTX`: a handler that queries in a
+ * `database-telemetry.ts`'s `MAX_CLIENT_SPANS_PER_TALLY`: a handler that queries in a
  * loop already folds repeats of the SAME statement into one running entry (see
  * `sql` getter), so this only bounds the number of DISTINCT statement shapes one
  * dispatch can accumulate before {@link ShardDO.flushStmtSamples} starts
@@ -1487,11 +1489,16 @@ const flattenReadRanges = (byTable: Map<string, KeyRange[]> | undefined): KeyRan
 /** One dispatch's telemetry side-channel: the `ctx.span` wide event, the `ctx.db` / `ctx.sql` tallies, and the sink they go to. */
 interface DispatchSpanEntry {
     collector?: SpanCollector;
-    dbTally?: DatabaseTally;
     sink?: TelemetrySink;
-    /** `ctx.sql`'s own tally — kept apart from `dbTally` and folded as `sql.*` (see `instrumentSqlClient`). */
-    sqlTally?: DatabaseTally;
+    /** One auto-instrumentation tally per surface, kept apart and folded under its own prefix (`db.*`, `sql.*`). */
+    tallies?: Partial<Record<TallySurface, DatabaseTally>>;
 }
+
+/** The dispatch's tallies that counted at least one call, by surface. */
+const nonEmptyTallies = (entry: DispatchSpanEntry | undefined): [TallySurface, DatabaseTally][] =>
+    (Object.entries(entry?.tallies ?? {}) as [TallySurface, DatabaseTally | undefined][]).filter(
+        (pair): pair is [TallySurface, DatabaseTally] => pair[1] !== undefined && pair[1].calls > 0,
+    );
 
 /**
  * Whether a finished dispatch produced anything the synthetic root span would
@@ -1507,7 +1514,7 @@ interface DispatchSpanEntry {
  * A non-empty `ctx.sql` tally counts for the same reason.
  */
 const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
-    entry !== undefined && (entry.collector !== undefined || (entry.dbTally?.calls ?? 0) > 0 || (entry.sqlTally?.calls ?? 0) > 0);
+    entry !== undefined && (entry.collector !== undefined || nonEmptyTallies(entry).length > 0);
 
 /**
  * Base class for shard Durable Objects.
@@ -6457,35 +6464,9 @@ abstract class ShardDO {
      * nothing.
      */
     protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
-        const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
+        const deps = this.databaseTelemetryDeps("db", functionPath, anchor, sink);
 
-        if (mode === "off") {
-            // Bail before touching `dispatchSpans`: with nothing collecting, the
-            // tally allocation and its map insert would be per-dispatch waste on
-            // the hot path (it showed up as a benchmark regression).
-            return database;
-        }
-
-        return instrumentDatabase(database, {
-            anchor,
-            // Raw constraint-error messages in dev only — matches `makeTracer`'s
-            // `captureRaw` posture.
-            captureRaw: isDevEnvironment(this.env),
-            functionPath,
-            mode,
-            record: (recorded) => {
-                this.recordSpan(recorded, sink, anchor.sampled);
-            },
-            shardKey: this.runner.shardKey,
-            // Parked on the dispatch entry rather than written through `ctx.span`:
-            // a query pays only integer increments, and the tally is read ONCE in
-            // `recordDispatchRootSpan`. A non-empty tally IS reason enough to
-            // record that root span (see `hasRootSpanContent`) — otherwise the
-            // counters were computed on the hot path of every db-touching
-            // dispatch and discarded, which is the common shape.
-            tally: this.dispatchTally(anchor, "dbTally"),
-            userId: () => this.getCurrentUserId(),
-        });
+        return deps === undefined ? database : instrumentDatabase(database, deps);
     }
 
     /**
@@ -6501,25 +6482,9 @@ abstract class ShardDO {
      * span through the root-span mirroring in `recordDispatchRootSpan`.
      */
     protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
-        const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
+        const deps = this.databaseTelemetryDeps("sql", functionPath, anchor, sink);
 
-        if (mode === "off") {
-            return client;
-        }
-
-        return instrumentSqlClient(client, {
-            anchor,
-            // Raw driver error messages in dev only — matches `instrumentDb`.
-            captureRaw: isDevEnvironment(this.env),
-            functionPath,
-            mode,
-            record: (recorded) => {
-                this.recordSpan(recorded, sink, anchor.sampled);
-            },
-            shardKey: this.runner.shardKey,
-            tally: this.dispatchTally(anchor, "sqlTally"),
-            userId: () => this.getCurrentUserId(),
-        });
+        return deps === undefined ? client : instrumentSqlClient(client, deps);
     }
 
     /**
@@ -6542,6 +6507,11 @@ abstract class ShardDO {
             return base;
         }
 
+        // Captured now, not read when the span is built: that happens after the
+        // network await, and `currentRequestUserId` is per-instance state a
+        // concurrent request may have re-set by then.
+        const userId = this.getCurrentUserId();
+
         return createTracedFetch(
             {
                 anchor,
@@ -6556,7 +6526,7 @@ abstract class ShardDO {
                     this.recordSpan(span, sink, anchor.sampled);
                 },
                 shardKey: this.runner.shardKey,
-                userId: () => this.getCurrentUserId(),
+                userId: () => userId,
             },
             base,
         );
@@ -7725,18 +7695,66 @@ abstract class ShardDO {
     }
 
     /**
-     * The dispatch entry's `ctx.db` (`dbTally`) or `ctx.sql` (`sqlTally`) tally,
-     * created on first use. Shares the entry with `ctx.span`'s collector but is
-     * deliberately a separate slot — see `instrumentDb` / `instrumentSql`.
+     * What `instrumentDb` / `instrumentSql` hand their instrumenter, or
+     * `undefined` when nothing collects (no sink, or `instrumentDatabase: "off"`).
      */
-    private dispatchTally(anchor: TraceAnchor, slot: "dbTally" | "sqlTally"): DatabaseTally {
+    private databaseTelemetryDeps(
+        surface: TallySurface,
+        functionPath: string,
+        anchor: TraceAnchor,
+        sink: TelemetrySink | undefined,
+    ): DatabaseTelemetryDeps | undefined {
+        const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
+
+        if (mode === "off") {
+            // Bail before touching `dispatchSpans`: with nothing collecting, the
+            // tally allocation and its map insert would be per-dispatch waste on
+            // the hot path (it showed up as a benchmark regression).
+            return undefined;
+        }
+
+        // Captured now, not read when a span is built: that happens after the
+        // call's await, and `currentRequestUserId` is per-instance state a
+        // concurrent request may have re-set by then.
+        const userId = this.getCurrentUserId();
+
+        return {
+            anchor,
+            // Raw driver/constraint error messages in dev only — matches
+            // `makeTracer`'s `captureRaw` posture.
+            captureRaw: isDevEnvironment(this.env),
+            functionPath,
+            mode,
+            record: (recorded) => {
+                this.recordSpan(recorded, sink, anchor.sampled);
+            },
+            shardKey: this.runner.shardKey,
+            // Parked on the dispatch entry rather than written through `ctx.span`:
+            // a query pays only integer increments, and the tally is read ONCE in
+            // `recordDispatchRootSpan`. A non-empty tally IS reason enough to
+            // record that root span (see `hasRootSpanContent`) — otherwise the
+            // counters were computed on the hot path of every db-touching
+            // dispatch and discarded, which is the common shape.
+            tally: this.dispatchTally(anchor, surface),
+            userId: () => userId,
+        };
+    }
+
+    /**
+     * The dispatch entry's tally for one surface, created on first use. Shares
+     * the entry with `ctx.span`'s collector but is deliberately a separate slot
+     * per surface — see `instrumentDb` / `instrumentSql`.
+     */
+    private dispatchTally(anchor: TraceAnchor, surface: TallySurface): DatabaseTally {
         evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
 
         const key = dispatchSpanKey(anchor);
         const entry = this.dispatchSpans.get(key) ?? {};
-        const tally = entry[slot] ?? createDatabaseTally();
+        const tallies = entry.tallies ?? {};
+        const tally = tallies[surface] ?? createDatabaseTally();
 
-        entry[slot] = tally;
+        tallies[surface] = tally;
+        entry.tallies = tallies;
         this.dispatchSpans.set(key, entry);
 
         return tally;
@@ -7840,16 +7858,19 @@ abstract class ShardDO {
     private recordDispatchRootSpan(functionPath: string, startedAt: number, failure: { thrown: unknown } | undefined, anchor: TraceAnchor): void {
         const wide = this.dispatchSpans.get(dispatchSpanKey(anchor));
         const durationMs = Date.now() - startedAt;
-        // Auto-instrumentation counters ride whatever root span is being recorded;
-        // they never cause one (see `instrumentDb`).
-        const databaseAttributes = wide?.dbTally === undefined || wide.dbTally.calls === 0 ? undefined : formatTally(wide.dbTally);
-        // `ctx.sql`'s tally rides alongside under its own `sql.*` keys.
-        const sqlAttributes = wide?.sqlTally === undefined || wide.sqlTally.calls === 0 ? undefined : formatTally(wide.sqlTally, "sql");
+        // Auto-instrumentation counters ride whatever root span is being recorded,
+        // each surface under its own prefix (`db.*`, `sql.*`).
+        const tallyAttributes: LogFields = {};
+
+        for (const [surface, tally] of nonEmptyTallies(wide)) {
+            Object.assign(tallyAttributes, formatTally(tally, surface));
+        }
+
         // Mirrors `db.spans_truncated`: the per-dispatch statement-sample buffer
         // (see `currentStmtSamples`) hit its distinct-statement cap, so the
         // query-metrics leaderboard's contribution from this dispatch is partial.
         const stmtSamplesAttributes: LogFields | undefined = this.currentStmtSamplesTruncated ? { "db.stmt_samples_truncated": true } : undefined;
-        const attributes = { ...databaseAttributes, ...sqlAttributes, ...stmtSamplesAttributes, ...wide?.collector?.collected.attributes };
+        const attributes = { ...tallyAttributes, ...stmtSamplesAttributes, ...wide?.collector?.collected.attributes };
         // Built whenever there is anything to carry, not only when the handler
         // opened a `ctx.span` — the auto-instrumentation counters are attributes
         // in their own right, and gating them on the wide event's collector is

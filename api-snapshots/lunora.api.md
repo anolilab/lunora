@@ -3287,6 +3287,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `TallySurface` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `TraceAnchor` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.

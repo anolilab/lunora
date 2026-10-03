@@ -212,6 +212,56 @@ describe('instrumentDatabase: "summary" — where the counters land', () => {
         }
     });
 
+    // The span is built after the network await; reading the acting user then
+    // would pick up whatever a concurrent request set on the shared instance.
+    it("stamps a ctx.sql span with the user current when the client was instrumented, not when the query settled", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+        const recorded: { name: string; userId?: string }[] = [];
+
+        try {
+            const shard = new (class extends ShardDO {
+                public actingUser: string | undefined = "user-a";
+
+                public override async handleRpc(functionPath: string): Promise<unknown> {
+                    const sql = this.instrumentSql(
+                        {
+                            query: async (_text: string, _params?: ReadonlyArray<unknown>): Promise<unknown[]> => {
+                                // A concurrent request re-sets the per-instance user mid-await.
+                                this.actingUser = "user-b";
+
+                                return [];
+                            },
+                        },
+                        functionPath,
+                        this.resolveDispatchAnchor(false),
+                        {
+                            instrumentDatabase: "spans",
+                            onSpan: (span) => {
+                                recorded.push(span);
+                            },
+                        },
+                    );
+
+                    await sql.query("select 1");
+
+                    return { ok: true };
+                }
+
+                protected override getCurrentUserId(): string | undefined {
+                    return this.actingUser;
+                }
+            })(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await shard.fetch(rpcRequest("orders:who"));
+
+            expect(recorded.find((span) => span.name === "sql.SELECT")?.userId).toBe("user-a");
+        } finally {
+            database.close();
+        }
+    });
+
     it("still records no root span for a dispatch that touched nothing", async () => {
         expect.assertions(1);
 

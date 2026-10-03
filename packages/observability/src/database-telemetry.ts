@@ -20,7 +20,7 @@
  * when you are actually chasing a specific slow query.
  *
  * **`ctx.sql` shares all of it but the tally.** Same three levels, same knob,
- * same span cap and the same best-effort settle ({@link settleCall}) — but its
+ * same span cap and the same best-effort settle ({@link observeCall}) — but its
  * own tally, folded as `sql.*` keys rather than merged into `db.*`. The two are
  * different cost classes: a `ctx.db` call is a local SQLite read inside the
  * Durable Object, a `ctx.sql` call is a network round trip to an external
@@ -32,6 +32,7 @@ import { otlpRandomHex } from "../../../shared/otlp";
 import type { SpanEvent } from "../../../shared/span-event";
 import type { TraceAnchor } from "./context-telemetry";
 import { redactArgs } from "./request-log";
+import { sqlOperationName, sqlSystemOf } from "./sql-operation";
 import { toErrorType } from "./trace-context";
 
 /**
@@ -45,7 +46,7 @@ import { toErrorType } from "./trace-context";
  * Counted per tally, so `ctx.db` and `ctx.sql` each get the full allowance — a
  * loop over one surface cannot starve the other's waterfall.
  */
-const MAX_DB_SPANS_PER_CTX = 100;
+const MAX_CLIENT_SPANS_PER_TALLY = 100;
 
 /**
  * The `DatabaseWriterLike` methods worth instrumenting: the ones that reach
@@ -117,62 +118,6 @@ const TABLE_FIRST_METHODS = new Set([
     "rankPageRows",
 ]);
 
-/**
- * The leading SQL keywords `ctx.sql` reports as `db.operation.name`. An
- * allowlist, not "whatever the first word is": the operation lands in a span
- * name and a summary key, both of which must stay low-cardinality, and a
- * statement that opens with something unexpected is reported as `OTHER`
- * rather than minting a new group. `WITH` is reported as-is — finding the
- * statement a CTE feeds would mean parsing past it, which this deliberately
- * never does.
- */
-const SQL_OPERATIONS = new Set([
-    "ALTER",
-    "ANALYZE",
-    "BEGIN",
-    "CALL",
-    "COMMIT",
-    "COPY",
-    "CREATE",
-    "DEALLOCATE",
-    "DELETE",
-    "DESCRIBE",
-    "DO",
-    "DROP",
-    "EXECUTE",
-    "EXPLAIN",
-    "GRANT",
-    "INSERT",
-    "LISTEN",
-    "LOCK",
-    "MERGE",
-    "NOTIFY",
-    "PREPARE",
-    "REFRESH",
-    "RELEASE",
-    "REPLACE",
-    "REVOKE",
-    "ROLLBACK",
-    "SAVEPOINT",
-    "SELECT",
-    "SET",
-    "SHOW",
-    "START",
-    "TABLE",
-    "TRUNCATE",
-    "UNLISTEN",
-    "UPDATE",
-    "VACUUM",
-    "VALUES",
-    "WITH",
-]);
-
-/** `db.operation.name` for a statement whose leading keyword is not in {@link SQL_OPERATIONS}. */
-const SQL_OPERATION_OTHER = "OTHER";
-
-/** One leading keyword — applied to a bounded slice, so it never scans the statement. */
-const SQL_KEYWORD = /^[a-z]+/iu;
-
 /** Table name from a call's arguments, when the method takes it first. */
 const tableOf = (method: string, arguments_: unknown[]): string | undefined => {
     if (!TABLE_FIRST_METHODS.has(method)) {
@@ -183,63 +128,6 @@ const tableOf = (method: string, arguments_: unknown[]): string | undefined => {
 
     return typeof first === "string" && first.length > 0 ? first : undefined;
 };
-
-/**
- * The statement's operation, from its LEADING keyword only (`SELECT`, `INSERT`,
- * …, else `OTHER`).
- *
- * Skips leading whitespace, `--` line comments, `/* … *\/` block comments (a
- * driver or ORM often prepends one) and opening parentheses, then reads one
- * keyword. Nothing past that keyword is examined, so no literal, identifier or
- * parameter from the statement can reach a span — the cheap parse is also the
- * safe one. A linear scan rather than a regex so a pathological comment run
- * cannot backtrack.
- */
-const sqlOperationName = (text: unknown): string => {
-    if (typeof text !== "string") {
-        return SQL_OPERATION_OTHER;
-    }
-
-    let index = 0;
-
-    while (index < text.length) {
-        const char = text.charAt(index);
-
-        if (char === "(" || char.trim() === "") {
-            index += 1;
-        } else if (text.startsWith("--", index)) {
-            const end = text.indexOf("\n", index);
-
-            if (end === -1) {
-                return SQL_OPERATION_OTHER;
-            }
-
-            index = end + 1;
-        } else if (text.startsWith("/*", index)) {
-            const end = text.indexOf("*/", index + 2);
-
-            if (end === -1) {
-                return SQL_OPERATION_OTHER;
-            }
-
-            index = end + 2;
-        } else {
-            break;
-        }
-    }
-
-    const keyword = SQL_KEYWORD.exec(text.slice(index, index + 16))?.[0].toUpperCase();
-
-    return keyword !== undefined && SQL_OPERATIONS.has(keyword) ? keyword : SQL_OPERATION_OTHER;
-};
-
-/**
- * OTel `db.system.name` for a `ctx.sql` client: the system its driver adapter
- * stamped (`fromPostgresJs` / `fromNodePg` → `postgresql`, `fromMysql2` →
- * `mysql`), else the semconv's `other_sql` for a hand-built client that did not
- * say.
- */
-const sqlSystemOf = (client: SqlClientLike): string => (client.dbSystem === "mysql" || client.dbSystem === "postgresql" ? client.dbSystem : "other_sql");
 
 /** Render a thrown value for a span's `error.message` without relying on `Object`'s default stringification. */
 const describeFailure = (failure: unknown): string => {
@@ -259,101 +147,6 @@ const describeFailure = (failure: unknown): string => {
     return json ?? String(failure);
 };
 
-/**
- * The fields every auto-instrumented span shares, whichever surface made the
- * call.
- *
- * CLIENT: from the handler's point of view the call goes OUT to a datastore,
- * which is what lets a collector render it as a dependency rather than as
- * internal computation.
- */
-const clientSpanBase = (
-    deps: DatabaseTelemetryDeps,
-    startTs: number,
-): Pick<SpanEvent, "functionPath" | "kind" | "parentSpanId" | "rayId" | "shardKey" | "spanId" | "startTs" | "traceId" | "userId"> => {
-    return {
-        functionPath: deps.functionPath,
-        kind: "client",
-        parentSpanId: deps.anchor.rootSpanId,
-        ...(deps.anchor.rayId === undefined ? {} : { rayId: deps.anchor.rayId }),
-        shardKey: deps.shardKey,
-        spanId: otlpRandomHex(8),
-        startTs,
-        traceId: deps.anchor.traceId,
-        userId: deps.userId(),
-    };
-};
-
-/**
- * Build the CLIENT span for one instrumented `ctx.db` call.
- *
- * Extracted from the proxy trap so that trap stays a readable dispatch — the
- * span's shape is a data-mapping concern, not control flow.
- */
-const buildDatabaseSpan = (input: {
-    deps: DatabaseTelemetryDeps;
-    durationMs: number;
-    failure: unknown;
-    operation: string;
-    startTs: number;
-    table: string | undefined;
-}): SpanEvent => {
-    const { deps, durationMs, failure, operation, startTs, table } = input;
-
-    return {
-        ...clientSpanBase(deps, startTs),
-        attributes: {
-            "db.operation.name": operation,
-            ...(table === undefined ? {} : { "db.collection.name": table }),
-            "db.system.name": "sqlite",
-        },
-        durationMs,
-        ...(failure === undefined ? {} : { error: { message: redactArgs(describeFailure(failure), deps.captureRaw) as string, type: toErrorType(failure) } }),
-        name: table === undefined ? `db.${operation}` : `db.${operation} ${table}`,
-        ok: failure === undefined,
-    };
-};
-
-/**
- * Build the CLIENT span for one `ctx.sql` statement.
- *
- * Carries no statement text and no parameters — only the leading-keyword
- * operation, the system, and the returned row count. No `db.collection.name`
- * either: naming the table means parsing past `FROM`/`INTO` through joins,
- * CTEs and quoting, which is neither cheap nor safe.
- *
- * `error.message` is the error TYPE outside dev, not the redacted message
- * `ctx.db` records: an external database's error text routinely quotes the
- * offending row (Postgres's `Key (email)=(…) already exists`), and that is data
- * Lunora never owned and a PII pattern will not reliably catch. `captureRaw`
- * (dev only) records the driver's message verbatim.
- */
-const buildSqlSpan = (input: {
-    deps: DatabaseTelemetryDeps;
-    durationMs: number;
-    failure: unknown;
-    operation: string;
-    returnedRows: number | undefined;
-    startTs: number;
-    system: string;
-}): SpanEvent => {
-    const { deps, durationMs, failure, operation, returnedRows, startTs, system } = input;
-    const errorType = failure === undefined ? undefined : toErrorType(failure);
-
-    return {
-        ...clientSpanBase(deps, startTs),
-        attributes: {
-            "db.operation.name": operation,
-            ...(returnedRows === undefined ? {} : { "db.response.returned_rows": returnedRows }),
-            "db.system.name": system,
-        },
-        durationMs,
-        ...(errorType === undefined ? {} : { error: { message: deps.captureRaw === true ? describeFailure(failure) : errorType, type: errorType } }),
-        name: `sql.${operation}`,
-        ok: failure === undefined,
-    };
-};
-
 /** Running totals for `"summary"` mode; created by the caller, read once at the dispatch boundary. */
 interface DatabaseTally {
     calls: number;
@@ -363,6 +156,12 @@ interface DatabaseTally {
     spansEmitted: number;
     spansTruncated: boolean;
 }
+
+/**
+ * Which instrumented surface a tally belongs to, and the key prefix
+ * {@link formatTally} folds it under: `db` for `ctx.db`, `sql` for `ctx.sql`.
+ */
+type TallySurface = "db" | "sql";
 
 /**
  * How much detail `ctx.db` / `ctx.sql` auto-instrumentation produces.
@@ -383,7 +182,7 @@ type DatabaseInstrumentation = "off" | "spans" | "summary";
  * hyperdrive.
  */
 interface SqlClientLike {
-    /** OTel `db.system.name` the driver adapter stamped; see {@link sqlSystemOf}. */
+    /** OTel `db.system.name` the driver adapter stamped; `other_sql` when absent. */
     readonly dbSystem?: string;
     query: (text: string, params?: ReadonlyArray<unknown>) => Promise<unknown>;
 }
@@ -394,11 +193,9 @@ interface DatabaseTelemetryDeps {
     anchor: TraceAnchor;
 
     /**
-     * Whether to record a failed call's error message verbatim rather than
-     * redacted (`"spans"` mode only) — the same dev-only escape hatch as
-     * `TracerDeps.captureRaw`. A constraint-error message quotes the
-     * conflicting row, so this CLIENT span gets the same default-redacted
-     * posture as the request log and function-metrics sinks.
+     * Whether to record a failed call's error message verbatim (`"spans"` mode
+     * only) — the same dev-only escape hatch as `TracerDeps.captureRaw`. See
+     * {@link failureMessage} for what each surface records without it.
      */
     captureRaw?: boolean;
 
@@ -426,45 +223,195 @@ interface DatabaseTelemetryDeps {
      */
     tally: DatabaseTally;
 
-    /** Read lazily — the acting user is resolved per span. */
+    /**
+     * The acting user, read when a span is built. Callers resolve it ONCE, when
+     * they instrument the client, and return that captured value: a span is
+     * built after the call's await, and per-request shared state read by then
+     * may already belong to a concurrent request.
+     */
     userId: () => string | undefined;
 }
 
+/** How one observed call ended — what a span builder needs beyond its own operation. */
+interface CallOutcome {
+    durationMs: number;
+    failure: unknown;
+    result: unknown;
+    startTs: number;
+}
+
 /**
- * Account for one settled call: bump the tally, then — in `"spans"` mode and
- * under {@link MAX_DB_SPANS_PER_CTX} — record its span.
+ * The two error-message policies, side by side.
  *
- * Shared by the `ctx.db` and `ctx.sql` instrumenters so both surfaces have one
- * definition of the tally, the cap and the truncation flag. `buildSpan` is a
- * thunk so `"summary"` mode never allocates a span it would discard.
+ * `"redact"` (`ctx.db`): the message, PII-redacted unless `captureRaw` — the
+ * request log's posture. A constraint-error message quotes the conflicting
+ * row, but Lunora owns the store, so a redaction pass is trustworthy enough.
+ *
+ * `"type-only"` (`ctx.sql`): the error TYPE, unless `captureRaw` keeps the
+ * driver's message verbatim. An external database's error text routinely
+ * quotes the offending row (Postgres's `Key (email)=(…) already exists`) —
+ * data Lunora never owned and a PII pattern will not reliably catch.
  */
-const settleCall = (deps: DatabaseTelemetryDeps, operation: string, durationMs: number, failure: unknown, buildSpan: () => SpanEvent): void => {
-    const { tally } = deps;
-
-    tally.calls += 1;
-    tally.durationMs += durationMs;
-    tally.perOperation[operation] = (tally.perOperation[operation] ?? 0) + 1;
-
-    if (failure !== undefined) {
-        tally.errors += 1;
+const failureMessage = (failure: unknown, deps: DatabaseTelemetryDeps, policy: "redact" | "type-only"): string => {
+    if (policy === "redact") {
+        return redactArgs(describeFailure(failure), deps.captureRaw) as string;
     }
 
-    // Guarded as a whole: telemetry runs after the call already settled, so
-    // letting it throw would turn a succeeded query into a failed one — and
-    // replace the real error with a telemetry one on the failure path.
+    return deps.captureRaw === true ? describeFailure(failure) : toErrorType(failure);
+};
+
+/**
+ * The fields every auto-instrumented span shares, whichever surface made the
+ * call.
+ *
+ * CLIENT: from the handler's point of view the call goes OUT to a datastore,
+ * which is what lets a collector render it as a dependency rather than as
+ * internal computation.
+ */
+const clientSpanBase = (
+    deps: DatabaseTelemetryDeps,
+    outcome: CallOutcome,
+    policy: "redact" | "type-only",
+): Pick<
+    SpanEvent,
+    "durationMs" | "error" | "functionPath" | "kind" | "ok" | "parentSpanId" | "rayId" | "shardKey" | "spanId" | "startTs" | "traceId" | "userId"
+> => {
+    const { durationMs, failure, startTs } = outcome;
+
+    return {
+        durationMs,
+        ...(failure === undefined ? {} : { error: { message: failureMessage(failure, deps, policy), type: toErrorType(failure) } }),
+        functionPath: deps.functionPath,
+        kind: "client",
+        ok: failure === undefined,
+        parentSpanId: deps.anchor.rootSpanId,
+        ...(deps.anchor.rayId === undefined ? {} : { rayId: deps.anchor.rayId }),
+        shardKey: deps.shardKey,
+        spanId: otlpRandomHex(8),
+        startTs,
+        traceId: deps.anchor.traceId,
+        userId: deps.userId(),
+    };
+};
+
+/**
+ * Run one storage call under telemetry: time it, re-throw its failure
+ * untouched, then bump the tally and — in `"spans"` mode and under
+ * {@link MAX_CLIENT_SPANS_PER_TALLY} — record its span.
+ *
+ * The ONE place that enforces "telemetry never changes the outcome": the
+ * caller gets exactly the value or the error `run` produced, and nothing the
+ * accounting does after the call settled can turn a succeeded query into a
+ * failed one or replace the real error with a telemetry one. `buildSpan` is a
+ * callback so `"summary"` mode never allocates a span it would discard.
+ */
+const observeCall = async (
+    deps: DatabaseTelemetryDeps,
+    operation: string,
+    run: () => unknown,
+    buildSpan: (outcome: CallOutcome) => SpanEvent,
+): Promise<unknown> => {
+    const startTs = Date.now();
+    let failure: unknown;
+    let result: unknown;
+
     try {
-        if (deps.mode === "spans") {
-            if (tally.spansEmitted >= MAX_DB_SPANS_PER_CTX) {
-                tally.spansTruncated = true;
-            } else {
-                tally.spansEmitted += 1;
+        result = await run();
 
-                deps.record(buildSpan());
-            }
+        return result;
+    } catch (error) {
+        failure = error;
+
+        // Re-thrown untouched: this is instrumentation, never flow control.
+        throw error;
+    } finally {
+        const durationMs = Date.now() - startTs;
+        const { tally } = deps;
+
+        tally.calls += 1;
+        tally.durationMs += durationMs;
+        tally.perOperation[operation] = (tally.perOperation[operation] ?? 0) + 1;
+
+        if (failure !== undefined) {
+            tally.errors += 1;
         }
-    } catch {
-        // Best-effort throughout — see the note above.
+
+        // Guarded as a whole — see the note above.
+        try {
+            if (deps.mode === "spans") {
+                if (tally.spansEmitted >= MAX_CLIENT_SPANS_PER_TALLY) {
+                    tally.spansTruncated = true;
+                } else {
+                    tally.spansEmitted += 1;
+
+                    deps.record(buildSpan({ durationMs, failure, result, startTs }));
+                }
+            }
+        } catch {
+            // Best-effort throughout.
+        }
     }
+};
+
+type AnyMethod = (...arguments_: unknown[]) => unknown;
+
+/**
+ * A view of `source` whose methods passing `shouldWrap` are replaced by
+ * `wrap(name, original)`; every other member passes through.
+ *
+ * Proxies a throwaway target rather than `source`, and reads every member with
+ * `source` as the receiver.
+ *
+ * A `get` trap on a frozen `source` (or any non-configurable, non-writable
+ * method) may not return a different value — the Proxy invariant would make
+ * every wrapped call throw a `TypeError`. The throwaway target has no such
+ * properties to violate.
+ *
+ * A class-based client's `#private` accessors and methods need `this` to be
+ * the real instance, never a proxy of it. `original` is bound to `source` for
+ * the same reason.
+ *
+ * The prototype, `in`, and own-key enumeration are forwarded, so `instanceof`,
+ * spread and `Object.keys` still see the real object. Wrapped methods are
+ * memoized, so repeated access returns a stable function identity.
+ */
+const instrumentMethods = <T extends object>(source: T, shouldWrap: (name: string) => boolean, wrap: (name: string, original: AnyMethod) => AnyMethod): T => {
+    const wrapped = new Map<string, AnyMethod>();
+
+    return new Proxy({} as T, {
+        get(_target, property) {
+            const value = Reflect.get(source, property, source) as unknown;
+
+            if (typeof property !== "string" || typeof value !== "function" || !shouldWrap(property)) {
+                return value;
+            }
+
+            let instrumented = wrapped.get(property);
+
+            if (instrumented === undefined) {
+                instrumented = wrap(property, (value as AnyMethod).bind(source));
+                wrapped.set(property, instrumented);
+            }
+
+            return instrumented;
+        },
+        getOwnPropertyDescriptor(_target, property) {
+            const descriptor = Reflect.getOwnPropertyDescriptor(source, property);
+
+            // Reported configurable: the throwaway target lacks the property, and
+            // the invariant forbids reporting a missing one as non-configurable.
+            return descriptor === undefined ? undefined : { ...descriptor, configurable: true };
+        },
+        getPrototypeOf() {
+            return Reflect.getPrototypeOf(source);
+        },
+        has(_target, property) {
+            return Reflect.has(source, property);
+        },
+        ownKeys() {
+            return Reflect.ownKeys(source);
+        },
+    });
 };
 
 /**
@@ -473,122 +420,93 @@ const settleCall = (deps: DatabaseTelemetryDeps, operation: string, durationMs: 
  * Returns the database unchanged when `mode` is `"off"`, so the default-disabled
  * path costs nothing — not even a proxy indirection.
  *
- * Implemented as a `Proxy` rather than by enumerating and rebinding methods:
- * `DatabaseWriterLike` has optional members that a given backend may or may not
- * implement, plus properties (`system`) and builder factories (`query`) that
- * must pass through untouched. A proxy instruments exactly what it is asked to
- * and is transparently correct for everything else, including members added
- * later — an enumeration would silently stop covering them.
+ * A proxy rather than an enumerated, rebound copy: `DatabaseWriterLike` has
+ * optional members that a given backend may or may not implement, plus
+ * properties (`system`) and builder factories (`query`) that must pass through
+ * untouched. A proxy instruments exactly what it is asked to and is
+ * transparently correct for everything else, including members added later —
+ * an enumeration would silently stop covering them.
  */
 const instrumentDatabase = <T extends object>(database: T, deps: DatabaseTelemetryDeps): T => {
     if (deps.mode === "off") {
         return database;
     }
 
-    /** Wrapped methods are memoized so repeated property access returns a stable function identity. */
-    const wrapped = new Map<string, unknown>();
+    return instrumentMethods(
+        database,
+        (name) => INSTRUMENTED_METHODS.has(name),
+        (operation, original) =>
+            async (...arguments_: unknown[]) => {
+                const table = tableOf(operation, arguments_);
 
-    return new Proxy(database, {
-        get(target, property, receiver) {
-            const value = Reflect.get(target, property, receiver) as unknown;
-
-            if (typeof property !== "string" || typeof value !== "function" || !INSTRUMENTED_METHODS.has(property)) {
-                return value;
-            }
-
-            const cached = wrapped.get(property);
-
-            if (cached !== undefined) {
-                return cached;
-            }
-
-            const original = value as (...arguments_: unknown[]) => unknown;
-
-            const instrumented = async (...arguments_: unknown[]): Promise<unknown> => {
-                const startTs = Date.now();
-                const table = tableOf(property, arguments_);
-                let failure: unknown;
-
-                try {
-                    return await original.apply(target, arguments_);
-                } catch (error) {
-                    failure = error;
-
-                    // Re-thrown untouched: this is instrumentation, never flow control.
-                    throw error;
-                } finally {
-                    const durationMs = Date.now() - startTs;
-
-                    settleCall(deps, property, durationMs, failure, () =>
-                        buildDatabaseSpan({ deps, durationMs, failure, operation: property, startTs, table }),
-                    );
-                }
-            };
-
-            wrapped.set(property, instrumented);
-
-            return instrumented;
-        },
-    });
+                return observeCall(
+                    deps,
+                    operation,
+                    () => original(...arguments_),
+                    (outcome) => {
+                        return {
+                            ...clientSpanBase(deps, outcome, "redact"),
+                            attributes: {
+                                "db.operation.name": operation,
+                                ...(table === undefined ? {} : { "db.collection.name": table }),
+                                "db.system.name": "sqlite",
+                            },
+                            name: table === undefined ? `db.${operation}` : `db.${operation} ${table}`,
+                        };
+                    },
+                );
+            },
+    );
 };
 
 /**
  * Wrap the action-only `ctx.sql` client so every `query` is instrumented — the
  * `ctx.sql` twin of {@link instrumentDatabase}, at the same levels and through
- * the same {@link settleCall}. `deps.tally` must be a tally of its own (folded
+ * the same {@link observeCall}. `deps.tally` must be a tally of its own (folded
  * as `sql.*`), never `ctx.db`'s.
  *
- * `query` is the whole `SqlClient` surface: it has no transaction or batch
- * method to cover. Everything else on the client passes through the proxy
- * untouched, and `"off"` returns the client itself.
+ * Its span carries no statement text and no parameters — only the
+ * leading-keyword operation, the system, and the returned row count. No
+ * `db.collection.name` either: naming the table means parsing past
+ * `FROM`/`INTO` through joins, CTEs and quoting, which is neither cheap nor
+ * safe. A failure records its TYPE (see {@link failureMessage}).
+ *
+ * `query` is the whole `SqlClient` surface: there is no transaction or batch
+ * method to cover. Everything else on the client passes through untouched, and
+ * `"off"` returns the client itself.
  */
 const instrumentSqlClient = <T extends SqlClientLike>(client: T, deps: DatabaseTelemetryDeps): T => {
     if (deps.mode === "off") {
         return client;
     }
 
-    const system = sqlSystemOf(client);
-    let instrumented: ((...arguments_: unknown[]) => Promise<unknown>) | undefined;
+    const system = sqlSystemOf(client.dbSystem);
 
-    return new Proxy(client, {
-        get(target, property, receiver) {
-            const value = Reflect.get(target, property, receiver) as unknown;
-
-            if (property !== "query" || typeof value !== "function") {
-                return value;
-            }
-
-            const original = value as (...arguments_: unknown[]) => Promise<unknown>;
-
-            instrumented ??= async (...arguments_: unknown[]): Promise<unknown> => {
-                const startTs = Date.now();
+    return instrumentMethods(
+        client,
+        (name) => name === "query",
+        (_name, original) =>
+            async (...arguments_: unknown[]) => {
                 const operation = sqlOperationName(arguments_[0]);
-                let failure: unknown;
-                let returnedRows: number | undefined;
 
-                try {
-                    const rows = await original.apply(target, arguments_);
-
-                    returnedRows = Array.isArray(rows) ? rows.length : undefined;
-
-                    return rows;
-                } catch (error) {
-                    failure = error;
-
-                    // Re-thrown untouched: this is instrumentation, never flow control.
-                    throw error;
-                } finally {
-                    const durationMs = Date.now() - startTs;
-
-                    settleCall(deps, operation, durationMs, failure, () =>
-                        buildSqlSpan({ deps, durationMs, failure, operation, returnedRows, startTs, system }),
-                    );
-                }
-            };
-
-            return instrumented;
-        },
-    });
+                return observeCall(
+                    deps,
+                    operation,
+                    () => original(...arguments_),
+                    (outcome) => {
+                        return {
+                            ...clientSpanBase(deps, outcome, "type-only"),
+                            attributes: {
+                                "db.operation.name": operation,
+                                ...(Array.isArray(outcome.result) ? { "db.response.returned_rows": outcome.result.length } : {}),
+                                "db.system.name": system,
+                            },
+                            name: `sql.${operation}`,
+                        };
+                    },
+                );
+            },
+    );
 };
 
 /** A zero'd tally for one dispatch. */
@@ -597,33 +515,33 @@ const createDatabaseTally = (): DatabaseTally => {
 };
 
 /**
- * Render the running tally as span attributes, under `prefix` — `db` for
- * `ctx.db` (the default), `sql` for `ctx.sql`.
+ * Render the running tally as span attributes, under its surface's prefix
+ * ({@link TallySurface}).
  *
  * Called ONCE per dispatch, from the shard's root-span recorder — not per query.
- * Building this object on every call was pure waste on a hot path. It is a handful of keys, so the per-call cost is a small object
- * assignment — the property that makes `"summary"` mode scale to any call count.
+ * It is a handful of keys, so the per-call cost is a small object assignment —
+ * the property that makes `"summary"` mode scale to any call count.
  */
-const formatTally = (tally: DatabaseTally, prefix: "db" | "sql" = "db"): LogFields => {
+const formatTally = (tally: DatabaseTally, surface: TallySurface = "db"): LogFields => {
     const fields: LogFields = {
-        [`${prefix}.calls`]: tally.calls,
-        [`${prefix}.duration_ms`]: tally.durationMs,
+        [`${surface}.calls`]: tally.calls,
+        [`${surface}.duration_ms`]: tally.durationMs,
     };
 
     if (tally.errors > 0) {
-        fields[`${prefix}.errors`] = tally.errors;
+        fields[`${surface}.errors`] = tally.errors;
     }
 
     if (tally.spansTruncated) {
-        fields[`${prefix}.spans_truncated`] = true;
+        fields[`${surface}.spans_truncated`] = true;
     }
 
     for (const [operation, count] of Object.entries(tally.perOperation)) {
-        fields[`${prefix}.op.${operation}`] = count;
+        fields[`${surface}.op.${operation}`] = count;
     }
 
     return fields;
 };
 
-export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps, SqlClientLike };
-export { createDatabaseTally, formatTally, instrumentDatabase, instrumentSqlClient, sqlOperationName };
+export type { DatabaseInstrumentation, DatabaseTally, DatabaseTelemetryDeps, SqlClientLike, TallySurface };
+export { createDatabaseTally, formatTally, instrumentDatabase, instrumentSqlClient };

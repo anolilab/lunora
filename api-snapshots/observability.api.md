@@ -873,6 +873,12 @@ interface SqlClientLike {
 }
 ```
 
+### `TallySurface` (type)
+
+```ts
+type TallySurface = "db" | "sql";
+```
+
 ### `TraceAnchor` (interface)
 
 ```ts
@@ -1064,7 +1070,7 @@ const foldTraces: (spans: ReadonlyArray<SpanEvent>, limit?: number) => FoldedTra
 ### `formatTally` (const)
 
 ```ts
-const formatTally: (tally: DatabaseTally, prefix?: "db" | "sql") => LogFields;
+const formatTally: (tally: DatabaseTally, surface?: TallySurface) => LogFields;
 ```
 
 ### `instrumentDatabase` (const)

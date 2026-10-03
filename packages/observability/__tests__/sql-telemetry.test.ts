@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SpanEvent } from "../../../shared/span-event";
 import type { DatabaseTally } from "../src/database-telemetry";
-import { createDatabaseTally, formatTally, instrumentSqlClient, sqlOperationName } from "../src/database-telemetry";
+import { createDatabaseTally, formatTally, instrumentSqlClient } from "../src/database-telemetry";
 
 /**
  * Automatic `ctx.sql` (Hyperdrive) instrumentation — the `ctx.db` tiering, cap
@@ -45,37 +45,6 @@ const collect = (): { record: (span: SpanEvent) => void; spans: SpanEvent[] } =>
         spans,
     };
 };
-
-describe(sqlOperationName, () => {
-    it.each([
-        ["select * from orders where id = $1", "SELECT"],
-        ["  INSERT INTO orders (id) VALUES ($1)", "INSERT"],
-        ["\n\tupdate orders set total = 1", "UPDATE"],
-        ["DELETE FROM orders", "DELETE"],
-        ["-- fetch the slice\nSELECT 1", "SELECT"],
-        ["/* drizzle */ select 1", "SELECT"],
-        ["/* a */ -- b\n /* c */ (SELECT 1) UNION (SELECT 2)", "SELECT"],
-        ["with recent as (select 1) select * from recent", "WITH"],
-        ["begin", "BEGIN"],
-        ["", "OTHER"],
-        ["   ", "OTHER"],
-        ["-- unterminated comment", "OTHER"],
-        ["/* unterminated", "OTHER"],
-        ["frobnicate the table", "OTHER"],
-        ["SELECTED", "OTHER"],
-        ["'; DROP TABLE users; --", "OTHER"],
-    ])("reads %j as %s", (text, expected) => {
-        expect.assertions(1);
-
-        expect(sqlOperationName(text)).toBe(expected);
-    });
-
-    it("reports a non-string statement as OTHER", () => {
-        expect.assertions(1);
-
-        expect(sqlOperationName(42)).toBe("OTHER");
-    });
-});
 
 describe(instrumentSqlClient, () => {
     it("returns the client untouched when off", () => {
@@ -270,5 +239,65 @@ describe(instrumentSqlClient, () => {
         );
 
         await expect(instrumented.query("select 1")).resolves.toHaveLength(2);
+    });
+
+    // M1: a `get` trap on a frozen client may not return anything but the
+    // frozen value, so proxying the client itself made every query throw.
+    it("instruments a frozen client without tripping the Proxy invariant", async () => {
+        expect.assertions(3);
+
+        const client = Object.freeze({ dbSystem: "postgresql" as const, query: async (_text: string): Promise<unknown[]> => [{ id: 1 }] });
+        const { record, spans } = collect();
+        const instrumented = instrumentSqlClient(client, deps("spans", createDatabaseTally(), record));
+
+        await expect(instrumented.query("select 1")).resolves.toStrictEqual([{ id: 1 }]);
+
+        expect(spans).toHaveLength(1);
+        expect(instrumented.dbSystem).toBe("postgresql");
+    });
+
+    // M2: `#private` members only resolve with `this` as the real instance.
+    it("keeps #private getters and methods working on a class-based client", async () => {
+        expect.assertions(4);
+
+        class PrivateClient {
+            readonly #system = "mysql" as const;
+
+            readonly #rows = [{ id: 1 }, { id: 2 }, { id: 3 }];
+
+            public get dbSystem(): "mysql" {
+                return this.#system;
+            }
+
+            public async query(_text: string): Promise<unknown[]> {
+                return this.#rows;
+            }
+        }
+
+        const client = new PrivateClient();
+        const { record, spans } = collect();
+        const instrumented = instrumentSqlClient(client, deps("spans", createDatabaseTally(), record));
+
+        expect(instrumented.dbSystem).toBe("mysql");
+
+        await expect(instrumented.query("select 1")).resolves.toHaveLength(3);
+
+        expect(spans[0]?.attributes?.["db.system.name"]).toBe("mysql");
+        expect(instrumented).toBeInstanceOf(PrivateClient);
+    });
+
+    it("forwards in, own keys and spread to the real client", () => {
+        expect.assertions(3);
+
+        const client = { ...fakeClient("postgresql"), label: "primary" };
+        const instrumented = instrumentSqlClient(
+            client,
+            deps("summary", createDatabaseTally(), () => undefined),
+        );
+
+        expect("label" in instrumented).toBe(true);
+        expect(Object.keys(instrumented).toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["dbSystem", "label", "query"]);
+        // Spread copies the wrapped `query`, not the raw one.
+        expect({ ...instrumented }.query).toBe(instrumented.query);
     });
 });
