@@ -628,9 +628,16 @@ class ImplTaint {
         return owner !== undefined && owner === this.scope.impl;
     }
 
-    /** Whether caller data reaches an opaque call: its callee is caller-controlled, or an operand other than `value` is. */
+    /**
+     * Whether caller data reaches an opaque call: its callee is caller-controlled,
+     * or an operand is — any other operand, and `value` itself when it is more
+     * than the bare binding (a container also carrying `args`:
+     * `merge({ target: row, src: args })`).
+     */
     private isOpaqueCallTainted(callee: TsNode, operands: ReadonlyArray<TsNode>, value: TsNode): boolean {
-        return this.isTaintedValue(callee, false) || operands.some((operand) => operand !== value && this.isTaintedValue(operand, false));
+        const carriesMore = !Node.isIdentifier(unwrapExpression(value));
+
+        return this.isTaintedValue(callee, false) || operands.some((operand) => (operand !== value || carriesMore) && this.isTaintedValue(operand, false));
     }
 
     /**

@@ -300,6 +300,7 @@ describe("discoverOwnerFieldWrites: ctx rows changed after they are read", () =>
         ],
         ["a nested function returning it", `${read}\n        const pick = (r) => r;\n        pick(row).ownerId = args.targetUserId;${write("row.ownerId")}`],
         ["a container handed to an import with args", `${read}\n        merge({ r: row }, args);${write("row.ownerId")}`],
+        ["a container carrying args handed to an import", `${read}\n        merge({ target: row, src: args });${write("row.ownerId")}`],
         ["a `yield`", `${read}\n        function* each() { yield row; }\n        void each;${write("row.ownerId")}`],
     ])("reports a ctx row reached through %s", (_label, body) => {
         expect.assertions(2);

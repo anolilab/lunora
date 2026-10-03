@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { discoverAgents } from "../../src/discover/agents";
 import { discoverContainers } from "../../src/discover/containers";
+import discoverFunctions from "../../src/discover/functions";
+import discoverKvKeyAccesses from "../../src/discover/kv-key-accesses";
 import discoverMigrations from "../../src/discover/migrations";
 import { discoverQueueDeclarations, discoverQueues } from "../../src/discover/queues";
 import { discoverShapes } from "../../src/discover/shapes";
@@ -117,5 +119,19 @@ export { mail as emailQueue, events as orderEvents, audit as auditTrail };
         );
 
         expect(discoverShapes(newProject(), workdir)).toEqual([]);
+    });
+
+    it("names a site by the identifier export when a string-literal alias sits beside it", () => {
+        expect.assertions(2);
+
+        // `kebab-name` sorts first by code point, but only `start` is addressable,
+        // so registration and every lint row name the function `start`.
+        write(
+            "other.ts",
+            `import { query } from "@lunora/server";\nconst run = query(async ({ ctx, args }) => ctx.kv.get(args.key));\nexport { run as start, run as "kebab-name" };\n`,
+        );
+
+        expect(discoverFunctions(newProject(), workdir).map((entry) => entry.exportName)).toEqual(["start"]);
+        expect(discoverKvKeyAccesses(newProject(), workdir)).toMatchObject([{ scope: { kind: "export", name: "start" } }]);
     });
 });

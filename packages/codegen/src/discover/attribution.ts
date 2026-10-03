@@ -108,7 +108,7 @@ const EXPORT_NAMES_CACHE = new WeakMap<ts.SourceFile, ReadonlyMap<string, Readon
 
 /**
  * Local top-level binding name → every name the module exports it under,
- * sorted in code-point order, read syntactically (no type checker): the
+ * identifier names first, then code-point order, read syntactically (no type checker): the
  * `export` keyword on its declaration (`export const run`, `export function`,
  * a destructured `export const { check } = …`), each local specifier
  * (`export { run as start }` → `start`, `export { run as "kebab-name" }` →
@@ -128,7 +128,8 @@ const exportNamesByLocalOf = (sourceFile: SourceFile): ReadonlyMap<string, Reado
         names.set(local, (names.get(local) ?? new Set()).add(exported));
     }
 
-    const index = new Map([...names].map(([local, exported]) => [local, [...exported].toSorted(byCodepoint)] as const));
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the ordering helper sits with the identifier check below
+    const index = new Map([...names].map(([local, exported]) => [local, [...exported].toSorted(byExportPreference)] as const));
 
     EXPORT_NAMES_CACHE.set(sourceFile.compilerNode, index);
 
@@ -448,6 +449,14 @@ const primaryExportName = (declaration: VariableDeclaration): string => exportNa
 
 /** An ASCII JavaScript identifier, the names emit can spell as `lunora_x.<name>`. */
 const IDENTIFIER_NAME = /^[$A-Z_a-z][\w$]*$/u;
+
+/**
+ * Export-name order: identifier names first (the ones registrations and lint
+ * rows can address), then code-point order, so the first name is stable and
+ * never a string-literal alias while an identifier one exists.
+ */
+const byExportPreference = (left: string, right: string): number =>
+    Number(IDENTIFIER_NAME.test(right)) - Number(IDENTIFIER_NAME.test(left)) || byCodepoint(left, right);
 
 /**
  * Whether `name` can be emitted as a property access on the generated module
