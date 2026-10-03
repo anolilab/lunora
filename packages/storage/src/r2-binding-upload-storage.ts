@@ -552,6 +552,9 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
  * Speaks TUS (without the `checksum`, `concatenation` and
  * `creation-defer-length` extensions), chunked REST with chunks sent in order
  * (a chunk at any other offset is a `409`), and multipart forms.
+ *
+ * Chunked REST is broken upstream, see visulima/visulima#884 and the
+ * `@lunora/storage` docs ("Chunked REST is broken upstream").
  */
 const createR2BindingUploadStorage = (bucket: R2UploadBucket, options: R2BindingUploadStorageOptions = {}): UploadStorage =>
     new R2BindingUploadStorage(bucket, options);

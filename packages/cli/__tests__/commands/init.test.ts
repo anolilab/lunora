@@ -349,13 +349,17 @@ describe("lunora init", () => {
                 devDependencies: Record<string, string>;
             };
 
+            const template = JSON.parse(readFileSync(join(templatesRoot, "tanstack-start-react", "package.json"), "utf8")) as {
+                devDependencies: Record<string, string>;
+            };
+
             // Lunora-scoped ranges are pinned to the concrete version; the `^0.0.0` stub is gone.
             expect(pkg.dependencies.lunorash).toBe("1.0.0-alpha.99");
             expect(pkg.dependencies["@lunora/react"]).toBe("1.0.0-alpha.99");
             expect(pkg.devDependencies["@lunora/vite"]).toBe("1.0.0-alpha.99");
             // Third-party deps keep their template ranges verbatim.
             expect(pkg.dependencies["react-dom"]).toBe("^19.0.0");
-            expect(pkg.devDependencies.wrangler).toBe("^4.143.1");
+            expect(pkg.devDependencies.wrangler).toBe(template.devDependencies.wrangler);
         });
 
         it("pins a STABLE published version exactly when the channel tag resolves to it (1.0 promotion)", async () => {

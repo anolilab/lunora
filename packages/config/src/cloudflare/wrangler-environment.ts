@@ -33,8 +33,14 @@ import type { WranglerConfig } from "./wrangler-config";
  * by wrangler 4.145.0, and its config-schema description says so outright
  * ("not automatically inherited from the top level environment", checked
  * 2026-10-03).
+ *
+ * `k2` (K2 producer bindings, wrangler >= 4.145.0, which Lunora tracks but does
+ * not model) is read through `notInheritable(...)` by wrangler's config
+ * normaliser, and its config-schema description says "This field must be
+ * specified separately in each named environment" (checked against 4.145.0 and
+ * 4.146.0, 2026-10-03).
  */
-const NON_INHERITABLE_KEYS = [
+const NON_INHERITABLE_KEYS: ReadonlyArray<keyof WranglerConfig> = [
     "ai_search",
     "ai_search_namespaces",
     "analytics",
@@ -42,6 +48,7 @@ const NON_INHERITABLE_KEYS = [
     "containers",
     "d1_databases",
     "durable_objects",
+    "k2",
     "kv_namespaces",
     "queues",
     "r2_buckets",
@@ -52,7 +59,7 @@ const NON_INHERITABLE_KEYS = [
     "vars",
     "vectorize",
     "workflows",
-] as const satisfies ReadonlyArray<keyof WranglerConfig>;
+];
 
 /**
  * `env.<name>` keys confirmed INHERITABLE by the same docs section: an
@@ -157,5 +164,6 @@ export type { WranglerEnvironmentMerge };
 // preflights (D1 placeholder, localhost origin, container Docker) inspect the
 // same `--env` view wrangler will deploy. Reading the top level there let an
 // env-scoped placeholder / loopback origin ship silently, and falsely blocked
-// the reverse layout.
-export { mergeWranglerEnvironment };
+// the reverse layout. `NON_INHERITABLE_KEYS` is exported (not from the package
+// entry) so the merge test iterates every key instead of a hand-copied list.
+export { mergeWranglerEnvironment, NON_INHERITABLE_KEYS };

@@ -591,6 +591,9 @@ const WORKFLOW_EXPORTS_TOOLCHAIN: ReadonlyArray<{ minimum: readonly [number, num
     { minimum: [1, 61], name: "@cloudflare/vite-plugin" },
 ];
 
+/** The `pnpm add -D` arguments that lift every package in {@link WORKFLOW_EXPORTS_TOOLCHAIN} past its floor. */
+const WORKFLOW_EXPORTS_UPGRADE: string = WORKFLOW_EXPORTS_TOOLCHAIN.map(({ minimum, name }) => `${name}@^${minimum.join(".")}.0`).join(" ");
+
 /** The installed `major.minor` of `name` as resolved from the project, or `undefined` when it is not installed. */
 const installedVersion = (projectRoot: string, name: string): readonly [number, number] | undefined => {
     try {
@@ -617,7 +620,7 @@ const workflowExportsToolchainGap = (projectRoot: string): string | undefined =>
 
     return stale.length === 0
         ? undefined
-        : `workflows are declared in wrangler \`exports\`, which ${stale.join(" and ")} cannot run — reconcile left workflows[] untouched. Upgrade (\`pnpm add -D wrangler@^4.143.1 @cloudflare/vite-plugin@^1.62.1\`) and re-run.`;
+        : `workflows are declared in wrangler \`exports\`, which ${stale.join(" and ")} cannot run — reconcile left workflows[] untouched. Upgrade (\`pnpm add -D ${WORKFLOW_EXPORTS_UPGRADE}\`) and re-run.`;
 };
 
 /**

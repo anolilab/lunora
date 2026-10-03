@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CLOUDFLARE_TOOLCHAIN_VERSIONS } from "@lunora/config/cloudflare";
 import { describe, expect, test } from "vitest";
 
 /**
@@ -112,7 +113,10 @@ const LATEST_MAJORS: Record<string, number> = {
     // \`moduleType\``. 14 moved to `vite: ^8.0.13` and peers on `astro: ^7.0.0`.
     "@astrojs/cloudflare": 14,
     "@astrojs/react": 5,
-    "@cloudflare/workers-types": 4,
+    // 5: the v4 line ended at 4.20260702.1, so a `^4` template never got AI Search,
+    // Artifacts, Analytics SQL or tracing `setStatus` types; v5's default entrypoint
+    // is the latest runtime (v4's was the pre-2021-11-03 compatibility date).
+    "@cloudflare/workers-types": 5,
     "@opennextjs/cloudflare": 1,
     "@react-router/dev": 7,
     "@rsbuild/core": 2,
@@ -336,6 +340,19 @@ describe("templates/* package.json validation", () => {
 
             for (const secretFile of IGNORED_SECRET_FILES) {
                 expect(patterns, `${templateName}/.gitignore does not ignore ${secretFile}`).toContain(secretFile);
+            }
+        });
+
+        /**
+         * Templates are fetched at runtime and cannot import the toolchain ranges,
+         * so they are held to them here: a template on a stale range is how every
+         * scaffold stayed on the dead workers-types v4 line.
+         */
+        test("declares the Cloudflare toolchain at exactly CLOUDFLARE_TOOLCHAIN_VERSIONS", () => {
+            for (const [name, range] of Object.entries(CLOUDFLARE_TOOLCHAIN_VERSIONS)) {
+                if (deps[name] !== undefined) {
+                    expect(deps[name], `${templateName} → ${name}`).toBe(range);
+                }
             }
         });
 

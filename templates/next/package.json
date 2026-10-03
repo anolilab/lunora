@@ -26,13 +26,13 @@
         "react-dom": "^19.2.7"
     },
     "devDependencies": {
-        "@cloudflare/workers-types": "^4.20260611.1",
+        "@cloudflare/workers-types": "^5.20261002.1",
         "@lunora/studio": "^0.0.0",
         "@opennextjs/cloudflare": "^1.8.0",
         "@types/node": "^24.0.0",
         "@types/react": "^19.2.7",
         "@types/react-dom": "^19.2.3",
         "typescript": "^6.0.3",
-        "wrangler": "^4.143.1"
+        "wrangler": "^4.146.0"
     }
 }
