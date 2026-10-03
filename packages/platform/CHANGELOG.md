@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.50...@lunora/platform@1.0.0-alpha.51) (2026-10-03)
+
+### Features
+
+* **observability:** attach the cloudflare ray id to logs and spans ([#943](https://github.com/anolilab/lunora/issues/943)) ([b871bc8](https://github.com/anolilab/lunora/commit/b871bc89f4bf64c76f5716577dfff3d352ec3519))
+
 ## @lunora/platform [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.49...@lunora/platform@1.0.0-alpha.50) (2026-10-02)
 
 ### Features
