@@ -643,20 +643,36 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             expect(withinCap.status).toBe(201);
         });
 
-        it("refuses chunked REST over createR2UploadStorage (S3 API), which stores chunks in arrival order", () => {
+        it("refuses chunked REST over createR2UploadStorage (S3 API), which stores chunks in arrival order", async () => {
             expect.hasAssertions();
 
-            const s3 = () => createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", path: "/upload", secretAccessKey: "secret" });
+            // The aws-light provider probes the bucket (`checkBucketAccess`) from its
+            // constructor, over the network and unawaited. Answer it locally: on CI the
+            // fake account's R2 endpoint fails the TLS handshake, and the rejection
+            // lands after the test as an unhandled error that fails the run.
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(undefined, { status: 200 }));
 
-            expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: s3() })).toThrow(
-                expect.objectContaining({
-                    code: "VALIDATION_ERROR",
-                    message: expect.stringMatching(/chunked REST is not supported over createR2UploadStorage.*"tus".*createR2BindingUploadStorage/),
-                }),
-            );
-            // TUS and multipart over the same provider are fine.
-            expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: s3() })).not.toThrow();
-            expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: s3() })).not.toThrow();
+            try {
+                const s3 = () => createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", path: "/upload", secretAccessKey: "secret" });
+
+                expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: s3() })).toThrow(
+                    expect.objectContaining({
+                        code: "VALIDATION_ERROR",
+                        message: expect.stringMatching(/chunked REST is not supported over createR2UploadStorage.*"tus".*createR2BindingUploadStorage/),
+                    }),
+                );
+                // TUS and multipart over the same provider are fine.
+                expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: s3() })).not.toThrow();
+                expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: s3() })).not.toThrow();
+
+                // The probes are signed asynchronously before they fetch; keep the stub
+                // in place until all three constructors have issued theirs.
+                await vi.waitFor(() => {
+                    expect(fetchSpy).toHaveBeenCalledTimes(3);
+                });
+            } finally {
+                fetchSpy.mockRestore();
+            }
         });
 
         it("rejects a maxFileSize that is not a finite, non-negative number", async () => {
