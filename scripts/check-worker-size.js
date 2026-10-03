@@ -52,6 +52,11 @@ const kib = (bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
  * Cloudflare's Worker size limit — 64 MiB uncompressed, the same on Free and
  * Paid. There is no compressed limit; only the uncompressed bundle counts.
  * https://developers.cloudflare.com/workers/platform/limits/#worker-size
+ *
+ * Mirrors `WORKER_SIZE_LIMIT_BYTES` in
+ * `packages/cli/src/commands/build/bundle-size.ts` (what `lunora build` warns
+ * against). This script cannot import it — it measures that CLI's own output —
+ * so change both together.
  */
 const RAW_LIMIT_BYTES = 64 * 1024 * 1024;
 
