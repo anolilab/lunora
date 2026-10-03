@@ -159,7 +159,9 @@ export interface RegisteredMutator<
  * validating, owner-scoping entry point as `handler`, so `createPost.server(ctx,
  * { userId: other })` cannot skip `applyOwnerScope`; and the raw impl runs with
  * the returned mutator as `this`, so `this.server(…)` inside a method-shorthand
- * impl re-enters through that same entry point.
+ * impl re-enters through that same entry point. That `this` is a spread copy
+ * of the definition, so prototype methods and getters of a class-instance
+ * definition are not available (or not live) through it.
  */
 export const defineMutator = <Args extends ValidatorMap = ValidatorMap, ServerContext = MutationContext, ClientTx = unknown, R = unknown>(
     definition: MutatorDefinition<Args, ServerContext, ClientTx, R>,
