@@ -890,7 +890,7 @@ interface RequestScope {
      * a queued mutation admitted after a sibling's prologue would otherwise
      * forward the sibling's trace.
      */
-    trace: { rayId?: string; rootSpanId: string; traceId: string } | undefined;
+    trace: TraceAnchor | undefined;
 
     /**
      * The inbound W3C `traceparent`, which `buildCtx` hands to
@@ -1973,7 +1973,7 @@ abstract class ShardDO {
      * `traceparent`. Cleared in the same `finally` as the other per-request
      * fields.
      */
-    private currentRequestTrace: { rayId?: string; rootSpanId: string; traceId: string } | undefined;
+    private currentRequestTrace: TraceAnchor | undefined;
 
     /**
      * Anchor of the in-flight trigger (`withTriggerTrace`), handed across the
@@ -3659,7 +3659,7 @@ abstract class ShardDO {
      * {@link makeTracer}. `undefined` outside a dispatch (an alarm, a lifecycle
      * hook), where the tracer mints its own anchor.
      */
-    protected getCurrentTrace(): { rayId?: string; rootSpanId: string; traceId: string } | undefined {
+    protected getCurrentTrace(): TraceAnchor | undefined {
         return this.currentRequestTrace;
     }
 
@@ -12849,7 +12849,7 @@ abstract class ShardDO {
         dispatchBookmark: DispatchBookmark;
         dispatchHeadroom: TransactionHeadroomTracker;
         dispatchStartedAt: number;
-        dispatchTrace: { rayId?: string; rootSpanId: string; traceId: string };
+        dispatchTrace: TraceAnchor;
     } {
         this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
         this.currentResponseBookmark = undefined;

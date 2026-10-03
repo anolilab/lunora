@@ -507,6 +507,15 @@ is dropped rather than logged. It is a Cloudflare-only signal: `wrangler dev`
 every event simply has no `rayId`. Dispatches that no HTTP request started, such
 as alarms, cron jobs and subscription re-runs, have none either.
 
+The same holds for work dispatched over a WebSocket: a subscription's first
+evaluation, stream queries, and the `onConnect` / `onDisconnect` lifecycle hooks.
+The upgrade request does carry a `cf-ray`, but the worker strips every
+`x-lunora-*` header from the upgrade before forwarding it to the shard (a
+security boundary, so a client cannot forge the server-minted ones). The Ray ID
+does not cross that hop, and the socket's later frames are not HTTP requests
+with a Ray ID of their own. Correlate socket-driven work by its `traceId`
+instead.
+
 Wiring Lunora's spans into Cloudflare's native trace tree, rather than linking
 the two by Ray ID, is tracked in
 [#939](https://github.com/anolilab/lunora/issues/939).
