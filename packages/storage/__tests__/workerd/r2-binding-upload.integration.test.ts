@@ -51,7 +51,7 @@ describe("createR2BindingUploadStorage (workerd + Miniflare R2)", () => {
             // eslint-disable-next-line no-await-in-loop -- TUS chunks are sequential
             const response = await patch(location, offset, bytes.slice(offset, offset + chunkSize));
 
-            expect([200, 204]).toContain(response.status);
+            expect(response.status).toBe(204);
         }
 
         const object = await env.BUCKET.get(location.split("/").pop() ?? "");
@@ -78,7 +78,7 @@ describe("createR2BindingUploadStorage (workerd + Miniflare R2)", () => {
         const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
 
         await expect(patch(location, 50, pattern(50))).resolves.toHaveProperty("status", 409);
-        await expect(patch(location, 0, pattern(100))).resolves.toHaveProperty("status", 200);
+        await expect(patch(location, 0, pattern(100))).resolves.toHaveProperty("status", 204);
     });
 
     it("honors a create-only conditional put on the real binding", async () => {
@@ -104,7 +104,7 @@ describe("createR2BindingUploadStorage (workerd + Miniflare R2)", () => {
             // eslint-disable-next-line no-await-in-loop -- TUS chunks are sequential
             const response = await patch(location, offset, bytes.slice(offset, offset + 700_000));
 
-            expect([200, 204]).toContain(response.status);
+            expect(response.status).toBe(204);
         }
 
         const object = await env.BUCKET.get(location.split("/").pop() ?? "");

@@ -319,11 +319,8 @@ A finished upload cannot be deleted through the handler either. On TUS, `DELETE`
 only cancels an upload in progress. The chunked-REST and multipart handlers would
 delete any stored file by id, so they do not take `DELETE` at all.
 
-**Known issue (TUS):** `@visulima/storage` answers the `PATCH` that completes an
-upload with `200`, while its TUS client expects `204`. The client recovers with a
-`HEAD` after about a second, so the upload succeeds, but its progress never
-reports the last chunk
-([visulima/visulima#899](https://github.com/visulima/visulima/issues/899)).
+On TUS every successful `PATCH` answers `204` with no body, the one that
+completes the upload included; read the new offset from `Upload-Offset`.
 
 How `maxFileSize` is enforced depends on the protocol. For TUS and chunked REST
 the handler reads the largest size the request declares across `Upload-Length`
@@ -386,27 +383,34 @@ remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
   progress, with its parts and segments. For a finished upload they drop only
   the state, never the stored file: removing a file is `ctx.storage.delete`.
 - **Concurrency.** A chunk at an offset other than the stored one is a `409`. A
-  chunk also takes a lease on the upload with a conditional put, so a second
-  request for the same upload while one is streaming gets a `409`, and the
-  client re-reads the offset with `HEAD` and continues. The writer confirms the
+  second TUS `PATCH` for an upload while one is streaming in the same isolate
+  gets a `423` from `@visulima/storage`, which the TUS client retries. Across
+  isolates, a chunk takes a lease on the upload with a conditional put, so a
+  second request that lands on another isolate gets a `409`, and the client
+  re-reads the offset with `HEAD` and continues. The writer confirms the
   lease before storing each part and before finishing, so one whose lease
   lapsed stops (`409`) instead of writing on. A lease left behind by a request
   that died expires after a minute. Tiny chunks cannot pile up waiting
   segments: past eight, they are joined into one.
 - **Interrupted chunks.** When the client drops mid-chunk, the bytes that
   arrived are kept and `HEAD` reports them, as TUS expects.
-- **Not supported:** the TUS `checksum`, `concatenation` and
-  `creation-defer-length` extensions (they are not advertised), and chunked-REST
-  chunks sent out of order (`409`, see [below](#chunked-rest)). `copy`/`move` on
-  the provider are refused.
+- **Not supported:** the TUS `concatenation` and `creation-defer-length`
+  extensions (not advertised; a request using one gets a `501`), and
+  chunked-REST chunks sent out of order (`409`, see [below](#chunked-rest)).
+  `copy`/`move` on the provider are refused. The `checksum` extension is not
+  advertised either, but a TUS `PATCH` that sends `Upload-Checksum` anyway is
+  verified by `@visulima/storage` before the provider sees it: the handler
+  buffers the chunk in memory, so it needs a `Content-Length` (`411`) and may be
+  at most 64 MiB (`413`); a mismatch is a `460`.
 
 `createR2UploadStorage({ accountId, bucket, accessKeyId, secretAccessKey, endpoint?, partSize?, path? })`
 builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
 `nodejs_compat`). `path` must match the route the handler is mounted on, and
 `endpoint` pins a jurisdiction. Each upload chunk becomes one part of an R2
 multipart upload, and R2 rejects parts under 5 MiB except the last (and parts
-of unequal size), so a TUS client must send equal chunks of at least 5 MiB. The
-binding provider above has neither restriction. The constructor throws on a missing
+of unequal size), so a TUS client must send equal chunks of at least 5 MiB
+(the TUS client's default `chunkSize` is 5 MiB). The binding provider above has
+neither restriction. The constructor throws on a missing
 credential: build it on first use rather than at module scope. Use it with TUS
 only: it appends each chunked-REST chunk as the next part without checking its
 `X-Chunk-Offset`, so a chunk sent out of order, or sent twice, silently corrupts
@@ -466,8 +470,8 @@ Check the stored size, not the reported status, or use TUS.
 
 ### Upgrading
 
-This release moves `@visulima/storage` to 2.0.25. What changes for an upload
-route:
+This release moves `@visulima/storage` to 2.0.26 and `@visulima/storage-client`
+to 1.0.6. What changes for an upload route:
 
 - **`GET` is refused** (`405`) on every protocol, before `authorize` runs, as
   described above. Nothing that uploads needs it. Code that read files back
@@ -483,3 +487,10 @@ route:
   (`<collection>/<id>/<id>.<ext>`).
 - **Chunked REST works** (it answered `400` to every chunk before), within the
   limits above.
+- **TUS follows tus 1.0 more strictly.** The `PATCH` that completes an upload
+  answers `204` with no body (it was `200` with the file record), so the
+  client's progress now reaches 100%. A `PATCH` at the wrong offset is a `409`,
+  a second one for the same upload while one is streaming is a `423`, and a
+  malformed `Upload-Length`, `Upload-Offset` or `Upload-Metadata` is a `400`.
+- **The TUS client's default `chunkSize` is 5 MiB** (it was 1 MiB), and it
+  retries a `423`.

@@ -130,14 +130,10 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         wire.restore();
 
         expect(result.bytesWritten ?? 0).toBe(2_000_000);
-        // Progress is live and monotonic. It stops one chunk short of 100:
-        // `@visulima/storage`'s TUS handler answers the completing PATCH with
-        // 200, the client accepts only 204, so it re-reads the offset with HEAD
-        // and finishes without a last progress event: visulima/visulima#899.
-        // (2.0.24's MemoryStorage marked an upload complete early and hid this.)
+        // Progress is live, monotonic, and reaches 100%.
         expect(progress.length).toBeGreaterThan(1);
         expect(progress).toStrictEqual(progress.toSorted((a, b) => a - b));
-        expect(progress.at(-1)).toBeGreaterThan(90);
+        expect(progress.at(-1)).toBe(100);
         // The upload went through the RLS route (POST create + PATCH chunks), never an admin path.
         expect(wire.requests.some((entry) => entry.method === "POST")).toBe(true);
         expect(wire.requests.some((entry) => entry.method === "PATCH")).toBe(true);
@@ -407,8 +403,7 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         const cut = 100 * 1024;
         const first = await driver.patch(location, 0, bytes.slice(0, cut));
 
-        // A partial chunk is 204; the one that completes the upload is 200.
-        // (2.0.24's MemoryStorage completed the upload early: 200 here, then 204.)
+        // Every successful PATCH is 204, the completing one included (tus 1.0).
         expect(first.status).toBe(204);
         expect(Number(first.headers.get("upload-offset"))).toBe(cut);
 
@@ -418,7 +413,8 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         // "Resume": finish from the reported offset.
         const rest = await driver.patch(location, cut, bytes.slice(cut));
 
-        expect(rest.status).toBe(200);
+        expect(rest.status).toBe(204);
+        await expect(rest.text()).resolves.toBe("");
         expect(Number(rest.headers.get("upload-offset"))).toBe(total);
     });
 
@@ -443,8 +439,8 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 
         const finished = await driver.patch(location, resumeOffset, bytes.slice(resumeOffset));
 
-        // The completing chunk answers 200 (a partial one 204).
-        expect(finished.status).toBe(200);
+        // The completing chunk answers 204, like a partial one.
+        expect(finished.status).toBe(204);
         expect(Number(finished.headers.get("upload-offset"))).toBe(total);
     });
 
@@ -643,36 +639,22 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             expect(withinCap.status).toBe(201);
         });
 
-        it("refuses chunked REST over createR2UploadStorage (S3 API), which stores chunks in arrival order", async () => {
+        it("refuses chunked REST over createR2UploadStorage (S3 API), which stores chunks in arrival order", () => {
             expect.hasAssertions();
 
-            // The aws-light provider probes the bucket (`checkBucketAccess`) from its
-            // constructor, over the network and unawaited. Answer it locally: on CI the
-            // fake account's R2 endpoint fails the TLS handshake, and the rejection
-            // lands after the test as an unhandled error that fails the run.
-            const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(undefined, { status: 200 }));
+            // Nothing here reaches the network: the aws-light provider probes the
+            // bucket on its first metadata read or write, not from its constructor.
+            const s3 = () => createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", path: "/upload", secretAccessKey: "secret" });
 
-            try {
-                const s3 = () => createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", path: "/upload", secretAccessKey: "secret" });
-
-                expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: s3() })).toThrow(
-                    expect.objectContaining({
-                        code: "VALIDATION_ERROR",
-                        message: expect.stringMatching(/chunked REST is not supported over createR2UploadStorage.*"tus".*createR2BindingUploadStorage/),
-                    }),
-                );
-                // TUS and multipart over the same provider are fine.
-                expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: s3() })).not.toThrow();
-                expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: s3() })).not.toThrow();
-
-                // The probes are signed asynchronously before they fetch; keep the stub
-                // in place until all three constructors have issued theirs.
-                await vi.waitFor(() => {
-                    expect(fetchSpy).toHaveBeenCalledTimes(3);
-                });
-            } finally {
-                fetchSpy.mockRestore();
-            }
+            expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: s3() })).toThrow(
+                expect.objectContaining({
+                    code: "VALIDATION_ERROR",
+                    message: expect.stringMatching(/chunked REST is not supported over createR2UploadStorage.*"tus".*createR2BindingUploadStorage/),
+                }),
+            );
+            // TUS and multipart over the same provider are fine.
+            expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: s3() })).not.toThrow();
+            expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: s3() })).not.toThrow();
         });
 
         it("rejects a maxFileSize that is not a finite, non-negative number", async () => {

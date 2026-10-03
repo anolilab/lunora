@@ -77,7 +77,7 @@ const sendChunks = async (
 
         offset += chunk.byteLength;
 
-        expect([200, 204]).toContain(response.status);
+        expect(response.status).toBe(204);
         expect(Number(response.headers.get("upload-offset"))).toBe(offset);
     }
 };
@@ -232,7 +232,7 @@ describe(createR2BindingUploadStorage, () => {
         expect(bucket.partSizes).toStrictEqual([[R2_PART_SIZE, 2_000_000]]);
     });
 
-    it("drives a whole upload from the TUS client with its default 1 MiB chunks", async () => {
+    it("drives a whole upload from the TUS client with its default 5 MiB chunks", async () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
@@ -274,11 +274,15 @@ describe(createR2BindingUploadStorage, () => {
         expect(sameBytes(storedObject(bucket, location)?.bytes, bytes)).toBe(true);
     });
 
-    it("refuses a second PATCH while another one for the same upload is still streaming (409)", async () => {
+    it("refuses a second PATCH while another one for the same upload is still streaming: 423 in the isolate, 409 from another", async () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
         const driver = tus(handlerOver(bucket));
+        // A second handler over the same bucket stands in for another isolate:
+        // it does not share the TUS handler's in-memory lock, so only the
+        // provider's lease in the bucket stops it.
+        const elsewhere = tus(handlerOver(bucket));
         const bytes = pattern(600_000);
         const location = await driver.create(bytes.byteLength);
 
@@ -309,15 +313,16 @@ describe(createR2BindingUploadStorage, () => {
             expect(pulled).toBe(1);
         });
 
-        const concurrent = await driver.patch(location, 0, bytes);
-
-        expect(concurrent.status).toBe(409);
+        // Same isolate: `@visulima/storage`'s TUS handler refuses it before the provider.
+        await expect(driver.patch(location, 0, bytes)).resolves.toHaveProperty("status", 423);
+        // Another isolate: the provider's lease refuses it.
+        await expect(elsewhere.patch(location, 0, bytes)).resolves.toHaveProperty("status", 409);
 
         release?.();
 
         const finished = await inFlight;
 
-        expect(finished.status).toBe(200);
+        expect(finished.status).toBe(204);
         expect(sameBytes(storedObject(bucket, location)?.bytes, bytes)).toBe(true);
     });
 
@@ -590,7 +595,7 @@ describe(createR2BindingUploadStorage, () => {
 
         paused.release();
 
-        await expect(inFlight).resolves.toHaveProperty("status", 200);
+        await expect(inFlight).resolves.toHaveProperty("status", 204);
         expect(sameBytes(storedObject(bucket, location)?.bytes, bytes)).toBe(true);
     });
 

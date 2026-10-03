@@ -25,8 +25,9 @@ const PROVIDER_OWNED_FIELDS = ["bytesWritten", "ETag", "id", "name", "size", "st
  *
  * `@visulima/storage`'s chunked-REST handler keeps the chunks it has received
  * in the upload's metadata (`_chunks`) and decides from that list alone whether
- * the upload is complete. 2.0.25 records a chunk only after the provider's
- * write succeeds, which fixes #892 for a refused chunk. It still misses a chunk
+ * the upload is complete. Since 2.0.25 it records a chunk only after the
+ * provider's write succeeds, which fixes #892 for a refused chunk. 2.0.26 still
+ * misses a chunk
  * whose body was cut off mid-request: the write fails, so the chunk is never
  * recorded, but this provider keeps the bytes that arrived (as TUS requires)
  * and the client resumes from the offset `HEAD` reports. The list then has a

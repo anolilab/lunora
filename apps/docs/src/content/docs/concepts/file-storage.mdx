@@ -359,9 +359,12 @@ the binding of that same bucket.
   least 5 MiB and all of them the same size. `createR2BindingUploadStorage`
   coalesces chunks of any size into 5 MiB parts, so the client's `chunkSize` is
   free. Over `createR2UploadStorage` each chunk becomes one part, so set
-  `chunkSize` to the same 5 MiB or more on every chunk (TUS defaults to 1 MiB).
+  `chunkSize` to the same 5 MiB or more on every chunk (the TUS client's default
+  is 5 MiB).
 - **Unsupported TUS extensions.** The binding provider does not offer
-  `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`.
+  `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`. A
+  client that sends `Upload-Checksum` anyway has the chunk buffered and verified
+  by the handler, up to 64 MiB per chunk.
 - **Chunked REST** runs over `createR2BindingUploadStorage` only, one chunk at a
   time and in order: a chunk at any other offset, or one sent while another is
   streaming, is a `409` and is not stored. The bundled client sends four chunks

@@ -20,7 +20,7 @@
  *
  * R2 rejects a multipart upload unless every part but the last is at least
  * 5 MiB **and all of them are the same size**. Clients send whatever chunk size
- * they like (TUS defaults to 1 MiB), so chunks are coalesced into parts of
+ * they like (the TUS client defaults to 5 MiB), so chunks are coalesced into parts of
  * exactly `R2_PART_SIZE` bytes: part `n` always holds bytes
  * `[(n - 1) * R2_PART_SIZE, n * R2_PART_SIZE)` of the file. Whatever a request
  * leaves over (less than one part) is written to a small "segment" object and
@@ -35,7 +35,10 @@
  * A write first checks the client's offset against the stored one (a mismatch
  * is a `409`, as TUS requires), then takes a lease on the upload by writing a
  * lock token into the state with a conditional put. Another request for the
- * same upload while the lease is held gets a `409` and writes nothing. Before
+ * same upload while the lease is held gets a `409` and writes nothing. (Within
+ * one isolate `@visulima/storage`'s TUS handler answers such a `PATCH` with a
+ * `423` before it reaches the provider; the lease is what holds across
+ * isolates, and for chunked REST, which has no such lock.) Before
  * every part is stored, and before the object is made, the writer confirms the
  * lease with a compare-and-swap; after every part it records its progress the
  * same way. A writer that finds its token gone (its lease expired and another
