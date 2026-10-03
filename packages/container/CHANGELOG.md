@@ -1,3 +1,9 @@
+## @lunora/container [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.68...@lunora/container@1.0.0-alpha.69) (2026-10-03)
+
+### Bug Fixes
+
+* follow-ups to the cloudflare limits and ray id reviews ([#942](https://github.com/anolilab/lunora/issues/942), [#943](https://github.com/anolilab/lunora/issues/943)) ([#949](https://github.com/anolilab/lunora/issues/949)) ([34a4597](https://github.com/anolilab/lunora/commit/34a4597a14128ea2e48d52d101d0fbbf9b61e932)), closes [#944](https://github.com/anolilab/lunora/issues/944) [#944](https://github.com/anolilab/lunora/issues/944)
+
 ## @lunora/container [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.67...@lunora/container@1.0.0-alpha.68) (2026-10-03)
 
 
