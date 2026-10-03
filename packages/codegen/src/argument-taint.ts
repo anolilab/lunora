@@ -1,20 +1,7 @@
-import type { BindingElement, Identifier, Node as TsNode, ParameterDeclaration } from "ts-morph";
+import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { bindingKeyName } from "./discover/ast";
-import { declarationOf } from "./discover/attribution";
-
-/** The parameter `declaration` binds: the parameter itself, or the one whose destructuring pattern holds it. */
-const parameterOf = (declaration: TsNode | undefined): ParameterDeclaration | undefined => {
-    if (Node.isParameterDeclaration(declaration)) {
-        return declaration;
-    }
-
-    return Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.Parameter) : undefined;
-};
-
-/** The identifiers of `node` — `node` itself when it is one. */
-const identifiersOf = (node: TsNode): Identifier[] => (Node.isIdentifier(node) ? [node] : node.getDescendantsOfKind(SyntaxKind.Identifier));
 
 /**
  * The parameter binding element that declares `name`, searched from the
@@ -179,8 +166,8 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     // so preferring the closest preceding binding avoids resolving through a shadow.
     // Kept spelling-based on purpose: over-resolving here only makes the taint
     // predicate report MORE, which fails open. The project does carry a type
-    // checker, and a predicate that SILENCES on a match must use it instead; see
-    // {@link readsRequestParameter} and the owner-field feeder.
+    // checker, and a predicate that SILENCES on a match must use it instead, as
+    // the owner-field feeder does for mutator impls (`implTaintOf`).
     const usePosition = node.getStart();
     let nearest: TsNode | undefined;
     let nearestPosition = -1;
@@ -216,43 +203,6 @@ export const isArgumentDerived = (expression: TsNode): boolean => {
     const initializer = singleHopInitializer(expression);
 
     return initializer !== undefined && referencesArgs(initializer);
-};
-
-/**
- * True when `value` reads a caller-controlled parameter, resolved by SYMBOL:
- * a parameter `isSource` accepts, or a binding destructured out of one —
- * directly, or through one local variable (`const a = input`,
- * `const { targetUserId } = input`, `let x = input.x`).
- *
- * The symbol-resolved counterpart of {@link isArgumentDerived}, keyed off the
- * resolved {@link ParameterDeclaration} instead of the spelling `args`, for a
- * handler that takes its args POSITIONALLY: `defineMutator`'s
- * `server: (ctx, args) => …` can name or destructure that parameter however it
- * likes (`(ctx, input)`, `(ctx, { targetUserId })`), which the spelling-based
- * predicate never sees. A `({ ctx, args })` procedure handler needs none of
- * this: its args are recognized by the `args` KEY, whatever the local name.
- */
-export const readsRequestParameter = (value: TsNode, isSource: (parameter: ParameterDeclaration) => boolean): boolean => {
-    const readsDirectly = (node: TsNode): boolean =>
-        identifiersOf(node).some((identifier) => {
-            const parameter = parameterOf(declarationOf(identifier));
-
-            return parameter !== undefined && isSource(parameter);
-        });
-
-    return identifiersOf(value).some((identifier) => {
-        const declaration = declarationOf(identifier);
-        const parameter = parameterOf(declaration);
-
-        if (parameter !== undefined) {
-            return isSource(parameter);
-        }
-
-        const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
-        const initializer = Node.isVariableDeclaration(variable) ? variable.getInitializer() : undefined;
-
-        return initializer !== undefined && readsDirectly(initializer);
-    });
 };
 
 /**

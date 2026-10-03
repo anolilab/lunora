@@ -305,6 +305,74 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
             expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
         });
 
+        const insert = (value: string): string => `ctx.db.insert("posts", { userId: ${value} })`;
+
+        // Each body's `// @write` line must be recorded and reported.
+        it.each([
+            // A callback receiver is server-scoped only when ROOTED in the impl's `ctx`.
+            ["a receiver filtered against ctx", `args.items.filter((i) => i.orgId === ctx.orgId).map((i) => ${insert("i.userId")}); // @write`],
+            [
+                "a variable bound to such a receiver",
+                `const mine = args.items.filter((i) => i.orgId === ctx.orgId);\n        mine.forEach((i) => ${insert("i.userId")}); // @write`,
+            ],
+            ["an array literal mixing ctx and args", `[ctx.auth.userId, args.targetUserId].map((id) => ${insert("id")}); // @write`],
+            ["a `??` fallback to ctx", `(args.items ?? ctx.defaults).map((i) => ${insert("i.userId")}); // @write`],
+            ["a spread of args beside ctx", `[{ ...args, org: ctx.org }].map((p) => ${insert("p.targetUserId")}); // @write`],
+            ["a helper called with ctx and args", `validate(ctx, args).then((a) => ${insert("a.targetUserId")}); // @write`],
+            ["an awaited helper over args", `(await helper(ctx, args.items)).map((i) => ${insert("i.userId")}); // @write`],
+            // Only receiver-iterating methods take taint from the receiver alone.
+            ["`Array.from` over args", `Array.from(args.items, (i) => ${insert("i.userId")}); // @write`],
+            ["a namespace `map` over args", `_.map(args.items, (i) => ${insert("i.userId")}); // @write`],
+            ["`Array.prototype.map.call` over args", `Array.prototype.map.call(args.items, (i) => ${insert("i.userId")}); // @write`],
+            ["a `reduce` seeded from args", `[0].reduce((acc) => ${insert("acc")}, args.targetUserId); // @write`],
+            // Variables are followed past one hop.
+            [
+                "a helper over a destructured args list",
+                `const { items } = args;\n        const uniq = dedupe(items);\n        uniq.forEach((i) => ${insert("i.userId")}); // @write`,
+            ],
+            [
+                "a two-hop alias of args",
+                `const items = args.items;\n        const list = items.slice(0);\n        list.map((i) => ${insert("i.userId")}); // @write`,
+            ],
+            [
+                "a two-hop argument",
+                `const persist = (d) => ${insert("d.userId")}; // @write\n        const t = args.targetUserId;\n        const u = t;\n        await persist({ userId: u });`,
+            ],
+            // Defaults inside a destructured parameter, and spread call arguments.
+            [
+                "a destructured parameter default",
+                `const persist = ({ userId = args.targetUserId }) => ${insert("userId")}; // @write\n        await persist({});`,
+            ],
+            ["an argument shifted by a spread", `const persist = (d) => ${insert("d.userId")}; // @write\n        persist(...[], args);`],
+            // A `for…of` variable takes the taint of what it iterates.
+            ["a `for…of` over args", `for (const item of args.items) {\n            await ${insert("item.userId")}; // @write\n        }`],
+        ])("reports %s", (_label, body) => {
+            expect.assertions(2);
+
+            const source = ownerMutator(`        ${body}`);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        // Rows read through `ctx.db` are server-scoped, even when the query filters on args.
+        it.each([
+            ["a `then` on a ctx.db read", `ctx.db.get(args.id).then((row) => ${insert("row.userId")}); // @write`],
+            [
+                "a `for…of` over ctx.db rows",
+                `const rows = await ctx.db.query("posts").collect();\n        for (const row of rows) {\n            await ${insert("row.userId")}; // @write\n        }`,
+            ],
+            [
+                "a recursive helper seeded with the verified identity",
+                `const walk = (n) => { ${insert("n.userId")}; walk(n.child); }; // @write\n        walk({ userId: ctx.auth.userId });`,
+            ],
+        ])("does not record %s", (_label, body) => {
+            expect.assertions(1);
+
+            const source = ownerMutator(`        ${body}`);
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
+        });
+
         it("marks a nested closure that closes over the impl's own `args` as owner-scoped", () => {
             expect.assertions(1);
 

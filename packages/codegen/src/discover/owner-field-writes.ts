@@ -1,7 +1,7 @@
-import type { CallExpression, Node as TsNode, ObjectLiteralExpression, ParameterDeclaration, Project, ts } from "ts-morph";
+import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpression, ParameterDeclaration, Project, ts, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { isArgumentDerived, isScopedByContext, readsRequestParameter, singleHopInitializer } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { CallSiteScope, FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../ir";
 import { bindingKeyName, collectCallRows, isConstDeclaration, isWriteTarget, outermostValueWrapper, propertyKeyName, unwrapExpression } from "./ast";
 import { callSiteScopeOf, declarationOf, withCallerVisibility } from "./attribution";
@@ -207,59 +207,118 @@ const parameterOf = (declaration: TsNode | undefined): ParameterDeclaration | un
     return Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.Parameter) : undefined;
 };
 
-/** Whether `value` mentions the `arguments` object. */
-const readsArgumentsObject = (value: TsNode): boolean =>
-    (Node.isIdentifier(value) ? [value] : value.getDescendantsOfKind(SyntaxKind.Identifier)).some((identifier) => identifier.getText() === "arguments");
+/** Whether `identifier` names a value, not a property: the `k` of `x.k` and of `{ k: v }` names a property. */
+const isValueIdentifier = (identifier: Identifier): boolean => {
+    const parent = identifier.getParent();
 
-/** How taint flows inside one mutator impl: which parameters are caller-controlled, and which values derive from them. */
-interface ImplTaint {
-    /** Whether a value is caller-controlled. `contextScoped` lets a value that also reads `ctx` count as server-scoped. */
-    isTaintedValue: (value: TsNode, contextScoped: boolean) => boolean;
-}
+    if (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) {
+        return false;
+    }
+
+    return !((Node.isPropertyAssignment(parent) || Node.isMethodDeclaration(parent)) && parent.getNameNode() === identifier);
+};
 
 /**
- * The taint model of `scope`'s impl. The impl's own `args` parameter is
- * caller-controlled. A parameter of a function NESTED in the impl is
- * caller-controlled only when what flows into it is.
- *
- * A function called by name (`const persist = …; persist(x)`, a nested
- * `function persist`, or an IIFE) takes taint from the argument at that
- * position, at ANY call site in the impl. A function with no visible call
- * site, or one also used as a value (passed on, returned, stored), fails
- * closed.
- *
- * A callback (`rows.map((row) => …)`) takes taint from the receiver it is
- * called on: `args.items.map(…)` is caller-controlled; rows read through
- * `ctx.db` are not, even when the query filters on `args`.
- *
- * Anything else (passed to an unknown function, a method of a literal) is
- * always caller-controlled, which fails closed.
- *
- * A parameter default (`(x = args.targetUserId) => …`) is followed too.
- * Recursion is resolved to the least fixed point: a call cycle adds no taint
- * of its own, so a recursive helper is tainted only by what enters the cycle.
+ * Methods that call their callback with the elements, or the settled value, of
+ * their RECEIVER, plus their other arguments (`reduce`'s seed). Only for these
+ * does a callback's taint come from the receiver; any other callee — a static
+ * or namespace function (`Array.from(list, cb)`, `_.map(list, cb)`), `.call` —
+ * fails closed.
  */
-const implTaintOf = (scope: MutatorImplScope): ImplTaint => {
-    const { impl } = scope;
-    const memo = new Map<ts.Node, boolean>();
-    const visiting = new Set<ts.Node>();
-    const isNested = (node: TsNode): boolean => impl.getPos() <= node.getPos() && node.getEnd() <= impl.getEnd();
+const RECEIVER_ITERATING_METHODS = new Set<string>([
+    "catch",
+    "every",
+    "filter",
+    "finally",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "flatMap",
+    "forEach",
+    "map",
+    "reduce",
+    "reduceRight",
+    "some",
+    "sort",
+    "then",
+]);
 
-    let isTaintedValue: ImplTaint["isTaintedValue"];
+/** How many variable hops (`const a = b; const b = c`) taint is followed through before failing closed. */
+const MAX_VARIABLE_HOPS = 8;
 
-    const isCallSiteTainted = (call: CallExpression, index: number, isRest: boolean): boolean =>
-        call.getArguments().some((argument, position) => {
-            if (Node.isSpreadElement(argument)) {
-                return position <= index && isTaintedValue(argument.getExpression(), false);
-            }
+/**
+ * How taint flows inside one mutator impl, resolved by symbol. Caller-controlled
+ * are the impl's own `args` parameter, the `arguments` object, any identifier
+ * spelled `args` that is not a nested parameter cleared below, and what derives
+ * from them through variables (followed up to {@link MAX_VARIABLE_HOPS}; a
+ * `let` that is reassigned, a variable with no initializer, a `catch` binding,
+ * or running out of hops fails closed). A `for…of` / `for…in` variable takes
+ * the taint of what it iterates.
+ *
+ * A parameter of a function NESTED in the impl is caller-controlled only when
+ * what flows into it is. A function called by name (`const persist = …;
+ * persist(x)`, a nested `function`, an IIFE) takes taint from the argument at
+ * that position at ANY call site; past a spread argument, from every later
+ * argument. A function with no visible call site, or one also used as a value
+ * (passed on, returned, stored, `.call`ed), fails closed. A callback takes
+ * taint from its receiver and the call's other arguments, but only for a
+ * {@link RECEIVER_ITERATING_METHODS} method; anything else fails closed. A
+ * default, of the parameter or of any element of its destructuring, is
+ * followed too.
+ *
+ * Each verdict is computed once. Recursion resolves to the least fixed point:
+ * a cycle adds no taint of its own, and a verdict that depended on a cut cycle
+ * (or on the hop bound) is not cached.
+ */
+class ImplTaint {
+    private readonly argsParameter: ParameterDeclaration | undefined;
 
-            return (position === index || (isRest && position > index)) && isTaintedValue(argument, false);
-        });
+    private readonly contextParameter: ParameterDeclaration | undefined;
 
-    const flowsIntoTainted = (parameter: ParameterDeclaration): boolean => {
-        const initializer = parameter.getInitializer();
+    private cuts = 0;
 
-        if (initializer !== undefined && isTaintedValue(initializer, false)) {
+    private readonly impl: MutatorServerImpl;
+
+    private readonly inProgress = new Set<ts.Node>();
+
+    private readonly referencesByName = new Map<string, Identifier[]>();
+
+    private variableDepth = 0;
+
+    private readonly verdicts = new Map<ts.Node, boolean>();
+
+    public constructor(scope: MutatorImplScope) {
+        this.impl = scope.impl;
+        this.argsParameter = scope.parameter;
+        [this.contextParameter] = scope.impl.getParameters();
+
+        for (const identifier of scope.impl.getDescendantsOfKind(SyntaxKind.Identifier)) {
+            const name = identifier.getText();
+
+            this.referencesByName.set(name, [...(this.referencesByName.get(name) ?? []), identifier]);
+        }
+    }
+
+    /**
+     * Whether `value` is caller-controlled. With `rootedInContext`, a value whose
+     * member / call chain is rooted in the impl's own `ctx` parameter (rows read
+     * through `ctx.db`) counts as server-scoped.
+     */
+    public isTaintedValue(value: TsNode, rootedInContext: boolean): boolean {
+        if (rootedInContext && this.isRootedInContext(value, MAX_VARIABLE_HOPS)) {
+            return false;
+        }
+
+        const identifiers = Node.isIdentifier(value) ? [value] : value.getDescendantsOfKind(SyntaxKind.Identifier);
+
+        return identifiers.some((identifier) => isValueIdentifier(identifier) && this.isIdentifierTainted(identifier));
+    }
+
+    private flowsIntoTainted(parameter: ParameterDeclaration): boolean {
+        const defaults = [parameter.getInitializer(), ...parameter.getDescendantsOfKind(SyntaxKind.BindingElement).map((element) => element.getInitializer())];
+
+        if (defaults.some((value) => value !== undefined && this.isTaintedValue(value, false))) {
             return true;
         }
 
@@ -277,12 +336,18 @@ const implTaintOf = (scope: MutatorImplScope): ImplTaint => {
         if (Node.isCallExpression(holder)) {
             // An IIFE is a direct call; anything else receives the function as a callback.
             if (holder.getExpression() === value) {
-                return isCallSiteTainted(holder, index, parameter.isRestParameter());
+                return this.isCallSiteTainted(holder, index, parameter.isRestParameter());
             }
 
             const callee = unwrapExpression(holder.getExpression());
 
-            return Node.isPropertyAccessExpression(callee) || Node.isElementAccessExpression(callee) ? isTaintedValue(callee.getExpression(), true) : true;
+            if (!Node.isPropertyAccessExpression(callee) || !RECEIVER_ITERATING_METHODS.has(callee.getName())) {
+                return true;
+            }
+
+            const others = holder.getArguments().filter((argument) => argument !== value);
+
+            return this.isTaintedValue(callee.getExpression(), true) || others.some((argument) => this.isTaintedValue(argument, false));
         }
 
         const binding = Node.isVariableDeclaration(holder) && isConstDeclaration(holder) ? holder : undefined;
@@ -293,14 +358,7 @@ const implTaintOf = (scope: MutatorImplScope): ImplTaint => {
             return true;
         }
 
-        const references = impl
-            .getDescendantsOfKind(SyntaxKind.Identifier)
-            .filter(
-                (identifier) =>
-                    identifier !== nameNode &&
-                    identifier.getText() === nameNode.getText() &&
-                    declarationOf(identifier)?.compilerNode === declaration.compilerNode,
-            );
+        const references = this.referencesTo(declaration, nameNode.getText());
 
         return (
             references.length === 0 ||
@@ -308,72 +366,178 @@ const implTaintOf = (scope: MutatorImplScope): ImplTaint => {
                 const callee = outermostValueWrapper(reference);
                 const call = callee.getParent();
 
-                return !Node.isCallExpression(call) || call.getExpression() !== callee || isCallSiteTainted(call, index, parameter.isRestParameter());
+                return !Node.isCallExpression(call) || call.getExpression() !== callee || this.isCallSiteTainted(call, index, parameter.isRestParameter());
             })
         );
-    };
+    }
 
-    const isSource = (parameter: ParameterDeclaration): boolean => {
-        if (parameter.compilerNode === scope.parameter?.compilerNode) {
+    private isCallSiteTainted(call: CallExpression, index: number, isRest: boolean): boolean {
+        const callArguments = call.getArguments();
+        const firstSpread = callArguments.findIndex((argument) => Node.isSpreadElement(argument));
+        // Past a spread, any later argument may land on any later parameter.
+        const reaches = (position: number): boolean =>
+            position === index || (isRest && position > index) || (firstSpread !== -1 && firstSpread <= index && position >= firstSpread);
+
+        return callArguments.some((argument, position) => reaches(position) && this.isTaintedValue(argument, false));
+    }
+
+    private isIdentifierTainted(identifier: Identifier): boolean {
+        const name = identifier.getText();
+
+        if (name === "arguments") {
             return true;
         }
 
-        const key = parameter.compilerNode;
+        const declaration = declarationOf(identifier);
+        const parameter = parameterOf(declaration);
 
-        if (parameter.getParent() === impl || !isNested(parameter)) {
+        if (parameter !== undefined) {
+            return this.isSource(parameter);
+        }
+
+        // An `args` that is not, by symbol, a parameter cleared above stays tainted by its spelling.
+        if (name === "args") {
+            return true;
+        }
+
+        if (declaration === undefined || !this.isInImpl(declaration)) {
             return false;
         }
 
-        const known = memo.get(key);
+        const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
+
+        return Node.isVariableDeclaration(variable) && this.isVariableTainted(variable, name);
+    }
+
+    private isInImpl(node: TsNode): boolean {
+        return node !== this.impl && this.impl.getPos() <= node.getPos() && node.getEnd() <= this.impl.getEnd();
+    }
+
+    /** Whether `value`'s member / call chain is rooted, by symbol, in the impl's `ctx` parameter (directly or through `const`s). */
+    private isRootedInContext(value: TsNode, hops: number): boolean {
+        let current: TsNode | undefined = unwrapExpression(value);
+
+        while (
+            Node.isAwaitExpression(current) ||
+            Node.isPropertyAccessExpression(current) ||
+            Node.isElementAccessExpression(current) ||
+            Node.isCallExpression(current)
+        ) {
+            current = unwrapExpression(current.getExpression());
+        }
+
+        if (!Node.isIdentifier(current)) {
+            return false;
+        }
+
+        const declaration = declarationOf(current);
+        const context = this.contextParameter;
+
+        if (context !== undefined && Node.isIdentifier(context.getNameNode()) && declaration?.compilerNode === context.compilerNode) {
+            return true;
+        }
+
+        const initializer = isConstDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) ? declaration.getInitializer() : undefined;
+
+        return hops > 0 && initializer !== undefined && this.isRootedInContext(initializer, hops - 1);
+    }
+
+    private isSource(parameter: ParameterDeclaration): boolean {
+        if (parameter.compilerNode === this.argsParameter?.compilerNode) {
+            return true;
+        }
+
+        return parameter.getParent() !== this.impl && this.isInImpl(parameter) && this.memoized(parameter.compilerNode, () => this.flowsIntoTainted(parameter));
+    }
+
+    private isVariableTainted(variable: VariableDeclaration, name: string): boolean {
+        return this.memoized(variable.compilerNode, () => {
+            const holder = variable.getParent().getParent();
+
+            if (Node.isCatchClause(variable.getParent())) {
+                return true;
+            }
+
+            if (Node.isForOfStatement(holder) || Node.isForInStatement(holder)) {
+                return this.isTaintedValue(holder.getExpression(), true);
+            }
+
+            const initializer = variable.getInitializer();
+
+            if (
+                initializer === undefined ||
+                (!isConstDeclaration(variable) && this.referencesTo(variable, name).some((reference) => isWriteTarget(reference)))
+            ) {
+                return true;
+            }
+
+            if (this.variableDepth >= MAX_VARIABLE_HOPS) {
+                this.cuts += 1;
+
+                return true;
+            }
+
+            this.variableDepth += 1;
+
+            try {
+                return this.isTaintedValue(initializer, false);
+            } finally {
+                this.variableDepth -= 1;
+            }
+        });
+    }
+
+    private memoized(key: ts.Node, compute: () => boolean): boolean {
+        const known = this.verdicts.get(key);
 
         if (known !== undefined) {
             return known;
         }
 
-        if (visiting.has(key)) {
+        if (this.inProgress.has(key)) {
+            this.cuts += 1;
+
             return false;
         }
 
-        visiting.add(key);
+        const cutsBefore = this.cuts;
 
-        const tainted = flowsIntoTainted(parameter);
+        this.inProgress.add(key);
 
-        visiting.delete(key);
+        const verdict = compute();
 
-        // Only a verdict reached outside any open cycle is final.
-        if (visiting.size === 0) {
-            memo.set(key, tainted);
+        this.inProgress.delete(key);
+
+        if (this.cuts === cutsBefore) {
+            this.verdicts.set(key, verdict);
         }
 
-        return tainted;
-    };
+        return verdict;
+    }
 
-    // The spelling-based predicate also matches an `args` that, by symbol, is a
-    // nested function's parameter this model has cleared; such a match is not taint.
-    const isSpellingTaint = (value: TsNode): boolean => {
-        if (!isArgumentDerived(value)) {
-            return false;
-        }
-
-        const hop = singleHopInitializer(value);
-        const spelled = [value, ...(hop === undefined ? [] : [hop])].flatMap((node) =>
-            (Node.isIdentifier(node) ? [node] : node.getDescendantsOfKind(SyntaxKind.Identifier)).filter((identifier) => identifier.getText() === "args"),
+    private referencesTo(declaration: TsNode, name: string): Identifier[] {
+        return (this.referencesByName.get(name) ?? []).filter(
+            (reference) => reference.getParent() !== declaration && declarationOf(reference)?.compilerNode === declaration.compilerNode,
         );
+    }
+}
 
-        return !spelled.every((identifier) => {
-            const parameter = parameterOf(declarationOf(identifier));
+/** One {@link ImplTaint} per impl, keyed on the compiler node so a re-parse rebuilds it. */
+const IMPL_TAINT_CACHE = new WeakMap<ts.Node, ImplTaint>();
 
-            return parameter !== undefined && parameter.getParent() !== impl && isNested(parameter) && !isSource(parameter);
-        });
-    };
+/** The {@link ImplTaint} of `scope`'s impl, built once. */
+const implTaintOf = (scope: MutatorImplScope): ImplTaint => {
+    const cached = IMPL_TAINT_CACHE.get(scope.impl.compilerNode);
 
-    isTaintedValue = (value, contextScoped) => {
-        const tainted = readsRequestParameter(value, isSource) || readsArgumentsObject(value) || isSpellingTaint(value);
+    if (cached !== undefined) {
+        return cached;
+    }
 
-        return tainted && !(contextScoped && isScopedByContext(value));
-    };
+    const taint = new ImplTaint(scope);
 
-    return { isTaintedValue };
+    IMPL_TAINT_CACHE.set(scope.impl.compilerNode, taint);
+
+    return taint;
 };
 
 /** The object `node` reads `field` from (`<object>.<field>`, `<object>?.<field>`, `<object>["<field>"]`), unwrapped; else `undefined`. */
