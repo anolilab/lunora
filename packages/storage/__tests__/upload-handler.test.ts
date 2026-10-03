@@ -648,3 +648,57 @@ describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
         await expect(create(handler, { "Upload-Length": length })).resolves.toHaveProperty("status", 413);
     });
 });
+
+describe("createUploadHandler chunked REST", () => {
+    it("uploads a file end to end: POST init, two in-order PATCHes, HEAD reports it complete (visulima/visulima#884)", async () => {
+        expect.hasAssertions();
+
+        // `@visulima/storage` 2.0.8 to 2.0.22 answered every chunked-REST PATCH
+        // with 400: its create never marked the upload as chunked.
+        const handler = createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+        const bytes = new TextEncoder().encode("0123456789");
+
+        const created = await handler.fetch(
+            new Request(ENDPOINT, {
+                headers: { "content-type": "text/plain", "x-chunked-upload": "true", "x-total-size": String(bytes.byteLength) },
+                method: "POST",
+            }),
+        );
+
+        expect(created.status).toBe(201);
+        expect(created.headers.get("x-chunked-upload")).toBe("true");
+
+        const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
+        const patch = async (offset: number, chunk: Uint8Array<ArrayBuffer>): Promise<Response> =>
+            handler.fetch(
+                new Request(location, {
+                    body: chunk,
+                    headers: { "content-length": String(chunk.byteLength), "content-type": "application/octet-stream", "x-chunk-offset": String(offset) },
+                    method: "PATCH",
+                }),
+            );
+
+        const first = await patch(0, bytes.slice(0, 5));
+
+        expect(first.status).toBe(202);
+        expect(first.headers.get("x-upload-offset")).toBe("5");
+        expect(first.headers.get("x-upload-complete")).toBe("false");
+
+        const second = await patch(5, bytes.slice(5));
+
+        expect(second.status).toBe(200);
+        expect(second.headers.get("x-upload-offset")).toBe("10");
+        expect(second.headers.get("x-upload-complete")).toBe("true");
+
+        const head = await handler.fetch(new Request(location, { method: "HEAD" }));
+
+        expect(head.status).toBe(200);
+        expect(head.headers.get("x-upload-complete")).toBe("true");
+        expect(head.headers.get("x-upload-offset")).toBe("10");
+
+        const download = await handler.fetch(new Request(location, { method: "GET" }));
+
+        expect(download.status).toBe(200);
+        await expect(download.text()).resolves.toBe("0123456789");
+    });
+});
