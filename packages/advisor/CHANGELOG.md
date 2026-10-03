@@ -1,3 +1,9 @@
+## @lunora/advisor [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.188...@lunora/advisor@1.0.0-alpha.189) (2026-10-03)
+
+### Bug Fixes
+
+* **codegen:** owner-taint, ctx resolution and export-registration follow-ups ([#961](https://github.com/anolilab/lunora/issues/961)) ([ae5bed3](https://github.com/anolilab/lunora/commit/ae5bed3be46885cbc48eda675aa4a8da8bd7199a)), closes [#960](https://github.com/anolilab/lunora/issues/960) [#960](https://github.com/anolilab/lunora/issues/960) [#957](https://github.com/anolilab/lunora/issues/957)
+
 ## @lunora/advisor [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.187...@lunora/advisor@1.0.0-alpha.188) (2026-10-03)
 
 ### Bug Fixes
