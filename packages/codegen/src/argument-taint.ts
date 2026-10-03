@@ -2,7 +2,7 @@ import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { bindingKeyName } from "./discover/ast";
-import { declarationOf } from "./discover/attribution";
+import { declarationOf, isReassignedBinding } from "./discover/attribution";
 import { isHandlerArgsParameter, referencesContext } from "./discover/context-root";
 
 /**
@@ -153,15 +153,6 @@ const referencesBinding = (node: TsNode, name: string): boolean => {
 };
 
 /**
- * True when `node` is, or contains, a value reference to the handler's `ctx`:
- * spelled `ctx` (or destructured from a `ctx` key) as before, or any binding
- * the shared resolver proves denotes the ctx or a surface of it — a renamed
- * `(c, args)` ctx, a destructured `{ auth }`, `const userId = ctx.auth.userId`
- * (see `referencesContext`).
- */
-const textuallyReferencesContext = (node: TsNode): boolean => referencesBinding(node, "ctx") || referencesContext(node);
-
-/**
  * The leftmost identifier of a member/element-access (and non-null) chain
  * (`body.tag.id` → `body`), or `undefined` when the chain doesn't root at a bare
  * identifier. Lets the request taint follow one hop through the *object* of a
@@ -176,6 +167,20 @@ const memberAccessRootIdentifier = (node: TsNode): Identifier | undefined => {
     }
 
     return Node.isIdentifier(current) ? current : undefined;
+};
+
+/**
+ * The initializer of the variable `node` names, resolved by symbol, when that
+ * binding cannot have been repointed since (a `const`, or a `let` never
+ * reassigned) — the hop a SUPPRESSOR may follow. `singleHopInitializer` is the
+ * looser, spelling-based hop the taint side uses.
+ */
+const trustedInitializerOf = (node: TsNode): TsNode | undefined => {
+    const declaration = Node.isIdentifier(node) ? declarationOf(node) : undefined;
+
+    return Node.isVariableDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) && !isReassignedBinding(declaration)
+        ? declaration.getInitializer()
+        : undefined;
 };
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
@@ -292,25 +297,25 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
  * introduces one.
  */
 export const isScopedByContext = (node: TsNode): boolean => {
-    if (textuallyReferencesContext(node)) {
+    if (referencesContext(node)) {
         return true;
     }
 
-    const initializer = singleHopInitializer(node);
+    const initializer = trustedInitializerOf(node);
 
-    if (initializer !== undefined && textuallyReferencesContext(initializer)) {
+    if (initializer !== undefined && referencesContext(initializer)) {
         return true;
     }
 
     // Follow each value-identifier composed into the (expanded) key one hop to its
-    // own `const` initializer — `${userId}/…` reaches ctx via `const userId = ctx.*`.
+    // own initializer — `${userId}/…` reaches ctx via `const userId = ctx.*`.
     const composed = initializer ?? node;
     const identifiers = Node.isIdentifier(composed) ? [composed] : composed.getDescendantsOfKind(SyntaxKind.Identifier);
 
     return identifiers.some((identifier) => {
-        const boundInitializer = singleHopInitializer(identifier);
+        const boundInitializer = trustedInitializerOf(identifier);
 
-        return boundInitializer !== undefined && textuallyReferencesContext(boundInitializer);
+        return boundInitializer !== undefined && referencesContext(boundInitializer);
     });
 };
 

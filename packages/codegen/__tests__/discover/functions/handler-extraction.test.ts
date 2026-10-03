@@ -11,7 +11,7 @@
 import { Node, Project, SyntaxKind } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import { isDatabaseAccessor } from "../../../src/discover/context-root";
+import { isDatabaseAccessor } from "../../../src/discover/database-calls";
 import { inlineHandler, procedureHandler } from "../../../src/discover/functions/handler";
 
 /**

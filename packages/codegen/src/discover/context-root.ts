@@ -28,12 +28,11 @@ import type {
     ObjectLiteralElementLike,
     ParameterDeclaration,
     ts,
-    VariableDeclaration,
 } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { bindingKeyName, findObjectProperty, isConstDeclaration, isWriteTarget, unwrapExpression } from "./ast";
-import { declarationOf, isTypePosition } from "./attribution";
+import { bindingKeyName, findObjectProperty, isConstDeclaration, memberAccessOf, unwrapExpression, walkChain } from "./ast";
+import { declarationOf, isReassignedBinding, isValueIdentifier } from "./attribution";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import { isDefineMutatorCallee } from "./mutators";
 
@@ -142,38 +141,6 @@ const isHandlerArgsParameter = (parameter: ParameterDeclaration): boolean => {
     );
 };
 
-/** Per-binding {@link isRebound} verdicts, keyed on the compiler node. */
-const REBOUND_CACHE = new WeakMap<ts.Node, boolean>();
-
-/** Whether a `let` / `var` binding is assigned after its declaration (`db = other`); a `const` never is. */
-const isRebound = (binding: BindingElement | VariableDeclaration): boolean => {
-    const list = binding.getFirstAncestorByKind(SyntaxKind.VariableDeclarationList);
-    const nameNode = binding.getNameNode();
-
-    if (list === undefined || isConstDeclaration(list.getDeclarations()[0]) || !Node.isIdentifier(nameNode)) {
-        return false;
-    }
-
-    let rebound = REBOUND_CACHE.get(binding.compilerNode);
-
-    if (rebound === undefined) {
-        const scope =
-            binding.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor)) ?? binding.getSourceFile();
-
-        rebound = scope
-            .getDescendantsOfKind(SyntaxKind.Identifier)
-            .some(
-                (identifier) =>
-                    identifier.getText() === nameNode.getText() &&
-                    isWriteTarget(identifier) &&
-                    declarationOf(identifier)?.compilerNode === binding.compilerNode,
-            );
-        REBOUND_CACHE.set(binding.compilerNode, rebound);
-    }
-
-    return rebound;
-};
-
 /** The ctx path a ctx-surface expression denotes: `[]` for the ctx itself, `["db"]` for `ctx.db`, `["auth", "userId"]` for `ctx.auth.userId`. */
 type ContextPath = ReadonlyArray<string>;
 
@@ -203,7 +170,7 @@ const bindingContextPath = (element: BindingElement, policy: Policy, hops: numbe
     const holder = element.getParent().getParent();
     const key = bindingKeyName(element);
 
-    if (element.getDotDotDotToken() !== undefined || (policy === "trust" && isRebound(element))) {
+    if (element.getDotDotDotToken() !== undefined || (policy === "trust" && isReassignedBinding(element))) {
         return undefined;
     }
 
@@ -225,17 +192,6 @@ const bindingContextPath = (element: BindingElement, policy: Policy, hops: numbe
     return base === undefined ? undefined : [...base, key];
 };
 
-/** The member a `<x>.k` / `<x>["k"]` access reads, and the expression it reads it off; `undefined` for anything else. */
-const memberAccessOf = (node: TsNode | undefined): { member: string; object: TsNode } | undefined => {
-    if (Node.isPropertyAccessExpression(node)) {
-        return { member: node.getName(), object: node.getExpression() };
-    }
-
-    const key = Node.isElementAccessExpression(node) ? node.getArgumentExpression() : undefined;
-
-    return Node.isElementAccessExpression(node) && Node.isStringLiteral(key) ? { member: key.getLiteralValue(), object: node.getExpression() } : undefined;
-};
-
 /** The {@link ContextPath} `node` denotes under `policy`, or `undefined` when it is no ctx surface. */
 const contextPathOf = (node: TsNode | undefined, policy: Policy = "discover", hops = MAX_CONTEXT_HOPS): ContextPath | undefined => {
     const value = unwrapExpression(node);
@@ -247,15 +203,20 @@ const contextPathOf = (node: TsNode | undefined, policy: Policy = "discover", ho
         return base === undefined ? undefined : [...base, access.member];
     }
 
-    if (!Node.isIdentifier(value)) {
-        return undefined;
-    }
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the expression and identifier resolvers recurse into each other
+    return Node.isIdentifier(value) ? identifierContextPath(value, policy, hops) : undefined;
+};
 
-    if (value.getText() === "ctx") {
-        return [];
-    }
+/** The {@link ContextPath} an identifier denotes: through its declaration, by symbol. */
+const identifierContextPath = (identifier: Identifier, policy: Policy, hops: number): ContextPath | undefined => {
+    const isSpelledContext = identifier.getText() === "ctx";
+    const declaration = policy === "trust" || !isSpelledContext ? declarationOf(identifier) : undefined;
 
-    const declaration = declarationOf(value);
+    // Spelled `ctx` is the ctx (as every feeder matched it) — except, under the
+    // trust policy, a local `let` / `const ctx = …`, which is only what it holds.
+    if (isSpelledContext && !Node.isVariableDeclaration(declaration)) {
+        return Node.isBindingElement(declaration) ? bindingContextPath(declaration, policy, hops) : [];
+    }
 
     if (Node.isParameterDeclaration(declaration)) {
         return Node.isIdentifier(declaration.getNameNode()) && isHandlerContextParameter(declaration) ? [] : undefined;
@@ -267,12 +228,11 @@ const contextPathOf = (node: TsNode | undefined, policy: Policy = "discover", ho
 
     const isFollowed = Node.isVariableDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) && hops > 0;
 
-    if (!isFollowed || (policy === "trust" && isRebound(declaration))) {
-        return undefined;
-    }
-
-    return contextPathOf(declaration.getInitializer(), policy, hops - 1);
+    return !isFollowed || (policy === "trust" && isReassignedBinding(declaration)) ? undefined : contextPathOf(declaration.getInitializer(), policy, hops - 1);
 };
+
+/** The ctx surface `node` denotes under the DISCOVERY policy (`["db"]` for `c.db`), or `undefined`. */
+const contextSurfacePathOf = (node: TsNode | undefined): ReadonlyArray<string> | undefined => contextPathOf(node, "discover");
 
 /** The `ctx.<a>.<b>` spelling of the ctx surface `node` denotes (`c.kv` → `ctx.kv`), or `undefined`. */
 const contextSurfaceText = (node: TsNode): string | undefined => {
@@ -388,23 +348,12 @@ const contextMemberAccessesIn = (scope: TsNode): [string, TsNode][] =>
 /** Whether `node` denotes the handler's ctx object itself (the `ctx` of `ctx.flags`, `ctx.fetch`). */
 const isContextIdentifier = (node: TsNode): boolean => Node.isIdentifier(node) && contextPathOf(node)?.length === 0;
 
-/** Whether `node` denotes a handler's `ctx.db` (discovery policy). */
-const mayDenoteContextDatabase = (node: TsNode | undefined): boolean => {
+/** Whether `node` denotes a handler's `ctx.db` — exactly that surface, under the discovery policy. */
+const denotesContextDatabase = (node: TsNode | undefined): boolean => {
     const path = contextPathOf(node);
 
     return path?.length === 1 && path[0] === "db";
 };
-
-/**
- * True when `receiver` is the database accessor: anything named `db` by
- * shape (`ctx.db`, `this.db`, a bare `db`, as every feeder has always matched
- * it), or a binding resolving to `ctx.db` under another name
- * (`const database = ctx.db`).
- */
-const isDatabaseAccessor = (receiver: TsNode): boolean =>
-    (Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") ||
-    (Node.isIdentifier(receiver) && receiver.getText() === "db") ||
-    mayDenoteContextDatabase(receiver);
 
 /**
  * `ctx` methods whose result echoes caller-chosen input: `ctx.db.asId(table, args.x)`
@@ -431,26 +380,16 @@ const CALLBACK_RESULT_METHODS: ReadonlySet<string> = new Set(["catch", "flatMap"
  * IDOR whatever its left side is.
  */
 const isContextRooted = (value: TsNode, hops = MAX_CONTEXT_HOPS): boolean => {
-    let current = unwrapExpression(value);
-
-    while (
-        Node.isAwaitExpression(current) ||
-        Node.isPropertyAccessExpression(current) ||
-        Node.isElementAccessExpression(current) ||
-        Node.isCallExpression(current)
-    ) {
-        const callee = Node.isCallExpression(current) ? unwrapExpression(current.getExpression()) : undefined;
+    const end = walkChain(value, (call) => {
+        const callee = unwrapExpression(call.getExpression());
         const method = Node.isPropertyAccessExpression(callee) ? callee.getName() : undefined;
 
-        if (method !== undefined && (ECHOING_CONTEXT_METHODS.has(method) || CALLBACK_RESULT_METHODS.has(method))) {
-            return false;
-        }
+        return method !== undefined && (ECHOING_CONTEXT_METHODS.has(method) || CALLBACK_RESULT_METHODS.has(method)) ? false : undefined;
+    });
+    const current = end.root;
 
-        current = unwrapExpression(current.getExpression());
-    }
-
-    if (!Node.isIdentifier(current)) {
-        return false;
+    if (end.verdict !== undefined || !Node.isIdentifier(current)) {
+        return end.verdict ?? false;
     }
 
     if (contextPathOf(current, "trust") !== undefined) {
@@ -462,17 +401,6 @@ const isContextRooted = (value: TsNode, hops = MAX_CONTEXT_HOPS): boolean => {
     const initializer = isConstDeclaration(variable) && hops > 0 ? variable.getInitializer() : undefined;
 
     return initializer !== undefined && isContextRooted(initializer, hops - 1);
-};
-
-/** Whether `identifier` names a value, not a property: the `k` of `x.k` and of `{ k: v }` names a property. */
-const isValueIdentifier = (identifier: Identifier): boolean => {
-    const parent = identifier.getParent();
-
-    return !(
-        (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) ||
-        (Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier) ||
-        isTypePosition(identifier)
-    );
 };
 
 /**
@@ -487,127 +415,17 @@ const referencesContext = (node: TsNode): boolean => {
     return identifiers.some((identifier) => isValueIdentifier(identifier) && contextPathOf(identifier, "trust") !== undefined);
 };
 
-/**
- * List reads whose options object the `ctx.db` read feeders inspect. Only
- * `findMany` / `findFirst` / `findFirstOrThrow` / `findUnique` take an options
- * object — the by-id `get` is id-only and the fluent `query(...)` reader carries
- * no options object, so both are excluded.
- *
- * A read method missing from this set is INVISIBLE to every feeder that reads
- * through `readTargetOf` — the soft-delete and relation-load analyses — so adding
- * one to the facade means adding it here in the same change.
- */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "findUnique"]);
-
-/**
- * The `(table, options)` a `ctx.db` list read addresses, or `undefined` when the
- * call isn't one. Matched by receiver **shape** (not import origin), fail-closed,
- * in both surface forms Lunora exposes. Facade form
- * `ctx.db.<table>.findMany(options?)` — the form real app code writes — puts the
- * table in the receiver's property name and the options object at argument 0.
- * Table-arg form `ctx.db.findMany("table", options?)` puts the table in the
- * string-literal argument 0 and the options object at argument 1. `table` is `""`
- * when the table-arg form's first argument isn't a string literal (a dynamic
- * table — not lintable).
- */
-const readTargetOf = (call: CallExpression): { options: TsNode | undefined; table: string } | undefined => {
-    const callee = call.getExpression();
-
-    if (!Node.isPropertyAccessExpression(callee) || !READ_METHODS.has(callee.getName())) {
-        return undefined;
-    }
-
-    const receiver = callee.getExpression();
-
-    // Table-arg form: the receiver is `ctx.db` (property named `db`) or a bare `db`.
-    if (isDatabaseAccessor(receiver)) {
-        const first = call.getArguments()[0];
-
-        return { options: call.getArguments()[1], table: first && Node.isStringLiteral(first) ? first.getLiteralText() : "" };
-    }
-
-    // Facade form: the receiver is `ctx.db.<table>` (or `db.<table>`) — its inner
-    // expression is the `db` accessor and its own name is the table.
-    if (Node.isPropertyAccessExpression(receiver)) {
-        const inner = receiver.getExpression();
-        const onDatabase = isDatabaseAccessor(inner);
-
-        if (onDatabase) {
-            return { options: call.getArguments()[0], table: receiver.getName() };
-        }
-    }
-
-    return undefined;
-};
-
-/** True when `call` is a `ctx.db.<method>(...)` or bare `db.<method>(...)` call against `methodSet`. */
-const isDatabaseCall = (call: CallExpression, methodSet: ReadonlySet<string>): boolean => {
-    const callee = call.getExpression();
-
-    if (!Node.isPropertyAccessExpression(callee) || !methodSet.has(callee.getName())) {
-        return false;
-    }
-
-    return isDatabaseAccessor(callee.getExpression());
-};
-
-/** String-literal first argument of a `ctx.db.<method>("table", ...)` call, or `""` when the argument is not a string literal (dynamic table — not lintable). */
-const tableArgumentOf = (call: CallExpression): string => {
-    const argument = call.getArguments()[0];
-
-    return argument && Node.isStringLiteral(argument) ? argument.getLiteralText() : "";
-};
-
-/**
- * Discover the set of tables read and written inside the lexical scope of the
- * exported procedure binding (including helper closures in the body), against
- * the caller's read/write method sets.
- */
-const tablesAccessedIn = (
-    declaration: TsNode,
-    readMethods: ReadonlySet<string>,
-    writeMethods: ReadonlySet<string>,
-): { tablesRead: string[]; tablesWritten: string[] } => {
-    const tablesRead = new Set<string>();
-    const tablesWritten = new Set<string>();
-
-    for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        if (isDatabaseCall(call, readMethods)) {
-            const table = tableArgumentOf(call);
-
-            if (table !== "") {
-                tablesRead.add(table);
-            }
-        } else if (isDatabaseCall(call, writeMethods)) {
-            const table = tableArgumentOf(call);
-
-            if (table !== "") {
-                tablesWritten.add(table);
-            }
-        }
-    }
-
-    return { tablesRead: [...tablesRead], tablesWritten: [...tablesWritten] };
-};
-
 export {
     CALLBACK_RESULT_METHODS,
-    contextPathOf,
     contextSurfaceNodesIn,
+    contextSurfacePathOf,
     contextSurfaceText,
+    denotesContextDatabase,
     ECHOING_CONTEXT_METHODS,
     isContextIdentifier,
     isContextRooted,
     isContextSurface,
-    isDatabaseAccessor,
-    isDatabaseCall,
     isHandlerArgsParameter,
-    isHandlerContextParameter,
     matchesContextReceiver,
-    mayDenoteContextDatabase,
-    readTargetOf,
     referencesContext,
-    tableArgumentOf,
-    tablesAccessedIn,
 };
-export type { ContextPath };

@@ -2,13 +2,13 @@
 import type { CallExpression, Identifier, Node as TsNode, ParameterDeclaration, ts, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { isConstDeclaration, isWriteTarget, outermostValueWrapper, unwrapExpression } from "../ast";
-import { declarationOf } from "../attribution";
+import { chainRootOf, isConstDeclaration, isSameNode, isWriteTarget, outermostValueWrapper, returningFunctionOf, unwrapExpression, walkChain } from "../ast";
+import { declarationOf, isReassignedBinding, isValueIdentifier } from "../attribution";
 import { CALLBACK_RESULT_METHODS, ECHOING_CONTEXT_METHODS } from "../context-root";
 import type { MutatorImplScope } from "./args-pristine";
 import type { ObjectBinding } from "./object-flow";
 import { aliasBindingsOf, bindingIdentifiersOf, isMethodCall, isPrimitiveType, objectContinuation, RECEIVER_ITERATING_METHODS } from "./object-flow";
-import { chainRootOf, isImplContextReference, isReadOnlyCallArgument, receivingParameter, visibleFunctionOf } from "./read-only-use";
+import { isImplContextReference, isLibraryGlobal, isReadOnlyCallArgument, isReadOperand, receivingParameter, visibleFunctionOf } from "./read-only-use";
 
 /**
  * Methods whose result is their receiver, one of its elements, or a value
@@ -94,17 +94,6 @@ const parameterOf = (declaration: TsNode | undefined): ParameterDeclaration | un
     return Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.Parameter) : undefined;
 };
 
-/** Whether `identifier` names a value, not a property: the `k` of `x.k` and of `{ k: v }` names a property. */
-const isValueIdentifier = (identifier: Identifier): boolean => {
-    const parent = identifier.getParent();
-
-    if (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) {
-        return false;
-    }
-
-    return !((Node.isPropertyAssignment(parent) || Node.isMethodDeclaration(parent)) && parent.getNameNode() === identifier);
-};
-
 /** How many variable hops (`const a = b; const b = c`) taint is followed through before failing closed. */
 const MAX_VARIABLE_HOPS = 8;
 
@@ -124,18 +113,6 @@ interface VerdictTable {
     inProgress: Set<ts.Node>;
     verdicts: Map<ts.Node, boolean>;
 }
-
-/**
- * The function nested in `impl` whose return value `node` is (`return node`, an
- * arrow's expression body); `undefined` for the impl's own return or no return.
- */
-const returningFunctionOf = (node: TsNode, impl: TsNode): TsNode | undefined => {
-    const parent = node.getParent();
-    const isReturned = Node.isReturnStatement(parent) || (Node.isArrowFunction(parent) && parent.getBody() === node);
-    const owner = isReturned ? node.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor)) : undefined;
-
-    return owner === undefined || owner === impl ? undefined : owner;
-};
 
 /** One binding queued by {@link ImplTaint}'s flow walk, with the alias hops spent to reach it. */
 interface FlowStep {
@@ -310,8 +287,13 @@ class ImplTaint {
     /** `Promise.all([ctx.db.get(a), …])` / `Promise.all(xs.map((x) => ctx.db.get(x)))`: every settled value is ctx-rooted. */
     private isContextRootedCombinator(call: CallExpression, hops: number): boolean {
         const callee = unwrapExpression(call.getExpression());
+        const object = Node.isPropertyAccessExpression(callee) ? callee.getExpression() : undefined;
         const isCombinator =
-            Node.isPropertyAccessExpression(callee) && callee.getExpression().getText() === "Promise" && PROMISE_COMBINATORS.has(callee.getName());
+            Node.isPropertyAccessExpression(callee) &&
+            Node.isIdentifier(object) &&
+            object.getText() === "Promise" &&
+            isLibraryGlobal(object) &&
+            PROMISE_COMBINATORS.has(callee.getName());
         const input = isCombinator ? unwrapExpression(call.getArguments()[0]) : undefined;
 
         if (Node.isArrayLiteralExpression(input)) {
@@ -365,7 +347,7 @@ class ImplTaint {
 
         const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
 
-        return Node.isVariableDeclaration(variable) && this.isVariableTainted(variable, name);
+        return Node.isVariableDeclaration(variable) && this.isVariableTainted(variable);
     }
 
     private isInImpl(node: TsNode): boolean {
@@ -452,7 +434,7 @@ class ImplTaint {
             return this.methodCallCompromises(method, follow);
         }
 
-        const returnedFrom = returningFunctionOf(end, this.scope.impl);
+        const returnedFrom = this.nestedReturningFunctionOf(end);
 
         if (returnedFrom !== undefined) {
             return this.resultCompromises(returnedFrom, follow, depth) && !isCopy();
@@ -579,46 +561,24 @@ class ImplTaint {
         return this.isOpaqueCallTainted(call.getExpression(), call.getArguments(), value);
     }
 
-    /** Positions where a value is only read: a condition, a comparison or arithmetic operand, an index, a `throw`, the impl's own `return`. */
+    /**
+     * Positions where the object is only read: a discarded expression, a `for`
+     * initializer, a {@link isReadOperand} position, the object of an element
+     * access the member walk did not follow, or the impl's own `return` (the
+     * mutation's result, which goes back to the caller unchanged). A `throw`
+     * hands it to a `catch`, so it is not one.
+     */
     private isReadPosition(end: TsNode): boolean {
         const parent = end.getParent();
 
-        if (parent === undefined || Node.isExpressionStatement(parent) || Node.isThrowStatement(parent) || Node.isForInStatement(parent)) {
-            return true;
-        }
-
-        if (
-            Node.isIfStatement(parent) ||
-            Node.isWhileStatement(parent) ||
-            Node.isDoStatement(parent) ||
-            Node.isSwitchStatement(parent) ||
-            Node.isCaseClause(parent)
-        ) {
-            return true;
-        }
-
-        if (Node.isConditionalExpression(parent) || Node.isElementAccessExpression(parent) || Node.isComputedPropertyName(parent)) {
-            return true;
-        }
-
-        if (Node.isPrefixUnaryExpression(parent) || Node.isTypeOfExpression(parent) || Node.isVoidExpression(parent)) {
-            return true;
-        }
-
-        if (Node.isBinaryExpression(parent)) {
-            const operator = parent.getOperatorToken().getKind();
-
-            return operator < SyntaxKind.FirstAssignment || operator > SyntaxKind.LastAssignment;
-        }
-
-        if (Node.isTemplateSpan(parent) || Node.isForStatement(parent)) {
-            return true;
-        }
-
-        const returned = Node.isReturnStatement(parent) || (Node.isArrowFunction(parent) && parent.getBody() === end);
-        const owner = returned ? end.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor)) : undefined;
-
-        return owner !== undefined && owner === this.scope.impl;
+        return (
+            parent === undefined ||
+            Node.isExpressionStatement(parent) ||
+            Node.isForStatement(parent) ||
+            Node.isElementAccessExpression(parent) ||
+            isReadOperand(end) ||
+            isSameNode(returningFunctionOf(end), this.scope.impl)
+        );
     }
 
     /**
@@ -697,11 +657,7 @@ class ImplTaint {
             return false;
         }
 
-        this.work += 1;
-
-        if (this.work > WORK_BUDGET) {
-            this.cuts += 1;
-
+        if (this.spend()) {
             return true;
         }
 
@@ -785,21 +741,11 @@ class ImplTaint {
 
     /** Whether `value`'s member / call chain is rooted, by symbol, in the impl's `ctx` parameter (directly or through `const`s). */
     private isRootedInContext(value: TsNode, hops: number): boolean {
-        let current: TsNode | undefined = unwrapExpression(value);
+        const end = walkChain(value, (call) => this.callChainVerdict(call, hops));
+        const current = end.root;
 
-        while (
-            Node.isAwaitExpression(current) ||
-            Node.isPropertyAccessExpression(current) ||
-            Node.isElementAccessExpression(current) ||
-            Node.isCallExpression(current)
-        ) {
-            const verdict = Node.isCallExpression(current) ? this.callChainVerdict(current, hops) : undefined;
-
-            if (verdict !== undefined) {
-                return verdict;
-            }
-
-            current = unwrapExpression(current.getExpression());
+        if (end.verdict !== undefined) {
+            return end.verdict;
         }
 
         if (isImplContextReference(current, this.scope.context)) {
@@ -820,6 +766,26 @@ class ImplTaint {
         );
     }
 
+    /** The function nested in the impl whose return value `node` is; `undefined` for the impl's own return or no return. */
+    private nestedReturningFunctionOf(node: TsNode): TsNode | undefined {
+        const owner = returningFunctionOf(node);
+
+        return isSameNode(owner, this.scope.impl) ? undefined : owner;
+    }
+
+    /** Count one unit of work; past {@link WORK_BUDGET}, record a cut and say so — the caller then fails closed. */
+    private spend(): boolean {
+        this.work += 1;
+
+        if (this.work <= WORK_BUDGET) {
+            return false;
+        }
+
+        this.cuts += 1;
+
+        return true;
+    }
+
     private isSource(parameter: ParameterDeclaration): boolean {
         const { impl, parameter: argsParameter } = this.scope;
 
@@ -835,7 +801,7 @@ class ImplTaint {
         );
     }
 
-    private isVariableTainted(variable: VariableDeclaration, name: string): boolean {
+    private isVariableTainted(variable: VariableDeclaration): boolean {
         return this.memoized(variable.compilerNode, () => {
             const holder = variable.getParent().getParent();
 
@@ -848,7 +814,7 @@ class ImplTaint {
             }
 
             const initializer = variable.getInitializer();
-            const isReassigned = !isConstDeclaration(variable) && this.referencesTo(variable, name).some((reference) => isWriteTarget(reference));
+            const isReassigned = isReassignedBinding(variable);
 
             if (initializer === undefined || isReassigned) {
                 return true;
@@ -887,11 +853,7 @@ class ImplTaint {
             return false;
         }
 
-        this.work += 1;
-
-        if (this.work > WORK_BUDGET) {
-            this.cuts += 1;
-
+        if (this.spend()) {
             return true;
         }
 

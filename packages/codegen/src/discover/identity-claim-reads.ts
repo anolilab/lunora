@@ -8,16 +8,16 @@ import type { IdentityClaimReadIR } from "../ir";
 import { collectNodeRows, propertyKeyName } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
+import { isContextSurface } from "./context-root";
 import { IDENTITY_FILENAME } from "./identity";
 
 /**
- * Receiver texts a `.identity` member access must sit on to count as the
- * resolved-identity claim bag: the RLS/mask policy context's destructured
- * `auth`, or the full `ctx.auth`/`context.auth`. Matched by receiver text (the
- * same `import`-agnostic, fail-closed convention the other feeders use), so a
- * re-export or alias still resolves.
+ * Receiver texts a `.identity` member access sits on in an RLS / mask POLICY
+ * context, which is not a handler ctx: its destructured `auth` and its
+ * `context.auth`. A handler's `ctx.auth` is resolved by symbol instead (a
+ * renamed or destructured ctx included, see {@link identityBagAccess}).
  */
-const IDENTITY_RECEIVERS = new Set(["auth", "context.auth", "ctx.auth"]);
+const POLICY_IDENTITY_RECEIVERS = new Set(["auth", "context.auth"]);
 
 /** `userId` is a required, always-declared claim (`defineIdentity` mandates it), so a read of it is never an undeclared-claim finding. */
 const ALWAYS_DECLARED_CLAIM = "userId";
@@ -86,7 +86,9 @@ const identityBagAccess = (node: TsNode | undefined): TsNode | undefined => {
         return undefined;
     }
 
-    return IDENTITY_RECEIVERS.has(node.getExpression().getText()) ? node : undefined;
+    const receiver = node.getExpression();
+
+    return POLICY_IDENTITY_RECEIVERS.has(receiver.getText()) || isContextSurface(receiver, ["auth"]) ? node : undefined;
 };
 
 /** The claim key a node reads off the identity bag — a `.identity.<key>` property name, or a `.identity["<key>"]` string-literal index. `undefined` when the node is neither. */

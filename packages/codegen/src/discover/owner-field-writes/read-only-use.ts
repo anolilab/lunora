@@ -5,29 +5,9 @@
 import type { ArrowFunction, CallExpression, FunctionDeclaration, FunctionExpression, Identifier, Node as TsNode, ParameterDeclaration, ts } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { isConstDeclaration, isWriteTarget, outermostValueWrapper, unwrapExpression } from "../ast";
-import { declarationOf, isTypePosition } from "../attribution";
+import { chainRootOf, isConstDeclaration, isSameNode, isWriteTarget, outermostValueWrapper, unwrapExpression } from "../ast";
+import { declarationOf, isReassignedBinding, isTypePosition } from "../attribution";
 import { ECHOING_CONTEXT_METHODS } from "../context-root";
-
-/**
- * The leftmost operand of `value`'s member / call chain: walked through
- * property and element access, the callee side of calls, `await`, parentheses
- * and casts (`(await ctx.db.get(id)).owner` → `ctx`).
- */
-const chainRootOf = (value: TsNode): TsNode | undefined => {
-    let current: TsNode | undefined = unwrapExpression(value);
-
-    while (
-        Node.isAwaitExpression(current) ||
-        Node.isPropertyAccessExpression(current) ||
-        Node.isElementAccessExpression(current) ||
-        Node.isCallExpression(current)
-    ) {
-        current = unwrapExpression(current.getExpression());
-    }
-
-    return current;
-};
 
 /** Whether `node` resolves, by symbol, to the impl's `ctx` parameter or to a binding destructured out of it (`{ db }`). */
 const isImplContextReference = (node: TsNode | undefined, context: ParameterDeclaration | undefined): boolean => {
@@ -182,30 +162,6 @@ const OPAQUE: ArgumentTarget = { kind: "opaque" };
 
 const UNREACHED: ArgumentTarget = { kind: "unreached" };
 
-/** Per-declaration verdicts of {@link isReassignedFunction}, keyed on the compiler node so a re-parse recomputes. */
-const REASSIGNED_FUNCTION_CACHE = new WeakMap<ts.Node, boolean>();
-
-/** Whether the binding a `function` declaration creates is ever assigned to (`save = other`): then a call by name may run anything. */
-const isReassignedFunction = (declaration: FunctionDeclaration): boolean => {
-    const cached = REASSIGNED_FUNCTION_CACHE.get(declaration.compilerNode);
-
-    if (cached !== undefined) {
-        return cached;
-    }
-
-    const name = declaration.getName();
-    const reassigned = declaration
-        .getSourceFile()
-        .getDescendantsOfKind(SyntaxKind.Identifier)
-        .some(
-            (identifier) => identifier.getText() === name && isWriteTarget(identifier) && declarationOf(identifier)?.compilerNode === declaration.compilerNode,
-        );
-
-    REASSIGNED_FUNCTION_CACHE.set(declaration.compilerNode, reassigned);
-
-    return reassigned;
-};
-
 /**
  * The implementation a same-file `function` binding runs: the declaration with
  * a body among its overloads, when every declaration of the name is a
@@ -244,7 +200,7 @@ const visibleFunctionOf = (callee: TsNode): VisibleFunction | undefined => {
     if (Node.isFunctionDeclaration(declaration)) {
         const implementation = functionImplementationOf(declaration);
 
-        return implementation === undefined || isReassignedFunction(implementation) ? undefined : implementation;
+        return implementation === undefined || isReassignedBinding(implementation) ? undefined : implementation;
     }
 
     const initializer = isConstDeclaration(declaration) ? unwrapExpression(declaration.getInitializer()) : undefined;
@@ -298,26 +254,57 @@ const visibleArgumentTarget = (node: TsNode): ArgumentTarget | undefined => {
  */
 const MUTATING_MEMBERS = new Set<string>(["__defineGetter__", "__defineSetter__", "__proto__"]);
 
+/** The operand of `parent` that is only read: what a `for…in` enumerates, the test of `a ? b : c`, an index. */
+const readOperandOf = (parent: TsNode | undefined): TsNode | undefined => {
+    if (Node.isForInStatement(parent)) {
+        return parent.getExpression();
+    }
+
+    if (Node.isConditionalExpression(parent)) {
+        return parent.getCondition();
+    }
+
+    return Node.isElementAccessExpression(parent) ? parent.getArgumentExpression() : undefined;
+};
+
 /**
- * Whether `node` is only tested or compared: a condition (`if (!input)`), a
- * `!` / `typeof` / `void` operand, or an operand of a comparison or arithmetic
- * operator. `??` / `||` / `&&` hand the value itself on, so they are not.
+ * Whether `node` is only tested, compared or interpolated: a condition
+ * (`if (!input)`, `while`, `switch` / `case`, the test of `a ? b : c`), a `!` /
+ * `-` / `typeof` / `void` operand, an operand of a comparison or arithmetic
+ * operator, an index (`x[node]`, `{ [node]: … }`), a template interpolation, or
+ * the object a `for…in` enumerates the keys of. `??` / `||` / `&&` hand the
+ * value itself on and `++` / `--` rebind it, so they are not.
  */
-const isOperandRead = (node: TsNode): boolean => {
+const isReadOperand = (node: TsNode): boolean => {
     const value = outermostValueWrapper(node);
     const parent = value.getParent();
 
-    if (Node.isIfStatement(parent) || Node.isWhileStatement(parent) || Node.isTypeOfExpression(parent) || Node.isVoidExpression(parent)) {
+    if (
+        Node.isIfStatement(parent) ||
+        Node.isWhileStatement(parent) ||
+        Node.isDoStatement(parent) ||
+        Node.isSwitchStatement(parent) ||
+        Node.isCaseClause(parent) ||
+        Node.isTypeOfExpression(parent) ||
+        Node.isVoidExpression(parent) ||
+        Node.isComputedPropertyName(parent)
+    ) {
         return true;
     }
 
-    // `for (const key in args)` only enumerates its keys.
-    if (Node.isForInStatement(parent)) {
-        return parent.getExpression() === value;
+    // An untagged template only stringifies it; a tag receives the value itself.
+    if (Node.isTemplateSpan(parent)) {
+        return !Node.isTaggedTemplateExpression(parent.getParent().getParent());
+    }
+
+    const operand = readOperandOf(parent);
+
+    if (operand !== undefined) {
+        return isSameNode(operand, value);
     }
 
     if (Node.isPrefixUnaryExpression(parent)) {
-        return parent.getOperatorToken() === SyntaxKind.ExclamationToken;
+        return parent.getOperatorToken() !== SyntaxKind.PlusPlusToken && parent.getOperatorToken() !== SyntaxKind.MinusMinusToken;
     }
 
     if (!Node.isBinaryExpression(parent)) {
@@ -356,7 +343,7 @@ const isReadOnlyUse = (reference: Identifier, context: ParameterDeclaration | un
         return member === undefined || !MUTATING_MEMBERS.has(member);
     }
 
-    if (isDestructuringRead(reference) || isCopiedOnly(reference) || isOperandRead(reference) || isReadOnlyCallArgument(reference, context)) {
+    if (isDestructuringRead(reference) || isCopiedOnly(reference) || isReadOperand(reference) || isReadOnlyCallArgument(reference, context)) {
         return true;
     }
 
@@ -417,11 +404,7 @@ const isReadOnlyParameter = (parameter: ParameterDeclaration, depth = 0): boolea
     return readOnly;
 };
 
-/** Whether `node` is `other`: the same compiler node. */
-const isSameNode = (node: TsNode | undefined, other: TsNode): boolean => node?.compilerNode === other.compilerNode;
-
 export {
-    chainRootOf,
     isCopiedOnly,
     isDestructuringRead,
     isImplContextReference,
@@ -430,8 +413,7 @@ export {
     isReadOnlyCallArgument,
     isReadOnlyParameter,
     isReadOnlyUse,
-    isReassignedFunction,
-    isSameNode,
+    isReadOperand,
     receivingParameter,
     visibleArgumentTarget,
     visibleFunctionOf,

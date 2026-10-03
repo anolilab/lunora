@@ -5,7 +5,7 @@ import { isArgumentDerived } from "../argument-taint";
 import type { SoftDeleteReadIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
-import { readTargetOf } from "./context-root";
+import { readTargetOf } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**

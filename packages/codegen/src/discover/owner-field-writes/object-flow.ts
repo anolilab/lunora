@@ -6,9 +6,9 @@
 import type { BindingElement, Node as TsNode, ParameterDeclaration, Type, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { isConstDeclaration, outermostValueWrapper, unwrapExpression } from "../ast";
+import { isConstDeclaration, isSameNode, outermostValueWrapper, returningFunctionOf, unwrapExpression } from "../ast";
 import { CALLBACK_RESULT_METHODS } from "../context-root";
-import { isLibraryGlobal, isSameNode } from "./read-only-use";
+import { isLibraryGlobal } from "./read-only-use";
 
 /** A binding whose object a later statement may change: a variable, a parameter, or one element of a destructuring. */
 type ObjectBinding = BindingElement | ParameterDeclaration | VariableDeclaration;
@@ -130,14 +130,16 @@ const isMemberResultStatic = (call: TsNode | undefined): boolean => {
 
 /** The call whose result a callback's returned `value` becomes: an inline callback of a {@link CALLBACK_RESULT_METHODS} method. */
 const callbackResultCallOf = (value: TsNode): TsNode | undefined => {
-    const parent = value.getParent();
-    const returned = Node.isReturnStatement(parent) || (Node.isArrowFunction(parent) && parent.getBody() === value);
-    const callback = returned ? value.getFirstAncestor((ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor)) : undefined;
-    const call = callback === undefined ? undefined : outermostValueWrapper(callback).getParent();
+    const callback = returningFunctionOf(value);
 
-    return Node.isCallExpression(call) && call.getArguments().includes(outermostValueWrapper(callback as TsNode)) && isMethodCall(call, CALLBACK_RESULT_METHODS)
-        ? call
-        : undefined;
+    if (!Node.isArrowFunction(callback) && !Node.isFunctionExpression(callback)) {
+        return undefined;
+    }
+
+    const argument = outermostValueWrapper(callback);
+    const call = argument.getParent();
+
+    return Node.isCallExpression(call) && call.getArguments().includes(argument) && isMethodCall(call, CALLBACK_RESULT_METHODS) ? call : undefined;
 };
 
 /**

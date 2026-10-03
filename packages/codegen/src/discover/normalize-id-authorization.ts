@@ -2,10 +2,11 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NormalizeIdAuthorizationIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { chainRootOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { chainUsesWrappedCall } from "./builder-chain";
-import { contextPathOf, contextSurfaceNodesIn, isDatabaseAccessor } from "./context-root";
+import { contextSurfaceNodesIn, contextSurfacePathOf } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
 import { procedureHandler } from "./functions/handler";
@@ -159,28 +160,6 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
 };
 
 /**
- * The leftmost identifier of a dotted / indexed / awaited expression — `ctx` in
- * `ctx.auth.userId`, `viewer` in `viewer.teamId`, `undefined` for a literal or a
- * more complex head.
- */
-const rootIdentifierName = (node: TsNode): string | undefined => {
-    let current: TsNode = node;
-
-    while (
-        Node.isPropertyAccessExpression(current) ||
-        Node.isElementAccessExpression(current) ||
-        Node.isNonNullExpression(current) ||
-        Node.isParenthesizedExpression(current) ||
-        Node.isAsExpression(current) ||
-        Node.isAwaitExpression(current)
-    ) {
-        current = current.getExpression();
-    }
-
-    return Node.isIdentifier(current) ? current.getText() : undefined;
-};
-
-/**
  * True when the handler passes `ctx` (or any `ctx.`-rooted value) into a function
  * call — `getViewer(ctx)`, `requireUser(ctx)`, `authorize(ctx, id)`. Delegating the
  * whole context to a helper is a strong tell that identity/authorization is resolved
@@ -190,7 +169,7 @@ const rootIdentifierName = (node: TsNode): string | undefined => {
 const delegatesContextToHelper = (handler: InspectableHandler): boolean =>
     handler
         .getDescendantsOfKind(SyntaxKind.CallExpression)
-        .some((call) => call.getArguments().some((argument) => rootIdentifierName(argument) === "ctx" || contextPathOf(argument) !== undefined));
+        .some((call) => call.getArguments().some((argument) => contextSurfacePathOf(chainRootOf(argument)) !== undefined));
 
 /**
  * True when the handler contains an equality comparison with a property-access

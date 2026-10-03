@@ -11,10 +11,11 @@
  */
 import { byCodepoint, callSiteCallers } from "@lunora/advisor";
 import type { BindingElement, FunctionDeclaration, Identifier, Node as TsNode, SourceFile, Symbol as TsSymbol, VariableDeclaration } from "ts-morph";
-import { Node, SyntaxKind, ts } from "ts-morph";
+import { Node, SyntaxKind, ts, VariableDeclarationKind } from "ts-morph";
 
 import type { CallSiteScope, FunctionIR } from "../ir";
 import { isBindingName } from "../reserved-words";
+import { isWriteTarget } from "./ast";
 
 type TopLevelDeclaration = FunctionDeclaration | VariableDeclaration;
 
@@ -226,6 +227,19 @@ const isTypePosition = (identifier: Identifier): boolean => {
     return false;
 };
 
+/**
+ * Whether `identifier` names a VALUE: not the member name of `x.k`, not the key
+ * of `{ k: v }` or of a method `{ k() {} }`, and not in a type position
+ * (`typeof x`, an annotation).
+ */
+const isValueIdentifier = (identifier: Identifier): boolean => {
+    const parent = identifier.getParent();
+    const isMemberName = Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier;
+    const isKey = (Node.isPropertyAssignment(parent) || Node.isMethodDeclaration(parent)) && parent.getNameNode() === identifier;
+
+    return !isMemberName && !isKey && !isTypePosition(identifier);
+};
+
 /** The symbol an identifier refers to — a shorthand property (`{ helper }`) names its value, not the property. */
 const referencedSymbolOf = (identifier: Identifier): TsSymbol | undefined => {
     const parent = identifier.getParent();
@@ -238,6 +252,46 @@ const declarationOf = (identifier: Identifier): TsNode | undefined => {
     const symbol = referencedSymbolOf(identifier);
 
     return symbol?.getValueDeclaration() ?? symbol?.getDeclarations()[0];
+};
+
+/** Per-binding {@link isReassignedBinding} verdicts, keyed on the compiler node so a re-parse recomputes. */
+const REASSIGNED_CACHE = new WeakMap<ts.Node, boolean>();
+
+/**
+ * Whether the binding a declaration creates is assigned after it: a `let` /
+ * `var` (or an element of one) or a `function` declaration whose name is
+ * written anywhere in its scope (`x = other`, `({ x } = other)`, `x++`). A
+ * `const` never is.
+ */
+const isReassignedBinding = (binding: BindingElement | FunctionDeclaration | VariableDeclaration): boolean => {
+    const nameNode = binding.getNameNode();
+    const list = Node.isFunctionDeclaration(binding) ? undefined : binding.getFirstAncestorByKind(SyntaxKind.VariableDeclarationList);
+
+    if (!Node.isIdentifier(nameNode) || list?.getDeclarationKind() === VariableDeclarationKind.Const) {
+        return false;
+    }
+
+    let reassigned = REASSIGNED_CACHE.get(binding.compilerNode);
+
+    if (reassigned === undefined) {
+        const scope = Node.isFunctionDeclaration(binding)
+            ? binding.getSourceFile()
+            : (binding.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor)) ?? binding.getSourceFile());
+        const name = nameNode.getText();
+
+        reassigned = scope
+            .getDescendantsOfKind(SyntaxKind.Identifier)
+            .some(
+                (identifier) =>
+                    identifier !== nameNode &&
+                    identifier.getText() === name &&
+                    isWriteTarget(identifier) &&
+                    declarationOf(identifier)?.compilerNode === binding.compilerNode,
+            );
+        REASSIGNED_CACHE.set(binding.compilerNode, reassigned);
+    }
+
+    return reassigned;
 };
 
 /** The symbols and spellings of the helpers' own names, for the one identifier pass. */
@@ -509,7 +563,9 @@ export {
     exportNamesByLocalOf,
     exportNamesOfDeclaration,
     isAddressableExportName,
+    isReassignedBinding,
     isTypePosition,
+    isValueIdentifier,
     referencedSymbolOf,
     withCallerVisibility,
 };

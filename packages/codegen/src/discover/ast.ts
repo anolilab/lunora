@@ -568,6 +568,64 @@ const unwrapExpression = (node: Node | undefined): Node | undefined => {
     return current;
 };
 
+/** Where {@link walkChain} stopped: at the chain's root, or at a call `settle` decided. */
+type ChainEnd = { root: Node | undefined; verdict?: never } | { root?: never; verdict: boolean };
+
+/**
+ * Walk `value`'s member / call chain to its leftmost operand: through property
+ * and element access, the callee side of calls, `await`, parentheses and
+ * casts (`(await ctx.db.get(id)).owner` → `ctx`). `settle` is asked at each
+ * call on the way and may end the walk with a verdict.
+ */
+const walkChain = (value: Node | undefined, settle?: (call: CallExpression) => boolean | undefined): ChainEnd => {
+    let current: Node | undefined = unwrapExpression(value);
+
+    while (
+        Node.isAwaitExpression(current) ||
+        Node.isPropertyAccessExpression(current) ||
+        Node.isElementAccessExpression(current) ||
+        Node.isCallExpression(current)
+    ) {
+        const verdict = Node.isCallExpression(current) ? settle?.(current) : undefined;
+
+        if (verdict !== undefined) {
+            return { verdict };
+        }
+
+        current = unwrapExpression(current.getExpression());
+    }
+
+    return { root: current };
+};
+
+/** The leftmost operand of `value`'s member / call chain (see {@link walkChain}). */
+const chainRootOf = (value: Node | undefined): Node | undefined => walkChain(value).root;
+
+/** Whether `node` is `other`: the same compiler node. */
+const isSameNode = (node: Node | undefined, other: Node): boolean => node?.compilerNode === other.compilerNode;
+
+/** The member a `<x>.k` / `<x>["k"]` access reads, and the expression it reads it off; `undefined` for anything else. */
+const memberAccessOf = (node: Node | undefined): { member: string; object: Node } | undefined => {
+    if (Node.isPropertyAccessExpression(node)) {
+        return { member: node.getName(), object: node.getExpression() };
+    }
+
+    const key = Node.isElementAccessExpression(node) ? node.getArgumentExpression() : undefined;
+
+    return Node.isElementAccessExpression(node) && Node.isStringLiteral(key) ? { member: key.getLiteralValue(), object: node.getExpression() } : undefined;
+};
+
+/**
+ * The function whose return value `node` is — `return node`, or an arrow's
+ * expression body — or `undefined` when it is not returned.
+ */
+const returningFunctionOf = (node: Node): Node | undefined => {
+    const parent = node.getParent();
+    const isReturned = Node.isReturnStatement(parent) || (Node.isArrowFunction(parent) && parent.getBody() === node);
+
+    return isReturned ? node.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor)) : undefined;
+};
+
 /**
  * Unwrap `as`/`satisfies`/parenthesized wrappers around a call expression —
  * `define…({...}) satisfies Definition`, `define…({...}) as const`, or
@@ -713,6 +771,7 @@ const functionReferenceSegments = (node: Node | undefined): string[] | undefined
 
 export {
     bindingKeyName,
+    chainRootOf,
     collectCallRows,
     collectNodeRows,
     collectSecurityCallRows,
@@ -721,17 +780,20 @@ export {
     functionReferenceSegments,
     handlerOf,
     isConstDeclaration,
+    isSameNode,
     isWriteTarget,
     limitNameOf,
     listLunoraSourceFiles,
     listSecurityScanFiles,
     lunoraRelativePath,
+    memberAccessOf,
     objectLiteralFromCallbackBody,
     optionsObjectLiteral,
     outermostValueWrapper,
     propertyInitializer,
     propertyKeyName,
     propertyNameText,
+    returningFunctionOf,
     RUN_METHODS,
     stringPropertyFor,
     stringPropertyOf,
@@ -739,5 +801,6 @@ export {
     TS_EXTENSION_RE,
     unwrapExpression,
     unwrapToCallExpression,
+    walkChain,
 };
-export type { RowsOf, ScannedSourceFile };
+export type { ChainEnd, RowsOf, ScannedSourceFile };

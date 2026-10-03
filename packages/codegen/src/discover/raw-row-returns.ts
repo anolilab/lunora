@@ -6,7 +6,7 @@ import type { RawRowReturnIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { chainHasStep, chainUsesWrappedCall } from "./builder-chain";
-import { isDatabaseAccessor } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
 import { procedureHandler } from "./functions/handler";

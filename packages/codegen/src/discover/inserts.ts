@@ -4,7 +4,7 @@ import { Node } from "ts-morph";
 import type { InsertWriteIR } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
-import { isDatabaseAccessor } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 
 /**
  * True for a `ctx.db.insert(...)` (or bare `db.insert(...)`) call — the database

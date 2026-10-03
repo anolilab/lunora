@@ -12,12 +12,14 @@ import discoverContextPropertyCalls from "../../src/discover/context-property-ca
 import { discoverFlagKeys } from "../../src/discover/flag-keys";
 import discoverFlagReads from "../../src/discover/flag-reads";
 import discoverFlagSecurityDefaults from "../../src/discover/flag-security-defaults";
+import discoverIdentityClaimReads from "../../src/discover/identity-claim-reads";
 import discoverKvKeyAccesses from "../../src/discover/kv-key-accesses";
 import discoverMailRecipientAccesses from "../../src/discover/mail-recipient-accesses";
 import discoverNormalizeIdAuthorization from "../../src/discover/normalize-id-authorization";
 import { discoverNotifyCalls } from "../../src/discover/notify";
 import discoverProcedureMiddleware from "../../src/discover/procedure-middleware";
 import discoverSqlInterpolation from "../../src/discover/sql-interpolation";
+import discoverStorageUploads from "../../src/discover/storage-uploads";
 import discoverVectorNamespaceAccesses from "../../src/discover/vector-namespace-accesses";
 
 let workdir: string;
@@ -192,5 +194,43 @@ describe("feeders resolve the ctx by symbol", () => {
         return ${database}.get(id);`;
 
         expect(discoverIn(handler("query", parameters, body), discoverNormalizeIdAuthorization)).toMatchObject([{ mentionsOwnership: true }]);
+    });
+
+    it.each([
+        ["renamed", "c, args", "c.storage.avatars"],
+        ["destructured", "{ storage }, args", "storage.avatars"],
+    ])("finds a storage upload through a %s ctx", (_label, parameters, bucket) => {
+        expect.assertions(1);
+
+        expect(discoverIn(handler("action", parameters, `return ${bucket}.upload("k", args.body);`), discoverStorageUploads)).toMatchObject([
+            { method: "upload" },
+        ]);
+    });
+
+    it.each([
+        ["renamed", "c, args", "c.auth.identity"],
+        ["destructured", "{ auth }, args", "auth.identity"],
+    ])("finds an identity claim read through a %s ctx", (_label, parameters, bag) => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(lunora(), "identity.ts"),
+            `import { defineIdentity, v } from "@lunora/server";\nexport const identity = defineIdentity({ userId: v.string() });\n`,
+            "utf8",
+        );
+
+        expect(discoverIn(handler("query", parameters, `return ${bag}.role;`), discoverIdentityClaimReads)).toMatchObject([{ declared: false, key: "role" }]);
+    });
+
+    // The trust policy applies to the spelling `ctx` too: a local `let ctx` that
+    // is reassigned holds whatever it was last given, so it scopes nothing.
+    it("does not trust a reassigned local `let ctx`", () => {
+        expect.assertions(2);
+
+        const scoped = handler("mutation", "c, args", "await c.kv.get(c.auth.userId + args.key);");
+        const rebound = handler("mutation", "c, args", "let ctx = c;\n        ctx = args;\n        await c.kv.get(ctx.auth.userId + args.key);");
+
+        expect(discoverIn(scoped, discoverKvKeyAccesses)).toHaveLength(0);
+        expect(discoverIn(rebound, discoverKvKeyAccesses)).toHaveLength(1);
     });
 });

@@ -6,7 +6,8 @@ import { argumentNames, procedureArgumentObjects } from "../procedure-argument-o
 import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { calleeName } from "./callee";
-import { contextPathOf, contextSurfaceNodesIn, isContextIdentifier, isDatabaseAccessor } from "./context-root";
+import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -288,7 +289,7 @@ const isFanOutCall = (call: CallExpression): boolean => {
     }
 
     // A destructured or aliased surface (`const { topics } = ctx; topics.publish(…)`).
-    const surface = contextPathOf(node);
+    const surface = contextSurfacePathOf(node);
 
     return surface?.length === 1 && FANOUT_SURFACES.has(surface[0] ?? "");
 };

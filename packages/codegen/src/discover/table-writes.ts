@@ -4,7 +4,7 @@ import { Node } from "ts-morph";
 import type { TableWriteIR } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
-import { isDatabaseAccessor } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 
 /** `ctx.db.<method>(id, …)` writes whose first argument is an `Id<"table">`. */
 const BY_ID = new Set(["delete", "hardDelete", "patch", "replace", "restore"]);

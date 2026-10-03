@@ -4,6 +4,7 @@ import { Node } from "ts-morph";
 import type { StorageUploadIR } from "../ir";
 import { collectCallRows, propertyKeyName } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { contextSurfacePathOf } from "./context-root";
 
 /**
  * `ctx.storage.<bucket>.<method>` calls this feeder inspects, mapped to the
@@ -97,9 +98,10 @@ const storageUploadMethod = (node: TsNode): { method: string; optionsIndex: numb
         return undefined;
     }
 
-    const receiver = node.getExpression().getText();
+    // `ctx.storage` or a bucket of it, through any spelling of the ctx (`c.storage.avatars`, a destructured `storage`).
+    const [surface] = contextSurfacePathOf(node.getExpression()) ?? [];
 
-    return receiver === "ctx.storage" || receiver.startsWith("ctx.storage.") ? { method, optionsIndex } : undefined;
+    return surface === "storage" ? { method, optionsIndex } : undefined;
 };
 
 /** The IR row for a tracked `ctx.storage.<bucket>.<method>(...)` call, or `undefined`. */

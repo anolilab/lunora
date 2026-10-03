@@ -4,7 +4,7 @@ import { Node } from "ts-morph";
 import type { QueryReadIR } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
-import { isDatabaseAccessor } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 
 /**
  * Chain methods that narrow a read so it is not a full scan.

@@ -4,7 +4,7 @@ import { Node } from "ts-morph";
 import type { MaskProcedureIR } from "../../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "../attribution";
-import { tablesAccessedIn } from "../context-root";
+import { tablesAccessedIn } from "../database-calls";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { maskCallsInChain, memberName } from "./internal/mask-call";
 

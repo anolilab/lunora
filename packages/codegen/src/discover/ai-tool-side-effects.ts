@@ -23,12 +23,12 @@ const MODEL_INPUT_KEYS = new Set(["messages", "prompt", "system"]);
  */
 const SIDE_EFFECT_SINKS: ReadonlyArray<{ methods: ReadonlySet<string>; prefixes: ReadonlyArray<string> }> = [
     // Database writes.
-    { methods: new Set(["delete", "insert", "insertManyUnsafe", "patch", "replace"]), prefixes: ["context.db", "ctx.db"] },
+    { methods: new Set(["delete", "insert", "insertManyUnsafe", "patch", "replace"]), prefixes: ["ctx.db"] },
     // Function dispatch (runs another mutation / action with the caller's authority).
-    { methods: new Set(["run", "runAction", "runMutation"]), prefixes: ["context", "ctx"] },
+    { methods: new Set(["run", "runAction", "runMutation"]), prefixes: ["ctx"] },
     // Outbound network / mail / queue sends.
-    { methods: new Set(["fetch"]), prefixes: ["context", "ctx"] },
-    { methods: new Set(["queue", "send"]), prefixes: ["context.email", "context.mail", "ctx.email", "ctx.mail"] },
+    { methods: new Set(["fetch"]), prefixes: ["ctx"] },
+    { methods: new Set(["queue", "send"]), prefixes: ["ctx.email", "ctx.mail"] },
 ];
 
 /** The privileged side-effect label a call matches (`ctx.db.insert`, `ctx.run`, …), or `undefined` when the call is not a tracked sink. */
@@ -40,19 +40,18 @@ const sideEffectLabel = (call: CallExpression): string | undefined => {
     }
 
     const method = callee.getName();
-    const written = callee.getExpression().getText();
-    // As written first (labels unchanged); then as the ctx surface it denotes (`c.db` → `ctx.db`).
-    const receivers = [written, contextSurfaceText(callee.getExpression())].filter((receiver): receiver is string => receiver !== undefined);
+    // The ctx surface the receiver denotes, through any spelling of the ctx (`context.db`, `c.db`, a destructured `db` → `ctx.db`).
+    const receiver = contextSurfaceText(callee.getExpression());
 
-    for (const receiver of receivers) {
-        for (const sink of SIDE_EFFECT_SINKS) {
-            if (sink.methods.has(method) && sink.prefixes.some((prefix) => receiver === prefix || receiver.startsWith(`${prefix}.`))) {
-                return `${receiver}.${method}`;
-            }
-        }
+    if (receiver === undefined) {
+        return undefined;
     }
 
-    return undefined;
+    const isSink = SIDE_EFFECT_SINKS.some(
+        (candidate) => candidate.methods.has(method) && candidate.prefixes.some((prefix) => receiver === prefix || receiver.startsWith(`${prefix}.`)),
+    );
+
+    return isSink ? `${receiver}.${method}` : undefined;
 };
 
 /** The first privileged side-effect label reached inside a `tool({ execute })` construction, or `undefined` when the tool performs none. */

@@ -3,9 +3,9 @@ import { Node } from "ts-morph";
 
 import { isArgumentDerived } from "../../argument-taint";
 import type { CallSiteScope, FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../../ir";
-import { bindingKeyName, collectCallRows, isConstDeclaration, propertyKeyName, unwrapExpression } from "../ast";
+import { bindingKeyName, collectCallRows, isConstDeclaration, memberAccessOf, propertyKeyName, unwrapExpression } from "../ast";
 import { callSiteScopeOf, declarationOf, withCallerVisibility } from "../attribution";
-import { isContextRooted, mayDenoteContextDatabase } from "../context-root";
+import { denotesContextDatabase, isContextRooted } from "../context-root";
 import type { MutatorImplScope } from "./args-pristine";
 import { mutatorImplScopeOf } from "./args-pristine";
 import implTaintOf from "./impl-taint";
@@ -44,7 +44,7 @@ const IDENTITY_WRITE_METHODS = new Set<string>(["insert", "insertManyUnsafe", "p
 /**
  * When `node` is a `<ctx>.db.<method>` member access for one of the
  * {@link IDENTITY_WRITE_METHODS}, return the method name; otherwise `undefined`.
- * The `ctx.db` receiver is resolved by symbol (see `mayDenoteContextDatabase`), so a
+ * The `ctx.db` receiver is resolved by symbol (see `denotesContextDatabase`), so a
  * renamed (`(c, args) => c.db.insert(…)`) or destructured
  * (`({ db }, args) => db.insert(…)`, `const { db } = ctx`) ctx still matches.
  */
@@ -55,7 +55,7 @@ const contextDatabaseWriteMethod = (node: TsNode): string | undefined => {
 
     const method = node.getName();
 
-    return IDENTITY_WRITE_METHODS.has(method) && mayDenoteContextDatabase(node.getExpression()) ? method : undefined;
+    return IDENTITY_WRITE_METHODS.has(method) && denotesContextDatabase(node.getExpression()) ? method : undefined;
 };
 
 /**
@@ -85,19 +85,9 @@ const documentObjectLiterals = (documentArgument: TsNode, method: string): Objec
 
 /** The object `node` reads `field` from (`<object>.<field>`, `<object>?.<field>`, `<object>["<field>"]`), unwrapped; else `undefined`. */
 const ownerPropertyObject = (node: TsNode, field: string): TsNode | undefined => {
-    if (Node.isPropertyAccessExpression(node)) {
-        return node.getName() === field ? unwrapExpression(node.getExpression()) : undefined;
-    }
+    const access = memberAccessOf(node);
 
-    if (Node.isElementAccessExpression(node)) {
-        const argument = node.getArgumentExpression();
-
-        return argument !== undefined && Node.isStringLiteral(argument) && argument.getLiteralValue() === field
-            ? unwrapExpression(node.getExpression())
-            : undefined;
-    }
-
-    return undefined;
+    return access?.member === field ? unwrapExpression(access.object) : undefined;
 };
 
 /** Whether `node` is an identifier resolving, by symbol, to `parameter` itself. */
