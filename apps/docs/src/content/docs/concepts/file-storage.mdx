@@ -356,10 +356,11 @@ the binding of that same bucket.
   `chunkSize` to the same 5 MiB or more on every chunk (TUS defaults to 1 MiB).
 - **Unsupported TUS extensions.** The binding provider does not offer
   `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`, and
-  chunked REST has to send its chunks in order, as the bundled clients do.
-- **Chunked REST is broken upstream**, see visulima/visulima#884. Use TUS, the
-  default; [@lunora/storage](/docs/packages/storage#chunked-rest-is-broken-upstream)
-  has the details.
+  chunked REST has to send its chunks in order, as the bundled clients do: a
+  chunk at any other offset is a `409` and is not stored.
+- **Chunked REST** needs `@visulima/storage` 2.0.24 or later, which fixed
+  visulima/visulima#884 (every chunk `PATCH` answered `400`).
+  [@lunora/storage](/docs/packages/storage#chunked-rest) has the details.
 - **`maxFileSize`** defaults to 100 MiB, has no unlimited setting, and must be a
   finite, non-negative number. Uploads over it get a `413`.
   [@lunora/storage](/docs/packages/storage#end-user-uploads-rls-gated) covers how

@@ -371,9 +371,8 @@ remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
   arrived are kept and `HEAD` reports them, as TUS expects.
 - **Not supported:** the TUS `checksum`, `concatenation` and
   `creation-defer-length` extensions (they are not advertised), and chunked-REST
-  chunks sent out of order (`409`). `copy`/`move` on the provider are refused.
-- **Chunked REST** is broken upstream; see
-  [below](#chunked-rest-is-broken-upstream).
+  chunks sent out of order (`409`, see [below](#chunked-rest)). `copy`/`move` on
+  the provider are refused.
 
 `createR2UploadStorage({ accountId, bucket, accessKeyId, secretAccessKey, endpoint?, partSize?, path? })`
 builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
@@ -384,10 +383,24 @@ of unequal size), so a TUS client must send equal chunks of at least 5 MiB. The
 binding provider above has neither restriction. The constructor throws on a missing
 credential: build it on first use rather than at module scope.
 
-### Chunked REST is broken upstream
+### Chunked REST
 
-`protocol: "chunked-rest"` does not work on any provider: `@visulima/storage`'s
-chunked-REST create never marks the upload as chunked, so the first chunk
-`PATCH` answers `400` ("File is not a chunked upload"). See
-[visulima/visulima#884](https://github.com/visulima/visulima/issues/884). Use
-TUS, the default, until it is fixed upstream.
+`protocol: "chunked-rest"` works as of `@visulima/storage` 2.0.24. Earlier
+versions never marked a chunked-REST create as chunked, so every chunk `PATCH`
+answered `400` ("File is not a chunked upload"):
+[visulima/visulima#884](https://github.com/visulima/visulima/issues/884).
+
+A client creates the upload with a `POST` carrying `X-Chunked-Upload: true` and
+`X-Total-Size`, then sends each chunk as a `PATCH` with `X-Chunk-Offset` and
+`Content-Length`. A chunk answers `202` with `X-Upload-Offset` until the last
+one, which answers `200` with `X-Upload-Complete: true`. `HEAD` reports the same
+two headers, so a client resumes from `X-Upload-Offset`.
+
+Over `createR2BindingUploadStorage` the chunks have to arrive **in order**. The
+provider streams bytes into equal 5 MiB R2 parts as they arrive, so it cannot
+hold a chunk for a gap that is still open. A chunk at any offset other than the
+upload's current one, ahead of it or overlapping bytes already stored, is a
+`409` (`FileConflict`) and nothing of it is stored. A refused chunk never counts
+towards completion, so the upload is not reported complete until every byte is
+stored. Re-read the offset with `HEAD` and continue from there. The bundled
+chunked-REST clients send in order.
