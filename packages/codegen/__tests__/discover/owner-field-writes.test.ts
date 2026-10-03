@@ -704,6 +704,9 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
             ["an untagged template", `const key = \`\${args}\`;`],
             ["`Object.keys`", `const keys = Object.keys(args);`],
             ["a copy via `Object.assign({}, args)`", `const copy = Object.assign({}, args);`],
+            // Freezing cannot rewrite a member, so `args` may sit in any position.
+            ["`Object.freeze(args)`", `Object.freeze(args);`],
+            ["`Object.isFrozen(args)`", `if (!Object.isFrozen(args)) throw new Error("mutable");`],
         ])("keeps the owner write owner-scoped next to %s", (_label, statement) => {
             expect.assertions(1);
 

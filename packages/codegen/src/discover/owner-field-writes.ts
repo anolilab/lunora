@@ -279,8 +279,8 @@ const isLibraryGlobal = (identifier: Identifier): boolean => {
 /**
  * Whether `node` is an argument of a call that only reads, serializes or copies
  * it: `console.*`, `JSON.stringify`, `structuredClone`, any argument of
- * `Object.keys` / `values` / `entries`, a non-first argument of
- * `Object.assign` / `freeze` / `isFrozen`, or any argument of a call on the
+ * `Object.keys` / `values` / `entries` / `freeze` / `isFrozen`, a non-first
+ * argument of `Object.assign`, or any argument of a call on the
  * impl's own `ctx` (`ctx.scheduler.runAfter(0, fn, args)`), the trusted
  * runtime surface. Any other call (`assertValid(args)`, `fix(args)`,
  * `Object.assign(args, …)`, `Reflect.set(args, …)`) may change it.
@@ -335,7 +335,8 @@ const isReadOnlyCallArgument = (node: TsNode, context: ParameterDeclaration | un
             return method === "stringify";
         }
         case "Object": {
-            return ["entries", "keys", "values"].includes(method) || (["assign", "freeze", "isFrozen"].includes(method) && position > 0);
+            // Only `assign` writes, and only into its first argument; freezing cannot change a member.
+            return ["entries", "freeze", "isFrozen", "keys", "values"].includes(method) || (method === "assign" && position > 0);
         }
         default: {
             return false;
