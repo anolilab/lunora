@@ -467,15 +467,20 @@
               "run": "shellcheck -x apps/hostd/install/install.sh"
 
             # Root, for install.sh's functions, the unit, nft and the probes; the
-            # lane's own environment (and the runner's node and pnpm) carried over.
+            # lane's own environment (and the runner's node) carried over. vitest
+            # runs directly, never through pnpm: as root, pnpm's pre-run deps check
+            # sees a foreign store and config, decides to reinstall, and aborts the
+            # modules purge for want of a TTY (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY)
+            # before a test starts.
             - "name": "Run the hostd lane"
+              "working-directory": "apps/hostd"
               "env":
                   "LUNORA_HOSTD_TESTS": "1"
                   "LUNORA_HOSTD_ISOLATION": "1"
                   "LUNORA_HOSTD_S3_ENDPOINT": "http://127.0.0.1:19000"
               "run": |
                   sudo --preserve-env=LUNORA_HOSTD_TESTS,LUNORA_HOSTD_ISOLATION,LUNORA_HOSTD_S3_ENDPOINT,LUNORA_HOSTD_BIN,LUNORA_CELLD_BIN,LUNORA_CADDY_BIN \
-                      env "PATH=${PATH}" pnpm --filter "@lunora/hostd" run test --project integration
+                      env "PATH=${PATH}" ./node_modules/.bin/vitest run --project integration
 
             - "name": "Show hostd's journal"
               "if": "failure()"
