@@ -285,14 +285,14 @@ client side, and the request-size limits. This is the reference.
 `fetch` on the route your client uploads to; one handler speaks one protocol, so
 each protocol needs its own route.
 
-| Option           | Meaning                                                                                                                                                                                                                                 |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `storage`        | The `@visulima/storage` provider the bytes land in: `createR2BindingUploadStorage(env.BUCKET)` (the Worker's R2 binding), `createR2UploadStorage(...)` (R2's S3 API), or `@visulima/storage/provider/memory` in tests.                  |
-| `authorize`      | `({ method, protocol, request, url }) => boolean \| Promise<boolean>`. Runs on every request (`POST` create, `PATCH` chunk, `HEAD` resume, `DELETE` cancel on TUS). Only `true` allows it; anything else, or a throw, answers `403`.    |
-| `protocol`       | `"tus"` (default, resumable), `"chunked-rest"` (resumable), or `"multipart"` (one request per file).                                                                                                                                    |
-| `maxFileSize`    | Bytes. Default 100 MiB, no unlimited setting; a value that is not a finite, non-negative number throws at construction.                                                                                                                 |
-| `maxFileSizeFor` | `({ contentType, metadata, declaredSize, method, request, … }) => number \| undefined`. A per-upload cap below `maxFileSize`, from what the create request declares (TUS `Upload-Metadata`, chunked-REST `X-File-Metadata`). See below. |
-| `public`         | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                              |
+| Option           | Meaning                                                                                                                                                                                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `storage`        | The `@visulima/storage` provider the bytes land in: `createR2BindingUploadStorage(env.BUCKET)` (the Worker's R2 binding), `createR2UploadStorage(...)` (R2's S3 API; currently broken upstream, see below), or `@visulima/storage/provider/memory` in tests. |
+| `authorize`      | `({ method, protocol, request, url }) => boolean \| Promise<boolean>`. Runs on every request (`POST` create, `PATCH` chunk, `HEAD` resume, `DELETE` cancel on TUS). Only `true` allows it; anything else, or a throw, answers `403`.                         |
+| `protocol`       | `"tus"` (default, resumable), `"chunked-rest"` (resumable), or `"multipart"` (one request per file).                                                                                                                                                         |
+| `maxFileSize`    | Bytes. Default 100 MiB, no unlimited setting; a value that is not a finite, non-negative number throws at construction.                                                                                                                                      |
+| `maxFileSizeFor` | `({ contentType, metadata, declaredSize, method, request, … }) => number \| undefined`. A per-upload cap below `maxFileSize`, from what the create request declares (TUS `Upload-Metadata`, chunked-REST `X-File-Metadata`). See below.                      |
+| `public`         | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                                                   |
 
 An upload route is **write-only**. It answers only the methods its protocol
 needs to upload, and anything else gets a `405` before `authorize` runs:
@@ -313,7 +313,8 @@ id. Serve files with `ctx.storage.download()` or a
 The `Allow` header on a `405` lists exactly these methods. The CORS preflight
 (`OPTIONS`) still answers `@visulima/storage`'s full method list in
 `Access-Control-Allow-Methods`; that is cosmetic, since the route refuses the
-rest whatever the preflight says.
+rest whatever the preflight says. On TUS it drops `Tus-Checksum-Algorithm` when
+the provider verifies no checksum (see below).
 
 A finished upload cannot be deleted through the handler either. On TUS, `DELETE`
 only cancels an upload in progress. The chunked-REST and multipart handlers would
@@ -347,7 +348,12 @@ the way the stored file's type is: on chunked REST the request's
 `Content-Type`; on TUS the metadata's `mimeType`, else `type`, else `filetype`;
 else `application/octet-stream`. Return a byte count, or `undefined` to leave
 `maxFileSize` as the only cap; the result never raises the cap past
-`maxFileSize`. A create that declares no size is answered `413` once a cap
+`maxFileSize`. TUS `Upload-Metadata` is parsed the way `@visulima/storage`
+2.0.26 parses it (pairs split on `,` and trimmed, then split on one space), and
+a header it would refuse (a pair of more than two parts, a duplicate key, a
+reserved key such as `uploadConcat`, a value that is not base64) gets the same
+`400` from the route, before `authorize` and `maxFileSizeFor` run, so the type a
+cap is decided on is always the type that is stored. A create that declares no size is answered `413` once a cap
 applies, and so is one whose declared size is not a non-negative integer (with
 or without a cap). A throw, or anything that is not a finite, non-negative
 number, is a `403`. The type is what the client says the
@@ -391,11 +397,12 @@ remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
   progress, with its parts and segments. For a finished upload they drop only
   the state, never the stored file: removing a file is `ctx.storage.delete`.
 - **Concurrency.** A chunk at an offset other than the stored one is a `409`. A
-  second TUS `PATCH` for an upload while one is streaming in the same isolate
-  gets a `423` from `@visulima/storage`, which the TUS client retries. Across
-  isolates, a chunk takes a lease on the upload with a conditional put, so a
-  second request that lands on another isolate gets a `409`, and the client
-  re-reads the offset with `HEAD` and continues. The writer confirms the
+  chunk also takes a lease on the upload with a conditional put, so a second
+  request for the same upload while one is streaming normally gets a `409`, and
+  the client re-reads the offset with `HEAD` and continues. Only when one
+  handler instance serves both requests (built once per isolate rather than per
+  request) does `@visulima/storage` answer the second TUS `PATCH` with a `423`
+  first, which the TUS client retries. The writer confirms the
   lease before storing each part and before finishing, so one whose lease
   lapsed stops (`409`) instead of writing on. A lease left behind by a request
   that died expires after a minute. Tiny chunks cannot pile up waiting
@@ -405,15 +412,30 @@ remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
 - **Not supported:** the TUS `concatenation` and `creation-defer-length`
   extensions (not advertised; a request using one gets a `501`), and
   chunked-REST chunks sent out of order (`409`, see [below](#chunked-rest)).
-  `copy`/`move` on the provider are refused. The `checksum` extension is not
-  advertised either, but a TUS `PATCH` that sends `Upload-Checksum` anyway is
-  verified by `@visulima/storage` before the provider sees it: the handler
-  buffers the chunk in memory, so it needs a `Content-Length` (`411`) and may be
-  at most 16 MiB, or `maxFileSize` when that is smaller (`413`, refused before
-  any byte is read); a mismatch is a `460`. `createUploadHandler` sets that cap
-  on every handler: upstream's default of 64 MiB is half a Worker isolate's
-  memory. Send checksummed chunks of 16 MiB or less (the TUS client's default
-  is 5 MiB).
+  `copy`/`move` on the provider are refused.
+- **Checksums.** The provider verifies no checksum itself, so the TUS
+  `checksum` extension is not advertised, `OPTIONS` carries no
+  `Tus-Checksum-Algorithm`, and a request that sends `Upload-Checksum` anyway
+  gets a `400` (`UnsupportedChecksumAlgorithm`) before `authorize` runs, without
+  its body being read. `@visulima/storage` would otherwise buffer the chunk in
+  memory to verify it, at about twice the chunk's size, which a few concurrent
+  requests could use to exhaust the isolate.
+
+The same refusal applies to any provider whose `checksumTypes` is empty
+(`@visulima/storage`'s memory provider among them). On a provider that verifies
+some algorithms itself, `@visulima/storage` verifies the others by buffering the
+chunk: it needs a `Content-Length` (`411`), a mismatch is a `460`, and
+`createUploadHandler` caps the chunk at 16 MiB, or `maxFileSize` when that is
+smaller (`413`, refused before any byte is read), where upstream's default is
+64 MiB.
+
+**`createR2UploadStorage` is currently broken upstream**
+([visulima/visulima#905](https://github.com/visulima/visulima/issues/905),
+`@visulima/storage` 2.0.25 and 2.0.26). Its S3 base class runs the bucket check
+from its constructor before the S3 client is set up, so the storage never
+becomes ready and every upload request answers `503` after about five seconds.
+Use `createR2BindingUploadStorage` until that is fixed. What follows describes
+the provider as designed; none of it, TUS included, works until the fix ships.
 
 `createR2UploadStorage({ accountId, bucket, accessKeyId, secretAccessKey, endpoint?, partSize?, path? })`
 builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
@@ -501,6 +523,9 @@ to 1.0.6. What changes for an upload route:
   limits above.
 - **Method-override headers are refused** (`405`) on every protocol, before
   `authorize` runs.
+- **TUS `Upload-Checksum` is refused** (`400`) on a provider that verifies no
+  checksum itself, `createR2BindingUploadStorage` included, and an invalid
+  `Upload-Metadata` is a `400` before `authorize` runs.
 - **TUS follows tus 1.0 more strictly.** The `PATCH` that completes an upload
   answers `204` with no body (it was `200` with the file record), so the
   client's progress now reaches 100%. A `PATCH` at the wrong offset is a `409`,

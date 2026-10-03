@@ -35,10 +35,11 @@
  * A write first checks the client's offset against the stored one (a mismatch
  * is a `409`, as TUS requires), then takes a lease on the upload by writing a
  * lock token into the state with a conditional put. Another request for the
- * same upload while the lease is held gets a `409` and writes nothing. (Within
- * one isolate `@visulima/storage`'s TUS handler answers such a `PATCH` with a
- * `423` before it reaches the provider; the lease is what holds across
- * isolates, and for chunked REST, which has no such lock.) Before
+ * same upload while the lease is held gets a `409` and writes nothing. (Only when
+ * one handler instance serves both requests does `@visulima/storage`'s TUS
+ * handler answer the second `PATCH` with a `423` first, from an in-memory
+ * lock. A handler built per request, or another isolate, leaves it to the
+ * lease, as does chunked REST, which has no such lock.) Before
  * every part is stored, and before the object is made, the writer confirms the
  * lease with a compare-and-swap; after every part it records its progress the
  * same way. A writer that finds its token gone (its lease expired and another

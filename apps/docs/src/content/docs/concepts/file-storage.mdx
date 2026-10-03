@@ -279,8 +279,10 @@ pair a type-based cap with `allowMIME` on the provider
 (`createR2BindingUploadStorage(env.UPLOADS, { allowMIME: ["image/*", "video/*"] })`).
 
 `createR2UploadStorage` is the other R2 provider: it writes over R2's S3 API
-with S3 credentials and no binding. Use it when the Worker that mounts the
-route has no binding to the bucket.
+with S3 credentials and no binding. It is **currently broken upstream**
+([visulima/visulima#905](https://github.com/visulima/visulima/issues/905)): the
+storage never becomes ready, and every upload request answers `503` after about
+five seconds. Use `createR2BindingUploadStorage` until that is fixed.
 
 #### Upload from the client
 
@@ -358,13 +360,13 @@ the binding of that same bucket.
 - **R2 part size.** R2 requires every multipart part but the last to be at
   least 5 MiB and all of them the same size. `createR2BindingUploadStorage`
   coalesces chunks of any size into 5 MiB parts, so the client's `chunkSize` is
-  free. Over `createR2UploadStorage` each chunk becomes one part, so set
-  `chunkSize` to the same 5 MiB or more on every chunk (the TUS client's default
-  is 5 MiB).
+  free. Over `createR2UploadStorage` (broken upstream for now, see above) each
+  chunk would become one part, so `chunkSize` would have to be the same 5 MiB
+  or more on every chunk (the TUS client's default is 5 MiB).
 - **Unsupported TUS extensions.** The binding provider does not offer
   `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`. A
-  client that sends `Upload-Checksum` anyway has the chunk buffered and verified
-  by the handler, up to 16 MiB per chunk (`413` above it).
+  request that sends `Upload-Checksum` anyway gets a `400` before its body is
+  read.
 - **Method overrides.** A request carrying `X-HTTP-Method-Override` (or
   `X-HTTP-Method`, `X-Method-Override`) gets a `405`, so no request can pass the
   write gate as one method and run as another.

@@ -10,13 +10,17 @@
  */
 import { createHash } from "node:crypto";
 
+import { ERRORS } from "@visulima/storage";
+import { Tus } from "@visulima/storage/handler/http/fetch";
 import { MemoryStorage } from "@visulima/storage/provider/memory";
 import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createR2BindingUploadStorage } from "../src/r2-binding-upload-storage";
 import type { UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
 import { createR2UploadStorage, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
+import { createFakeR2UploadBucket } from "./fake-r2-upload-bucket";
 
 const ENDPOINT = "https://test.local/upload";
 const B64 = (value: string): string => Buffer.from(value).toString("base64");
@@ -464,6 +468,11 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     describe("checksummed TUS chunks", () => {
         const MiB = 1024 * 1024;
 
+        /** A memory provider that verifies md5 itself, so other algorithms are left to the handler's buffer. */
+        class Md5MemoryStorage extends MemoryStorage {
+            public override checksumTypes: string[] = ["md5"];
+        }
+
         const checksummedPatch = (location: string, length: number, checksum: string, body: BodyInit): Request =>
             new Request(location, {
                 body,
@@ -478,45 +487,222 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
                 ...(body instanceof ReadableStream ? { duplex: "half" } : {}),
             });
 
-        it("refuses a checksummed chunk just over 16 MiB (413) before reading any of it", async () => {
+        /** A `length`-byte body that counts its reads. `highWaterMark: 0` keeps it from reading ahead of its consumer. */
+        const countedBody = (length: number) => {
+            const counter = { pulled: 0 };
+            const body = new ReadableStream<Uint8Array>(
+                {
+                    pull(controller) {
+                        const sent = counter.pulled * MiB;
+
+                        counter.pulled += 1;
+                        controller.enqueue(new Uint8Array(Math.min(MiB, length - sent)));
+
+                        if (sent + MiB >= length) {
+                            controller.close();
+                        }
+                    },
+                },
+                { highWaterMark: 0 },
+            );
+
+            return { body, counter };
+        };
+
+        it.each([
+            ["the memory provider", () => new MemoryStorage({ path: "/upload" })],
+            ["createR2BindingUploadStorage", () => createR2BindingUploadStorage(createFakeR2UploadBucket())],
+        ] as const)("refuses Upload-Checksum over %s, which verifies none (400), before the gate and without reading the body", async (_name, storage) => {
             expect.hasAssertions();
 
-            const location = await rawTus(handler).create(32 * MiB, "big.bin");
+            const authorize = vi.fn<() => boolean>(() => true);
+            const route = createUploadHandler({ authorize, storage: storage() });
+            const location = await rawTus({ fetch: async (request) => route.fetch(request) }).create(2 * MiB, "sum.bin");
+
+            authorize.mockClear();
+
+            const { body, counter } = countedBody(MiB);
+            const response = await route.fetch(checksummedPatch(location, MiB, "AAAA", body));
+
+            expect(response.status).toBe(400);
+            expect(response.headers.get("tus-resumable")).toBe("1.0.0");
+            await expect(response.json()).resolves.toMatchObject({ error: { code: ERRORS.UNSUPPORTED_CHECKSUM_ALGORITHM } });
+            expect(counter.pulled).toBe(0);
+            expect(authorize).not.toHaveBeenCalled();
+        });
+
+        it("drops Tus-Checksum-Algorithm from OPTIONS on a route that refuses checksums, and keeps it where they are verified", async () => {
+            expect.hasAssertions();
+
+            const refusing = await createUploadHandler({ silent: true, storage: new MemoryStorage({ path: "/upload" }) }).fetch(
+                new Request(ENDPOINT, { method: "OPTIONS" }),
+            );
+            const verifying = await createUploadHandler({ silent: true, storage: new Md5MemoryStorage({ path: "/upload" }) }).fetch(
+                new Request(ENDPOINT, { method: "OPTIONS" }),
+            );
+
+            expect(refusing.status).toBe(204);
+            expect(refusing.headers.has("tus-checksum-algorithm")).toBe(false);
+            expect(refusing.headers.get("tus-resumable")).toBe("1.0.0");
+            expect(verifying.headers.get("tus-checksum-algorithm")).toContain("sha256");
+        });
+
+        it("refuses a buffered checksummed chunk just over 16 MiB (413) before reading any of it", async () => {
+            expect.hasAssertions();
+
+            const route = createUploadHandler({ silent: true, storage: new Md5MemoryStorage({ path: "/upload" }) });
+            const location = await rawTus(route).create(32 * MiB, "big.bin");
             const length = 16 * MiB + 1;
-            let pulled = 0;
-            const body = new ReadableStream<Uint8Array>({
-                pull(controller) {
-                    const sent = pulled * MiB;
+            const { body, counter } = countedBody(length);
 
-                    pulled += 1;
-                    controller.enqueue(new Uint8Array(Math.min(MiB, length - sent)));
-
-                    if (sent + MiB >= length) {
-                        controller.close();
-                    }
-                },
-            });
-
-            const response = await handler.fetch(checksummedPatch(location, length, "AAAA", body));
+            const response = await route.fetch(checksummedPatch(location, length, "AAAA", body));
 
             expect(response.status).toBe(413);
             await expect(response.json()).resolves.toMatchObject({ error: { message: expect.stringMatching(/at most 16777216 bytes/) } });
-            // The stream may prefetch its first chunk, but nothing past it is read.
-            expect(pulled).toBeLessThanOrEqual(1);
-            await expect(rawTus(handler).head(location)).resolves.toBe(0);
+            expect(counter.pulled).toBe(0);
+            await expect(rawTus(route).head(location)).resolves.toBe(0);
         });
 
-        it("verifies and stores a checksummed 5 MiB chunk", async () => {
+        it("verifies and stores a buffered checksummed 5 MiB chunk", async () => {
             expect.hasAssertions();
 
+            const route = createUploadHandler({ silent: true, storage: new Md5MemoryStorage({ path: "/upload" }) });
             const bytes = new Uint8Array(5 * MiB).fill(42);
-            const location = await rawTus(handler).create(bytes.byteLength, "five.bin");
+            const location = await rawTus(route).create(bytes.byteLength, "five.bin");
             const checksum = createHash("sha256").update(bytes).digest("base64");
 
-            const response = await handler.fetch(checksummedPatch(location, bytes.byteLength, checksum, bytes));
+            const response = await route.fetch(checksummedPatch(location, bytes.byteLength, checksum, bytes));
 
             expect(response.status).toBe(204);
             expect(Number(response.headers.get("upload-offset"))).toBe(bytes.byteLength);
+        });
+    });
+
+    describe("tus Upload-Metadata, parsed as @visulima/storage parses it", () => {
+        const MiB = 1024 * 1024;
+        const IMAGE_CAP = MiB;
+
+        /** A route that caps images at 1 MiB and records the type `maxFileSizeFor` saw. */
+        const cappedRoute = (storage: MemoryStorage) => {
+            const seen: string[] = [];
+            const authorize = vi.fn<() => boolean>(() => true);
+            const route = createUploadHandler({
+                authorize,
+                maxFileSizeFor: ({ contentType }: UploadSizeContext) => {
+                    seen.push(contentType);
+
+                    return contentType.startsWith("image/") ? IMAGE_CAP : undefined;
+                },
+                storage,
+            });
+
+            return { authorize, route, seen };
+        };
+
+        const create = async (route: { fetch: (request: Request) => Promise<Response> }, metadata: string, length = 40 * MiB): Promise<Response> =>
+            route.fetch(
+                new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": String(length), "Upload-Metadata": metadata }, method: "POST" }),
+            );
+
+        it.each([
+            ["a `, ` separator", `filename ${B64("a.png")}, filetype ${B64("image/png")}`],
+            ["mixed type keys, mimeType winning after a `, `", `filetype ${B64("video/mp4")}, mimeType ${B64("image/png")}`],
+            ["padding around every pair", `  filename ${B64("a.png")} ,  type ${B64("image/png")}  `],
+        ])("caps an image declared with %s at the image cap (413)", async (_label, metadata) => {
+            expect.hasAssertions();
+
+            const { route, seen } = cappedRoute(new MemoryStorage({ path: "/upload" }));
+
+            await expect(create(route, metadata)).resolves.toHaveProperty("status", 413);
+            expect(seen).toStrictEqual(["image/png"]);
+        });
+
+        it.each([
+            ["a duplicate key", `filetype ${B64("video/mp4")},filetype ${B64("image/png")}`, /duplicate key "filetype"/],
+            ["a pair of three parts", `filetype ${B64("image/png")} extra`, /malformed key-value pair/],
+            ["a value that is not base64", "filetype image/png!", /value of "filetype" is not base64/],
+            ["url-safe base64", `filename ${Buffer.from("??>").toString("base64url")}`, /value of "filename" is not base64/],
+            ["a reserved key", `uploadConcat ${B64("partial")}`, /reserved key "uploadConcat"/],
+        ])("refuses Upload-Metadata with %s (400) before authorize and maxFileSizeFor", async (_label, metadata, message) => {
+            expect.hasAssertions();
+
+            const { authorize, route, seen } = cappedRoute(new MemoryStorage({ path: "/upload" }));
+            const response = await create(route, metadata, 10);
+
+            expect(response.status).toBe(400);
+            expect(response.headers.get("tus-resumable")).toBe("1.0.0");
+            await expect(response.json()).resolves.toMatchObject({ error: { message: expect.stringMatching(message) } });
+            expect(authorize).not.toHaveBeenCalled();
+            expect(seen).toStrictEqual([]);
+        });
+
+        it("refuses an invalid Upload-Metadata on a PATCH too, where upstream also reads it", async () => {
+            expect.hasAssertions();
+
+            const { route } = cappedRoute(new MemoryStorage({ path: "/upload" }));
+            const location = await rawTus(route).create(4, "a.bin");
+            const response = await route.fetch(
+                new Request(location, {
+                    body: new Uint8Array(4),
+                    headers: {
+                        "Content-Type": "application/offset+octet-stream",
+                        "Tus-Resumable": "1.0.0",
+                        "Upload-Metadata": "a b c",
+                        "Upload-Offset": "0",
+                    },
+                    method: "PATCH",
+                }),
+            );
+
+            expect(response.status).toBe(400);
+            await expect(rawTus(route).head(location)).resolves.toBe(0);
+        });
+
+        // Lunora's parse and upstream's must agree on every header: the same
+        // status, and on a create, the type `maxFileSizeFor` saw is the type
+        // stored.
+        it.each([
+            `filetype ${B64("image/png")}`,
+            `filename ${B64("a.png")}, filetype ${B64("image/png")}`,
+            `filetype ${B64("video/mp4")}, mimeType ${B64("image/png")}`,
+            `type ${B64("text/plain")},filetype ${B64("image/png")}`,
+            `mimeType ${B64("")},filetype ${B64("image/png")}`,
+            `mimeType,filetype ${B64("image/png")}`,
+            ` , ,filename ${B64("x")}`,
+            "",
+            "   ",
+            "flag",
+            `filetype ${B64("image/png")},filetype ${B64("image/png")}`,
+            "a b c",
+            "filetype %%%",
+            `partialIds ${B64("x")}`,
+            `filename ${Buffer.from("??>").toString("base64url")}`,
+        ])("agrees with @visulima/storage on %j", async (metadata) => {
+            expect.hasAssertions();
+
+            const upstreamStorage = new MemoryStorage({ path: "/upload" });
+            const upstream = await new Tus({ storage: upstreamStorage }).fetch(
+                new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10", "Upload-Metadata": metadata }, method: "POST" }),
+            );
+            const lunoraStorage = new MemoryStorage({ path: "/upload" });
+            const { route, seen } = cappedRoute(lunoraStorage);
+            const lunora = await create(route, metadata, 10);
+
+            expect(lunora.status).toBe(upstream.status);
+
+            const storedType = async (storage: MemoryStorage, response: Response): Promise<string | undefined> => {
+                if (response.status !== 201) {
+                    return undefined;
+                }
+
+                const file = await storage.getMeta(uploadId(response.headers.get("location") ?? ""));
+
+                return file.contentType;
+            };
+            const upstreamType = await storedType(upstreamStorage, upstream);
+
+            await expect(storedType(lunoraStorage, lunora)).resolves.toBe(upstreamType);
+            expect(seen).toStrictEqual(upstreamType === undefined ? [] : [upstreamType]);
         });
     });
 
@@ -943,7 +1129,7 @@ describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
         ).resolves.toHaveProperty("status", 413);
     });
 
-    it("decodes url-safe base64 metadata as the TUS handler does", async () => {
+    it("refuses url-safe base64 metadata (400), as the TUS handler does since 2.0.26", async () => {
         expect.hasAssertions();
 
         const seen: UploadSizeContext[] = [];
@@ -954,9 +1140,8 @@ describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
         });
         const urlSafe = Buffer.from("?>?>").toString("base64url");
 
-        await create(handler, { "Upload-Length": "1", "Upload-Metadata": `filename ${urlSafe}` });
-
-        expect(seen[0]?.metadata).toStrictEqual({ filename: "?>?>" });
+        await expect(create(handler, { "Upload-Length": "1", "Upload-Metadata": `filename ${urlSafe}` })).resolves.toHaveProperty("status", 400);
+        expect(seen).toStrictEqual([]);
     });
 
     it.each(["-1", "1.5", "abc", "1e3", ""])("reads a declared size of %j as too large, never as small (regression)", async (length) => {
