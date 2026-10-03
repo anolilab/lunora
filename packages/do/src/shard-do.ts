@@ -28,6 +28,7 @@ import type {
 } from "@lunora/observability";
 import {
     appendRequestLogEntry,
+    applyHostRootSpan,
     buildSecurityAudit,
     createDatabaseTally,
     createMetrics,
@@ -62,8 +63,6 @@ import {
     redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
-    setHostSpanAttributes,
-    setHostSpanErrorStatus,
     SpanBuffer,
     upsertIssueState,
 } from "@lunora/observability";
@@ -570,36 +569,6 @@ const resolveHostTracing = async (): Promise<HostTracingLike | undefined> => {
     }
 
     return cloudflareTracing;
-};
-
-/**
- * Mirror a finished dispatch's root span onto the host's invocation span, for
- * a sink with `fuseCloudflareTraces`. Every `ctx.trace` custom span has ended by
- * the time this runs, so `getActiveSpan()` is the invocation's root span — the
- * host-side twin of this dispatch. Reads the probe verdict synchronously: it
- * settled at construction. Throws propagate to the caller's best-effort guard.
- */
-const mirrorDispatchOntoHostRootSpan = (rootSpan: SpanEvent, failure: { thrown: unknown } | undefined): void => {
-    const hostSpan = cloudflareTracing?.getActiveSpan?.();
-
-    if (hostSpan === undefined) {
-        return;
-    }
-
-    // The (already redacted) wide-event attributes.
-    if (rootSpan.attributes !== undefined) {
-        setHostSpanAttributes(hostSpan, rootSpan.attributes);
-    }
-
-    // A failed RPC dispatch never throws out of the DO — it is answered with an
-    // error Response (`errorToResponse`), so the host sees a served request, not
-    // an exception. Mark the root span failed ourselves, but only for a server
-    // fault (status >= 500): a 4xx (validation, auth, not-found, conflict) is an
-    // expected client outcome, which OTel's server-span convention leaves
-    // `unset`. The message is the root span's already-redacted one.
-    if (failure !== undefined && rootSpan.error !== undefined && toErrorBody(failure.thrown).status >= 500) {
-        setHostSpanErrorStatus(hostSpan, rootSpan.error.message);
-    }
 };
 
 /**
@@ -7160,6 +7129,9 @@ abstract class ShardDO {
         // `finally` below. A sentinel rather than a boolean so the `catch` can
         // hand the thrown value straight through to the span's error classifier.
         let dispatchError: { thrown: unknown } | undefined;
+        // Whether that failure is the server's, read off the Response actually
+        // sent (see the `catch`) — for the host invocation span's status.
+        let dispatchServerFault = false;
 
         // The {@link ShardDO.inFlightClaims} claim this dispatch holds, if any.
         // Hoisted so the `finally` releases it — after the tail's dedup row.
@@ -7534,15 +7506,27 @@ abstract class ShardDO {
             this.recordChangedTable(REQUEST_LOG_TABLE);
             await this.flushChangedTables();
 
-            return this.errorToResponse(error);
+            const errorResponse = this.errorToResponse(error);
+
+            // Read off the Response actually sent, not re-derived from `error`:
+            // `errorToResponse` is overridable, and the host span must agree with
+            // what the caller saw.
+            dispatchServerFault = errorResponse.status >= 500;
+
+            return errorResponse;
         } finally {
             // Guard hoisted to the call site so the common case — a handler that
             // produced no telemetry at all — is visibly a no-op here.
             const dispatchSpan = this.dispatchSpans.get(dispatchSpanKey(dispatchTrace));
+            const rootSpan =
+                this.spans.hasTrace(dispatchTrace.traceId) || hasRootSpanContent(dispatchSpan)
+                    ? this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace)
+                    : undefined;
 
-            if (this.spans.hasTrace(dispatchTrace.traceId) || hasRootSpanContent(dispatchSpan)) {
-                this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace);
-            }
+            // Outside that gate: a handler that threw before recording anything
+            // is the most common server fault, and its invocation span must still
+            // read as failed. The sink was registered eagerly by `makeDispatchSpan`.
+            this.mirrorHostRootSpan(dispatchSpan?.sink, rootSpan, dispatchError, dispatchServerFault);
 
             this.dispatchSpans.delete(dispatchSpanKey(dispatchTrace));
 
@@ -7845,9 +7829,16 @@ abstract class ShardDO {
             // Only when the trigger actually produced telemetry — an idle alarm
             // that did nothing should not mint a bar in the studio waterfall and
             // evict a real trace from the bounded ring.
-            if (this.spans.hasTrace(anchor.traceId) || hasRootSpanContent(this.dispatchSpans.get(dispatchSpanKey(anchor)))) {
-                this.recordDispatchRootSpan(name, startedAt, failure, anchor);
-            }
+            const triggerSpan = this.dispatchSpans.get(dispatchSpanKey(anchor));
+            const rootSpan =
+                this.spans.hasTrace(anchor.traceId) || hasRootSpanContent(triggerSpan)
+                    ? this.recordDispatchRootSpan(name, startedAt, failure, anchor)
+                    : undefined;
+
+            // A trigger re-throws, so any failure is a real one — a 4xx-coded
+            // `LunoraError` included; there is no client response to classify.
+            // No ctx may have registered a sink, so fall back to the last seen.
+            this.mirrorHostRootSpan(triggerSpan?.sink ?? this.lastTelemetrySink, rootSpan, failure, true);
 
             this.dispatchSpans.delete(dispatchSpanKey(anchor));
             this.flushTelemetry();
@@ -7886,7 +7877,12 @@ abstract class ShardDO {
      * exports it — see {@link exportWideEvent} for why it goes out as an OTel
      * Event record rather than on the span itself.
      */
-    private recordDispatchRootSpan(functionPath: string, startedAt: number, failure: { thrown: unknown } | undefined, anchor: TraceAnchor): void {
+    private recordDispatchRootSpan(
+        functionPath: string,
+        startedAt: number,
+        failure: { thrown: unknown } | undefined,
+        anchor: TraceAnchor,
+    ): SpanEvent | undefined {
         const wide = this.dispatchSpans.get(dispatchSpanKey(anchor));
         const durationMs = Date.now() - startedAt;
         // Auto-instrumentation counters ride whatever root span is being recorded,
@@ -7912,8 +7908,10 @@ abstract class ShardDO {
         const withoutWideEvent = Object.keys(attributes).length === 0 ? undefined : { attributes, events: [], links: [] };
         const collected = wide?.collector === undefined ? withoutWideEvent : { ...wide.collector.collected, attributes };
 
+        let rootSpan: SpanEvent | undefined;
+
         try {
-            const rootSpan = dispatchRootSpan({
+            rootSpan = dispatchRootSpan({
                 anchor,
                 // Raw failure messages in dev only — matches `makeTracer`'s
                 // `captureRaw` posture for this synthetic root span.
@@ -7929,18 +7927,54 @@ abstract class ShardDO {
             });
 
             this.spans.push(rootSpan);
-
-            // Fused: land the (already redacted) wide-event attributes, and a
-            // server fault's error status, on the host's own invocation span too.
-            if (wide?.sink?.fuseCloudflareTraces === true) {
-                mirrorDispatchOntoHostRootSpan(rootSpan, failure);
-            }
         } catch {
             // Best-effort — span capture must never fail a served request.
         }
 
         if (wide?.collector !== undefined) {
             this.exportWideEvent(functionPath, durationMs, failure, anchor, { collected: collected ?? wide.collector.collected, sink: wide.sink });
+        }
+
+        return rootSpan;
+    }
+
+    /**
+     * Mirror a finished dispatch or trigger onto the host's invocation span, for
+     * a sink with `fuseCloudflareTraces`: the root span's (already redacted)
+     * wide-event attributes when one was recorded, and error status for a server
+     * fault. `serverFault` is the caller's verdict — the sent Response's status
+     * for an RPC (which never throws out of the DO, so the host would see a
+     * served request), `true` for a trigger. The policy lives in
+     * `applyHostRootSpan`; the probe verdict settled at construction.
+     */
+    private mirrorHostRootSpan(
+        sink: TelemetrySink | undefined,
+        rootSpan: SpanEvent | undefined,
+        failure: { thrown: unknown } | undefined,
+        serverFault: boolean,
+    ): void {
+        if (sink?.fuseCloudflareTraces !== true) {
+            return;
+        }
+
+        try {
+            applyHostRootSpan(cloudflareTracing, {
+                ...(rootSpan?.attributes === undefined ? {} : { attributes: rootSpan.attributes }),
+                ...(failure === undefined
+                    ? {}
+                    : {
+                          error: {
+                              // Redacted exactly as the root span's own error message.
+                              message: redactArgs(
+                                  failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown),
+                                  isDevEnvironment(this.env),
+                              ) as string,
+                              serverFault,
+                          },
+                      }),
+            });
+        } catch {
+            // Best-effort — the host mirror must never fail a served request.
         }
     }
 

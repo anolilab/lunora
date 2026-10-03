@@ -21,7 +21,7 @@
  * Those assertions are called out inline.
  */
 import type { HostTracingLike, TracerDeps } from "@lunora/observability";
-import { createTracer, setHostSpanAttributes, setHostSpanErrorStatus } from "@lunora/observability";
+import { applyHostRootSpan, createTracer, setHostSpanAttributes } from "@lunora/observability";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
@@ -113,8 +113,8 @@ describe("createTracer cloudflare custom-spans bridge (workerd)", () => {
         expect(outcome.failure).toBe("kaboom");
     });
 
-    it("sets error status on the real host spans without throwing, where the runtime has setStatus", async () => {
-        expect.assertions(3);
+    it("exposes setStatus on the real custom and invocation spans, and applyHostRootSpan writes it", async () => {
+        expect.assertions(2);
 
         const stub = newShardStub("cf-bridge-status");
 
@@ -125,35 +125,18 @@ describe("createTracer cloudflare custom-spans bridge (workerd)", () => {
             // A custom span: the shape `ctx.trace` hands `applyHostSpanAttributes`.
             tracing?.enterSpan("probe.status", (hostSpan) => {
                 customSetStatus = typeof hostSpan.setStatus;
-                setHostSpanErrorStatus(hostSpan, "internal error");
             });
 
-            // The invocation root span: the shape the shard's dispatch mirror marks.
-            const activeSpan = tracing?.getActiveSpan?.();
+            // The invocation span the shard's dispatch mirror marks for a server fault.
+            applyHostRootSpan(tracing, { attributes: { "lunora.probe": true }, error: { message: "internal error", serverFault: true } });
 
-            if (activeSpan !== undefined) {
-                setHostSpanErrorStatus(activeSpan, "internal error");
-            }
-
-            // And end to end: a failing bridged `ctx.trace` still re-throws the
-            // body's own error with the status write in between.
-            const { trace } = setup({ fuseHostSpans: true, resolveHostTracing: realResolveCloudflareTracing });
-            const failure = await trace("fails", () => {
-                throw new TypeError("kaboom");
-            }).catch((error: unknown) => error);
-
-            return {
-                activeSetStatus: typeof activeSpan?.setStatus,
-                customSetStatus,
-                failure: failure instanceof Error ? failure.message : String(failure),
-            };
+            return { activeSetStatus: typeof tracing?.getActiveSpan?.()?.setStatus, customSetStatus };
         });
 
-        // Feature-detected: a runtime predating `setStatus` reports `undefined`,
-        // and the helper no-ops. Either way nothing threw.
-        expect(["function", "undefined"]).toContain(outcome.customSetStatus);
-        expect(["function", "undefined"]).toContain(outcome.activeSetStatus);
-        expect(outcome.failure).toBe("kaboom");
+        // The pinned workerd implements the workers-types 5.20260929 `Span.setStatus`,
+        // so the feature-detected path is the one production takes.
+        expect(outcome.customSetStatus).toBe("function");
+        expect(outcome.activeSetStatus).toBe("function");
     });
 
     it("runs a nested ctx.trace inside a real DO with the bridge ON — no throw, isTraced is boolean, our spans intact", async () => {

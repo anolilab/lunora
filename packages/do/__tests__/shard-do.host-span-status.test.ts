@@ -1,125 +1,136 @@
 import { LunoraError } from "@lunora/errors";
 import type { HostSpanLike } from "@lunora/observability";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState, TelemetrySink } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
 
-type Status = Parameters<NonNullable<HostSpanLike["setStatus"]>>[0];
-
 /**
- * Two host spans so the assertions can tell them apart: `custom` is what
- * `tracing.enterSpan` hands a fused `ctx.trace`, `root` is what
- * `tracing.getActiveSpan()` returns once every custom span has ended — the
- * invocation span the dispatch root mirror writes to.
+ * Wiring only — the status policy itself is unit-tested on `applyHostRootSpan`
+ * in `@lunora/observability`. This checks that the shard hands it the right
+ * verdict through public entry points: the RPC's sent status, and `true` for a
+ * trigger.
  */
-const host = vi.hoisted(() => {
-    const makeSpan = () => {
-        const statuses: { code: string; message?: string }[] = [];
-
-        return {
-            isTraced: true,
-            setAttribute: () => undefined,
-            setStatus: (status: { code: string; message?: string }) => {
-                statuses.push(status);
-            },
-            statuses,
-        };
-    };
-
-    return { custom: makeSpan(), root: makeSpan() };
-});
+const statuses = vi.hoisted((): { code: string; message?: string }[] => []);
 
 vi.mock(import("cloudflare:workers"), () => {
+    const invocationSpan: HostSpanLike = {
+        isTraced: true,
+        setAttribute: () => undefined,
+        setStatus: (status) => {
+            statuses.push(status);
+        },
+    };
     // Structural stand-in: only the members the bridge feature-detects, so it
     // is cast to the full platform `Tracing` the module type declares.
     const tracing = {
-        enterSpan: <T>(_name: string, callback: (span: HostSpanLike) => T): T => callback(host.custom),
-        getActiveSpan: () => host.root,
+        enterSpan: <T>(_name: string, callback: (span: HostSpanLike) => T): T => callback(invocationSpan),
+        getActiveSpan: () => invocationSpan,
     };
 
     return { tracing: tracing as unknown as Tracing };
 });
 
-/** Fused sink; the throw a dispatch ends in is chosen per test. */
-class FailingShard extends ShardDO {
-    public readonly sink: TelemetrySink = { fuseCloudflareTraces: true };
+/**
+ * Throws from the handler after only the eager sink registration the generated
+ * `buildCtx` performs — no `ctx.trace`, `ctx.span` or `ctx.db`, so the dispatch
+ * records no root span. An alarm fails through the host alarm handler.
+ */
+class ThrowingShard extends ShardDO {
+    public thrown: unknown;
 
-    public thrown: unknown = new Error("boom");
+    private readonly sink: TelemetrySink = { fuseCloudflareTraces: true };
 
-    public override async handleRpc(functionPath: string): Promise<unknown> {
-        const anchor = this.resolveDispatchAnchor(false);
+    public override async handleRpc(): Promise<unknown> {
+        this.makeDispatchSpan(this.resolveDispatchAnchor(false), this.sink);
 
-        // A wide-event attribute makes the dispatch record its root span, and
-        // registers the fused sink on the dispatch entry.
-        this.makeDispatchSpan(anchor, this.sink).setAttribute("order.id", "o-1");
+        throw this.thrown;
+    }
 
-        const tracer = this.makeTracer(functionPath, this.sink, anchor);
-
-        return tracer("work", () => {
-            throw this.thrown;
-        });
+    protected override async handleAlarmCloudflare(): Promise<void> {
+        throw this.thrown;
     }
 }
 
-const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
-    return {
+const rpcRequest = (): Request =>
+    new Request("https://shard.internal/rpc", {
+        body: JSON.stringify({ args: {}, functionPath: "orders:charge" }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+    });
+
+const withShard = async (thrown: unknown, run: (shard: ThrowingShard) => Promise<void>): Promise<void> => {
+    const database = createSqliteExec();
+    let probe: Promise<unknown> = Promise.resolve();
+    const state: ShardDOState = {
         acceptWebSocket() {},
+        blockConcurrencyWhile: async <T>(callback: () => Promise<T>): Promise<T> => {
+            const settled = callback();
+
+            probe = settled;
+
+            return settled;
+        },
         getWebSockets() {
             return [];
         },
         storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
     };
-};
-
-const rpcRequest = (functionPath: string): Request =>
-    new Request("https://shard.internal/rpc", {
-        body: JSON.stringify({ args: {}, functionPath }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-    });
-
-const dispatch = async (thrown: unknown): Promise<{ customStatuses: Status[]; rootStatuses: Status[]; status: number }> => {
-    host.custom.statuses.length = 0;
-    host.root.statuses.length = 0;
-
-    const database = createSqliteExec();
 
     try {
-        const shard = new FailingShard(makeState(database), {});
+        const shard = new ThrowingShard(state, {});
 
+        // The host-tracing probe the constructor starts; dispatches read its verdict.
+        await probe;
         shard.thrown = thrown;
-
-        const response = await shard.fetch(rpcRequest("orders:charge"));
-
-        return { customStatuses: [...host.custom.statuses] as Status[], rootStatuses: [...host.root.statuses] as Status[], status: response.status };
+        await run(shard);
     } finally {
         database.close();
     }
 };
 
-describe("fused host span status for a failed dispatch", () => {
-    it("marks both the ctx.trace span and the invocation root span failed on a server error", async () => {
-        expect.assertions(3);
-
-        const outcome = await dispatch(new Error("User 12345 not found"));
-
-        expect(outcome.status).toBe(500);
-        // Redacted (`standardRules` masks a bare 5-digit run as `<DL>`) — the host
-        // exports these spans, so neither may carry the raw message.
-        expect(outcome.customStatuses).toStrictEqual([{ code: "error", message: "User <DL> not found" }]);
-        expect(outcome.rootStatuses).toStrictEqual([{ code: "error", message: "User <DL> not found" }]);
+describe("fused host invocation span status", () => {
+    beforeEach(() => {
+        statuses.length = 0;
     });
 
-    it("leaves the invocation root span unset for an expected 4xx client error", async () => {
-        expect.assertions(3);
+    it("marks it failed for a 5xx from a handler that recorded no telemetry", async () => {
+        expect.assertions(2);
 
-        const outcome = await dispatch(new LunoraError("FORBIDDEN", "not yours", { status: 403 }));
+        await withShard(new Error("User 12345 not found"), async (shard) => {
+            const response = await shard.fetch(rpcRequest());
 
-        expect(outcome.status).toBe(403);
-        // The ctx.trace span still failed — its body threw — so it is marked.
-        expect(outcome.customStatuses).toStrictEqual([{ code: "error", message: "not yours" }]);
-        expect(outcome.rootStatuses).toStrictEqual([]);
+            expect(response.status).toBe(500);
+        });
+
+        // Redacted (`standardRules` masks a bare 5-digit run as `<DL>`).
+        expect(statuses).toStrictEqual([{ code: "error", message: "User <DL> not found" }]);
+    });
+
+    it("leaves it unset for a 4xx", async () => {
+        expect.assertions(2);
+
+        await withShard(new LunoraError("FORBIDDEN", "not yours", { status: 403 }), async (shard) => {
+            const response = await shard.fetch(rpcRequest());
+
+            expect(response.status).toBe(403);
+        });
+
+        expect(statuses).toStrictEqual([]);
+    });
+
+    it("marks it failed for a failing alarm, even with a 4xx-coded error", async () => {
+        expect.assertions(2);
+
+        await withShard(new LunoraError("FORBIDDEN", "not yours", { status: 403 }), async (shard) => {
+            // A prior dispatch registers the sink; a trigger has no ctx of its own.
+            await shard.fetch(rpcRequest());
+            statuses.length = 0;
+
+            await expect(shard.alarm()).rejects.toThrow("not yours");
+        });
+
+        expect(statuses).toStrictEqual([{ code: "error", message: "not yours" }]);
     });
 });
