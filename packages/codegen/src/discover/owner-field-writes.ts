@@ -1010,22 +1010,29 @@ class ImplTaint {
     }
 
     /**
-     * Whether `binding` may have been changed by code this cannot read
-     * (fail-closed): its object, a `const` alias of it, or the loop variable of a
-     * `for…of` over it is handed to a call that is not a read-only one
-     * ({@link isReadOnlyCallArgument}), not `Object.assign`'s target (judged by
-     * what it stores, in {@link isMutatedWithTaint}), and not a visible function
-     * that keeps it read-only; or a `let` / assignment aliases it, past which
-     * its uses are not followed. An iterating callback over it (`rows.forEach(cb)`)
-     * and a nested function it is handed to are followed into their parameters.
-     * A binding whose type is a primitive cannot be changed in place and never
-     * counts.
+     * Whether `binding` may have absorbed caller-controlled data in code this
+     * cannot read. The attacker controls `args`, not a helper's code, so an
+     * opaque call (an import, a method, a parameter) can only plant caller data
+     * in the row when caller data reaches that call too: the row (or a `const`
+     * alias of it, or the loop variable of a `for…of` over it) is handed to an
+     * opaque call that also receives a caller-controlled argument
+     * (`merge(user, args)`, `apply(user, { owner: args.x })`), or whose callee is
+     * itself caller-controlled (`args.fn(user)`, `handlers[args.kind](user)`).
+     * Spreading it into such a call, handing it to such a constructor or
+     * template tag, counts the same. A `let` / assignment alias, past which its
+     * uses are not followed, fails closed. Read-only calls
+     * ({@link isReadOnlyCallArgument}) and `Object.assign`'s target (judged by
+     * what it stores, in {@link isMutatedWithTaint}) never count; a nested
+     * function, or an iterating callback over it (`rows.forEach(cb)`), is
+     * followed into its parameters, and a same-file function outside the impl
+     * must only read it ({@link isReadOnlyParameter}). A binding whose type is a
+     * primitive cannot be changed in place and never counts.
      */
     private isChangedUnseen(binding: ObjectBinding): boolean {
         return this.reaches(binding, this.escapes, (reference, follow) => this.escapesThrough(reference, follow)) && !isPrimitiveType(binding.getType());
     }
 
-    /** One use of {@link isChangedUnseen}: whether it hands the object to code that may change it unseen. */
+    /** One use of {@link isChangedUnseen}: whether it hands the object to code that may plant caller data in it. */
     private escapesThrough(reference: Identifier, follow: Follow): boolean {
         const value = outermostValueWrapper(reference);
         const parent = value.getParent();
@@ -1058,7 +1065,8 @@ class ImplTaint {
         }
 
         if (target === undefined) {
-            return true;
+            // An opaque callback sees the elements; it can only plant caller data that reaches it.
+            return this.isTaintedValue(callback, false) || this.hasTaintedOperand(call.getArguments(), callback);
         }
 
         return this.isInImpl(target)
@@ -1069,8 +1077,8 @@ class ImplTaint {
     /**
      * Whether `reference` is aliased by a binding this does not follow
      * (`let alias = row`, `alias = row`; a destructuring only copies members
-     * out), spread into a call's arguments that is not read-only, or handed to a
-     * constructor or a template tag.
+     * out), or spread into a call, handed to a constructor or to a template tag
+     * that caller data also reaches (see {@link isChangedUnseen}).
      */
     private escapesAsOperand(reference: Identifier): boolean {
         const value = outermostValueWrapper(reference);
@@ -1084,14 +1092,34 @@ class ImplTaint {
             return isSameNode(parent.getRight(), value) && isWriteTarget(parent.getLeft());
         }
 
-        if (Node.isSpreadElement(parent) && Node.isCallExpression(parent.getParent())) {
-            return !isReadOnlyCallArgument(parent, this.scope.context);
+        const holder = parent?.getParent();
+
+        if (Node.isSpreadElement(parent) && Node.isCallExpression(holder)) {
+            return !isReadOnlyCallArgument(parent, this.scope.context) && this.isOpaqueCallTainted(holder.getExpression(), holder.getArguments(), parent);
         }
 
-        return Node.isNewExpression(parent) || (Node.isTemplateSpan(parent) && !isCopiedOnly(reference));
+        if (Node.isNewExpression(parent)) {
+            return this.isOpaqueCallTainted(parent.getExpression(), parent.getArguments(), value);
+        }
+
+        if (!Node.isTemplateSpan(parent) || isCopiedOnly(reference)) {
+            return false;
+        }
+
+        const template = parent.getParent();
+        const tagged = template.getParent();
+
+        return (
+            Node.isTaggedTemplateExpression(tagged) &&
+            this.isOpaqueCallTainted(
+                tagged.getTag(),
+                template.getTemplateSpans().map((span) => span.getExpression()),
+                value,
+            )
+        );
     }
 
-    /** Whether handing `value` to `call` may change it unseen: see {@link isChangedUnseen}. */
+    /** Whether handing `value` to `call` may plant caller data in it: see {@link isChangedUnseen}. */
     private escapesAsArgument(call: CallExpression, value: TsNode, follow: Follow): boolean {
         if (isReadOnlyCallArgument(value, this.scope.context) || isObjectAssignTarget(call, value)) {
             return false;
@@ -1101,7 +1129,7 @@ class ImplTaint {
         const parameter = target === undefined ? undefined : receivingParameter(target, call, value);
 
         if (target === undefined || parameter === undefined) {
-            return true;
+            return this.isOpaqueCallTainted(call.getExpression(), call.getArguments(), value);
         }
 
         if (parameter === null) {
@@ -1110,6 +1138,16 @@ class ImplTaint {
 
         // A nested function's writes are judged by their values (`isMutatedWithTaint`); one outside the impl must only read.
         return this.isInImpl(target) ? follow(parameter, false) : !isReadOnlyParameter(parameter);
+    }
+
+    /** Whether caller data reaches an opaque call: its callee is caller-controlled, or an operand other than `value` is. */
+    private isOpaqueCallTainted(callee: TsNode, operands: ReadonlyArray<TsNode>, value: TsNode): boolean {
+        return this.isTaintedValue(callee, false) || this.hasTaintedOperand(operands, value);
+    }
+
+    /** Whether any of `operands` other than `value` is caller-controlled (a spread `...args` included). */
+    private hasTaintedOperand(operands: ReadonlyArray<TsNode>, value: TsNode): boolean {
+        return operands.some((operand) => operand !== value && this.isTaintedValue(operand, false));
     }
 
     /**
