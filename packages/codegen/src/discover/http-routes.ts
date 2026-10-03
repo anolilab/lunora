@@ -4,6 +4,7 @@ import { Node } from "ts-morph";
 import type { HttpRouteIR, ValidatorIR } from "../ir";
 import { parseObjectShape, parseValidator } from "../parse-validator";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
 import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /**
@@ -210,29 +211,23 @@ const routeFromTerminal = (call: CallExpression, callee: PropertyAccessExpressio
 const discoverFileRoutes = (source: SourceFile, relativePath: string): HttpRouteIR[] => {
     const found: HttpRouteIR[] = [];
 
-    for (const statement of source.getVariableStatements()) {
-        if (!statement.isExported()) {
+    for (const declaration of exportedVariableDeclarationsOf(source)) {
+        const initializer = declaration.getInitializer();
+
+        if (!initializer || !Node.isCallExpression(initializer)) {
             continue;
         }
 
-        for (const declaration of statement.getDeclarations()) {
-            const initializer = declaration.getInitializer();
+        const callee = initializer.getExpression();
 
-            if (!initializer || !Node.isCallExpression(initializer)) {
-                continue;
-            }
+        if (!Node.isPropertyAccessExpression(callee)) {
+            continue;
+        }
 
-            const callee = initializer.getExpression();
+        const route = routeFromTerminal(initializer, callee, primaryExportName(declaration), relativePath);
 
-            if (!Node.isPropertyAccessExpression(callee)) {
-                continue;
-            }
-
-            const route = routeFromTerminal(initializer, callee, declaration.getName(), relativePath);
-
-            if (route) {
-                found.push(route);
-            }
+        if (route) {
+            found.push(route);
         }
     }
 

@@ -4,6 +4,7 @@ import { Node } from "ts-morph";
 import type { ArgumentValidatorIR } from "../ir";
 import { procedureArgumentObjects } from "../procedure-argument-objects";
 import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -134,7 +135,7 @@ const argumentValidatorIrFromDeclaration = (declaration: VariableDeclaration, re
 
     return {
         anyArgs,
-        exportName: declaration.getName(),
+        exportName: primaryExportName(declaration),
         file: relativePath,
         line: initializer.getStartLineNumber(),
         unboundedStringArgs,
@@ -145,17 +146,11 @@ const argumentValidatorIrFromDeclaration = (declaration: VariableDeclaration, re
 const argumentValidatorsInSourceFile = (sourceFile: SourceFile, relativePath: string): ArgumentValidatorIR[] => {
     const found: ArgumentValidatorIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const ir = argumentValidatorIrFromDeclaration(declaration, relativePath);
 
-        for (const declaration of statement.getDeclarations()) {
-            const ir = argumentValidatorIrFromDeclaration(declaration, relativePath);
-
-            if (ir) {
-                found.push(ir);
-            }
+        if (ir) {
+            found.push(ir);
         }
     }
 

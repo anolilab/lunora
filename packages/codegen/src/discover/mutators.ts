@@ -19,7 +19,8 @@ import { diagnosticAt } from "../diagnostics";
 import type { MutatorIR, ValidatorIR } from "../ir";
 import { isServerSurfaceModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
-import { findObjectProperty, localExportAliases, unwrapExpression } from "./ast";
+import { findObjectProperty, unwrapExpression } from "./ast";
+import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /** The only file custom mutators may be declared in — mirrors `lunora/queues.ts`. */
@@ -206,35 +207,9 @@ const ownerFromMutator = (literal: ObjectLiteralExpression | undefined): string 
     return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralValue() : undefined;
 };
 
-/**
- * The names a top-level mutator declaration is exported under: its own name
- * with the `export` keyword, every local specifier naming it
- * (`export { createPost as makePost }` → `makePost`), and `default` for
- * `export default createPost`. The emitted dispatch table reads the mutator
- * off the module namespace by these names, so the local name of a binding
- * exported only under another one would read `undefined`.
- */
-const mutatorExportNames = (
-    declaration: VariableDeclaration,
-    aliases: ReadonlyMap<string, ReadonlyArray<string>>,
-    defaultLocal: string | undefined,
-): string[] => {
-    const local = declaration.getName();
-    const names = [
-        ...(declaration.getVariableStatement()?.hasExportKeyword() === true ? [local] : []),
-        ...(aliases.get(local) ?? []),
-        ...(defaultLocal === local ? ["default"] : []),
-    ];
-
-    return [...new Set(names)];
-};
-
 /** Collect exported `defineMutator` declarations from one source file. */
 const mutatorsFromSource = (source: SourceFile): MutatorIR[] => {
     const mutators: MutatorIR[] = [];
-    const aliases = localExportAliases(source);
-    const defaultExpression = source.getExportAssignment((assignment) => !assignment.isExportEquals())?.getExpression();
-    const defaultLocal = defaultExpression !== undefined && Node.isIdentifier(defaultExpression) ? defaultExpression.getText() : undefined;
 
     for (const declaration of source.getVariableDeclarations()) {
         if (!declaration.isExported()) {
@@ -262,7 +237,8 @@ const mutatorsFromSource = (source: SourceFile): MutatorIR[] => {
 
         const literal = mutatorLiteral(call);
 
-        for (const exportName of mutatorExportNames(declaration, aliases, defaultLocal)) {
+        // Under every name the module exports it as; the dispatch table reads it off the namespace by name.
+        for (const exportName of exportNamesOfDeclaration(declaration).filter((name) => isAddressableExportName(name))) {
             mutators.push({
                 args: argsFromMutator(literal),
                 exportName,

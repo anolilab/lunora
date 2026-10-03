@@ -9,12 +9,11 @@
  * cached on the compiler `SourceFile`, so the collectors share it and a file
  * re-parsed in watch mode (a new compiler node) is re-indexed.
  */
-import { callSiteCallers } from "@lunora/advisor";
-import type { FunctionDeclaration, Identifier, Node as TsNode, SourceFile, Symbol as TsSymbol, VariableDeclaration } from "ts-morph";
+import { byCodepoint, callSiteCallers } from "@lunora/advisor";
+import type { BindingElement, FunctionDeclaration, Identifier, Node as TsNode, SourceFile, Symbol as TsSymbol, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind, ts } from "ts-morph";
 
 import type { CallSiteScope, FunctionIR } from "../ir";
-import { localExportAliases } from "./ast";
 
 type TopLevelDeclaration = FunctionDeclaration | VariableDeclaration;
 
@@ -33,8 +32,8 @@ interface HelperReach {
 
 /** The per-file attribution index, keyed by compiler nodes so it never outlives a re-parse. */
 interface FileAttribution {
-    /** Exported top-level declaration → the name it is exported under. */
-    exportNames: ReadonlyMap<ts.Node, string>;
+    /** Exported top-level declaration → every name it is exported under, sorted. */
+    exportNames: ReadonlyMap<ts.Node, ReadonlyArray<string>>;
     /** Non-exported top-level declaration (a helper) → how it is reached. */
     helperReach: ReadonlyMap<ts.Node, HelperReach>;
 }
@@ -51,61 +50,123 @@ const topLevelDeclarations = (sourceFile: SourceFile): TopLevelDeclaration[] =>
         return Node.isVariableStatement(statement) ? statement.getDeclarations().filter((declaration) => Node.isIdentifier(declaration.getNameNode())) : [];
     });
 
-/** The name an `export`-keyword declaration exports itself under, or `undefined` without the keyword. */
-const keywordExportName = (declaration: TopLevelDeclaration): string | undefined => {
-    if (Node.isFunctionDeclaration(declaration)) {
-        if (!declaration.hasExportKeyword()) {
-            return undefined;
+/** The value an export specifier's name node spells: `start` for `start`, `kebab-name` for `"kebab-name"`. */
+const exportNameText = (node: TsNode): string => (Node.isStringLiteral(node) ? node.getLiteralValue() : node.getText());
+
+/** The local names a top-level statement with the `export` keyword exports under their own names (`default` for an anonymous default). */
+const keywordExportedNames = (statement: TsNode): [local: string, exported: string][] => {
+    if (Node.isFunctionDeclaration(statement) || Node.isClassDeclaration(statement)) {
+        const name = statement.getName();
+
+        if (!statement.hasExportKeyword()) {
+            return [];
         }
 
-        return declaration.hasDefaultKeyword() ? "default" : (declaration.getName() ?? "default");
+        return [[name ?? "default", statement.hasDefaultKeyword() ? "default" : (name ?? "default")]];
     }
 
-    return declaration.getVariableStatement()?.hasExportKeyword() === true ? declaration.getName() : undefined;
+    if (!Node.isVariableStatement(statement) || !statement.hasExportKeyword()) {
+        return [];
+    }
+
+    return statement.getDeclarations().flatMap((declaration): [string, string][] => {
+        const nameNode = declaration.getNameNode();
+
+        if (Node.isIdentifier(nameNode)) {
+            return [[nameNode.getText(), nameNode.getText()]];
+        }
+
+        return nameNode
+            .getDescendantsOfKind(SyntaxKind.BindingElement)
+            .flatMap((element): [string, string][] => (Node.isIdentifier(element.getNameNode()) ? [[element.getName(), element.getName()]] : []));
+    });
 };
 
-/** `[localName, exportedName]` for every local `export { a as b }` specifier and `export default a` of the file. */
-const exportStatementNames = (sourceFile: SourceFile): (readonly [string, string])[] => [
-    ...[...localExportAliases(sourceFile)].flatMap(([local, exported]) => exported.map((name) => [local, name] as const)),
-    ...sourceFile.getExportAssignments().flatMap((assignment): (readonly [string, string])[] => {
-        const expression = assignment.isExportEquals() ? undefined : assignment.getExpression();
+/** The `[local, exported]` name pairs one top-level statement contributes: its `export` keyword, a local `export { … }`, `export default <identifier>`. */
+const exportedNamesOfStatement = (statement: TsNode): [local: string, exported: string][] => {
+    if (Node.isExportDeclaration(statement)) {
+        return statement.hasModuleSpecifier() || statement.isTypeOnly()
+            ? []
+            : statement
+                  .getNamedExports()
+                  .filter((specifier) => !specifier.isTypeOnly())
+                  .map((specifier): [string, string] => {
+                      const local = exportNameText(specifier.getNameNode());
+                      const alias = specifier.getAliasNode();
 
-        return expression !== undefined && Node.isIdentifier(expression) ? [[expression.getText(), "default"] as const] : [];
-    }),
-];
+                      return [local, alias === undefined ? local : exportNameText(alias)];
+                  });
+    }
+
+    const expression = Node.isExportAssignment(statement) && !statement.isExportEquals() ? statement.getExpression() : undefined;
+
+    return Node.isIdentifier(expression) ? [[expression.getText(), "default"]] : keywordExportedNames(statement);
+};
+
+/** Per-file {@link exportNamesByLocalOf} indexes, keyed by the compiler node so a re-parse rebuilds them. */
+const EXPORT_NAMES_CACHE = new WeakMap<ts.SourceFile, ReadonlyMap<string, ReadonlyArray<string>>>();
 
 /**
- * Exported top-level declaration → its exported name, read syntactically (no
- * type checker): `export const` / `export function`, a local
- * `export { run as start }` (→ `start`), and `export default go` (→ `default`).
- * A declaration exported under several names takes the first in code-point
- * order, so the choice is stable.
+ * Local top-level binding name → every name the module exports it under,
+ * sorted in code-point order, read syntactically (no type checker): the
+ * `export` keyword on its declaration (`export const run`, `export function`,
+ * a destructured `export const { check } = …`), each local specifier
+ * (`export { run as start }` → `start`, `export { run as "kebab-name" }` →
+ * `kebab-name`), and `export default run` → `default`. Re-exports
+ * (`export { x } from "./other"`) and type-only specifiers name no local value.
  */
-const exportNamesOf = (sourceFile: SourceFile, declarations: ReadonlyArray<TopLevelDeclaration>): Map<ts.Node, string> => {
-    const byLocalName = new Map(declarations.map((declaration) => [declaration.getName(), declaration] as const));
-    const names = new Map<ts.Node, string>();
-    const offer = (declaration: TopLevelDeclaration | undefined, name: string | undefined): void => {
-        if (declaration === undefined || name === undefined) {
-            return;
-        }
+const exportNamesByLocalOf = (sourceFile: SourceFile): ReadonlyMap<string, ReadonlyArray<string>> => {
+    const cached = EXPORT_NAMES_CACHE.get(sourceFile.compilerNode);
 
-        const current = names.get(declaration.compilerNode);
-
-        if (current === undefined || name < current) {
-            names.set(declaration.compilerNode, name);
-        }
-    };
-
-    for (const declaration of declarations) {
-        offer(declaration, keywordExportName(declaration));
+    if (cached !== undefined) {
+        return cached;
     }
 
-    for (const [local, exported] of exportStatementNames(sourceFile)) {
-        offer(byLocalName.get(local), exported);
+    const names = new Map<string, Set<string>>();
+
+    for (const [local, exported] of sourceFile.getStatements().flatMap((statement) => exportedNamesOfStatement(statement))) {
+        names.set(local, (names.get(local) ?? new Set()).add(exported));
     }
 
-    return names;
+    const index = new Map([...names].map(([local, exported]) => [local, [...exported].toSorted(byCodepoint)] as const));
+
+    EXPORT_NAMES_CACHE.set(sourceFile.compilerNode, index);
+
+    return index;
 };
+
+/**
+ * Every name a top-level `function`, variable or destructured binding is
+ * exported under, sorted in code-point order (see {@link exportNamesByLocalOf});
+ * `[]` for one the module does not export. A binding nested in a function is
+ * never exported.
+ */
+const exportNamesOfDeclaration = (declaration: BindingElement | FunctionDeclaration | VariableDeclaration): ReadonlyArray<string> => {
+    const statement = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableStatement) : undefined;
+    const variableStatement = Node.isVariableDeclaration(declaration) ? declaration.getVariableStatement() : undefined;
+    const holder = Node.isFunctionDeclaration(declaration) ? declaration : (statement ?? variableStatement);
+
+    if (holder === undefined || !Node.isSourceFile(holder.getParent())) {
+        return [];
+    }
+
+    const name = Node.isFunctionDeclaration(declaration) ? (declaration.getName() ?? "default") : declaration.getName();
+
+    return exportNamesByLocalOf(declaration.getSourceFile()).get(name) ?? [];
+};
+
+/**
+ * Exported top-level declaration → every name it is exported under, sorted;
+ * the attribution names an export site by the first, so the choice is stable.
+ */
+const exportNamesOf = (declarations: ReadonlyArray<TopLevelDeclaration>): Map<ts.Node, ReadonlyArray<string>> =>
+    new Map(
+        declarations.flatMap((declaration) => {
+            const names = exportNamesOfDeclaration(declaration);
+
+            return names.length === 0 ? [] : [[declaration.compilerNode, names] as const];
+        }),
+    );
 
 /**
  * The ONE mapping from where code sits to who owns it. Walks to the top-level
@@ -114,7 +175,7 @@ const exportNamesOf = (sourceFile: SourceFile, declarations: ReadonlyArray<TopLe
  * anything else — module scope, a class, a destructured declaration — is
  * untracked.
  */
-const ownerOf = (node: TsNode, exportNames: ReadonlyMap<ts.Node, string>): Owner => {
+const ownerOf = (node: TsNode, exportNames: ReadonlyMap<ts.Node, ReadonlyArray<string>>): Owner => {
     for (const ancestor of node.getAncestors()) {
         if (Node.isExportAssignment(ancestor) && !ancestor.isExportEquals()) {
             return { kind: "export", name: "default" };
@@ -127,7 +188,7 @@ const ownerOf = (node: TsNode, exportNames: ReadonlyMap<ts.Node, string>): Owner
                 Node.isIdentifier(ancestor.getNameNode()));
 
         if (isTopLevel && (Node.isFunctionDeclaration(ancestor) || Node.isVariableDeclaration(ancestor))) {
-            const name = exportNames.get(ancestor.compilerNode);
+            const name = exportNames.get(ancestor.compilerNode)?.[0];
 
             return name === undefined ? { declaration: ancestor, kind: "helper" } : { kind: "export", name };
         }
@@ -205,7 +266,7 @@ const helperNamesOf = (helpers: ReadonlyArray<TopLevelDeclaration>): { bySymbol:
 const helperReferencesOf = (
     sourceFile: SourceFile,
     helpers: ReadonlyArray<TopLevelDeclaration>,
-    exportNames: ReadonlyMap<ts.Node, string>,
+    exportNames: ReadonlyMap<ts.Node, ReadonlyArray<string>>,
 ): Map<ts.Node, Owner[]> => {
     const { bySymbol, nameNodes, spellings } = helperNamesOf(helpers);
     const references = new Map<ts.Node, Owner[]>();
@@ -282,7 +343,7 @@ const attributionOf = (sourceFile: SourceFile): FileAttribution => {
     }
 
     const declarations = topLevelDeclarations(sourceFile);
-    const exportNames = exportNamesOf(sourceFile, declarations);
+    const exportNames = exportNamesOf(declarations);
     const helpers = declarations.filter((declaration) => !exportNames.has(declaration.compilerNode));
     const index: FileAttribution = {
         exportNames,
@@ -360,7 +421,51 @@ const withCallerVisibility = <Row extends { file: string; scope: CallSiteScope }
 };
 
 /** The name a top-level declaration is exported under (`export { run as start }` → `start`), or `undefined`. */
-const exportedNameOf = (declaration: TopLevelDeclaration): string | undefined =>
-    attributionOf(declaration.getSourceFile()).exportNames.get(declaration.compilerNode);
+const exportedNameOf = (declaration: TopLevelDeclaration): string | undefined => exportNamesOfDeclaration(declaration)[0];
 
-export { callSiteScopeOf, declarationOf, exportedNameOf, isTypePosition, referencedSymbolOf, withCallerVisibility };
+/**
+ * The top-level variable declarations `sourceFile` exports, however it spells
+ * the export: the `export` keyword, a local `export { a as b }` specifier, or
+ * `export default a`. The per-procedure feeders walk these, so a procedure
+ * exported only by a specifier gets the same lints as `export const`.
+ */
+const exportedVariableDeclarationsOf = (sourceFile: SourceFile): VariableDeclaration[] =>
+    sourceFile
+        .getVariableStatements()
+        .flatMap((statement) => statement.getDeclarations())
+        .filter((declaration) =>
+            Node.isIdentifier(declaration.getNameNode())
+                ? exportNamesOfDeclaration(declaration).length > 0
+                : declaration.getVariableStatement()?.hasExportKeyword() === true,
+        );
+
+/**
+ * The name a lint row names an exported declaration by: the first of its
+ * exported names (the one attribution names its sites by), or its own name for
+ * a destructured `export const { … }`.
+ */
+const primaryExportName = (declaration: VariableDeclaration): string => exportNamesOfDeclaration(declaration)[0] ?? declaration.getName();
+
+/** An ASCII JavaScript identifier, the names emit can spell as `lunora_x.<name>`. */
+const IDENTIFIER_NAME = /^[$A-Z_a-z][\w$]*$/u;
+
+/**
+ * Whether `name` can be emitted as a property access on the generated module
+ * namespace (`lunora_x.<name>`): an identifier. A string-literal export alias
+ * (`export { run as "kebab-name" }`) is not, so it is never registered.
+ */
+const isAddressableExportName = (name: string): boolean => IDENTIFIER_NAME.test(name);
+
+export {
+    callSiteScopeOf,
+    declarationOf,
+    exportedNameOf,
+    exportedVariableDeclarationsOf,
+    exportNamesByLocalOf,
+    exportNamesOfDeclaration,
+    isAddressableExportName,
+    isTypePosition,
+    primaryExportName,
+    referencedSymbolOf,
+    withCallerVisibility,
+};

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget } from "ts-morph";
+import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget, ts } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { emitQueues, UMBRELLA_BASE_PACKAGES } from "../src/emit";
@@ -3060,6 +3060,75 @@ export { createPost as makePost };
             expect(result.generated.functions).toMatch(/"mutators:makePost": lunora_mutators_\d+\.makePost as unknown as RegisteredLunoraFunction/u);
             expect(result.generated.functions).not.toContain(".createPost");
             expect(result.generated.api).toContain("makePost: FunctionReference<");
+        });
+
+        it("lints a procedure exported by a separate specifier exactly like an `export const`", () => {
+            expect.hasAssertions();
+
+            // Item 3 made `export { removeIt as deletePost }` callable, so every
+            // per-procedure lint must see it too: a newly callable endpoint must not
+            // get weaker coverage than the keyword-exported twin below.
+            const body = `mutation.input({ id: v.any(), note: v.string() }).mutation(async ({ ctx, args }) => {
+    const row = await ctx.db.get(args.id);
+    await ctx.db.insert("posts", { userId: args.id, title: String(Math.random()) });
+    return row;
+})`;
+
+            writeFileSync(join(workdir, "lunora", "keyword.ts"), `import { mutation, v } from "@lunora/server";\n\nexport const deletePost = ${body};\n`);
+            writeFileSync(
+                join(workdir, "lunora", "renamed.ts"),
+                `import { mutation, v } from "@lunora/server";\n\nconst removeIt = ${body};\n\nexport { removeIt as deletePost };\n`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+            const namesFor = (file: string): string[] =>
+                result.advisories
+                    // The project-wide type-check notice names one witness procedure, not a finding about it.
+                    .filter((finding) => finding.name !== "procedure_type_check_unavailable")
+                    .filter((finding) => JSON.stringify(finding).includes(`"${file}"`) || JSON.stringify(finding).includes(`${file}:`))
+                    .map((finding) => finding.name)
+                    .toSorted((a, b) => a.localeCompare(b));
+
+            expect(namesFor("keyword").length).toBeGreaterThan(0);
+            expect(namesFor("renamed")).toStrictEqual(namesFor("keyword"));
+        });
+
+        it("does not register a string-literal export alias, and keeps the emitted output compiling", () => {
+            expect.assertions(4);
+
+            // `lunora_x."kebab-name"` is a syntax error, so a name that is not an
+            // identifier is left out of `api.ts` and the dispatch table.
+            writeFileSync(
+                join(workdir, "lunora", "settings.ts"),
+                `import { query } from "@lunora/server";\n\nconst listSettings = query.input({}).query(async () => "x");\n\nexport { listSettings as "list-settings" };\n`,
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+            const syntaxErrors = (text: string): number => {
+                const file = ts.createSourceFile("probe.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+
+                return (file as unknown as { parseDiagnostics: unknown[] }).parseDiagnostics.length;
+            };
+
+            expect(result.generated.functions).not.toContain("list-settings");
+            expect(result.generated.api).not.toContain("list-settings");
+            expect(syntaxErrors(result.generated.functions)).toBe(0);
+            expect(syntaxErrors(result.generated.api)).toBe(0);
+        });
+
+        it("names a string-literal export alias as the reason a procedure was not registered", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "lunora", "builders.d.ts"), PROBE_BUILDERS);
+            writeFileSync(
+                join(workdir, "lunora", "settings.ts"),
+                `import { probeQuery } from "./builders.js";\n\nconst listSettings = probeQuery.input({}).query(async () => "x");\n\nexport { listSettings as "list-settings" };\n`,
+            );
+
+            const finding = runCodegen({ projectRoot: workdir }).advisories.find((entry) => entry.name === "procedure_not_registered");
+
+            expect(finding?.detail).toContain("`list-settings`");
+            expect(finding?.detail).toContain("string name that is not an identifier");
         });
 
         it("flags a factory-made procedure behind a separate export statement as an indirect initializer", () => {

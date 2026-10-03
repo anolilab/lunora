@@ -9,6 +9,7 @@ import type { ShapeIR, ValidatorIR } from "../ir";
 import { isServerPackageModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
 import { findObjectProperty } from "./ast";
+import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 
 /** The only file shapes may be declared in — mirrors `lunora/queues.ts`. */
 const SHAPES_FILENAME = "shapes.ts";
@@ -167,7 +168,13 @@ const shapesFromSource = (source: SourceFile): ShapeIR[] => {
             throw diagnosticAt(nameNode, "defineShape exports must be plain named exports (no destructuring)");
         }
 
-        shapes.push({ args: argsFrom(callExpression), exportName: nameNode.getText(), filePath: "shapes", table: tableLiteralFrom(callExpression) });
+        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        shapes.push({ args: argsFrom(callExpression), exportName, filePath: "shapes", table: tableLiteralFrom(callExpression) });
     }
 
     return shapes;

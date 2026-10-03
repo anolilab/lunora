@@ -7,6 +7,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { IdentityIR } from "../ir";
 import { isServerPackageModule } from "../module-specifiers";
+import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 
 /** The only file a `defineIdentity` contract may be declared in — mirrors `lunora/shapes.ts`. */
 const IDENTITY_FILENAME = "identity.ts";
@@ -112,7 +113,13 @@ const identitiesFromSource = (source: SourceFile): IdentityIR[] => {
             throw diagnosticAt(nameNode, "defineIdentity exports must be plain named exports (no destructuring)");
         }
 
-        identities.push({ exportName: nameNode.getText() });
+        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        identities.push({ exportName });
     }
 
     return identities;

@@ -9,6 +9,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { QueueIR, TopicIR } from "../ir";
 import { findObjectProperty, stringPropertyFor } from "./ast";
+import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 import { resolveHandlerReference } from "./handler-reference";
 
 /** The only file queues may be declared in — mirrors `lunora/workflows.ts`. */
@@ -155,7 +156,7 @@ const queueFromCall = (call: CallExpression, exportName: string, lunoraDirectory
  * the same file — that is what lets codegen wire `ctx.topics.<topic>` to this
  * subscription's binding without evaluating anything.
  */
-const subscriptionFromCall = (call: CallExpression, exportName: string, topics: ReadonlySet<string>, lunoraDirectory: string): QueueIR => {
+const subscriptionFromCall = (call: CallExpression, exportName: string, topics: ReadonlyMap<string, string>, lunoraDirectory: string): QueueIR => {
     const [topicArgument, configArgument] = call.getArguments();
 
     if (!topicArgument || !Node.isIdentifier(topicArgument) || !topics.has(topicArgument.getText())) {
@@ -166,7 +167,7 @@ const subscriptionFromCall = (call: CallExpression, exportName: string, topics: 
         throw diagnosticAt(call, `subscription "${exportName}": defineSubscription must be passed an inline object literal`);
     }
 
-    return queueFromConfig(configArgument, exportName, topicArgument.getText(), lunoraDirectory);
+    return queueFromConfig(configArgument, exportName, topics.get(topicArgument.getText()), lunoraDirectory);
 };
 
 /** One exported `define*(...)` call in `lunora/queues.ts`. */
@@ -174,6 +175,8 @@ interface FactoryExport {
     call: CallExpression;
     exportName: string;
     factory: QueueFactory;
+    /** The binding name in the module, which a subscription passes as its topic. */
+    localName: string;
 }
 
 /** Every exported `@lunora/queue` factory call in one source file, in source order. */
@@ -205,7 +208,13 @@ const factoryExports = (source: SourceFile): FactoryExport[] => {
             throw diagnosticAt(nameNode, `${factory} exports must be plain named exports (no destructuring)`);
         }
 
-        found.push({ call, exportName: nameNode.getText(), factory });
+        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        found.push({ call, exportName, factory, localName: nameNode.getText() });
     }
 
     return found;
@@ -214,7 +223,8 @@ const factoryExports = (source: SourceFile): FactoryExport[] => {
 /** Collect the queues (subscriptions included) and topics one source file declares. */
 const queuesFromSource = (source: SourceFile, lunoraDirectory: string): { queues: QueueIR[]; topics: TopicIR[] } => {
     const exports = factoryExports(source);
-    const topicNames = new Set(exports.filter((entry) => entry.factory === "defineTopic").map((entry) => entry.exportName));
+    // A subscription names its topic by the LOCAL binding; the topic registers under its exported name.
+    const topicNames = new Map(exports.filter((entry) => entry.factory === "defineTopic").map((entry) => [entry.localName, entry.exportName] as const));
     const queues: QueueIR[] = [];
 
     for (const entry of exports) {
@@ -225,7 +235,7 @@ const queuesFromSource = (source: SourceFile, lunoraDirectory: string): { queues
         }
     }
 
-    const topics = [...topicNames].map((exportName) => {
+    const topics = [...topicNames.values()].map((exportName) => {
         return { exportName };
     });
 

@@ -3,6 +3,7 @@ import { Node } from "ts-morph";
 
 import type { MaskProcedureIR } from "../../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, tablesAccessedIn } from "../ast";
+import { exportedVariableDeclarationsOf, primaryExportName } from "../attribution";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { maskCallsInChain, memberName } from "./internal/mask-call";
 
@@ -97,7 +98,7 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
     const { tablesRead, tablesWritten } = tablesAccessedIn(declaration, READ_METHODS, WRITE_METHODS);
 
     return {
-        exportName: declaration.getName(),
+        exportName: primaryExportName(declaration),
         file: relativePath,
         maskColumns: chain.maskColumns,
         tablesRead,
@@ -121,17 +122,11 @@ const discoverMaskProcedures = (project: Project, lunoraDirectory: string): Mask
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            const ir = procedureIrFromDeclaration(declaration, relativePath);
 
-            for (const declaration of statement.getDeclarations()) {
-                const ir = procedureIrFromDeclaration(declaration, relativePath);
-
-                if (ir) {
-                    procedures.push(ir);
-                }
+            if (ir) {
+                procedures.push(ir);
             }
         }
     }

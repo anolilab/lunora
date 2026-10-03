@@ -3,6 +3,7 @@ import { Node } from "ts-morph";
 
 import type { MaskStrategyIR } from "../../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
+import { exportedVariableDeclarationsOf, primaryExportName } from "../attribution";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { maskCallsInChain, memberName, strategyOf } from "./internal/mask-call";
 
@@ -76,7 +77,7 @@ const maskStrategyRowsFromDeclaration = (declaration: TsNode, relativePath: stri
         return [];
     }
 
-    return maskCallsInChain(classified.receiver).flatMap((maskCall) => extractMaskStrategyRows(maskCall, declaration.getName(), relativePath));
+    return maskCallsInChain(classified.receiver).flatMap((maskCall) => extractMaskStrategyRows(maskCall, primaryExportName(declaration), relativePath));
 };
 
 /**
@@ -97,14 +98,8 @@ const discoverMaskStrategies = (project: Project, lunoraDirectory: string): Mask
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
-
-            for (const declaration of statement.getDeclarations()) {
-                rows.push(...maskStrategyRowsFromDeclaration(declaration, relativePath));
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            rows.push(...maskStrategyRowsFromDeclaration(declaration, relativePath));
         }
     }
 

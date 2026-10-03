@@ -3,6 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ContextPropertyCallIR } from "../ir";
 import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** One resolved query/mutation handler with its attribution. */
@@ -34,7 +35,7 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
 
     const handler = handlerOf(initializer, classified.receiver);
 
-    return handler ? { exportName: declaration.getName(), handler, kind: classified.kind } : undefined;
+    return handler ? { exportName: primaryExportName(declaration), handler, kind: classified.kind } : undefined;
 };
 
 /**
@@ -84,17 +85,11 @@ const accessesInHandler = (procedure: ResolvedProcedure, file: string, property:
 const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, property: string): ContextPropertyCallIR[] => {
     const found: ContextPropertyCallIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const procedure = exportedProcedureHandler(declaration);
 
-        for (const declaration of statement.getDeclarations()) {
-            const procedure = exportedProcedureHandler(declaration);
-
-            if (procedure) {
-                found.push(...accessesInHandler(procedure, relativePath, property));
-            }
+        if (procedure) {
+            found.push(...accessesInHandler(procedure, relativePath, property));
         }
     }
 

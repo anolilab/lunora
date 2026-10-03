@@ -4,6 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
 import { findObjectProperty, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
 import { calleeName } from "./callee";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
@@ -821,7 +822,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         ...exemptionOf(declaration),
         ...protections,
         analyzableBody: behaviourRoot !== undefined,
-        exportName: declaration.getName(),
+        exportName: primaryExportName(declaration),
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,
@@ -833,17 +834,11 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
 const middlewareInSourceFile = (sourceFile: SourceFile, relativePath: string): ProcedureMiddlewareIR[] => {
     const found: ProcedureMiddlewareIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const ir = middlewareIrFromDeclaration(declaration, relativePath);
 
-        for (const declaration of statement.getDeclarations()) {
-            const ir = middlewareIrFromDeclaration(declaration, relativePath);
-
-            if (ir) {
-                found.push(ir);
-            }
+        if (ir) {
+            found.push(ir);
         }
     }
 

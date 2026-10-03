@@ -3,6 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { NormalizeIdAuthorizationIR } from "../ir";
 import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
 import { chainUsesWrappedCall } from "./builder-chain";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
@@ -290,7 +291,7 @@ const normalizeIdAuthorizationsInDeclaration = (declaration: TsNode, relativePat
 
         seen.add(name);
         rows.push({
-            exportName: declaration.getName(),
+            exportName: primaryExportName(declaration),
             file: relativePath,
             line: call.getStartLineNumber(),
             mentionsOwnership,
@@ -324,14 +325,8 @@ const discoverNormalizeIdAuthorization = (project: Project, lunoraDirectory: str
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
-
-            for (const declaration of statement.getDeclarations()) {
-                rows.push(...normalizeIdAuthorizationsInDeclaration(declaration, relativePath));
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            rows.push(...normalizeIdAuthorizationsInDeclaration(declaration, relativePath));
         }
     }
 

@@ -11,6 +11,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { AgentIR } from "../ir";
 import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 
 /** The only file agents may be declared in — mirrors `lunora/workflows.ts`. */
 const AGENTS_FILENAME = "agents.ts";
@@ -162,7 +163,13 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
             throw diagnosticAt(nameNode, "defineAgent exports must be plain named exports (no destructuring)");
         }
 
-        agents.push(agentFromCall(call, nameNode.getText()));
+        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        agents.push(agentFromCall(call, exportName));
     }
 
     return agents;

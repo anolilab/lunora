@@ -3,6 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { FlagReadIR } from "../ir";
 import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** One resolved query handler with its attribution. */
@@ -42,7 +43,7 @@ const exportedQueryHandler = (declaration: VariableDeclaration): ResolvedQuery |
 
     const handler = handlerOf(initializer, classified.receiver);
 
-    return handler ? { exportName: declaration.getName(), handler } : undefined;
+    return handler ? { exportName: primaryExportName(declaration), handler } : undefined;
 };
 
 /**
@@ -121,17 +122,11 @@ const readsInHandler = (procedure: ResolvedQuery, file: string): FlagReadIR[] =>
 const readsInSourceFile = (sourceFile: SourceFile, relativePath: string): FlagReadIR[] => {
     const found: FlagReadIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const procedure = exportedQueryHandler(declaration);
 
-        for (const declaration of statement.getDeclarations()) {
-            const procedure = exportedQueryHandler(declaration);
-
-            if (procedure) {
-                found.push(...readsInHandler(procedure, relativePath));
-            }
+        if (procedure) {
+            found.push(...readsInHandler(procedure, relativePath));
         }
     }
 

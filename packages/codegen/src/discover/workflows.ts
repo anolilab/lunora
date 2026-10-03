@@ -10,6 +10,7 @@ import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { HandlerSiteIR, WorkflowIR, WorkflowStepIR } from "../ir";
 import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 import { resolveHandlerReference } from "./handler-reference";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
@@ -348,7 +349,13 @@ const workflowsFromSource = (source: SourceFile, lunoraDirectory: string): Workf
             throw diagnosticAt(nameNode, "defineWorkflow exports must be plain named exports (no destructuring)");
         }
 
-        workflows.push(workflowFromCall(call, nameNode.getText(), lunoraDirectory));
+        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        workflows.push(workflowFromCall(call, exportName, lunoraDirectory));
     }
 
     return workflows;

@@ -26,6 +26,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { ContainerImageIR, ContainerIR, DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } from "../ir";
 import { findObjectProperty, isWriteTarget, outermostValueWrapper, propertyKeyName, stringPropertyFor, symbolConstInitializer } from "./ast";
+import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 
 /** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
 const CONTAINERS_FILENAME = "containers.ts";
@@ -666,7 +667,13 @@ const containersFromSource = (source: SourceFile): ContainerIR[] => {
             throw diagnosticAt(nameNode, "defineContainer exports must be plain named exports (no destructuring)");
         }
 
-        const container = containerFromCall(call, nameNode.getText());
+        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        const container = containerFromCall(call, exportName);
         const clash = exportByBinding.get(container.bindingName);
 
         if (clash !== undefined) {

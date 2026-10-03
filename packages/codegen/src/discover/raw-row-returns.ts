@@ -4,6 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { singleHopInitializer } from "../argument-taint";
 import type { RawRowReturnIR } from "../ir";
 import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
+import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
 import { chainHasStep, chainUsesWrappedCall } from "./builder-chain";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
@@ -189,7 +190,7 @@ const rawRowReturnsInDeclaration = (declaration: TsNode, relativePath: string): 
 
         seen.add(table);
         rows.push({
-            exportName: declaration.getName(),
+            exportName: primaryExportName(declaration),
             file: relativePath,
             line: expression.getStartLineNumber(),
             table,
@@ -222,14 +223,8 @@ const discoverRawRowReturns = (project: Project, lunoraDirectory: string): RawRo
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
-
-            for (const declaration of statement.getDeclarations()) {
-                rows.push(...rawRowReturnsInDeclaration(declaration, relativePath));
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            rows.push(...rawRowReturnsInDeclaration(declaration, relativePath));
         }
     }
 

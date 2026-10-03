@@ -3,6 +3,7 @@ import type { Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedVariableDeclarationsOf, exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 
 /**
  * Every type a `lunora/` registration terminates in, mapped to the call that
@@ -184,30 +185,16 @@ const wrongFile = (file: string): MissedRegistration => {
     };
 };
 
-const SEPARATE_EXPORT_STATEMENT: MissedRegistration = {
-    cause: "the binding is exported by a separate `export { … }` statement, and codegen reads the `export` keyword on the declaration itself",
-    remediation: "Move the keyword onto the declaration and drop the separate export statement.",
-};
-
 /**
- * The kinds procedure and mutator discovery register through a separate local
- * `export { a as b }` too, under the exported name. One of these still missing
- * behind such a specifier was dropped for its initializer, not its export.
+ * `export { run as "kebab-name" }`: a string-literal export name that is not an
+ * identifier. The generated `api.ts` and dispatch table read every registration
+ * off the module namespace as `<module>.<name>`, which cannot spell it, so
+ * discovery does not register it.
  */
-const SEPARATE_EXPORT_REGISTERED = new Set<string>([
-    "RegisteredAction",
-    "RegisteredLifecycleHook",
-    "RegisteredMutation",
-    "RegisteredMutator",
-    "RegisteredQuery",
-    "RegisteredReactor",
-    "RegisteredStream",
-    "RegisteredWhisperAuthorizer",
-]);
-
-/** Why a binding behind a separate local `export { … }` is still unregistered. */
-const separateExportCause = (registration: Registration): MissedRegistration =>
-    SEPARATE_EXPORT_REGISTERED.has(registration.typeName) ? INDIRECT_INITIALIZER : SEPARATE_EXPORT_STATEMENT;
+const STRING_EXPORT_NAME: MissedRegistration = {
+    cause: "it is exported only under a string name that is not an identifier, which the generated `api.ts` and dispatch table cannot address as `<module>.<name>`",
+    remediation: "Export it under an identifier name as well (or instead).",
+};
 
 const findingFor = (relativePath: string, exportName: string, registration: Registration, line: number, indirection: MissedRegistration): Finding => {
     const { call, file, note, typeName } = registration;
@@ -223,7 +210,7 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
         cacheKey: `procedure_not_registered:${relativePath}:${exportName}`,
         categories: ["SCHEMA"],
         description:
-            "Codegen registers an export only when its initializer is literally the registering call and it is exported by its declaration's own `export` keyword (procedures and mutators: or by a local `export { … }`). Written any other way it exists at runtime but never reaches the generated output — `_generated/api.ts` for a procedure, the lifecycle manifest for a hook or reactor — so a caller cannot address it and a hook never fires.",
+            "Codegen registers an export only when its initializer is literally the registering call and the module exports it under an identifier name — by the `export` keyword, a local `export { … }`, or `export default`. Written any other way it exists at runtime but never reaches the generated output — `_generated/api.ts` for a procedure, the lifecycle manifest for a hook or reactor — so a caller cannot address it and a hook never fires.",
         detail: `\`${exportName}\` in \`${relativePath}\` (line ${line.toString()}) has type \`${typeName}\` but was not registered — ${missed.cause}.`,
         facing: "INTERNAL",
         level: "WARN",
@@ -252,19 +239,16 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
 const namedExportFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => {
     const findings: Finding[] = [];
 
-    for (const statement of source.getVariableStatements().filter((entry) => entry.isExported())) {
-        for (const declaration of statement.getDeclarations()) {
-            const exportName = declaration.getName();
+    for (const declaration of exportedVariableDeclarationsOf(source)) {
+        const names = Node.isIdentifier(declaration.getNameNode()) ? exportNamesOfDeclaration(declaration) : [declaration.getName()];
+        const missing = names.find((name) => !isRegistered(registrations, relativePath, name));
+        const registration = missing !== undefined && mayHideRegistration(declaration) ? registrationOf(declaration) : undefined;
 
-            if (isRegistered(registrations, relativePath, exportName) || !mayHideRegistration(declaration)) {
-                continue;
-            }
+        if (missing !== undefined && registration !== undefined) {
+            // A string name no addressable sibling covers is the cause; otherwise the initializer is.
+            const cause = names.some((name) => isAddressableExportName(name)) ? INDIRECT_INITIALIZER : STRING_EXPORT_NAME;
 
-            const registration = registrationOf(declaration);
-
-            if (registration !== undefined) {
-                findings.push(findingFor(relativePath, exportName, registration, declaration.getStartLineNumber(), INDIRECT_INITIALIZER));
-            }
+            findings.push(findingFor(relativePath, missing, registration, declaration.getStartLineNumber(), cause));
         }
     }
 
@@ -284,7 +268,8 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registr
 
     const findings: Finding[] = [];
 
-    for (const assignment of source.getExportAssignments().filter((entry) => !entry.isExportEquals())) {
+    // `export default run` names a local binding, which `namedExportFindings` covers.
+    for (const assignment of source.getExportAssignments().filter((entry) => !entry.isExportEquals() && !Node.isIdentifier(entry.getExpression()))) {
         const registration = registrationOf(assignment.getExpression());
 
         if (registration !== undefined) {
@@ -295,54 +280,9 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registr
     return findings;
 };
 
-/**
- * `const handler = defineShape(…); export { handler };` — the export-declaration form.
- *
- * Procedures and mutators are registered through such a specifier, under the
- * exported name (`discoverFunctions`, `discoverMutators`); one still missing
- * here was dropped for its initializer, and is reported as such. The other
- * kinds' discoverers key a binding by its LOCAL name, so a renamed one is
- * missing under the name callers use while looking like a perfectly ordinary
- * registration — which is what makes this shape worse than the ones above
- * rather than merely another of them.
- *
- * The exported name is what a caller addresses, so `export { a as b }` is
- * checked and reported as `b`. Re-exports (`export { x } from "./other"`) are
- * skipped: the declaration lives in another file, and naming this one would send
- * the reader to the wrong place.
- */
-const exportDeclarationFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => {
-    const findings: Finding[] = [];
-
-    for (const declaration of source.getExportDeclarations().filter((entry) => entry.getModuleSpecifier() === undefined)) {
-        for (const specifier of declaration.getNamedExports()) {
-            const exportName = specifier.getAliasNode()?.getText() ?? specifier.getName();
-
-            if (isRegistered(registrations, relativePath, exportName)) {
-                continue;
-            }
-
-            const local = specifier.getLocalTargetDeclarations().find((entry): entry is VariableDeclaration => Node.isVariableDeclaration(entry));
-
-            if (local === undefined || !mayHideRegistration(local)) {
-                continue;
-            }
-
-            const registration = registrationOf(local);
-
-            if (registration !== undefined) {
-                findings.push(findingFor(relativePath, exportName, registration, specifier.getStartLineNumber(), separateExportCause(registration)));
-            }
-        }
-    }
-
-    return findings;
-};
-
 const fileFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => [
     ...namedExportFindings(source, relativePath, registrations),
     ...defaultExportFindings(source, relativePath, registrations),
-    ...exportDeclarationFindings(source, relativePath, registrations),
 ];
 
 /**
@@ -368,16 +308,18 @@ const fileFindings = (source: SourceFile, relativePath: string, registrations: R
 const registeredDeclarations = (source: SourceFile, relativePath: string, registrations: Registrations): Witness[] =>
     source
         .getVariableStatements()
-        .filter((entry) => entry.isExported())
         .flatMap((entry) => entry.getDeclarations())
-        .filter((declaration) => isRegistered(registrations, relativePath, declaration.getName()))
+        .filter((declaration) => Node.isIdentifier(declaration.getNameNode()))
+        .filter((declaration) => exportNamesOfDeclaration(declaration).some((name) => isRegistered(registrations, relativePath, name)))
         .filter((declaration) => {
             const initializer = declaration.getInitializer();
 
             return initializer !== undefined && Node.isCallExpression(initializer) && Node.isPropertyAccessExpression(initializer.getExpression());
         })
         .map((declaration) => {
-            return { declaration, exportName: declaration.getName(), relativePath };
+            const exportName = exportNamesOfDeclaration(declaration).find((name) => isRegistered(registrations, relativePath, name)) ?? declaration.getName();
+
+            return { declaration, exportName, relativePath };
         });
 
 /**
