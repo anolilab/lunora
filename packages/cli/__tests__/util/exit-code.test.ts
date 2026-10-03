@@ -111,7 +111,7 @@ describe("exit-code taxonomy", () => {
         expect(exitCodeForError(new LunoraError("CONFLICT", "raced"))).toBe(EXIT_CODE.CONFLICT);
         // An explicit status on the instance wins over the catalog default —
         // the upstream-API codes pass the real upstream status through.
-        expect(exitCodeForError(new LunoraError("ANALYTICS_SQL_ERROR", "upstream", { status: 429 }))).toBe(EXIT_CODE.RATE_LIMITED);
+        expect(exitCodeForError(new LunoraError("ANALYTICS_SQL_QUERY_ERROR", "upstream", { status: 429 }))).toBe(EXIT_CODE.RATE_LIMITED);
     });
 
     it("treats anything that is not a Lunora error as a general failure", () => {

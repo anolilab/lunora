@@ -6,6 +6,8 @@
 export { createAnalyticsSql } from "./create-analytics-sql";
 export type { AnalyticsSqlQueryErrorData } from "./error";
 export { AnalyticsSqlQueryError } from "./error";
+export type { FunctionUsagePanel, FunctionUsageQueryOptions } from "./function-usage";
+export { FUNCTION_USAGE_PANELS, functionUsageQuery, isFunctionUsagePanel } from "./function-usage";
 export { createAnalyticsSqlRest } from "./rest";
 export type {
     AnalyticsSql,

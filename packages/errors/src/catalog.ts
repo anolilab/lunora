@@ -225,7 +225,6 @@ export const ERROR_CATALOG = {
      * infra, not user input), so it is echoed rather than redacted. `status`
      * here is a fallback; each throw passes the actual upstream HTTP status.
      */
-    ANALYTICS_SQL_ERROR: { status: 502, title: "Analytics Engine SQL API error" },
     /*
      * `ctx.analyticsSql` (`@lunora/bindings/analytics-sql`): a rejected Analytics
      * SQL query from the binding or its REST transport. `data.retryable` says

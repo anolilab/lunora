@@ -105,6 +105,50 @@ describe("createAnalyticsSqlRest", () => {
         );
     });
 
+    it("wraps a request that never reaches the API (DNS, reset) as a retryable query error", async () => {
+        expect.assertions(4);
+
+        const cause = new TypeError("fetch failed");
+        const fetchMock = vi.fn<FetchMock>(async () => {
+            throw cause;
+        });
+
+        const error = (await createAnalyticsSqlRest({ accountId: "a", apiToken: "t", fetch: fetchMock })
+            .query({ query: "SELECT 1" })
+            .catch((error_: unknown) => error_)) as AnalyticsSqlQueryError;
+
+        expect(error).toBeInstanceOf(AnalyticsSqlQueryError);
+        expect(error.retryable).toBe(true);
+        expect(error.status).toBe(502);
+        expect(error.cause).toBe(cause);
+    });
+
+    it("keeps the real status when the deadline fires while reading an error body", async () => {
+        expect.assertions(3);
+
+        const fetchMock = vi.fn<FetchMock>(
+            async (_url, init) =>
+                ({
+                    ok: false,
+                    status: 429,
+                    text: async () =>
+                        new Promise<string>((_resolve, reject) => {
+                            init?.signal?.addEventListener("abort", () => {
+                                reject(new DOMException("aborted", "AbortError"));
+                            });
+                        }),
+                }) as unknown as Response,
+        );
+
+        const error = (await createAnalyticsSqlRest({ accountId: "a", apiToken: "t", fetch: fetchMock, timeoutMs: 5 })
+            .query({ query: "SELECT 1" })
+            .catch((error_: unknown) => error_)) as AnalyticsSqlQueryError;
+
+        expect(error.status).toBe(429);
+        expect(error.retryable).toBe(true);
+        expect(error.message).not.toMatch(/timed out/);
+    });
+
     it("aborts a stalled query after timeoutMs as a retryable 504", async () => {
         expect.assertions(3);
 

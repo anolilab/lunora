@@ -545,52 +545,6 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
-### `AnalyticsSqlClient` (interface)
-
-```ts
-interface AnalyticsSqlClient {
-    query: (sql: string) => Promise<AnalyticsSqlResult>;
-}
-```
-
-### `AnalyticsSqlColumnMeta` (interface)
-
-```ts
-interface AnalyticsSqlColumnMeta {
-    name: string;
-    type: string;
-}
-```
-
-### `AnalyticsSqlConfig` (interface)
-
-```ts
-interface AnalyticsSqlConfig {
-    accountId: string;
-    apiToken: string;
-    fetch?: typeof globalThis.fetch;
-    timeoutMs?: number;
-}
-```
-
-### `AnalyticsSqlError` (class)
-
-```ts
-class AnalyticsSqlError extends LunoraError {
-    constructor(status: number, body: string);
-}
-```
-
-### `AnalyticsSqlResult` (interface)
-
-```ts
-interface AnalyticsSqlResult {
-    columns: AnalyticsSqlColumnMeta[];
-    rowCount: number;
-    rows: Record<string, unknown>[];
-}
-```
-
 ### `TrackColumn` (interface)
 
 ```ts
@@ -625,12 +579,6 @@ interface TrackSchema {
 
 ```ts
 const createAnalytics: (binding: AnalyticsEngineDatasetLike) => AnalyticsClient;
-```
-
-### `createAnalyticsSqlClient` (const)
-
-```ts
-const createAnalyticsSqlClient: (config: AnalyticsSqlConfig) => AnalyticsSqlClient;
 ```
 
 ## `@lunora/bindings/analytics-sql`
@@ -742,6 +690,31 @@ interface AnalyticsSqlStatistics {
 }
 ```
 
+### `FUNCTION_USAGE_PANELS` (const)
+
+```ts
+const FUNCTION_USAGE_PANELS: readonly [
+    "volume",
+    "latency",
+    "hotShards"
+];
+```
+
+### `FunctionUsagePanel` (type)
+
+```ts
+type FunctionUsagePanel = (typeof FUNCTION_USAGE_PANELS)[number];
+```
+
+### `FunctionUsageQueryOptions` (interface)
+
+```ts
+interface FunctionUsageQueryOptions {
+    dataset?: string;
+    since?: string;
+}
+```
+
 ### `createAnalyticsSql` (const)
 
 ```ts
@@ -752,6 +725,22 @@ const createAnalyticsSql: (options: AnalyticsSqlOptions) => AnalyticsSql;
 
 ```ts
 const createAnalyticsSqlRest: (config: AnalyticsSqlRestConfig) => AnalyticsSqlBindingLike;
+```
+
+### `functionUsageQuery` (const)
+
+```ts
+const functionUsageQuery: (panel: FunctionUsagePanel, options?: FunctionUsageQueryOptions) => AnalyticsSqlRequest & {
+    params: {
+        since: string;
+    };
+};
+```
+
+### `isFunctionUsagePanel` (const)
+
+```ts
+const isFunctionUsagePanel: (value: unknown) => value is FunctionUsagePanel;
 ```
 
 ## `@lunora/bindings/artifacts`
