@@ -1,3 +1,12 @@
+## @lunora/client [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.169...@lunora/client@1.0.0-alpha.170) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.189
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.172
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.107
+
 ## @lunora/client [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.168...@lunora/client@1.0.0-alpha.169) (2026-10-02)
 
 
