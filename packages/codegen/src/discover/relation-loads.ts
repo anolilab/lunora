@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { RelationLoadIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, propertyKeyName } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { readTargetOf } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
@@ -66,7 +66,7 @@ const relationLoadsInDeclaration = (declaration: TsNode, relativePath: string): 
         }
 
         rows.push({
-            exportName: primaryExportName(declaration),
+            exportName: exportedNameOf(declaration) ?? declaration.getName(),
             file: relativePath,
             line: call.getStartLineNumber(),
             parentTable: target.table,

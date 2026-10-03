@@ -11,7 +11,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { AgentIR } from "../ir";
 import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
-import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
+import { addressableExportNameOf } from "./attribution";
 
 /** The only file agents may be declared in — mirrors `lunora/workflows.ts`. */
 const AGENTS_FILENAME = "agents.ts";
@@ -141,10 +141,6 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
     const agents: AgentIR[] = [];
 
     for (const declaration of source.getVariableDeclarations()) {
-        if (!declaration.isExported()) {
-            continue;
-        }
-
         const call = unwrapToCallExpression(declaration.getInitializer());
 
         if (!call) {
@@ -159,11 +155,16 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
 
         const nameNode = declaration.getNameNode();
 
+        // Only the `export` keyword can export a destructuring; an unexported one is a local.
         if (!Node.isIdentifier(nameNode)) {
+            if (declaration.getVariableStatement()?.hasExportKeyword() !== true) {
+                continue;
+            }
+
             throw diagnosticAt(nameNode, "defineAgent exports must be plain named exports (no destructuring)");
         }
 
-        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+        const exportName = addressableExportNameOf(declaration, "binding");
 
         if (exportName === undefined) {
             continue;

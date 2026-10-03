@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { NormalizeIdAuthorizationIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { chainUsesWrappedCall } from "./builder-chain";
 import { contextPathOf, contextSurfaceNodesIn, isDatabaseAccessor } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
@@ -291,7 +291,7 @@ const normalizeIdAuthorizationsInDeclaration = (declaration: TsNode, relativePat
 
         seen.add(name);
         rows.push({
-            exportName: primaryExportName(declaration),
+            exportName: exportedNameOf(declaration) ?? declaration.getName(),
             file: relativePath,
             line: call.getStartLineNumber(),
             mentionsOwnership,

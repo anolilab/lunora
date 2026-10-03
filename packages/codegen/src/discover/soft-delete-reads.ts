@@ -4,7 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { isArgumentDerived } from "../argument-taint";
 import type { SoftDeleteReadIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { readTargetOf } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
@@ -53,7 +53,7 @@ const softDeleteReadsInDeclaration = (declaration: TsNode, relativePath: string)
         }
 
         rows.push({
-            exportName: primaryExportName(declaration),
+            exportName: exportedNameOf(declaration) ?? declaration.getName(),
             file: relativePath,
             fromArgs,
             hardcodedTrue,

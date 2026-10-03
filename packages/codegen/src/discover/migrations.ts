@@ -5,7 +5,7 @@ import { diagnosticAt } from "../diagnostics";
 import type { MigrationIR } from "../ir";
 import { isServerPackageModule } from "../module-specifiers";
 import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { addressableExportNameOf, exportedVariableDeclarationsOf } from "./attribution";
 
 /**
  * Decide whether a callee identifier refers to `@lunora/server`'s
@@ -76,7 +76,11 @@ const migrationFromDeclaration = (declaration: VariableDeclaration, relativePath
     }
 
     const id = stringProperty(argument, "id");
-    const exportName = primaryExportName(declaration);
+    const exportName = addressableExportNameOf(declaration, "member");
+
+    if (exportName === undefined) {
+        return undefined;
+    }
 
     if (id === undefined || id.trim() === "") {
         throw diagnosticAt(

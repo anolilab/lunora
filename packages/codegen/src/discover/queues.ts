@@ -9,7 +9,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { QueueIR, TopicIR } from "../ir";
 import { findObjectProperty, stringPropertyFor } from "./ast";
-import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
+import { addressableExportNameOf } from "./attribution";
 import { resolveHandlerReference } from "./handler-reference";
 
 /** The only file queues may be declared in — mirrors `lunora/workflows.ts`. */
@@ -184,10 +184,6 @@ const factoryExports = (source: SourceFile): FactoryExport[] => {
     const found: FactoryExport[] = [];
 
     for (const declaration of source.getVariableDeclarations()) {
-        if (!declaration.isExported()) {
-            continue;
-        }
-
         const initializer = declaration.getInitializer();
 
         if (initializer?.getKind() !== SyntaxKind.CallExpression) {
@@ -204,11 +200,16 @@ const factoryExports = (source: SourceFile): FactoryExport[] => {
 
         const nameNode = declaration.getNameNode();
 
+        // Only the `export` keyword can export a destructuring; an unexported one is a local.
         if (!Node.isIdentifier(nameNode)) {
+            if (declaration.getVariableStatement()?.hasExportKeyword() !== true) {
+                continue;
+            }
+
             throw diagnosticAt(nameNode, `${factory} exports must be plain named exports (no destructuring)`);
         }
 
-        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+        const exportName = addressableExportNameOf(declaration, "binding");
 
         if (exportName === undefined) {
             continue;

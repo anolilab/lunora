@@ -2,6 +2,7 @@ import type { Finding } from "@lunora/advisor";
 import type { Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
+import { isBindingName } from "../reserved-words";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedVariableDeclarationsOf, exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 
@@ -196,6 +197,41 @@ const STRING_EXPORT_NAME: MissedRegistration = {
     remediation: "Export it under an identifier name as well (or instead).",
 };
 
+/**
+ * The kinds whose name the generated code imports or declares as a binding,
+ * or derives a class / binding / deployed name from — so `default` or a
+ * reserved word cannot be their name.
+ */
+const BINDING_NAMED_KINDS = new Set<string>([
+    "AgentDefinition",
+    "ContainerDefinition",
+    "QueueDefinition",
+    "RegisteredShape",
+    "SubscriptionDefinition",
+    "WorkflowDefinition",
+]);
+
+/** `export default worker` (or only `export { worker as delete }`) for a kind whose name becomes a class or binding. */
+const BINDING_EXPORT_NAME: MissedRegistration = {
+    cause: "it is exported only as `default` or under a reserved word, and this kind's name becomes an import binding and a generated class / binding name, where that is a syntax error",
+    remediation: "Export it under a plain identifier: `export const <name> = …` (an extra `export default <name>` is fine).",
+};
+
+/** Why an exported binding that IS a registration by type was not registered, read off how it is exported. */
+const missedCauseOf = (declaration: VariableDeclaration, names: ReadonlyArray<string>, registration: Registration): MissedRegistration => {
+    if (!names.some((name) => isAddressableExportName(name))) {
+        return STRING_EXPORT_NAME;
+    }
+
+    const hasKeyword = declaration.getVariableStatement()?.hasExportKeyword() === true;
+
+    if (BINDING_NAMED_KINDS.has(registration.typeName) && !hasKeyword && !names.some((name) => isBindingName(name))) {
+        return BINDING_EXPORT_NAME;
+    }
+
+    return INDIRECT_INITIALIZER;
+};
+
 const findingFor = (relativePath: string, exportName: string, registration: Registration, line: number, indirection: MissedRegistration): Finding => {
     const { call, file, note, typeName } = registration;
     // The wrong module beats every other cause: nothing about how the value was
@@ -241,14 +277,13 @@ const namedExportFindings = (source: SourceFile, relativePath: string, registrat
 
     for (const declaration of exportedVariableDeclarationsOf(source)) {
         const names = Node.isIdentifier(declaration.getNameNode()) ? exportNamesOfDeclaration(declaration) : [declaration.getName()];
-        const missing = names.find((name) => !isRegistered(registrations, relativePath, name));
-        const registration = missing !== undefined && mayHideRegistration(declaration) ? registrationOf(declaration) : undefined;
+        // Registered under ANY of its names, it is reachable: a registration kind keeps one name on purpose.
+        const isReachable = names.some((name) => isRegistered(registrations, relativePath, name));
+        const registration = isReachable || !mayHideRegistration(declaration) ? undefined : registrationOf(declaration);
+        const [shown = declaration.getName()] = names;
 
-        if (missing !== undefined && registration !== undefined) {
-            // A string name no addressable sibling covers is the cause; otherwise the initializer is.
-            const cause = names.some((name) => isAddressableExportName(name)) ? INDIRECT_INITIALIZER : STRING_EXPORT_NAME;
-
-            findings.push(findingFor(relativePath, missing, registration, declaration.getStartLineNumber(), cause));
+        if (registration !== undefined) {
+            findings.push(findingFor(relativePath, shown, registration, declaration.getStartLineNumber(), missedCauseOf(declaration, names, registration)));
         }
     }
 

@@ -1,7 +1,7 @@
 import type { IndexIR, SchemaIR, TableIR, ValidatorIR } from "../ir";
 import { SCHEMA_MODULE_PATH } from "./data-model";
 import { rebaseRelativeQualifiers } from "./qualifiers";
-import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, renderObjectKey, unwrapOptional, validatorToType } from "./shared";
+import { assertIdentifier, assertPropertyIdentifier, baseSpecifiers, GENERATED_HEADER, renderObjectKey, unwrapOptional, validatorToType } from "./shared";
 
 // ─── Drizzle schema emission ─────────────────────────────────────────────────
 
@@ -113,7 +113,7 @@ const renderDrizzleColumn = (name: string, validator: ValidatorIR, knownTables: 
     // The column name is emitted as a bare object key (`<name>: …`) and a
     // `builder("<name>")` literal, so it must be a valid identifier like the
     // table/index names — reject unescaped source at the same boundary.
-    assertIdentifier(name, "drizzle column name");
+    assertPropertyIdentifier(name, "drizzle column name");
 
     const column = validatorToDrizzleColumn(validator);
 
@@ -162,7 +162,7 @@ const renderIndexEntry = (index: IndexIR): string => {
     const constructor = index.unique ? "uniqueIndex" : "index";
     const fields = index.fields
         .map((field) => {
-            assertIdentifier(field, "drizzle index field");
+            assertPropertyIdentifier(field, "drizzle index field");
 
             return `t.${field}`;
         })

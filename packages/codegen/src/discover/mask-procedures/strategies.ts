@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import type { MaskStrategyIR } from "../../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "../attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "../attribution";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { maskCallsInChain, memberName, strategyOf } from "./internal/mask-call";
 
@@ -77,7 +77,9 @@ const maskStrategyRowsFromDeclaration = (declaration: TsNode, relativePath: stri
         return [];
     }
 
-    return maskCallsInChain(classified.receiver).flatMap((maskCall) => extractMaskStrategyRows(maskCall, primaryExportName(declaration), relativePath));
+    return maskCallsInChain(classified.receiver).flatMap((maskCall) =>
+        extractMaskStrategyRows(maskCall, exportedNameOf(declaration) ?? declaration.getName(), relativePath),
+    );
 };
 
 /**

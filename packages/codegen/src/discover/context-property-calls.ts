@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import type { ContextPropertyCallIR } from "../ir";
 import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { contextSurfaceNodesIn } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
@@ -36,7 +36,7 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
 
     const handler = handlerOf(initializer, classified.receiver);
 
-    return handler ? { exportName: primaryExportName(declaration), handler, kind: classified.kind } : undefined;
+    return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler, kind: classified.kind } : undefined;
 };
 
 /**

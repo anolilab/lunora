@@ -18,6 +18,7 @@ import type {
     VectorIndexIR,
 } from "../../../ir";
 import { parseObjectShape, resolveObjectLiteral } from "../../../parse-validator";
+import { RESERVED_JS_WORDS } from "../../../reserved-words";
 import { findObjectProperty, propertyKeyName } from "../../ast";
 import { asMetric, getBooleanProperty, getNumberProperty, getStringArrayProperty, getStringProperty, indexNameOf, stringArrayPropertyOf } from "./properties";
 
@@ -72,73 +73,6 @@ const RESERVED_TABLE_NAMES = new Set([
     "restore",
     "system",
     "wipeShard",
-]);
-
-/**
- * ES reserved words. `emit/drizzle.ts` interpolates the table name raw into a bare
- * `const ${name} = sqliteTable(...)` binding (and into `.references((): AnySQLiteColumn => ${name}._id)`
- * for every FK) — a table named after a keyword produces a syntax error in the
- * generated Drizzle module, not a type error, so this must be rejected at
- * discovery time. Kept as a separate set from `RESERVED_TABLE_NAMES`: that one
- * is about `ctx.db` member shadowing, this one is about generated-code syntax.
- * If `emit/drizzle.ts` ever stops emitting table names as bare `const` bindings, this
- * check becomes unnecessary.
- *
- * Scope is "illegal as a `const` binding in an ES module", which is wider than
- * the unconditional keyword list: `await` and `yield` are reserved only in a
- * module / strict-mode context, and `eval` / `arguments` are not reserved words
- * at all yet `const eval = …` is still a SyntaxError under strict mode (which an
- * ES module always is). All four fail identically in the emitted Drizzle module.
- */
-const RESERVED_JS_WORDS = new Set([
-    "arguments",
-    "await",
-    "break",
-    "case",
-    "catch",
-    "class",
-    "const",
-    "continue",
-    "debugger",
-    "default",
-    "delete",
-    "do",
-    "else",
-    "enum",
-    "eval",
-    "export",
-    "extends",
-    "false",
-    "finally",
-    "for",
-    "function",
-    "if",
-    "implements",
-    "import",
-    "in",
-    "instanceof",
-    "interface",
-    "let",
-    "new",
-    "null",
-    "package",
-    "private",
-    "protected",
-    "public",
-    "return",
-    "static",
-    "super",
-    "switch",
-    "this",
-    "throw",
-    "true",
-    "try",
-    "typeof",
-    "var",
-    "void",
-    "while",
-    "with",
-    "yield",
 ]);
 
 /**

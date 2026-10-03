@@ -417,4 +417,35 @@ export const viaFactory = makeQuery();
         // availability finding needs a witness before it fires.
         expect(run([]).map((finding) => finding.name)).not.toContain("procedure_type_check_unavailable");
     });
+
+    it("names `default` as the cause for a workflow exported only as the default export", () => {
+        expect.assertions(2);
+
+        // A workflow's name becomes an import binding and its class name, so
+        // `export default wf` alone is not registered; the finding must say why.
+        write("srv.d.ts", SERVER);
+        write(
+            "workflows.ts",
+            `import { defineWorkflow } from "./srv";\n\nconst nightly = defineWorkflow({ run: async () => {} });\n\nexport default nightly;\n`,
+        );
+        load("srv.d.ts", "workflows.ts");
+
+        const finding = run().find((entry) => entry.name === "procedure_not_registered");
+
+        expect(finding?.metadata["exportName"]).toBe("default");
+        expect(finding?.detail).toContain("exported only as `default` or under a reserved word");
+    });
+
+    it("does not report a workflow registered under its keyword name beside an alias", () => {
+        expect.assertions(1);
+
+        write("srv.d.ts", SERVER);
+        write(
+            "workflows.ts",
+            `import { defineWorkflow } from "./srv";\n\nexport const nightly = defineWorkflow({ run: async () => {} });\n\nexport { nightly as etl };\n`,
+        );
+        load("srv.d.ts", "workflows.ts");
+
+        expect(run(REGISTERED, { byName: ["nightly"] }).map((entry) => entry.name)).not.toContain("procedure_not_registered");
+    });
 });

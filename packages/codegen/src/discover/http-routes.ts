@@ -4,7 +4,7 @@ import { Node } from "ts-morph";
 import type { HttpRouteIR, ValidatorIR } from "../ir";
 import { parseObjectShape, parseValidator } from "../parse-validator";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /**
@@ -224,7 +224,7 @@ const discoverFileRoutes = (source: SourceFile, relativePath: string): HttpRoute
             continue;
         }
 
-        const route = routeFromTerminal(initializer, callee, primaryExportName(declaration), relativePath);
+        const route = routeFromTerminal(initializer, callee, exportedNameOf(declaration) ?? declaration.getName(), relativePath);
 
         if (route) {
             found.push(route);

@@ -26,7 +26,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { ContainerImageIR, ContainerIR, DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } from "../ir";
 import { findObjectProperty, isWriteTarget, outermostValueWrapper, propertyKeyName, stringPropertyFor, symbolConstInitializer } from "./ast";
-import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
+import { addressableExportNameOf } from "./attribution";
 
 /** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
 const CONTAINERS_FILENAME = "containers.ts";
@@ -644,10 +644,6 @@ const containersFromSource = (source: SourceFile): ContainerIR[] => {
     const exportByBinding = new Map<string, string>();
 
     for (const declaration of source.getVariableDeclarations()) {
-        if (!declaration.isExported()) {
-            continue;
-        }
-
         const initializer = declaration.getInitializer();
 
         if (initializer?.getKind() !== SyntaxKind.CallExpression) {
@@ -663,11 +659,16 @@ const containersFromSource = (source: SourceFile): ContainerIR[] => {
 
         const nameNode = declaration.getNameNode();
 
+        // Only the `export` keyword can export a destructuring; an unexported one is a local.
         if (!Node.isIdentifier(nameNode)) {
+            if (declaration.getVariableStatement()?.hasExportKeyword() !== true) {
+                continue;
+            }
+
             throw diagnosticAt(nameNode, "defineContainer exports must be plain named exports (no destructuring)");
         }
 
-        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+        const exportName = addressableExportNameOf(declaration, "binding");
 
         if (exportName === undefined) {
             continue;

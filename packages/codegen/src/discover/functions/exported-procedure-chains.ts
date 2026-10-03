@@ -1,7 +1,7 @@
 import type { Node as TsNode, SourceFile } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { exportedVariableDeclarationsOf, primaryExportName } from "../attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "../attribution";
 import { classifyProcedureCall } from "./classify-procedure-call";
 
 /**
@@ -18,7 +18,7 @@ const exportedProcedureChains = (sourceFile: SourceFile): { name: string; receiv
         const classified = initializer && Node.isCallExpression(initializer) ? classifyProcedureCall(initializer) : undefined;
 
         if (classified?.receiver) {
-            chains.push({ name: primaryExportName(declaration), receiver: classified.receiver });
+            chains.push({ name: exportedNameOf(declaration) ?? declaration.getName(), receiver: classified.receiver });
         }
     }
 

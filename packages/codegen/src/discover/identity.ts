@@ -7,7 +7,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { IdentityIR } from "../ir";
 import { isServerPackageModule } from "../module-specifiers";
-import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
+import { addressableExportNameOf } from "./attribution";
 
 /** The only file a `defineIdentity` contract may be declared in — mirrors `lunora/shapes.ts`. */
 const IDENTITY_FILENAME = "identity.ts";
@@ -91,10 +91,6 @@ const identitiesFromSource = (source: SourceFile): IdentityIR[] => {
     const identities: IdentityIR[] = [];
 
     for (const declaration of source.getVariableDeclarations()) {
-        if (!declaration.isExported()) {
-            continue;
-        }
-
         const initializer = declaration.getInitializer();
 
         if (initializer?.getKind() !== SyntaxKind.CallExpression) {
@@ -109,11 +105,16 @@ const identitiesFromSource = (source: SourceFile): IdentityIR[] => {
 
         const nameNode = declaration.getNameNode();
 
+        // Only the `export` keyword can export a destructuring; an unexported one is a local.
         if (!Node.isIdentifier(nameNode)) {
+            if (declaration.getVariableStatement()?.hasExportKeyword() !== true) {
+                continue;
+            }
+
             throw diagnosticAt(nameNode, "defineIdentity exports must be plain named exports (no destructuring)");
         }
 
-        const exportName = exportNamesOfDeclaration(declaration).find((name) => isAddressableExportName(name));
+        const exportName = addressableExportNameOf(declaration, "member");
 
         if (exportName === undefined) {
             continue;

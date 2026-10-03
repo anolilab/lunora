@@ -14,6 +14,7 @@ import type { BindingElement, FunctionDeclaration, Identifier, Node as TsNode, S
 import { Node, SyntaxKind, ts } from "ts-morph";
 
 import type { CallSiteScope, FunctionIR } from "../ir";
+import { isBindingName } from "../reserved-words";
 
 type TopLevelDeclaration = FunctionDeclaration | VariableDeclaration;
 
@@ -128,7 +129,7 @@ const exportNamesByLocalOf = (sourceFile: SourceFile): ReadonlyMap<string, Reado
         names.set(local, (names.get(local) ?? new Set()).add(exported));
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the ordering helper sits with the identifier check below
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the ordering helper sits with the export-name helpers below
     const index = new Map([...names].map(([local, exported]) => [local, [...exported].toSorted(byExportPreference)] as const));
 
     EXPORT_NAMES_CACHE.set(sourceFile.compilerNode, index);
@@ -421,8 +422,33 @@ const withCallerVisibility = <Row extends { file: string; scope: CallSiteScope }
     });
 };
 
-/** The name a top-level declaration is exported under (`export { run as start }` → `start`), or `undefined`. */
-const exportedNameOf = (declaration: TopLevelDeclaration): string | undefined => exportNamesOfDeclaration(declaration)[0];
+/** An ASCII JavaScript identifier, the names emit can spell as `lunora_x.<name>`. */
+const IDENTIFIER_NAME = /^[$A-Z_a-z][\w$]*$/u;
+
+/**
+ * Whether `name` can be emitted as a property access on the generated module
+ * namespace (`lunora_x.<name>`): an identifier, reserved words included. A
+ * string-literal export alias (`export { run as "kebab-name" }`) is not, so it
+ * is never registered.
+ */
+const isAddressableExportName = (name: string): boolean => IDENTIFIER_NAME.test(name);
+
+/**
+ * The name a lint row or call site names an exported top-level declaration
+ * by: its first ADDRESSABLE export name — the one procedures register under
+ * and attribution names its sites by — or, for a declaration without one (a
+ * destructured `export const { … }`, a string-only alias), its own name.
+ * `undefined` when the module does not export it at all.
+ */
+const exportedNameOf = (declaration: TopLevelDeclaration): string | undefined => {
+    const names = exportNamesOfDeclaration(declaration);
+
+    if (names.length === 0) {
+        return Node.isVariableDeclaration(declaration) && declaration.getVariableStatement()?.hasExportKeyword() === true ? declaration.getName() : undefined;
+    }
+
+    return names.find((name) => isAddressableExportName(name)) ?? declaration.getName();
+};
 
 /**
  * The top-level variable declarations `sourceFile` exports, however it spells
@@ -434,21 +460,37 @@ const exportedVariableDeclarationsOf = (sourceFile: SourceFile): VariableDeclara
     sourceFile
         .getVariableStatements()
         .flatMap((statement) => statement.getDeclarations())
-        .filter((declaration) =>
-            Node.isIdentifier(declaration.getNameNode())
-                ? exportNamesOfDeclaration(declaration).length > 0
-                : declaration.getVariableStatement()?.hasExportKeyword() === true,
-        );
+        .filter((declaration) => exportedNameOf(declaration) !== undefined);
 
 /**
- * The name a lint row names an exported declaration by: the first of its
- * exported names (the one attribution names its sites by), or its own name for
- * a destructured `export const { … }`.
+ * The name a registration that is NOT a procedure (an agent, container,
+ * workflow, queue, shape, migration, identity, env) registers under, or
+ * `undefined` when it must not register:
+ *
+ * - with the `export` keyword, its own (local) name — whatever other aliases
+ * it also has, so adding `export { zeta as alpha }` never renames a deployed
+ * class, queue, workflow or container;
+ * - otherwise (a pure rename, `const x = …; export { x as y }`), the first
+ * alias the emitted code can use: for a `"binding"` kind — whose name the
+ * generated code imports, declares or derives a class / binding name from —
+ * an identifier that is not a reserved word and not `default`; for a
+ * `"member"` kind — read off the module namespace (`lunora_x.<name>`) — any
+ * identifier, `default` included;
+ * - with no such name (only `export default x`, or only a reserved or string
+ * name for a binding kind): `undefined`, and `procedure_not_registered` names
+ * the cause.
  */
-const primaryExportName = (declaration: VariableDeclaration): string => exportNamesOfDeclaration(declaration)[0] ?? declaration.getName();
+const addressableExportNameOf = (declaration: VariableDeclaration, use: "binding" | "member"): string | undefined => {
+    if (!Node.isIdentifier(declaration.getNameNode())) {
+        return undefined;
+    }
 
-/** An ASCII JavaScript identifier, the names emit can spell as `lunora_x.<name>`. */
-const IDENTIFIER_NAME = /^[$A-Z_a-z][\w$]*$/u;
+    if (declaration.getVariableStatement()?.hasExportKeyword() === true) {
+        return declaration.getName();
+    }
+
+    return exportNamesOfDeclaration(declaration).find((name) => (use === "binding" ? isBindingName(name) : isAddressableExportName(name)));
+};
 
 /**
  * Export-name order: identifier names first (the ones registrations and lint
@@ -458,14 +500,8 @@ const IDENTIFIER_NAME = /^[$A-Z_a-z][\w$]*$/u;
 const byExportPreference = (left: string, right: string): number =>
     Number(IDENTIFIER_NAME.test(right)) - Number(IDENTIFIER_NAME.test(left)) || byCodepoint(left, right);
 
-/**
- * Whether `name` can be emitted as a property access on the generated module
- * namespace (`lunora_x.<name>`): an identifier. A string-literal export alias
- * (`export { run as "kebab-name" }`) is not, so it is never registered.
- */
-const isAddressableExportName = (name: string): boolean => IDENTIFIER_NAME.test(name);
-
 export {
+    addressableExportNameOf,
     callSiteScopeOf,
     declarationOf,
     exportedNameOf,
@@ -474,7 +510,6 @@ export {
     exportNamesOfDeclaration,
     isAddressableExportName,
     isTypePosition,
-    primaryExportName,
     referencedSymbolOf,
     withCallerVisibility,
 };

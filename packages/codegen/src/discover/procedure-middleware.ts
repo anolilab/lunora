@@ -4,7 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
 import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { calleeName } from "./callee";
 import { contextPathOf, contextSurfaceNodesIn, isContextIdentifier, isDatabaseAccessor } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
@@ -804,7 +804,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         ...exemptionOf(declaration),
         ...protections,
         analyzableBody: behaviourRoot !== undefined,
-        exportName: primaryExportName(declaration),
+        exportName: exportedNameOf(declaration) ?? declaration.getName(),
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,

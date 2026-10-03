@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import type { MaskProcedureIR } from "../../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "../attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "../attribution";
 import { tablesAccessedIn } from "../context-root";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { maskCallsInChain, memberName } from "./internal/mask-call";
@@ -99,7 +99,7 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
     const { tablesRead, tablesWritten } = tablesAccessedIn(declaration, READ_METHODS, WRITE_METHODS);
 
     return {
-        exportName: primaryExportName(declaration),
+        exportName: exportedNameOf(declaration) ?? declaration.getName(),
         file: relativePath,
         maskColumns: chain.maskColumns,
         tablesRead,

@@ -3,7 +3,7 @@ import { Node } from "ts-morph";
 
 import type { FlagReadIR } from "../ir";
 import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { contextSurfaceNodesIn } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
@@ -44,7 +44,7 @@ const exportedQueryHandler = (declaration: VariableDeclaration): ResolvedQuery |
 
     const handler = handlerOf(initializer, classified.receiver);
 
-    return handler ? { exportName: primaryExportName(declaration), handler } : undefined;
+    return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler } : undefined;
 };
 
 /**

@@ -6,7 +6,7 @@ import type { Node as TsNode, Project, SourceFile, VariableDeclaration } from "t
 import { Node, SyntaxKind } from "ts-morph";
 
 import { defaultExportExpression, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { isContextSurface } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
@@ -48,7 +48,7 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
 
     const handler = handlerOf(initializer, classified.receiver);
 
-    return handler ? { exportName: primaryExportName(declaration), handler, kind: classified.kind } : undefined;
+    return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler, kind: classified.kind } : undefined;
 };
 
 /** Every exported procedure handler in one source file. */

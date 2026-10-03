@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { NondeterministicCallIR } from "../ir";
 import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
-import { exportedVariableDeclarationsOf, primaryExportName } from "./attribution";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -151,7 +151,7 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
 
     const handler = handlerOf(initializer, classified.receiver);
 
-    return handler ? { exportName: primaryExportName(declaration), handler, kind: classified.kind } : undefined;
+    return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler, kind: classified.kind } : undefined;
 };
 
 /** Non-deterministic call IRs lexically inside one resolved procedure handler. */
