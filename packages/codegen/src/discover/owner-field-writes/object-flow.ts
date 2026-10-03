@@ -1,7 +1,7 @@
 /**
  * Where an object goes once bound: the expressions that still evaluate to (part
  * of) it, and the bindings that take it. The syntax half of
- * `ImplTaint.isCompromised`, which judges what happens at the end of the climb.
+ * `CompromiseWalk`, which judges what happens at the end of the climb.
  */
 import type { BindingElement, Node as TsNode, ParameterDeclaration, Type, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -115,6 +115,30 @@ const isMethodCall = (call: TsNode | undefined, methods: ReadonlySet<string>, re
     return Node.isPropertyAccessExpression(callee) && methods.has(callee.getName()) && (receiver === undefined || callee.getExpression() === receiver);
 };
 
+/**
+ * The values an inline callback can return: an expression body, or every
+ * `return` of a block body (a bare `return;` as `undefined`). `undefined` when
+ * `node` is not an inline arrow / function expression.
+ */
+const callbackResults = (node: TsNode): (TsNode | undefined)[] | undefined => {
+    const callback = unwrapExpression(node);
+
+    if (!Node.isArrowFunction(callback) && !Node.isFunctionExpression(callback)) {
+        return undefined;
+    }
+
+    const body = callback.getBody();
+
+    if (!Node.isBlock(body)) {
+        return [body];
+    }
+
+    return body
+        .getDescendantsOfKind(SyntaxKind.ReturnStatement)
+        .filter((statement) => statement.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor)) === callback)
+        .map((statement) => statement.getExpression());
+};
+
 /** Whether `call` is a {@link MEMBER_RESULT_STATICS} call on the platform global (`Object.values(rows)`). */
 const isMemberResultStatic = (call: TsNode | undefined): boolean => {
     const callee = Node.isCallExpression(call) ? unwrapExpression(call.getExpression()) : undefined;
@@ -142,15 +166,6 @@ const callbackResultCallOf = (value: TsNode): TsNode | undefined => {
     return Node.isCallExpression(call) && call.getArguments().includes(argument) && isMethodCall(call, CALLBACK_RESULT_METHODS) ? call : undefined;
 };
 
-/**
- * One step up from `node` to the expression that still evaluates to (part of)
- * the same object, or `undefined` when `node`'s value goes no further: a member
- * path (`row.meta`, `rows[0]`), `await`, `??` / `||` / `&&`, either branch of
- * `?:`, a container holding it (`[row]`, `{ r: row }`, `{ ...row }`), an
- * element-returning method (`rows.find(…)`, `rows.slice()`), a member-returning
- * static (`Object.values(rows)`), or the result of a callback-result method its
- * callback returns it to (`rows.map((r) => r)`).
- */
 /** One {@link objectContinuation} step through a member access on `value`: the member path, or an element-returning method's result. */
 const memberContinuation = (access: TsNode, value: TsNode): TsNode | undefined => {
     if (!(Node.isPropertyAccessExpression(access) || Node.isElementAccessExpression(access)) || access.getExpression() !== value) {
@@ -227,5 +242,5 @@ const objectContinuation = (node: TsNode): TsNode | undefined => {
     );
 };
 
-export { aliasBindingsOf, bindingIdentifiersOf, ELEMENT_RESULT_METHODS, isMethodCall, isPrimitiveType, objectContinuation, RECEIVER_ITERATING_METHODS };
+export { aliasBindingsOf, bindingIdentifiersOf, callbackResults, isMethodCall, isPrimitiveType, objectContinuation, RECEIVER_ITERATING_METHODS };
 export type { ObjectBinding };

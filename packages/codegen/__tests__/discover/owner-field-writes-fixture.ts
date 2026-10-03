@@ -16,13 +16,17 @@ type Row = ReturnType<typeof discoverOwnerFieldWrites>[number];
  * writes together with the mutators it declares. Wire `setUp` / `tearDown` into
  * `beforeEach` / `afterEach` of the `describe` that uses it.
  */
-const createOwnerFieldFixture = (): { discover: (source: string, file?: string) => Row[]; setUp: () => void; tearDown: () => void } => {
+const createOwnerFieldFixture = (): {
+    discover: (source: string, file?: string, project?: Project) => Row[];
+    setUp: () => void;
+    tearDown: () => void;
+} => {
     let workdir = "";
 
     return {
-        discover: (source: string, file = "mutators.ts"): Row[] => {
+        /** Pass `project` to reuse one across runs, as the Vite dev loop does. */
+        discover: (source: string, file = "mutators.ts", project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false })): Row[] => {
             const lunoraDirectory = join(workdir, "lunora");
-            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
             writeFileSync(join(lunoraDirectory, file), source, "utf8");
 

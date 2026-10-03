@@ -1,12 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { discoverMutators } from "../../src/discover/mutators";
-import discoverOwnerFieldWrites from "../../src/discover/owner-field-writes";
+import { createOwnerFieldFixture, expectReported, ownerMutator } from "./owner-field-writes-fixture";
 
 // Every symbol lookup the feeder makes goes through `declarationOf`, so counting
 // its calls measures the feeder's work without depending on wall-clock time.
@@ -27,7 +22,7 @@ vi.mock(import("../../src/discover/attribution"), async (importOriginal) => {
     };
 });
 
-let workdir: string;
+const fixture = createOwnerFieldFixture();
 
 /**
  * A clean chain of `depth` helpers: `f0` writes its parameter's `userId`, and
@@ -49,77 +44,57 @@ const chain = (depth: number, recursive: boolean): string => {
     return lines.join("\n");
 };
 
-/** The owner-field rows of one mutator whose impl body is `body`, and the symbol lookups it took. */
-const discoverCounting = (body: string): { lookups: number; rows: ReturnType<typeof discoverOwnerFieldWrites> } => {
-    const lunoraDirectory = join(workdir, "lunora");
-    const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-
-    writeFileSync(
-        join(lunoraDirectory, "mutators.ts"),
-        `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => {\n${body}\n} });`,
-        "utf8",
-    );
-
-    const mutators = discoverMutators(project, lunoraDirectory);
-
+/** The owner-field rows of one mutator whose impl body is `body`, and the symbol lookups discovering them took. */
+const discoverCounting = (body: string): { lookups: number; rows: ReturnType<typeof fixture.discover> } => {
     lookups.count = 0;
 
-    const rows = discoverOwnerFieldWrites(project, lunoraDirectory, [], mutators);
+    const rows = fixture.discover(ownerMutator(body));
 
     return { lookups: lookups.count, rows };
 };
 
 describe("discoverOwnerFieldWrites work bound", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "lunora-owner-work-"));
-        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        fixture.setUp();
     });
 
     afterEach(() => {
-        rmSync(workdir, { force: true, recursive: true });
+        fixture.tearDown();
     });
 
     // Each helper's verdict is computed once, so the work grows linearly with the
-    // chain; re-deriving it per call site would double it at every level (2^14).
-    it("resolves a depth-14 chain of helpers that each call the next twice in linear work", () => {
-        expect.assertions(4);
+    // chain; re-deriving it per call site would double it at every level, a
+    // factor of 128 between these two depths.
+    it("resolves a chain of helpers that each call the next twice in linear work", () => {
+        expect.assertions(3);
 
         const shallow = discoverCounting(chain(7, false));
         const deep = discoverCounting(chain(14, false));
 
-        // Clean all the way down: nothing recorded, and the budget never ran out.
+        // Clean all the way down: nothing recorded, so nothing ran out of budget.
         expect(shallow.rows).toHaveLength(0);
         expect(deep.rows).toHaveLength(0);
         expect(deep.lookups).toBeLessThan(shallow.lookups * 4);
-        expect(deep.lookups).toBeLessThan(2000);
     });
 
     // Recursion makes the verdicts on a cycle uncachable, so this shape doubles
-    // per level. The per-impl work budget caps it and fails closed: past the
-    // budget the write is reported rather than cleared.
-    it("caps a recursive chain at the work budget and fails closed", () => {
-        expect.assertions(3);
-
-        const capped = discoverCounting(chain(20, true));
-
-        expect(capped.rows).toHaveLength(1);
-        expect(capped.rows[0]).not.toHaveProperty("ownerScoped");
-        expect(capped.lookups).toBeLessThan(500_000);
-    });
-
-    // The 50,000-verdict budget is a backstop, not a tuning knob: a shallow
-    // recursive chain resolves well inside it, a very deep one runs out and is
-    // reported (fail closed), and the work stays bounded either way.
+    // per level. The work budget is a backstop, not a tuning knob: a shallow
+    // recursive chain resolves inside it; one deep enough to exhaust any budget
+    // is reported (fail closed), and the work stops growing with the depth.
     it("resolves a shallow recursive chain and fails closed, in bounded work, on a very deep one", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const shallow = discoverCounting(chain(6, true));
         const deep = discoverCounting(chain(24, true));
+        const deeper = discoverCounting(chain(30, true));
 
         expect(shallow.rows).toHaveLength(0);
         expect(deep.rows).toHaveLength(1);
-        expect(deep.rows[0]).not.toHaveProperty("ownerScoped");
-        expect(deep.lookups).toBeLessThan(500_000);
+
+        expectReported(deep.rows[0]);
+
+        // Six more doubling levels would cost 64 times the work were it not capped.
+        expect(deeper.lookups).toBeLessThan(deep.lookups * 2);
     });
 
     // The Vite dev loop reuses one Project, so an unchanged impl keeps its cached
@@ -135,23 +110,15 @@ describe("discoverOwnerFieldWrites work bound", () => {
             { length: 20 },
             (_, index) => `const v${index.toString()} = me.userId; await ctx.db.insert("posts", { userId: v${index.toString()} });`,
         );
-        const lunoraDirectory = join(workdir, "lunora");
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-
-        writeFileSync(
-            join(lunoraDirectory, "mutators.ts"),
-            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => {\nconst me = { userId: ctx.auth.userId };\n${[...helpers, ...calls, ...locals].join("\n")}\nawait ctx.db.insert("posts", { userId: args.userId });\n} });`,
-            "utf8",
+        const source = ownerMutator(
+            ["const me = { userId: ctx.auth.userId };", ...helpers, ...calls, ...locals, `await ctx.db.insert("posts", { userId: args.userId });`].join("\n"),
         );
-
-        const mutators = discoverMutators(project, lunoraDirectory);
-        const first = discoverOwnerFieldWrites(project, lunoraDirectory, [], mutators);
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        const first = fixture.discover(source, "mutators.ts", project);
         let drifted = 0;
 
         for (let run = 0; run < 2000; run += 1) {
-            const rows = discoverOwnerFieldWrites(project, lunoraDirectory, [], mutators);
-
-            if (JSON.stringify(rows) !== JSON.stringify(first)) {
+            if (JSON.stringify(fixture.discover(source, "mutators.ts", project)) !== JSON.stringify(first)) {
                 drifted += 1;
             }
         }

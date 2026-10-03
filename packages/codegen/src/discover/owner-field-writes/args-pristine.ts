@@ -11,19 +11,21 @@ import type { MutatorServerImpl } from "../mutators";
 import { mutatorServerImplOf } from "../mutators";
 import { isReadOnlyUse } from "./read-only-use";
 
-/**
- * The mutator `server` impl `call` runs in, plus its own `ctx` and `args`
- * parameters. `pristine` says whether `args` is still exactly the object
- * `applyOwnerScope` verified (see {@link isPristineArgsParameter}).
- */
-interface MutatorImplScope {
+/** The mutator `server` impl `call` runs in, and its own `ctx` parameter. */
+interface ImplScopeBase {
     context: ParameterDeclaration | undefined;
     impl: MutatorServerImpl;
     /** The name the mutator is exported (and its `owner` declared) under. */
     mutatorName: string;
-    parameter: ParameterDeclaration | undefined;
-    pristine: boolean;
 }
+
+/**
+ * {@link ImplScopeBase} plus the impl's `args` parameter. `pristine` says
+ * whether `args` is still exactly the object `applyOwnerScope` verified (see
+ * {@link isPristineArgsParameter}); only then is there a parameter to trust.
+ */
+type MutatorImplScope = ImplScopeBase &
+    ({ parameter: ParameterDeclaration | undefined; pristine: false } | { parameter: ParameterDeclaration; pristine: true });
 
 /** Per-impl {@link isPristineArgsParameter} verdicts, keyed on the compiler node so a re-parse recomputes. */
 const PRISTINE_CACHE = new WeakMap<ts.Node, boolean>();
@@ -79,11 +81,7 @@ const canReenterUnverified = (impl: MutatorServerImpl, mutatorDeclaration: Varia
  * changed where this cannot see;
  * - a destructured binding of the parameter that is written (`userId = …`).
  */
-const isPristineArgsParameter = (
-    scope: Omit<MutatorImplScope, "pristine">,
-    parameter: ParameterDeclaration,
-    mutatorDeclaration: VariableDeclaration,
-): boolean => {
+const isPristineArgsParameter = (scope: ImplScopeBase, parameter: ParameterDeclaration, mutatorDeclaration: VariableDeclaration): boolean => {
     const { context, impl } = scope;
     const cached = PRISTINE_CACHE.get(impl.compilerNode);
 
@@ -167,10 +165,12 @@ const mutatorImplScopeOf = (call: CallExpression): MutatorImplScope | undefined 
 
     const [context, candidate] = impl.getParameters();
     const parameter = candidate === undefined || candidate.isRestParameter() ? undefined : candidate;
-    const scope = { context, impl, mutatorName: exportedNameOf(declaration) ?? declaration.getName(), parameter };
+    const scope = { context, impl, mutatorName: exportedNameOf(declaration) ?? declaration.getName() };
 
-    return { ...scope, pristine: parameter !== undefined && isPristineArgsParameter(scope, parameter, declaration) };
+    return parameter !== undefined && isPristineArgsParameter(scope, parameter, declaration)
+        ? { ...scope, parameter, pristine: true }
+        : { ...scope, parameter, pristine: false };
 };
 
-export { isPristineArgsParameter, mutatorImplScopeOf };
+export { mutatorImplScopeOf };
 export type { MutatorImplScope };

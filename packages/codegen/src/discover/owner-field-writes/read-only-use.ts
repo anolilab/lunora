@@ -404,18 +404,4 @@ const isReadOnlyParameter = (parameter: ParameterDeclaration, depth = 0): boolea
     return readOnly;
 };
 
-export {
-    isCopiedOnly,
-    isDestructuringRead,
-    isImplContextReference,
-    isLibraryGlobal,
-    isMemberRead,
-    isReadOnlyCallArgument,
-    isReadOnlyParameter,
-    isReadOnlyUse,
-    isReadOperand,
-    receivingParameter,
-    visibleArgumentTarget,
-    visibleFunctionOf,
-};
-export type { ArgumentTarget, VisibleFunction };
+export { isImplContextReference, isLibraryGlobal, isReadOnlyCallArgument, isReadOnlyUse, isReadOperand, receivingParameter, visibleFunctionOf };

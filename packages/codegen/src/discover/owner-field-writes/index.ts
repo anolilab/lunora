@@ -183,11 +183,7 @@ const identityWritesInObjectLiteral = (
             // included, qualifies iff it reads THAT parameter and the impl never
             // rewrites or lets it escape. A helper's or a nested function's own
             // parameters can be filled from anything, so they never qualify.
-            const ownerScoped =
-                write.ownerField === name &&
-                implScope?.parameter !== undefined &&
-                implScope.pristine &&
-                resolvesToOwnerArgument(value, implScope.parameter, name);
+            const ownerScoped = write.ownerField === name && implScope?.pristine === true && resolvesToOwnerArgument(value, implScope.parameter, name);
 
             rows.push({
                 field: name,
