@@ -221,11 +221,13 @@ s3://<bucket>/fleets/<alias> [--endpoint] [--region] --listen
   event stream), rate-limited per client, with on-demand TLS that hostd's own
   loopback `ask` endpoint approves only for routed hostnames and the box's own.
 
-Children restart with a 1–30 s backoff; a stop is SIGTERM, then SIGKILL past
-a budget; shutdown drains the fleets before Caddy. The control plane is the
-source of truth: a fleet it stops routing is stopped (its data stays), and
-`hello` reports the fleets on every connect. `destroy` with `deleteData`
-deletes exactly the `fleets/<alias>/` prefix.
+Children restart with a 1–30 s backoff (one that cannot be started at all —
+Node emits `error` and never `exit` — counts as one that exited, and is
+logged); a stop is SIGTERM, then SIGKILL past a budget; shutdown drains the
+fleets before Caddy. The control plane is the source of truth: a fleet it
+stops routing is stopped (its data stays), and `hello` reports the fleets on
+every connect. `destroy` with `deleteData` deletes exactly the
+`fleets/<alias>/` prefix.
 
 **Its own logs** go to the journal (stderr), and — once the control plane's
 `config` frame names an OTLP endpoint and the organization's ingest key

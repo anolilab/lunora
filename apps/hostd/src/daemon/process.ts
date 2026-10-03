@@ -128,9 +128,17 @@ class SupervisedProcess {
                 child.kill("SIGKILL");
             }, budgetMs);
 
-            child.once("exit", () => {
+            const stopped = (): void => {
                 this.timers.clearTimeout(killer);
                 resolve();
+            };
+
+            child.once("exit", stopped);
+            // A child that never started emits no `exit`.
+            child.once("error", () => {
+                if (child.pid === undefined) {
+                    stopped();
+                }
             });
 
             child.kill("SIGTERM");
@@ -176,14 +184,21 @@ class SupervisedProcess {
 
         child.once("error", (error) => {
             this.remember(`spawn failed: ${error.message}`, "stderr");
+
+            // A child that never started (Node could not execute it, or enter its `cwd`) emits no `exit`:
+            // without this it would count as running forever, never be restarted, and hold up `stop`.
+            if (child.pid === undefined && this.child === child) {
+                this.onExit(`could not start: ${error.message}`);
+            }
         });
 
         child.once("exit", (code, signal) => {
-            this.onExit(code, signal);
+            this.onExit(`exited (${signal ?? `code ${String(code)}`})`);
         });
     }
 
-    private onExit(code: number | null, signal: NodeJS.Signals | null): void {
+    /** The child is gone (`how`: what happened to it); restart it with backoff unless it was stopped. */
+    private onExit(how: string): void {
         this.child = undefined;
 
         if (!this.wanted) {
@@ -198,7 +213,7 @@ class SupervisedProcess {
 
         this.failures += 1;
         this.restarts += 1;
-        this.options.logger.warn(`${this.options.name} exited (${signal ?? `code ${String(code)}`}); restarting in ${String(delay)} ms`);
+        this.options.logger.warn(`${this.options.name} ${how}; restarting in ${String(delay)} ms`);
         this.restartTimer = this.timers.setTimeout(() => {
             this.restartTimer = undefined;
 

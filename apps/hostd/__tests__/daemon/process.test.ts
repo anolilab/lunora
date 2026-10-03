@@ -140,6 +140,55 @@ describe(SupervisedProcess, () => {
         expect(children[0]?.signals).toStrictEqual(["SIGTERM", "SIGKILL"]);
     });
 
+    it("restarts a child that could not be started at all, which emits no exit, with the same backoff", () => {
+        expect.assertions(3);
+
+        const warnings: string[] = [];
+        const process = new SupervisedProcess({
+            args: [],
+            command: "caddy",
+            env: {},
+            logger: { ...silentLogger, warn: (message: string) => warnings.push(message) },
+            name: "caddy",
+            spawn,
+            timers: { clearTimeout: (handle) => clearTimeout(handle), now: () => Date.now(), setTimeout: (callback, ms) => setTimeout(callback, ms) },
+        });
+
+        process.start();
+        // What Node does when it cannot enter the child's cwd: `error`, no pid, and never an `exit`.
+        children[0]?.emit("error", new Error("spawn /usr/bin/setpriv EACCES"));
+
+        expect(process.running).toBe(false);
+
+        vi.advanceTimersByTime(1000);
+
+        expect(children).toHaveLength(2);
+        expect(warnings).toStrictEqual(["caddy could not start: spawn /usr/bin/setpriv EACCES; restarting in 1000 ms"]);
+    });
+
+    it("stops at once while a child that could not be started waits to be restarted, and while one is failing to start", async () => {
+        expect.assertions(2);
+
+        const process = supervised();
+
+        process.start();
+        children[0]?.emit("error", new Error("spawn EACCES"));
+        await process.stop(10_000);
+        vi.advanceTimersByTime(60_000);
+
+        expect(children).toHaveLength(1);
+
+        process.start();
+        (children[1] as FakeChild).stubborn = true;
+
+        const stopped = process.stop(10_000);
+
+        children[1]?.emit("error", new Error("spawn EACCES"));
+        await stopped;
+
+        expect(children[1]?.signals).toStrictEqual(["SIGTERM"]);
+    });
+
     it("keeps the last lines a child printed", async () => {
         expect.assertions(1);
 
