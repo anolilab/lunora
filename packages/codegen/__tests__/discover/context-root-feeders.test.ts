@@ -17,6 +17,7 @@ import discoverKvKeyAccesses from "../../src/discover/kv-key-accesses";
 import discoverMailRecipientAccesses from "../../src/discover/mail-recipient-accesses";
 import discoverNormalizeIdAuthorization from "../../src/discover/normalize-id-authorization";
 import { discoverNotifyCalls } from "../../src/discover/notify";
+import discoverOwnerFieldWrites from "../../src/discover/owner-field-writes";
 import discoverProcedureMiddleware from "../../src/discover/procedure-middleware";
 import discoverSqlInterpolation from "../../src/discover/sql-interpolation";
 import discoverStorageUploads from "../../src/discover/storage-uploads";
@@ -232,5 +233,108 @@ describe("feeders resolve the ctx by symbol", () => {
 
         expect(discoverIn(scoped, discoverKvKeyAccesses)).toHaveLength(0);
         expect(discoverIn(rebound, discoverKvKeyAccesses)).toHaveLength(1);
+    });
+
+    // Discovery fails toward MATCHING: a site a feeder found by its `ctx.` (or,
+    // for AI tools, `context.`) spelling is still found when it sits in a helper
+    // outside any handler, where the symbol resolver has no handler to anchor
+    // to. Each count is what `alpha` reports for the same fixture.
+    describe("in a helper outside any handler", () => {
+        const tool = (call: string): string => `return generateText({ prompt: args.prompt, tools: { save: tool({ execute: async ({ text }) => ${call} }) } });`;
+        const normalizeBody = `if (!NAME.auth) throw new Error("anonymous");\nconst id = NAME.db.normalizeId("posts", args.id);\nif (id === null) throw new Error("x");\nreturn NAME.db.get(id);`;
+        const cases: [string, "action" | "mutation" | "query", string, (project: Project, directory: string) => ReadonlyArray<unknown>][] = [
+            ["kv", "mutation", "await NAME.kv.get(args.key);", discoverKvKeyAccesses],
+            ["mail", "action", `await NAME.mail.send({ to: args.email, subject: "x" });`, discoverMailRecipientAccesses],
+            ["vectors", "query", "return NAME.vectors.query(idx, { namespace: args.tenant });", discoverVectorNamespaceAccesses],
+            ["sql", "action", `return NAME.sql.query("SELECT * FROM t WHERE id = " + args.id);`, discoverSqlInterpolation],
+            ["fetch", "action", "return NAME.fetch(args.url);", discoverArgumentDerivedFetches],
+            ["ai", "action", "return NAME.ai.run(args.model, {});", discoverAiRawRuns],
+            ["aitool-db", "action", tool(`NAME.db.insert("notes", { text })`), discoverAiToolSideEffects],
+            ["aitool-run", "action", tool(`NAME.runMutation("notes:save", { text })`), discoverAiToolSideEffects],
+            ["aitool-fetch", "action", tool("NAME.fetch(text)"), discoverAiToolSideEffects],
+            ["aitool-mail", "action", tool("NAME.mail.send({ to: text })"), discoverAiToolSideEffects],
+            ["aitool-mail-chain", "action", tool("NAME.mail.with({}).send({ to: text })"), discoverAiToolSideEffects],
+            ["notify", "mutation", `await NAME.notify.send({ title: "x" });`, discoverNotifyCalls],
+            ["ctxprop", "query", `return NAME.sql.query("SELECT 1");`, (project, directory) => discoverContextPropertyCalls(project, directory, "sql")],
+            ["flag-reads", "query", `return NAME.flags.boolean("bypassAuth", true);`, discoverFlagReads],
+            ["flag-keys", "query", `return NAME.flags.boolean("bypassAuth", true);`, discoverFlagKeys],
+            ["flag-defaults", "query", `return NAME.flags.boolean("bypassAuth", true);`, discoverFlagSecurityDefaults],
+            ["middleware", "mutation", `await NAME.mail.send({ to: "a@b.c", subject: "x" });`, discoverProcedureMiddleware],
+            ["normalize-id", "query", normalizeBody, discoverNormalizeIdAuthorization],
+            ["storage", "action", `return NAME.storage.avatars.upload("k", args.body);`, discoverStorageUploads],
+            ["storage-bucket", "action", `return NAME.storage.bucket("a").upload("k", args.body);`, discoverStorageUploads],
+            ["identity", "query", "return NAME.auth.identity.role;", discoverIdentityClaimReads],
+            [
+                "owner-field",
+                "mutation",
+                `await NAME.db.insert("posts", { userId: args.userId });`,
+                (project, directory) => discoverOwnerFieldWrites(project, directory, [], []),
+            ],
+        ];
+        // [spelled `ctx`, spelled `context`] row counts on `alpha`.
+        const ALPHA_COUNTS: Record<string, [number, number]> = {
+            kv: [1, 0],
+            mail: [1, 0],
+            vectors: [1, 0],
+            sql: [1, 0],
+            fetch: [1, 0],
+            ai: [1, 0],
+            "aitool-db": [1, 1],
+            "aitool-run": [1, 1],
+            "aitool-fetch": [1, 1],
+            "aitool-mail": [1, 1],
+            "aitool-mail-chain": [1, 1],
+            notify: [0, 0],
+            ctxprop: [0, 0],
+            "flag-reads": [0, 0],
+            "flag-keys": [1, 0],
+            "flag-defaults": [1, 0],
+            middleware: [1, 1],
+            "normalize-id": [0, 0],
+            storage: [1, 0],
+            "storage-bucket": [1, 0],
+            identity: [1, 1],
+            "owner-field": [1, 0],
+        };
+
+        it.each(
+            cases.flatMap(([label, kind, body, discover]) =>
+                (["ctx", "context"] as const).map(
+                    (name, index) => [`${name}/${label}`, kind, name, body.replaceAll("NAME", name), discover, ALPHA_COUNTS[label]?.[index]] as const,
+                ),
+            ),
+        )("finds %s as alpha did", (_label, kind, name, body, discover, expected) => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(lunora(), "identity.ts"),
+                `import { defineIdentity, v } from "@lunora/server";\nexport const identity = defineIdentity({ userId: v.string() });\n`,
+                "utf8",
+            );
+
+            const source = `import { ${kind} } from "@lunora/server";\nconst helper = async (${name}, args) => {\n${body}\n};\nexport const run = ${kind}({ args: {}, handler: async (c, a) => helper(c, a) });\n`;
+
+            expect(discoverIn(source, discover)).toHaveLength(expected ?? -1);
+        });
+
+        it("labels an AI tool built in a helper by the receiver as written", () => {
+            expect.assertions(1);
+
+            const source = `import type { ActionCtx } from "@lunora/server";\nexport const runAgent = (context: ActionCtx, prompt: string) =>\n    generateText({ prompt, tools: { save: tool({ execute: async ({ text }) => context.runMutation("notes:save", { text }) }) } });\n`;
+
+            expect(discoverIn(source, discoverAiToolSideEffects)).toMatchObject([{ method: "generateText", sideEffect: "context.runMutation" }]);
+        });
+
+        it("labels an AI tool in a handler with a renamed ctx by the ctx surface", () => {
+            expect.assertions(1);
+
+            const source = handler(
+                "action",
+                "c, args",
+                `return generateText({ prompt: args.prompt, tools: { save: tool({ execute: async ({ text }) => c.runMutation("notes:save", { text }) }) } });`,
+            );
+
+            expect(discoverIn(source, discoverAiToolSideEffects)).toMatchObject([{ method: "generateText", sideEffect: "ctx.runMutation" }]);
+        });
     });
 });
