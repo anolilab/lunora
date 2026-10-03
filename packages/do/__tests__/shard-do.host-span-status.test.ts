@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { HostSpanLike } from "@lunora/observability";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ShardDOState, TelemetrySink } from "../src/shard-do";
+import type { ShardDOOptions, ShardDOState, TelemetrySink } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -32,6 +32,12 @@ vi.mock(import("cloudflare:workers"), () => {
     return { tracing: tracing as unknown as Tracing };
 });
 
+/** The app's configured sink, as `config.observability` would resolve it. */
+const FUSED_SINK: TelemetrySink = { fuseCloudflareTraces: true };
+
+/** What the emitted subclass passes to `super`: the configured sink. */
+const CONFIGURED: ShardDOOptions = { telemetrySink: () => FUSED_SINK };
+
 /**
  * Throws from the handler after only the eager sink registration the generated
  * `buildCtx` performs — no `ctx.trace`, `ctx.span` or `ctx.db`, so the dispatch
@@ -40,10 +46,8 @@ vi.mock(import("cloudflare:workers"), () => {
 class ThrowingShard extends ShardDO {
     public thrown: unknown;
 
-    private readonly sink: TelemetrySink = { fuseCloudflareTraces: true };
-
     public override async handleRpc(): Promise<unknown> {
-        this.makeDispatchSpan(this.resolveDispatchAnchor(false), this.sink);
+        this.makeDispatchSpan(this.resolveDispatchAnchor(false), FUSED_SINK);
 
         throw this.thrown;
     }
@@ -60,7 +64,8 @@ const rpcRequest = (): Request =>
         method: "POST",
     });
 
-const withShard = async (thrown: unknown, run: (shard: ThrowingShard) => Promise<void>): Promise<void> => {
+/** `options` defaults to {@link CONFIGURED}. */
+const withShard = async (thrown: unknown, run: (shard: ThrowingShard) => Promise<void>, options: ShardDOOptions = CONFIGURED): Promise<void> => {
     const database = createSqliteExec();
     let probe: Promise<unknown> = Promise.resolve();
     const state: ShardDOState = {
@@ -79,7 +84,7 @@ const withShard = async (thrown: unknown, run: (shard: ThrowingShard) => Promise
     };
 
     try {
-        const shard = new ThrowingShard(state, {});
+        const shard = new ThrowingShard(state, {}, options);
 
         // The host-tracing probe the constructor starts; dispatches read its verdict.
         await probe;
@@ -120,17 +125,29 @@ describe("fused host invocation span status", () => {
         expect(statuses).toStrictEqual([]);
     });
 
-    it("marks it failed for a failing alarm, even with a 4xx-coded error", async () => {
+    it("marks it failed for an alarm that throws on a fresh shard, before any ctx, even with a 4xx code", async () => {
         expect.assertions(2);
 
+        // No dispatch first: the sink comes from the configured `telemetrySink`
+        // alone, which is all a fresh Durable Object's first alarm has.
         await withShard(new LunoraError("FORBIDDEN", "not yours", { status: 403 }), async (shard) => {
-            // A prior dispatch registers the sink; a trigger has no ctx of its own.
-            await shard.fetch(rpcRequest());
-            statuses.length = 0;
-
             await expect(shard.alarm()).rejects.toThrow("not yours");
         });
 
         expect(statuses).toStrictEqual([{ code: "error", message: "not yours" }]);
+    });
+
+    it("cannot mark a fresh shard's failing alarm when no sink is configured", async () => {
+        expect.assertions(2);
+
+        await withShard(
+            new Error("boom"),
+            async (shard) => {
+                await expect(shard.alarm()).rejects.toThrow("boom");
+            },
+            {},
+        );
+
+        expect(statuses).toStrictEqual([]);
     });
 });

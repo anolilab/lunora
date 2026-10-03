@@ -514,6 +514,7 @@ interface ShardDOOptions {
     maxRelationKeys?: number;
     reactiveCache?: ReactiveCacheOptions;
     relationExistsPushDown?: "always" | "auto" | "never";
+    telemetrySink?: () => TelemetrySink | undefined;
 }
 ```
 

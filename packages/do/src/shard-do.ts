@@ -1046,6 +1046,15 @@ interface ShardDOOptions {
      * {@link ShardDO.ctxDbTuning}.
      */
     relationExistsPushDown?: "always" | "auto" | "never";
+
+    /**
+     * Resolves the app's configured telemetry sink (`config.observability`)
+     * without a ctx. The constructor seeds {@link ShardDO.lastTelemetrySink} from
+     * it, so a trigger that fails before any ctx is built — an alarm on a fresh
+     * Durable Object — still flushes and still reaches `fuseCloudflareTraces`.
+     * The emitter wires it; a hand-written subclass leaves it unset.
+     */
+    telemetrySink?: () => TelemetrySink | undefined;
 }
 
 /**
@@ -2039,7 +2048,9 @@ abstract class ShardDO {
 
     /**
      * The most recent telemetry sink seen while building a ctx — the flush handle
-     * for paths that have no ctx of their own (see `flushTelemetry`).
+     * for paths that have no ctx of their own (see `flushTelemetry`). Seeded at
+     * construction from {@link ShardDOOptions.telemetrySink}, so it is set before
+     * the first ctx is.
      */
     private lastTelemetrySink: TelemetrySink | undefined;
 
@@ -2598,6 +2609,13 @@ abstract class ShardDO {
         }
 
         this.ctxDbCacheWired = options.ctxDbCacheWired ?? false;
+
+        try {
+            this.lastTelemetrySink = options.telemetrySink?.();
+        } catch {
+            // Best-effort — a throwing sink factory must not stop the Durable
+            // Object from constructing; the first ctx resolves it again.
+        }
         this.ctxDbRelationOptions = {
             ...(options.maxRelationKeys === undefined ? {} : { maxRelationKeys: options.maxRelationKeys }),
             ...(options.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: options.relationExistsPushDown }),
