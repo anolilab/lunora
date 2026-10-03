@@ -1,10 +1,11 @@
-import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
+import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpression, ParameterDeclaration, Project, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../ir";
-import { collectCallRows, propertyKeyName } from "./ast";
-import { callSiteScopeOf, withCallerVisibility } from "./attribution";
+import { bindingKeyName, collectCallRows, propertyKeyName } from "./ast";
+import { callSiteScopeOf, referencedSymbolOf, withCallerVisibility } from "./attribution";
+import { isDefineMutatorCallee } from "./mutators";
 
 /**
  * Ownership / identity columns whose value must come from the server-trusted
@@ -90,119 +91,274 @@ const documentObjectLiterals = (documentArgument: TsNode, method: string): Objec
     return objectLiterals;
 };
 
-/** True when `node` is `args.<field>` or `args["<field>"]` — that exact property, nothing else. */
-const isArgsProperty = (node: TsNode, field: string): boolean => {
-    if (Node.isPropertyAccessExpression(node)) {
-        const object = node.getExpression();
+/**
+ * The 2nd parameter (the validated `args`) of the `defineMutator` `server`
+ * impl that `node` sits in, when that mutator is the export `exportName`;
+ * otherwise `undefined`.
+ *
+ * Walks out to the nearest enclosing function that IS such an impl: inline
+ * `server: (ctx, args) => …`, `server: function (ctx, args) {…}`, or the method
+ * shorthand `server(ctx, args) {…}`. A closure nested inside the impl is walked
+ * through, so a write in it still finds the impl; whether that write reads the
+ * impl's own parameter is then decided by symbol, never by spelling.
+ */
+const mutatorArgsParameterOf = (node: TsNode, exportName: string): ParameterDeclaration | undefined => {
+    for (const ancestor of node.getAncestors()) {
+        if (!(Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isMethodDeclaration(ancestor))) {
+            continue;
+        }
 
-        return Node.isIdentifier(object) && object.getText() === "args" && node.getName() === field;
+        // A function whose parent is a property assignment is that property's value.
+        const member = Node.isMethodDeclaration(ancestor) ? ancestor : ancestor.getParent();
+        const isServerMember = (Node.isMethodDeclaration(member) || Node.isPropertyAssignment(member)) && propertyKeyName(member) === "server";
+        const literal = isServerMember ? member.getParent() : undefined;
+        const call = literal?.getParent();
+        const declaration = call?.getParent();
+
+        if (
+            Node.isObjectLiteralExpression(literal) &&
+            Node.isCallExpression(call) &&
+            call.getArguments()[0] === literal &&
+            isDefineMutatorCallee(call.getExpression()) &&
+            Node.isVariableDeclaration(declaration) &&
+            declaration.getInitializer() === call &&
+            declaration.getName() === exportName
+        ) {
+            const parameter = ancestor.getParameters()[1];
+
+            return parameter === undefined || parameter.isRestParameter() ? undefined : parameter;
+        }
+    }
+
+    return undefined;
+};
+
+/** The declaration `identifier` resolves to through the type checker, or `undefined` when it has no symbol. */
+const declarationOf = (identifier: Identifier): TsNode | undefined => {
+    const symbol = referencedSymbolOf(identifier);
+
+    return symbol?.getValueDeclaration() ?? symbol?.getDeclarations()[0];
+};
+
+/** Whether `declaration` is a `const` variable, the only binding that cannot be repointed after its initializer ran. */
+const isConstVariable = (declaration: TsNode | undefined): declaration is VariableDeclaration => {
+    const list = declaration?.getParent();
+
+    return Node.isVariableDeclaration(declaration) && Node.isVariableDeclarationList(list) && list.getDeclarationKind() === VariableDeclarationKind.Const;
+};
+
+/**
+ * Whether the expression `node` is written to: the left of any assignment
+ * operator, an `++` / `--` / `delete` operand, a `for…in` / `for…of` target, or
+ * a slot inside a destructuring assignment's left side (`({ userId } = other)`).
+ */
+const isWriteTarget = (node: TsNode): boolean => {
+    const parent = node.getParent();
+
+    if (parent === undefined) {
+        return false;
+    }
+
+    if (Node.isBinaryExpression(parent)) {
+        const operator = parent.getOperatorToken().getKind();
+
+        return parent.getLeft() === node && operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment;
+    }
+
+    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
+        const operator = parent.getOperatorToken();
+
+        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
+    }
+
+    if (Node.isDeleteExpression(parent)) {
+        return true;
+    }
+
+    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
+        return parent.getInitializer() === node;
+    }
+
+    if (Node.isPropertyAssignment(parent)) {
+        const initializer: TsNode | undefined = parent.getInitializer();
+
+        return initializer === node && isWriteTarget(parent);
+    }
+
+    // A slot of a destructuring assignment: the enclosing literal is the write target.
+    const isSlot =
+        Node.isShorthandPropertyAssignment(parent) ||
+        Node.isSpreadAssignment(parent) ||
+        Node.isSpreadElement(parent) ||
+        Node.isParenthesizedExpression(parent) ||
+        Node.isObjectLiteralExpression(parent) ||
+        Node.isArrayLiteralExpression(parent);
+
+    return isSlot && isWriteTarget(parent);
+};
+
+/**
+ * Whether the binding `declaration` (a parameter, or an element of a
+ * destructured parameter) is written anywhere in `handler`: rebinding it
+ * (`args = {…}`, `userId = other`) or, for the `args` object, writing one of
+ * its members (`args.userId = other`, `delete args[key]`). Any of these makes
+ * the binding something other than the value `applyOwnerScope` verified,
+ * wherever the write sits relative to the read, so it disqualifies the binding.
+ */
+const isRewrittenIn = (handler: TsNode, declaration: TsNode, name: string): boolean =>
+    handler.getDescendantsOfKind(SyntaxKind.Identifier).some((reference) => {
+        if (reference.getText() !== name || declarationOf(reference)?.compilerNode !== declaration.compilerNode) {
+            return false;
+        }
+
+        const access = reference.getParent();
+        const isMemberWrite =
+            (Node.isPropertyAccessExpression(access) || Node.isElementAccessExpression(access)) &&
+            access.getExpression() === reference &&
+            isWriteTarget(access);
+
+        return isMemberWrite || isWriteTarget(reference);
+    });
+
+/**
+ * Whether `node` is the mutator's own `args` parameter, by symbol: an identifier
+ * resolving to `parameter` itself, which the impl never rebinds or writes a
+ * member of. A nested closure's own `args`, a `for` / `catch` / block binding
+ * that shadows it, or anything else merely spelled `args` resolves elsewhere.
+ */
+const isVerifiedArgsObject = (node: TsNode, parameter: ParameterDeclaration): boolean => {
+    const nameNode = parameter.getNameNode();
+
+    return (
+        Node.isIdentifier(node) &&
+        Node.isIdentifier(nameNode) &&
+        declarationOf(node)?.compilerNode === parameter.compilerNode &&
+        !isRewrittenIn(parameter.getParentOrThrow(), parameter, nameNode.getText())
+    );
+};
+
+/** The object `node` reads `field` from (`node` being `<object>.<field>` or `<object>["<field>"]`), else `undefined`. */
+const ownerPropertyObject = (node: TsNode, field: string): TsNode | undefined => {
+    if (Node.isPropertyAccessExpression(node)) {
+        return node.getName() === field ? node.getExpression() : undefined;
     }
 
     if (Node.isElementAccessExpression(node)) {
-        const object = node.getExpression();
         const argument = node.getArgumentExpression();
 
-        return (
-            Node.isIdentifier(object) &&
-            object.getText() === "args" &&
-            argument !== undefined &&
-            Node.isStringLiteral(argument) &&
-            argument.getLiteralValue() === field
-        );
+        return argument !== undefined && Node.isStringLiteral(argument) && argument.getLiteralValue() === field ? node.getExpression() : undefined;
     }
 
-    return false;
+    return undefined;
 };
 
 /**
- * The initializer of an IMMUTABLE local alias for `node`, or `undefined`.
- *
- * Deliberately stricter than the shared `singleHopInitializer` in
- * `argument-taint.ts`, which is
- * built for taint detection and is right to be loose there: over-resolving makes
- * that predicate report MORE, which fails open. Here the same looseness fails the
- * other way — this hop is what SILENCES a finding — so it has to be exact.
- *
- * That helper takes the nearest preceding same-named declaration
- * regardless of `const`/`let`/`var` and never looks at assignments, so
- * `let userId = args.userId; userId = args.targetUserId` still resolves through
- * the stale initializer. That is an act-as-any-user IDOR being waved through.
- * Requiring `const`, and rejecting any binding the function reassigns, closes it.
+ * Whether the identifier `node` is a destructured binding of the verified
+ * `args[owner]`: an element of the impl's own destructured parameter
+ * (`server: (ctx, { userId }) => …`, never rebound), or of a `const`
+ * destructure of the verified args object (`const { userId } = args`).
+ * `applyOwnerScope` stamps the parsed args object BEFORE `server` is called with
+ * it, so destructuring that parameter reads the stamped value. A rest element
+ * (`...rest`) is not followed.
  */
-const constAliasInitializer = (node: TsNode): TsNode | undefined => {
-    if (!Node.isIdentifier(node)) {
-        return undefined;
+const isVerifiedOwnerBinding = (node: TsNode, parameter: ParameterDeclaration, ownerField: string): boolean => {
+    const element = Node.isIdentifier(node) ? declarationOf(node) : undefined;
+
+    if (!Node.isBindingElement(element) || element.getDotDotDotToken() !== undefined || bindingKeyName(element) !== ownerField) {
+        return false;
     }
 
-    const name = node.getText();
-    const enclosingFunction = node.getFirstAncestor(
-        (ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isFunctionDeclaration(ancestor),
-    );
+    const elementName = element.getNameNode();
+    const pattern = element.getParent();
+    const holder = pattern.getParent();
 
-    if (enclosingFunction === undefined) {
-        return undefined;
+    if (!Node.isIdentifier(elementName) || !Node.isObjectBindingPattern(pattern)) {
+        return false;
     }
 
-    // Any write to this name anywhere in the function disqualifies the alias. A
-    // `const` cannot be reassigned, so this only ever rejects a `let`/`var` that
-    // the declaration check below would already have caught — belt and braces,
-    // because the cost of being wrong here is a suppressed IDOR.
-    for (const assignment of enclosingFunction.getDescendantsOfKind(SyntaxKind.BinaryExpression)) {
-        const left = assignment.getLeft();
-
-        if (Node.isIdentifier(left) && left.getText() === name && assignment.getOperatorToken().getText().endsWith("=")) {
-            return undefined;
-        }
+    if (holder === parameter) {
+        return !isRewrittenIn(parameter.getParentOrThrow(), element, elementName.getText());
     }
 
-    const usePosition = node.getStart();
-    let nearest: TsNode | undefined;
-    let nearestPosition = -1;
+    const initializer = isConstVariable(holder) ? holder.getInitializer() : undefined;
 
-    for (const variable of enclosingFunction.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
-        if (variable.getName() !== name) {
-            continue;
-        }
+    return initializer !== undefined && isVerifiedArgsObject(initializer, parameter);
+};
 
-        const list = variable.getParent();
+/** `value` reads the verified owner directly: `args.<owner>`, `args["<owner>"]`, or a destructured binding of it. */
+const readsOwnerArgument = (value: TsNode, parameter: ParameterDeclaration, ownerField: string): boolean => {
+    const object = ownerPropertyObject(value, ownerField);
 
-        if (!Node.isVariableDeclarationList(list) || list.getDeclarationKind() !== VariableDeclarationKind.Const) {
-            continue;
-        }
-
-        const initializer = variable.getInitializer();
-        const declarationPosition = variable.getStart();
-
-        if (initializer !== undefined && declarationPosition < usePosition && declarationPosition > nearestPosition) {
-            nearest = initializer;
-            nearestPosition = declarationPosition;
-        }
-    }
-
-    return nearest;
+    return object === undefined ? isVerifiedOwnerBinding(value, parameter, ownerField) : isVerifiedArgsObject(object, parameter);
 };
 
 /**
- * Whether `value` resolves to the mutator's own `args[owner]` — directly, or
- * through one immutable local `const` alias.
+ * Whether `value` resolves to the verified `args[owner]` of the mutator impl
+ * whose own `args` is `parameter`: directly, or through one immutable local
+ * `const` alias.
  *
  * The column NAME matching the declared `owner` is not enough.
  * `applyOwnerScope` overwrites exactly `args[ownerField]` with the verified
  * identity, so only that one argument is laundered: a mutator declaring
  * `owner: "userId"` whose impl writes `{ userId: args.targetUserId }` is a
  * genuine act-as-any-user IDOR, and matching on the name alone would suppress it.
- * Anything this cannot resolve — a destructured binding, a computed key, a
- * reassignable alias — falls through as NOT owner-scoped, which fails toward
- * reporting.
+ *
+ * Every identifier is resolved by SYMBOL. Matching the spelling `args` let a
+ * nested closure with its own `args` parameter (or any shadowing `for` /
+ * `catch` / block binding) launder a caller-chosen value into an
+ * "owner-scoped" write. Anything this cannot resolve (a computed key, a
+ * reassignable alias, a rewritten parameter) falls through as NOT
+ * owner-scoped, which fails toward reporting.
  */
-const resolvesToOwnerArgument = (value: TsNode, ownerField: string): boolean => {
-    if (isArgsProperty(value, ownerField)) {
+const resolvesToOwnerArgument = (value: TsNode, parameter: ParameterDeclaration, ownerField: string): boolean => {
+    if (readsOwnerArgument(value, parameter, ownerField)) {
         return true;
     }
 
-    const hop = constAliasInitializer(value);
+    const alias = Node.isIdentifier(value) ? declarationOf(value) : undefined;
+    const initializer = isConstVariable(alias) && Node.isIdentifier(alias.getNameNode()) ? alias.getInitializer() : undefined;
 
-    return hop !== undefined && isArgsProperty(hop, ownerField);
+    return initializer !== undefined && readsOwnerArgument(initializer, parameter, ownerField);
+};
+
+/**
+ * Whether `value` reads the mutator impl's own `args` parameter by symbol,
+ * whatever it is called: the parameter itself (`server: (ctx, input) => …`) or
+ * a binding destructured out of it (`server: (ctx, { targetUserId }) => …`),
+ * directly or through one `const` alias. The shared taint predicate matches the
+ * spelling `args` (and bindings destructured from a parameter KEYED `args`), so
+ * a renamed or positionally destructured parameter would otherwise record no
+ * write at all.
+ */
+const readsParameterBinding = (value: TsNode, parameter: ParameterDeclaration): boolean => {
+    const isParameter = (identifier: Identifier): boolean => declarationOf(identifier)?.compilerNode === parameter.compilerNode;
+    const isParameterBinding = (identifier: Identifier): boolean => {
+        const declaration = declarationOf(identifier);
+
+        if (
+            declaration?.compilerNode === parameter.compilerNode ||
+            declaration?.getFirstAncestorByKind(SyntaxKind.Parameter)?.compilerNode === parameter.compilerNode
+        ) {
+            return true;
+        }
+
+        // `const { targetUserId } = args`: a binding destructured from the parameter in the body.
+        const holder = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : undefined;
+        const initializer = holder?.getInitializer();
+
+        return initializer !== undefined && Node.isIdentifier(initializer) && isParameter(initializer);
+    };
+    const readsDirectly = (node: TsNode): boolean =>
+        (Node.isIdentifier(node) ? [node] : node.getDescendantsOfKind(SyntaxKind.Identifier)).some((identifier) => isParameterBinding(identifier));
+
+    if (readsDirectly(value)) {
+        return true;
+    }
+
+    const alias = Node.isIdentifier(value) ? declarationOf(value) : undefined;
+    const initializer = isConstVariable(alias) ? alias.getInitializer() : undefined;
+
+    return initializer !== undefined && readsDirectly(initializer);
 };
 
 /** Identity columns in one object literal that are written from `args` and not from `ctx`. */
@@ -231,22 +387,28 @@ const identityWritesInObjectLiteral = (
             continue;
         }
 
+        const scope = callSiteScopeOf(call);
+        const parameter = scope.kind === "export" ? mutatorArgsParameterOf(call, scope.name) : undefined;
+
         // Correct: `userId: ctx.auth.userId`; offending: `userId: args.userId`.
         // A value that references `ctx` is server-scoped even when it also embeds
         // `args`, so it is not flagged — mirrors the shared taint convention.
-        if (isArgumentDerived(value) && !isScopedByContext(value)) {
-            const scope = callSiteScopeOf(call);
+        if ((isArgumentDerived(value) || (parameter !== undefined && readsParameterBinding(value, parameter))) && !isScopedByContext(value)) {
             // Recorded either way — the lint decides what to do with it. Dropping it
             // here would make the feeder the only place that knows the write
             // happened, and the `visibility` stamp is the precedent for annotating
             // rather than discarding.
             //
-            // Owner-scoped ONLY in the mutator's own body. The runtime's
-            // `applyOwnerScope` verifies the mutator's `args[owner]`; inside a
-            // helper `args` is the HELPER's parameter, which a mutator can fill
-            // from anything (`persist(ctx, { userId: args.targetUserId })`), so a
-            // helper's write is never owner-scoped.
-            const ownerScoped = scope.kind === "export" && ownerFieldOf(scope.name) === name && resolvesToOwnerArgument(value, name);
+            // Owner-scoped ONLY when the value is, by symbol, the `args[owner]`
+            // the runtime verified. `applyOwnerScope` stamps the parsed args
+            // object that this export's `defineMutator` `server` impl receives as
+            // its 2nd parameter, and nothing else. A write anywhere in that impl,
+            // nested closures included, qualifies iff it reads THAT parameter (or
+            // a destructured / `const` binding of its owner field). A helper's or
+            // a nested closure's own `args` can be filled from anything
+            // (`persist({ userId: args.targetUserId })`), so it never qualifies.
+            const ownerScoped =
+                scope.kind === "export" && parameter !== undefined && ownerFieldOf(scope.name) === name && resolvesToOwnerArgument(value, parameter, name);
 
             rows.push({
                 field: name,

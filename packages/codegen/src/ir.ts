@@ -1611,7 +1611,9 @@ export interface OwnerFieldWriteIR {
 
     /**
      * The enclosing `defineMutator` declared this very column as its `owner`, AND
-     * the value written resolves to that same `args[owner]`.
+     * the value written resolves, by symbol, to that same `args[owner]` of the
+     * `server` impl's own 2nd parameter. A nested closure's or a helper's own
+     * `args` (or any binding shadowing it) never qualifies.
      *
      * `applyOwnerScope` requires a verified identity, rejects a client-supplied
      * value that disagrees with it, and overwrites the column with the verified
