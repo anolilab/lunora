@@ -240,6 +240,7 @@ const verifySignedUrl: (input: string | URL, secret: string, options?: {
 interface CreateUploadHandlerOptions {
     authorize?: (context: UploadAuthzContext) => boolean | Promise<boolean>;
     maxFileSize?: number;
+    maxFileSizeFor?: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>;
     protocol?: UploadProtocol;
     public?: boolean;
     silent?: boolean;
@@ -253,6 +254,20 @@ interface CreateUploadHandlerOptions {
 const DEFAULT_MAX_UPLOAD_BYTES: number;
 ```
 
+### `R2BindingUploadStorageOptions` (interface)
+
+```ts
+interface R2BindingUploadStorageOptions extends Omit<BaseStorageOptions, "metaStorage"> {
+    statePrefix?: string;
+}
+```
+
+### `R2UploadBucket` (type)
+
+```ts
+type R2UploadBucket = R2BucketLike & Required<Pick<R2BucketLike, "createMultipartUpload" | "resumeMultipartUpload">>;
+```
+
 ### `R2UploadStorageOptions` (interface)
 
 ```ts
@@ -264,6 +279,12 @@ interface R2UploadStorageOptions {
     partSize?: number | string;
     path?: string;
 }
+```
+
+### `R2_PART_SIZE` (const)
+
+```ts
+const R2_PART_SIZE: number;
 ```
 
 ### `UploadAuthzContext` (interface)
@@ -292,10 +313,26 @@ interface UploadHandler {
 type UploadProtocol = "chunked-rest" | "multipart" | "tus";
 ```
 
+### `UploadSizeContext` (interface)
+
+```ts
+interface UploadSizeContext extends UploadAuthzContext {
+    contentType: string;
+    declaredSize: number | undefined;
+    metadata: Record<string, string>;
+}
+```
+
 ### `UploadStorage` (type)
 
 ```ts
 type UploadStorage = UploadHandlerOptions["storage"];
+```
+
+### `createR2BindingUploadStorage` (const)
+
+```ts
+const createR2BindingUploadStorage: (bucket: R2UploadBucket, options?: R2BindingUploadStorageOptions) => UploadStorage;
 ```
 
 ### `createR2UploadStorage` (const)

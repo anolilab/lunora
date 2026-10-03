@@ -3,8 +3,11 @@
  * containers, queues, workflows, D1, and the hint / self-describing binding kinds.
  */
 
+import { CUSTOM_INSTANCE_MIN_MEMORY_MIB_PER_VCPU, CUSTOM_INSTANCE_TYPE_LIMITS } from "@lunora/container";
+
 import type { SchemaInfo } from "../schema-info";
-import { isPlainObject, settingLeaf, WORKFLOW_SETTINGS } from "./workflow-settings";
+import { isNonEmptyString, isPlainObject } from "./guards";
+import { settingLeaf, WORKFLOW_SETTINGS } from "./workflow-settings";
 import type { WranglerConfig, WranglerContainerEntry } from "./wrangler-config";
 
 /**
@@ -31,14 +34,16 @@ const validateVectorizeBindings = (wrangler: WranglerConfig, vectorIndexNames: R
 const NAMED_INSTANCE_TYPES = new Set(["basic", "dev", "lite", "standard", "standard-1", "standard-2", "standard-3", "standard-4"]);
 
 /**
- * Documented bounds for custom instance types (developers.cloudflare.com/containers/platform-details/limits):
- * 1–4 vCPU, ≤ 12 GiB memory, ≤ 20 GB disk at any memory size, ≥ 3 GiB memory per vCPU. The former
- * 2-GB-disk-per-GiB-memory ratio is gone — custom sizes are open to every account.
+ * Inclusive bounds per custom `instance_type` dimension, keyed by wrangler's
+ * field names. The numbers are `@lunora/container`'s `CUSTOM_INSTANCE_TYPE_LIMITS`
+ * — the one copy, which `defineContainer` also checks a `durable_object`
+ * container's runtime size against. `hint` is the remedy for a value below `min`.
  */
-const CUSTOM_INSTANCE_LIMITS = { disk_mb: 20_000, memory_mib: 12_288, vcpu: 4 } as const;
-
-/** Custom instance types start at 1 vCPU; below that, Cloudflare points at the named `lite` / `basic` types. */
-const CUSTOM_INSTANCE_MIN_VCPU = 1;
+const CUSTOM_INSTANCE_LIMITS: Readonly<Record<"disk_mb" | "memory_mib" | "vcpu", { hint?: string; max: number; min: number }>> = {
+    disk_mb: CUSTOM_INSTANCE_TYPE_LIMITS.diskMb,
+    memory_mib: CUSTOM_INSTANCE_TYPE_LIMITS.memoryMib,
+    vcpu: { ...CUSTOM_INSTANCE_TYPE_LIMITS.vcpu, hint: 'use the named "lite" or "basic" instance type below 1 vCPU' },
+};
 
 /** Validate one entry's `instance_type` (named or custom object). */
 const validateInstanceType = (entry: WranglerContainerEntry, label: string, errors: string[]): void => {
@@ -58,24 +63,24 @@ const validateInstanceType = (entry: WranglerContainerEntry, label: string, erro
         return;
     }
 
-    for (const [field, limit] of Object.entries(CUSTOM_INSTANCE_LIMITS) as ReadonlyArray<[keyof typeof CUSTOM_INSTANCE_LIMITS, number]>) {
+    for (const [field, { hint, max, min }] of Object.entries(CUSTOM_INSTANCE_LIMITS) as ReadonlyArray<
+        [keyof typeof CUSTOM_INSTANCE_LIMITS, (typeof CUSTOM_INSTANCE_LIMITS)[keyof typeof CUSTOM_INSTANCE_LIMITS]]
+    >) {
         const value = instanceType[field];
 
-        if (value !== undefined && (typeof value !== "number" || value <= 0 || value > limit)) {
-            errors.push(`${label} custom instance_type ${field} must be a positive number ≤ ${String(limit)} (got ${String(value)})`);
+        if (value !== undefined && (typeof value !== "number" || Number.isNaN(value) || value < min || value > max)) {
+            const remedy = hint !== undefined && typeof value === "number" && value < min ? ` — ${hint}` : "";
+
+            errors.push(`${label} custom instance_type ${field} must be a number in ${String(min)}–${String(max)} (got ${String(value)})${remedy}`);
         }
     }
 
     const { memory_mib: memoryMib, vcpu } = instanceType;
 
-    if (typeof vcpu === "number" && vcpu > 0 && vcpu < CUSTOM_INSTANCE_MIN_VCPU) {
+    if (typeof vcpu === "number" && typeof memoryMib === "number" && memoryMib < vcpu * CUSTOM_INSTANCE_MIN_MEMORY_MIB_PER_VCPU) {
         errors.push(
-            `${label} custom instance_type needs ≥ ${String(CUSTOM_INSTANCE_MIN_VCPU)} vCPU (got ${String(vcpu)}) — use the named "lite" or "basic" instance type below 1 vCPU`,
+            `${label} custom instance_type needs ≥ 3 GiB (${String(CUSTOM_INSTANCE_MIN_MEMORY_MIB_PER_VCPU)} MiB) memory per vCPU (got ${String(memoryMib)} MiB for ${String(vcpu)} vCPU)`,
         );
-    }
-
-    if (typeof vcpu === "number" && typeof memoryMib === "number" && memoryMib < vcpu * 3072) {
-        errors.push(`${label} custom instance_type needs ≥ 3 GiB (3072 MiB) memory per vCPU (got ${String(memoryMib)} MiB for ${String(vcpu)} vCPU)`);
     }
 };
 
@@ -163,9 +168,6 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
         warnings.push(`${label} ("${entry.class_name}") declares no max_instances — set a cap so a traffic spike can't fan out unbounded container spend`);
     }
 };
-
-/** A non-empty string — the shape every binding's required fields must satisfy. */
-const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 
 /**
  * The object-typed entries of a possibly-malformed bindings array from untrusted
@@ -924,7 +926,6 @@ const validateVpcNetworks = (wrangler: WranglerConfig, errors: string[]): void =
 // `./cloudflare` barrel re-exports by name and deliberately does not list them.
 export {
     HINT_BINDING_RULES,
-    isNonEmptyString,
     objectBindingEntries,
     REQUIRED_FIELD_BINDING_RULES,
     SECRETS_STORE_RULE,

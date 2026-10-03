@@ -47,7 +47,8 @@ import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
 import type { Teardown } from "./supervise";
 import { defaultWorkerSpawner, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt } from "./supervise";
-import type { DevCommandOptions, DevCommandPlan, WorkerProcess, WorkerSpawner } from "./types";
+import { normalizeAllowMail, printPublicWarning, startTunnelForPlan } from "./tunnel";
+import type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, WorkerProcess, WorkerSpawner } from "./types";
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
 const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined, manifestPath: string | undefined): void => {
@@ -595,6 +596,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             // server that had been serving for an hour.
             startReadyProbe();
             logger.info(attachedModeNotice(plan));
+            handles.tunnel = startTunnelForPlan({ cwd, logger, plan, tunnel: options.tunnel });
 
             return { code: await (options.waitForInterrupt ?? waitForInterrupt)(logger), plan };
         }
@@ -621,6 +623,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         startReadyProbe();
 
         handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl, emitted.written);
+        handles.tunnel = startTunnelForPlan({ cwd, logger, plan, tunnel: options.tunnel });
 
         printAgentRulesHint(logger, cwd);
 
@@ -666,6 +669,34 @@ const negatableDevFlags = (options: Pick<DevOptions, "codegen" | "studio" | "wor
     };
 };
 
+/**
+ * The flag combinations `lunora dev` refuses as a usage error, or `undefined`.
+ * `--local` is the opposite of `--remote`; `--allow-mail` protects a tunnel, so
+ * without `--tunnel` there is nothing for it to protect, and an entry that is
+ * not an email address (or `*@domain`) protects nothing either.
+ */
+const devFlagConflict = (options: Pick<DevOptions, "allowMail" | "local" | "remote" | "tunnel">): string | undefined => {
+    if (options.local === true && options.remote === true) {
+        return "`--local` and `--remote` are mutually exclusive — pass at most one.";
+    }
+
+    const { entries, invalid } = normalizeAllowMail(options.allowMail);
+
+    if (invalid.length > 0) {
+        return `\`--allow-mail\` takes email addresses or '*@domain' — not ${invalid.map((entry) => `"${entry}"`).join(", ")}.`;
+    }
+
+    if (entries.length > 0 && options.tunnel !== true) {
+        return "`--allow-mail` only applies to a tunnel — add `--tunnel`.";
+    }
+
+    return undefined;
+};
+
+/** The `--tunnel` request, built once from the parsed flags; `undefined` without `--tunnel`. */
+const tunnelRequest = (options: Pick<DevOptions, "allowMail" | "tunnel">): DevTunnelRequest | undefined =>
+    options.tunnel === true ? { allowMail: normalizeAllowMail(options.allowMail).entries } : undefined;
+
 /** `lunora dev` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ argument, cwd, logger, options }) => {
     const json = options.json === true;
@@ -701,11 +732,15 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
     // `resolveRemoteEnabled` in @lunora/config.
     // `--local` is the opposite request, so the two flags together are a usage
     // error; on its own it beats a remote default from the env or the config.
-    if (options.local === true && options.remote === true) {
-        logger.error("dev: `--local` and `--remote` are mutually exclusive — pass at most one.");
+    const usageError = devFlagConflict(options);
+
+    if (usageError !== undefined) {
+        logger.error(`dev: ${usageError}`);
 
         return { code: EXIT_CODE.USAGE };
     }
+
+    const tunnel = tunnelRequest(options);
 
     const remote =
         options.local === true
@@ -726,6 +761,13 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
             return { code: 0 };
         }
 
+        // The daemon prints the tunnel's own warning into its log file, which
+        // nobody reads until something goes wrong — say it here, where the
+        // person who asked for a public URL is looking.
+        if (tunnel?.allowMail.length === 0) {
+            printPublicWarning(logger);
+        }
+
         return startBackground({ cwd, jsonLogs, logger, options, remote });
     }
 
@@ -740,10 +782,11 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         port: options.port,
         remote,
         target: options.target,
+        tunnel,
         workerPort: options.workerPort,
         ...negatableDevFlags(options),
     });
 });
 
 export { execute };
-export { negatableDevFlags, runDevCommand };
+export { devFlagConflict, negatableDevFlags, runDevCommand };

@@ -367,7 +367,8 @@ export interface R2BucketLike {
         key: string,
         options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
     ) => Promise<R2MultipartUploadLike>;
-    delete: (key: string) => Promise<void>;
+    /** Delete one key, or up to 1000 in one call (R2's bulk delete). Absent keys are a no-op. */
+    delete: (keys: string | string[]) => Promise<void>;
     get: (key: string, options?: { range?: R2RangeLike }) => Promise<R2ObjectBodyLike | null>;
 
     /**
@@ -407,22 +408,45 @@ export interface R2BucketLike {
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;
-    put: (
-        key: string,
-        // `ArrayBufferView` is in the real `R2Bucket.put` signature and in this
-        // file's own `uploadPart`; it was missing here, which is the projection
-        // drifting from the binding it projects. A `Uint8Array` is the most
-        // natural thing to hand a byte store.
-        body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null,
-        // `sha256` is in the real `R2Bucket.put` signature and `@lunora/storage`'s
-        // `upload` has always passed it; the projection omitted it, which is the
-        // drift this file exists to prevent. R2 verifies the digest on write and
-        // records it, and a recorded digest is the only reason `list()`/`head()`
-        // can report `checksums.sha256` at all.
-        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string }; sha256?: ArrayBuffer | string },
-    ) => Promise<R2ObjectLike>;
+    // Two overloads, as on the real `R2Bucket.put`: a plain put always stores
+    // and answers the object; a conditional one (`onlyIf`) answers `null` when
+    // its precondition fails and nothing was written. That `null` is what a
+    // compare-and-swap over R2 is built on.
+    put: {
+        (key: string, body: R2PutBodyLike, options: R2PutOptionsLike & { onlyIf: R2ConditionalLike }): Promise<R2ObjectLike | null>;
+        (key: string, body: R2PutBodyLike, options?: R2PutOptionsLike): Promise<R2ObjectLike>;
+    };
     /** Resume an in-progress multipart upload by id (R2 `resumeMultipartUpload`). Optional; see {@link Storage.resumeMultipartUpload}. */
     resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;
+}
+
+/**
+ * What `R2BucketLike.put` stores bytes from. `ArrayBufferView` is in the real
+ * `R2Bucket.put` signature and in `uploadPart`; a `Uint8Array` is the most
+ * natural thing to hand a byte store.
+ */
+export type R2PutBodyLike = ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null;
+
+/**
+ * The put options `R2BucketLike.put` accepts. `sha256` is in the real
+ * `R2Bucket.put` signature and `@lunora/storage`'s `upload` has always passed
+ * it: R2 verifies the digest on write and records it, and a recorded digest is
+ * the only reason `list()`/`head()` can report `checksums.sha256` at all.
+ */
+export interface R2PutOptionsLike {
+    customMetadata?: Record<string, string>;
+    httpMetadata?: { contentType?: string };
+    sha256?: ArrayBuffer | string;
+}
+
+/**
+ * A put precondition (R2's `R2Conditional`, the etag half). `etagMatches` is
+ * `If-Match`; `etagDoesNotMatch: "*"` is `If-None-Match: *`, "only if the key
+ * does not exist yet".
+ */
+export interface R2ConditionalLike {
+    etagDoesNotMatch?: string;
+    etagMatches?: string;
 }
 
 /** One uploaded multipart part — returned by `uploadPart`, required to `complete`. Mirrors R2's `R2UploadedPart`. */

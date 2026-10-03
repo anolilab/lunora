@@ -214,8 +214,8 @@ export interface TraceAnchor {
     /**
      * Cloudflare Ray ID of the request this dispatch serves, forwarded by the
      * runtime alongside `traceparent`. Carried on the anchor so every span and
-     * log line of the dispatch stamps the same value. Informational only; absent
-     * off the edge.
+     * log line of the dispatch stamps the same value. Absent off the edge.
+     * Informational only, as `parseRayId` in `shared/ray-id.ts` defines it.
      */
     rayId?: string;
     rootSpanId: string;
@@ -229,6 +229,15 @@ export interface TraceAnchor {
     sampled?: boolean;
     traceId: string;
 }
+
+/**
+ * The span fields every span of a dispatch copies off its {@link TraceAnchor}:
+ * the trace id, and the Ray ID when the anchor carries one. One helper so a span
+ * builder cannot stamp the trace id and forget the Ray ID (or emit an explicit
+ * `rayId: undefined` key, which a sink would serialize).
+ */
+export const spanAnchorFields = (anchor: TraceAnchor): { rayId?: string; traceId: string } =>
+    anchor.rayId === undefined ? { traceId: anchor.traceId } : { rayId: anchor.rayId, traceId: anchor.traceId };
 
 /** What {@link createTracer} needs from the shard to build a span. */
 export interface TracerDeps {
@@ -557,11 +566,10 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             name,
                             ok,
                             parentSpanId: parentId,
-                            ...(anchor.rayId === undefined ? {} : { rayId: anchor.rayId }),
+                            ...spanAnchorFields(anchor),
                             shardKey,
                             spanId,
                             startTs,
-                            traceId: anchor.traceId,
                             userId: resolvedUserId,
                         });
                     } catch {
@@ -761,11 +769,10 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
                     name: `${request.method} ${safeHost(request.url)}`,
                     ok: error === undefined,
                     parentSpanId: anchor.rootSpanId,
-                    ...(anchor.rayId === undefined ? {} : { rayId: anchor.rayId }),
+                    ...spanAnchorFields(anchor),
                     shardKey,
                     spanId,
                     startTs,
-                    traceId: anchor.traceId,
                     userId: userId(),
                 });
             } catch {
@@ -889,11 +896,10 @@ export const dispatchRootSpan = (input: {
         // sits above it in a full collector-side trace, but it is not in this
         // buffer, so naming it here would dangle.
         parentSpanId: "",
-        ...(anchor.rayId === undefined ? {} : { rayId: anchor.rayId }),
+        ...spanAnchorFields(anchor),
         shardKey,
         spanId: anchor.rootSpanId,
         startTs,
-        traceId: anchor.traceId,
         userId,
     };
 };

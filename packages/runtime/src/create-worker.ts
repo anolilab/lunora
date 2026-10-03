@@ -20,7 +20,7 @@ import {
 } from "../../../shared/identity-header";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
-import { parseRayId } from "../../../shared/ray-id";
+import { CF_RAY_HEADER, parseRayId } from "../../../shared/ray-id";
 import type { RegionHint } from "../../../shared/region-hint";
 import { regionHintFromRequest } from "../../../shared/region-hint";
 import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
@@ -1685,7 +1685,7 @@ interface RequestTelemetryMeta {
     method: string;
     path?: string;
     port?: number;
-    /** Cloudflare Ray ID (`cf-ray`, colo suffix dropped); absent off the edge. See `shared/ray-id.ts`. */
+    /** Cloudflare Ray ID, parsed once here and handed to `beginDispatchTrace`; absent off the edge. See {@link parseRayId}. */
     rayId?: string;
     scheme?: string;
     userAgent?: string;
@@ -1744,8 +1744,9 @@ const requestTelemetryMeta = (request: Request): RequestTelemetryMeta => {
     const userAgent = request.headers.get("user-agent") ?? undefined;
     // Cross-navigation key into Cloudflare Traces / Workers Logs. Every request
     // event carries it — fan-out and REST included — so any Lunora log line can be
-    // looked up on the Cloudflare side. Informational only.
-    const rayId = parseRayId(request.headers.get("cf-ray"));
+    // looked up on the Cloudflare side. Parsed ONCE per request, here; the
+    // dispatch trace takes this value rather than re-reading the header.
+    const rayId = parseRayId(request.headers.get(CF_RAY_HEADER));
     const rayField = rayId === undefined ? {} : { rayId };
     let url: URL;
 
@@ -4667,6 +4668,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // the span's `flags`, the `traceparent` we forward, and the export gate can
         // never disagree about whether this trace is sampled.
         const { decision, ignoredUpstream, trace } = beginDispatchTrace(request, {
+            ...(requestMeta.rayId === undefined ? {} : { rayId: requestMeta.rayId }),
             ...(sampling === undefined ? {} : { sampling }),
             trustInbound: isTrustedUpstream(request),
         });
@@ -4958,6 +4960,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // fired (no settled decision to hand it) and the shard minted a fresh,
         // unrelated trace for every sub-request it received.
         const { decision, ignoredUpstream, trace } = beginDispatchTrace(request, {
+            ...(requestMeta.rayId === undefined ? {} : { rayId: requestMeta.rayId }),
             ...(sampling === undefined ? {} : { sampling }),
             trustInbound: isTrustedUpstream(request),
         });

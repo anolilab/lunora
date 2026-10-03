@@ -24,6 +24,8 @@ const devCommand: Command = {
         ["lunora dev --inspector-port 9235", "Pin wrangler's devtools inspector port instead of letting it walk up from 9229"],
         ["lunora dev --remote", "Proxy D1/KV/R2 to the deployed worker (also LUNORA_REMOTE=1)"],
         ["lunora dev --local", "Start no remote proxy session, e.g. in CI where a service's `ai` binding has no credentials"],
+        ["lunora dev --tunnel", "Share the worker on a public *.trycloudflare.com URL (needs cloudflared ≥ 2026.9.3)"],
+        ["lunora dev --tunnel --allow-mail you@example.com", "Same, but visitors must confirm an allowed email with a one-time PIN"],
     ],
     group: "Develop",
     loader: () =>
@@ -31,7 +33,7 @@ const devCommand: Command = {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "dev",
-    // KEEP IN SYNC with `daemonArguments` in `./lifecycle.ts`: a new flag that
+    // KEEP IN SYNC with `daemonArguments` in `./daemon-arguments.ts`: a new flag that
     // must reach a `--background` daemon has to be forwarded there explicitly.
     options: [
         { description: `Which API spec(s) codegen emits: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
@@ -89,12 +91,26 @@ const devCommand: Command = {
             name: "local",
             type: Boolean,
         },
+        {
+            description:
+                "Share the worker through a Cloudflare quick tunnel (*.trycloudflare.com, needs cloudflared ≥ 2026.9.3). PUBLIC unless --allow-mail is given",
+            name: "tunnel",
+            type: Boolean,
+        },
+        {
+            description:
+                "With --tunnel: only these emails get in, after a one-time PIN (passed to cloudflared as --allowed-mail). Repeatable; accepts a comma list and '*@domain'",
+            lazyMultiple: true,
+            name: "allow-mail",
+            type: String,
+        },
     ],
 };
 
 export { devCommand };
 
 export type DevOptions = CreateOptions<{
+    "allow-mail": string[] | undefined;
     "api-spec": string | undefined;
     background: boolean | undefined;
     // Each of `codegen` / `studio` / `worker` is declared TWICE in `options` (the
@@ -112,6 +128,7 @@ export type DevOptions = CreateOptions<{
     remote: boolean | undefined;
     studio: boolean | undefined;
     target: string | undefined;
+    tunnel: boolean | undefined;
     worker: boolean | undefined;
     "worker-port": number | undefined;
 }>;

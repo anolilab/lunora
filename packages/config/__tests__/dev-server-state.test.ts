@@ -42,6 +42,7 @@ describe("dev-server-state", () => {
             readyAt: "2026-01-01T00:00:02.000Z",
             startedAt: "2026-01-01T00:00:00.000Z",
             studioUrl: "http://127.0.0.1:6173",
+            tunnelUrl: "https://quiet-marble-otter.trycloudflare.com",
             url: "http://localhost:8787",
         });
 
@@ -54,6 +55,7 @@ describe("dev-server-state", () => {
             readyAt: "2026-01-01T00:00:02.000Z",
             startedAt: "2026-01-01T00:00:00.000Z",
             studioUrl: "http://127.0.0.1:6173",
+            tunnelUrl: "https://quiet-marble-otter.trycloudflare.com",
             url: "http://localhost:8787",
         });
     });
@@ -108,6 +110,19 @@ describe("dev-server-state", () => {
 
         expect(merged?.background).toBe(true);
         expect(readDevServerState(workdir)?.logFile).toBe(join(workdir, "dev.log"));
+    });
+
+    it("keeps the recorded tunnel URL when its own owner refreshes the record", () => {
+        expect.assertions(2);
+
+        const tunnelUrl = "https://quiet-marble-otter.trycloudflare.com";
+
+        writeDevServerState(workdir, { mode: "vite", pid: process.pid, tunnelUrl, url: "http://localhost:5173" });
+
+        const claim = claimDevServerState(workdir, { mode: "vite", pid: process.pid, url: "http://localhost:5174" });
+
+        expect(claim.ok).toBe(true);
+        expect(readDevServerState(workdir)).toMatchObject({ tunnelUrl, url: "http://localhost:5174" });
     });
 
     it("isProcessAlive: own pid is alive, an impossible pid is not", () => {

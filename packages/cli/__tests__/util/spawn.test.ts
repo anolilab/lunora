@@ -174,4 +174,18 @@ describe("defaultSpawner", () => {
         expect((error as LunoraErrorLike).code).toBe("LOCAL_DEPENDENCY_MISSING");
         expect(exitCodeForError(error)).toBe(EXIT_CODE.MISSING_DEPENDENCY);
     });
+
+    it("decodes a multi-byte character split across two output chunks once", async () => {
+        expect.assertions(1);
+
+        // "é" is 0xC3 0xA9 in UTF-8; written as two separate chunks, a per-chunk
+        // `toString()` decoded each half as a replacement character.
+        const result = await defaultSpawner({
+            args: ["-e", "process.stdout.write(Buffer.from([0xc3])); setTimeout(() => process.stdout.write(Buffer.from([0xa9])), 50);"],
+            captureStdoutSilently: true,
+            command: process.execPath,
+        });
+
+        expect(result.stdout).toBe("é");
+    });
 });

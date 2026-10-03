@@ -113,6 +113,33 @@ describe("devStatePlugin", () => {
         expect(readDevServerState(workdir)).toBeUndefined();
     });
 
+    it("keeps the tunnel URL across a restart, which clears the record before the new server claims it", () => {
+        expect.assertions(2);
+
+        const tunnelUrl = "https://quiet-marble-otter.trycloudflare.com";
+        const first = createMockServer();
+
+        configure(devStatePlugin(options(workdir)), first.server);
+        first.server.printUrls();
+        // `lunora dev --tunnel` patches the URL into Vite's record.
+        writeDevServerState(workdir, { ...readDevServerState(workdir)!, tunnelUrl });
+
+        // `server.restart()`: a fresh plugin instance configures the new server,
+        // then the old server closes, then the new one prints its URLs.
+        const second = createMockServer();
+
+        configure(devStatePlugin(options(workdir)), second.server);
+        first.close();
+
+        expect(readDevServerState(workdir)).toBeUndefined();
+
+        second.server.printUrls();
+
+        expect(readDevServerState(workdir)?.tunnelUrl).toBe(tunnelUrl);
+
+        second.close();
+    });
+
     it("records the daemon marker + log file from the detach env", () => {
         expect.assertions(2);
 

@@ -25,6 +25,22 @@ interface BuildImageSource {
 const CONTAINER_EXEC_PATH = "/__lunora/exec";
 ```
 
+### `CUSTOM_INSTANCE_MIN_MEMORY_MIB_PER_VCPU` (const)
+
+```ts
+const CUSTOM_INSTANCE_MIN_MEMORY_MIB_PER_VCPU = 3072;
+```
+
+### `CUSTOM_INSTANCE_TYPE_LIMITS` (const)
+
+```ts
+const CUSTOM_INSTANCE_TYPE_LIMITS: Readonly<{
+    diskMb: InstanceDimensionLimits;
+    memoryMib: InstanceDimensionLimits;
+    vcpu: InstanceDimensionLimits;
+}>;
+```
+
 ### `ContainerAccessor` (interface)
 
 ```ts
@@ -430,6 +446,15 @@ interface DurableObjectScheduledContainerConfig extends ContainerConfigBase {
     images?: Readonly<Record<string, ContainerNamedImageSource>>;
     instanceType?: ContainerRuntimeInstanceType;
     schedulingPolicy: "durable_object";
+}
+```
+
+### `InstanceDimensionLimits` (interface)
+
+```ts
+interface InstanceDimensionLimits {
+    readonly max: number;
+    readonly min: number;
 }
 ```
 
