@@ -1,3 +1,22 @@
+## @lunora/do [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.191...@lunora/do@1.0.0-alpha.192) (2026-10-03)
+
+### Features
+
+* **storage:** resumable uploads over the r2 binding ([#948](https://github.com/anolilab/lunora/issues/948)) ([8189220](https://github.com/anolilab/lunora/commit/8189220610b21af0827acf9575c6ccd60c611e00)), closes [#937](https://github.com/anolilab/lunora/issues/937)
+
+### Bug Fixes
+
+* follow-ups to the cloudflare limits and ray id reviews ([#942](https://github.com/anolilab/lunora/issues/942), [#943](https://github.com/anolilab/lunora/issues/943)) ([#949](https://github.com/anolilab/lunora/issues/949)) ([34a4597](https://github.com/anolilab/lunora/commit/34a4597a14128ea2e48d52d101d0fbbf9b61e932)), closes [#944](https://github.com/anolilab/lunora/issues/944) [#944](https://github.com/anolilab/lunora/issues/944)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.119
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.73
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.110
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.95
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+
 ## @lunora/do [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.190...@lunora/do@1.0.0-alpha.191) (2026-10-03)
 
 ### Features
