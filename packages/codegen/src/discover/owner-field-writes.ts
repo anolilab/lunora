@@ -766,6 +766,13 @@ interface VerdictTable {
 /** A binding whose object a later statement may change: a variable, a parameter, or one element of a destructuring. */
 type ObjectBinding = BindingElement | ParameterDeclaration | VariableDeclaration;
 
+/**
+ * Hands {@link ImplTaint}'s flow walk the next binding an object flows into;
+ * `isAlias` counts it against the alias hop bound. `true` when that bound is
+ * exceeded, which the caller reports as a finding (fail-closed).
+ */
+type Follow = (next: ObjectBinding, isAlias: boolean) => boolean;
+
 /** The identifier-named elements of a destructuring pattern, nested ones included. */
 const bindingIdentifiersOf = (binding: ObjectBinding): BindingElement[] =>
     binding
@@ -812,12 +819,13 @@ const bindingIdentifiersOf = (binding: ObjectBinding): BindingElement[] =>
  * fails closed.
  */
 class ImplTaint {
-    private aliasDepth = 0;
-
     private cuts = 0;
 
-    /** {@link ImplTaint.isChangedUnseen} verdicts, kept apart: they key on the same name nodes as the mutation verdicts. */
+    /** {@link ImplTaint.isChangedUnseen} verdicts, kept apart: they key on the same bindings as the mutation verdicts. */
     private readonly escapes: VerdictTable = { inProgress: new Set(), verdicts: new Map() };
+
+    /** {@link ImplTaint.isMutatedWithTaint} verdicts, keyed on the binding like the variable verdicts are. */
+    private readonly mutations: VerdictTable = { inProgress: new Set(), verdicts: new Map() };
 
     private readonly referencesByDeclaration = new Map<string, Map<ts.Node, Identifier[]>>();
 
@@ -1009,35 +1017,26 @@ class ImplTaint {
      * what it stores, in {@link isMutatedWithTaint}), and not a visible function
      * that keeps it read-only; or a `let` / assignment aliases it, past which
      * its uses are not followed. An iterating callback over it (`rows.forEach(cb)`)
-     * is followed into its parameters. A binding whose type is a primitive
-     * cannot be changed in place and never counts.
+     * and a nested function it is handed to are followed into their parameters.
+     * A binding whose type is a primitive cannot be changed in place and never
+     * counts.
      */
     private isChangedUnseen(binding: ObjectBinding): boolean {
-        const nameNode = binding.getNameNode();
-
-        if (!Node.isIdentifier(nameNode)) {
-            return Node.isParameterDeclaration(binding) && bindingIdentifiersOf(binding).some((element) => this.isChangedUnseen(element));
-        }
-
-        return this.memoized(
-            nameNode.compilerNode,
-            () => this.referencesTo(binding, nameNode.getText()).some((reference) => this.escapesThrough(reference)) && !isPrimitiveType(nameNode.getType()),
-            this.escapes,
-        );
+        return this.reaches(binding, this.escapes, (reference, follow) => this.escapesThrough(reference, follow)) && !isPrimitiveType(binding.getType());
     }
 
     /** One use of {@link isChangedUnseen}: whether it hands the object to code that may change it unseen. */
-    private escapesThrough(reference: Identifier): boolean {
+    private escapesThrough(reference: Identifier, follow: Follow): boolean {
         const value = outermostValueWrapper(reference);
         const parent = value.getParent();
         const alias = constAliasOf(reference) ?? forOfVariableOf(reference);
 
         if (alias !== undefined) {
-            return this.throughAlias(() => this.isChangedUnseen(alias));
+            return follow(alias, true);
         }
 
         if (Node.isCallExpression(parent) && parent.getArguments().includes(value)) {
-            return this.escapesAsArgument(parent, value);
+            return this.escapesAsArgument(parent, value, follow);
         }
 
         if (this.escapesAsOperand(reference)) {
@@ -1054,7 +1053,17 @@ class ImplTaint {
         const callback = call.getArguments()[0];
         const target = callback === undefined ? undefined : visibleFunctionOf(callback);
 
-        return callback !== undefined && (target === undefined || target.getParameters().some((parameter) => this.isChangedUnseen(parameter)));
+        if (callback === undefined) {
+            return false;
+        }
+
+        if (target === undefined) {
+            return true;
+        }
+
+        return this.isInImpl(target)
+            ? target.getParameters().some((parameter) => follow(parameter, false))
+            : !target.getParameters().every((parameter) => isReadOnlyParameter(parameter));
     }
 
     /**
@@ -1083,7 +1092,7 @@ class ImplTaint {
     }
 
     /** Whether handing `value` to `call` may change it unseen: see {@link isChangedUnseen}. */
-    private escapesAsArgument(call: CallExpression, value: TsNode): boolean {
+    private escapesAsArgument(call: CallExpression, value: TsNode, follow: Follow): boolean {
         if (isReadOnlyCallArgument(value, this.scope.context) || isObjectAssignTarget(call, value)) {
             return false;
         }
@@ -1100,7 +1109,7 @@ class ImplTaint {
         }
 
         // A nested function's writes are judged by their values (`isMutatedWithTaint`); one outside the impl must only read.
-        return this.isInImpl(target) ? this.isChangedUnseen(parameter) : !isReadOnlyParameter(parameter);
+        return this.isInImpl(target) ? follow(parameter, false) : !isReadOnlyParameter(parameter);
     }
 
     /**
@@ -1113,19 +1122,11 @@ class ImplTaint {
      * of a nested function it is handed to (`set(row)`) — any of the same.
      */
     private isMutatedWithTaint(binding: ObjectBinding): boolean {
-        const nameNode = binding.getNameNode();
-
-        if (!Node.isIdentifier(nameNode)) {
-            return Node.isParameterDeclaration(binding) && bindingIdentifiersOf(binding).some((element) => this.isMutatedWithTaint(element));
-        }
-
-        return this.memoized(nameNode.compilerNode, () =>
-            this.referencesTo(binding, nameNode.getText()).some((reference) => this.storesTaintThrough(reference)),
-        );
+        return this.reaches(binding, this.mutations, (reference, follow) => this.storesTaintThrough(reference, follow));
     }
 
     /** One use of {@link isMutatedWithTaint}: whether it stores a caller-controlled value into the object. */
-    private storesTaintThrough(reference: Identifier): boolean {
+    private storesTaintThrough(reference: Identifier, follow: Follow): boolean {
         const value = outermostValueWrapper(reference);
         let top = value;
         let parent = top.getParent();
@@ -1142,7 +1143,7 @@ class ImplTaint {
         const alias = top === value ? (constAliasOf(reference) ?? forOfVariableOf(reference)) : undefined;
 
         if (alias !== undefined) {
-            return this.throughAlias(() => this.isMutatedWithTaint(alias));
+            return follow(alias, true);
         }
 
         if (!Node.isCallExpression(parent)) {
@@ -1151,7 +1152,7 @@ class ImplTaint {
 
         const callArguments = parent.getArguments();
 
-        if (this.isWrittenByNestedFunction(parent, top)) {
+        if (this.nestedParametersReceiving(parent, top).some((parameter) => follow(parameter, false))) {
             return true;
         }
 
@@ -1166,41 +1167,112 @@ class ImplTaint {
     }
 
     /**
-     * Whether a function nested in the impl stores a caller-controlled value into
-     * `node` through its own parameter: `node` handed to it as an argument
-     * (`set(row)`), or `node` the receiver of an iterating method it is the
-     * callback of (`rows.forEach((r) => { r.ownerId = args.x; })`).
+     * The parameters of functions nested in the impl that receive `node`'s
+     * object in `call`: `node` handed to one as an argument (`set(row)`), or the
+     * receiver of an iterating method one is the callback of
+     * (`rows.forEach((r) => …)`).
      */
-    private isWrittenByNestedFunction(call: CallExpression, node: TsNode): boolean {
+    private nestedParametersReceiving(call: CallExpression, node: TsNode): ParameterDeclaration[] {
         if (call.getArguments().includes(node)) {
             const target = visibleFunctionOf(call.getExpression());
             const parameter = target !== undefined && this.isInImpl(target) ? receivingParameter(target, call, node) : undefined;
 
-            return parameter !== undefined && parameter !== null && this.isMutatedWithTaint(parameter);
+            return parameter === undefined || parameter === null ? [] : [parameter];
         }
 
         const method = Node.isPropertyAccessExpression(node) && call.getExpression() === node ? node.getName() : undefined;
         const callback = method !== undefined && RECEIVER_ITERATING_METHODS.has(method) ? call.getArguments()[0] : undefined;
         const target = callback === undefined ? undefined : visibleFunctionOf(callback);
 
-        return target !== undefined && this.isInImpl(target) && target.getParameters().some((parameter) => this.isMutatedWithTaint(parameter));
+        return target !== undefined && this.isInImpl(target) ? target.getParameters() : [];
     }
 
-    /** Follow one alias hop; past {@link MAX_VARIABLE_HOPS} of them, fail closed. */
-    private throughAlias(follow: () => boolean): boolean {
-        if (this.aliasDepth >= MAX_VARIABLE_HOPS) {
+    /**
+     * Whether any binding `root`'s object flows into — `root` itself, and every
+     * binding `visit` hands to `follow`, transitively — has a use `visit` judges
+     * bad. A breadth-first walk over that flow, not a recursion: a recursive
+     * helper (`walk(n)` calling `walk(n.child)`) puts its parameter on a cycle,
+     * and a recursion would have to leave every verdict on it uncached. Alias
+     * hops (`follow(next, true)`) are bounded by {@link MAX_VARIABLE_HOPS} per
+     * path, past which the walk fails closed. When nothing is found (and no cut
+     * cycle or bound was involved), every binding visited is clean too — its own
+     * flow is part of `root`'s — so each is cached as such.
+     */
+    private reaches(root: ObjectBinding, table: VerdictTable, visit: (reference: Identifier, follow: Follow) => boolean): boolean {
+        return this.memoized(
+            root.compilerNode,
+            () => {
+                const cutsBefore = this.cuts;
+                const queue: { binding: ObjectBinding; hops: number }[] = [{ binding: root, hops: 0 }];
+                const seen = new Set<ts.Node>([root.compilerNode]);
+                let found = false;
+                const enqueue = (binding: ObjectBinding, hops: number): void => {
+                    if (!seen.has(binding.compilerNode)) {
+                        seen.add(binding.compilerNode);
+                        queue.push({ binding, hops });
+                    }
+                };
+
+                for (let index = 0; index < queue.length && !found; index += 1) {
+                    const { binding, hops } = queue[index] as { binding: ObjectBinding; hops: number };
+                    const known = binding === root ? undefined : table.verdicts.get(binding.compilerNode);
+                    const follow: Follow = (next, isAlias) => {
+                        if (isAlias && hops >= MAX_VARIABLE_HOPS) {
+                            this.cuts += 1;
+
+                            return true;
+                        }
+
+                        enqueue(next, isAlias ? hops + 1 : hops);
+
+                        return false;
+                    };
+
+                    found = known ?? this.visitBinding(binding, visit, follow, enqueue, hops);
+                }
+
+                if (!found && this.cuts === cutsBefore) {
+                    for (const node of seen) {
+                        table.verdicts.set(node, false);
+                    }
+                }
+
+                return found;
+            },
+            table,
+        );
+    }
+
+    /** Expand one binding of {@link reaches}: its references, or a destructured parameter's elements. */
+    private visitBinding(
+        binding: ObjectBinding,
+        visit: (reference: Identifier, follow: Follow) => boolean,
+        follow: Follow,
+        enqueue: (binding: ObjectBinding, hops: number) => void,
+        hops: number,
+    ): boolean {
+        const nameNode = binding.getNameNode();
+
+        if (!Node.isIdentifier(nameNode)) {
+            // A destructured parameter binds members of what it receives, each an object of its own.
+            if (Node.isParameterDeclaration(binding)) {
+                for (const element of bindingIdentifiersOf(binding)) {
+                    enqueue(element, hops);
+                }
+            }
+
+            return false;
+        }
+
+        this.work += 1;
+
+        if (this.work > WORK_BUDGET) {
             this.cuts += 1;
 
             return true;
         }
 
-        this.aliasDepth += 1;
-
-        try {
-            return follow();
-        } finally {
-            this.aliasDepth -= 1;
-        }
+        return this.referencesTo(binding, nameNode.getText()).some((reference) => visit(reference, follow));
     }
 
     /**
