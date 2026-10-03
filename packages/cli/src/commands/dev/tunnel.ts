@@ -18,6 +18,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { updateDevServerState } from "@lunora/config";
+import { isLunoraError } from "@lunora/errors";
 import { coerce, gte } from "semver";
 
 import type { Logger } from "../../util/logger";
@@ -70,8 +71,14 @@ const checkCloudflared = async (spawner: Spawner): Promise<CloudflaredCheck> => 
         }
 
         output = result.stdout ?? "";
-    } catch {
-        return { message: `--tunnel needs \`cloudflared\` ${CLOUDFLARED_MIN_VERSION} or newer, and it is not on your PATH. ${install}`, ok: false };
+    } catch (error: unknown) {
+        // Only a missing binary is "not on your PATH"; anything else (EACCES,
+        // EPERM, a broken install) is reported as what actually happened.
+        if (isLunoraError(error) && error.code === "LOCAL_DEPENDENCY_MISSING") {
+            return { message: `--tunnel needs \`cloudflared\` ${CLOUDFLARED_MIN_VERSION} or newer, and it is not on your PATH. ${install}`, ok: false };
+        }
+
+        return { message: `\`cloudflared --version\` could not run: ${error instanceof Error ? error.message : String(error)}. ${install}`, ok: false };
     }
 
     const version = coerce(VERSION_PATTERN.exec(output)?.[1])?.version;

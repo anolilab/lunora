@@ -242,6 +242,17 @@ describe("lunora dev --tunnel", () => {
             expect(check.ok ? "" : check.message).toContain(CLOUDFLARED_INSTALL_URL);
         });
 
+        it("reports a cloudflared that exists but cannot run as what happened, not as missing", async () => {
+            expect.assertions(2);
+
+            const check = await checkCloudflared(async () => {
+                throw Object.assign(new Error("spawn cloudflared EACCES"), { code: "EACCES" });
+            });
+
+            expect(check.ok ? "" : check.message).toContain("EACCES");
+            expect(check.ok ? "" : check.message).not.toContain("not on your PATH");
+        });
+
         it("lets an unparseable version (a source build) through", async () => {
             expect.assertions(1);
 
@@ -703,6 +714,30 @@ describe("lunora dev --tunnel", () => {
     });
 
     describe(spawnLongLivedChild, () => {
+        it("decodes a multi-byte character split across two output chunks", async () => {
+            expect.assertions(1);
+
+            const lines: string[] = [];
+            // "é" is 0xC3 0xA9; its two bytes are written in separate chunks.
+            const child = spawnLongLivedChild(
+                {
+                    args: [
+                        "-e",
+                        String.raw`process.stderr.write(Buffer.from([0x63, 0x61, 0x66, 0xc3])); setTimeout(() => process.stderr.write(Buffer.from([0xa9, 0x0a])), 50);`,
+                    ],
+                    command: process.execPath,
+                    direct: true,
+                },
+                (line) => {
+                    lines.push(line);
+                },
+            );
+
+            await child.exited;
+
+            await expect.poll(() => lines).toStrictEqual(["café"]);
+        });
+
         it("hands over each output line — split chunks rejoined — and stops on kill", async () => {
             expect.assertions(2);
 
