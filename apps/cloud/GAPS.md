@@ -496,7 +496,7 @@ GitHub webhook only parses PR events into preview _intents_.
 >   (`builds.reusesBuildId`) and the runner releases that build's stored
 >   release (`releases/<deploymentId>.json`) without rebuilding; once the
 >   release was pruned with the rollback window, it builds from source. A
->   build whose release still serves is reused as is (`feat/cloud-followups`).
+>   build whose release still serves is reused as is (PR #85).
 
 ### A4. Push-to-deploy via GitHub App (✅ model + webhook shipped, 🌐 App registration)
 
@@ -529,7 +529,7 @@ deploy. PR events keep creating TTL'd previews, now built server-side too.
 - Dispatcher: hostname → `domains` → project → active deployment (A1 pointer),
   with the same cached lookup pattern as the plan resolver.
 
-**Shipped (`feat/cloud-followups`):** certificate issuance on `cloudflare-wfp`
+**Shipped (PR #85):** certificate issuance on `cloudflare-wfp`
 through the target seam, not a target branch. The driver's `domains.issue`
 creates the Cloudflare-for-SaaS custom hostname on `LUNORA_SAAS_ZONE_ID` for a
 domain that just verified, and the verify route records `customHostnameId` /

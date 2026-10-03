@@ -408,7 +408,7 @@ and the dispatcher Worker. Enforceable with an ESLint `no-restricted-imports`
 boundary — add it in this phase, not later.
 
 **Status: ✅ Done (2026-10-02)** — `11b541d73`, `100d758d6`, `93803df29`,
-`d66cd836d`, `6b42bb0d5` on `work/cloud-vps-gaps` (plan 458 G3–G10).
+`d66cd836d`, `6b42bb0d5` on PR #85 (plan 458 G3–G10).
 
 What shipped (as reshaped by the code-quality pass that followed — the
 interface below is the current one):
@@ -489,8 +489,8 @@ Where each row of the §3 table lives now:
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lunora/schema.ts` `cells`               | unchanged columns, documented as `cloudflare-wfp` encodings; new `target` + `config` for everything else                                                    |
 | `lunora/schema.ts` `deployments`         | `target` + `resourceRef` added; `scriptName` kept as the WfP encoding; `cronSpecs` read only for `fanout: "dispatcher"` targets                             |
-| `src/provision-contract.ts`              | per-target `BINDING_SUPPORT`; neutral `TenantDeploymentSpec` (no cell / namespace / tail consumers); the box job moved to `cloudflare-wfp/box-contract.ts`  |
-| `containers/provision/`                  | unchanged; driven only by `cloudflare-wfp/provision-box.ts`                                                                                                 |
+| `src/provision-contract.ts`              | per-target `BINDING_SUPPORT`; neutral `TenantDeploymentSpec` (no cell / namespace / tail consumers); the box job moved to `provision-box/contract.ts`       |
+| `containers/provision/`                  | unchanged; driven only by `provision-box/client.ts` (`cloudflare-wfp` and `cloudflare-workers`)                                                             |
 | `src/cloudflare/api.ts`                  | stays (see deviations); fenced by the boundary                                                                                                              |
 | `src/dispatcher/{route,worker}.ts`       | grammar in `cloudflare-wfp/route.ts`, used by the dispatcher Worker; the Worker itself stays WfP's data plane                                               |
 | `src/metering/analytics.ts`              | `cloudflare-wfp/analytics.ts`, read through `fleet.usage`; `src/metering/rollback.ts` is target-neutral                                                     |
@@ -526,7 +526,7 @@ Deviations from the §5.1 sketch, and why:
 - **Not added from §5.2:** `cells.credentialsRef` and
   `deployments.convergeState` have no consumer until Phases 2–3;
   `cloudflareAccountId` stays a column rather than migrating into `config`.
-- **Pacing per target** (closed on `feat/cloud-followups`): the old
+- **Pacing per target** (closed on PR #85): the old
   `CellScheduler` paced every converge against the platform account's
   Cloudflare budget. The budget a converge spends now follows where its target
   places it (`TARGETS[target].placedOn`), and `src/deploy/pacing.ts` keeps
@@ -570,7 +570,7 @@ tested by a second implementation instead of by inspection.
 
 **Status: 🔨 code complete, untested against a real account (2026-10-02)** —
 `c5aa68ff6`, `89a4d4c33`, `a890e83b8`, `236fa6bc0`, `9151bda55` on
-`feat/byo-cloudflare`.
+PR #85.
 
 What shipped:
 

@@ -19,8 +19,9 @@
  *
  * API-shaped, not CLI-shaped: unlike `@lunora/config`'s `DeployDriver`, nothing
  * here runs a toolchain or reads a checkout. A driver acts on behalf of a tenant
- * with the platform's credentials, from inside the control-plane Worker. The
- * implementations live in `src/targets/{cloudflare-wfp,celld-vps}/`; the
+ * with the platform's credentials (or, on `cloudflare-workers`, the connected
+ * account's), from inside the control-plane Worker. The implementations live in
+ * `src/targets/{cloudflare-wfp,cloudflare-workers,celld-vps}/`; the
  * in-memory reference the conformance suite is written against lives in
  * `__tests__/support/memory-driver.ts`.
  */
@@ -175,8 +176,9 @@ export interface TargetFleet {
 
     /**
      * The metering readback of a `metering: "readback"` target, when this
-     * deployment is configured to read it (`cloudflare-wfp/analytics.ts`,
-     * `cloudflare-workers/analytics.ts`).
+     * deployment is configured to read it (`cloudflare-wfp/analytics.ts`; on
+     * `cloudflare-workers`, each connected account's own analytics, read in
+     * `cloudflare-workers/driver.ts`).
      */
     usage?: UsageReadback;
 }

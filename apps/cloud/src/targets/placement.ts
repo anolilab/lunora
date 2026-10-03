@@ -195,7 +195,12 @@ export type HostedTargetId = Exclude<TargetId, CellTargetId>;
 /** The kind of host a project of `target` names. */
 export const hostsOf = (target: HostedTargetId): PlacementHost<Host> => hostEntryOf(TARGETS[target].placedOn);
 
-/** Where a release converges: in this control plane's cell, or on the host its project names. */
+/**
+ * Where a release converges: `{ target }` for a cell-placed target (in this
+ * control plane's cell), or `{ target, host }` for any other — the host its
+ * project's `placementRef` names, of the kind `TARGETS[target].placedOn` says
+ * (a {@link BoxHost} or an {@link AccountHost}).
+ */
 export type Placement = { host: AccountHost; target: AccountTargetId } | { host: BoxHost; target: BoxTargetId } | { target: CellTargetId };
 
 /**
