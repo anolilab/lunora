@@ -237,8 +237,8 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
             expectReported(found[0]);
         });
 
-        // A nested function can be called with anything, so its parameters are
-        // taint sources however they are spelled, and never owner-scoped.
+        // A nested function's parameter is tainted by what flows into it, however it
+        // is spelled, and is never owner-scoped.
         it.each([
             [
                 "a renamed nested parameter",
@@ -253,10 +253,56 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
                     "ctx, { userId, targetUserId }",
                 ),
             ],
+            [
+                "a function with mixed call sites (one caller-controlled)",
+                ownerMutator(`        const persist = async (data) => ctx.db.insert("posts", { userId: data.userId }); // @write
+        await persist({ userId: ctx.auth.userId });
+        await persist({ userId: args.targetUserId });`),
+            ],
+            [
+                "a function with no visible call site",
+                ownerMutator(`        const persist = async (data) => ctx.db.insert("posts", { userId: data.userId }); // @write`),
+            ],
+            [
+                "a function passed on as a value",
+                ownerMutator(`        const persist = async (data) => ctx.db.insert("posts", { userId: data.userId }); // @write
+        await schedule(persist);`),
+            ],
+            [
+                "a callback over a caller-controlled list",
+                ownerMutator(`        await Promise.all(args.items.map((item) => ctx.db.insert("posts", { userId: item.userId }))); // @write`),
+            ],
+            [
+                "a callback handed to an unknown function",
+                ownerMutator(`        await each(rows, (row) => ctx.db.insert("posts", { userId: row.userId })); // @write`),
+            ],
         ])("reports a write laundered through %s", (_label, source) => {
             expect.assertions(2);
 
             expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it.each([
+            [
+                "a callback over rows read through `ctx.db`",
+                ownerMutator(`        const rows = await ctx.db.query("posts").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect();
+        await Promise.all(rows.map((row) => ctx.db.insert("audit", { userId: row.userId }))); // @write`),
+            ],
+            [
+                "a function whose every call site passes the verified identity",
+                ownerMutator(`        const persist = async (data) => ctx.db.insert("posts", { userId: data.userId }); // @write
+        await persist({ userId: ctx.auth.userId });`),
+            ],
+            // The spelling `args` alone is not taint once, by symbol, it is a cleared nested parameter.
+            [
+                "a nested `args` parameter whose every call site passes the verified identity",
+                ownerMutator(`        const persist = async (args) => ctx.db.insert("posts", { userId: args.userId }); // @write
+        await persist({ userId: ctx.auth.userId });`),
+            ],
+        ])("does not record %s", (_label, source) => {
+            expect.assertions(1);
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
         });
 
         it("marks a nested closure that closes over the impl's own `args` as owner-scoped", () => {

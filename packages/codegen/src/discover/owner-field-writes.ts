@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, ParameterDeclaration, Project, ts } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { isArgumentDerived, isScopedByContext, readsRequestParameter } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext, readsRequestParameter, singleHopInitializer } from "../argument-taint";
 import type { CallSiteScope, FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../ir";
 import { bindingKeyName, collectCallRows, isConstDeclaration, isWriteTarget, outermostValueWrapper, propertyKeyName, unwrapExpression } from "./ast";
 import { callSiteScopeOf, declarationOf, withCallerVisibility } from "./attribution";
@@ -198,22 +198,183 @@ const mutatorImplScopeOf = (call: CallExpression): MutatorImplScope | undefined 
     return { impl, parameter, pristine: parameter !== undefined && isPristineArgsParameter(impl, parameter) };
 };
 
+/** The parameter `declaration` binds: the parameter itself, or the one whose destructuring pattern holds it. */
+const parameterOf = (declaration: TsNode | undefined): ParameterDeclaration | undefined => {
+    if (Node.isParameterDeclaration(declaration)) {
+        return declaration;
+    }
+
+    return Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.Parameter) : undefined;
+};
+
+/** Whether `value` mentions the `arguments` object. */
+const readsArgumentsObject = (value: TsNode): boolean =>
+    (Node.isIdentifier(value) ? [value] : value.getDescendantsOfKind(SyntaxKind.Identifier)).some((identifier) => identifier.getText() === "arguments");
+
+/** How taint flows inside one mutator impl: which parameters are caller-controlled, and which values derive from them. */
+interface ImplTaint {
+    /** Whether a value is caller-controlled. `contextScoped` lets a value that also reads `ctx` count as server-scoped. */
+    isTaintedValue: (value: TsNode, contextScoped: boolean) => boolean;
+}
+
 /**
- * Whether `parameter` is caller-controlled inside `scope`'s impl: the impl's own
- * `args`, or ANY parameter of a function nested in the impl. A nested function
- * can be called with anything (`persist({ userId: args.targetUserId })`), so
- * its parameters are taint sources however they are spelled, and never
- * owner-scoped.
+ * The taint model of `scope`'s impl. The impl's own `args` parameter is
+ * caller-controlled. A parameter of a function NESTED in the impl is
+ * caller-controlled only when what flows into it is.
+ *
+ * A function called by name (`const persist = …; persist(x)`, a nested
+ * `function persist`, or an IIFE) takes taint from the argument at that
+ * position, at ANY call site in the impl. A function with no visible call
+ * site, or one also used as a value (passed on, returned, stored), fails
+ * closed.
+ *
+ * A callback (`rows.map((row) => …)`) takes taint from the receiver it is
+ * called on: `args.items.map(…)` is caller-controlled; rows read through
+ * `ctx.db` are not, even when the query filters on `args`.
+ *
+ * Anything else (passed to an unknown function, a method of a literal) is
+ * always caller-controlled, which fails closed.
+ *
+ * A parameter default (`(x = args.targetUserId) => …`) is followed too.
+ * Recursion is resolved to the least fixed point: a call cycle adds no taint
+ * of its own, so a recursive helper is tainted only by what enters the cycle.
  */
-const isRequestParameterIn =
-    (scope: MutatorImplScope) =>
-    (parameter: ParameterDeclaration): boolean => {
+const implTaintOf = (scope: MutatorImplScope): ImplTaint => {
+    const { impl } = scope;
+    const memo = new Map<ts.Node, boolean>();
+    const visiting = new Set<ts.Node>();
+    const isNested = (node: TsNode): boolean => impl.getPos() <= node.getPos() && node.getEnd() <= impl.getEnd();
+
+    let isTaintedValue: ImplTaint["isTaintedValue"];
+
+    const isCallSiteTainted = (call: CallExpression, index: number, isRest: boolean): boolean =>
+        call.getArguments().some((argument, position) => {
+            if (Node.isSpreadElement(argument)) {
+                return position <= index && isTaintedValue(argument.getExpression(), false);
+            }
+
+            return (position === index || (isRest && position > index)) && isTaintedValue(argument, false);
+        });
+
+    const flowsIntoTainted = (parameter: ParameterDeclaration): boolean => {
+        const initializer = parameter.getInitializer();
+
+        if (initializer !== undefined && isTaintedValue(initializer, false)) {
+            return true;
+        }
+
+        const nestedFunction = parameter.getParentOrThrow();
+        const index = Node.isFunctionLikeDeclaration(nestedFunction)
+            ? nestedFunction.getParameters().findIndex((candidate) => candidate.compilerNode === parameter.compilerNode)
+            : -1;
+        const value = outermostValueWrapper(nestedFunction);
+        const holder = value.getParent();
+
+        if (index === -1) {
+            return true;
+        }
+
+        if (Node.isCallExpression(holder)) {
+            // An IIFE is a direct call; anything else receives the function as a callback.
+            if (holder.getExpression() === value) {
+                return isCallSiteTainted(holder, index, parameter.isRestParameter());
+            }
+
+            const callee = unwrapExpression(holder.getExpression());
+
+            return Node.isPropertyAccessExpression(callee) || Node.isElementAccessExpression(callee) ? isTaintedValue(callee.getExpression(), true) : true;
+        }
+
+        const binding = Node.isVariableDeclaration(holder) && isConstDeclaration(holder) ? holder : undefined;
+        const declaration = Node.isFunctionDeclaration(nestedFunction) ? nestedFunction : binding;
+        const nameNode = declaration?.getNameNode();
+
+        if (declaration === undefined || !Node.isIdentifier(nameNode)) {
+            return true;
+        }
+
+        const references = impl
+            .getDescendantsOfKind(SyntaxKind.Identifier)
+            .filter(
+                (identifier) =>
+                    identifier !== nameNode &&
+                    identifier.getText() === nameNode.getText() &&
+                    declarationOf(identifier)?.compilerNode === declaration.compilerNode,
+            );
+
+        return (
+            references.length === 0 ||
+            references.some((reference) => {
+                const callee = outermostValueWrapper(reference);
+                const call = callee.getParent();
+
+                return !Node.isCallExpression(call) || call.getExpression() !== callee || isCallSiteTainted(call, index, parameter.isRestParameter());
+            })
+        );
+    };
+
+    const isSource = (parameter: ParameterDeclaration): boolean => {
         if (parameter.compilerNode === scope.parameter?.compilerNode) {
             return true;
         }
 
-        return parameter.getParent() !== scope.impl && scope.impl.getPos() <= parameter.getPos() && parameter.getEnd() <= scope.impl.getEnd();
+        const key = parameter.compilerNode;
+
+        if (parameter.getParent() === impl || !isNested(parameter)) {
+            return false;
+        }
+
+        const known = memo.get(key);
+
+        if (known !== undefined) {
+            return known;
+        }
+
+        if (visiting.has(key)) {
+            return false;
+        }
+
+        visiting.add(key);
+
+        const tainted = flowsIntoTainted(parameter);
+
+        visiting.delete(key);
+
+        // Only a verdict reached outside any open cycle is final.
+        if (visiting.size === 0) {
+            memo.set(key, tainted);
+        }
+
+        return tainted;
     };
+
+    // The spelling-based predicate also matches an `args` that, by symbol, is a
+    // nested function's parameter this model has cleared; such a match is not taint.
+    const isSpellingTaint = (value: TsNode): boolean => {
+        if (!isArgumentDerived(value)) {
+            return false;
+        }
+
+        const hop = singleHopInitializer(value);
+        const spelled = [value, ...(hop === undefined ? [] : [hop])].flatMap((node) =>
+            (Node.isIdentifier(node) ? [node] : node.getDescendantsOfKind(SyntaxKind.Identifier)).filter((identifier) => identifier.getText() === "args"),
+        );
+
+        return !spelled.every((identifier) => {
+            const parameter = parameterOf(declarationOf(identifier));
+
+            return parameter !== undefined && parameter.getParent() !== impl && isNested(parameter) && !isSource(parameter);
+        });
+    };
+
+    isTaintedValue = (value, contextScoped) => {
+        const tainted = readsRequestParameter(value, isSource) || readsArgumentsObject(value) || isSpellingTaint(value);
+
+        return tainted && !(contextScoped && isScopedByContext(value));
+    };
+
+    return { isTaintedValue };
+};
 
 /** The object `node` reads `field` from (`<object>.<field>`, `<object>?.<field>`, `<object>["<field>"]`), unwrapped; else `undefined`. */
 const ownerPropertyObject = (node: TsNode, field: string): TsNode | undefined => {
@@ -278,10 +439,6 @@ const resolvesToOwnerArgument = (value: TsNode, parameter: ParameterDeclaration,
     return hops > 0 && initializer !== undefined && resolvesToOwnerArgument(initializer, parameter, ownerField, hops - 1);
 };
 
-/** Whether `value` mentions the `arguments` object. */
-const readsArgumentsObject = (value: TsNode): boolean =>
-    (Node.isIdentifier(value) ? [value] : value.getDescendantsOfKind(SyntaxKind.Identifier)).some((identifier) => identifier.getText() === "arguments");
-
 /** Identity columns in one object literal that are written from `args` and not from `ctx`. */
 const identityWritesInObjectLiteral = (
     objectLiteral: ObjectLiteralExpression,
@@ -289,7 +446,7 @@ const identityWritesInObjectLiteral = (
     implScope: MutatorImplScope | undefined,
 ): OwnerFieldWriteIR[] => {
     const rows: OwnerFieldWriteIR[] = [];
-    const isSource = implScope === undefined ? undefined : isRequestParameterIn(implScope);
+    const taint = implScope === undefined ? undefined : implTaintOf(implScope);
 
     for (const property of objectLiteral.getProperties()) {
         let name: string | undefined;
@@ -310,8 +467,8 @@ const identityWritesInObjectLiteral = (
         // Correct: `userId: ctx.auth.userId`; offending: `userId: args.userId`.
         // A value that references `ctx` is server-scoped even when it also embeds
         // `args`, so it is not flagged — mirrors the shared taint convention.
-        // Inside a mutator impl, `arguments` reaches the args without naming them.
-        const isTainted = isArgumentDerived(value) || (isSource !== undefined && (readsRequestParameter(value, isSource) || readsArgumentsObject(value)));
+        // Inside a mutator impl taint is resolved by symbol (see `implTaintOf`).
+        const isTainted = taint === undefined ? isArgumentDerived(value) : taint.isTaintedValue(value, false);
 
         if (isTainted && !isScopedByContext(value)) {
             // Recorded either way — the lint decides what to do with it. Dropping it
