@@ -1,3 +1,14 @@
+## @lunora/server [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.176...@lunora/server@1.0.0-alpha.177) (2026-10-03)
+
+### Bug Fixes
+
+* **codegen:** owner-scope only the mutator's own args parameter ([#958](https://github.com/anolilab/lunora/issues/958)) ([cf4003a](https://github.com/anolilab/lunora/commit/cf4003a8df06ba4556e8f26688823f97dae3611f)), closes [#957](https://github.com/anolilab/lunora/issues/957)
+
+
+### Dependencies
+
+* **@lunora/storage:** upgraded to 1.0.0-alpha.108
+
 ## @lunora/server [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.175...@lunora/server@1.0.0-alpha.176) (2026-10-03)
 
 ### Bug Fixes
