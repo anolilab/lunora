@@ -1,3 +1,14 @@
+## @lunora/codegen [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.259...@lunora/codegen@1.0.0-alpha.260) (2026-10-03)
+
+### Bug Fixes
+
+* **codegen:** owner-taint, ctx resolution and export-registration follow-ups ([#961](https://github.com/anolilab/lunora/issues/961)) ([ae5bed3](https://github.com/anolilab/lunora/commit/ae5bed3be46885cbc48eda675aa4a8da8bd7199a)), closes [#960](https://github.com/anolilab/lunora/issues/960) [#960](https://github.com/anolilab/lunora/issues/960) [#957](https://github.com/anolilab/lunora/issues/957)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.174
+
 ## @lunora/codegen [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.258...@lunora/codegen@1.0.0-alpha.259) (2026-10-03)
 
 
