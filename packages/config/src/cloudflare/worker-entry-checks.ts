@@ -638,7 +638,7 @@ const rootsAtTableFactory = (node: Node, factoryNames: ReadonlySet<string>): boo
  * purpose: {@link CHAIN_PREFILTERS} is keyed by it, so adding a capability
  * without its prefilter is a compile error rather than a gate that never fires.
  */
-type CapabilityMethod = "global" | "hyperdriveGlobal" | "vectors";
+type CapabilityMethod = "analyticsSql" | "global" | "hyperdriveGlobal" | "vectors";
 
 /**
  * `.<method>(` with whitespace allowed on either side of the name — the text
@@ -658,6 +658,7 @@ type CapabilityMethod = "global" | "hyperdriveGlobal" | "vectors";
  * one ever does.
  */
 const CHAIN_PREFILTERS: Record<CapabilityMethod, RegExp> = {
+    analyticsSql: /\.\s*analyticsSql\s*\(/u,
     global: /\.\s*global\s*\(/u,
     hyperdriveGlobal: /\.\s*hyperdriveGlobal\s*\(/u,
     vectors: /\.\s*vectors\s*\(/u,

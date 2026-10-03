@@ -32,6 +32,7 @@ import type { OwnedServices } from "./reconcile-services";
 import { readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
 import collectWarnings from "./reconcile-warnings";
 import { objectBindingEntries, stringEntries } from "./validate-bindings";
+import { scanAppChains } from "./worker-entry-checks";
 import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import type { MigrationEntry, ReconcileStep, WranglerShape } from "./wrangler-shape";
@@ -227,19 +228,25 @@ const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
 };
 
 /**
- * Add a self-describing single-`{ binding }` binding (`ai`, `analytics`,
- * `browser`, `images`) if absent. These share one shape — the binding name is
- * the whole config, with no remote id to mint — so each is written safely like
- * `DB`, and one helper covers all of them. Idempotent on `parsed[key].binding`.
- * Pure.
+ * The self-describing single-`{ binding }` sections reconcile auto-writes:
+ * wrangler key → the binding name it writes and the label it reports. They share
+ * one shape — the binding name is the whole config, with no remote id to mint —
+ * so {@link reconcileSelfDescribing} covers all of them, and its key type is
+ * this table's keys.
  */
-const reconcileSelfDescribing = (
-    text: string,
-    parsed: WranglerShape,
-    key: "ai" | "analytics" | "browser" | "images",
-    binding: string,
-    label: string,
-): ReconcileStep => {
+const SELF_DESCRIBING_BINDINGS = {
+    ai: { binding: "AI", label: "AI (Workers AI)" },
+    analytics: { binding: "ANALYTICS_SQL", label: "ANALYTICS_SQL (Analytics SQL)" },
+    browser: { binding: "BROWSER", label: "BROWSER (Browser Rendering)" },
+    images: { binding: "IMAGES", label: "IMAGES (Cloudflare Images)" },
+} as const satisfies Partial<Record<keyof WranglerShape, { binding: string; label: string }>>;
+
+/**
+ * Add one {@link SELF_DESCRIBING_BINDINGS} section if absent, written safely
+ * like `DB`. Idempotent on `parsed[key].binding`. Pure.
+ */
+const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: keyof typeof SELF_DESCRIBING_BINDINGS): ReconcileStep => {
+    const { binding, label } = SELF_DESCRIBING_BINDINGS[key];
     const current = parsed[key]?.binding;
 
     if (typeof current === "string" && current.length > 0) {
@@ -248,6 +255,19 @@ const reconcileSelfDescribing = (
 
     return { added: [label], text: applyModify(text, [key], { binding }) };
 };
+
+/**
+ * Whether reconcile should write the `analytics` binding: `ctx.analyticsSql` is
+ * read and the project does NOT chain `.analyticsSql(...)` onto `defineApp()`.
+ * The chain is a parsed call anywhere in the project ({@link scanAppChains}), so
+ * a comment or string naming it does not count. With the override,
+ * `ctx.analyticsSql` reads whatever it returns (typically the REST transport),
+ * so the binding would be dead config. A project with no readable `defineApp()`
+ * composition reads as not overridden: the binding is then what
+ * `ctx.analyticsSql` reads by default.
+ */
+const wantsAnalyticsSqlBinding = (inferred: InferredBindings, projectRoot: string): boolean =>
+    inferred.usesAnalyticsSql && scanAppChains(projectRoot, new Set(["analyticsSql"]))?.chained.has("analyticsSql") !== true;
 
 /** Sections that are a list of entries naming their binding with `name`, not `binding`. */
 const NAME_KEYED_LIST_SECTIONS = new Set(["ratelimits", "send_email"]);
@@ -868,13 +888,14 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // observability vs exports + workflows vs queues vs services + env.*.services;
     // the env queue step writes only env.<name>.queues). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
-    // Self-describing bindings (ai/browser/images/analytics) auto-write here;
+    // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
+    // ai_search_namespaces and analytics_engine_datasets) auto-write here;
     // their hint-only siblings (kv/hyperdrive/pipelines) carry an un-mintable
     // remote id and only surface as warnings (see collectWarnings).
     const pipeline: ReadonlyArray<{ enabled: boolean; run: (text: string) => ReconcileStep }> = [
         { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },
         { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed) },
-        { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai", "AI", "AI (Workers AI)") },
+        { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai") },
         {
             enabled: inferred.usesAiSearch,
             run: (text) =>
@@ -888,12 +909,15 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         },
         // No `remote: true`: wrangler rates the Analytics SQL binding as never
         // having a local simulator and proxies it remotely in plain dev, like `ai`.
+        // Skipped when the app points `ctx.analyticsSql` elsewhere with
+        // `defineApp().analyticsSql(...)` (the REST transport, typically): the
+        // binding would then be dead config that wrangler < 4.145.0 rejects.
         {
-            enabled: inferred.usesAnalyticsSql,
-            run: (text) => reconcileSelfDescribing(text, parsed, "analytics", "ANALYTICS_SQL", "ANALYTICS_SQL (Analytics SQL)"),
+            enabled: wantsAnalyticsSqlBinding(inferred, projectRoot),
+            run: (text) => reconcileSelfDescribing(text, parsed, "analytics"),
         },
-        { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser", "BROWSER", "BROWSER (Browser Rendering)") },
-        { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images", "IMAGES", "IMAGES (Cloudflare Images)") },
+        { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser") },
+        { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images") },
         {
             enabled: inferred.usesAnalytics,
             run: (text) =>

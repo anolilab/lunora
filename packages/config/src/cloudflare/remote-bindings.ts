@@ -72,6 +72,15 @@ const REMOTE_ELIGIBLE_KEYS = {
 
 type RemoteEligibleKey = keyof typeof REMOTE_ELIGIBLE_KEYS;
 
+/**
+ * The eligible sections of one structural `shape` — a mapped key type over the
+ * table, so a section narrowed by {@link hasShape} indexes
+ * {@link RemoteWranglerShape} at its real type, without a cast.
+ */
+type RemoteSectionOfShape<Shape> = {
+    [Key in RemoteEligibleKey]: (typeof REMOTE_ELIGIBLE_KEYS)[Key]["shape"] extends Shape ? Key : never;
+}[RemoteEligibleKey];
+
 const REMOTE_ELIGIBLE_KEY_LIST = Object.keys(REMOTE_ELIGIBLE_KEYS) as RemoteEligibleKey[];
 
 /** One binding object as it appears in any eligible section. */
@@ -139,24 +148,28 @@ const planArrayEntries = (
     return plans;
 };
 
+/** Narrow `section` to the eligible sections of `shape`. */
+const hasShape = <Shape extends (typeof REMOTE_ELIGIBLE_KEYS)[RemoteEligibleKey]["shape"]>(
+    section: RemoteEligibleKey,
+    shape: Shape,
+): section is RemoteSectionOfShape<Shape> => REMOTE_ELIGIBLE_KEYS[section].shape === shape;
+
 /** Plans for one eligible section, dispatched on its declared structural shape. */
 const planSection = (section: RemoteEligibleKey, parsed: RemoteWranglerShape): RemoteBindingPlan[] => {
-    const { label, shape } = REMOTE_ELIGIBLE_KEYS[section];
+    const { label } = REMOTE_ELIGIBLE_KEYS[section];
 
-    if (shape === "array") {
-        const entries = (parsed[section] as ReadonlyArray<BindingEntry | null | undefined> | undefined) ?? [];
-
-        return planArrayEntries(section, entries, label, []);
+    if (hasShape(section, "array")) {
+        return planArrayEntries(section, parsed[section] ?? [], label, []);
     }
 
-    if (shape === "producers") {
-        return planArrayEntries(section, parsed.queues?.producers ?? [], label, ["producers"]);
+    if (hasShape(section, "object")) {
+        // Single-object section (`ai`, `analytics`): one binding, edit path is the section key itself.
+        const entry = parsed[section];
+
+        return entry === null || entry === undefined ? [] : [{ binding: entryName(entry, section), kind: label, path: [], section }];
     }
 
-    // Single-object section (`ai`, `analytics`): one binding, edit path is the section key itself.
-    const entry = parsed[section] as BindingEntry | null | undefined;
-
-    return entry === null || entry === undefined ? [] : [{ binding: entryName(entry, section), kind: label, path: [], section }];
+    return planArrayEntries(section, parsed.queues?.producers ?? [], label, ["producers"]);
 };
 
 /**

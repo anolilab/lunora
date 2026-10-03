@@ -225,10 +225,7 @@ const ARRAY_SECTIONS: ReadonlyArray<{
 ];
 
 /** Parameterless `{ binding }` sections — the platform capabilities with nothing to provision. */
-const SINGLETON_SECTIONS: ReadonlyArray<{
-    field: "ai" | "analytics" | "assets" | "browser" | "images" | "media" | "stream";
-    type: BindingRequirement["type"];
-}> = [
+const SINGLETON_SECTIONS = [
     { field: "ai", type: "ai" },
     { field: "analytics", type: "analytics_sql" },
     { field: "assets", type: "assets" },
@@ -236,7 +233,7 @@ const SINGLETON_SECTIONS: ReadonlyArray<{
     { field: "images", type: "images" },
     { field: "media", type: "media" },
     { field: "stream", type: "stream" },
-];
+] as const satisfies ReadonlyArray<{ field: keyof ManifestConfigShape; type: BindingRequirement["type"] }>;
 
 /** The binding sections this module understands, derived from the tables above so the three can never disagree. */
 const KNOWN_BINDING_FIELDS = new Set<string>([
