@@ -402,8 +402,11 @@ const resolveClaimConflict = (projectRoot: string, state: DevServerState, supers
         return { existing, ok: false };
     }
 
-    // Our own pid already owns the record (restart in-process) — refresh it.
-    return { ok: writeDevServerState(projectRoot, state) !== undefined };
+    // Our own pid already owns the record (restart in-process) — refresh it,
+    // keeping the tunnel URL another process (`lunora dev --tunnel`) wrote into
+    // it: the tunnel outlives the restart, and the refreshed record must not
+    // stop advertising it.
+    return { ok: writeDevServerState(projectRoot, { ...state, tunnelUrl: state.tunnelUrl ?? existing.tunnelUrl }) !== undefined };
 };
 
 const claimDevServerState = (projectRoot: string, state: DevServerState, options?: { supersedePid?: number }): ClaimDevServerStateResult => {

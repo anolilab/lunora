@@ -18,7 +18,7 @@
  * claims `.lunora/dev.json` before spawning Vite (closing the duplicate-start
  * race) and this plugin replaces that record with the authoritative URL + PID.
  */
-import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_HANDOFF_ENV, DEV_LOG_FILE_ENV, lunoraLine } from "@lunora/config";
+import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_HANDOFF_ENV, DEV_LOG_FILE_ENV, lunoraLine, readDevServerState } from "@lunora/config";
 import type { Plugin, ViteDevServer } from "vite";
 
 import type { PendingCloseMap } from "./server-close";
@@ -48,6 +48,17 @@ const resolveLocalUrl = (server: ViteDevServer): string | undefined => {
 
     return undefined;
 };
+
+/**
+ * The `tunnelUrl` a closing server's record carried, handed to the next record
+ * this process writes. `server.restart()` closes the old server — clearing the
+ * record — before the new one listens and claims a fresh one, while the
+ * `lunora dev --tunnel` daemon keeps the same tunnel up throughout; without the
+ * hand-over `lunora dev status` would stop showing a tunnel that still serves.
+ * Module scope because a restart re-instantiates the plugin. Consumed by the
+ * next claim, so it never outlives one close → listen cycle.
+ */
+let carriedTunnelUrl: string | undefined;
 
 /** Vite plugin (serve-only) that writes the dev-server state record on listen and clears it on close. */
 const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
@@ -94,6 +105,7 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                         // the server is already listening.
                         readyAt: new Date().toISOString(),
                         startedAt: new Date().toISOString(),
+                        ...(carriedTunnelUrl === undefined ? {} : { tunnelUrl: carriedTunnelUrl }),
                         url,
                     },
                     Number.isInteger(handoffPid) && handoffPid > 0 ? { supersedePid: handoffPid } : undefined,
@@ -112,10 +124,14 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 }
 
                 recorded = true;
+                carriedTunnelUrl = undefined;
             };
 
             const clearOnClose = (): void => {
                 if (recorded) {
+                    const current = readDevServerState(root);
+
+                    carriedTunnelUrl = current?.pid === process.pid ? current.tunnelUrl : undefined;
                     clearDevServerState(root, process.pid);
                     recorded = false;
                 }
