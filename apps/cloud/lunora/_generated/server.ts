@@ -58,7 +58,6 @@ export type {
 } from "@lunora/server/data-model";
 
 import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
-import type { LunoraPayment } from "@lunora/payment";
 import type { ContainerAccessor } from "@lunora/container";
 import type * as lunoraEnvContract from "../env.js";
 
@@ -231,7 +230,7 @@ export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage" | "env">
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;
     readonly ai: import("@lunora/ai").LunoraAi;
-    readonly payments: LunoraPayment;
+    readonly payments: import("@lunora/payment").LunoraPayment;
     readonly containers: {
         readonly buildBox: ContainerAccessor;
         readonly provisionBox: ContainerAccessor;
