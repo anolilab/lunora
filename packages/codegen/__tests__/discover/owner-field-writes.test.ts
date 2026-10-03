@@ -911,14 +911,19 @@ const cache = {};
                 "a nested function handed an alias",
                 `${read}\n        const alias = row;\n        const set = (r) => { r.ownerId = args.targetUserId; };\n        set(alias);`,
             ],
-            ["an unknown function", `${read}\n        normalize(row);`],
-            ["an unknown function handed an alias", `${read}\n        const alias = row;\n        normalize(alias);`],
-            ["a nested function passing it on to an unknown one", `${read}\n        const relay = (r) => normalize(r);\n        relay(row);`],
+            // An opaque call can plant caller data in the row only when caller data reaches it too.
+            ["an imported `merge(row, args)`", `${read}\n        merge(row, args);`],
+            ["an imported `apply(row, { ownerId: args.x })`", `${read}\n        apply(row, { ownerId: args.targetUserId });`],
+            ["an imported call spreading args", `${read}\n        apply(row, ...args.patches);`],
+            ["an imported call handed an alias and args", `${read}\n        const alias = row;\n        merge(alias, args);`],
+            ["a nested function passing it on with args", `${read}\n        const relay = (r) => merge(r, args);\n        relay(row);`],
+            ["a caller-chosen callee", `${read}\n        args.fn(row);`],
+            ["a computed callee keyed by args", `${read}\n        handlers[args.kind](row);`],
             ["a same-file helper outside the impl that writes it", `${read}\n        stamp(row);`],
             ["a `let` alias", `${read}\n        let alias = row;\n        alias.ownerId = args.targetUserId;`],
             ["`Object.defineProperty`", `${read}\n        Object.defineProperty(row, "ownerId", { value: args.targetUserId });`],
-            ["a constructor", `${read}\n        new Normalizer(row);`],
-            ["a template tag", `${read}\n        normalize\`\${row}\`;`],
+            ["a constructor handed args", `${read}\n        new Normalizer(row, args);`],
+            ["a template tag handed args", `${read}\n        normalize\`\${row}\${args.targetUserId}\`;`],
             [
                 "a destructured element written later",
                 `const { meta } = await ctx.db.get(args.postId);\n        meta.ownerId = args.targetUserId;\n        await ${insert("meta.ownerId")}; // @write`,
@@ -927,7 +932,7 @@ const cache = {};
             expect.assertions(2);
 
             const write = body.includes("// @write") ? "" : `\n        await ${insert("row.ownerId")}; // @write`;
-            const source = `function stamp(r) { r.ownerId = "fixed"; }\n${ownerMutator(`        ${body}${write}`)}`;
+            const source = `import { apply, handlers, merge, Normalizer, normalize } from "./helpers";\nfunction stamp(r) { r.ownerId = "fixed"; }\n${ownerMutator(`        ${body}${write}`)}`;
 
             expectReported(rowAt(discover(source), markerLine(source, "write")));
         });
@@ -947,7 +952,7 @@ const cache = {};
             ],
             [
                 "a spread into an unknown call",
-                `const rows = await ctx.db.query("posts").collect();\n        normalize(...rows);\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
+                `const rows = await ctx.db.query("posts").collect();\n        normalize(args.mode, ...rows);\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
             ],
         ])("reports ctx rows changed through %s", (_label, body) => {
             expect.assertions(2);
@@ -965,10 +970,16 @@ const cache = {};
             ["a nested function writing a fixed value", `const touch = (r) => { r.seen = true; };\n        touch(row);`],
             ["a same-file helper outside the impl that only reads it", `describe(row);`],
             ["a `const` alias that is only read", `const alias = row;\n        console.log(alias.title);`],
+            // The attacker controls `args`, not an imported helper's code: with no caller data
+            // reaching the call, the helper has nothing of the caller's to plant.
+            ["an imported `sendWelcome(row)`", `await sendWelcome(row);`],
+            ["an imported call handed an alias and server data", `const alias = row;\n        await notify(alias, ctx.auth.userId);`],
+            ["an imported constructor", `new Mailer(row);`],
+            ["an imported callback over rows", `[row].forEach(sendWelcome);`],
         ])("keeps a ctx row server-scoped next to %s", (_label, statement) => {
             expect.assertions(1);
 
-            const source = `function describe(r) { return \`\${r.title}\`; }\n${ownerMutator(`        ${read}\n        ${statement}\n        await ${insert("row.ownerId")}; // @write`)}`;
+            const source = `import { Mailer, notify, sendWelcome } from "./mail";\nfunction describe(r) { return \`\${r.title}\`; }\n${ownerMutator(`        ${read}\n        ${statement}\n        await ${insert("row.ownerId")}; // @write`)}`;
 
             expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
         });
