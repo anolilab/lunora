@@ -458,6 +458,12 @@ fit Cloudflare's request body limit, and `@visulima/storage` caps a chunk at
 100 MiB. For the same reason the bundled client cannot resume an interrupted
 upload over the R2 binding: use TUS.
 
+Over providers that accept parallel chunks, the bundled client's upload stores
+every byte, but it can come back with `status: "part"` and the upload is never
+marked complete. Concurrent `PATCH`es lose each other's chunk records upstream
+([visulima/visulima#902](https://github.com/visulima/visulima/issues/902)).
+Check the stored size, not the reported status, or use TUS.
+
 ### Upgrading
 
 This release moves `@visulima/storage` to 2.0.25. What changes for an upload

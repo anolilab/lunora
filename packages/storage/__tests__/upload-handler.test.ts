@@ -984,12 +984,16 @@ describe("createUploadHandler chunked REST", () => {
         const adapter = createChunkedRestAdapter({ chunkSize: 10_000, endpoint: ENDPOINT, retry: false });
         const result = await adapter.upload(new File([bytes], "four.bin", { type: "application/octet-stream" }));
 
-        expect(result).toMatchObject({ bytesWritten: 40_000, status: "completed" });
+        // Not `status: "completed"`: the client's four chunks run in parallel, and
+        // upstream loses `_chunks` records between concurrent PATCHes
+        // (visulima/visulima#902), so no PATCH may report the upload complete and
+        // the result can say "part" with every byte stored. What this test pins is
+        // what Lunora guarantees: all bytes land, and nothing is read back over GET.
+        expect(result).toMatchObject({ bytesWritten: 40_000 });
         expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(4);
-        // The client never asks for the file's bytes. Its four chunks run in
-        // parallel, and over MemoryStorage their `_chunks` updates race, so no
-        // PATCH may report the upload complete; it then tries `/metadata`, gets
-        // 405, and builds the result from what it knows.
+        // The client never asks for the file's bytes. When no PATCH reports the
+        // upload complete it tries `/metadata`, gets 405, and builds the result
+        // from what it knows.
         expect(route.requests.filter((request) => request.startsWith("GET") && !request.endsWith("/metadata"))).toStrictEqual([]);
 
         const stored = await storage.get({ id: result.id });
