@@ -302,8 +302,10 @@ public key and nothing else (plan 458 §3).
   counted against the plan's `boxes` limit) and shows the three-line install
   from `apps/hostd/README.md` § Install: download `install.sh` of the newest
   **stable** stored hostd release, compare its hash, and run it as root with
-  `--control-plane <LUNORA_ORIGIN_URL>`, the token in `LUNORA_HOSTD_ENROL_TOKEN`
-  and the customer's own bucket and key as placeholders. A control plane
+  `--control-plane <LUNORA_ORIGIN_URL>` and the customer's own bucket as a
+  placeholder. The token is not on that command: the studio shows it on its
+  own, to paste when install.sh prompts for it (hidden, like the bucket's
+  access key), so it never lands in shell history or `sudo`'s logged argv. A control plane
   without `LUNORA_ORIGIN_URL`, or with no stored release yet, mints nothing
   (`SERVICE_UNAVAILABLE`). `hostd` generates its key and calls
   `POST /v1/boxes/enrol` with the token, its raw public key (base64url), its

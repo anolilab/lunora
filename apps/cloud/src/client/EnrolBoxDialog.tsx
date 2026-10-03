@@ -19,18 +19,21 @@ interface EnrolBoxDialogProps {
     organizationId: OrgId;
 }
 
-/** The one-time command, once minted. */
+/** The install command and its one-time token, once minted. */
 interface Enrolment {
     expiresAt: number;
     installCommand: string;
+    token: string;
 }
 
 /**
  * Enrol a box: name it, mint a one-time token (`boxes.createEnrolment`), and show
- * the command that uses it. The command carries the token in plaintext and the
- * server keeps only its hash, so this is the only time it can be shown — the copy
- * says so, and closing the dialog drops it. Remount with a fresh `key` per open so
- * a previous token never reappears.
+ * the install command and, separately, the token install.sh asks for. The token
+ * stays off the command so it never lands in shell history or `sudo`'s logged
+ * argv; it is pasted at install.sh's hidden prompt. The server keeps only its
+ * hash, so this is the only time it can be shown — the copy says so, and closing
+ * the dialog drops it. Remount with a fresh `key` per open so a previous token
+ * never reappears.
  */
 export const EnrolBoxDialog = ({ onOpenChange, open, organizationId }: EnrolBoxDialogProps): ReactElement => {
     const { call: createEnrolment, pending } = useAction(api.boxes.createEnrolment);
@@ -55,8 +58,13 @@ export const EnrolBoxDialog = ({ onOpenChange, open, organizationId }: EnrolBoxD
                         <pre className="m-0 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed">
                             <code>{enrolment.installCommand}</code>
                         </pre>
+                        <CopyButton label="Copy command" value={enrolment.installCommand} />
+                        <p className="m-0 text-sm">It asks for this enrolment token, and then your bucket&apos;s access key — paste each when prompted:</p>
+                        <pre className="m-0 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs leading-relaxed">
+                            <code>{enrolment.token}</code>
+                        </pre>
                         <div className="flex flex-wrap items-center gap-3">
-                            <CopyButton label="Copy command" value={enrolment.installCommand} />
+                            <CopyButton label="Copy token" value={enrolment.token} />
                             <p className="m-0 text-xs text-muted-foreground">
                                 Shown once — the token is not stored and cannot be shown again. It works once and expires in 15 minutes (at{" "}
                                 {formatTime(enrolment.expiresAt)} UTC).
@@ -72,7 +80,7 @@ export const EnrolBoxDialog = ({ onOpenChange, open, organizationId }: EnrolBoxD
                                 try {
                                     const result = await createEnrolment({ name, organizationId });
 
-                                    setEnrolment({ expiresAt: result.expiresAt, installCommand: result.installCommand });
+                                    setEnrolment({ expiresAt: result.expiresAt, installCommand: result.installCommand, token: result.token });
                                 } catch (error_: unknown) {
                                     setError(describeEnrolError(error_ instanceof Error ? error_.message : "could not create the enrolment"));
                                 }

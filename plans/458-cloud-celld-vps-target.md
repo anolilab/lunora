@@ -697,13 +697,17 @@ installing it (enrol runs as `lunora-hostd`), since that directory is
 
 **Follow-ups:**
 
-- **`apps/cloud` branch:** the studio's install command (`installCommandFor` in
-  `src/boxes/enrolment.ts`) is still `sudo lunora-hostd enrol --token …`. It
-  must become the three-line `install.sh` invocation in `apps/hostd/README.md`
-  ("What the studio's install command must say"): download `install.sh`, then
-  `sudo LUNORA_HOSTD_ENROL_TOKEN=… AWS_…=… bash install.sh --control-plane
-<origin> --bucket <bucket> [--endpoint …] --version <desired release>`.
-  `--control-plane` is required until a production origin is compiled in.
+- **`apps/cloud` branch:** done — the studio's install command
+  (`installCommandFor` in `src/boxes/enrolment.ts`) is the three-line
+  `install.sh` invocation: download `install.sh`, compare its hash, then
+  `sudo bash install.sh --control-plane <origin> --bucket <bucket> --version
+<desired release>`, with the token shown separately to paste at install.sh's
+  hidden prompt (§11, thermos round 2 L4). **Cross-branch dependency:** that
+  prompt (`read -rs`, plus `--token-file` / `--credentials-file`) lands with
+  `fix/hostd-round2`; the install.sh on this branch still reads only
+  `LUNORA_HOSTD_ENROL_TOKEN` / `--token`, so the studio's command needs that
+  branch merged first. `--control-plane` is required until a production origin
+  is compiled in.
 - **`esbuild` on the box — not needed (2026-10-03).** Raised while validating W8
   and then disproved: releases deploy with `no_bundle: true` (W3), and celld
   v0.6.0 deploys and serves a Worker importing `cloudflare:workers` that way with

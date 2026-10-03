@@ -133,14 +133,15 @@ describe("boxes.createEnrolment", () => {
 
         expect(isEnrolmentTokenShape(result.token)).toBe(true);
         // install.sh of the newest STABLE release (not the newer canary), enrolling with this control
-        // plane's own origin; the token rides in the environment, the bucket stays the customer's.
+        // plane's own origin; the bucket stays the customer's.
         expect(result.installCommand.split("\n")).toStrictEqual([
             "curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v1.2.0/install.sh",
             "sha256sum install.sh   # compare with the release notes",
-            // eslint-disable-next-line no-secrets/no-secrets -- env-var NAMES and placeholders, not a credential
-            `sudo LUNORA_HOSTD_ENROL_TOKEN=${result.token} AWS_ACCESS_KEY_ID=<bucket key id> AWS_SECRET_ACCESS_KEY=<bucket secret> \\`,
-            "    bash install.sh --control-plane https://cloud.lunora.test --bucket <bucket> --version 1.2.0",
+            "sudo bash install.sh --control-plane https://cloud.lunora.test --bucket <bucket> --version 1.2.0",
         ]);
+        // The token is pasted at install.sh's hidden prompt, never put on a command line (shell history, sudo's argv).
+        expect(result.installCommand).not.toContain(result.token);
+        expect(result.installCommand).not.toContain("LUNORA_HOSTD_ENROL_TOKEN");
         expect(result.expiresAt).toBe(NOW + 15 * 60 * 1000);
 
         const stored = ops.find((op) => op.kind === "insert" && op.table === "boxEnrolments");

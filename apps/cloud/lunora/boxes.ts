@@ -199,7 +199,7 @@ export const createEnrolment = action
             target: name.trim(),
         });
 
-        return { expiresAt, installCommand: installCommandFor({ controlPlaneOrigin: origin, hostdVersion, token }), token };
+        return { expiresAt, installCommand: installCommandFor({ controlPlaneOrigin: origin, hostdVersion }), token };
     });
 
 /** An organization's boxes, revoked ones included (members). */

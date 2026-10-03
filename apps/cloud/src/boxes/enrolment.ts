@@ -47,20 +47,20 @@ export const mintBoxSlug = (): string => {
  * is the origin the box enrols with, dials its session to, and alone fetches
  * releases from (protocol README §5.2) — always this control plane's own public
  * origin (`LUNORA_ORIGIN_URL`).
+ *
+ * The token is NOT in it. install.sh asks for the token and the bucket's access
+ * key at a hidden prompt (`read -rs`), so neither lands in shell history or in
+ * `sudo`'s logged argv; the studio shows the token on its own, to paste when
+ * prompted. The bucket is the customer's, so it stays a placeholder.
  */
-export const installCommandFor = (input: { controlPlaneOrigin: string; hostdVersion: string; token: string }): string => {
+export const installCommandFor = (input: { controlPlaneOrigin: string; hostdVersion: string }): string => {
     const version = input.hostdVersion;
 
     // The three lines `apps/hostd/README.md` § Install documents: fetch the
-    // release's install.sh, compare its hash with the release notes, then run it
-    // as root. install.sh hands the token to `lunora-hostd enrol` through the
-    // environment, so it never sits on enrol's command line; the bucket and its
-    // key are the customer's, so they stay placeholders.
+    // release's install.sh, compare its hash with the release notes, then run it as root.
     return [
         `curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v${version}/install.sh`,
         "sha256sum install.sh   # compare with the release notes",
-        // eslint-disable-next-line no-secrets/no-secrets -- env-var NAMES and placeholders, not a credential
-        `sudo LUNORA_HOSTD_ENROL_TOKEN=${input.token} AWS_ACCESS_KEY_ID=<bucket key id> AWS_SECRET_ACCESS_KEY=<bucket secret> \\`,
-        `    bash install.sh --control-plane ${stripTrailingSlashes(input.controlPlaneOrigin)} --bucket <bucket> --version ${version}`,
+        `sudo bash install.sh --control-plane ${stripTrailingSlashes(input.controlPlaneOrigin)} --bucket <bucket> --version ${version}`,
     ].join("\n");
 };
