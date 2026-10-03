@@ -9,6 +9,12 @@
  * - **Liveness.** An alarm every {@link TICK_MS} pings authenticated boxes,
  *   closes a box silent for 90 s (it goes `offline`), closes handshakes that
  *   stall, and re-reads the row so a revoke made anywhere cuts the box off.
+ * - **Configuration.** After its `routes`, an authenticated box gets a
+ *   `config` frame (protocol §5.2): where to forward its own logs, with its
+ *   organization's ingest key. Re-resolved every {@link CONFIG_REFRESH_MS} and
+ *   sent again when it changed — a revoked ingest key is replaced by a fresh
+ *   one. The key is a secret: never logged, never in a socket attachment
+ *   (those are persisted); only a digest of the last frame sent is stored.
  * - **Internal API.** Native RPC over the namespace binding ({@link BoxSession}):
  *   `dispatch` (run a job, its progress called back as it arrives),
  *   `pushRoutes` (push the box's routing table), `close` (revoke) and
@@ -23,6 +29,8 @@ import { DurableObject } from "cloudflare:workers";
 
 import type { ControlPlaneStore } from "../d1-store";
 import { controlPlaneDatabase } from "../d1-store";
+import { sha256Hex } from "../deploy/keys";
+import { resolveBoxTelemetryConfig } from "../telemetry/ingest-key";
 import { fleetsAfterJob, jobMovesFleets } from "./fleets";
 import { versionKey } from "./hostd-releases";
 import type { JobOutcome } from "./jobs";
@@ -42,6 +50,10 @@ export type BoxSessionEnvironment = {
     LUNORA_BOX_DOMAIN?: string;
     /** This control plane's public origin — where a box fetches the release manifest an `upgrade` job names. */
     LUNORA_ORIGIN_URL?: string;
+    /** The OTLP/HTTP base a box forwards its own logs to — the one tenants get. Absent → the box forwards nothing. */
+    LUNORA_OTLP_ENDPOINT?: string;
+    /** The master key the organizations' ingest keys are envelope-encrypted with. Absent → the box forwards nothing. */
+    SECRET_ENCRYPTION_KEY?: string;
 };
 
 /** The hibernatable-WebSocket slice of a socket the session uses. */
@@ -57,6 +69,17 @@ export const TICK_MS = 30_000;
 
 /** Sockets one box may hold open at once — a reconnect overlaps its old socket briefly, nothing more. */
 export const MAX_SOCKETS = 4;
+
+/**
+ * How often a connected box's `config` is resolved again, so a replaced ingest
+ * key reaches it. A frame goes out only when it changed.
+ */
+export const CONFIG_REFRESH_MS = 5 * 60 * 1000;
+
+/** Storage keys: the SHA-256 of the last `config` frame sent (never the frame — it holds the ingest key), and when it was resolved. */
+const CONFIG_DIGEST_KEY = "configDigest";
+
+const CONFIG_CHECKED_KEY = "configCheckedAt";
 
 /** Bounds on a dispatched job's wait. */
 const MIN_JOB_TIMEOUT_MS = 1000;
@@ -261,6 +284,9 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
             }
         }
 
+        // A refused socket no longer counts as ready, so a box cut off above gets nothing.
+        await this.refreshConfig(now);
+
         await this.sweepNonces(now);
         await this.sweepReportWindows(now);
 
@@ -445,6 +471,7 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
                 await recordHello(database, attachment.boxId, { ...effect.hello, ...(fleets === undefined ? {} : { fleets }) }, now);
                 await this.ctx.storage.put("seenWrittenAt", now);
                 await this.pushRoutes();
+                await this.pushConfig(database, attachment.boxId, now, true);
                 await this.replayDesiredRelease(database, socket, attachment.boxId, effect.hello.versions);
                 break;
             }
@@ -482,6 +509,70 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
                 break;
             }
         }
+    }
+
+    /**
+     * Send the box's `config` (protocol §5.2) to its authenticated sockets:
+     * always when `force` (it just authenticated — a box holds its config in
+     * memory only), otherwise only when it differs from the last one sent.
+     * Never throws: a config that cannot be resolved now is logged — without
+     * the key — and retried on the next refresh.
+     */
+    private async pushConfig(database: ControlPlaneStore, boxId: string, now: number, force: boolean): Promise<void> {
+        const sockets = this.readySockets();
+
+        if (sockets.length === 0) {
+            return;
+        }
+
+        let frame: string;
+
+        try {
+            const box = await loadBox(database, boxId);
+
+            if (box === null || box.status === "revoked") {
+                return;
+            }
+
+            const telemetry = await resolveBoxTelemetryConfig(database, this.env, box.organizationId, now);
+
+            frame = encodeMessage({ type: "config", ...(telemetry === undefined ? {} : { telemetry }) });
+        } catch (error) {
+            // The store's, the cipher's or the codec's message: it names a field or a query, never the
+            // key — which is only ever decrypted into `telemetry`, and the codec does not echo values.
+            // eslint-disable-next-line no-console -- a box left without its config is only visible here, in Workers Logs
+            console.warn(`[box ${boxId}] could not resolve its config: ${error instanceof Error ? error.message : String(error)}`);
+
+            return;
+        }
+
+        const digest = await sha256Hex(frame);
+
+        if (force || digest !== (await this.ctx.storage.get<string>(CONFIG_DIGEST_KEY))) {
+            for (const socket of sockets) {
+                try {
+                    socket.send(frame);
+                } catch {
+                    // The socket closed under us.
+                }
+            }
+        }
+
+        await this.ctx.storage.put(CONFIG_DIGEST_KEY, digest);
+        await this.ctx.storage.put(CONFIG_CHECKED_KEY, now);
+    }
+
+    /** Resolve the connected box's `config` again once {@link CONFIG_REFRESH_MS} has passed, and send it if it changed. */
+    private async refreshConfig(now: number): Promise<void> {
+        const database = this.database();
+        const socket = this.readySockets().at(0);
+        const checkedAt = (await this.ctx.storage.get<number>(CONFIG_CHECKED_KEY)) ?? 0;
+
+        if (database === undefined || socket === undefined || now - checkedAt < CONFIG_REFRESH_MS) {
+            return;
+        }
+
+        await this.pushConfig(database, attachmentOf(socket).boxId, now, false);
     }
 
     /** Hold a challenged `hello`'s fleets until its `auth`, dropping the oldest past one per possible handshake. */

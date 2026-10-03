@@ -1,4 +1,4 @@
-import type { DeployJob } from "@lunora/hostd/protocol";
+import type { CloudMessage, DeployJob } from "@lunora/hostd/protocol";
 import { describe, expect, it, vi } from "vitest";
 
 import { randomBase64Url } from "../src/boxes/encoding";
@@ -6,8 +6,10 @@ import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "../src/boxes/jobs";
 import type { SessionAttachment, SessionEffect, SessionPorts } from "../src/boxes/session";
 import { FRAME_BUCKET, HANDSHAKE_TIMEOUT_MS, livenessOf, openSession, receiveFrame, SILENCE_LIMIT_MS } from "../src/boxes/session";
 import { boxSession } from "../src/boxes/session-client";
-import { TICK_MS } from "../src/boxes/session-do";
-import type { BoxKey } from "./support/box-session-fakes";
+import { CONFIG_REFRESH_MS, TICK_MS } from "../src/boxes/session-do";
+import { hashDeployKey } from "../src/deploy/keys";
+import { decryptSecret, encryptSecret } from "../src/secrets/crypto";
+import type { BoxKey, FakeSocket, FakeState } from "./support/box-session-fakes";
 import { authFrame, boxKey, boxRow, fakeSocket, fakeState, handshake, helloFrame, namespaceOver, TestBoxSession } from "./support/box-session-fakes";
 import { memoryStore } from "./support/memory-store";
 
@@ -258,7 +260,7 @@ describe("boxSessionDO", () => {
         const socket = await handshake(session, state, key, "box_1");
 
         expect(store.tables["boxes"]?.[0]).toMatchObject({ resources: { diskFreeMb: 40_960, memMb: 3891 }, status: "online", versions: { celld: "v0.6.0" } });
-        expect(socket.received().at(-1)).toStrictEqual({
+        expect(socket.received().find((frame) => frame.type === "routes")).toStrictEqual({
             table: [
                 { alias: "web-pr-7", hostname: "web-pr-7.bslug000001.boxes.test" },
                 { alias: "web", hostname: "web.bslug000001.boxes.test" },
@@ -513,6 +515,136 @@ describe("boxSessionDO", () => {
         await expect(client.claimNonce(randomBase64Url(), expiresAt)).resolves.toBe(true);
         // A nonce of the wrong shape is never claimed: the signed request it came with is refused.
         await expect(client.claimNonce("short", expiresAt)).resolves.toBe(false);
+    });
+
+    describe("the config frame", () => {
+        const ENCRYPTION_KEY = "0f".repeat(32);
+        const ENDPOINT = "https://cloud.test";
+        const TOKEN = "production:org_1|existing-ingest-secret";
+
+        const configured = async (options: { encryptionKey?: string; ingestToken?: string; withoutEndpoint?: boolean } = {}) => {
+            const key = await boxKey();
+            const encryptionKey = options.encryptionKey ?? ENCRYPTION_KEY;
+            const deployKeys =
+                options.ingestToken === undefined
+                    ? []
+                    : [
+                          { _id: "key_deploy", capability: "deploy", hashedKey: "h0", organizationId: "org_1" },
+                          {
+                              _id: "key_ingest",
+                              capability: "ingest",
+                              encryptedSecret: await encryptSecret(ENCRYPTION_KEY, options.ingestToken),
+                              hashedKey: await hashDeployKey(options.ingestToken),
+                              organizationId: "org_1",
+                          },
+                      ];
+            const store = memoryStore({ boxes: [boxRow(key)], deployKeys, deployments: [], domains: [], projects: [] });
+            const state = fakeState();
+            const session = new TestBoxSession(state, store, {
+                LUNORA_BOX_DOMAIN: "boxes.test",
+                ...(options.withoutEndpoint === true ? {} : { LUNORA_OTLP_ENDPOINT: ENDPOINT }),
+                SECRET_ENCRYPTION_KEY: encryptionKey,
+            });
+
+            await state.storage.put("boxId", "box_1");
+
+            return { key, session, state, store };
+        };
+
+        /** Everything the session persisted: the socket's attachment and its storage. */
+        const persisted = (state: FakeState, socket: FakeSocket): string => JSON.stringify([socket.attachment, [...state.values]]);
+
+        it("follows the routes with the box organization's ingest key and the cell's OTLP endpoint", async () => {
+            const { key, session, state } = await configured({ ingestToken: TOKEN });
+            const socket = await handshake(session, state, key, "box_1");
+            const types = socket.received().map((frame) => frame.type);
+
+            expect(types.indexOf("config")).toBe(types.indexOf("routes") + 1);
+            expect(socket.received().find((frame) => frame.type === "config")).toStrictEqual({
+                telemetry: { endpoint: ENDPOINT, token: TOKEN },
+                type: "config",
+            });
+            // The key is a secret: nothing the session persists carries it.
+            expect(persisted(state, socket)).not.toContain("existing-ingest-secret");
+        });
+
+        it("mints the organization an ingest key when it has none, and sends that one", async () => {
+            const { key, session, state, store } = await configured();
+            const socket = await handshake(session, state, key, "box_1");
+            const config = socket.received().find((frame) => frame.type === "config");
+            const token = config?.type === "config" ? config.telemetry?.token : undefined;
+            const rows = store.tables["deployKeys"] ?? [];
+
+            expect(token).toMatch(/^production:/u);
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({ capability: "ingest", hashedKey: await hashDeployKey(token ?? ""), organizationId: "org_1", type: "production" });
+            await expect(decryptSecret(ENCRYPTION_KEY, rows[0]?.["encryptedSecret"] as { ciphertext: string; iv: string })).resolves.toBe(token);
+            expect(persisted(state, socket)).not.toContain(token);
+
+            // A reconnect reuses the key it minted.
+            const again = await handshake(session, state, key, "box_1");
+
+            expect(again.received().find((frame) => frame.type === "config")).toStrictEqual(config);
+            expect(store.tables["deployKeys"]).toHaveLength(1);
+        });
+
+        it("sends an empty config when the cell has no telemetry configured", async () => {
+            const { key, session, state, store } = await configured({ withoutEndpoint: true });
+            const socket = await handshake(session, state, key, "box_1");
+
+            expect(socket.received().find((frame) => frame.type === "config")).toStrictEqual({ type: "config" });
+            expect(store.tables["deployKeys"]).toStrictEqual([]);
+        });
+
+        it("sends it again on the refresh only once it changed — a revoked ingest key is replaced", async () => {
+            vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+
+            try {
+                const { key, session, state, store } = await configured({ ingestToken: TOKEN });
+                const socket = await handshake(session, state, key, "box_1");
+                const configs = (): CloudMessage[] => socket.received().filter((frame) => frame.type === "config");
+
+                // Not due yet, then due but unchanged: nothing more is sent.
+                vi.setSystemTime(NOW + TICK_MS);
+                await session.alarm();
+                vi.setSystemTime(NOW + CONFIG_REFRESH_MS);
+                socket.attachment = { ...socket.attachment, seenAt: Date.now() };
+                await session.alarm();
+
+                expect(configs()).toHaveLength(1);
+
+                await store.patch("key_ingest", { revokedAt: NOW });
+                vi.setSystemTime(NOW + 2 * CONFIG_REFRESH_MS);
+                socket.attachment = { ...socket.attachment, seenAt: Date.now() };
+                await session.alarm();
+
+                const latest = configs().at(-1);
+
+                expect(configs()).toHaveLength(2);
+                expect(latest).toMatchObject({ telemetry: { endpoint: ENDPOINT }, type: "config" });
+                expect(latest?.type === "config" ? latest.telemetry?.token : undefined).not.toBe(TOKEN);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it("leaves the session up, and logs nothing of the key, when the config cannot be resolved", async () => {
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            try {
+                // The stored key was sealed under another master key: decryption fails.
+                const { key, session, state } = await configured({ encryptionKey: "1e".repeat(32), ingestToken: TOKEN });
+                const socket = await handshake(session, state, key, "box_1");
+
+                expect(socket.received().some((frame) => frame.type === "config")).toBe(false);
+                expect(socket.attachment.phase).toBe("ready");
+                expect(socket.closedWith).toBeUndefined();
+                expect(warn).toHaveBeenCalledWith(expect.stringContaining("could not resolve its config"));
+                expect(JSON.stringify(warn.mock.calls)).not.toContain("existing-ingest-secret");
+            } finally {
+                warn.mockRestore();
+            }
+        });
     });
 
     it("accepts only a WebSocket upgrade of a box id over fetch — the rest is RPC", async () => {

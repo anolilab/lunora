@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { isDeployCapable, isKeyLive } from "../src/deploy/capability";
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
+import { findActiveIngestKey, ingestKeyRow } from "../src/telemetry/ingest-key-row";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
@@ -269,21 +270,6 @@ interface CipherEnvelope {
     iv: string;
 }
 
-/** One row as the ingest-key helpers read it. */
-interface IngestKeyRow {
-    capability?: "deploy" | "ingest";
-    encryptedSecret?: CipherEnvelope;
-    revokedAt?: number;
-}
-
-/**
- * The org's live ingest key, if any — the single definition of "what counts as
- * the active ingest key" (an `ingest`-capability, non-revoked row that carries
- * its encrypted secret), so the reader and the writer can never drift apart.
- */
-const findActiveIngestKey = (rows: IngestKeyRow[]): IngestKeyRow | undefined =>
-    rows.find((candidate) => candidate.capability === "ingest" && candidate.revokedAt == null && candidate.encryptedSecret != null);
-
 /**
  * The org's platform-managed ingest key ciphertext, for the deploy path to
  * re-inject into a tenant's `otlpSink`. Deploy-key authorized (the caller is a
@@ -320,7 +306,9 @@ export const ingestKeyCipher = internalQuery
  * authorizes `"org-wide"`) could register an org-wide telemetry credential whose
  * plaintext they chose. It authenticates every ingest path for the whole org,
  * shows in the UI as "Telemetry ingest (auto)", and outlives revocation of the
- * key that created it. Only the deploy route mints these now.
+ * key that created it. Only the deploy route mints these through here; a box's
+ * session, a system context with no deploy key, writes the same row
+ * (`ingestKeyRow`) directly (`resolveBoxTelemetryConfig`).
  */
 export const recordIngestKey = internalMutation
     .input({
@@ -342,15 +330,7 @@ export const recordIngestKey = internalMutation
             return existing.encryptedSecret; // a racing deploy already provisioned it
         }
 
-        await context.db.insert("deployKeys", {
-            capability: "ingest",
-            createdAt: context.now,
-            encryptedSecret,
-            hashedKey,
-            name: "Telemetry ingest (auto)",
-            organizationId,
-            type: "production",
-        });
+        await context.db.insert("deployKeys", ingestKeyRow({ createdAt: context.now, encryptedSecret, hashedKey, organizationId }));
 
         return encryptedSecret;
     });

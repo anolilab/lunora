@@ -14,6 +14,8 @@ export interface Env {
     DB: D1DatabaseLike;
     LUNORA_BOX_DOMAIN: string;
     LUNORA_ORIGIN_URL: string;
+    LUNORA_OTLP_ENDPOINT: string;
+    SECRET_ENCRYPTION_KEY: string;
 }
 
 export default {

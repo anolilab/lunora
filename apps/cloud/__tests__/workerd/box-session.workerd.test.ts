@@ -3,9 +3,10 @@
  * session with a fake state and fake sockets, so what only the runtime can
  * show is checked here — `acceptWebSocket` and the hibernation handlers, the
  * attachment surviving between events, WebCrypto Ed25519 in workerd, the
- * object reaching the control-plane D1, and a dispatch crossing the namespace
- * binding as native RPC — its progress called back into the caller while the
- * socket answers it.
+ * object reaching the control-plane D1 (minting the organization's ingest key
+ * there for the `config` frame), and a dispatch crossing the namespace binding
+ * as native RPC — its progress called back into the caller while the socket
+ * answers it.
  */
 import type { D1CtxDbOptions } from "@lunora/d1";
 import { runD1GlobalTableMigrations } from "@lunora/d1";
@@ -18,6 +19,7 @@ import schema from "../../lunora/schema";
 import { toBase64Url } from "../../src/boxes/encoding";
 import { boxSession } from "../../src/boxes/session-client";
 import { buildExec, controlPlaneDatabase } from "../../src/d1-store";
+import { hashDeployKey } from "../../src/deploy/keys";
 
 const HELLO = {
     fleets: [],
@@ -118,6 +120,14 @@ describe("the box session object in workerd", () => {
         socket.send(JSON.stringify({ signature: await key.sign(challengeSigningPayload(challenge.nonce, boxId)), type: "auth" }));
 
         await expect(next("routes")).resolves.toStrictEqual({ table: [], type: "routes" });
+
+        // The organization had no ingest key: the session minted one in D1 and sent it.
+        const config = await next("config");
+        const token = config.telemetry?.token ?? "";
+        const { page: keys } = await database.findMany("deployKeys", { where: { hashedKey: await hashDeployKey(token) } });
+
+        expect(config.telemetry?.endpoint).toBe(env.LUNORA_OTLP_ENDPOINT);
+        expect(keys).toMatchObject([{ capability: "ingest", organizationId: "org_1" }]);
         await expect(database.get(boxId, "boxes")).resolves.toMatchObject({ status: "online", versions: HELLO.versions });
 
         const lines: string[] = [];

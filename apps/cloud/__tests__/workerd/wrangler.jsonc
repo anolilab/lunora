@@ -12,5 +12,11 @@
     },
     "migrations": [{ "new_sqlite_classes": ["BoxSessionDO"], "tag": "v1" }],
     "d1_databases": [{ "binding": "DB", "database_id": "box-session-test", "database_name": "box-session-test" }],
-    "vars": { "LUNORA_BOX_DOMAIN": "boxes.test", "LUNORA_ORIGIN_URL": "https://cloud.test" },
+    // A throwaway master key: the session mints and seals the organization's ingest key under it.
+    "vars": {
+        "LUNORA_BOX_DOMAIN": "boxes.test",
+        "LUNORA_ORIGIN_URL": "https://cloud.test",
+        "LUNORA_OTLP_ENDPOINT": "https://cloud.test",
+        "SECRET_ENCRYPTION_KEY": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    },
 }
