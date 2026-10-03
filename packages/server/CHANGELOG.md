@@ -1,3 +1,14 @@
+## @lunora/server [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.175...@lunora/server@1.0.0-alpha.176) (2026-10-03)
+
+### Bug Fixes
+
+* **codegen:** attribute helper writes to their exported callers ([#954](https://github.com/anolilab/lunora/issues/954)) ([91467c4](https://github.com/anolilab/lunora/commit/91467c45d17123552f41e2c6caf8011ce74d911d))
+
+
+### Dependencies
+
+* **@lunora/storage:** upgraded to 1.0.0-alpha.107
+
 ## @lunora/server [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.174...@lunora/server@1.0.0-alpha.175) (2026-10-03)
 
 
