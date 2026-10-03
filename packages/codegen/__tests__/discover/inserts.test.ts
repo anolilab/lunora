@@ -34,8 +34,20 @@ const MESSAGES = `
     // Genuinely dynamic (computed) table — not resolvable, discovered with table "".
     export const dynamic = mutation({ args: {}, handler: (ctx) => ctx.db.insert(\`tbl_\${ctx.foo}\`, {}) });
 
-    // Not exported — dropped.
+    // Not exported and never referenced — kept with exportName "" and the helper's name.
     const helper = (ctx) => ctx.db.insert("secret", {});
+
+    // A helper two exports call, reached through a second helper and a cycle.
+    function audit(ctx) {
+        return ctx.db.insert("audit", {});
+    }
+    const record = (ctx) => (ctx.retry ? retry(ctx) : audit(ctx));
+    const retry = (ctx) => record(ctx);
+
+    export const archive = mutation({ args: {}, handler: (ctx) => record(ctx) });
+    export async function legacy(ctx) {
+        return audit(ctx);
+    }
 `;
 
 const CHANNELS = `
@@ -92,11 +104,24 @@ describe("discoverInserts", () => {
         expect(dynamic).toMatchObject({ table: "" });
     });
 
-    it("drops inserts that aren't inside an exported declaration", () => {
+    it("keeps an insert in a helper no export calls, with an empty export and the helper's name", () => {
         expect.assertions(1);
 
-        const writes = discoverInserts(project, join(workdir, "lunora"));
+        const writes = discoverInserts(project, join(workdir, "lunora")).filter((write) => write.table === "secret");
 
-        expect(writes.some((write) => write.table === "secret")).toBe(false);
+        expect(writes).toStrictEqual([{ exportName: "", file: "messages", helper: "helper", line: 29, table: "secret" }]);
+    });
+
+    it("attributes an insert in a helper to every export reaching it, transitively and through a cycle", () => {
+        expect.assertions(1);
+
+        const writes = discoverInserts(project, join(workdir, "lunora")).filter((write) => write.table === "audit");
+
+        // One record per exported caller, all at the insert's own line; an exported
+        // function declaration counts as an export.
+        expect(writes).toStrictEqual([
+            { exportName: "archive", file: "messages", line: 33, table: "audit" },
+            { exportName: "legacy", file: "messages", line: 33, table: "audit" },
+        ]);
     });
 });

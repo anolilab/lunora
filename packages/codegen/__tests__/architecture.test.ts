@@ -206,15 +206,18 @@ describe("architecture manifest", () => {
         expect(() => runCodegen({ projectRoot: workdir })).toThrow(/write `tables` inline/u);
     });
 
-    it("attributes calls inside export default, and reports a call inside a helper", () => {
-        expect.assertions(2);
+    it("attributes calls inside export default and inside a helper, and reports a helper no export calls", () => {
+        expect.assertions(3);
 
         write("chat/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({});\n`);
         write(
             "chat/feed.ts",
             `import { query } from "@lunora/server";
 
-const loadAll = (ctx: { db: { query: (table: string) => { collect: () => unknown } } }) => ctx.db.query("messages").collect();
+type Db = { db: { query: (table: string) => { collect: () => unknown } } };
+
+const loadAll = (ctx: Db) => ctx.db.query("messages").collect();
+const loadUnused = (ctx: Db) => ctx.db.query("users").collect();
 
 export default query({ args: {}, handler: async (ctx) => ctx.db.query("users").collect() });
 
@@ -224,7 +227,148 @@ export const viaHelper = query({ args: {}, handler: async (ctx) => loadAll(ctx) 
         runCodegen({ projectRoot: workdir });
 
         expect(manifest().edges).toContainEqual({ from: "function:chat_feed:default", kind: "read", to: "table:users" });
-        expect(manifest().unresolved).toContainEqual(expect.objectContaining({ file: "chat/feed", kind: "read", reason: "inside a non-exported helper" }));
+        expect(manifest().edges).toContainEqual({ from: "function:chat_feed:viaHelper", kind: "read", to: "table:messages" });
+        expect(manifest().unresolved).toContainEqual({ file: "chat/feed", kind: "read", line: 6, reason: "inside a non-exported helper" });
+    });
+
+    /** The issue #951 repro: `accounts` writes `billing`'s `invoices` directly, through helpers, transitively, through a cycle, and from an orphan helper. */
+    const writeHelperWrites = (): void => {
+        write(
+            "schema.ts",
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({ invoices: defineTable({ amount: v.number() }) });
+`,
+        );
+        write("billing/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({ tables: ["invoices"] });\n`);
+        write("accounts/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({});\n`);
+        write(
+            "accounts/signup.ts",
+            `import { mutation } from "@lunora/server";
+
+type Id<T extends string> = string & { readonly __table: T };
+interface MutationCtx {
+    db: {
+        delete: <T extends string>(id: Id<T>) => Promise<void>;
+        insert: (table: "invoices", document: object) => Promise<Id<"invoices">>;
+        patch: <T extends string>(id: Id<T>, patch: object) => Promise<void>;
+    };
+}
+
+export const signupDirect = mutation.input({}).mutation(async ({ ctx }) => {
+    await ctx.db.insert("invoices", { amount: 0 });
+});
+
+const openInvoice = async (ctx: MutationCtx) => ctx.db.insert("invoices", { amount: 0 });
+const touchInvoice = async (ctx: MutationCtx, id: Id<"invoices">) => ctx.db.patch(id, { amount: 1 });
+
+export const signupViaHelper = mutation.input({}).mutation(async ({ ctx }) => {
+    const id = await openInvoice(ctx);
+    await touchInvoice(ctx, id);
+});
+
+const settle = async (ctx: MutationCtx) => touchInvoice(ctx, await openInvoice(ctx));
+
+export const signupTransitive = mutation.input({}).mutation(async ({ ctx }) => settle(ctx));
+
+const ping = async (ctx: MutationCtx, n: number): Promise<void> => (n > 0 ? pong(ctx, n - 1) : undefined);
+async function pong(ctx: MutationCtx, n: number): Promise<void> {
+    await ctx.db.insert("invoices", { amount: n });
+    await ping(ctx, n);
+}
+
+export const signupCycle = mutation.input({}).mutation(async ({ ctx }) => ping(ctx, 2));
+
+const voidInvoice = async (ctx: MutationCtx, id: Id<"invoices">) => ctx.db.delete(id);
+`,
+        );
+    };
+
+    it("draws writes made through same-file helpers as the exported caller's, and lists an orphan helper's write", () => {
+        expect.assertions(2);
+
+        writeHelperWrites();
+        runCodegen({ projectRoot: workdir });
+
+        const writes = manifest().edges.filter((edge) => edge.kind === "write");
+
+        expect(writes).toStrictEqual(
+            ["signupCycle", "signupDirect", "signupTransitive", "signupViaHelper"].map((name) => {
+                return { from: `function:accounts_signup:${name}`, kind: "write", to: "table:invoices" };
+            }),
+        );
+        expect(manifest().unresolved).toStrictEqual([{ file: "accounts/signup", kind: "write", line: 36, reason: "inside a non-exported helper" }]);
+    });
+
+    it("flags a cross-module write made through a helper, and one in a helper no export calls", () => {
+        expect.assertions(1);
+
+        writeHelperWrites();
+
+        const result = runCodegen({ projectRoot: workdir });
+        const findings = result.advisories
+            .filter((finding) => finding.name === "cross_module_table_write")
+            .map((finding) => finding.metadata)
+            .toSorted((a, b) => String(a["helper"] ?? a["exportName"]).localeCompare(String(b["helper"] ?? b["exportName"])));
+        const signup = { file: "accounts/signup", owner: "billing", table: "invoices", writer: "accounts" };
+
+        expect(findings).toStrictEqual([
+            { ...signup, exportName: "signupCycle" },
+            { ...signup, exportName: "signupDirect" },
+            { ...signup, exportName: "signupTransitive" },
+            { ...signup, exportName: "signupViaHelper" },
+            { ...signup, exportName: "", helper: "voidInvoice", line: 36 },
+        ]);
+    });
+
+    it("draws the call sites of a workflow or queue handler imported from another file as that workflow's or queue's", () => {
+        expect.assertions(3);
+
+        writeModules();
+        write(
+            "onboarding/flow.ts",
+            `import { api } from "../_generated/api";
+
+export const onboard = async (ctx) => {
+    await ctx.step.do("greet", () => undefined);
+    await ctx.runQuery(api.accounts_users.me, {});
+};
+`,
+        );
+        write(
+            "workflows.ts",
+            `import { defineWorkflow } from "@lunora/workflow";
+import { onboard } from "./onboarding/flow";
+
+export const onboarding = defineWorkflow({ handler: onboard });
+`,
+        );
+        write(
+            "jobs/process.ts",
+            `import { internal } from "../_generated/api";
+
+export async function processJob(message, ctx) {
+    await ctx.runMutation(internal.accounts_users.touch, {});
+}
+`,
+        );
+        write(
+            "queues.ts",
+            `import { defineQueue, defineSubscription, defineTopic } from "@lunora/queue";
+import { processJob } from "./jobs/process";
+
+export const posted = defineTopic<{ text: string }>();
+export const indexPost = defineSubscription(posted, { handler: async () => {} });
+export const jobs = defineQueue({ handler: processJob });
+`,
+        );
+        runCodegen({ projectRoot: workdir });
+
+        const { edges, unresolved } = manifest();
+
+        expect(edges).toContainEqual({ from: "workflow:onboarding", kind: "call", to: "function:accounts_users:me" });
+        expect(edges).toContainEqual({ from: "queue:jobs", kind: "call", to: "function:accounts_users:touch" });
+        expect(unresolved.filter((entry) => entry.file === "onboarding/flow" || entry.file === "jobs/process")).toStrictEqual([]);
     });
 
     it("treats an installed component as a module: its own lane, and a warning for app code writing its table", () => {

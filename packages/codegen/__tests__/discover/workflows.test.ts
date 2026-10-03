@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -187,6 +187,54 @@ describe("discover/workflows", () => {
         `);
 
         expect(discoverWorkflows(newProject(), workdir)[0]?.steps).toEqual([{ line: 8, method: "do", name: "open" }]);
+    });
+
+    it("follows a handler imported from another lunora file: its steps, and its call-site key", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(workdir, "onboarding"));
+        writeFileSync(
+            join(workdir, "onboarding", "flow.ts"),
+            `export const onboard = async (ctx) => {
+    await ctx.step.do("welcome", () => undefined);
+    await ctx.step.sleep("pause", "1 day");
+};
+`,
+        );
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            import { onboard } from "./onboarding/flow";
+
+            export const onboarding = defineWorkflow({ handler: onboard });
+        `);
+
+        const [workflow] = discoverWorkflows(newProject(), workdir);
+
+        // The step lines are lines of onboarding/flow.ts, which `handlerSite` names.
+        expect(workflow?.steps).toEqual([
+            { line: 2, method: "do", name: "welcome" },
+            { line: 3, method: "sleep", name: "pause" },
+        ]);
+        expect(workflow?.handlerSite).toStrictEqual({ exportName: "onboard", file: "onboarding/flow" });
+    });
+
+    it("follows a local shorthand handler for its steps without a handler site", () => {
+        expect.assertions(2);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+
+            async function handler(ctx) {
+                await ctx.step.do("only", () => undefined);
+            }
+
+            export const local = defineWorkflow({ handler });
+        `);
+
+        const [workflow] = discoverWorkflows(newProject(), workdir);
+
+        expect(workflow?.steps).toEqual([{ line: 5, method: "do", name: "only" }]);
+        expect(workflow).not.toHaveProperty("handlerSite");
     });
 
     it("ignores non-defineWorkflow exports and unexported definitions", () => {

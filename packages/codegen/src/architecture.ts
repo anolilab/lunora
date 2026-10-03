@@ -156,13 +156,19 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
     const nodes = new Map<string, ArchitectureNode>();
     const sites = new Map<string, string>();
     const owners = tableOwners(input.modules);
-    const add = (entry: ArchitectureNode, site?: string): void => {
+    const add = (entry: ArchitectureNode, ...entrySites: ReadonlyArray<string | undefined>): void => {
         nodes.set(entry.id, entry);
 
-        if (site !== undefined) {
-            sites.set(site, entry.id);
+        for (const site of entrySites) {
+            if (site !== undefined) {
+                sites.set(site, entry.id);
+            }
         }
     };
+    // A handler passed by reference (`handler: onboard`, exported from another
+    // file) runs its call sites under that file's export, not the declaring one.
+    const handlerSiteKey = (site: { exportName: string; file: string } | undefined): string | undefined =>
+        site === undefined ? undefined : siteKey(site.file, site.exportName);
 
     for (const definition of input.functions) {
         const key = siteKey(definition.filePath, definition.exportName);
@@ -185,7 +191,11 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
     for (const queue of input.queues) {
         const detail = queue.topic === undefined ? {} : { detail: "subscription" };
 
-        add({ ...detail, id: `queue:${queue.exportName}`, kind: "queue", name: queue.exportName }, siteKey(QUEUES_MODULE, queue.exportName));
+        add(
+            { ...detail, id: `queue:${queue.exportName}`, kind: "queue", name: queue.exportName },
+            siteKey(QUEUES_MODULE, queue.exportName),
+            handlerSiteKey(queue.handlerSite),
+        );
     }
 
     for (const topic of input.topics) {
@@ -193,7 +203,11 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
     }
 
     for (const workflow of input.workflows) {
-        add({ id: `workflow:${workflow.exportName}`, kind: "workflow", name: workflow.exportName }, siteKey(WORKFLOWS_MODULE, workflow.exportName));
+        add(
+            { id: `workflow:${workflow.exportName}`, kind: "workflow", name: workflow.exportName },
+            siteKey(WORKFLOWS_MODULE, workflow.exportName),
+            handlerSiteKey(workflow.handlerSite),
+        );
     }
 
     for (const cron of input.crons) {

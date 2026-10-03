@@ -644,6 +644,14 @@ export interface WorkflowIR {
     defaultRetention?: { errorRetention?: string; successRetention?: string };
     /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
+
+    /**
+     * Where the `handler:` is declared when it is a reference to a function
+     * exported from a lunora source file (`handler: onboard`, imported from
+     * `onboarding/flow.ts`) rather than written inline — the call-site key the
+     * architecture graph attributes that function's own call sites through.
+     */
+    handlerSite?: { exportName: string; file: string };
     /** Static `limits` literal → `exports.<Class>.limits`. */
     limits?: { steps?: number };
 
@@ -667,7 +675,8 @@ export interface WorkflowIR {
      * call. Feeds the duplicate-step-name lint, which flags a name used twice
      * (Cloudflare memoizes by name, so the second call silently returns the
      * first's cached result). Calls with a non-literal name are omitted (not
-     * statically comparable).
+     * statically comparable). A handler passed by reference is followed to its
+     * declaration; the lines are then in that file ({@link WorkflowIR.handlerSite}).
      */
     steps: ReadonlyArray<WorkflowStepIR>;
 }
@@ -759,6 +768,14 @@ export interface QueueIR {
     bindingName: string;
     /** The `lunora/queues.ts` export name, e.g. `emailQueue`. */
     exportName: string;
+
+    /**
+     * Where the `handler:` is declared when it is a reference to a function
+     * exported from a lunora source file (`handler: onboard`, imported from
+     * `onboarding/flow.ts`) rather than written inline — the call-site key the
+     * architecture graph attributes that function's own call sites through.
+     */
+    handlerSite?: { exportName: string; file: string };
     /** How the queue is consumed: `"push"` (a worker `queue()` handler) or `"pull"` (external HTTP). */
     mode: "pull" | "push";
 
@@ -927,10 +944,20 @@ export interface FlagsIR {
  * unused-workflow heuristic rather than producing a false positive).
  */
 export interface WorkflowCallIR {
-    /** Export binding name of the function performing the call, e.g. `create`. */
+    /**
+     * Export binding name of the function performing the call, e.g. `create`. A
+     * call inside a same-file helper is attributed to each export referencing the
+     * helper (one record per export); `""` when none does.
+     */
     exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
+
+    /**
+     * Set only when `exportName` is `""`: the non-exported top-level helper the
+     * call sits in, which no exported function references (an orphan helper).
+     */
+    helper?: string;
     /** 1-based line of the `get(...)` call. */
     line: number;
     /** The referenced workflow export name, or `""` when the argument is not a string literal. */
@@ -1007,10 +1034,20 @@ export interface AuthApiCallIR {
  * edges and the `cross_module_table_write` lint.
  */
 export interface TableWriteIR {
-    /** Export binding name of the function performing the write. */
+    /**
+     * Export binding name of the function performing the write. A write inside a
+     * same-file helper is attributed to each export referencing the helper (one
+     * record per export); `""` when none does.
+     */
     exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
+
+    /**
+     * Set only when `exportName` is `""`: the non-exported top-level helper the
+     * call sits in, which no exported function references (an orphan helper).
+     */
+    helper?: string;
     /** 1-based line of the call. */
     line: number;
     /** The writer method called, e.g. `patch`, `deleteMany`, `upsert`. */
@@ -1027,10 +1064,20 @@ export interface TableWriteIR {
  * {@link InsertWriteIR.table} is `""` when the argument is not a string literal.
  */
 export interface InsertWriteIR {
-    /** Export binding name of the function performing the insert, e.g. "send". */
+    /**
+     * Export binding name of the function performing the insert, e.g. "send". An
+     * insert inside a same-file helper is attributed to each export referencing
+     * the helper (one record per export); `""` when none does.
+     */
     exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
+
+    /**
+     * Set only when `exportName` is `""`: the non-exported top-level helper the
+     * call sits in, which no exported function references (an orphan helper).
+     */
+    helper?: string;
     /** 1-based line of the `insert(...)` call. */
     line: number;
     /** Target table name, or `""` when the argument is not a string literal. */

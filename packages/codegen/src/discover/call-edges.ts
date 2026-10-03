@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { CallEdgeIR } from "../ir";
 import sanitizeNamespace from "../paths";
-import { enclosingExportName, functionReferenceSegments, listLunoraSourceFiles, lunoraRelativePath, RUN_METHODS } from "./ast";
+import { exportAttributionsOf, functionReferenceSegments, listLunoraSourceFiles, lunoraRelativePath, RUN_METHODS } from "./ast";
 
 /**
  * A function reference as the `namespace:export` key the function registry uses.
@@ -109,8 +109,10 @@ const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
  * service use (`ctx.services.<s>.<member>`; a destructured `ctx.services` is not seen) in
  * `lunora/`, attributed to the exported declaration it sits in. Purely syntactic
  * — no type checker — so a reference held in a variable is recorded with a
- * `reason` instead of a `target`, and a call inside a non-exported helper carries
- * `exportName: ""`; the manifest builder reports both rather than guessing.
+ * `reason` instead of a `target`. A call inside a same-file helper is recorded once
+ * per export that reaches the helper (see `enclosingExportNames`); one no export
+ * reaches carries `exportName: ""`, and the manifest builder reports it rather
+ * than guessing.
  */
 const discoverCallEdges = (project: Project, lunoraDirectory: string): CallEdgeIR[] => {
     const edges: CallEdgeIR[] = [];
@@ -119,11 +121,18 @@ const discoverCallEdges = (project: Project, lunoraDirectory: string): CallEdgeI
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const file = lunoraRelativePath(lunoraDirectory, filePath);
 
+        // One edge per export the site is attributed to, all at the site's own line.
+        const record = (site: TsNode, edge: CallSiteEdge): void => {
+            for (const { exportName } of exportAttributionsOf(site)) {
+                edges.push({ ...edge, exportName, file, line: site.getStartLineNumber() });
+            }
+        };
+
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
             const edge = edgeOf(call);
 
             if (edge !== undefined) {
-                edges.push({ ...edge, exportName: enclosingExportName(call), file, line: call.getStartLineNumber() });
+                record(call, edge);
             }
         }
 
@@ -134,7 +143,7 @@ const discoverCallEdges = (project: Project, lunoraDirectory: string): CallEdgeI
             const service = surfaceMemberOf(access, "services");
 
             if (service !== undefined) {
-                edges.push({ exportName: enclosingExportName(access), file, kind: "invoke", line: access.getStartLineNumber(), target: service });
+                record(access, { kind: "invoke", target: service });
             }
         }
     }

@@ -2,7 +2,7 @@ import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { WorkflowCallIR } from "../ir";
-import { enclosingExportName, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportAttributionsOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * True for a `ctx.workflows.get(...)` (or bare `workflows.get(...)`) call — the
@@ -36,7 +36,8 @@ const workflowOf = (call: CallExpression): string => {
 /**
  * Discover `ctx.workflows.get("name")` call sites under the lunora source
  * directory and attribute each to the exported function (and file) performing
- * it. A call outside an exported declaration is dropped; a call with a
+ * it — a call inside a same-file helper once per export that reaches the helper,
+ * or with `exportName: ""` and the helper's name when none does; a call with a
  * non-literal name argument is kept with `workflow === ""` so the unused-workflow
  * lint can treat it as a dynamic use (and suppress its heuristic) rather than
  * silently ignoring it.
@@ -53,13 +54,11 @@ const discoverWorkflowCalls = (project: Project, lunoraDirectory: string): Workf
                 continue;
             }
 
-            const exportName = enclosingExportName(call);
+            const workflow = workflowOf(call);
 
-            if (exportName === "") {
-                continue;
+            for (const attribution of exportAttributionsOf(call)) {
+                calls.push({ ...attribution, file: relativePath, line: call.getStartLineNumber(), workflow });
             }
-
-            calls.push({ exportName, file: relativePath, line: call.getStartLineNumber(), workflow: workflowOf(call) });
         }
     }
 

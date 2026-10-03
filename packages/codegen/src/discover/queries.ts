@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { QueryReadIR } from "../ir";
-import { enclosingExportName, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportAttributionsOf, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * Chain methods that narrow a read so it is not a full scan.
@@ -142,6 +142,11 @@ const tableOf = (queryCall: CallExpression): string => {
  * `filter_without_index` candidates (that lint gates on `hasFilter`), but an
  * unfiltered, unindexed `.collect()` is the read `unbounded_collect` exists for
  * — and dropping it here is precisely why nothing could see it.
+ *
+ * A read inside a same-file helper is recorded once per export that reaches the
+ * helper (see `enclosingExportNames`), all at the read's own line; one no export
+ * reaches keeps `exportName: ""`. The read lints key on file and line, so they
+ * report such a read once however many exports share it.
  */
 const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR[] => {
     const reads: QueryReadIR[] = [];
@@ -157,9 +162,7 @@ const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR
 
             const methods = chainMethods(call);
             const hasFilter = methods.includes("filter");
-
-            reads.push({
-                exportName: enclosingExportName(call),
+            const read = {
                 file: relativePath,
                 filtersPrimaryKey: hasFilter && filtersPrimaryKeyOf(call),
                 hasFilter,
@@ -167,7 +170,11 @@ const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR
                 line: call.getStartLineNumber(),
                 table: tableOf(call),
                 terminal: methods.findLast((method) => TERMINAL_METHODS.has(method)),
-            });
+            };
+
+            for (const { exportName } of exportAttributionsOf(call)) {
+                reads.push({ ...read, exportName });
+            }
         }
     }
 

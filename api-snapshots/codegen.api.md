@@ -392,6 +392,7 @@ interface IndexSnapshot {
 interface InsertWriteIR {
     exportName: string;
     file: string;
+    helper?: string;
     line: number;
     table: string;
 }
@@ -687,6 +688,10 @@ interface QueryReadIR {
 interface QueueIR {
     bindingName: string;
     exportName: string;
+    handlerSite?: {
+        exportName: string;
+        file: string;
+    };
     mode: "pull" | "push";
     name: string;
     topic?: string;
@@ -1095,6 +1100,10 @@ interface WorkflowIR {
         successRetention?: string;
     };
     exportName: string;
+    handlerSite?: {
+        exportName: string;
+        file: string;
+    };
     limits?: {
         steps?: number;
     };
@@ -2774,6 +2783,7 @@ interface StorageUploadIR {
 interface TableWriteIR {
     exportName: string;
     file: string;
+    helper?: string;
     line: number;
     method: string;
     table: string;
@@ -2828,6 +2838,7 @@ interface VectorNamespaceAccessIR {
 interface WorkflowCallIR {
     exportName: string;
     file: string;
+    helper?: string;
     line: number;
     workflow: string;
 }

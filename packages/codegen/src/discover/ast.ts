@@ -7,12 +7,14 @@ import type {
     Block,
     CallExpression,
     Expression,
+    FunctionDeclaration,
     Identifier,
     ObjectLiteralElementLike,
     ObjectLiteralExpression,
     Project,
     SourceFile,
     Symbol as TsSymbol,
+    VariableDeclaration,
 } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
@@ -304,6 +306,140 @@ const enclosingExportName = (node: Node): string => {
     }
 
     return "";
+};
+
+/** The top-level `function` / `const` declaration a node sits in, or `undefined` at module scope. */
+const topLevelDeclarationOf = (node: Node): FunctionDeclaration | VariableDeclaration | undefined => {
+    for (const ancestor of node.getAncestors()) {
+        if (Node.isFunctionDeclaration(ancestor) && Node.isSourceFile(ancestor.getParent())) {
+            return ancestor;
+        }
+
+        if (Node.isVariableDeclaration(ancestor) && Node.isSourceFile(ancestor.getVariableStatement()?.getParent())) {
+            return ancestor;
+        }
+    }
+
+    return undefined;
+};
+
+/** The export name of an exported top-level declaration (`export function f`, `export { f }`), or `undefined`. */
+const exportedDeclarationName = (declaration: FunctionDeclaration | VariableDeclaration): string | undefined => {
+    if (!declaration.isExported()) {
+        return undefined;
+    }
+
+    return declaration.isDefaultExport() ? "default" : declaration.getName();
+};
+
+/**
+ * Every identifier in the declaration's own file that refers to it — by symbol,
+ * so a shadowing local of the same name is not one. A shorthand property
+ * (`{ handler }`) names the property symbol, so its value symbol is compared.
+ */
+const sameFileReferences = (nameNode: Identifier): Identifier[] => {
+    const symbol = nameNode.getSymbol()?.compilerSymbol;
+
+    if (symbol === undefined) {
+        return [];
+    }
+
+    return nameNode
+        .getSourceFile()
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .filter((identifier) => {
+            if (identifier === nameNode || identifier.getText() !== nameNode.getText()) {
+                return false;
+            }
+
+            const parent = identifier.getParent();
+            const referenced = Node.isShorthandPropertyAssignment(parent) ? parent.getValueSymbol() : identifier.getSymbol();
+
+            return referenced?.compilerSymbol === symbol;
+        });
+};
+
+/**
+ * The exported declarations a call site runs on behalf of — {@link enclosingExportName}
+ * extended through same-file helpers.
+ *
+ * A call lexically inside an export resolves to that export alone. A call inside
+ * a top-level, non-exported `function` / `const` (a helper) resolves to every
+ * export that references the helper, following helper → helper references
+ * transitively (a visited set stops cycles). An exported `function` declaration —
+ * never a registered function, but still an export — resolves to its own name.
+ *
+ * Per-file and syntactic: a helper imported from another file is not followed,
+ * and a reference is taken to mean a call made with the caller's `ctx`. Returns
+ * `[]` when no export reaches the call — an orphan helper, or module scope.
+ */
+const enclosingExportNames = (node: Node): string[] => {
+    const names = new Set<string>();
+    const visited = new Set<Node>();
+
+    const visit = (at: Node): void => {
+        const direct = enclosingExportName(at);
+
+        if (direct !== "") {
+            names.add(direct);
+
+            return;
+        }
+
+        const declaration = topLevelDeclarationOf(at);
+
+        if (declaration === undefined || visited.has(declaration)) {
+            return;
+        }
+
+        visited.add(declaration);
+
+        const exported = exportedDeclarationName(declaration);
+
+        if (exported !== undefined) {
+            names.add(exported);
+
+            return;
+        }
+
+        const nameNode = declaration.getNameNode();
+
+        if (nameNode !== undefined && Node.isIdentifier(nameNode)) {
+            for (const reference of sameFileReferences(nameNode)) {
+                visit(reference);
+            }
+        }
+    };
+
+    visit(node);
+
+    return [...names];
+};
+
+/** Who a call site is attributed to: an export, or — when none reaches it — `""` plus the helper it sits in. */
+interface ExportAttribution {
+    exportName: string;
+    /** The enclosing top-level helper's name, set only when `exportName` is `""` and the call is not at module scope. */
+    helper?: string;
+}
+
+/**
+ * The attributions of a call site: one per export {@link enclosingExportNames}
+ * finds — or, when no export reaches the call, a single `exportName: ""` attribution naming the helper it
+ * sits in, so the call site is reported as undrawable rather than dropped.
+ */
+const exportAttributionsOf = (node: Node): ExportAttribution[] => {
+    const names = enclosingExportNames(node);
+
+    if (names.length > 0) {
+        return names.map((exportName) => {
+            return { exportName };
+        });
+    }
+
+    const helper = topLevelDeclarationOf(node)?.getName();
+
+    return [helper === undefined ? { exportName: "" } : { exportName: "", helper }];
 };
 
 /**
@@ -604,6 +740,65 @@ const unwrapExpression = (node: Node | undefined): Node | undefined => {
 };
 
 /**
+ * Where a `handler:` property's function is declared, when it is a reference
+ * rather than an inline function: `handler: onboard` resolved through its
+ * (aliased) symbol to the declaration — local, or imported from another file.
+ * `body` is the function itself (a `const`'s initializer or the `function`
+ * declaration); `exportName` is the declaration's own export, `""` when it has
+ * none. `undefined` for an inline handler or one that cannot be resolved.
+ */
+const handlerDeclarationOf = (
+    handlerProperty: ObjectLiteralElementLike | undefined,
+): { body: Node; exportName: string; sourceFile: SourceFile } | undefined => {
+    let reference: Node | undefined;
+
+    if (handlerProperty !== undefined && Node.isPropertyAssignment(handlerProperty)) {
+        reference = unwrapExpression(handlerProperty.getInitializer());
+    } else if (handlerProperty !== undefined && Node.isShorthandPropertyAssignment(handlerProperty)) {
+        reference = handlerProperty.getNameNode();
+    }
+
+    if (reference === undefined || !Node.isIdentifier(reference)) {
+        return undefined;
+    }
+
+    const parent = reference.getParent();
+    const symbol = Node.isShorthandPropertyAssignment(parent) ? parent.getValueSymbol() : reference.getSymbol();
+    const target = symbol?.getAliasedSymbol() ?? symbol;
+
+    for (const declaration of target?.getDeclarations() ?? []) {
+        if (Node.isFunctionDeclaration(declaration)) {
+            return { body: declaration, exportName: exportedDeclarationName(declaration) ?? "", sourceFile: declaration.getSourceFile() };
+        }
+
+        const body = Node.isVariableDeclaration(declaration) ? unwrapExpression(declaration.getInitializer()) : undefined;
+
+        if (Node.isVariableDeclaration(declaration) && body !== undefined && (Node.isArrowFunction(body) || Node.isFunctionExpression(body))) {
+            return { body, exportName: exportedDeclarationName(declaration) ?? "", sourceFile: declaration.getSourceFile() };
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The call-site key (`file` + `exportName`) of a referenced `handler:` that is
+ * exported from a lunora source file, so the architecture graph can attribute
+ * the handler's own call sites to the queue / workflow that runs it. `undefined`
+ * for an inline or non-exported handler (a non-exported one in the declaring file
+ * is reached through {@link enclosingExportNames} instead) or one outside `lunora/`.
+ */
+const handlerSiteOf = (handler: ReturnType<typeof handlerDeclarationOf>, lunoraDirectory: string): { exportName: string; file: string } | undefined => {
+    if (handler === undefined || handler.exportName === "") {
+        return undefined;
+    }
+
+    const file = lunoraRelativePath(lunoraDirectory, handler.sourceFile.getFilePath());
+
+    return file.startsWith("../") ? undefined : { exportName: handler.exportName, file };
+};
+
+/**
  * Unwrap `as`/`satisfies`/parenthesized wrappers around a call expression —
  * `define…({...}) satisfies Definition`, `define…({...}) as const`, or
  * `(define…({...}))` — down to the inner `CallExpression`. Returns `undefined`
@@ -755,9 +950,13 @@ export {
     collectSecurityCallRows,
     defaultExportExpression,
     enclosingExportName,
+    enclosingExportNames,
+    exportAttributionsOf,
     findObjectProperty,
     functionReferenceSegments,
+    handlerDeclarationOf,
     handlerOf,
+    handlerSiteOf,
     isContextIdentifier,
     isDatabaseAccessor,
     limitNameOf,
@@ -780,4 +979,4 @@ export {
     unwrapExpression,
     unwrapToCallExpression,
 };
-export type { ScannedSourceFile };
+export type { ExportAttribution, ScannedSourceFile };

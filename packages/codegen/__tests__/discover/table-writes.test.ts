@@ -37,6 +37,17 @@ export const write = mutation({
 });
 
 const helper = async (ctx: { db: Db }, id: Id<"todos">) => ctx.db.patch(id, {});
+
+const removeEither = async (ctx: { db: Db }, id: Id<"notes"> | Id<"todos">) => ctx.db.delete(id);
+// An optional id handed straight to delete: the table is still "notes".
+const removeMaybe = async (ctx: { db: Db }, id: Id<"notes"> | undefined) => ctx.db.delete(id);
+
+export const cleanup = mutation({
+    handler: async (ctx, args) => {
+        await removeEither(ctx, args.id);
+        await removeMaybe(ctx, undefined);
+    },
+});
 `;
 
 describe("discoverTableWrites", () => {
@@ -54,9 +65,11 @@ describe("discoverTableWrites", () => {
         expect.assertions(1);
 
         const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
-        const writes = discoverTableWrites(project, join(workdir, "lunora")).map((write) => `${write.method}:${write.table}`);
+        const writes = discoverTableWrites(project, join(workdir, "lunora"))
+            .filter((write) => write.exportName === "write")
+            .map((write) => `${write.method}:${write.table}`);
 
-        // Reads are not writes, an untyped id yields "", and the helper is skipped like discoverInserts does.
+        // Reads are not writes, and an untyped id yields "".
         expect(writes).toStrictEqual([
             "patch:todos",
             "replace:todos",
@@ -67,5 +80,25 @@ describe("discoverTableWrites", () => {
             "upsert:todos",
             "delete:",
         ]);
+    });
+
+    it("keeps a write in a helper no export calls, with an empty export and the helper's name", () => {
+        expect.assertions(1);
+
+        const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
+        const orphans = discoverTableWrites(project, join(workdir, "lunora")).filter((write) => write.exportName === "");
+
+        expect(orphans).toStrictEqual([{ exportName: "", file: "todos", helper: "helper", line: 28, method: "patch", table: "todos" }]);
+    });
+
+    it("records one write per table of a union id, and reads through `| undefined`", () => {
+        expect.assertions(1);
+
+        const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
+        const writes = discoverTableWrites(project, join(workdir, "lunora"))
+            .filter((write) => write.exportName === "cleanup")
+            .map((write) => `${String(write.line)}:${write.method}:${write.table}`);
+
+        expect(writes.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["30:delete:notes", "30:delete:todos", "32:delete:notes"]);
     });
 });

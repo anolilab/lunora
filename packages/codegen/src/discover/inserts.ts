@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { InsertWriteIR } from "../ir";
-import { enclosingExportName, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportAttributionsOf, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * True for a `ctx.db.insert(...)` (or bare `db.insert(...)`) call — the database
@@ -66,9 +66,11 @@ const tableOf = (call: CallExpression): string => {
 
 /**
  * Discover `ctx.db.insert("table", …)` writes under the lunora source directory
- * and attribute each to the exported function (and file) performing it. Calls
- * with a non-literal table argument, or outside an exported declaration, are
- * dropped (`table === ""` / no enclosing export).
+ * and attribute each to the exported function (and file) performing it. An
+ * insert inside a same-file helper is recorded once per export that reaches the
+ * helper (see `enclosingExportNames`), at the insert's own line; one no export
+ * reaches is kept with `exportName: ""` and the helper's name, so it is reported
+ * rather than lost. A non-literal table argument is kept with `table: ""`.
  */
 const discoverInserts = (project: Project, lunoraDirectory: string): InsertWriteIR[] => {
     const writes: InsertWriteIR[] = [];
@@ -82,13 +84,11 @@ const discoverInserts = (project: Project, lunoraDirectory: string): InsertWrite
                 continue;
             }
 
-            const exportName = enclosingExportName(call);
+            const table = tableOf(call);
 
-            if (exportName === "") {
-                continue;
+            for (const attribution of exportAttributionsOf(call)) {
+                writes.push({ ...attribution, file: relativePath, line: call.getStartLineNumber(), table });
             }
-
-            writes.push({ exportName, file: relativePath, line: call.getStartLineNumber(), table: tableOf(call) });
         }
     }
 

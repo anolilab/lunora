@@ -37,8 +37,12 @@ const CHANNELS = `
     // A read — not a workflow get.
     export const headers = mutation({ args: {}, handler: (ctx) => ctx.req.headers.get("x-token") });
 
-    // Not exported — dropped.
+    // Not exported and never referenced — kept with exportName "".
     const helper = (ctx) => ctx.workflows.get("secret");
+
+    // Referenced from an export — attributed to it.
+    const welcome = (ctx) => ctx.workflows.get("channelWelcome");
+    export const rejoin = mutation({ args: {}, handler: (ctx) => welcome(ctx) });
 `;
 
 let workdir: string;
@@ -84,11 +88,19 @@ describe("discoverWorkflowCalls", () => {
         expect(calls.some((call) => call.exportName === "headers")).toBe(false);
     });
 
-    it("drops calls that aren't inside an exported declaration", () => {
+    it("keeps a call in a helper no export calls, with an empty export and the helper's name", () => {
+        expect.assertions(1);
+
+        const calls = discoverWorkflowCalls(project, join(workdir, "lunora")).filter((call) => call.workflow === "secret");
+
+        expect(calls).toStrictEqual([{ exportName: "", file: "channels", helper: "helper", line: 32, workflow: "secret" }]);
+    });
+
+    it("attributes a call in a helper to the export calling it", () => {
         expect.assertions(1);
 
         const calls = discoverWorkflowCalls(project, join(workdir, "lunora"));
 
-        expect(calls.some((call) => call.workflow === "secret")).toBe(false);
+        expect(calls).toContainEqual({ exportName: "rejoin", file: "channels", line: 35, workflow: "channelWelcome" });
     });
 });
