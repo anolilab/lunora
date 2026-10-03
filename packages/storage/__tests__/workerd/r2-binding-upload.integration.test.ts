@@ -111,3 +111,83 @@ describe("createR2BindingUploadStorage (workerd + Miniflare R2)", () => {
         expect(body.byteLength).toBe(total);
     }, 60_000);
 });
+
+const chunkedHandler = () => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: createR2BindingUploadStorage(bucket) });
+
+const createChunked = async (total: number): Promise<string> => {
+    const created = await chunkedHandler().fetch(
+        new Request(ENDPOINT, { headers: { "content-type": "text/plain", "x-chunked-upload": "true", "x-total-size": String(total) }, method: "POST" }),
+    );
+
+    expect(created.status).toBe(201);
+
+    return new URL(created.headers.get("location") ?? "", ENDPOINT).href;
+};
+
+const patchChunk = async (location: string, offset: number, chunk: Uint8Array<ArrayBuffer>): Promise<Response> =>
+    chunkedHandler().fetch(
+        new Request(location, {
+            body: chunk,
+            headers: { "content-length": String(chunk.byteLength), "content-type": "application/octet-stream", "x-chunk-offset": String(offset) },
+            method: "PATCH",
+        }),
+    );
+
+/** A chunked-REST `Location` names the id plus an extension; the object is keyed by the id. */
+const objectKey = (location: string): string => (location.split("/").pop() ?? "").replace(/\.[^.]*$/, "");
+
+describe("chunked REST over the R2 binding (workerd + Miniflare R2)", () => {
+    it("uploads in-order chunks across a part boundary, each request on a fresh provider", async () => {
+        expect.hasAssertions();
+
+        const total = R2_PART_SIZE + 1_234_567;
+        const bytes = pattern(total);
+        const location = await createChunked(total);
+        const chunkSize = 2 * 1024 * 1024;
+
+        for (let offset = 0; offset < total; offset += chunkSize) {
+            const end = Math.min(offset + chunkSize, total);
+            // eslint-disable-next-line no-await-in-loop -- the provider takes chunks in order
+            const response = await patchChunk(location, offset, bytes.slice(offset, end));
+
+            expect(response.status).toBe(end === total ? 200 : 202);
+            expect(response.headers.get("x-upload-offset")).toBe(String(end));
+        }
+
+        const head = await chunkedHandler().fetch(new Request(location, { method: "HEAD" }));
+
+        expect(head.headers.get("x-upload-complete")).toBe("true");
+
+        const object = await env.BUCKET.get(objectKey(location));
+        const stored = new Uint8Array(object === null ? new ArrayBuffer(0) : await object.arrayBuffer());
+
+        expect(object?.httpMetadata?.contentType).toBe("text/plain");
+        expect(stored.byteLength).toBe(total);
+        expect(stored.every((byte, index) => byte === bytes[index])).toBe(true);
+    }, 60_000);
+
+    it("refuses an out-of-order chunk with 409 and does not count it towards completion", async () => {
+        expect.hasAssertions();
+
+        const bytes = pattern(100);
+        const location = await createChunked(100);
+
+        await expect(patchChunk(location, 50, bytes.slice(50))).resolves.toHaveProperty("status", 409);
+
+        const first = await patchChunk(location, 0, bytes.slice(0, 50));
+
+        expect(first.status).toBe(202);
+        expect(first.headers.get("x-upload-complete")).toBe("false");
+        await expect(env.BUCKET.get(objectKey(location))).resolves.toBeNull();
+
+        const second = await patchChunk(location, 50, bytes.slice(50));
+
+        expect(second.status).toBe(200);
+        expect(second.headers.get("x-upload-complete")).toBe("true");
+
+        const object = await env.BUCKET.get(objectKey(location));
+        const stored = new Uint8Array(object === null ? new ArrayBuffer(0) : await object.arrayBuffer());
+
+        expect(stored.every((byte, index) => byte === bytes[index]) && stored.byteLength === 100).toBe(true);
+    });
+});

@@ -18,6 +18,44 @@ const CAS_ATTEMPTS = 5;
  */
 const PROVIDER_OWNED_FIELDS = ["bytesWritten", "ETag", "id", "name", "size", "status"] as const satisfies ReadonlyArray<keyof File>;
 
+/**
+ * The metadata key `@visulima/storage`'s chunked-REST handler keeps its list of
+ * received chunks under. The handler adds a chunk to it BEFORE the provider
+ * stores (or refuses) the chunk, and decides from the list alone whether the
+ * upload is complete. So the provider never stores the list, and answers it
+ * from its own offset instead: see {@link withStoredChunks}.
+ */
+const CHUNKS_KEY = "_chunks";
+
+/** The metadata flag the chunked-REST create sets on an upload. */
+const CHUNKED_UPLOAD_KEY = "_chunkedUpload";
+
+/**
+ * The record with the chunked-REST chunk list it can vouch for: the one run of
+ * bytes the provider has stored, `[0, bytesWritten)`. A chunk the provider
+ * refused (out of order, or overlapping what is stored) therefore never counts
+ * towards completion, in the `PATCH` that follows or in a `HEAD`.
+ */
+const withStoredChunks = (file: FileRecord): FileRecord => {
+    if (file.metadata[CHUNKED_UPLOAD_KEY] !== true) {
+        return file;
+    }
+
+    const stored = file.bytesWritten;
+    const chunks = stored > 0 ? [{ length: stored, offset: 0 }] : [];
+
+    return { ...file, metadata: Object.fromEntries([...Object.entries(file.metadata), [CHUNKS_KEY, chunks]]) };
+};
+
+/** The record without the chunked-REST chunk list, which is never stored. */
+const withoutChunks = (file: FileRecord): FileRecord => {
+    if (!(CHUNKS_KEY in file.metadata)) {
+        return file;
+    }
+
+    return { ...file, metadata: Object.fromEntries(Object.entries(file.metadata).filter(([key]) => key !== CHUNKS_KEY)) };
+};
+
 interface StoredState {
     etag: string;
     state: UploadState;
@@ -97,7 +135,7 @@ class R2UploadStateStore extends MetaStorage {
             throw new Error(`Upload state not found for id: ${id}`);
         }
 
-        return stored.state.file;
+        return withStoredChunks(stored.state.file);
     }
 
     /**
@@ -105,11 +143,12 @@ class R2UploadStateStore extends MetaStorage {
      * the caller's changes the base way, then saves. This lays that record over
      * the current state under a compare-and-swap, keeping the progress fields
      * from the stored record, so a metadata update can never rewind an upload.
+     * The chunked-REST chunk list is dropped: `get` derives it.
      */
     public override async save(id: string, file: File): Promise<File> {
         const next = await this.swap(id, (state) => {
             const saved: FileRecord = file;
-            const record: FileRecord = { ...saved };
+            const record: FileRecord = withoutChunks({ ...saved });
 
             for (const field of PROVIDER_OWNED_FIELDS) {
                 (record as Record<string, unknown>)[field] = state.file[field];

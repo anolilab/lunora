@@ -718,3 +718,126 @@ describe(createR2BindingUploadStorage, () => {
         expect(received).toBe(size);
     });
 });
+
+/** A raw chunked-REST driver: create with `X-Chunked-Upload`, then `PATCH` chunks at `X-Chunk-Offset`. */
+const chunkedRest = (handler: Handler) => {
+    return {
+        create: async (total: number, contentType = "application/octet-stream"): Promise<string> => {
+            const response = await handler.fetch(
+                new Request(ENDPOINT, {
+                    headers: { "content-type": contentType, "x-chunked-upload": "true", "x-total-size": String(total) },
+                    method: "POST",
+                }),
+            );
+
+            expect(response.status).toBe(201);
+
+            return new URL(response.headers.get("location") ?? "", ENDPOINT).href;
+        },
+        head: async (location: string): Promise<Response> => handler.fetch(new Request(location, { method: "HEAD" })),
+        patch: async (location: string, offset: number, body: Uint8Array<ArrayBuffer>): Promise<Response> =>
+            handler.fetch(
+                new Request(location, {
+                    body,
+                    headers: { "content-length": String(body.byteLength), "content-type": "application/octet-stream", "x-chunk-offset": String(offset) },
+                    method: "PATCH",
+                }),
+            ),
+    };
+};
+
+/** The stored object of a chunked-REST upload: its `Location` names the id plus an extension, the object is keyed by the id. */
+const storedUpload = (bucket: ReturnType<typeof createFakeR2UploadBucket>, location: string) =>
+    bucket.objects.get((location.split("/").pop() ?? "").replace(/\.[^.]*$/, ""));
+
+describe("chunked REST over the R2 binding", () => {
+    const chunkedHandlerOver = (bucket: R2UploadBucket): Handler =>
+        createUploadHandler({ protocol: "chunked-rest", silent: true, storage: createR2BindingUploadStorage(bucket) });
+
+    it("uploads in-order chunks across a part boundary and reports the upload complete", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const driver = chunkedRest(chunkedHandlerOver(bucket));
+        const total = R2_PART_SIZE + 1_234_567;
+        const bytes = pattern(total);
+        const location = await driver.create(total, "video/mp4");
+        const chunkSize = 2_000_003;
+
+        for (let offset = 0; offset < total; offset += chunkSize) {
+            const end = Math.min(offset + chunkSize, total);
+            // eslint-disable-next-line no-await-in-loop -- chunks are sent in order
+            const response = await driver.patch(location, offset, bytes.slice(offset, end));
+
+            expect(response.status).toBe(end === total ? 200 : 202);
+            expect(response.headers.get("x-upload-offset")).toBe(String(end));
+            expect(response.headers.get("x-upload-complete")).toBe(end === total ? "true" : "false");
+        }
+
+        const object = storedUpload(bucket, location);
+
+        expect(sameBytes(object?.bytes, bytes)).toBe(true);
+        expect(object?.contentType).toBe("video/mp4");
+        expect(bucket.partSizes).toStrictEqual([[R2_PART_SIZE, 1_234_567]]);
+
+        const head = await driver.head(location);
+
+        expect(head.status).toBe(200);
+        expect(head.headers.get("x-upload-complete")).toBe("true");
+    });
+
+    it("refuses an out-of-order chunk with 409 and never reports the upload complete before every byte is stored", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const driver = chunkedRest(chunkedHandlerOver(bucket));
+        const bytes = pattern(10);
+        const location = await driver.create(10);
+
+        // The second half first: the provider streams in order and cannot take it.
+        const ahead = await driver.patch(location, 5, bytes.slice(5));
+
+        expect(ahead.status).toBe(409);
+        await expect(ahead.json()).resolves.toMatchObject({ error: { code: "FileConflict" } });
+        expect(storedUpload(bucket, location)).toBeUndefined();
+
+        // The first half: stored, and the refused chunk counts for nothing.
+        const first = await driver.patch(location, 0, bytes.slice(0, 5));
+
+        expect(first.status).toBe(202);
+        expect(first.headers.get("x-upload-offset")).toBe("5");
+        expect(first.headers.get("x-upload-complete")).toBe("false");
+
+        const midway = await driver.head(location);
+
+        expect(midway.headers.get("x-upload-complete")).toBe("false");
+        expect(midway.headers.get("x-upload-offset")).toBe("5");
+        expect(storedUpload(bucket, location)).toBeUndefined();
+
+        // Resent in order, the second half finishes the upload.
+        const second = await driver.patch(location, 5, bytes.slice(5));
+
+        expect(second.status).toBe(200);
+        expect(second.headers.get("x-upload-complete")).toBe("true");
+        expect(sameBytes(storedUpload(bucket, location)?.bytes, bytes)).toBe(true);
+    });
+
+    it("refuses a chunk that overlaps bytes already stored (409) without claiming the overlap", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const driver = chunkedRest(chunkedHandlerOver(bucket));
+        const bytes = pattern(10);
+        const location = await driver.create(10);
+
+        await expect(driver.patch(location, 0, bytes.slice(0, 5))).resolves.toHaveProperty("status", 202);
+        // Starts inside the stored prefix and runs to the end.
+        await expect(driver.patch(location, 3, bytes.slice(3))).resolves.toHaveProperty("status", 409);
+
+        const head = await driver.head(location);
+
+        expect(head.headers.get("x-upload-complete")).toBe("false");
+        expect(head.headers.get("x-upload-offset")).toBe("5");
+        expect(storedUpload(bucket, location)).toBeUndefined();
+    });
+});
