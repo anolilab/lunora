@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { devFlagConflict, runDevCommand } from "../../src/commands/dev/handler";
 import type { DevOptions } from "../../src/commands/dev/index";
 import { runDevBackground, runDevStatus, startBackground } from "../../src/commands/dev/lifecycle";
-import { spawnLongLivedChild } from "../../src/commands/dev/supervise";
+import { signalChild, spawnLongLivedChild } from "../../src/commands/dev/supervise";
 import type { DevTunnelHandle } from "../../src/commands/dev/tunnel";
 import {
     buildCloudflaredArgs,
@@ -355,6 +355,87 @@ describe("lunora dev --tunnel", () => {
             expect(text(recorded)).not.toContain("cloudflared exited");
             // The shutdown-signal listeners are detached again.
             expect(process.listenerCount("SIGINT")).toBe(listenersBefore);
+        });
+
+        /** A cloudflared stand-in that prints the URL, then ignores the signals in `ignored`. */
+        const stubbornCloudflared = (ignored: ReadonlySet<NodeJS.Signals>): FakeChild => {
+            const calls: LongLivedDescriptor[] = [];
+            const killed: NodeJS.Signals[] = [];
+
+            const startChild: LongLivedSpawner = (descriptor, onLine) => {
+                calls.push(descriptor);
+
+                let end: (code: number) => void = () => {};
+                const exited = new Promise<number>((resolve) => {
+                    end = resolve;
+                });
+
+                queueMicrotask(() => {
+                    onLine(URL_LINE, "stderr");
+                });
+
+                return {
+                    exited,
+                    kill: (signal) => {
+                        killed.push(signal);
+
+                        if (!ignored.has(signal)) {
+                            end(1);
+                        }
+                    },
+                };
+            };
+
+            return { calls, killed, startChild };
+        };
+
+        it("force-kills a cloudflared that ignores SIGTERM when the close timeout expires", async () => {
+            expect.assertions(3);
+
+            const recorded = recordingLogger();
+            const { logger, printed } = waitForTunnelLine(recorded);
+            const child = stubbornCloudflared(new Set(["SIGTERM"]));
+
+            tunnel = startDevTunnel({
+                allowMail: [],
+                closeTimeoutMs: 20,
+                cwd: workdir,
+                logger,
+                origin: { kind: "fixed", origin: "http://localhost:8787" },
+                spawner: versionProbe("2026.9.3"),
+                startChild: child.startChild,
+            });
+            await printed;
+            await tunnel.close();
+
+            expect(child.killed).toStrictEqual(["SIGTERM", "SIGKILL"]);
+            expect(text(recorded)).toContain("cloudflared did not exit within 0.02s of SIGTERM — force-killing it.");
+            expect(recorded.lines.filter((line) => line.level === "error")).toHaveLength(0);
+        });
+
+        it("says so when even the force-kill cannot be confirmed, so a public tunnel cannot silently outlive dev", async () => {
+            expect.assertions(2);
+
+            const recorded = recordingLogger();
+            const { logger, printed } = waitForTunnelLine(recorded);
+            const child = stubbornCloudflared(new Set(["SIGKILL", "SIGTERM"]));
+
+            tunnel = startDevTunnel({
+                allowMail: [],
+                closeTimeoutMs: 20,
+                cwd: workdir,
+                logger,
+                origin: { kind: "fixed", origin: "http://localhost:8787" },
+                spawner: versionProbe("2026.9.3"),
+                startChild: child.startChild,
+            });
+            await printed;
+            await tunnel.close();
+
+            expect(child.killed).toStrictEqual(["SIGTERM", "SIGKILL"]);
+            expect(recorded.lines.find((line) => line.level === "error")?.message).toContain(
+                "could not confirm that cloudflared stopped — the PUBLIC tunnel may still be reachable",
+            );
         });
 
         it("treats a Ctrl-C that reaches cloudflared first as shutdown, not a dead tunnel", async () => {
@@ -710,6 +791,35 @@ describe("lunora dev --tunnel", () => {
             runDevStatus({ cwd: workdir, json: false, logger: recorded.logger });
 
             expect(text(recorded)).toContain(`Tunnel: ${TUNNEL_URL}`);
+        });
+    });
+
+    describe(signalChild, () => {
+        it("force-kills the whole tree with taskkill on Windows, and signals directly elsewhere", () => {
+            expect.assertions(3);
+
+            const sent: NodeJS.Signals[] = [];
+            const taskkill: ReadonlyArray<string>[] = [];
+            const child = {
+                kill: (signal?: NodeJS.Signals | number) => {
+                    sent.push(signal as NodeJS.Signals);
+
+                    return true;
+                },
+                pid: 4321,
+            };
+            const spawnSyncImpl = (command: string, args: ReadonlyArray<string>): void => {
+                taskkill.push([command, ...args]);
+            };
+
+            signalChild(child, "SIGKILL", "win32", spawnSyncImpl);
+            signalChild(child, "SIGTERM", "win32", spawnSyncImpl);
+            signalChild(child, "SIGKILL", "linux", spawnSyncImpl);
+
+            expect(taskkill).toStrictEqual([["taskkill", "/pid", "4321", "/T", "/F"]]);
+            // SIGTERM on Windows, and SIGKILL elsewhere, go to the child itself.
+            expect(sent).toStrictEqual(["SIGTERM", "SIGKILL"]);
+            expect(taskkill).toHaveLength(1);
         });
     });
 

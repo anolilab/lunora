@@ -26,7 +26,7 @@ import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import pollDevServerState from "./dev-state-poll";
 import { spawnLongLivedChild } from "./supervise";
-import type { DevCommandPlan, DevTunnelRequest, LongLivedSpawner } from "./types";
+import type { DevCommandPlan, DevTunnelRequest, LongLivedSpawner, WorkerProcess } from "./types";
 
 /** First release with protected quick tunnels (`--allowed-mail`), per Cloudflare's announcement. */
 const CLOUDFLARED_MIN_VERSION = "2026.9.3";
@@ -42,8 +42,12 @@ const QUICK_TUNNEL_URL = /https:\/\/[\da-z-]+\.trycloudflare\.com/u;
 /** cloudflared waits this long (default 30s) for in-flight requests on SIGTERM; dev should stop promptly. */
 const GRACE_PERIOD = "1s";
 
-/** How long `close()` waits for cloudflared to exit before letting dev finish anyway. */
+/** How long `close()` waits for cloudflared to exit after SIGTERM, and again after the SIGKILL escalation. */
 const CLOSE_TIMEOUT_MS = 5000;
+
+/** Whether `promise` settles within `ms` — the timer never holds the process open. */
+const settlesWithin = async (promise: Promise<unknown>, ms: number): Promise<boolean> =>
+    await Promise.race([promise.then(() => true), sleep(ms, false, { ref: false })]);
 
 /** How long the Vite flavors wait for `@lunora/vite` to record the URL Vite listens on. */
 const VITE_ORIGIN_TIMEOUT_MS = 60_000;
@@ -213,6 +217,8 @@ const waitForViteOrigin = async (
 interface DevTunnelOptions {
     /** Normalized `--allow-mail` entries; empty opens a public tunnel. */
     allowMail: ReadonlyArray<string>;
+    /** Injection seam for tests — defaults to {@link CLOSE_TIMEOUT_MS}. */
+    closeTimeoutMs?: number;
     /** Project root: where the tunnel URL is recorded, and where the Vite flavors' record is read. */
     cwd: string;
     logger: Logger;
@@ -224,7 +230,11 @@ interface DevTunnelOptions {
 }
 
 interface DevTunnelHandle {
-    /** Stop `cloudflared` and wait (bounded) for it to exit. Idempotent. */
+    /**
+     * Stop `cloudflared`: SIGTERM, then SIGKILL (`taskkill /T /F` on Windows)
+     * if it has not exited in time, then an error if even that cannot be
+     * confirmed — a public tunnel must not silently outlive dev. Idempotent.
+     */
     close: () => Promise<void>;
 }
 
@@ -242,6 +252,9 @@ const startDevTunnel = (options: DevTunnelOptions): DevTunnelHandle => {
     // A function, not `signal.aborted` inline: the abort happens while `run`
     // awaits the child, which flow analysis cannot see.
     const isShuttingDown = (): boolean => signal.aborted;
+    const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_TIMEOUT_MS;
+    // The live cloudflared child, for `close()` to escalate on.
+    let running: WorkerProcess | undefined;
 
     // Ctrl-C reaches cloudflared directly (same process group) and it exits on
     // its own, before teardown calls `close()` — marking the shutdown here keeps
@@ -324,6 +337,8 @@ const startDevTunnel = (options: DevTunnelOptions): DevTunnelHandle => {
                 logger.error(`could not start cloudflared (${error.message}) — continuing without a tunnel.`);
             },
         );
+
+        running = child;
         const stop = (): void => {
             child.kill("SIGTERM");
         };
@@ -333,6 +348,7 @@ const startDevTunnel = (options: DevTunnelOptions): DevTunnelHandle => {
         const code = await child.exited;
 
         signal.removeEventListener("abort", stop);
+        running = undefined;
 
         if (assigned !== undefined) {
             updateDevServerState(cwd, { tunnelUrl: undefined }, { expectedPid: target.ownerPid });
@@ -358,7 +374,28 @@ const startDevTunnel = (options: DevTunnelOptions): DevTunnelHandle => {
             process.off("SIGINT", onShutdownSignal);
             process.off("SIGTERM", onShutdownSignal);
             controller.abort();
-            await Promise.race([finished, sleep(CLOSE_TIMEOUT_MS, undefined, { ref: false })]);
+
+            if (await settlesWithin(finished, closeTimeoutMs)) {
+                return;
+            }
+
+            const child = running;
+
+            // Nothing spawned yet (still probing or waiting for Vite's URL): nothing to escalate.
+            if (child === undefined) {
+                return;
+            }
+
+            logger.warn(`cloudflared did not exit within ${String(closeTimeoutMs / 1000)}s of SIGTERM — force-killing it.`);
+            child.kill("SIGKILL");
+
+            if (await settlesWithin(child.exited, closeTimeoutMs)) {
+                return;
+            }
+
+            logger.error(
+                `could not confirm that cloudflared stopped — ${isPublic ? "the PUBLIC tunnel" : "the tunnel"} may still be reachable. Stop the \`cloudflared\` process manually.`,
+            );
         },
     };
 };

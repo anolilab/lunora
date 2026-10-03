@@ -3,7 +3,8 @@
  * until they exit or the user interrupts, container log streaming, and
  * teardown.
  */
-import { spawn as nodeSpawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 
 import type { ContainerLogStreamHandle } from "@lunora/config";
 import { discoverContainerInfo, formatLunoraEvent, streamContainerLogs } from "@lunora/config";
@@ -46,6 +47,32 @@ const emitChildLine = (line: string, tag: string, kind: "stderr" | "stdout", log
         logger.warn(prefixed);
     } else {
         logger.info(prefixed);
+    }
+};
+
+/**
+ * Signal a long-lived child. `SIGKILL` on Windows — which has no signals, so
+ * Node's `kill` only terminates the one process it spawned — goes through
+ * `taskkill /T /F`, felling the child and everything it started (a `cmd.exe`
+ * wrapper's real program included). `platform` and `spawnSyncImpl` are test
+ * seams, defaulting to the real ones.
+ */
+const signalChild = (
+    child: Pick<ChildProcess, "kill" | "pid">,
+    signal: NodeJS.Signals,
+    platform: NodeJS.Platform = process.platform,
+    spawnSyncImpl: (command: string, args: ReadonlyArray<string>, options: { stdio: "ignore" }) => unknown = spawnSync,
+): void => {
+    try {
+        if (signal === "SIGKILL" && platform === "win32" && child.pid !== undefined) {
+            spawnSyncImpl("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+
+            return;
+        }
+
+        child.kill(signal);
+    } catch {
+        /* already gone */
     }
 };
 
@@ -97,11 +124,7 @@ const spawnLongLivedChild: LongLivedSpawner = (descriptor, onLine, onError) => {
             });
         }),
         kill: (signal) => {
-            try {
-                child.kill(signal);
-            } catch {
-                /* already gone */
-            }
+            signalChild(child, signal);
         },
     };
 };
@@ -323,4 +346,4 @@ const superviseWorkers = async (worker: WorkerProcess, sidecar: WorkerProcess | 
 };
 
 export type { Teardown };
-export { defaultWorkerSpawner, emitChildLine, spawnLongLivedChild, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt };
+export { defaultWorkerSpawner, emitChildLine, signalChild, spawnLongLivedChild, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt };
