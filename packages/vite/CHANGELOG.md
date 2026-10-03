@@ -1,3 +1,16 @@
+## @lunora/vite [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.294...@lunora/vite@1.0.0-alpha.295) (2026-10-03)
+
+### Features
+
+* **cli:** add lunora dev --tunnel via cloudflare quick tunnels ([#941](https://github.com/anolilab/lunora/issues/941)) ([1446ad1](https://github.com/anolilab/lunora/commit/1446ad1f290f56f54de54b055d873ae434d3bdd7))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.254
+* **@lunora/config:** upgraded to 1.0.0-alpha.297
+* **@lunora/studio:** upgraded to 1.0.0-alpha.256
+
 ## @lunora/vite [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.293...@lunora/vite@1.0.0-alpha.294) (2026-10-03)
 
 
