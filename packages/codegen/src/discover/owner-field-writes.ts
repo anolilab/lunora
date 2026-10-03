@@ -93,11 +93,12 @@ const documentObjectLiterals = (documentArgument: TsNode, method: string): Objec
 };
 
 /**
- * The mutator `server` impl `call` runs in, plus its own `args` parameter.
- * `pristine` says whether that parameter is still exactly the object
+ * The mutator `server` impl `call` runs in, plus its own `ctx` and `args`
+ * parameters. `pristine` says whether `args` is still exactly the object
  * `applyOwnerScope` verified (see {@link isPristineArgsParameter}).
  */
 interface MutatorImplScope {
+    context: ParameterDeclaration | undefined;
     impl: MutatorServerImpl;
     parameter: ParameterDeclaration | undefined;
     pristine: boolean;
@@ -105,6 +106,44 @@ interface MutatorImplScope {
 
 /** Per-impl {@link isPristineArgsParameter} verdicts, keyed on the compiler node so a re-parse recomputes. */
 const PRISTINE_CACHE = new WeakMap<ts.Node, boolean>();
+
+/** `Promise` combinators whose result is the settled values of their argument's elements. */
+const PROMISE_COMBINATORS = new Set<string>(["all", "allSettled", "any", "race"]);
+
+/**
+ * The leftmost operand of `value`'s member / call chain: walked through
+ * property and element access, the callee side of calls, `await`, parentheses
+ * and casts (`(await ctx.db.get(id)).owner` → `ctx`).
+ */
+const chainRootOf = (value: TsNode): TsNode | undefined => {
+    let current: TsNode | undefined = unwrapExpression(value);
+
+    while (
+        Node.isAwaitExpression(current) ||
+        Node.isPropertyAccessExpression(current) ||
+        Node.isElementAccessExpression(current) ||
+        Node.isCallExpression(current)
+    ) {
+        current = unwrapExpression(current.getExpression());
+    }
+
+    return current;
+};
+
+/** Whether `node` resolves, by symbol, to the impl's `ctx` parameter or to a binding destructured out of it (`{ db }`). */
+const isContextReference = (node: TsNode | undefined, context: ParameterDeclaration | undefined): boolean => {
+    const declaration = Node.isIdentifier(node) && context !== undefined ? declarationOf(node) : undefined;
+
+    if (declaration === undefined || context === undefined) {
+        return false;
+    }
+
+    if (declaration.compilerNode === context.compilerNode) {
+        return Node.isIdentifier(context.getNameNode());
+    }
+
+    return Node.isBindingElement(declaration) && declaration.getFirstAncestorByKind(SyntaxKind.Parameter)?.compilerNode === context.compilerNode;
+};
 
 /** Whether `node` is the operand of a plain member READ: `x.k`, `x?.k`, `x[k]`, seen through wrappers, and not written. */
 const isMemberRead = (node: TsNode): boolean => {
@@ -123,18 +162,133 @@ const isDestructuringRead = (node: TsNode): boolean => {
 };
 
 /**
+ * Whether `node` is only COPIED: spread into a new object / array literal
+ * (`{ ...args }`, `[...list]`), or interpolated into an untagged template
+ * (`${args}`). A tagged template hands the raw value to its tag, so it is not.
+ */
+const isCopiedOnly = (node: TsNode): boolean => {
+    const value = outermostValueWrapper(node);
+    const parent = value.getParent();
+
+    if (Node.isSpreadAssignment(parent) || Node.isSpreadElement(parent)) {
+        const literal = parent.getParent();
+
+        return (Node.isObjectLiteralExpression(literal) || Node.isArrayLiteralExpression(literal)) && !isWriteTarget(literal);
+    }
+
+    return Node.isTemplateSpan(parent) && !Node.isTaggedTemplateExpression(parent.getParent().getParent());
+};
+
+/**
+ * Whether `node` is an argument of a call that only reads, serializes or copies
+ * it: `console.*`, `JSON.stringify`, `structuredClone`, any argument of
+ * `Object.keys` / `values` / `entries`, a non-first argument of
+ * `Object.assign` / `freeze` / `isFrozen`, or any argument of a call on the
+ * impl's own `ctx` (`ctx.scheduler.runAfter(0, fn, args)`), the trusted
+ * runtime surface. Any other call (`assertValid(args)`, `fix(args)`,
+ * `Object.assign(args, …)`, `Reflect.set(args, …)`) may change it.
+ */
+const isReadOnlyCallArgument = (node: TsNode, context: ParameterDeclaration | undefined): boolean => {
+    const value = outermostValueWrapper(node);
+    const call = value.getParent();
+
+    if (!Node.isCallExpression(call)) {
+        return false;
+    }
+
+    const position = call.getArguments().indexOf(value);
+    const callee = unwrapExpression(call.getExpression());
+
+    if (position === -1 || callee === undefined) {
+        return false;
+    }
+
+    if (Node.isIdentifier(callee)) {
+        return callee.getText() === "structuredClone";
+    }
+
+    if (isContextReference(chainRootOf(callee), context)) {
+        return true;
+    }
+
+    if (!Node.isPropertyAccessExpression(callee) || !Node.isIdentifier(callee.getExpression())) {
+        return false;
+    }
+
+    const namespace = callee.getExpression().getText();
+    const method = callee.getName();
+
+    switch (namespace) {
+        case "console": {
+            return true;
+        }
+        case "JSON": {
+            return method === "stringify";
+        }
+        case "Object": {
+            return ["entries", "keys", "values"].includes(method) || (["assign", "freeze", "isFrozen"].includes(method) && position > 0);
+        }
+        default: {
+            return false;
+        }
+    }
+};
+
+/**
+ * Whether the impl can reach its own body again with an `args` that never went
+ * through `applyOwnerScope`. Fails closed on any of:
+ *
+ * - a named function-expression impl referencing its own name (`impl(ctx, forged)`
+ * calls the raw function);
+ * - a method or function-expression impl using `this` anywhere (an arrow impl has
+ * no `this` of its own);
+ * - the impl referencing the mutator binding it is declared in
+ * (`createPost.server(ctx, forged)`), by symbol.
+ *
+ * The runtime wraps the exposed `server` in the same validation and owner scope
+ * as `handler` and calls the raw impl with that wrapper as `this`, so the last
+ * two are defense in depth.
+ */
+const canReenterUnverified = (impl: MutatorServerImpl, mutatorDeclaration: VariableDeclaration): boolean => {
+    const ownName = Node.isFunctionExpression(impl) ? impl.getNameNode() : undefined;
+
+    if (!Node.isArrowFunction(impl) && impl.getFirstDescendantByKind(SyntaxKind.ThisKeyword) !== undefined) {
+        return true;
+    }
+
+    const names = new Set([mutatorDeclaration.getName(), ...(ownName === undefined ? [] : [ownName.getText()])]);
+
+    return impl.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => {
+        if (identifier === ownName || !names.has(identifier.getText())) {
+            return false;
+        }
+
+        const target = declarationOf(identifier)?.compilerNode;
+
+        return target !== undefined && (target === mutatorDeclaration.compilerNode || (ownName !== undefined && target === impl.compilerNode));
+    });
+};
+
+/**
  * Whether the impl's `args` parameter is still exactly the object
  * `applyOwnerScope` verified, for every read of it in the impl. Fails closed:
  *
+ * - the impl can re-enter itself unverified (see {@link canReenterUnverified});
  * - `arguments` anywhere in the impl reaches the parameter without naming it;
  * - a `var` redeclaration of a parameter binding is a second declaration of it;
- * - an `args` parameter used as anything but a plain member read (or a
- * destructuring initializer) — written through, passed to a call
- * (`fix(args)`, `Object.assign(args, …)`), aliased (`const a = args`),
- * spread — may be changed where this cannot see;
+ * - an `args` parameter used as anything but a member read, a destructuring
+ * initializer, a copy ({@link isCopiedOnly}) or a read-only call argument
+ * ({@link isReadOnlyCallArgument}): written through, passed to another call
+ * (`fix(args)`, `assertValid(args)`, `Object.assign(args, …)`), or aliased
+ * (`const a = args`), it may be changed where this cannot see;
  * - a destructured binding of the parameter that is written (`userId = …`).
  */
-const isPristineArgsParameter = (impl: MutatorServerImpl, parameter: ParameterDeclaration): boolean => {
+const isPristineArgsParameter = (
+    scope: Omit<MutatorImplScope, "pristine">,
+    parameter: ParameterDeclaration,
+    mutatorDeclaration: VariableDeclaration,
+): boolean => {
+    const { context, impl } = scope;
     const cached = PRISTINE_CACHE.get(impl.compilerNode);
 
     if (cached !== undefined) {
@@ -150,7 +304,15 @@ const isPristineArgsParameter = (impl: MutatorServerImpl, parameter: ParameterDe
               return Node.isIdentifier(name) ? [name] : [];
           });
     const declarationByName = new Map(bindings.map((binding) => [binding.getText(), binding.getParentOrThrow().compilerNode]));
+    const isAllowedUse = (reference: TsNode): boolean => {
+        if (!Node.isIdentifier(nameNode)) {
+            return !isWriteTarget(reference);
+        }
+
+        return isMemberRead(reference) || isDestructuringRead(reference) || isCopiedOnly(reference) || isReadOnlyCallArgument(reference, context);
+    };
     const pristine =
+        !canReenterUnverified(impl, mutatorDeclaration) &&
         bindings.every((binding) => (binding.getSymbol()?.getDeclarations().length ?? 0) === 1) &&
         impl.getDescendantsOfKind(SyntaxKind.Identifier).every((identifier) => {
             const name = identifier.getText();
@@ -159,13 +321,13 @@ const isPristineArgsParameter = (impl: MutatorServerImpl, parameter: ParameterDe
                 return false;
             }
 
-            const declaration = declarationByName.get(name);
+            const binding = declarationByName.get(name);
 
-            if (declaration === undefined || bindings.includes(identifier) || declarationOf(identifier)?.compilerNode !== declaration) {
+            if (binding === undefined || bindings.includes(identifier) || declarationOf(identifier)?.compilerNode !== binding) {
                 return true;
             }
 
-            return Node.isIdentifier(nameNode) ? isMemberRead(identifier) || isDestructuringRead(identifier) : !isWriteTarget(identifier);
+            return isAllowedUse(identifier);
         });
 
     PRISTINE_CACHE.set(impl.compilerNode, pristine);
@@ -188,14 +350,15 @@ const mutatorImplScopeOf = (call: CallExpression): MutatorImplScope | undefined 
         : undefined;
     const impl = declaration === undefined ? undefined : mutatorServerImplOf(declaration);
 
-    if (impl === undefined || call.getPos() < impl.getPos() || impl.getEnd() < call.getEnd()) {
+    if (declaration === undefined || impl === undefined || call.getPos() < impl.getPos() || impl.getEnd() < call.getEnd()) {
         return undefined;
     }
 
-    const candidate = impl.getParameters()[1];
+    const [context, candidate] = impl.getParameters();
     const parameter = candidate === undefined || candidate.isRestParameter() ? undefined : candidate;
+    const scope = { context, impl, parameter };
 
-    return { impl, parameter, pristine: parameter !== undefined && isPristineArgsParameter(impl, parameter) };
+    return { ...scope, pristine: parameter !== undefined && isPristineArgsParameter(scope, parameter, declaration) };
 };
 
 /** The parameter `declaration` binds: the parameter itself, or the one whose destructuring pattern holds it. */
@@ -248,13 +411,31 @@ const RECEIVER_ITERATING_METHODS = new Set<string>([
 const MAX_VARIABLE_HOPS = 8;
 
 /**
+ * How many identifiers one impl's taint model may resolve before every further
+ * verdict fails closed. A cycle makes the verdicts on it uncachable, so a
+ * recursive helper re-derived from many call sites could otherwise cost
+ * exponential time. Realistic impls, and a depth-14 chain of helpers that each
+ * call the next twice, stay far below it.
+ */
+const WORK_BUDGET = 50_000;
+
+/**
  * How taint flows inside one mutator impl, resolved by symbol. Caller-controlled
  * are the impl's own `args` parameter, the `arguments` object, any identifier
  * spelled `args` that is not a nested parameter cleared below, and what derives
- * from them through variables (followed up to {@link MAX_VARIABLE_HOPS}; a
+ * from them: through variables (followed up to {@link MAX_VARIABLE_HOPS}; a
  * `let` that is reassigned, a variable with no initializer, a `catch` binding,
- * or running out of hops fails closed). A `for…of` / `for…in` variable takes
- * the taint of what it iterates.
+ * or running out of hops fails closed), through a variable whose object takes
+ * a caller-controlled value later (`list.push(args.x)`, `o.k = args.x`,
+ * `Object.assign(o, args)`), and through a nested function declaration whose
+ * body reads one. A `for…of` / `for…in` variable takes the taint of what it
+ * iterates.
+ *
+ * A value whose member / call chain is ROOTED in the impl's own `ctx`
+ * parameter, directly or through `const`s, is server-scoped: rows read through
+ * `ctx.db`, even when the query filters on `args`. So is a `Promise`
+ * combinator over such reads (`Promise.all(ids.map((id) => ctx.db.get(id)))`).
+ * A helper result (`getMembers(ctx, args.orgId)`) is not.
  *
  * A parameter of a function NESTED in the impl is caller-controlled only when
  * what flows into it is. A function called by name (`const persist = …;
@@ -269,29 +450,26 @@ const MAX_VARIABLE_HOPS = 8;
  *
  * Each verdict is computed once. Recursion resolves to the least fixed point:
  * a cycle adds no taint of its own, and a verdict that depended on a cut cycle
- * (or on the hop bound) is not cached.
+ * (or on the hop bound) is not cached. Past {@link WORK_BUDGET} every verdict
+ * fails closed.
  */
 class ImplTaint {
-    private readonly argsParameter: ParameterDeclaration | undefined;
-
-    private readonly contextParameter: ParameterDeclaration | undefined;
-
     private cuts = 0;
-
-    private readonly impl: MutatorServerImpl;
 
     private readonly inProgress = new Set<ts.Node>();
 
     private readonly referencesByName = new Map<string, Identifier[]>();
 
+    private readonly scope: MutatorImplScope;
+
     private variableDepth = 0;
 
     private readonly verdicts = new Map<ts.Node, boolean>();
 
+    private work = 0;
+
     public constructor(scope: MutatorImplScope) {
-        this.impl = scope.impl;
-        this.argsParameter = scope.parameter;
-        [this.contextParameter] = scope.impl.getParameters();
+        this.scope = scope;
 
         for (const identifier of scope.impl.getDescendantsOfKind(SyntaxKind.Identifier)) {
             const name = identifier.getText();
@@ -302,8 +480,8 @@ class ImplTaint {
 
     /**
      * Whether `value` is caller-controlled. With `rootedInContext`, a value whose
-     * member / call chain is rooted in the impl's own `ctx` parameter (rows read
-     * through `ctx.db`) counts as server-scoped.
+     * member / call chain is rooted in the impl's own `ctx` parameter counts as
+     * server-scoped.
      */
     public isTaintedValue(value: TsNode, rootedInContext: boolean): boolean {
         if (rootedInContext && this.isRootedInContext(value, MAX_VARIABLE_HOPS)) {
@@ -381,7 +559,49 @@ class ImplTaint {
         return callArguments.some((argument, position) => reaches(position) && this.isTaintedValue(argument, false));
     }
 
+    /** `Promise.all([ctx.db.get(a), …])` / `Promise.all(xs.map((x) => ctx.db.get(x)))`: every settled value is ctx-rooted. */
+    private isContextRootedCombinator(call: CallExpression, hops: number): boolean {
+        const callee = unwrapExpression(call.getExpression());
+        const isCombinator =
+            Node.isPropertyAccessExpression(callee) && callee.getExpression().getText() === "Promise" && PROMISE_COMBINATORS.has(callee.getName());
+        const input = isCombinator ? unwrapExpression(call.getArguments()[0]) : undefined;
+
+        if (Node.isArrayLiteralExpression(input)) {
+            const elements = input.getElements();
+
+            return elements.length > 0 && elements.every((element) => !Node.isSpreadElement(element) && this.isRootedInContext(element, hops));
+        }
+
+        const mapCallee = Node.isCallExpression(input) ? unwrapExpression(input.getExpression()) : undefined;
+        const callback =
+            Node.isCallExpression(input) && Node.isPropertyAccessExpression(mapCallee) && mapCallee.getName() === "map"
+                ? unwrapExpression(input.getArguments()[0])
+                : undefined;
+
+        if (!Node.isArrowFunction(callback) && !Node.isFunctionExpression(callback)) {
+            return false;
+        }
+
+        const body = callback.getBody();
+        const results = Node.isBlock(body)
+            ? body
+                  .getDescendantsOfKind(SyntaxKind.ReturnStatement)
+                  .filter((statement) => statement.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor)) === callback)
+                  .map((statement) => statement.getExpression())
+            : [body];
+
+        return results.length > 0 && results.every((result) => result !== undefined && this.isRootedInContext(result, hops));
+    }
+
     private isIdentifierTainted(identifier: Identifier): boolean {
+        this.work += 1;
+
+        if (this.work > WORK_BUDGET) {
+            this.cuts += 1;
+
+            return true;
+        }
+
         const name = identifier.getText();
 
         if (name === "arguments") {
@@ -404,13 +624,64 @@ class ImplTaint {
             return false;
         }
 
+        if (Node.isFunctionDeclaration(declaration)) {
+            return this.memoized(declaration.compilerNode, () => this.isTaintedValue(declaration, false));
+        }
+
         const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
 
         return Node.isVariableDeclaration(variable) && this.isVariableTainted(variable, name);
     }
 
     private isInImpl(node: TsNode): boolean {
-        return node !== this.impl && this.impl.getPos() <= node.getPos() && node.getEnd() <= this.impl.getEnd();
+        const { impl } = this.scope;
+
+        return node !== impl && impl.getPos() <= node.getPos() && node.getEnd() <= impl.getEnd();
+    }
+
+    /**
+     * Whether a caller-controlled value is stored INTO `variable`'s object after
+     * its initializer: a member write (`o.k = args.x`), a method call on it with
+     * a tainted argument (`list.push(args.x)`, `map.set(k, args.x)`), or a call
+     * it is passed to alongside a tainted argument (`Object.assign(o, args)`).
+     */
+    private isMutatedWithTaint(variable: VariableDeclaration): boolean {
+        const nameNode = variable.getNameNode();
+
+        if (!Node.isIdentifier(nameNode)) {
+            return false;
+        }
+
+        return this.memoized(nameNode.compilerNode, () =>
+            this.referencesTo(variable, nameNode.getText()).some((reference) => {
+                let top = outermostValueWrapper(reference);
+                let parent = top.getParent();
+
+                while ((Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent)) && parent.getExpression() === top) {
+                    top = outermostValueWrapper(parent);
+                    parent = top.getParent();
+                }
+
+                if (top !== outermostValueWrapper(reference) && isWriteTarget(top)) {
+                    return !Node.isBinaryExpression(parent) || this.isTaintedValue(parent.getRight(), false);
+                }
+
+                if (!Node.isCallExpression(parent)) {
+                    return false;
+                }
+
+                // A callback (`rows.filter((r) => r.org === args.org)`) reads the object; it stores nothing into it.
+                const others = parent.getArguments().filter((argument) => {
+                    const unwrapped = unwrapExpression(argument);
+
+                    return argument !== top && !Node.isArrowFunction(unwrapped) && !Node.isFunctionExpression(unwrapped);
+                });
+
+                return (
+                    (parent.getExpression() === top || parent.getArguments().includes(top)) && others.some((argument) => this.isTaintedValue(argument, false))
+                );
+            }),
+        );
     }
 
     /** Whether `value`'s member / call chain is rooted, by symbol, in the impl's `ctx` parameter (directly or through `const`s). */
@@ -423,31 +694,38 @@ class ImplTaint {
             Node.isElementAccessExpression(current) ||
             Node.isCallExpression(current)
         ) {
+            if (Node.isCallExpression(current) && this.isContextRootedCombinator(current, hops)) {
+                return true;
+            }
+
             current = unwrapExpression(current.getExpression());
         }
 
-        if (!Node.isIdentifier(current)) {
-            return false;
-        }
-
-        const declaration = declarationOf(current);
-        const context = this.contextParameter;
-
-        if (context !== undefined && Node.isIdentifier(context.getNameNode()) && declaration?.compilerNode === context.compilerNode) {
+        if (isContextReference(current, this.scope.context)) {
             return true;
         }
 
-        const initializer = isConstDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) ? declaration.getInitializer() : undefined;
+        const declaration = Node.isIdentifier(current) ? declarationOf(current) : undefined;
+        const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
+        const initializer = isConstDeclaration(variable) && this.isInImpl(variable) ? variable.getInitializer() : undefined;
 
-        return hops > 0 && initializer !== undefined && this.isRootedInContext(initializer, hops - 1);
+        return (
+            hops > 0 &&
+            initializer !== undefined &&
+            Node.isVariableDeclaration(variable) &&
+            !this.isMutatedWithTaint(variable) &&
+            this.isRootedInContext(initializer, hops - 1)
+        );
     }
 
     private isSource(parameter: ParameterDeclaration): boolean {
-        if (parameter.compilerNode === this.argsParameter?.compilerNode) {
+        const { impl, parameter: argsParameter } = this.scope;
+
+        if (parameter.compilerNode === argsParameter?.compilerNode) {
             return true;
         }
 
-        return parameter.getParent() !== this.impl && this.isInImpl(parameter) && this.memoized(parameter.compilerNode, () => this.flowsIntoTainted(parameter));
+        return parameter.getParent() !== impl && this.isInImpl(parameter) && this.memoized(parameter.compilerNode, () => this.flowsIntoTainted(parameter));
     }
 
     private isVariableTainted(variable: VariableDeclaration, name: string): boolean {
@@ -463,12 +741,14 @@ class ImplTaint {
             }
 
             const initializer = variable.getInitializer();
+            const isReassigned = !isConstDeclaration(variable) && this.referencesTo(variable, name).some((reference) => isWriteTarget(reference));
 
-            if (
-                initializer === undefined ||
-                (!isConstDeclaration(variable) && this.referencesTo(variable, name).some((reference) => isWriteTarget(reference)))
-            ) {
+            if (initializer === undefined || isReassigned || this.isMutatedWithTaint(variable)) {
                 return true;
+            }
+
+            if (this.isRootedInContext(initializer, MAX_VARIABLE_HOPS)) {
+                return false;
             }
 
             if (this.variableDepth >= MAX_VARIABLE_HOPS) {
@@ -504,9 +784,13 @@ class ImplTaint {
 
         this.inProgress.add(key);
 
-        const verdict = compute();
+        let verdict: boolean;
 
-        this.inProgress.delete(key);
+        try {
+            verdict = compute();
+        } finally {
+            this.inProgress.delete(key);
+        }
 
         if (this.cuts === cutsBefore) {
             this.verdicts.set(key, verdict);
@@ -629,12 +913,14 @@ const identityWritesInObjectLiteral = (
         }
 
         // Correct: `userId: ctx.auth.userId`; offending: `userId: args.userId`.
-        // A value that references `ctx` is server-scoped even when it also embeds
-        // `args`, so it is not flagged — mirrors the shared taint convention.
-        // Inside a mutator impl taint is resolved by symbol (see `implTaintOf`).
-        const isTainted = taint === undefined ? isArgumentDerived(value) : taint.isTaintedValue(value, false);
+        // Outside a mutator impl, a value that references `ctx` is server-scoped
+        // even when it also embeds `args` — the shared taint convention. Inside
+        // one, taint is resolved by symbol and only a value ROOTED in the impl's
+        // `ctx` is server-scoped (see `ImplTaint`): `ctx.auth.userId ?? args.x`
+        // is not.
+        const isTainted = taint === undefined ? isArgumentDerived(value) && !isScopedByContext(value) : taint.isTaintedValue(value, true);
 
-        if (isTainted && !isScopedByContext(value)) {
+        if (isTainted) {
             // Recorded either way — the lint decides what to do with it. Dropping it
             // here would make the feeder the only place that knows the write
             // happened, and the `visibility` stamp is the precedent for annotating

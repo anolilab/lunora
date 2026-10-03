@@ -441,7 +441,6 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
             ["a call it is passed to", `fix(args);`],
             ["a `var` redeclaration", `var args = { userId: args.targetUserId };`],
             ["`arguments`", `void arguments;`],
-            ["a spread of it", `const copy = { ...args };`],
         ])("reports the owner write after %s", (_label, statement) => {
             expect.assertions(2);
 
@@ -481,6 +480,67 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
             expect.assertions(1);
 
             expect(discover(`export const createPost = defineMutator({ owner: "userId", server: ${server} });`)[0]).toMatchObject({ ownerScoped: true });
+        });
+
+        // `applyOwnerScope` only wraps `handler`; the runtime calls
+        // `definition.server(context, args)`, so an impl that calls ITSELF hands its
+        // own `args` an object that was never verified.
+        it.each([
+            [
+                "a named function-expression impl calling itself",
+                `export const createPost = defineMutator({
+    owner: "userId",
+    server: async function self(ctx, args) {
+        await ctx.db.insert("posts", { userId: args.userId }); // @write
+        if (!args.nested) await self(ctx, { nested: true, userId: args.targetUserId });
+    },
+});`,
+            ],
+            [
+                "a method impl calling `this.server`",
+                `export const createPost = defineMutator({
+    owner: "userId",
+    async server(ctx, args) {
+        await ctx.db.insert("posts", { userId: args.userId }); // @write
+        if (!args.nested) await this.server(ctx, { nested: true, userId: args.targetUserId });
+    },
+});`,
+            ],
+            [
+                "an arrow impl calling its own mutator's `server`",
+                `export const createPost = defineMutator({
+    owner: "userId",
+    server: async (ctx, args) => {
+        await ctx.db.insert("posts", { userId: args.userId }); // @write
+        if (!args.nested) await createPost.server(ctx, { nested: true, userId: args.targetUserId });
+    },
+});`,
+            ],
+            [
+                "a `const` impl calling itself by name",
+                `const impl = async (ctx, args) => {
+    await ctx.db.insert("posts", { userId: args.userId }); // @write
+    if (!args.nested) await impl(ctx, { nested: true, userId: args.targetUserId });
+};
+export const createPost = defineMutator({ owner: "userId", server: impl });`,
+            ],
+        ])("reports the owner write of %s", (_label, source) => {
+            expect.assertions(2);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it("keeps a named function-expression impl that never references its own name owner-scoped", () => {
+            expect.assertions(1);
+
+            const source = `export const createPost = defineMutator({
+    owner: "userId",
+    server: async function createPostImpl(ctx, args) {
+        await ctx.db.insert("posts", { userId: args.userId }); // @write
+    },
+});`;
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ ownerScoped: true });
         });
 
         // A higher-order wrapper could hand the impl different arguments than the
@@ -562,6 +622,106 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
             expect.assertions(2);
 
             expectReported(discover(ownerMutator(`let { userId } = args; await ctx.db.insert("posts", { userId });`))[0]);
+        });
+
+        // These only read, serialize or copy `args`, so the verified owner stays verified.
+        it.each([
+            ["`console.log`", `console.log("createPost", args);`],
+            ["`JSON.stringify`", `const raw = JSON.stringify(args);`],
+            ["a `ctx.*` call", `await ctx.scheduler.runAfter(0, "notify", args);`],
+            ["a spread into a new object", `await ctx.db.insert("audit", { payload: { ...args } });`],
+            ["an untagged template", `const key = \`\${args}\`;`],
+            ["`Object.keys`", `const keys = Object.keys(args);`],
+            ["a copy via `Object.assign({}, args)`", `const copy = Object.assign({}, args);`],
+        ])("keeps the owner write owner-scoped next to %s", (_label, statement) => {
+            expect.assertions(1);
+
+            const source = ownerMutator(`        ${statement}
+        await ${insert("args.userId")}; // @write`);
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ ownerScoped: true });
+        });
+
+        // Known noisy-but-safe: a validator could rewrite what it is handed.
+        it.each([
+            ["an unknown validator", `assertValid(args);`],
+            ["`Reflect.set`", `Reflect.set(args, "userId", args.targetUserId);`],
+            ["a tagged template", `tag\`\${args}\`;`],
+        ])("reports the owner write after %s", (_label, statement) => {
+            expect.assertions(2);
+
+            const source = ownerMutator(`        ${statement}
+        await ${insert("args.userId")}; // @write`);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        // A value ROOTED in the impl's `ctx` is server-scoped, even when `args`
+        // feeds the query; a helper's result is not.
+        it.each([
+            ["a destructured `ctx.db.get` row", `const { ownerId } = await ctx.db.get(args.postId);\n        await ${insert("ownerId")}; // @write`],
+            ["a member of a `ctx.db.get` row", `const post = await ctx.db.get(args.postId);\n        await ${insert("post.ownerId")}; // @write`],
+            [
+                "rows from a `let` bound to `ctx.db`",
+                `let rows = await ctx.db.query("m").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect();\n        await Promise.all(rows.map((r) => ${insert("r.userId")})); // @write`,
+            ],
+            [
+                "rows from `Promise.all` over `ctx.db.get`",
+                `const rows = await Promise.all(args.ids.map((id) => ctx.db.get(id)));\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
+            ],
+            [
+                "`Object.values` of a row",
+                `const row = await ctx.db.get(args.id);\n        for (const member of Object.values(row.members)) {\n            await ${insert("member")}; // @write\n        }`,
+            ],
+            [
+                "ctx.db rows filtered on args",
+                `const rows = await ctx.db.query("t").collect();\n        const mine = rows.filter((r) => r.orgId === args.orgId);\n        mine.forEach((r) => ${insert("r.userId")}); // @write`,
+            ],
+        ])("does not record a write from %s", (_label, body) => {
+            expect.assertions(1);
+
+            const source = ownerMutator(`        ${body}`);
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
+        });
+
+        it.each([
+            [
+                "a helper's result",
+                `const members = await getMembers(ctx, args.orgId);\n        for (const m of members) {\n            await ${insert("m.userId")}; // @write\n        }`,
+            ],
+            ["a `??` fallback from ctx to args", `await ${insert("ctx.auth.userId ?? args.targetUserId")}; // @write`],
+            [
+                "a `let` reassigned in a `try`",
+                `let id = ctx.auth.userId;\n        try {\n            id = args.targetUserId;\n        } catch {}\n        await ${insert("id")}; // @write`,
+            ],
+            [
+                "an object member written from args",
+                `const o = { userId: ctx.auth.userId };\n        o.userId = args.targetUserId;\n        await ${insert("o.userId")}; // @write`,
+            ],
+            [
+                "a list pushed from args",
+                `const list = [];\n        list.push(args.targetUserId);\n        for (const x of list) {\n            await ${insert("x")}; // @write\n        }`,
+            ],
+            ["a map set from args", `const m = new Map();\n        m.set("u", args.targetUserId);\n        await ${insert('m.get("u")')}; // @write`],
+            [
+                "an object assigned from args",
+                `const o = { userId: ctx.auth.userId };\n        Object.assign(o, { userId: args.targetUserId });\n        await ${insert("o.userId")}; // @write`,
+            ],
+            [
+                "a nested function declaration's return",
+                `function pick() {\n            return args.targetUserId;\n        }\n        await ${insert("pick()")}; // @write`,
+            ],
+            [
+                "a generator closing over args",
+                `function* gen() {\n            yield args.targetUserId;\n        }\n        for (const x of gen()) {\n            await ${insert("x")}; // @write\n        }`,
+            ],
+        ])("reports a write from %s", (_label, body) => {
+            expect.assertions(2);
+
+            const source = ownerMutator(`        ${body}`);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
         });
 
         it("raises the laundered write as an ERROR through the advisor lint", () => {

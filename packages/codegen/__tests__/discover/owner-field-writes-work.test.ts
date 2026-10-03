@@ -29,24 +29,34 @@ vi.mock(import("../../src/discover/attribution"), async (importOriginal) => {
 
 let workdir: string;
 
-/** Symbol lookups to discover one mutator whose impl is a chain of `depth` clean helpers, each calling the next twice. */
-const lookupsForChain = (depth: number): number => {
-    const lines = [`const f0 = (p0) => ctx.db.insert("posts", { userId: p0.userId });`];
+/**
+ * A clean chain of `depth` helpers: `f0` writes its parameter's `userId`, and
+ * each `f<k>` calls `f<k-1>` twice. With `recursive`, every helper also calls
+ * itself, which puts each verdict on a cycle so none of them can be cached.
+ */
+const chain = (depth: number, recursive: boolean): string => {
+    const self = (level: number): string => (recursive ? ` f${level.toString()}(p${level.toString()}.next);` : "");
+    const lines = [`const f0 = (p0) => { ctx.db.insert("posts", { userId: p0.userId });${self(0)} };`];
 
     for (let level = 1; level <= depth; level += 1) {
-        lines.push(
-            `const f${level.toString()} = (p${level.toString()}) => { f${(level - 1).toString()}(p${level.toString()}); f${(level - 1).toString()}(p${level.toString()}); };`,
-        );
+        const previous = `f${(level - 1).toString()}(p${level.toString()});`;
+
+        lines.push(`const f${level.toString()} = (p${level.toString()}) => { ${previous} ${previous}${self(level)} };`);
     }
 
     lines.push(`f${depth.toString()}({ userId: ctx.auth.userId });`);
 
+    return lines.join("\n");
+};
+
+/** The owner-field rows of one mutator whose impl body is `body`, and the symbol lookups it took. */
+const discoverCounting = (body: string): { lookups: number; rows: ReturnType<typeof discoverOwnerFieldWrites> } => {
     const lunoraDirectory = join(workdir, "lunora");
     const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
     writeFileSync(
         join(lunoraDirectory, "mutators.ts"),
-        `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => {\n${lines.join("\n")}\n} });`,
+        `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => {\n${body}\n} });`,
         "utf8",
     );
 
@@ -54,9 +64,9 @@ const lookupsForChain = (depth: number): number => {
 
     lookups.count = 0;
 
-    expect(discoverOwnerFieldWrites(project, lunoraDirectory, [], mutators)).toHaveLength(0);
+    const rows = discoverOwnerFieldWrites(project, lunoraDirectory, [], mutators);
 
-    return lookups.count;
+    return { lookups: lookups.count, rows };
 };
 
 describe("discoverOwnerFieldWrites work bound", () => {
@@ -74,10 +84,26 @@ describe("discoverOwnerFieldWrites work bound", () => {
     it("resolves a depth-14 chain of helpers that each call the next twice in linear work", () => {
         expect.assertions(4);
 
-        const shallow = lookupsForChain(7);
-        const deep = lookupsForChain(14);
+        const shallow = discoverCounting(chain(7, false));
+        const deep = discoverCounting(chain(14, false));
 
-        expect(deep).toBeLessThan(shallow * 4);
-        expect(deep).toBeLessThan(2000);
+        // Clean all the way down: nothing recorded, and the budget never ran out.
+        expect(shallow.rows).toHaveLength(0);
+        expect(deep.rows).toHaveLength(0);
+        expect(deep.lookups).toBeLessThan(shallow.lookups * 4);
+        expect(deep.lookups).toBeLessThan(2000);
+    });
+
+    // Recursion makes the verdicts on a cycle uncachable, so this shape doubles
+    // per level. The per-impl work budget caps it and fails closed: past the
+    // budget the write is reported rather than cleared.
+    it("caps a recursive chain at the work budget and fails closed", () => {
+        expect.assertions(3);
+
+        const capped = discoverCounting(chain(20, true));
+
+        expect(capped.rows).toHaveLength(1);
+        expect(capped.rows[0]).not.toHaveProperty("ownerScoped");
+        expect(capped.lookups).toBeLessThan(500_000);
     });
 });
