@@ -111,6 +111,50 @@ describe("defineMutator", () => {
             await expect(mutator.handler(ctxFor("user-1"), { userId: "someone-else" })).resolves.toBe("someone-else");
         });
 
+        // The returned mutator never exposes the raw impl: calling `.server`
+        // directly with a forged owner goes through the same scope as `handler`.
+        it("owner-scopes a direct `.server` call", async () => {
+            expect.assertions(3);
+
+            const mutator = defineMutator({
+                args: { userId: v.optional(v.string()) },
+                owner: "userId",
+                server: (_ctx: MutationCtx, args) => args.userId,
+            });
+
+            await expect(mutator.server(ctxFor("user-1"), { userId: "user-2" })).rejects.toThrow(/does not match the verified identity/u);
+            await expect(mutator.server(ctxFor("user-1"), {})).resolves.toBe("user-1");
+            await expect(mutator.server(ctxFor(null), { userId: "user-2" })).rejects.toThrow(/requires a verified identity/u);
+        });
+
+        // The raw impl runs with the returned mutator as `this`, so a method impl
+        // re-entering itself through `this.server` is owner-scoped again.
+        it("owner-scopes a method impl re-entering through `this.server`", async () => {
+            expect.assertions(2);
+
+            interface Reentrant {
+                server: (context: MutationCtx, args: { nested?: boolean; userId?: string }) => Promise<unknown>;
+            }
+
+            const seen: (string | undefined)[] = [];
+            const mutator = defineMutator({
+                args: { nested: v.optional(v.boolean()), userId: v.optional(v.string()) },
+                owner: "userId",
+                async server(this: Reentrant, context: MutationCtx, args): Promise<string | undefined> {
+                    seen.push(args.userId);
+
+                    if (args.nested !== true) {
+                        await this.server(context, { nested: true, userId: "user-2" });
+                    }
+
+                    return args.userId;
+                },
+            });
+
+            await expect(mutator.handler(ctxFor("user-1"), {})).rejects.toThrow(/does not match the verified identity/u);
+            expect(seen).toStrictEqual(["user-1"]);
+        });
+
         it("rejects a blank owner column at dispatch", async () => {
             expect.assertions(1);
 

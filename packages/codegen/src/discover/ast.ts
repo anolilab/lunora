@@ -14,6 +14,7 @@ import type {
     Project,
     SourceFile,
     Symbol as TsSymbol,
+    VariableDeclaration,
 } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
@@ -401,6 +402,88 @@ const propertyInitializer = (object: Node | undefined, name: string): Node | und
     return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
 };
 
+/** Whether `node` is a `const` variable declaration: the only binding that cannot be repointed after its initializer ran. */
+const isConstDeclaration = (node: Node | undefined): node is VariableDeclaration => {
+    const list = node?.getParent();
+
+    return Node.isVariableDeclaration(node) && Node.isVariableDeclarationList(list) && list.getDeclarationKind() === VariableDeclarationKind.Const;
+};
+
+/**
+ * The outermost expression around `node` that still denotes the same value:
+ * `(x)`, `x as T`, `x satisfies T`, `<T>x` and `x!` all evaluate to `x`.
+ */
+const outermostValueWrapper = (node: Node): Node => {
+    let current = node;
+    let parent = current.getParent();
+
+    while (
+        parent !== undefined &&
+        (Node.isParenthesizedExpression(parent) ||
+            Node.isAsExpression(parent) ||
+            Node.isSatisfiesExpression(parent) ||
+            Node.isTypeAssertion(parent) ||
+            Node.isNonNullExpression(parent))
+    ) {
+        current = parent;
+        parent = current.getParent();
+    }
+
+    return current;
+};
+
+/**
+ * Whether the expression `node` is written to, seen through type-only and
+ * parenthesis wrappers (`(x as T).k = v` writes `x.k`): the left of any
+ * assignment operator, an `++` / `--` / `delete` operand, a `for…in` /
+ * `for…of` target, or a slot inside a destructuring assignment's left side
+ * (`({ userId } = other)`, `[x.k] = list`).
+ */
+const isWriteTarget = (node: Node): boolean => {
+    const target = outermostValueWrapper(node);
+    const parent = target.getParent();
+
+    if (parent === undefined) {
+        return false;
+    }
+
+    if (Node.isBinaryExpression(parent)) {
+        const operator = parent.getOperatorToken().getKind();
+
+        return parent.getLeft() === target && operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment;
+    }
+
+    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
+        const operator = parent.getOperatorToken();
+
+        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
+    }
+
+    if (Node.isDeleteExpression(parent)) {
+        return true;
+    }
+
+    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
+        return parent.getInitializer() === target;
+    }
+
+    if (Node.isPropertyAssignment(parent)) {
+        const initializer: Node | undefined = parent.getInitializer();
+
+        return initializer === target && isWriteTarget(parent);
+    }
+
+    // A slot of a destructuring assignment: the enclosing literal is the write target.
+    const isSlot =
+        Node.isShorthandPropertyAssignment(parent) ||
+        Node.isSpreadAssignment(parent) ||
+        Node.isSpreadElement(parent) ||
+        Node.isObjectLiteralExpression(parent) ||
+        Node.isArrayLiteralExpression(parent);
+
+    return isSlot && isWriteTarget(parent);
+};
+
 /**
  * The initializer of the module-scope `const <name> = …` that `symbol`
  * resolves to, or `undefined` when it resolves to anything else.
@@ -420,17 +503,11 @@ const propertyInitializer = (object: Node | undefined, name: string): Node | und
 const symbolConstInitializer = (symbol: TsSymbol | undefined): Node | undefined => {
     const declaration = symbol?.getDeclarations().find((candidate) => Node.isVariableDeclaration(candidate));
 
-    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+    if (!isConstDeclaration(declaration)) {
         return undefined;
     }
 
-    const list = declaration.getParent();
-
-    if (!Node.isVariableDeclarationList(list) || list.getDeclarationKind() !== VariableDeclarationKind.Const) {
-        return undefined;
-    }
-
-    const statement = list.getParent();
+    const statement = declaration.getParent().getParent();
 
     return Node.isVariableStatement(statement) && Node.isSourceFile(statement.getParent()) ? declaration.getInitializer() : undefined;
 };
@@ -753,14 +830,17 @@ export {
     findObjectProperty,
     functionReferenceSegments,
     handlerOf,
+    isConstDeclaration,
     isContextIdentifier,
     isDatabaseAccessor,
+    isWriteTarget,
     limitNameOf,
     listLunoraSourceFiles,
     listSecurityScanFiles,
     lunoraRelativePath,
     objectLiteralFromCallbackBody,
     optionsObjectLiteral,
+    outermostValueWrapper,
     propertyInitializer,
     propertyKeyName,
     propertyNameText,

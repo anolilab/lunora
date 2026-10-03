@@ -173,6 +173,13 @@ const referencedSymbolOf = (identifier: Identifier): TsSymbol | undefined => {
     return Node.isShorthandPropertyAssignment(parent) && parent.getNameNode() === identifier ? parent.getValueSymbol() : identifier.getSymbol();
 };
 
+/** The declaration an identifier's {@link referencedSymbolOf} symbol points at, or `undefined` when it has none. */
+const declarationOf = (identifier: Identifier): TsNode | undefined => {
+    const symbol = referencedSymbolOf(identifier);
+
+    return symbol?.getValueDeclaration() ?? symbol?.getDeclarations()[0];
+};
+
 /** The symbols and spellings of the helpers' own names, for the one identifier pass. */
 const helperNamesOf = (helpers: ReadonlyArray<TopLevelDeclaration>): { bySymbol: Map<ts.Symbol, ts.Node>; nameNodes: Set<ts.Node>; spellings: Set<string> } => {
     const bySymbol = new Map<ts.Symbol, ts.Node>();
@@ -359,4 +366,4 @@ const withCallerVisibility = <Row extends { file: string; scope: CallSiteScope }
 const exportedNameOf = (declaration: TopLevelDeclaration): string | undefined =>
     attributionOf(declaration.getSourceFile()).exportNames.get(declaration.compilerNode);
 
-export { callSiteScopeOf, exportedNameOf, referencedSymbolOf, withCallerVisibility };
+export { callSiteScopeOf, declarationOf, exportedNameOf, referencedSymbolOf, withCallerVisibility };

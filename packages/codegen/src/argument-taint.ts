@@ -164,8 +164,10 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     // The nearest same-named `const` declared *before* this use. A declaration that
     // follows the use — or a shadowing one in a sibling branch — can't be its source,
     // so preferring the closest preceding binding avoids resolving through a shadow.
-    // (Exact symbol resolution would need the type-checker these pre-`pnpm install`
-    // feeders deliberately run without, so scope-order is the closest safe proxy.)
+    // Kept spelling-based on purpose: over-resolving here only makes the taint
+    // predicate report MORE, which fails open. The project does carry a type
+    // checker, and a predicate that SILENCES on a match must use it instead, as
+    // the owner-field feeder does for mutator impls (`implTaintOf`).
     const usePosition = node.getStart();
     let nearest: TsNode | undefined;
     let nearestPosition = -1;
