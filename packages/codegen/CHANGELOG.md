@@ -1,3 +1,23 @@
+## @lunora/codegen [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.250...@lunora/codegen@1.0.0-alpha.251) (2026-10-03)
+
+### Code Refactoring
+
+* **codegen:** capability-table follow-up and config binding inference fix ([#945](https://github.com/anolilab/lunora/issues/945)) ([66b7d12](https://github.com/anolilab/lunora/commit/66b7d12d905bc98132f72c621e2823d6b1e2bcd7))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.182
+* **@lunora/agent:** upgraded to 1.0.0-alpha.164
+* **@lunora/container:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+* **@lunora/queue:** upgraded to 1.0.0-alpha.87
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.105
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.92
+* **@lunora/do:** upgraded to 1.0.0-alpha.189
+* **@lunora/server:** upgraded to 1.0.0-alpha.171
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.107
+
 ## @lunora/codegen [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.249...@lunora/codegen@1.0.0-alpha.250) (2026-10-02)
 
 ### Features
