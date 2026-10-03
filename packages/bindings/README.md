@@ -16,16 +16,17 @@ The lightweight Cloudflare binding helpers for Lunora, in one install with
 per-binding subpaths — each is a thin, zero-dependency `ctx.*` facade over its
 Cloudflare binding:
 
-| Subpath                      | `ctx.*`         | Cloudflare binding     |
-| ---------------------------- | --------------- | ---------------------- |
-| `@lunora/bindings/kv`        | `ctx.kv`        | Workers KV             |
-| `@lunora/bindings/images`    | `ctx.images`    | Cloudflare Images      |
-| `@lunora/bindings/analytics` | `ctx.analytics` | Analytics Engine       |
-| `@lunora/bindings/pipelines` | `ctx.pipelines` | Pipelines              |
-| `@lunora/bindings/vectors`   | `ctx.vectors`   | Vectorize              |
-| `@lunora/bindings/r2sql`     | `ctx.r2sql`     | R2 SQL                 |
-| `@lunora/bindings/artifacts` | `ctx.artifacts` | Artifacts (Git repos)  |
-| `@lunora/bindings/ai-search` | `ctx.aiSearch`  | AI Search (types only) |
+| Subpath                          | `ctx.*`            | Cloudflare binding     |
+| -------------------------------- | ------------------ | ---------------------- |
+| `@lunora/bindings/kv`            | `ctx.kv`           | Workers KV             |
+| `@lunora/bindings/images`        | `ctx.images`       | Cloudflare Images      |
+| `@lunora/bindings/analytics`     | `ctx.analytics`    | Analytics Engine       |
+| `@lunora/bindings/pipelines`     | `ctx.pipelines`    | Pipelines              |
+| `@lunora/bindings/vectors`       | `ctx.vectors`      | Vectorize              |
+| `@lunora/bindings/r2sql`         | `ctx.r2sql`        | R2 SQL                 |
+| `@lunora/bindings/artifacts`     | `ctx.artifacts`    | Artifacts (Git repos)  |
+| `@lunora/bindings/ai-search`     | `ctx.aiSearch`     | AI Search (types only) |
+| `@lunora/bindings/analytics-sql` | `ctx.analyticsSql` | Analytics SQL          |
 
 ```ts
 import { createKv } from "@lunora/bindings/kv";
