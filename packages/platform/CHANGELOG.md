@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.54...@lunora/platform@1.0.0-alpha.55) (2026-10-03)
+
+### Features
+
+* **observability:** set error status on failed host spans ([#953](https://github.com/anolilab/lunora/issues/953)) ([112ef1e](https://github.com/anolilab/lunora/commit/112ef1e8b2758dc6043a7470fa99a4e63a58bbd4)), closes [#939](https://github.com/anolilab/lunora/issues/939)
+
 ## @lunora/platform [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.53...@lunora/platform@1.0.0-alpha.54) (2026-10-03)
 
 ### Features
