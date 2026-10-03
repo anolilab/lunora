@@ -5,17 +5,19 @@
  * and READS commits, trees, blobs and files. It has no write method: every write
  * is a `git push` over HTTPS with one of those tokens.
  *
- * Declared structurally (the `ImagesBindingLike` pattern) rather than leaning on
- * the global `Artifacts` type, because the pinned `@cloudflare/workers-types`
- * lags the runtime: it lacks `info()`, `log()`, `readCommit()`, `readTree()`,
- * `readBlob()` and `readFile()`, and it models `ArtifactsRepo` as carrying its
- * metadata as properties, which the deployed binding does not do (call
- * `info()`). The shapes here follow the Workers-binding docs and
- * `@cloudflare/workers-types@5.20261002.1`, the first release that matches them.
+ * Declared structurally (the `ImagesBindingLike` pattern) rather than aliasing
+ * the global `Artifacts` type, because an alias resolves against whatever
+ * `@cloudflare/workers-types` the app installed, and two lines get it wrong.
+ * The v4 line has no `Artifacts` global at all, so the alias is a silent `any`
+ * under `skipLibCheck`. v5 releases before 5.20261002.1 have a WRONG shape: no
+ * `info()`, `log()` or `read*()` methods, and `ArtifactsRepo` typed as carrying
+ * its metadata as properties, which the deployed binding does not do (call
+ * `info()`), so the alias is a wrong type.
  *
- * TODO(workers-types): once the catalog pin includes the read methods, add a
- * type test asserting the global `Artifacts` is assignable to
- * {@link ArtifactsBindingLike}.
+ * The shapes here follow the Workers-binding docs and
+ * `@cloudflare/workers-types@5.20261002.1`; `__tests__/artifacts/types.test.ts`
+ * pins that the global `Artifacts` / `ArtifactsRepo` still satisfy them, so
+ * drift fails CI.
  */
 
 /** A repo-scoped Git token's scope: `read` covers clone/fetch/pull, `write` adds push. */

@@ -22,10 +22,10 @@
         "vue": "^3.5.38"
     },
     "devDependencies": {
-        "@cloudflare/workers-types": "^4.20260611.1",
+        "@cloudflare/workers-types": "^5.20261002.1",
         "@lunora/studio": "^0.0.0",
         "@lunora/vite": "^0.0.0",
         "typescript": "^6.0.3",
-        "wrangler": "^4.143.1"
+        "wrangler": "^4.146.0"
     }
 }

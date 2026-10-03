@@ -1803,6 +1803,12 @@ interface BindingRequirement {
 const CLOUDFLARE_DRIVER: DeployDriver;
 ```
 
+### `CLOUDFLARE_TOOLCHAIN_VERSIONS` (const)
+
+```ts
+const CLOUDFLARE_TOOLCHAIN_VERSIONS: Readonly<Record<"@cloudflare/vite-plugin" | "@cloudflare/workers-types" | "wrangler", string>>;
+```
+
 ### `DEFAULT_OBSERVABILITY` (const)
 
 ```ts
