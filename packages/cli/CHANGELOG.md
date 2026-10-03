@@ -1,3 +1,18 @@
+## @lunora/cli [1.0.0-alpha.342](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.341...@lunora/cli@1.0.0-alpha.342) (2026-10-03)
+
+### Bug Fixes
+
+* **codegen:** attribute helper writes to their exported callers ([#954](https://github.com/anolilab/lunora/issues/954)) ([91467c4](https://github.com/anolilab/lunora/commit/91467c45d17123552f41e2c6caf8011ce74d911d))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.187
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.257
+* **@lunora/config:** upgraded to 1.0.0-alpha.300
+* **@lunora/seed:** upgraded to 1.0.0-alpha.185
+* **@lunora/testing:** upgraded to 1.0.0-alpha.228
+
 ## @lunora/cli [1.0.0-alpha.341](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.340...@lunora/cli@1.0.0-alpha.341) (2026-10-03)
 
 
