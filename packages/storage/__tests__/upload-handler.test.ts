@@ -168,6 +168,96 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         expect(authorize).not.toHaveBeenCalled();
     });
 
+    describe("write-only route: GET never serves a stored file", () => {
+        /** Store a real file through the multipart route, so GET has something it could serve. */
+        const storeFile = async (storage: MemoryStorage): Promise<string> => {
+            const form = new FormData();
+
+            form.append("file", new File(["secret bytes"], "secret.txt", { type: "text/plain" }));
+
+            const created = await createUploadHandler({ protocol: "multipart", silent: true, storage }).fetch(
+                new Request(ENDPOINT, { body: form, method: "POST" }),
+            );
+
+            expect(created.status).toBe(200);
+
+            const { id } = await created.json();
+
+            return id;
+        };
+
+        it.each(["chunked-rest", "multipart", "tus"] as const)(
+            "refuses GET /<id>, GET /<id>/metadata and the collection GET on a %s route before the gate (405)",
+            async (protocol) => {
+                expect.hasAssertions();
+
+                const storage = new MemoryStorage({ path: "/upload" });
+                const id = await storeFile(storage);
+                const authorize = vi.fn<() => boolean>(() => true);
+                const route = createUploadHandler({ authorize, protocol, storage });
+
+                // `@visulima/storage` 2.0.24 serves all three over fetch (2.0.22's
+                // Rest and Multipart answered 500; TUS served downloads already).
+                for (const path of [`${ENDPOINT}/${id}`, `${ENDPOINT}/${id}.txt`, `${ENDPOINT}/${id}/metadata`, ENDPOINT, `${ENDPOINT}?page=1`]) {
+                    // eslint-disable-next-line no-await-in-loop -- one path at a time
+                    const response = await route.fetch(new Request(path, { headers: { "Tus-Resumable": "1.0.0", range: "bytes=0-5" }, method: "GET" }));
+
+                    expect(response.status).toBe(405);
+                    expect(response.headers.get("Allow")).not.toContain("GET");
+                    // eslint-disable-next-line no-await-in-loop -- one path at a time
+                    await expect(response.text()).resolves.not.toContain("secret bytes");
+                }
+
+                expect(authorize).not.toHaveBeenCalled();
+            },
+        );
+
+        it("refuses GET on a public route too, which has no gate at all", async () => {
+            expect.hasAssertions();
+
+            const storage = new MemoryStorage({ path: "/upload" });
+            const id = await storeFile(storage);
+            const route = createUploadHandler({ protocol: "chunked-rest", public: true, storage });
+
+            await expect(route.fetch(new Request(`${ENDPOINT}/${id}`, { method: "GET" }))).resolves.toHaveProperty("status", 405);
+        });
+
+        it.each([
+            ["tus", "DELETE, HEAD, OPTIONS, PATCH, POST"],
+            ["chunked-rest", "HEAD, OPTIONS, PATCH, POST, PUT"],
+            ["multipart", "OPTIONS, POST"],
+        ] as const)("names the refused method and advertises only the %s upload methods", async (protocol, allow) => {
+            expect.hasAssertions();
+
+            const route = createUploadHandler({ protocol, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+            const response = await route.fetch(new Request(`${ENDPOINT}/abc`, { method: "PROPFIND" }));
+
+            expect(response.status).toBe(405);
+            expect(response.headers.get("Allow")).toBe(allow);
+            await expect(response.json()).resolves.toMatchObject({
+                error: { code: "METHOD_NOT_ALLOWED", message: expect.stringMatching(/^PROPFIND is not allowed/) },
+            });
+        });
+
+        it("still answers HEAD and OPTIONS, which resume and CORS need", async () => {
+            expect.hasAssertions();
+
+            const route = createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+            const created = await route.fetch(
+                new Request(ENDPOINT, { headers: { "content-type": "text/plain", "x-chunked-upload": "true", "x-total-size": "10" }, method: "POST" }),
+            );
+            const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
+            const head = await route.fetch(new Request(location, { method: "HEAD" }));
+
+            expect(head.status).toBe(200);
+            expect(head.headers.get("x-upload-offset")).toBe("0");
+
+            const preflight = await route.fetch(new Request(ENDPOINT, { method: "OPTIONS" }));
+
+            expect(preflight.status).toBe(204);
+        });
+    });
+
     it("survives pause/resume mid-upload", async () => {
         expect.hasAssertions();
 
@@ -655,7 +745,8 @@ describe("createUploadHandler chunked REST", () => {
 
         // `@visulima/storage` 2.0.8 to 2.0.22 answered every chunked-REST PATCH
         // with 400: its create never marked the upload as chunked.
-        const handler = createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+        const storage = new MemoryStorage({ path: "/upload" });
+        const handler = createUploadHandler({ protocol: "chunked-rest", silent: true, storage });
         const bytes = new TextEncoder().encode("0123456789");
 
         const created = await handler.fetch(
@@ -696,9 +787,61 @@ describe("createUploadHandler chunked REST", () => {
         expect(head.headers.get("x-upload-complete")).toBe("true");
         expect(head.headers.get("x-upload-offset")).toBe("10");
 
-        const download = await handler.fetch(new Request(location, { method: "GET" }));
+        // Read back from the provider: the upload route itself is write-only.
+        const id = (location.split("/").pop() ?? "").replace(/\.[^.]*$/u, "");
+        const stored = await storage.get({ id });
 
-        expect(download.status).toBe(200);
-        await expect(download.text()).resolves.toBe("0123456789");
+        expect(Buffer.from(stored.content).toString()).toBe("0123456789");
+    });
+
+    it("answers PATCH with a Location of <collection>/<id>.<ext>, without the id repeated (2.0.24)", async () => {
+        expect.hasAssertions();
+
+        const handler = createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+        const created = await handler.fetch(
+            new Request(ENDPOINT, { headers: { "content-type": "text/plain", "x-chunked-upload": "true", "x-total-size": "4" }, method: "POST" }),
+        );
+        const location = new URL(created.headers.get("location") ?? "", ENDPOINT);
+        const patched = await handler.fetch(
+            new Request(location, {
+                body: new Uint8Array(4),
+                headers: { "content-length": "4", "content-type": "application/octet-stream", "x-chunk-offset": "0" },
+                method: "PATCH",
+            }),
+        );
+        const patchedLocation = new URL(patched.headers.get("location") ?? "", ENDPOINT);
+        const segments = patchedLocation.pathname.split("/").filter(Boolean);
+
+        expect(patched.status).toBe(200);
+        // `/upload/<id>.txt`: one segment after the collection, the id not repeated.
+        expect(segments).toHaveLength(2);
+        expect(segments[0]).toBe("upload");
+        expect(patchedLocation.pathname).toBe(location.pathname);
+    });
+
+    it("creates a file with PUT under a word-character id, and refuses a dotted one (400, 2.0.24)", async () => {
+        expect.hasAssertions();
+
+        const maxFileSizeFor = vi.fn<(context: UploadSizeContext) => number | undefined>(() => 1000);
+        const handler = createUploadHandler({ maxFileSizeFor, protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+        const put = async (name: string): Promise<Response> =>
+            handler.fetch(
+                new Request(`${ENDPOINT}/${name}`, {
+                    body: new Uint8Array(3).fill(1),
+                    headers: { "content-length": "3", "content-type": "application/pdf" },
+                    method: "PUT",
+                }),
+            );
+
+        const created = await put("report-v2.pdf");
+
+        expect(created.status).toBe(201);
+        expect(new URL(created.headers.get("location") ?? "", ENDPOINT).pathname).toBe("/upload/report-v2.pdf");
+
+        // The per-upload cap still runs on a PUT create, and an id with a dot
+        // before its extension is then refused upstream.
+        await expect(put("report.v2.pdf")).resolves.toHaveProperty("status", 400);
+        expect(maxFileSizeFor).toHaveBeenCalledTimes(2);
+        expect(maxFileSizeFor.mock.calls[0]?.[0]).toMatchObject({ contentType: "application/pdf", declaredSize: 3, method: "PUT" });
     });
 });

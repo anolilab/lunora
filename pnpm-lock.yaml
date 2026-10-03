@@ -572,8 +572,8 @@ catalogs:
       specifier: 2.0.24
       version: 2.0.24
     '@visulima/storage-client':
-      specifier: 1.0.3
-      version: 1.0.3
+      specifier: 1.0.4
+      version: 1.0.4
     aws4fetch:
       specifier: 1.0.20
       version: 1.0.20
@@ -2527,7 +2527,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.3(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.4(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@angular/core':
         specifier: catalog:angular
@@ -3026,7 +3026,7 @@ importers:
         version: link:../errors
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.3(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.4(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
@@ -4270,7 +4270,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.3(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.4(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@babel/core':
         specifier: catalog:build
@@ -4781,7 +4781,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.3(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.15)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.4(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.15)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@babel/core':
         specifier: catalog:build
@@ -4910,7 +4910,7 @@ importers:
         version: 2.1.0(3bc567c36cc82f7d20fa04472ffbbfb9)
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.3(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.4(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.10(vitest@4.1.10)
@@ -5091,7 +5091,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.3(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.4(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -5275,7 +5275,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.3(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.4(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -14654,8 +14654,8 @@ packages:
     resolution: {integrity: sha512-/rVVuYA2Y0vQl7orDBLd5VBKHPxp3K/G5MU9MPI4s6QkH6EFJ0CorluQPplIRk6onr9nfXmeE08ZR6C3O2zNkQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/storage-client@1.0.3':
-    resolution: {integrity: sha512-UXQAdlZZxcwy8np/3+KkkrF1U1iU+1Sqd14C2sX8aacJ+JMrAkBrhDOZusXKFQU72GX7XMWGMRNeLv15TD7Jxw==}
+  '@visulima/storage-client@1.0.4':
+    resolution: {integrity: sha512-lrq5qF8BM4DNIXlwYFB0P5rmu0/sO4SbDVIon30h6eBRdWQUY4nwweo9BZMlCYf1pOwzma9nQMHIK0Zdr9h25g==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@tanstack/react-query': '>=5.100.9'
@@ -36722,7 +36722,7 @@ snapshots:
     dependencies:
       '@visulima/interactive-manager': 1.0.1
 
-  '@visulima/storage-client@1.0.3(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
+  '@visulima/storage-client@1.0.4(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
     dependencies:
       '@tanstack/react-query': 5.101.4(react@19.2.8)
       '@tanstack/solid-query': 5.101.3(solid-js@2.0.0-rc.0)
@@ -36733,7 +36733,7 @@ snapshots:
       svelte: 5.57.0(@typescript-eslint/types@8.69.0)
       vue: 3.5.42(typescript@6.0.3)
 
-  '@visulima/storage-client@1.0.3(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.15)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
+  '@visulima/storage-client@1.0.4(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.15)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
     dependencies:
       '@tanstack/react-query': 5.102.8(react@19.2.8)
       '@tanstack/solid-query': 5.101.3(solid-js@1.9.15)
@@ -36744,7 +36744,7 @@ snapshots:
       svelte: 5.57.0(@typescript-eslint/types@8.69.0)
       vue: 3.5.42(typescript@6.0.3)
 
-  '@visulima/storage-client@1.0.3(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
+  '@visulima/storage-client@1.0.4(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
     dependencies:
       '@tanstack/react-query': 5.102.8(react@19.2.8)
       '@tanstack/solid-query': 5.101.3(solid-js@2.0.0-rc.0)
