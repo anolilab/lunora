@@ -34,8 +34,8 @@ The split is enforced by **TypeScript**, not by the runtime: one object is built
 per context and the type is what narrows it, so a `mutation` that casts past its
 type still reaches `delete`. Where you need the narrowing to hold against more
 than a compiler, add [`storageRules(...)`](/docs/packages/server) — it rebuilds
-`ctx.storage` as an allowlist of the gated surface and drops every ungated
-sibling, so nothing can route around a rule.
+`ctx.storage` as an allowlist of the gated surface and refuses the members no
+rule can gate (`getPresignedUrl`, `list`), so nothing can route around a rule.
 
 | Operation                                         | Query | Mutation | Action |
 | ------------------------------------------------- | :---: | :------: | :----: |
@@ -112,8 +112,8 @@ rule-enforced `ctx.storage` surface.
 
 ### Large objects through the Worker
 
-`store` buffers a streamed body under its `maxSize` cap, so a stream is capped
-at 16 MiB. Above that, stream the body into R2 with a **multipart upload** from
+`store` buffers a streamed body under its `maxSize` cap, so a stream uploaded
+with `maxSize` is capped at 16 MiB. Above that, stream the body into R2 with a **multipart upload** from
 an action: `createMultipartUpload` wraps R2's native multipart API, and every
 part except the last must be at least 5 MiB and the same size. Persist
 `uploadId` and pick the upload back up in a later request with
@@ -156,8 +156,10 @@ do {
 } while (cursor);
 ```
 
-Neither one is rule-gated. A procedure guarded by `storageRules(...)` does not
-see them, and its rule-scoped enumeration goes through
+Under a procedure guarded by `storageRules(...)`, `createMultipartUpload` and
+`resumeMultipartUpload` are checked against the bucket's `write` rules like
+`store`. `list` enumerates keys no `read` rule has vetted, so it rejects with
+`FORBIDDEN` there; the rule-scoped enumeration is
 `ctx.db.system.query("_storage")`.
 
 ### Resumable uploads from the browser

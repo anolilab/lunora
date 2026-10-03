@@ -2217,10 +2217,7 @@ interface SpanOptions {
 ```ts
 interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
     bucket: (name: Buckets) => Storage<Buckets>;
-    createMultipartUpload: (key: string, options?: {
-        contentType?: string;
-        customMetadata?: Record<string, string>;
-    }) => Promise<StorageMultipartUpload>;
+    createMultipartUpload: (key: string, options?: StorageMultipartUploadOptions) => Promise<StorageMultipartUpload>;
     delete: (key: string) => Promise<void>;
     generateUploadUrl: (key: string, options?: {
         contentType?: string;
@@ -2233,7 +2230,7 @@ interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Bucke
     list: (prefix?: string, options?: StorageListOptions) => Promise<StorageListResult>;
     resumeMultipartUpload: (key: string, uploadId: string) => StorageMultipartUpload;
     store: (key: string, body: StorageUploadBody, options?: StorageUploadOptions) => Promise<StorageUploadResult>;
-    upload: (key: string, body: StorageUploadBody, options?: StorageUploadOptions) => Promise<StorageUploadResult>;
+    upload: Storage<Buckets>["store"];
 }
 ```
 
@@ -2280,6 +2277,15 @@ interface StorageMultipartUpload {
     readonly key: string;
     readonly uploadId: string;
     uploadPart: (partNumber: number, value: StorageUploadBody) => Promise<StorageUploadedPart>;
+}
+```
+
+### `StorageMultipartUploadOptions` (interface)
+
+```ts
+interface StorageMultipartUploadOptions {
+    contentType?: string;
+    customMetadata?: Record<string, string>;
 }
 ```
 
@@ -5234,6 +5240,10 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `StorageMultipartUpload` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `StorageMultipartUploadOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 

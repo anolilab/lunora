@@ -28,9 +28,27 @@ type CheckNoneMissing = Assert<Equal<MissingFromCtx, never>>;
 type PhantomOnCtx = Exclude<keyof Storage, keyof RuntimeStorage | "bucket">;
 type CheckNonePhantom = Assert<Equal<PhantomOnCtx, never>>;
 
-// The runtime object satisfies every signature the ctx type promises.
+// The runtime object satisfies every signature the ctx type promises. This is the
+// return-type direction only: parameters are contravariant, so a runtime method
+// that ACCEPTS more than the ctx type declares still passes here.
 type CheckRuntimeSatisfiesCtx = Assert<RuntimeStorage extends Omit<Storage, "bucket"> ? true : false>;
 type CheckBucketStorageSatisfiesCtx = Assert<BucketStorage extends Storage ? true : false>;
+
+// The parameter direction, per member: the ctx type accepts everything the runtime
+// does. Catches a widened union — the `store` body that once refused
+// `ArrayBufferView` / `string` the runtime takes.
+type SharedMember = Exclude<keyof RuntimeStorage, "bucketName">;
+type NarrowedParams = { [K in SharedMember]: Parameters<RuntimeStorage[K]> extends Parameters<Storage[K]> ? never : K }[SharedMember];
+type CheckNoNarrowedParams = Assert<Equal<NarrowedParams, never>>;
+
+// Stricter still: the parameter lists are IDENTICAL, which also catches an option
+// field the runtime grew (an object with an extra optional key is assignable
+// either way, so `extends` alone misses it). The one deliberate exception:
+// `getSignedUrl` is on every tier, and its runtime `{ method: "PUT", contentType }`
+// would mint an upload URL from a query — upload URLs are action-only, through
+// `generateUploadUrl`.
+type DifferingParams = { [K in SharedMember]: Equal<Parameters<RuntimeStorage[K]>, Parameters<Storage[K]>> extends true ? never : K }[SharedMember];
+type CheckParamsIdentical = Assert<Equal<DifferingParams, "getSignedUrl">>;
 
 declare const queryCtx: QueryCtx;
 declare const mutationCtx: MutationCtx;
@@ -93,6 +111,8 @@ const check = (): void => {
         CheckMultipart,
         CheckNoneMissing,
         CheckNonePhantom,
+        CheckNoNarrowedParams,
+        CheckParamsIdentical,
         CheckPart,
         CheckResume,
         CheckRuntimeSatisfiesCtx,

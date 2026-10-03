@@ -857,6 +857,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageMultipartUploadOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageObjectBody` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5767,6 +5771,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `StorageMultipartUploadOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `StorageObjectBody` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7678,6 +7686,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `StorageMultipartUpload` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `StorageMultipartUploadOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

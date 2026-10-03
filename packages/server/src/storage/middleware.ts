@@ -7,9 +7,9 @@
  *
  * 1. Resolves the request identity/roles once (like `rls`), then wraps
  * `ctx.storage`. Each guarded method (`download` / `getMetadata` / `head` /
- * `getUrl` → `read`; `store` / `generateUploadUrl` → `write`; `delete` →
- * `delete`) checks
- * the key it targets against the rules for that operation before delegating to
+ * `getUrl` → `read`; `store` / `upload` / `generateUploadUrl` /
+ * `createMultipartUpload` / `resumeMultipartUpload` → `write`; `delete` →
+ * `delete`) checks the key it targets against the rules for that operation before delegating to
  * the underlying storage. `getSignedUrl` is gated by the requested HTTP method:
  * `{ method: "PUT" }` mints an upload URL and is checked as `write`, otherwise
  * `read` — so a signed PUT URL can't bypass the bucket's write rules.
@@ -33,9 +33,11 @@
  * the unwrapped `ctx.storage`.
  *
  * The wrapper is an allowlist, not a passthrough: it re-exposes only the gated
- * surface and drops every privileged sibling on the backing object (`upload`,
- * `createMultipartUpload`, `resumeMultipartUpload`, `getPresignedUrl`, `list`),
- * so none of them can be invoked under a guarded procedure to evade the rules.
+ * surface. The two members no rule can gate — `getPresignedUrl` (a URL that
+ * reaches R2 directly, past every rule) and `list` (an enumeration of keys no
+ * `read` rule has vetted) — are replaced by stubs that reject with `FORBIDDEN`
+ * and say what to use instead ({@link UNAVAILABLE_METHODS}), so neither can be
+ * invoked under a guarded procedure to evade the rules.
  *
  * An allowlist has one failure mode, and it has already fired once: a method the
  * ctx GROWS is silently absent under a guarded procedure, so a handler calling it
@@ -45,8 +47,8 @@
  * in {@link GUARDED_METHODS} now, gated as a `delete` AT ENQUEUE TIME (the queued
  * call replays `delete(key)` against the unwrapped facade after the transaction
  * commits, past every wrapper — so the enqueue is the only point a rule can see).
- * Anything added to `ctx.storage` from here on belongs in that table or in the
- * dropped list above, deliberately, in the change that adds it.
+ * Anything added to `ctx.storage` from here on belongs in that table or in
+ * {@link UNAVAILABLE_METHODS}, deliberately, in the change that adds it.
  *
  * **`ctx.db.system` is gated too.** `ctx.db.system.query("_storage")` and
  * `.get("_storage", key)` read the SAME R2 adapter `ctx.storage` does — codegen
@@ -60,7 +62,7 @@
  *
  * `list` rules therefore DO govern something: they scope `_storage` enumeration
  * through `ctx.db.system`. They still govern nothing at the `ctx.storage` layer:
- * the action-only `ctx.storage.list` is dropped by the wrapper, not gated.
+ * the action-only `ctx.storage.list` is refused under the wrapper, not gated.
  */
 import { LunoraError } from "@lunora/errors";
 
@@ -75,6 +77,7 @@ interface WrappableStorage {
     bucket?: (name: string) => WrappableStorage;
     /** The bucket this accessor targets — scopes which `(bucket, op)` rules apply. */
     bucketName?: string;
+    createMultipartUpload?: (key: string, options?: unknown) => Promise<unknown>;
     delete?: (key: string) => Promise<void>;
 
     /**
@@ -86,6 +89,7 @@ interface WrappableStorage {
     download?: (key: string) => Promise<unknown>;
     generateUploadUrl?: (key: string, options?: unknown) => Promise<string>;
     getMetadata?: (key: string) => Promise<unknown>;
+    getPresignedUrl?: (key: string, options?: unknown) => Promise<string>;
     getSignedUrl?: (key: string, options?: unknown) => Promise<string>;
 
     /**
@@ -98,7 +102,15 @@ interface WrappableStorage {
      */
     getUrl?: (key: string) => string;
     head?: (key: string) => Promise<unknown>;
+    list?: (prefix?: string, options?: unknown) => Promise<unknown>;
+
+    /**
+     * SYNCHRONOUS, like `getUrl`: it returns the multipart handle, not a promise.
+     * The key is its first argument, so it is gated like every other method.
+     */
+    resumeMultipartUpload?: (key: string, uploadId: string) => unknown;
     store?: (key: string, body: unknown, options?: unknown) => Promise<unknown>;
+    upload?: (key: string, body: unknown, options?: unknown) => Promise<unknown>;
 }
 
 interface StorageContextIn {
@@ -235,16 +247,19 @@ const resolveSignedUrlOperation = (args: ReadonlyArray<unknown>): StorageOperati
 
 /**
  * The gated `ctx.storage` surface — each method paired with the operation a rule
- * must allow. This is the *only* surface the wrapper re-exposes; every other
- * method on the backing object (`upload`, `createMultipartUpload`,
- * `resumeMultipartUpload`, `getPresignedUrl`, `list`) is dropped so it can't
- * bypass enforcement. `list` has no entry: a guarded procedure enumerates through
- * the filtered `ctx.db.system.query("_storage")` instead.
+ * must allow. This is the *only* gated surface the wrapper re-exposes; the
+ * members no rule can gate (`getPresignedUrl`, `list`) are refused through
+ * {@link UNAVAILABLE_METHODS}, and anything else on the backing object is
+ * dropped so it can't bypass enforcement.
  *
  * `getSignedUrl` is gated by a per-call resolver (not a static op) because a
  * `{ method: "PUT" }` mints a write capability — see {@link resolveSignedUrlOperation}.
  */
 const GUARDED_METHODS: ReadonlyArray<[keyof WrappableStorage, OperationResolver]> = [
+    // Starting a multipart upload, or resuming one by id, is a write to its key:
+    // the parts land there on `complete`, so a write rule must see the key here,
+    // before the handle that writes them exists.
+    ["createMultipartUpload", "write"],
     ["delete", "delete"],
     // The deferred-delete enqueue. Gated HERE rather than at the flush: the queue
     // replays `delete(key)` against the facade that owns it once the transaction
@@ -261,7 +276,29 @@ const GUARDED_METHODS: ReadonlyArray<[keyof WrappableStorage, OperationResolver]
     // otherwise it is an ungated route to everything `getMetadata`'s `read` rules
     // were written to fence off.
     ["head", "read"],
+    ["resumeMultipartUpload", "write"],
     ["store", "write"],
+    // `store` under `@lunora/storage`'s own name — the same function, so the same gate.
+    ["upload", "write"],
+];
+
+/**
+ * The `ctx.storage` members no rule can gate, each with the error a guarded
+ * procedure gets in its place. Installed as a rejecting stub rather than omitted,
+ * so a call fails with what to do instead of a bare `x is not a function` on a
+ * method the action's own type promises.
+ *
+ * `getPresignedUrl` mints a SigV4 URL that hits R2 directly: no request ever
+ * passes back through the Worker, so no rule could see it. `list` enumerates
+ * keys a `read` rule has not vetted; the filtered, rule-scoped enumeration is
+ * `ctx.db.system.query("_storage")`.
+ */
+const UNAVAILABLE_METHODS: ReadonlyArray<["getPresignedUrl" | "list", string]> = [
+    [
+        "getPresignedUrl",
+        "ctx.storage.getPresignedUrl is not available under storageRules(...): a presigned URL reaches R2 directly, past every rule. Use getSignedUrl or generateUploadUrl, which route back through the Worker.",
+    ],
+    ["list", 'ctx.storage.list is not available under storageRules(...); enumerate via ctx.db.system.query("_storage"), which the rules filter.'],
 ];
 
 /**
@@ -368,12 +405,12 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
         /**
          * Rebuild `ctx.storage` as an ALLOWLIST of the gated surface, enforcing each
          * method against the accessor's bucket. Only {@link GUARDED_METHODS} (plus the
-         * `bucket(name)` selector) are re-exposed — privileged siblings on the backing
-         * object (`upload`, `createMultipartUpload`, `resumeMultipartUpload`,
-         * `getPresignedUrl`, `list`) are dropped, never passed through, so they can't
-         * evade the rules (e.g. `upload` writing outside `write`, or a presigned URL
-         * hitting R2 directly). `bucket(name)` is re-wrapped so a switched bucket is
-         * enforced too. An untagged accessor is treated as the `"default"` bucket.
+         * `bucket(name)` selector) are re-exposed. The ungateable members
+         * ({@link UNAVAILABLE_METHODS}: a presigned URL hitting R2 directly, an
+         * unfiltered `list`) become stubs that reject with `FORBIDDEN`, never passed
+         * through, so they can't evade the rules. `bucket(name)` is re-wrapped so a
+         * switched bucket is enforced too. An untagged accessor is treated as the
+         * `"default"` bucket.
          */
         const wrapStorage = (storage: WrappableStorage): WrappableStorage => {
             const bucketName = storage.bucketName ?? "default";
@@ -395,6 +432,17 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
                         assertAllowed(operation, key, bucketName);
 
                         return (original as (...callArgs: unknown[]) => unknown)(...args);
+                    };
+                }
+            }
+
+            for (const [method, message] of UNAVAILABLE_METHODS) {
+                if (typeof storage[method] === "function") {
+                    // `async`, so it rejects rather than throws: both members return a
+                    // promise, and a `.catch(...)` on the call must see the refusal.
+                    // eslint-disable-next-line @typescript-eslint/require-await -- the `async` is the point: it turns the throw into a rejection
+                    wrapped[method] = async (): Promise<never> => {
+                        throw new LunoraError("FORBIDDEN", message);
                     };
                 }
             }

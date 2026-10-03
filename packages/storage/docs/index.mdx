@@ -59,8 +59,8 @@ API below plus `bucket(name)` — `store` / `upload`, `delete`,
 <Callout>
     **The read-only / action-only split is a type-level one.** The object behind `ctx.storage` is the same in every context, so a `mutation` that casts past its
     type — or plain JavaScript — can still reach `delete`. TypeScript is the guardrail; it is not a sandbox. The runtime allowlist is `storageRules(...)`, which
-    rebuilds `ctx.storage` as exactly the gated surface and drops every ungated sibling (`upload`, multipart, `getPresignedUrl`, `list`) so nothing can route
-    around a rule. Reach for it whenever the split has to hold against more than a compiler.
+    rebuilds `ctx.storage` as exactly the gated surface — `upload` and multipart are checked as `write`, and `getPresignedUrl` and `list`, which no rule can
+    gate, reject with `FORBIDDEN` — so nothing can route around a rule. Reach for it whenever the split has to hold against more than a compiler.
 </Callout>
 
 ## Deleting an object with the row that owns it

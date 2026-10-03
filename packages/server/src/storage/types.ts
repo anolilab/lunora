@@ -17,14 +17,16 @@ import type { Permission, Role } from "../rls/types";
 
 /**
  * Operations a storage rule can gate. `read` covers `download` / `getMetadata` /
- * `head` / `getSignedUrl` / `getUrl`; `write` covers `store` /
- * `generateUploadUrl`; `delete` covers `delete` and the `deleteAfterCommit`
+ * `head` / `getSignedUrl` / `getUrl`; `write` covers `store` / `upload` /
+ * `generateUploadUrl` / `createMultipartUpload` / `resumeMultipartUpload`;
+ * `delete` covers `delete` and the `deleteAfterCommit`
  * enqueue; `list` is a prefix listing.
  *
  * `list` governs `ctx.db.system.query("_storage")` — the object enumeration
  * reachable from a handler — plus the file browser / admin path. It governs
  * nothing on `ctx.storage`: the action-only `ctx.storage.list` is not a gated
- * method, so `storageRules` drops it rather than enforcing it. Note the
+ * method, so `storageRules` refuses it with `FORBIDDEN` rather than enforcing
+ * it. Note the
  * enumeration is additionally narrowed by the bucket's `read`
  * rules, so a `read` prefix rule scopes what a handler can enumerate even with
  * no `list` rule declared.

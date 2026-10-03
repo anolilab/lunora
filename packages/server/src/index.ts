@@ -195,6 +195,7 @@ export type {
     StorageListResult,
     StorageMetadata,
     StorageMultipartUpload,
+    StorageMultipartUploadOptions,
     StorageObjectBody,
     StorageObjectHead,
     StorageRange,
