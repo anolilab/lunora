@@ -23,6 +23,7 @@
  * terminate one, and the other protocols refuse `DELETE` outright (405).
  */
 import { LunoraError } from "@lunora/errors";
+import { File } from "@visulima/storage";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
 import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
 
@@ -69,12 +70,18 @@ interface UploadAuthzContext {
  */
 interface UploadSizeContext extends UploadAuthzContext {
     /**
-     * The declared MIME type: TUS `Upload-Metadata` `filetype` (or `type` /
-     * `contentType` / `mimeType`), chunked-REST `X-File-Metadata` likewise, else
-     * the request's `Content-Type`.
+     * The declared MIME type, resolved the way the stored file's type is: on
+     * chunked REST the request's `Content-Type`; on TUS the `Upload-Metadata`
+     * `mimeType`, else `type`, else `filetype`; else
+     * `application/octet-stream`.
      */
-    contentType: string | undefined;
-    /** The largest size the request declares (`Upload-Length`, `X-Total-Size`, `Content-Length`). */
+    contentType: string;
+
+    /**
+     * The largest size the request declares (`Upload-Length`, `X-Total-Size`,
+     * `Content-Length`). A declared size that is not a non-negative integer
+     * reads as `Infinity`.
+     */
     declaredSize: number | undefined;
     /** The decoded TUS `Upload-Metadata`, or the chunked-REST `X-File-Metadata` JSON, as strings. */
     metadata: Record<string, string>;
@@ -252,6 +259,9 @@ const methodNotAllowedResponse = (protocol: UploadProtocol): Response => {
  * Known gap: a TUS upload created with `Upload-Defer-Length` (no declared
  * total up front) is not covered by this pre-check.
  */
+/** A declared size: decimal digits only, as TUS and HTTP define it. */
+const DIGITS = /^\d+$/u;
+
 const declaredUploadSize = (request: Request, protocol: UploadProtocol): number | undefined => {
     if (protocol === "multipart") {
         return undefined;
@@ -267,73 +277,75 @@ const declaredUploadSize = (request: Request, protocol: UploadProtocol): number 
             continue;
         }
 
-        const parsed = Number(raw);
+        // A size has to be a non-negative integer. Anything else is read as
+        // "too large", never as small: `Upload-Length: -1` once slipped past
+        // every cap, because the provider then saw no size at all and let the
+        // first PATCH complete an upload of any length.
+        const parsed = DIGITS.test(raw.trim()) ? Number(raw) : Number.NaN;
+        const size = Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 
-        if (Number.isFinite(parsed) && (largest === undefined || parsed > largest)) {
-            largest = parsed;
+        if (largest === undefined || size > largest) {
+            largest = size;
         }
     }
 
     return largest;
 };
 
-const decodeBase64 = (value: string): string => {
-    try {
-        return new TextDecoder().decode(Uint8Array.from(atob(value), (character) => character.codePointAt(0) ?? 0));
-    } catch {
-        return "";
-    }
-};
-
-/** What a create request declares about its file: metadata as strings, and a MIME type. */
-/** TUS `Upload-Metadata`: `key base64value,key2 base64value2`, where a key may carry no value. */
+/**
+ * TUS `Upload-Metadata`, decoded exactly as `@visulima/storage`'s TUS handler
+ * decodes it: `key base64value,key2 base64value2`, a key may carry no value,
+ * and the value is decoded with `Buffer` (which also takes url-safe base64).
+ */
 const tusMetadata = (header: string): Record<string, string> => {
     const metadata: Record<string, string> = {};
 
-    for (const pair of header.split(",")) {
-        const [key, value] = pair.trim().split(" ");
-
+    for (const [key, value] of header.split(",").map((pair) => pair.split(" "))) {
         if (key !== undefined && key !== "") {
-            metadata[key] = value === undefined ? "" : decodeBase64(value);
+            metadata[key] = value === undefined || value === "" ? "" : Buffer.from(value, "base64").toString();
         }
     }
 
     return metadata;
 };
 
-/** Chunked-REST `X-File-Metadata`: a JSON object. Malformed metadata declares nothing. */
-const restMetadata = (header: string): Record<string, string> => {
-    let parsed: unknown;
-
+/** Chunked-REST `X-File-Metadata`: a JSON object, as `@visulima/storage` reads it. Malformed metadata declares nothing. */
+const restMetadata = (header: string | null): Record<string, unknown> => {
     try {
-        parsed = JSON.parse(header);
+        const parsed: unknown = JSON.parse(header ?? "{}");
+
+        return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
     } catch {
         return {};
     }
-
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return {};
-    }
-
-    const metadata: Record<string, string> = {};
-
-    for (const [key, value] of Object.entries(parsed)) {
-        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-            metadata[key] = String(value);
-        }
-    }
-
-    return metadata;
 };
 
-/** What a create request declares about its file: metadata as strings, and a MIME type. */
-const declaredFile = (request: Request, protocol: UploadProtocol): { contentType: string | undefined; metadata: Record<string, string> } => {
-    const metadata =
-        protocol === "tus" ? tusMetadata(request.headers.get("Upload-Metadata") ?? "") : restMetadata(request.headers.get("X-File-Metadata") ?? "{}");
-    const contentType = metadata.filetype ?? metadata.type ?? metadata.contentType ?? metadata.mimeType ?? request.headers.get("Content-Type") ?? undefined;
+/**
+ * What a create request declares about its file. The MIME type is resolved by
+ * building the same `File` the protocol handler builds, so the cap is decided
+ * on the type that is then stored: on chunked REST the request's
+ * `Content-Type`, on TUS the metadata's `mimeType`, then `type`, then
+ * `filetype`.
+ */
+const declaredFile = (request: Request, protocol: UploadProtocol): { contentType: string; metadata: Record<string, string> } => {
+    const metadata = protocol === "tus" ? tusMetadata(request.headers.get("Upload-Metadata") ?? "") : restMetadata(request.headers.get("X-File-Metadata"));
+    const header = request.headers.get("Content-Type");
+    // An empty header falls back too, as it does in the REST handler.
+    const restType = header === null || header === "" ? "application/octet-stream" : header;
+    const contentType = protocol === "tus" ? undefined : restType;
+    const file = new File({ contentType, metadata });
+    const strings: Record<string, string> = {};
 
-    return { contentType, metadata };
+    for (const [key, value] of Object.entries(metadata)) {
+        strings[key] = typeof value === "string" ? value : JSON.stringify(value);
+    }
+
+    return { contentType: file.contentType, metadata: strings };
 };
+
+/** A request that creates an upload: the ones whose declared size a per-upload cap can check. */
+const isCreateRequest = (request: Request, protocol: UploadProtocol): boolean =>
+    protocol !== "multipart" && (request.method === "POST" || request.method === "PUT");
 
 /**
  * Apply {@link CreateUploadHandlerOptions.maxFileSizeFor} to a create request.
@@ -452,7 +464,7 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
             }
         }
 
-        if (maxFileSizeFor !== undefined && protocol !== "multipart" && (request.method === "POST" || request.method === "PUT")) {
+        if (maxFileSizeFor !== undefined && isCreateRequest(request, protocol)) {
             const refused = await checkSizeFor(maxFileSizeFor, context, maxFileSize);
 
             if (refused !== undefined) {

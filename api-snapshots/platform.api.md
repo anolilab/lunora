@@ -415,7 +415,7 @@ interface R2BucketLike {
             contentType?: string;
         };
     }) => Promise<R2MultipartUploadLike>;
-    delete: (key: string) => Promise<void>;
+    delete: (keys: string | string[]) => Promise<void>;
     get: (key: string, options?: {
         range?: R2RangeLike;
     }) => Promise<R2ObjectBodyLike | null>;
@@ -433,14 +433,22 @@ interface R2BucketLike {
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;
-    put: (key: string, body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null, options?: {
-        customMetadata?: Record<string, string>;
-        httpMetadata?: {
-            contentType?: string;
-        };
-        sha256?: ArrayBuffer | string;
-    }) => Promise<R2ObjectLike>;
+    put: {
+        (key: string, body: R2PutBodyLike, options: R2PutOptionsLike & {
+            onlyIf: R2ConditionalLike;
+        }): Promise<R2ObjectLike | null>;
+        (key: string, body: R2PutBodyLike, options?: R2PutOptionsLike): Promise<R2ObjectLike>;
+    };
     resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;
+}
+```
+
+### `R2ConditionalLike` (interface)
+
+```ts
+interface R2ConditionalLike {
+    etagDoesNotMatch?: string;
+    etagMatches?: string;
 }
 ```
 
@@ -484,6 +492,24 @@ interface R2ObjectLike {
     sha256Base64?: string;
     size: number;
     uploaded?: Date;
+}
+```
+
+### `R2PutBodyLike` (type)
+
+```ts
+type R2PutBodyLike = ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null;
+```
+
+### `R2PutOptionsLike` (interface)
+
+```ts
+interface R2PutOptionsLike {
+    customMetadata?: Record<string, string>;
+    httpMetadata?: {
+        contentType?: string;
+    };
+    sha256?: ArrayBuffer | string;
 }
 ```
 

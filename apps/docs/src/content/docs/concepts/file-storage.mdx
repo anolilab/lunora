@@ -223,7 +223,7 @@ const upload = httpAction(async (ctx, request) => {
         storage,
         maxFileSize: 2048 * MiB, // 2 GiB, the ceiling for any upload
         // Lower it per upload from the type the client declares.
-        maxFileSizeFor: ({ contentType }) => (contentType?.startsWith("image/") ? 10 * MiB : undefined),
+        maxFileSizeFor: ({ contentType }) => (contentType.startsWith("image/") ? 10 * MiB : undefined),
         authorize: async ({ method, url }) => method === "POST" || (await ctx.runQuery(internal.uploads.isOwner, { uploadId: uploadId(url), userId })),
     });
     const response = await handler.fetch(request);
@@ -260,6 +260,11 @@ continues). Building the handler per request is therefore fine, and it is what
 lets the gate see this request's `ctx.auth`. The provider names the object from
 the upload id alone, so it cannot put each user's uploads under their own key
 prefix. Ownership lives in your table instead.
+
+The state objects stay after an upload finishes (so `HEAD` still reports it
+complete), and so do those of uploads that were abandoned. Add an R2 object
+lifecycle rule that deletes objects under `_lunora/uploads/` after a few days,
+longer than any upload should take.
 
 `maxFileSizeFor` caps one upload below `maxFileSize`, from the MIME type and
 metadata its create request declares. It runs after `authorize`, on creates

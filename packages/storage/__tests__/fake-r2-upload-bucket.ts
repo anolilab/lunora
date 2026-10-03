@@ -1,13 +1,17 @@
 /**
- * A minimal in-memory R2 binding for the binding-backed upload provider: the
- * calls `R2UploadBucket` declares, with the R2 rules that matter to it —
- * conditional puts (`onlyIf.etagMatches` answers `null` on a mismatch; etags
- * are content hashes, as R2's are), and a multipart `complete` that refuses
- * parts under 5 MiB or of unequal size (every part but the last), as R2 does.
+ * A minimal in-memory R2 binding for the binding-backed upload provider, with
+ * the R2 rules that matter to it: conditional puts (`onlyIf` answers `null`
+ * when its precondition fails; etags are content hashes, as R2's are;
+ * `etagDoesNotMatch: "*"` is create-only), a delimiter roll-up on `list`, and a
+ * multipart `complete` that refuses parts under 5 MiB or of unequal size (every
+ * part but the last), as R2 does.
  */
 import { createHash } from "node:crypto";
 
-import type { R2UploadBucket, R2UploadBucketMultipartUpload } from "../src/r2-binding-upload-storage";
+import type { R2ConditionalLike, R2MultipartUploadLike, R2ObjectBodyLike, R2ObjectLike, R2PutBodyLike, R2PutOptionsLike } from "@lunora/platform";
+
+import { toBytes } from "../src/byte-queue";
+import type { R2UploadBucket } from "../src/r2-binding-upload-storage";
 
 const MIN_PART = 5 * 1024 * 1024;
 
@@ -26,16 +30,20 @@ interface OpenUpload {
 
 const digest = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
-const copyBytes = (value: ArrayBuffer | ArrayBufferView | string): Uint8Array => {
-    if (typeof value === "string") {
-        return new TextEncoder().encode(value);
+/** A private copy, so a caller reusing its buffer cannot change what was stored. */
+const copyBytes = (value: unknown): Uint8Array => new Uint8Array(toBytes(value));
+
+/** Key order as R2 lists it: by code unit, not by locale. */
+const byCodeUnit = (left: string, right: string): number => (left < right ? -1 : 1);
+
+const meets = (condition: R2ConditionalLike, etag: string | undefined): boolean => {
+    const matches = (expected: string): boolean => etag !== undefined && (expected === "*" || expected === etag);
+
+    if (condition.etagMatches !== undefined && !matches(condition.etagMatches)) {
+        return false;
     }
 
-    if (value instanceof ArrayBuffer) {
-        return new Uint8Array(value);
-    }
-
-    return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+    return condition.etagDoesNotMatch === undefined || !matches(condition.etagDoesNotMatch);
 };
 
 const createFakeR2UploadBucket = (): R2UploadBucket & {
@@ -48,15 +56,19 @@ const createFakeR2UploadBucket = (): R2UploadBucket & {
     const partSizes: number[][] = [];
     let uploadCounter = 0;
 
-    const store = (key: string, bytes: Uint8Array, contentType?: string): StoredObject => {
+    const project = (key: string, object: StoredObject): R2ObjectLike => {
+        return { etag: object.etag, httpMetadata: { contentType: object.contentType }, key, size: object.bytes.byteLength, uploaded: object.uploaded };
+    };
+
+    const store = (key: string, bytes: Uint8Array, contentType?: string): R2ObjectLike => {
         const object: StoredObject = { bytes, contentType, etag: digest(bytes), uploaded: new Date() };
 
         objects.set(key, object);
 
-        return object;
+        return project(key, object);
     };
 
-    const multipart = (key: string, uploadId: string): R2UploadBucketMultipartUpload => {
+    const multipart = (key: string, uploadId: string): R2MultipartUploadLike => {
         const open = (): OpenUpload => {
             const upload = openUploads.get(uploadId);
 
@@ -96,8 +108,7 @@ const createFakeR2UploadBucket = (): R2UploadBucket & {
                     chunks.push(part.bytes);
                 });
 
-                const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-                const bytes = new Uint8Array(total);
+                const bytes = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
                 let offset = 0;
 
                 for (const chunk of chunks) {
@@ -110,6 +121,7 @@ const createFakeR2UploadBucket = (): R2UploadBucket & {
 
                 return store(key, bytes, upload.contentType);
             },
+            key,
             uploadId,
             uploadPart: async (partNumber, value) => {
                 const bytes = copyBytes(value);
@@ -120,6 +132,14 @@ const createFakeR2UploadBucket = (): R2UploadBucket & {
                 return { etag, partNumber };
             },
         };
+    };
+
+    const put = async (key: string, value: R2PutBodyLike, options?: R2PutOptionsLike & { onlyIf?: R2ConditionalLike }): Promise<R2ObjectLike | null> => {
+        if (options?.onlyIf !== undefined && !meets(options.onlyIf, objects.get(key)?.etag)) {
+            return null;
+        }
+
+        return store(key, copyBytes(value), options?.httpMetadata?.contentType);
     };
 
     return {
@@ -133,30 +153,47 @@ const createFakeR2UploadBucket = (): R2UploadBucket & {
             return multipart(key, uploadId);
         },
         delete: async (keys) => {
-            for (const key of Array.isArray(keys) ? keys : [keys]) {
+            for (const key of typeof keys === "string" ? [keys] : keys) {
                 objects.delete(key);
             }
         },
-        get: async (key) => {
+        get: async (key): Promise<R2ObjectBodyLike | null> => {
             const object = objects.get(key);
 
             if (object === undefined) {
                 return null;
             }
 
-            return { arrayBuffer: async () => new Uint8Array(object.bytes).buffer, etag: object.etag };
+            return {
+                ...project(key, object),
+                arrayBuffer: async () => new Uint8Array(object.bytes).buffer,
+                body: new Blob([new Uint8Array(object.bytes)]).stream(),
+                text: async () => new TextDecoder().decode(object.bytes),
+            };
         },
-        // Two keys per page, so the provider's pagination is exercised.
+        // Two entries per page, so the provider's pagination is exercised.
         list: async (options) => {
-            const keys = [...objects.keys()].filter((key) => key.startsWith(options?.prefix ?? "")).toSorted((left, right) => left.localeCompare(right));
+            const prefix = options?.prefix ?? "";
+            const keys = [...objects.keys()].filter((key) => key.startsWith(prefix)).toSorted(byCodeUnit);
+            const { delimiter } = options ?? {};
+            const direct = delimiter === undefined ? keys : keys.filter((key) => !key.slice(prefix.length).includes(delimiter));
+            const delimitedPrefixes =
+                delimiter === undefined
+                    ? []
+                    : [
+                          ...new Set(
+                              keys
+                                  .filter((key) => key.slice(prefix.length).includes(delimiter))
+                                  .map((key) => `${prefix}${key.slice(prefix.length).split(delimiter)[0] ?? ""}${delimiter}`),
+                          ),
+                      ];
             const start = options?.cursor === undefined ? 0 : Number(options.cursor);
-            const page = keys.slice(start, start + 2);
-            const truncated = start + 2 < keys.length;
+            const page = direct.slice(start, start + 2);
+            const truncated = start + 2 < direct.length;
 
             return {
-                objects: page.map((key) => {
-                    return { key, uploaded: objects.get(key)?.uploaded ?? new Date() };
-                }),
+                delimitedPrefixes,
+                objects: page.map((key) => project(key, objects.get(key) as StoredObject)),
                 truncated,
                 ...(truncated ? { cursor: String(start + 2) } : {}),
             };
@@ -164,15 +201,7 @@ const createFakeR2UploadBucket = (): R2UploadBucket & {
         objects,
         openUploads,
         partSizes,
-        put: async (key, value, options) => {
-            const etagMatches = options?.onlyIf?.etagMatches;
-
-            if (etagMatches !== undefined && objects.get(key)?.etag !== etagMatches) {
-                return null;
-            }
-
-            return store(key, copyBytes(value), options?.httpMetadata?.contentType);
-        },
+        put: put as R2UploadBucket["put"],
         resumeMultipartUpload: (key, uploadId) => multipart(key, uploadId),
     };
 };

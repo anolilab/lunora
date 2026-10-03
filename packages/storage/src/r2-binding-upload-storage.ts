@@ -13,8 +13,8 @@
  * In the bucket itself, as one JSON object per upload under `statePrefix`. A
  * request for the same upload can land on any isolate, so nothing is kept in
  * memory between requests. R2 is strongly consistent and supports conditional
- * writes (`onlyIf: { etagMatches }`), which is all a compare-and-swap needs, so
- * the state does not need a Durable Object or a new binding.
+ * writes (`onlyIf`), which is all a compare-and-swap needs, so the state does
+ * not need a Durable Object or a new binding.
  *
  * # Part buffering
  *
@@ -23,34 +23,31 @@
  * they like (TUS defaults to 1 MiB), so chunks are coalesced into parts of
  * exactly `R2_PART_SIZE` bytes: part `n` always holds bytes
  * `[(n - 1) * R2_PART_SIZE, n * R2_PART_SIZE)` of the file. Whatever a request
- * leaves over (less than one part) is written to its own small "segment" object
- * and recorded in the state; the request that completes the next part reads the
+ * leaves over (less than one part) is written to a small "segment" object and
+ * recorded in the state; the request that completes the next part reads the
  * segments back into it. A request holds at most about two parts in memory,
- * however large its body, and no byte is rewritten while it waits. A file
- * smaller than one part never starts a multipart upload: its bytes are written
- * with a single `put` when the last one arrives.
+ * however large its body. A file smaller than one part never starts a
+ * multipart upload: its bytes are written with a single `put` when the last
+ * one arrives.
  *
  * # Concurrent requests
  *
  * A write first checks the client's offset against the stored one (a mismatch
  * is a `409`, as TUS requires), then takes a lease on the upload by writing a
  * lock token into the state with a conditional put. Another request for the
- * same upload while the lease is held gets a `409` and writes nothing. The
- * lease is renewed while the body streams and released by the conditional
- * write that records the new offset; a writer that finds its token gone (its
- * lease expired and another request took over) gives up instead of committing.
- * Because parts are aligned to fixed offsets, a part stored by a writer that
- * lost its lease holds the same bytes the new writer stores under that part
- * number, so it cannot corrupt the upload.
+ * same upload while the lease is held gets a `409` and writes nothing. Before
+ * every part is stored, and before the object is made, the writer confirms the
+ * lease with a compare-and-swap; after every part it records its progress the
+ * same way. A writer that finds its token gone (its lease expired and another
+ * request took over) stops with a `409` instead of writing on.
  */
 import type { BaseStorageOptions, FileInit, FilePart, FileQuery } from "@visulima/storage";
 import { AbstractBaseStorage, ERRORS, File, isUploadError, throwErrorCode, UploadError } from "@visulima/storage";
 
 import { readBody } from "./byte-queue";
 import { R2UploadPartWriter } from "./r2-upload-part-writer";
-import type { StoredState } from "./r2-upload-state-store";
-import { R2UploadStateStore } from "./r2-upload-state-store";
-import type { FileRecord, R2UploadBucket, UploadProgress, UploadState } from "./r2-upload-types";
+import { PROVIDER_OWNED_FIELDS, R2UploadStateStore } from "./r2-upload-state-store";
+import type { FileRecord, R2UploadBucket, UploadLock, UploadProgress, UploadState } from "./r2-upload-types";
 import type { UploadStorage } from "./upload-handler";
 
 /** What `get()` answers; `@visulima/storage` does not export the type by name. */
@@ -60,9 +57,14 @@ type FileReturn = Awaited<ReturnType<AbstractBaseStorage["get"]>>;
 interface R2BindingUploadStorageOptions extends Omit<BaseStorageOptions, "metaStorage"> {
     /**
      * Key prefix the upload state objects and buffered segments are stored
-     * under, in the same bucket. Default `"_lunora/uploads/"`. They show up in a
-     * listing of the bucket; an R2 lifecycle rule on this prefix cleans up
-     * uploads that were started and never finished.
+     * under, in the same bucket. Default `"_lunora/uploads/"`. No uploaded
+     * object may be named under it.
+     *
+     * The state of a finished upload stays (a few hundred bytes, so a `HEAD`
+     * can still answer that the upload is complete), and so does the state of
+     * one that was abandoned. Both accumulate: add an R2 object lifecycle rule
+     * that deletes objects under this prefix after a few days, longer than
+     * any upload you expect to take.
      */
     statePrefix?: string;
 }
@@ -72,29 +74,19 @@ const DEFAULT_STATE_PREFIX = "_lunora/uploads/";
 /** How long a write's lease on an upload lasts without being renewed. */
 const LEASE_MS = 60_000;
 
-/** Fields of the file record this provider owns: `update()` never takes them from a caller. */
-const PROVIDER_OWNED_FIELDS = new Set(["bytesWritten", "id", "name", "size", "status"]);
-
 /** TUS extensions this provider cannot honor. Advertising them would let a client start an upload it cannot finish. */
 const UNSUPPORTED_TUS_EXTENSIONS = new Set(["checksum", "concatenation", "creation-defer-length"]);
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
-
-const deepMerge = (target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> => {
-    const merged: Record<string, unknown> = { ...target };
-
-    for (const [key, value] of Object.entries(source)) {
-        const existing = merged[key];
-
-        merged[key] = isPlainObject(value) && isPlainObject(existing) ? deepMerge(existing, value) : value;
-    }
-
-    return merged;
-};
+/** Fields `update()` takes from no caller: the provider's own, and `expiredAt` (set it through `ttl`). */
+const UPDATE_IGNORED_FIELDS = new Set<string>([...PROVIDER_OWNED_FIELDS, "expiredAt"]);
 
 const conflict = (message: string): never => throwErrorCode(ERRORS.FILE_CONFLICT, message);
 
-const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
+const isLeaseLive = (lock: UploadLock | undefined): lock is UploadLock => lock !== undefined && lock.expiresAt > Date.now();
+
+/** An error that must end the request rather than be committed as an interruption: a lost lease, or a body past the declared length. */
+const isFatal = (error: unknown): boolean =>
+    isUploadError(error) && (error.UploadErrorCode === ERRORS.FILE_CONFLICT || error.UploadErrorCode === ERRORS.REQUEST_ENTITY_TOO_LARGE);
 
 /**
  * Resumable-upload storage over a Worker's R2 binding. Build it with
@@ -116,12 +108,29 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
         return super.tusExtension.filter((extension) => !UNSUPPORTED_TUS_EXTENSIONS.has(extension));
     }
 
+    /**
+     * Start an upload. Its size has to be declared, as a non-negative integer:
+     * every byte limit hangs off it, and `creation-defer-length` is not offered.
+     */
     public async create(fileInit: FileInit): Promise<File> {
         return this.instrumentOperation("create", async () => {
+            const size = fileInit.size === undefined || fileInit.size === "" ? Number.NaN : Number(fileInit.size);
+
+            if (!Number.isSafeInteger(size) || size < 0) {
+                return throwErrorCode(ERRORS.INVALID_FILE_SIZE, "An upload must declare its size as a non-negative integer");
+            }
+
             const file: FileRecord = new File(fileInit);
 
+            // `File` reads a declared size of 0 as "no size".
+            file.size = size;
             file.name = this.namingFunction(file);
             AbstractBaseStorage.assertSafeId(file.id);
+
+            if (file.name.includes(this.meta.prefix)) {
+                return throwErrorCode(ERRORS.INVALID_FILE_NAME, "An upload cannot be stored under the upload state prefix");
+            }
+
             await this.validate(file);
 
             // Same id, same upload: a client re-sending its create resumes it,
@@ -132,23 +141,24 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
                 return existing.state.file;
             }
 
-            if (typeof fileInit.ttl === "number" && Number.isFinite(fileInit.ttl)) {
-                file.expiredAt = Date.now() + fileInit.ttl;
-            }
-
             file.bytesWritten = 0;
             file.status = "created";
             this.updateTimestamps(file);
 
-            // `File` reads a declared size of 0 as "no size". A zero-byte upload
-            // never receives a write, so it is finished here.
-            if (fileInit.size !== undefined && Number(fileInit.size) === 0) {
+            // A zero-byte upload never receives a write, so it is finished here.
+            if (size === 0) {
                 await this.bucket.put(file.name, new Uint8Array(0), { httpMetadata: { contentType: file.contentType } });
-                file.size = 0;
                 file.status = "completed";
             }
 
-            await this.meta.write(file.id, { file, upload: { parts: [], segments: [] } });
+            // Create-only, so of two racing creates for one id, one writes the
+            // state and the other answers what it wrote.
+            if (!(await this.meta.create(file.id, { file, upload: { parts: [], segments: [] } }))) {
+                const raced = await this.meta.read(file.id);
+
+                return raced?.state.file ?? conflict("The upload is being created by another request");
+            }
+
             await this.onCreate(file);
 
             return file;
@@ -171,7 +181,7 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
             this.checkPart(file, part);
 
-            const token = await this.acquireLease(file.id, stored);
+            const token = await this.acquireLease(file.id, stored.state, stored.etag);
 
             try {
                 return await this.writeLeased(file, stored.state.upload, part.body, token);
@@ -209,6 +219,13 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
         });
     }
 
+    /**
+     * Forget an upload. One still in progress is aborted, with its parts and
+     * segments, under the lease (a `409` while a request is writing to it).
+     * For a finished upload only the state goes: the stored object is a file
+     * now, and removing it is `ctx.storage.delete`. That also keeps
+     * `expiration`, whose sweep deletes through here, from deleting files.
+     */
     public async delete({ id }: FileQuery): Promise<File> {
         return this.instrumentOperation("delete", async () => {
             const stored = await this.meta.read(id);
@@ -219,20 +236,19 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
             const { file, upload } = stored.state;
 
-            if (upload.lock !== undefined && upload.lock.expiresAt > Date.now()) {
-                return conflict("A request is writing to this upload");
+            if (file.status !== "completed") {
+                await this.acquireLease(id, stored.state, stored.etag);
+
+                if (upload.uploadId !== undefined) {
+                    await this.bucket
+                        .resumeMultipartUpload(file.name, upload.uploadId)
+                        .abort()
+                        .catch(() => undefined);
+                }
+
+                await this.deleteSegments(id);
             }
 
-            if (file.status === "completed") {
-                await this.bucket.delete(file.name);
-            } else if (upload.uploadId !== undefined) {
-                await this.bucket
-                    .resumeMultipartUpload(file.name, upload.uploadId)
-                    .abort()
-                    .catch(() => undefined);
-            }
-
-            await this.deleteSegments(id);
             await this.deleteMeta(id);
 
             const deleted: FileRecord = { ...file, status: "deleted" };
@@ -244,54 +260,42 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
     }
 
     /**
-     * Merge `changes` into the file record under a compare-and-swap. The fields
-     * that track the upload's progress (`bytesWritten`, `size`, `status`, …)
-     * belong to this provider and are ignored.
+     * The base class's update (its merge, its `ttl` parsing, its `originalName`
+     * re-derivation), minus the fields that track the upload's progress; the
+     * state store lays the result over the stored record under a
+     * compare-and-swap.
      */
-    public override async update({ id }: FileQuery, changes: Partial<File>): Promise<File> {
-        return this.instrumentOperation("update", async () => {
-            const { ttl, ...rest } = changes as Partial<File> & { ttl?: unknown };
-            const next = await this.meta.swap(id, (state) => {
-                let file: Record<string, unknown> = { ...state.file };
+    public override async update(query: FileQuery, changes: Partial<File>): Promise<File> {
+        const allowed = Object.fromEntries(Object.entries(changes).filter(([key]) => !UPDATE_IGNORED_FIELDS.has(key))) as Partial<File>;
 
-                for (const [key, value] of Object.entries(rest)) {
-                    if (!PROVIDER_OWNED_FIELDS.has(key)) {
-                        const current = file[key];
-
-                        file = { ...file, [key]: isPlainObject(value) && isPlainObject(current) ? deepMerge(current, value) : value };
-                    }
-                }
-
-                if (typeof ttl === "number" && Number.isFinite(ttl)) {
-                    file = { ...file, expiredAt: Date.now() + ttl };
-                }
-
-                return { ...state, file: file as FileRecord };
-            });
-
-            const result: FileRecord = { ...next.file, status: "updated" };
-
-            await this.onUpdate(result);
-
-            return result;
-        });
+        return super.update(query, allowed);
     }
 
+    /** The uploads with state in the bucket. Segment keys sit one level down and are rolled up by the delimiter, never read. */
     public override async list(): Promise<File[]> {
         return this.instrumentOperation("list", async () => {
             const { prefix, suffix } = this.meta;
-            const objects = await this.listObjects(prefix);
+            const files: File[] = [];
+            let cursor: string | undefined;
 
-            return objects
-                .filter((object) => object.key.endsWith(suffix) && !object.key.slice(prefix.length).includes("/"))
-                .map((object) => {
-                    const file: FileRecord = new File({ id: this.meta.getIdFromMetaName(object.key), metadata: {} });
+            do {
+                // eslint-disable-next-line no-await-in-loop -- R2 lists one page at a time
+                const page = await this.bucket.list({ delimiter: "/", prefix, ...(cursor === undefined ? {} : { cursor }) });
 
-                    file.createdAt = object.uploaded.toISOString();
-                    file.modifiedAt = file.createdAt;
+                for (const object of page.objects) {
+                    if (object.key.endsWith(suffix)) {
+                        const file: FileRecord = new File({ id: this.meta.getIdFromMetaName(object.key), metadata: {} });
 
-                    return file;
-                });
+                        file.createdAt = (object.uploaded ?? new Date()).toISOString();
+                        file.modifiedAt = file.createdAt;
+                        files.push(file);
+                    }
+                }
+
+                cursor = page.truncated === true ? page.cursor : undefined;
+            } while (cursor !== undefined);
+
+            return files;
         });
     }
 
@@ -320,24 +324,21 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
             throwErrorCode(ERRORS.UNSUPPORTED_CHECKSUM_ALGORITHM);
         }
 
-        if (file.size !== undefined && part.contentLength !== undefined && part.start + part.contentLength > file.size) {
+        if (part.contentLength !== undefined && part.start + part.contentLength > (file.size ?? 0)) {
             throwErrorCode(ERRORS.REQUEST_ENTITY_TOO_LARGE, "The chunk runs past the declared upload length");
         }
     }
 
     /** Take the upload's lease with a conditional write. A live lease, or losing the race for it, is a `409`. */
-    private async acquireLease(id: string, stored: StoredState): Promise<string> {
-        const { lock } = stored.state.upload;
-
-        if (lock !== undefined && lock.expiresAt > Date.now()) {
+    private async acquireLease(id: string, state: UploadState, etag: string): Promise<string> {
+        if (isLeaseLive(state.upload.lock)) {
             return conflict("Another request is writing to this upload");
         }
 
         const token = crypto.randomUUID();
-        const upload: UploadProgress = { ...stored.state.upload, lock: { expiresAt: Date.now() + LEASE_MS, token } };
-        const etag = await this.meta.write(id, { ...stored.state, upload }, stored.etag);
+        const upload: UploadProgress = { ...state.upload, lock: { expiresAt: Date.now() + LEASE_MS, token } };
 
-        if (etag === undefined) {
+        if ((await this.meta.write(id, { ...state, upload }, etag)) === undefined) {
             return conflict("Another request is writing to this upload");
         }
 
@@ -369,31 +370,25 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
         });
     }
 
+    /** Confirm the lease is still this request's, and extend it. */
     private async renewLease(id: string, token: string): Promise<void> {
         await this.changeLeased(id, token, (state) => {
             return { ...state, upload: { ...state.upload, lock: { expiresAt: Date.now() + LEASE_MS, token } } };
         });
     }
 
-    private async listObjects(prefix: string): Promise<{ key: string; uploaded: Date }[]> {
-        const objects: { key: string; uploaded: Date }[] = [];
+    private async deleteSegments(id: string): Promise<void> {
+        const keys: string[] = [];
         let cursor: string | undefined;
 
+        // Listed to the end first, so deleting cannot shift the listing.
         do {
             // eslint-disable-next-line no-await-in-loop -- R2 lists one page at a time
-            const page = await this.bucket.list({ prefix, ...(cursor === undefined ? {} : { cursor }) });
+            const page = await this.bucket.list({ prefix: this.meta.segmentPrefix(id), ...(cursor === undefined ? {} : { cursor }) });
 
-            objects.push(...page.objects);
-            cursor = page.truncated ? page.cursor : undefined;
+            keys.push(...page.objects.map((object) => object.key));
+            cursor = page.truncated === true ? page.cursor : undefined;
         } while (cursor !== undefined);
-
-        return objects;
-    }
-
-    /** Delete every segment of an upload. Listed to the end first, so deleting cannot shift the listing. */
-    private async deleteSegments(id: string): Promise<void> {
-        const objects = await this.listObjects(this.meta.segmentPrefix(id));
-        const keys = objects.map((object) => object.key);
 
         // R2 deletes at most 1000 keys per call.
         for (let index = 0; index < keys.length; index += 1000) {
@@ -404,11 +399,10 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
     /**
      * Read `body` into `writer`, renewing the lease as it goes. Answers the
-     * error that cut the body short (the client went away, a part failed), or
-     * `undefined` when it ended cleanly. A body running past the declared length
-     * throws.
+     * error that cut the body short (the client went away), or `undefined` when
+     * it ended cleanly. A lost lease or a body past the declared length throws.
      */
-    private async pump(writer: R2UploadPartWriter, body: unknown, limit: number, id: string, token: string): Promise<unknown> {
+    private async pump(writer: R2UploadPartWriter, body: unknown, limit: number, id: string, token: string): Promise<Error | undefined> {
         let received = 0;
         let renewedAt = Date.now();
 
@@ -420,77 +414,74 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
                     return throwErrorCode(ERRORS.REQUEST_ENTITY_TOO_LARGE, "The chunk runs past the declared upload length");
                 }
 
-                await writer.push(chunk);
-
                 if (Date.now() - renewedAt >= LEASE_MS / 3) {
                     renewedAt = Date.now();
                     await this.renewLease(id, token);
                 }
+
+                await writer.push(chunk);
             }
 
             return undefined;
         } catch (error) {
-            if (isUploadError(error) && error.UploadErrorCode === ERRORS.REQUEST_ENTITY_TOO_LARGE) {
+            if (isFatal(error)) {
                 throw error;
             }
 
-            return error;
+            return error instanceof Error ? error : new Error(String(error));
         }
     }
 
     /** Stream `body` into parts and segments while holding the lease, then record the new offset. */
     private async writeLeased(file: FileRecord, progress: UploadProgress, body: unknown, token: string): Promise<File> {
-        const writer = new R2UploadPartWriter(this.bucket, file, progress, this.meta.segmentPrefix(file.id));
-        const limit = file.size === undefined ? Number.POSITIVE_INFINITY : file.size - file.bytesWritten;
+        const size = file.size ?? 0;
+        const writer = new R2UploadPartWriter(this.bucket, file, progress, this.meta.segmentPrefix(file.id), {
+            confirm: async () => this.renewLease(file.id, token),
+            save: async (saved, stored) => {
+                await this.changeLeased(file.id, token, (state) => {
+                    return { file: { ...state.file, bytesWritten: stored, status: "part" }, upload: { ...saved, lock: state.upload.lock } };
+                });
+            },
+            token,
+        });
         // TUS keeps what arrived before the body was cut short, so those bytes
         // are committed below and the client resumes from there.
-        const interrupted = await this.pump(writer, body, limit, file.id, token);
-        // With a declared size, the last byte arriving finishes the upload even
-        // if the stream failed afterwards; without one, only a clean end does.
-        const completed = file.size === undefined ? interrupted === undefined : writer.offset === file.size;
-        const size = writer.offset;
-        let etag: string | undefined;
+        const interrupted = await this.pump(writer, body, size - file.bytesWritten, file.id, token);
+        // The last byte arriving finishes the upload, even if the stream failed afterwards.
+        const completed = writer.offset === size;
+        const etag = completed ? await writer.finish() : undefined;
 
-        if (completed) {
-            etag = await writer.finish();
-        } else {
-            // Best effort after an interruption: if this fails, the offset just
-            // stops at what the parts and earlier segments already hold.
-            await writer.keepTail(token).catch((error: unknown) => {
+        if (!completed) {
+            try {
+                await writer.keepTail();
+            } catch (error) {
+                // After an interruption this is best effort: the offset then
+                // stops at what the parts and earlier segments already hold.
                 if (interrupted === undefined) {
                     throw error;
                 }
-            });
+            }
         }
 
-        const next: FileRecord = {
-            ...file,
+        const record: Partial<FileRecord> = {
             bytesWritten: completed ? size : writer.stored,
             modifiedAt: new Date().toISOString(),
             status: completed ? "completed" : "part",
-            ...(completed && file.size === undefined ? { size } : {}),
             ...(etag === undefined ? {} : { ETag: etag }),
         };
+        const upload: UploadProgress = completed ? { parts: [], segments: [] } : writer.progress();
 
         await this.changeLeased(file.id, token, (state) => {
-            const upload: UploadProgress = completed
-                ? { parts: [], segments: [] }
-                : { parts: writer.parts, segments: writer.segments, ...(writer.uploadId === undefined ? {} : { uploadId: writer.uploadId }) };
-
-            return {
-                file: { ...state.file, bytesWritten: next.bytesWritten, ETag: next.ETag, modifiedAt: next.modifiedAt, size: next.size, status: next.status },
-                upload,
-            };
+            return { file: { ...state.file, ...record }, upload };
         });
 
-        // Only now that the stored state no longer lists them.
-        await (completed ? this.deleteSegments(file.id) : this.bucket.delete(writer.consumed)).catch(() => undefined);
+        await (completed ? this.deleteSegments(file.id).catch(() => undefined) : writer.dropConsumed());
 
         if (interrupted !== undefined) {
-            throw toError(interrupted);
+            throw interrupted;
         }
 
-        return next;
+        return { ...file, ...record };
     }
 }
 
@@ -501,14 +492,12 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
  *
  * Speaks TUS (without the `checksum`, `concatenation` and
  * `creation-defer-length` extensions), chunked REST with chunks sent in order
- * (as `@visulima/storage-client` sends them; a chunk at any other offset is a
- * `409`), and multipart forms.
+ * (a chunk at any other offset is a `409`), and multipart forms.
  */
 const createR2BindingUploadStorage = (bucket: R2UploadBucket, options: R2BindingUploadStorageOptions = {}): UploadStorage =>
     new R2BindingUploadStorage(bucket, options);
 
 export { R2_PART_SIZE } from "./r2-upload-part-writer";
+export type { R2UploadBucket } from "./r2-upload-types";
 export type { R2BindingUploadStorageOptions };
 export { createR2BindingUploadStorage };
-
-export type { R2UploadBucket, R2UploadBucketMultipartUpload, R2UploadBucketObject, R2UploadBucketObjectBody } from "./r2-upload-types";

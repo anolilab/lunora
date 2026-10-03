@@ -262,62 +262,10 @@ interface R2BindingUploadStorageOptions extends Omit<BaseStorageOptions, "metaSt
 }
 ```
 
-### `R2UploadBucket` (interface)
+### `R2UploadBucket` (type)
 
 ```ts
-interface R2UploadBucket {
-    createMultipartUpload: (key: string, options?: {
-        httpMetadata?: {
-            contentType?: string;
-        };
-    }) => Promise<R2UploadBucketMultipartUpload>;
-    delete: (keys: string | string[]) => Promise<void>;
-    get: (key: string) => Promise<R2UploadBucketObjectBody | null>;
-    list: (options?: {
-        cursor?: string;
-        prefix?: string;
-    }) => Promise<{
-        cursor?: string;
-        objects: ListedObject[];
-        truncated: boolean;
-    }>;
-    put: (key: string, value: ArrayBuffer | ArrayBufferView | string, options?: {
-        httpMetadata?: {
-            contentType?: string;
-        };
-        onlyIf?: {
-            etagMatches?: string;
-        };
-    }) => Promise<R2UploadBucketObject | null>;
-    resumeMultipartUpload: (key: string, uploadId: string) => R2UploadBucketMultipartUpload;
-}
-```
-
-### `R2UploadBucketMultipartUpload` (interface)
-
-```ts
-interface R2UploadBucketMultipartUpload {
-    abort: () => Promise<void>;
-    complete: (uploadedParts: UploadedPart[]) => Promise<R2UploadBucketObject>;
-    readonly uploadId: string;
-    uploadPart: (partNumber: number, value: ArrayBuffer | ArrayBufferView) => Promise<UploadedPart>;
-}
-```
-
-### `R2UploadBucketObject` (interface)
-
-```ts
-interface R2UploadBucketObject {
-    etag: string;
-}
-```
-
-### `R2UploadBucketObjectBody` (interface)
-
-```ts
-interface R2UploadBucketObjectBody extends R2UploadBucketObject {
-    arrayBuffer: () => Promise<ArrayBuffer>;
-}
+type R2UploadBucket = R2BucketLike & Required<Pick<R2BucketLike, "createMultipartUpload" | "resumeMultipartUpload">>;
 ```
 
 ### `R2UploadStorageOptions` (interface)
@@ -369,7 +317,7 @@ type UploadProtocol = "chunked-rest" | "multipart" | "tus";
 
 ```ts
 interface UploadSizeContext extends UploadAuthzContext {
-    contentType: string | undefined;
+    contentType: string;
     declaredSize: number | undefined;
     metadata: Record<string, string>;
 }
@@ -407,26 +355,8 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
-### `ListedObject` (interface)
-
-```ts
-interface ListedObject {
-    key: string;
-    uploaded: Date;
-}
-```
-
 ### `UploadHandlerOptions` (type)
 
 ```ts
 type UploadHandlerOptions = ConstructorParameters<typeof Tus>[0];
-```
-
-### `UploadedPart` (interface)
-
-```ts
-interface UploadedPart {
-    etag: string;
-    partNumber: number;
-}
 ```

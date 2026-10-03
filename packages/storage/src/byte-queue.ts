@@ -3,6 +3,7 @@
  * chunk by chunk, and a queue whose front is copied out before it is consumed.
  */
 
+/** One body chunk as bytes. */
 const toBytes = (chunk: unknown): Uint8Array => {
     if (chunk instanceof Uint8Array) {
         return chunk;
@@ -23,21 +24,25 @@ const toBytes = (chunk: unknown): Uint8Array => {
     throw new TypeError("Unsupported upload body chunk");
 };
 
-const isWebStream = (body: unknown): body is ReadableStream<unknown> =>
-    typeof body === "object" && body !== null && typeof (body as Partial<ReadableStream>).getReader === "function";
+const isWebStream = (body: object): body is ReadableStream<unknown> => typeof (body as Partial<ReadableStream>).getReader === "function";
 
 /**
  * Iterate a request body chunk by chunk. The fetch handlers hand over the
- * request's web `ReadableStream`; the multipart-form handler a Node `Readable`.
+ * request's web `ReadableStream` (or `null` for an empty body); the
+ * multipart-form handler a Node `Readable`. Anything else is a `TypeError`.
  */
 const readBody = async function* readBody(body: unknown): AsyncGenerator<Uint8Array> {
+    if (body === null || body === undefined) {
+        return;
+    }
+
     if (body instanceof Uint8Array) {
         yield body;
 
         return;
     }
 
-    if (isWebStream(body)) {
+    if (typeof body === "object" && isWebStream(body)) {
         const reader = body.getReader();
 
         try {
@@ -56,11 +61,15 @@ const readBody = async function* readBody(body: unknown): AsyncGenerator<Uint8Ar
         }
     }
 
-    if (typeof body === "object" && body !== null && Symbol.asyncIterator in body) {
+    if (typeof body === "object" && Symbol.asyncIterator in body) {
         for await (const chunk of body as AsyncIterable<unknown>) {
             yield toBytes(chunk);
         }
+
+        return;
     }
+
+    throw new TypeError("Unsupported upload body");
 };
 
 /** A FIFO of byte chunks. The front is read with {@link ByteQueue.copyFront} and dropped only once it has been stored. */
@@ -114,14 +123,6 @@ class ByteQueue {
 
         this.size -= length - remaining;
     }
-
-    public toBytes(): Uint8Array {
-        const bytes = new Uint8Array(this.size);
-
-        this.copyFront(bytes, 0, this.size);
-
-        return bytes;
-    }
 }
 
-export { ByteQueue, readBody };
+export { ByteQueue, readBody, toBytes };

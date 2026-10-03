@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { R2UploadBucket } from "../../src/r2-binding-upload-storage";
 import { createR2BindingUploadStorage, R2_PART_SIZE } from "../../src/r2-binding-upload-storage";
 import { createUploadHandler } from "../../src/upload-handler";
+import { pattern } from "../upload-pattern";
 
 const ENDPOINT = "https://test.local/upload";
 
@@ -16,16 +17,6 @@ const ENDPOINT = "https://test.local/upload";
 const bucket: R2UploadBucket = env.BUCKET;
 
 const handler = () => createUploadHandler({ silent: true, storage: createR2BindingUploadStorage(bucket) });
-
-const pattern = (length: number): Uint8Array<ArrayBuffer> => {
-    const bytes = new Uint8Array(length);
-
-    for (let index = 0; index < length; index += 1) {
-        bytes[index] = (index * 31 + 7) % 251;
-    }
-
-    return bytes;
-};
 
 const patch = async (location: string, offset: number, chunk: Uint8Array<ArrayBuffer>): Promise<Response> =>
     handler().fetch(
@@ -87,4 +78,36 @@ describe("createR2BindingUploadStorage (workerd + Miniflare R2)", () => {
         await expect(patch(location, 50, pattern(50))).resolves.toHaveProperty("status", 409);
         await expect(patch(location, 0, pattern(100))).resolves.toHaveProperty("status", 200);
     });
+
+    it("honors a create-only conditional put on the real binding", async () => {
+        expect.hasAssertions();
+
+        const key = "conditional/create-only";
+        const first = await env.BUCKET.put(key, "one", { onlyIf: { etagDoesNotMatch: "*" } });
+
+        expect(first).not.toBeNull();
+        await expect(env.BUCKET.put(key, "two", { onlyIf: { etagDoesNotMatch: "*" } })).resolves.toBeNull();
+        await expect(env.BUCKET.put(key, "three", { onlyIf: { etagMatches: "not-the-etag" } })).resolves.toBeNull();
+    });
+
+    it("stores a file under 5 MiB in several requests with a single put", async () => {
+        expect.hasAssertions();
+
+        const total = 3_000_001;
+        const bytes = pattern(total);
+        const created = await handler().fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": String(total) }, method: "POST" }));
+        const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
+
+        for (let offset = 0; offset < total; offset += 700_000) {
+            // eslint-disable-next-line no-await-in-loop -- TUS chunks are sequential
+            const response = await patch(location, offset, bytes.slice(offset, offset + 700_000));
+
+            expect([200, 204]).toContain(response.status);
+        }
+
+        const object = await env.BUCKET.get(location.split("/").pop() ?? "");
+        const body = object === null ? new ArrayBuffer(0) : await object.arrayBuffer();
+
+        expect(body.byteLength).toBe(total);
+    }, 60_000);
 });

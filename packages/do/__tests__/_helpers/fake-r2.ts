@@ -29,8 +29,10 @@ const createFakeR2Bucket = (): R2BucketLike & { keys: () => string[] } => {
     const objects = new Map<string, string>();
 
     return {
-        delete: async (key: string) => {
-            objects.delete(key);
+        delete: async (keys: string | string[]) => {
+            for (const key of typeof keys === "string" ? [keys] : keys) {
+                objects.delete(key);
+            }
         },
         get: async (key: string) => {
             const body = objects.get(key);

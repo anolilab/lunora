@@ -1,31 +1,19 @@
 /**
  * The binding-backed upload provider, driven through `createUploadHandler` over
- * an in-memory R2 binding (see `fake-r2-upload-bucket.ts`), plus the handler's
- * per-request size cap.
+ * an in-memory R2 binding (see `fake-r2-upload-bucket.ts`).
  */
 import { createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { R2UploadBucket } from "../src/r2-binding-upload-storage";
 import { createR2BindingUploadStorage, R2_PART_SIZE } from "../src/r2-binding-upload-storage";
-import type { UploadSizeContext } from "../src/upload-handler";
 import { createUploadHandler } from "../src/upload-handler";
 import { createFakeR2UploadBucket } from "./fake-r2-upload-bucket";
+import { pattern } from "./upload-pattern";
 
 const ENDPOINT = "https://test.local/upload";
 const STATE_PREFIX = "_lunora/uploads/";
 const B64 = (value: string): string => Buffer.from(value).toString("base64");
-
-/** Deterministic, position-dependent bytes, so a misplaced chunk changes the result. */
-const pattern = (length: number): Uint8Array<ArrayBuffer> => {
-    const bytes = new Uint8Array(length);
-
-    for (let index = 0; index < length; index += 1) {
-        bytes[index] = (index * 31 + 7) % 251;
-    }
-
-    return bytes;
-};
 
 /** Byte equality without a structural diff over megabytes (which is what makes `toStrictEqual` crawl). */
 const sameBytes = (actual: Uint8Array | undefined, expected: Uint8Array): boolean => actual !== undefined && Buffer.from(actual).equals(Buffer.from(expected));
@@ -101,6 +89,47 @@ const offsetOf = async (response: Promise<Response>): Promise<string | null> => 
 };
 
 const storedObject = (bucket: ReturnType<typeof createFakeR2UploadBucket>, location: string) => bucket.objects.get(location.split("/").pop() ?? "");
+
+/** The upload's state object, as the provider stored it. */
+const readState = (
+    bucket: ReturnType<typeof createFakeR2UploadBucket>,
+    location: string,
+): { file: { bytesWritten: number }; upload: Record<string, unknown> } => {
+    const object = bucket.objects.get(`${STATE_PREFIX}${location.split("/").pop() ?? ""}.json`);
+
+    return JSON.parse(new TextDecoder().decode(object?.bytes)) as { file: { bytesWritten: number }; upload: Record<string, unknown> };
+};
+
+/** A body that hands over `first`, then waits for `release()` before sending `rest`. */
+const pausedBody = (first: Uint8Array, rest: Uint8Array) => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+            if (pulled === 0) {
+                pulled += 1;
+                controller.enqueue(first);
+
+                return;
+            }
+
+            await gate;
+            controller.enqueue(rest);
+            controller.close();
+        },
+    });
+
+    return {
+        body,
+        pulled: () => pulled,
+        release: () => {
+            release();
+        },
+    };
+};
 
 const stateKeys = (bucket: ReturnType<typeof createFakeR2UploadBucket>): string[] => [...bucket.objects.keys()].filter((key) => key.startsWith(STATE_PREFIX));
 
@@ -443,129 +472,157 @@ describe(createR2BindingUploadStorage, () => {
 
         expect(listed.map((entry) => entry.id)).toStrictEqual([file.id]);
     });
-});
 
-describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
-    const MiB = 1024 * 1024;
+    it("refuses a create whose declared size is negative, missing or not an integer", async () => {
+        expect.hasAssertions();
 
-    const capped = (maxFileSizeFor: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>, maxFileSize = 100 * MiB) =>
-        createUploadHandler({ maxFileSize, maxFileSizeFor, silent: true, storage: createR2BindingUploadStorage(createFakeR2UploadBucket()) });
+        const bucket = createFakeR2UploadBucket();
+        const storage = createR2BindingUploadStorage(bucket);
 
-    const byType = (context: UploadSizeContext): number | undefined => {
-        if (context.contentType?.startsWith("image/")) {
-            return 1 * MiB;
+        // The provider is the last line: whatever reaches it without a usable
+        // size is refused, so no byte limit can be skipped.
+        for (const size of [-1, 1.5, Number.NaN, undefined, "", "-1"]) {
+            // eslint-disable-next-line no-await-in-loop -- one create per case
+            await expect(storage.create({ metadata: { name: "a.bin" }, size })).rejects.toMatchObject({ UploadErrorCode: "InvalidFileSize" });
         }
 
-        return context.contentType?.startsWith("video/") ? 50 * MiB : undefined;
-    };
-
-    const create = async (handler: Handler, headers: Record<string, string>): Promise<Response> =>
-        handler.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", ...headers }, method: "POST" }));
-
-    it("caps an upload by the type its TUS metadata declares", async () => {
-        expect.hasAssertions();
-
-        const handler = capped(byType);
-
-        const image = (size: number) => create(handler, { "Upload-Length": String(size), "Upload-Metadata": `filetype ${B64("image/png")}` });
-
-        await expect(image(2 * MiB)).resolves.toHaveProperty("status", 413);
-        await expect(image(MiB)).resolves.toHaveProperty("status", 201);
-        await expect(create(handler, { "Upload-Length": String(20 * MiB), "Upload-Metadata": `filetype ${B64("video/mp4")}` })).resolves.toHaveProperty(
-            "status",
-            201,
-        );
+        expect([...bucket.objects.keys()]).toStrictEqual([]);
     });
 
-    it("hands the decoded metadata and declared size to the callback", async () => {
+    it("never lets Upload-Length: -1 store more than the cap (regression)", async () => {
         expect.hasAssertions();
 
-        const seen: UploadSizeContext[] = [];
-        const handler = capped((context) => {
-            seen.push(context);
-
-            return undefined;
-        });
-
-        await create(handler, { "Upload-Length": "42", "Upload-Metadata": `filename ${B64("résumé.pdf")},filetype ${B64("application/pdf")},flag` });
-
-        expect(seen[0]?.metadata).toStrictEqual({ filename: "résumé.pdf", filetype: "application/pdf", flag: "" });
-        expect(seen[0]?.contentType).toBe("application/pdf");
-        expect(seen[0]?.declaredSize).toBe(42);
-        expect(seen[0]?.method).toBe("POST");
-    });
-
-    it("never raises the cap past maxFileSize", async () => {
-        expect.hasAssertions();
-
-        const handler = capped(() => 10 * MiB, MiB);
-
-        await expect(create(handler, { "Upload-Length": String(2 * MiB) })).resolves.toHaveProperty("status", 413);
-    });
-
-    it("refuses a create that declares no size once a cap applies", async () => {
-        expect.hasAssertions();
-
-        const handler = capped(() => MiB);
-
-        await expect(create(handler, { "Upload-Defer-Length": "1" })).resolves.toHaveProperty("status", 413);
-    });
-
-    it("fails closed when the callback throws or answers something that is not a size", async () => {
-        expect.hasAssertions();
-
-        const throwing = capped(() => {
-            throw new Error("lookup failed");
-        });
-        const nonsense = capped(() => Number.NaN);
-
-        await expect(create(throwing, { "Upload-Length": "10" })).resolves.toHaveProperty("status", 403);
-        await expect(create(nonsense, { "Upload-Length": "10" })).resolves.toHaveProperty("status", 403);
-    });
-
-    it("runs only on creates, after the authorize gate", async () => {
-        expect.hasAssertions();
-
-        const maxFileSizeFor = vi.fn<(context: UploadSizeContext) => number | undefined>(() => undefined);
+        const bucket = createFakeR2UploadBucket();
         const handler = createUploadHandler({
-            authorize: ({ request }) => request.headers.get("x-user") === "member",
-            maxFileSizeFor,
-            storage: createR2BindingUploadStorage(createFakeR2UploadBucket()),
-        });
-
-        await expect(create(handler, { "Upload-Length": "10" })).resolves.toHaveProperty("status", 403);
-        expect(maxFileSizeFor).not.toHaveBeenCalled();
-
-        const created = await create(handler, { "Upload-Length": "10", "x-user": "member" });
-        const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
-
-        await handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0", "x-user": "member" }, method: "HEAD" }));
-
-        expect(maxFileSizeFor).toHaveBeenCalledTimes(1);
-    });
-
-    it("reads a chunked-REST create's X-File-Metadata", async () => {
-        expect.hasAssertions();
-
-        const handler = createUploadHandler({
-            maxFileSizeFor: byType,
-            protocol: "chunked-rest",
+            maxFileSize: 1024 * 1024,
+            maxFileSizeFor: () => 10,
             silent: true,
-            storage: createR2BindingUploadStorage(createFakeR2UploadBucket()),
+            storage: createR2BindingUploadStorage(bucket),
         });
-
-        const response = await handler.fetch(
+        const created = await handler.fetch(
             new Request(ENDPOINT, {
-                headers: {
-                    "content-type": "application/octet-stream",
-                    "x-chunked-upload": "true",
-                    "x-file-metadata": JSON.stringify({ filetype: "image/jpeg" }),
-                    "x-total-size": String(2 * MiB),
-                },
+                headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "-1", "Upload-Metadata": `filename ${B64("a.bin")}` },
                 method: "POST",
             }),
         );
 
-        expect(response.status).toBe(413);
+        expect(created.status).toBe(413);
+        expect([...bucket.objects.keys()]).toStrictEqual([]);
+    });
+
+    it("keeps a finished file when expiration sweeps its upload state (regression)", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const handler = createUploadHandler({ silent: true, storage: createR2BindingUploadStorage(bucket, { expiration: { maxAge: 1 } }) });
+        const driver = tus(handler);
+        const location = await driver.create(5, "a.txt");
+
+        await sendChunks(driver, location, pattern(5), 5);
+        await new Promise((resolve) => {
+            setTimeout(resolve, 10);
+        });
+
+        // The expired state answers "gone", and is dropped; the file stays.
+        const head = await driver.head(location);
+
+        expect([404, 410]).toContain(head.status);
+
+        await vi.waitFor(() => {
+            expect(stateKeys(bucket)).toStrictEqual([]);
+        });
+
+        expect(sameBytes(storedObject(bucket, location)?.bytes, pattern(5))).toBe(true);
+    });
+
+    it("stops a writer whose lease was taken over: it neither stores parts nor finishes (regression)", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const driver = tus(handlerOver(bucket));
+        const bytes = pattern(R2_PART_SIZE + 1000);
+        const location = await driver.create(bytes.byteLength);
+        const paused = pausedBody(bytes.slice(0, 1000), bytes.slice(1000));
+        const inFlight = driver.patch(location, 0, paused.body);
+
+        await vi.waitFor(() => {
+            expect(paused.pulled()).toBe(1);
+            expect(readState(bucket, location).upload.lock).toBeDefined();
+        });
+
+        // Another request took the upload over after this one's lease lapsed.
+        const id = location.split("/").pop() ?? "";
+        const state = readState(bucket, location);
+
+        state.upload.lock = { expiresAt: Date.now() + 60_000, token: "someone-else" };
+        await bucket.put(`${STATE_PREFIX}${id}.json`, JSON.stringify(state));
+
+        paused.release();
+
+        await expect(inFlight).resolves.toHaveProperty("status", 409);
+        expect(storedObject(bucket, location)).toBeUndefined();
+        expect(bucket.openUploads.size).toBe(0);
+    });
+
+    it("records progress after every part, so a killed request loses at most the part in flight", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const driver = tus(handlerOver(bucket));
+        const bytes = pattern(2 * R2_PART_SIZE + 10);
+        const location = await driver.create(bytes.byteLength);
+        const cut = R2_PART_SIZE + 100;
+        const paused = pausedBody(bytes.slice(0, cut), bytes.slice(cut));
+        const inFlight = driver.patch(location, 0, paused.body);
+
+        // Mid-request, with one part stored and the rest held up.
+        await vi.waitFor(() => {
+            expect(readState(bucket, location).file.bytesWritten).toBe(R2_PART_SIZE);
+        });
+
+        paused.release();
+
+        await expect(inFlight).resolves.toHaveProperty("status", 200);
+        expect(sameBytes(storedObject(bucket, location)?.bytes, bytes)).toBe(true);
+    });
+
+    it("joins waiting segments once there are too many, so tiny chunks cannot pile them up", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const driver = tus(handlerOver(bucket));
+        const bytes = pattern(30_000);
+        const location = await driver.create(bytes.byteLength + 1);
+
+        await sendChunks(driver, location, bytes, 1000);
+
+        expect(stateKeys(bucket).length).toBeLessThanOrEqual(1 + 8);
+
+        await sendChunks(driver, location, pattern(bytes.byteLength + 1), 1, bytes.byteLength);
+
+        expect(sameBytes(storedObject(bucket, location)?.bytes, pattern(bytes.byteLength + 1))).toBe(true);
+    });
+
+    it("refuses an object name under the upload state prefix", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const storage = createR2BindingUploadStorage(bucket, { filename: () => `${STATE_PREFIX}victim.json` });
+
+        await expect(storage.create({ metadata: { name: "a.bin" }, size: 4 })).rejects.toMatchObject({ UploadErrorCode: "InvalidFileName" });
+        expect([...bucket.objects.keys()]).toStrictEqual([]);
+    });
+
+    it("lets one of two racing creates for an id write the state, and both answer it", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const storage = createR2BindingUploadStorage(bucket);
+        const init = { id: "same-upload-id", metadata: { name: "a.bin" }, size: 10 };
+        const [first, second] = await Promise.all([storage.create(init), storage.create(init)]);
+
+        expect(first.id).toBe("same-upload-id");
+        expect(second.id).toBe("same-upload-id");
+        expect(stateKeys(bucket)).toStrictEqual([`${STATE_PREFIX}same-upload-id.json`]);
     });
 });

@@ -311,12 +311,15 @@ parser enforces the cap on the file itself.
 `maxFileSizeFor` lowers the cap per upload, say 10 MiB for images and 2 GiB for
 video. It runs after `authorize`, on the requests that create an upload (`POST`,
 and the chunked-REST `PUT`) of TUS and chunked REST, and gets the decoded
-metadata, the declared MIME type (`filetype`, else `type` / `contentType` /
-`mimeType`, else the request's `Content-Type`) and the declared size. Return a
-byte count, or `undefined` to leave `maxFileSize` as the only cap; the result
-never raises the cap past `maxFileSize`. A create that declares no size is
-answered `413` once a cap applies, and a throw, or anything that is not a
-finite, non-negative number, is a `403`. The type is what the client says the
+metadata, the declared MIME type and the declared size. The type is resolved
+the way the stored file's type is: on chunked REST the request's
+`Content-Type`; on TUS the metadata's `mimeType`, else `type`, else `filetype`;
+else `application/octet-stream`. Return a byte count, or `undefined` to leave
+`maxFileSize` as the only cap; the result never raises the cap past
+`maxFileSize`. A create that declares no size is answered `413` once a cap
+applies, and so is one whose declared size is not a non-negative integer (with
+or without a cap). A throw, or anything that is not a finite, non-negative
+number, is a `403`. The type is what the client says the
 file is: check it with the provider's `allowMIME` too. Multipart forms are not
 covered, since their size is only known once the form is parsed.
 
@@ -325,7 +328,7 @@ const handler = createUploadHandler({
     storage: createR2BindingUploadStorage(env.UPLOADS),
     authorize,
     maxFileSize: 2 * 1024 * 1024 * 1024,
-    maxFileSizeFor: ({ contentType }) => (contentType?.startsWith("image/") ? 10 * 1024 * 1024 : undefined),
+    maxFileSizeFor: ({ contentType }) => (contentType.startsWith("image/") ? 10 * 1024 * 1024 : undefined),
 });
 ```
 
@@ -341,16 +344,29 @@ remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
   as a small segment object until a later chunk completes it. A request holds at
   most about two parts in memory. A file under 5 MiB never starts a multipart
   upload and is written with one `put`.
+- **Sizes.** An upload must declare its size up front, as a non-negative
+  integer; a create without one is refused (`400`).
 - **State.** Each upload's offset, metadata, multipart upload id, stored parts
   and waiting segments are a JSON object under `statePrefix` (default
   `"_lunora/uploads/"`) in the same bucket, so a request can land on any
-  isolate. They appear in listings of the bucket; add an R2 lifecycle rule on
-  the prefix to expire uploads that were started and never finished.
+  isolate. Progress is recorded after every stored part, so a request that is
+  killed loses at most the part it was working on. No uploaded object may be
+  named under the prefix (`400`). The state of a finished upload is kept,
+  shrunk to its file record, so `HEAD` still reports it complete; it and the
+  state of abandoned uploads accumulate, and they appear in listings of the
+  bucket. Add an R2 object lifecycle rule that deletes objects under the prefix
+  after a few days, longer than any upload should take.
+- **Removing uploads.** `DELETE` (TUS) or `expiration` aborts an upload in
+  progress, with its parts and segments. For a finished upload they drop only
+  the state, never the stored file: removing a file is `ctx.storage.delete`.
 - **Concurrency.** A chunk at an offset other than the stored one is a `409`. A
   chunk also takes a lease on the upload with a conditional put, so a second
   request for the same upload while one is streaming gets a `409`, and the
-  client re-reads the offset with `HEAD` and continues. A lease left behind by a
-  request that died expires after a minute.
+  client re-reads the offset with `HEAD` and continues. The writer confirms the
+  lease before storing each part and before finishing, so one whose lease
+  lapsed stops (`409`) instead of writing on. A lease left behind by a request
+  that died expires after a minute. Tiny chunks cannot pile up waiting
+  segments: past eight, they are joined into one.
 - **Interrupted chunks.** When the client drops mid-chunk, the bytes that
   arrived are kept and `HEAD` reports them, as TUS expects.
 - **Not supported:** the TUS `checksum`, `concatenation` and
