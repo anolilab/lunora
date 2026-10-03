@@ -848,6 +848,84 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
             expectReported(rowAt(discover(source), markerLine(source, "write")));
         });
 
+        // A ctx row is server-scoped only while nothing could have changed it:
+        // followed through `const` aliases, `for…of` variables, iterating
+        // callbacks and nested functions, and failing closed on any call this
+        // cannot read.
+        const read = `const row = await ctx.db.get(args.postId);`;
+
+        it.each([
+            ["a write through a `const` alias", `${read}\n        const alias = row;\n        alias.ownerId = args.targetUserId;`],
+            ["a write through a two-hop alias", `${read}\n        const a = row;\n        const b = a;\n        b.ownerId = args.targetUserId;`],
+            ["a nested arrow writing its parameter", `${read}\n        const set = (r) => { r.ownerId = args.targetUserId; };\n        set(row);`],
+            ["a nested `function` writing its parameter", `${read}\n        function set(r) { r.ownerId = args.targetUserId; }\n        set(row);`],
+            ["an IIFE writing its parameter", `${read}\n        ((r) => { r.ownerId = args.targetUserId; })(row);`],
+            [
+                "a nested function handed an alias",
+                `${read}\n        const alias = row;\n        const set = (r) => { r.ownerId = args.targetUserId; };\n        set(alias);`,
+            ],
+            ["an unknown function", `${read}\n        normalize(row);`],
+            ["an unknown function handed an alias", `${read}\n        const alias = row;\n        normalize(alias);`],
+            ["a nested function passing it on to an unknown one", `${read}\n        const relay = (r) => normalize(r);\n        relay(row);`],
+            ["a same-file helper outside the impl that writes it", `${read}\n        stamp(row);`],
+            ["a `let` alias", `${read}\n        let alias = row;\n        alias.ownerId = args.targetUserId;`],
+            ["`Object.defineProperty`", `${read}\n        Object.defineProperty(row, "ownerId", { value: args.targetUserId });`],
+            ["a constructor", `${read}\n        new Normalizer(row);`],
+            ["a template tag", `${read}\n        normalize\`\${row}\`;`],
+            [
+                "a destructured element written later",
+                `const { meta } = await ctx.db.get(args.postId);\n        meta.ownerId = args.targetUserId;\n        await ${insert("meta.ownerId")}; // @write`,
+            ],
+        ])("reports a ctx row's owner after %s", (_label, body) => {
+            expect.assertions(2);
+
+            const write = body.includes("// @write") ? "" : `\n        await ${insert("row.ownerId")}; // @write`;
+            const source = `function stamp(r) { r.ownerId = "fixed"; }\n${ownerMutator(`        ${body}${write}`)}`;
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it.each([
+            [
+                "a `for…of` variable written from args",
+                `const rows = await ctx.db.query("posts").collect();\n        for (const r of rows) {\n            r.ownerId = args.targetUserId;\n        }\n        await Promise.all(rows.map((r) => ${insert("r.ownerId")})); // @write`,
+            ],
+            [
+                "an iterating callback written from args",
+                `const rows = await ctx.db.query("posts").collect();\n        rows.forEach((r) => { r.ownerId = args.targetUserId; });\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
+            ],
+            [
+                "a callback parameter written before its own write",
+                `const rows = await ctx.db.query("posts").collect();\n        await Promise.all(rows.map((r) => { r.ownerId = args.targetUserId; return ${insert("r.ownerId")}; })); // @write`,
+            ],
+            [
+                "a spread into an unknown call",
+                `const rows = await ctx.db.query("posts").collect();\n        normalize(...rows);\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
+            ],
+        ])("reports ctx rows changed through %s", (_label, body) => {
+            expect.assertions(2);
+
+            const source = ownerMutator(`        ${body}`);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it.each([
+            ["`JSON.stringify`", `JSON.stringify(row);`],
+            ["`console.log`", `console.log("post", row);`],
+            ["a `ctx.*` call", `await ctx.scheduler.runAfter(0, "notify", row);`],
+            ["a local function that only reads it", `const title = (r) => r.title;\n        title(row);`],
+            ["a nested function writing a fixed value", `const touch = (r) => { r.seen = true; };\n        touch(row);`],
+            ["a same-file helper outside the impl that only reads it", `describe(row);`],
+            ["a `const` alias that is only read", `const alias = row;\n        console.log(alias.title);`],
+        ])("keeps a ctx row server-scoped next to %s", (_label, statement) => {
+            expect.assertions(1);
+
+            const source = `function describe(r) { return \`\${r.title}\`; }\n${ownerMutator(`        ${read}\n        ${statement}\n        await ${insert("row.ownerId")}; // @write`)}`;
+
+            expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
+        });
+
         it("raises the laundered write as an ERROR through the advisor lint", () => {
             expect.assertions(2);
 

@@ -1,4 +1,18 @@
-import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpression, ParameterDeclaration, Project, ts, VariableDeclaration } from "ts-morph";
+import type {
+    ArrowFunction,
+    BindingElement,
+    CallExpression,
+    FunctionDeclaration,
+    FunctionExpression,
+    Identifier,
+    Node as TsNode,
+    ObjectLiteralExpression,
+    ParameterDeclaration,
+    Project,
+    ts,
+    Type,
+    VariableDeclaration,
+} from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isArgumentDerived, isScopedByContext } from "../argument-taint";
@@ -344,6 +358,209 @@ const isReadOnlyCallArgument = (node: TsNode, context: ParameterDeclaration | un
     }
 };
 
+/** A function whose body this analysis reads: see {@link visibleFunctionOf}. */
+type VisibleFunction = ArrowFunction | FunctionDeclaration | FunctionExpression;
+
+/** Per-declaration verdicts of {@link isReassignedFunction}, keyed on the compiler node so a re-parse recomputes. */
+const REASSIGNED_FUNCTION_CACHE = new WeakMap<ts.Node, boolean>();
+
+/** Whether the binding a `function` declaration creates is ever assigned to (`save = other`): then a call by name may run anything. */
+const isReassignedFunction = (declaration: FunctionDeclaration): boolean => {
+    const cached = REASSIGNED_FUNCTION_CACHE.get(declaration.compilerNode);
+
+    if (cached !== undefined) {
+        return cached;
+    }
+
+    const name = declaration.getName();
+    const reassigned = declaration
+        .getSourceFile()
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .some(
+            (identifier) => identifier.getText() === name && isWriteTarget(identifier) && declarationOf(identifier)?.compilerNode === declaration.compilerNode,
+        );
+
+    REASSIGNED_FUNCTION_CACHE.set(declaration.compilerNode, reassigned);
+
+    return reassigned;
+};
+
+/**
+ * The function `callee` runs when this analysis can read its body: an inline
+ * arrow / function expression (an IIFE), or an identifier bound IN THE SAME
+ * FILE to a `function` declaration (with a body, declared once, never
+ * reassigned) or to a `const` initialized with an arrow / function expression.
+ * Anything else — an import, a parameter, a `let`, a method — is `undefined`.
+ */
+const visibleFunctionOf = (callee: TsNode): VisibleFunction | undefined => {
+    const value = unwrapExpression(callee);
+
+    if (Node.isArrowFunction(value) || Node.isFunctionExpression(value)) {
+        return value;
+    }
+
+    const declaration = Node.isIdentifier(value) ? declarationOf(value) : undefined;
+
+    if (declaration?.getSourceFile() !== callee.getSourceFile()) {
+        return undefined;
+    }
+
+    if (Node.isFunctionDeclaration(declaration)) {
+        const isSingle = (declaration.getSymbol()?.getDeclarations().length ?? 0) === 1;
+
+        return declaration.hasBody() && isSingle && !isReassignedFunction(declaration) ? declaration : undefined;
+    }
+
+    const initializer = isConstDeclaration(declaration) ? unwrapExpression(declaration.getInitializer()) : undefined;
+
+    return Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer) ? initializer : undefined;
+};
+
+/**
+ * The parameter of `target` that receives `argument` of `call`. `null` when
+ * no parameter does, so `target` cannot see it; `undefined` when that cannot be told:
+ * a spread argument at or before it, a rest parameter, or `arguments` read
+ * anywhere in `target`.
+ */
+const receivingParameter = (target: VisibleFunction, call: CallExpression, argument: TsNode): ParameterDeclaration | null | undefined => {
+    const callArguments = call.getArguments();
+    const position = callArguments.indexOf(argument);
+    const isOpaque =
+        position === -1 ||
+        callArguments.slice(0, position + 1).some((candidate) => Node.isSpreadElement(candidate)) ||
+        target.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => identifier.getText() === "arguments");
+
+    if (isOpaque) {
+        return undefined;
+    }
+
+    const parameters = target.getParameters();
+    const parameter = parameters[position];
+
+    if (parameter === undefined) {
+        // eslint-disable-next-line unicorn/no-null -- `null` (no receiver) and `undefined` (unknown) are distinct verdicts
+        return parameters.some((candidate) => candidate.isRestParameter()) ? undefined : null;
+    }
+
+    return parameter.isRestParameter() ? undefined : parameter;
+};
+
+/**
+ * The parameter of a {@link visibleFunctionOf} function that `node` is handed to
+ * as a call argument (`validate(args)`), `null` when the function takes no
+ * parameter there, and `undefined` when `node` is no call argument or the callee
+ * cannot be read.
+ */
+const visibleArgumentTarget = (node: TsNode): ParameterDeclaration | null | undefined => {
+    const value = outermostValueWrapper(node);
+    const call = value.getParent();
+
+    if (!Node.isCallExpression(call) || call.getExpression() === value) {
+        return undefined;
+    }
+
+    const target = visibleFunctionOf(call.getExpression());
+
+    return target === undefined ? undefined : receivingParameter(target, call, value);
+};
+
+/** How many nested {@link isReadOnlyParameter} hand-offs (`validate` → `check` → …) are followed before failing closed. */
+const MAX_READ_ONLY_DEPTH = 4;
+
+/**
+ * Whether the function `parameter` belongs to only READS what it is handed
+ * there: every use of the parameter is a member read, a destructuring
+ * initializer, a copy ({@link isCopiedOnly}), a read-only call argument
+ * ({@link isReadOnlyCallArgument}), or an argument to another visible function
+ * that is read-only for it, up to {@link MAX_READ_ONLY_DEPTH} hand-offs. Never
+ * written through, returned, stored or aliased, and never passed to a function
+ * this cannot read. A destructured parameter only copies members out, so it is
+ * read-only; a rest parameter never reaches here ({@link receivingParameter}).
+ */
+const isReadOnlyParameter = (parameter: ParameterDeclaration, depth = 0): boolean => {
+    const name = parameter.getNameNode();
+
+    if (!Node.isIdentifier(name)) {
+        return true;
+    }
+
+    if (depth > MAX_READ_ONLY_DEPTH) {
+        return false;
+    }
+
+    const isReadOnlyUse = (reference: TsNode): boolean => {
+        if (isMemberRead(reference) || isDestructuringRead(reference) || isCopiedOnly(reference) || isReadOnlyCallArgument(reference, undefined)) {
+            return true;
+        }
+
+        const target = visibleArgumentTarget(reference);
+
+        return target === null || (target !== undefined && isReadOnlyParameter(target, depth + 1));
+    };
+
+    return parameter
+        .getParentOrThrow()
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .every(
+            (identifier) =>
+                identifier === name ||
+                identifier.getText() !== name.getText() ||
+                declarationOf(identifier)?.compilerNode !== parameter.compilerNode ||
+                isReadOnlyUse(identifier),
+        );
+};
+
+/** Whether `node` is `other`: the same compiler node. */
+const isSameNode = (node: TsNode | undefined, other: TsNode): boolean => node?.compilerNode === other.compilerNode;
+
+/** The identifier-named `const` that `node` (through wrappers) is the whole initializer of: `const alias = row`. */
+const constAliasOf = (node: TsNode): VariableDeclaration | undefined => {
+    const value = outermostValueWrapper(node);
+    const declaration = value.getParent();
+
+    return isConstDeclaration(declaration) && isSameNode(declaration.getInitializer(), value) && Node.isIdentifier(declaration.getNameNode())
+        ? declaration
+        : undefined;
+};
+
+/** The identifier-named loop variable of a `for…of` that iterates `node`: each element it binds is an element of `node`. */
+const forOfVariableOf = (node: TsNode): VariableDeclaration | undefined => {
+    const value = outermostValueWrapper(node);
+    const loop = value.getParent();
+    const initializer = Node.isForOfStatement(loop) && loop.getExpression() === value ? loop.getInitializer() : undefined;
+    const [variable] = Node.isVariableDeclarationList(initializer) ? initializer.getDeclarations() : [];
+
+    return variable !== undefined && Node.isIdentifier(variable.getNameNode()) ? variable : undefined;
+};
+
+/** Whether every value of `type` is a primitive, which no call can change in place. `any` / `unknown` are not. */
+const isPrimitiveType = (type: Type): boolean => {
+    if (type.isUnion()) {
+        return type.getUnionTypes().every((member) => isPrimitiveType(member));
+    }
+
+    if (type.isIntersection()) {
+        return type.getIntersectionTypes().some((member) => isPrimitiveType(member));
+    }
+
+    return !type.isAny() && !type.isUnknown() && !type.isObject() && !type.isTypeParameter();
+};
+
+/** Whether `call` is `Object.assign(<node>, …)` on the platform `Object`: it writes into `node` only what its other arguments carry. */
+const isObjectAssignTarget = (call: CallExpression, node: TsNode): boolean => {
+    const callee = unwrapExpression(call.getExpression());
+    const root = Node.isPropertyAccessExpression(callee) ? callee.getExpression() : undefined;
+
+    return (
+        Node.isPropertyAccessExpression(callee) &&
+        callee.getName() === "assign" &&
+        Node.isIdentifier(root) &&
+        root.getText() === "Object" &&
+        isLibraryGlobal(root) &&
+        call.getArguments()[0] === node
+    );
+};
+
 /**
  * Whether the impl can reach its own body again with an `args` that never went
  * through `applyOwnerScope`. Fails closed on any of:
@@ -531,6 +748,22 @@ const MAX_VARIABLE_HOPS = 8;
  */
 const WORK_BUDGET = 50_000;
 
+/** Memoized verdicts plus the keys being computed, for {@link ImplTaint}'s least-fixed-point recursion. */
+interface VerdictTable {
+    inProgress: Set<ts.Node>;
+    verdicts: Map<ts.Node, boolean>;
+}
+
+/** A binding whose object a later statement may change: a variable, a parameter, or one element of a destructuring. */
+type ObjectBinding = BindingElement | ParameterDeclaration | VariableDeclaration;
+
+/** The identifier-named elements of a destructuring pattern, nested ones included. */
+const bindingIdentifiersOf = (binding: ObjectBinding): BindingElement[] =>
+    binding
+        .getNameNode()
+        .getDescendantsOfKind(SyntaxKind.BindingElement)
+        .filter((element) => Node.isIdentifier(element.getNameNode()));
+
 /**
  * How taint flows inside one mutator impl, resolved by symbol. Caller-controlled
  * are the impl's own `args` parameter, the `arguments` object, any identifier
@@ -547,7 +780,11 @@ const WORK_BUDGET = 50_000;
  * parameter, directly or through `const`s, is server-scoped: rows read through
  * `ctx.db`, even when the query filters on `args`. So is a `Promise`
  * combinator over such reads (`Promise.all(ids.map((id) => ctx.db.get(id)))`).
- * A helper result (`getMembers(ctx, args.orgId)`) is not.
+ * A helper result (`getMembers(ctx, args.orgId)`) is not. Neither is a row that
+ * may have been changed since: see {@link ImplTaint.isMutatedWithTaint} and
+ * {@link ImplTaint.isChangedUnseen}, which follow the row through `const`
+ * aliases, `for…of` variables, iterating callbacks and the parameters of the
+ * nested functions it is handed to.
  *
  * A parameter of a function NESTED in the impl is caller-controlled only when
  * what flows into it is. A function called by name (`const persist = …;
@@ -566,17 +803,22 @@ const WORK_BUDGET = 50_000;
  * fails closed.
  */
 class ImplTaint {
+    private aliasDepth = 0;
+
     private cuts = 0;
 
-    private readonly inProgress = new Set<ts.Node>();
+    /** {@link ImplTaint.isChangedUnseen} verdicts, kept apart: they key on the same name nodes as the mutation verdicts. */
+    private readonly escapes: VerdictTable = { inProgress: new Set(), verdicts: new Map() };
+
+    private readonly referencesByDeclaration = new Map<string, Map<ts.Node, Identifier[]>>();
 
     private readonly referencesByName = new Map<string, Identifier[]>();
 
     private readonly scope: MutatorImplScope;
 
-    private variableDepth = 0;
+    private readonly taint: VerdictTable = { inProgress: new Set(), verdicts: new Map() };
 
-    private readonly verdicts = new Map<ts.Node, boolean>();
+    private variableDepth = 0;
 
     private queryDepth = 0;
 
@@ -734,6 +976,11 @@ class ImplTaint {
             return this.memoized(declaration.compilerNode, () => this.isTaintedValue(declaration, false));
         }
 
+        // A destructured element is an object of its own, which a later statement may change.
+        if (Node.isBindingElement(declaration) && (this.isMutatedWithTaint(declaration) || this.isChangedUnseen(declaration))) {
+            return true;
+        }
+
         const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
 
         return Node.isVariableDeclaration(variable) && this.isVariableTainted(variable, name);
@@ -746,48 +993,205 @@ class ImplTaint {
     }
 
     /**
-     * Whether a caller-controlled value is stored INTO `variable`'s object after
-     * its initializer: a member write (`o.k = args.x`), a method call on it with
-     * a tainted argument (`list.push(args.x)`, `map.set(k, args.x)`), or a call
-     * it is passed to alongside a tainted argument (`Object.assign(o, args)`).
+     * Whether `binding` may have been changed by code this cannot read
+     * (fail-closed): its object, a `const` alias of it, or the loop variable of a
+     * `for…of` over it is handed to a call that is not a read-only one
+     * ({@link isReadOnlyCallArgument}), not `Object.assign`'s target (judged by
+     * what it stores, in {@link isMutatedWithTaint}), and not a visible function
+     * that keeps it read-only; or a `let` / assignment aliases it, past which
+     * its uses are not followed. An iterating callback over it (`rows.forEach(cb)`)
+     * is followed into its parameters. A binding whose type is a primitive
+     * cannot be changed in place and never counts.
      */
-    private isMutatedWithTaint(variable: VariableDeclaration): boolean {
-        const nameNode = variable.getNameNode();
+    private isChangedUnseen(binding: ObjectBinding): boolean {
+        const nameNode = binding.getNameNode();
 
         if (!Node.isIdentifier(nameNode)) {
+            return Node.isParameterDeclaration(binding) && bindingIdentifiersOf(binding).some((element) => this.isChangedUnseen(element));
+        }
+
+        return this.memoized(
+            nameNode.compilerNode,
+            () => this.referencesTo(binding, nameNode.getText()).some((reference) => this.escapesThrough(reference)) && !isPrimitiveType(nameNode.getType()),
+            this.escapes,
+        );
+    }
+
+    /** One use of {@link isChangedUnseen}: whether it hands the object to code that may change it unseen. */
+    private escapesThrough(reference: Identifier): boolean {
+        const value = outermostValueWrapper(reference);
+        const parent = value.getParent();
+        const alias = constAliasOf(reference) ?? forOfVariableOf(reference);
+
+        if (alias !== undefined) {
+            return this.throughAlias(() => this.isChangedUnseen(alias));
+        }
+
+        if (Node.isCallExpression(parent) && parent.getArguments().includes(value)) {
+            return this.escapesAsArgument(parent, value);
+        }
+
+        if (this.escapesAsOperand(reference)) {
+            return true;
+        }
+
+        const method = Node.isPropertyAccessExpression(parent) && parent.getExpression() === value ? parent : undefined;
+        const call = method?.getParent();
+
+        if (method === undefined || !Node.isCallExpression(call) || call.getExpression() !== method || !RECEIVER_ITERATING_METHODS.has(method.getName())) {
             return false;
         }
 
+        const callback = call.getArguments()[0];
+        const target = callback === undefined ? undefined : visibleFunctionOf(callback);
+
+        return callback !== undefined && (target === undefined || target.getParameters().some((parameter) => this.isChangedUnseen(parameter)));
+    }
+
+    /**
+     * Whether `reference` is aliased by a binding this does not follow
+     * (`let alias = row`, `alias = row`; a destructuring only copies members
+     * out), spread into a call's arguments that is not read-only, or handed to a
+     * constructor or a template tag.
+     */
+    private escapesAsOperand(reference: Identifier): boolean {
+        const value = outermostValueWrapper(reference);
+        const parent = value.getParent();
+
+        if (Node.isVariableDeclaration(parent)) {
+            return isSameNode(parent.getInitializer(), value) && !Node.isObjectBindingPattern(parent.getNameNode());
+        }
+
+        if (Node.isBinaryExpression(parent)) {
+            return isSameNode(parent.getRight(), value) && isWriteTarget(parent.getLeft());
+        }
+
+        if (Node.isSpreadElement(parent) && Node.isCallExpression(parent.getParent())) {
+            return !isReadOnlyCallArgument(parent, this.scope.context);
+        }
+
+        return Node.isNewExpression(parent) || (Node.isTemplateSpan(parent) && !isCopiedOnly(reference));
+    }
+
+    /** Whether handing `value` to `call` may change it unseen: see {@link isChangedUnseen}. */
+    private escapesAsArgument(call: CallExpression, value: TsNode): boolean {
+        if (isReadOnlyCallArgument(value, this.scope.context) || isObjectAssignTarget(call, value)) {
+            return false;
+        }
+
+        const target = visibleFunctionOf(call.getExpression());
+        const parameter = target === undefined ? undefined : receivingParameter(target, call, value);
+
+        if (target === undefined || parameter === undefined) {
+            return true;
+        }
+
+        if (parameter === null) {
+            return false;
+        }
+
+        // A nested function's writes are judged by their values (`isMutatedWithTaint`); one outside the impl must only read.
+        return this.isInImpl(target) ? this.isChangedUnseen(parameter) : !isReadOnlyParameter(parameter);
+    }
+
+    /**
+     * Whether a caller-controlled value is stored INTO `binding`'s object after
+     * its initializer: a member write (`o.k = args.x`), a method call on it with
+     * a tainted argument (`list.push(args.x)`, `map.set(k, args.x)`), a call it
+     * is passed to alongside a tainted argument (`Object.assign(o, args)`), or —
+     * through a `const` alias of it, the loop variable of a `for…of` over it,
+     * an iterating callback over it (`rows.forEach((r) => …)`), or the parameter
+     * of a nested function it is handed to (`set(row)`) — any of the same.
+     */
+    private isMutatedWithTaint(binding: ObjectBinding): boolean {
+        const nameNode = binding.getNameNode();
+
+        if (!Node.isIdentifier(nameNode)) {
+            return Node.isParameterDeclaration(binding) && bindingIdentifiersOf(binding).some((element) => this.isMutatedWithTaint(element));
+        }
+
         return this.memoized(nameNode.compilerNode, () =>
-            this.referencesTo(variable, nameNode.getText()).some((reference) => {
-                let top = outermostValueWrapper(reference);
-                let parent = top.getParent();
-
-                while ((Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent)) && parent.getExpression() === top) {
-                    top = outermostValueWrapper(parent);
-                    parent = top.getParent();
-                }
-
-                if (top !== outermostValueWrapper(reference) && isWriteTarget(top)) {
-                    return !Node.isBinaryExpression(parent) || this.isTaintedValue(parent.getRight(), false);
-                }
-
-                if (!Node.isCallExpression(parent)) {
-                    return false;
-                }
-
-                // A callback (`rows.filter((r) => r.org === args.org)`) reads the object; it stores nothing into it.
-                const others = parent.getArguments().filter((argument) => {
-                    const unwrapped = unwrapExpression(argument);
-
-                    return argument !== top && !Node.isArrowFunction(unwrapped) && !Node.isFunctionExpression(unwrapped);
-                });
-
-                return (
-                    (parent.getExpression() === top || parent.getArguments().includes(top)) && others.some((argument) => this.isTaintedValue(argument, false))
-                );
-            }),
+            this.referencesTo(binding, nameNode.getText()).some((reference) => this.storesTaintThrough(reference)),
         );
+    }
+
+    /** One use of {@link isMutatedWithTaint}: whether it stores a caller-controlled value into the object. */
+    private storesTaintThrough(reference: Identifier): boolean {
+        const value = outermostValueWrapper(reference);
+        let top = value;
+        let parent = top.getParent();
+
+        while ((Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent)) && parent.getExpression() === top) {
+            top = outermostValueWrapper(parent);
+            parent = top.getParent();
+        }
+
+        if (top !== value && isWriteTarget(top)) {
+            return !Node.isBinaryExpression(parent) || this.isTaintedValue(parent.getRight(), false);
+        }
+
+        const alias = top === value ? (constAliasOf(reference) ?? forOfVariableOf(reference)) : undefined;
+
+        if (alias !== undefined) {
+            return this.throughAlias(() => this.isMutatedWithTaint(alias));
+        }
+
+        if (!Node.isCallExpression(parent)) {
+            return false;
+        }
+
+        const callArguments = parent.getArguments();
+
+        if (this.isWrittenByNestedFunction(parent, top)) {
+            return true;
+        }
+
+        // A callback (`rows.filter((r) => r.org === args.org)`) reads the object; it stores nothing into it.
+        const others = callArguments.filter((argument) => {
+            const unwrapped = unwrapExpression(argument);
+
+            return argument !== top && !Node.isArrowFunction(unwrapped) && !Node.isFunctionExpression(unwrapped);
+        });
+
+        return (parent.getExpression() === top || callArguments.includes(top)) && others.some((argument) => this.isTaintedValue(argument, false));
+    }
+
+    /**
+     * Whether a function nested in the impl stores a caller-controlled value into
+     * `node` through its own parameter: `node` handed to it as an argument
+     * (`set(row)`), or `node` the receiver of an iterating method it is the
+     * callback of (`rows.forEach((r) => { r.ownerId = args.x; })`).
+     */
+    private isWrittenByNestedFunction(call: CallExpression, node: TsNode): boolean {
+        if (call.getArguments().includes(node)) {
+            const target = visibleFunctionOf(call.getExpression());
+            const parameter = target !== undefined && this.isInImpl(target) ? receivingParameter(target, call, node) : undefined;
+
+            return parameter !== undefined && parameter !== null && this.isMutatedWithTaint(parameter);
+        }
+
+        const method = Node.isPropertyAccessExpression(node) && call.getExpression() === node ? node.getName() : undefined;
+        const callback = method !== undefined && RECEIVER_ITERATING_METHODS.has(method) ? call.getArguments()[0] : undefined;
+        const target = callback === undefined ? undefined : visibleFunctionOf(callback);
+
+        return target !== undefined && this.isInImpl(target) && target.getParameters().some((parameter) => this.isMutatedWithTaint(parameter));
+    }
+
+    /** Follow one alias hop; past {@link MAX_VARIABLE_HOPS} of them, fail closed. */
+    private throughAlias(follow: () => boolean): boolean {
+        if (this.aliasDepth >= MAX_VARIABLE_HOPS) {
+            this.cuts += 1;
+
+            return true;
+        }
+
+        this.aliasDepth += 1;
+
+        try {
+            return follow();
+        } finally {
+            this.aliasDepth -= 1;
+        }
     }
 
     /**
@@ -878,12 +1282,14 @@ class ImplTaint {
         const declaration = Node.isIdentifier(current) ? declarationOf(current) : undefined;
         const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
         const initializer = isConstDeclaration(variable) && this.isInImpl(variable) ? variable.getInitializer() : undefined;
+        const binding = Node.isBindingElement(declaration) ? declaration : variable;
 
         return (
             hops > 0 &&
             initializer !== undefined &&
-            Node.isVariableDeclaration(variable) &&
-            !this.isMutatedWithTaint(variable) &&
+            (Node.isBindingElement(binding) || Node.isVariableDeclaration(binding)) &&
+            !this.isMutatedWithTaint(binding) &&
+            !this.isChangedUnseen(binding) &&
             this.isRootedInContext(initializer, hops - 1)
         );
     }
@@ -895,14 +1301,21 @@ class ImplTaint {
             return true;
         }
 
-        return parameter.getParent() !== impl && this.isInImpl(parameter) && this.memoized(parameter.compilerNode, () => this.flowsIntoTainted(parameter));
+        // A nested parameter is caller-controlled when what flows into it is, or when its object is changed afterwards.
+        return (
+            parameter.getParent() !== impl &&
+            this.isInImpl(parameter) &&
+            (this.memoized(parameter.compilerNode, () => this.flowsIntoTainted(parameter)) ||
+                this.isMutatedWithTaint(parameter) ||
+                this.isChangedUnseen(parameter))
+        );
     }
 
     private isVariableTainted(variable: VariableDeclaration, name: string): boolean {
         return this.memoized(variable.compilerNode, () => {
             const holder = variable.getParent().getParent();
 
-            if (Node.isCatchClause(variable.getParent())) {
+            if (Node.isCatchClause(variable.getParent()) || this.isMutatedWithTaint(variable) || this.isChangedUnseen(variable)) {
                 return true;
             }
 
@@ -913,7 +1326,7 @@ class ImplTaint {
             const initializer = variable.getInitializer();
             const isReassigned = !isConstDeclaration(variable) && this.referencesTo(variable, name).some((reference) => isWriteTarget(reference));
 
-            if (initializer === undefined || isReassigned || this.isMutatedWithTaint(variable)) {
+            if (initializer === undefined || isReassigned) {
                 return true;
             }
 
@@ -937,14 +1350,14 @@ class ImplTaint {
         });
     }
 
-    private memoized(key: ts.Node, compute: () => boolean): boolean {
-        const known = this.verdicts.get(key);
+    private memoized(key: ts.Node, compute: () => boolean, table: VerdictTable = this.taint): boolean {
+        const known = table.verdicts.get(key);
 
         if (known !== undefined) {
             return known;
         }
 
-        if (this.inProgress.has(key)) {
+        if (table.inProgress.has(key)) {
             this.cuts += 1;
 
             return false;
@@ -960,27 +1373,48 @@ class ImplTaint {
 
         const cutsBefore = this.cuts;
 
-        this.inProgress.add(key);
+        table.inProgress.add(key);
 
         let verdict: boolean;
 
         try {
             verdict = compute();
         } finally {
-            this.inProgress.delete(key);
+            table.inProgress.delete(key);
         }
 
         if (this.cuts === cutsBefore) {
-            this.verdicts.set(key, verdict);
+            table.verdicts.set(key, verdict);
         }
 
         return verdict;
     }
 
+    /**
+     * The references to `declaration` (spelled `name`) inside the impl. The
+     * identifiers spelled `name` are resolved once, on the first query for that
+     * spelling, and grouped by declaration: many same-named bindings (300
+     * helpers each taking `d`) then cost one symbol lookup per identifier, not
+     * one per identifier per binding.
+     */
     private referencesTo(declaration: TsNode, name: string): Identifier[] {
-        return (this.referencesByName.get(name) ?? []).filter(
-            (reference) => reference.getParent() !== declaration && declarationOf(reference)?.compilerNode === declaration.compilerNode,
-        );
+        let byDeclaration = this.referencesByDeclaration.get(name);
+
+        if (byDeclaration === undefined) {
+            byDeclaration = new Map();
+
+            for (const reference of this.referencesByName.get(name) ?? []) {
+                const target = declarationOf(reference)?.compilerNode;
+
+                if (target !== undefined) {
+                    byDeclaration.set(target, [...(byDeclaration.get(target) ?? []), reference]);
+                }
+            }
+
+            this.referencesByDeclaration.set(name, byDeclaration);
+        }
+
+        return (byDeclaration.get(declaration.compilerNode) ?? []).filter((reference) => reference.getParent() !== declaration);
     }
 }
 
