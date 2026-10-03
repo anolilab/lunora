@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.109...@lunora/shard-engine@1.0.0-alpha.110) (2026-10-03)
+
+### Features
+
+* **storage:** resumable uploads over the r2 binding ([#948](https://github.com/anolilab/lunora/issues/948)) ([8189220](https://github.com/anolilab/lunora/commit/8189220610b21af0827acf9575c6ccd60c611e00)), closes [#937](https://github.com/anolilab/lunora/issues/937)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.95
+
 ## @lunora/shard-engine [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.108...@lunora/shard-engine@1.0.0-alpha.109) (2026-10-03)
 
 
