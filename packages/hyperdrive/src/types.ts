@@ -73,6 +73,16 @@ export interface HyperdriveConnection {
  */
 export interface SqlClient {
     /**
+     * The database system behind this client, as OTel names it in
+     * `db.system.name`. Stamped by the driver adapters ({@link import("./create-hyperdrive").fromPostgresJs | fromPostgresJs}
+     * / {@link import("./create-hyperdrive").fromNodePg | fromNodePg} → `"postgresql"`,
+     * {@link import("./create-hyperdrive").fromMysql2 | fromMysql2} → `"mysql"`) so `ctx.sql`'s automatic
+     * instrumentation reports the real system. Optional: a hand-built client may
+     * omit it and is then reported as `"other_sql"`.
+     */
+    readonly dbSystem?: "mysql" | "postgresql";
+
+    /**
      * Run a parameterised SQL statement and return the result rows.
      *
      * SECURITY: `text` is executed verbatim — the package never rewrites or

@@ -57,6 +57,7 @@ export const createHyperdrive = (binding: HyperdriveLike): { config: HyperdriveC
  */
 export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
     return {
+        dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
             const rows = await client.unsafe(text, params);
 
@@ -72,6 +73,7 @@ export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
  */
 export const fromNodePg = (client: NodePgLike): SqlClient => {
     return {
+        dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
             const result = await client.query(text, params);
 
@@ -91,6 +93,7 @@ export const fromNodePg = (client: NodePgLike): SqlClient => {
  */
 export const fromMysql2 = (connection: Mysql2Like): SqlClient => {
     return {
+        dbSystem: "mysql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
             const [rows] = await connection.execute(text, params);
 
