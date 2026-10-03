@@ -44,6 +44,7 @@ export { withTailConsumer } from "./validate-settings";
 export type { WranglerCacheShape } from "./workers-cache";
 export { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
 export type {
+    ObservabilitySignalSampling,
     TailConsumer,
     WranglerConfig,
     WranglerContainerEntry,
@@ -53,6 +54,7 @@ export type {
     WranglerValidationReport,
     WranglerWorkflowEntry,
 } from "./wrangler-config";
+export { DEFAULT_OBSERVABILITY, resolveObservabilitySampling } from "./wrangler-config";
 export type { WranglerEnvironmentMerge } from "./wrangler-environment";
 export { mergeWranglerEnvironment } from "./wrangler-environment";
 export type { ReadWranglerResult } from "./wrangler-path";

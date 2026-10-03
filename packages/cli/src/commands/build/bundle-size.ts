@@ -25,6 +25,10 @@ interface BundleSize {
  * Cloudflare's Worker size limit: 64 MiB uncompressed, the same on Free and
  * Paid. There is no compressed limit — only the uncompressed bundle counts.
  * https://developers.cloudflare.com/workers/platform/limits/#worker-size
+ *
+ * Mirrored as `RAW_LIMIT_BYTES` in `scripts/check-worker-size.js` (the repo's
+ * CI size gate, a plain Node script that does not import this package); change
+ * both together.
  */
 const WORKER_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
 

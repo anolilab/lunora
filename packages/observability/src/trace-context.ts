@@ -11,6 +11,7 @@ import { isLunoraError } from "@lunora/errors";
 
 import { otlpRandomHex, parseTraceparent } from "../../../shared/otlp";
 import { parseRayId } from "../../../shared/ray-id";
+import type { TraceAnchor } from "./context-telemetry";
 
 /**
  * The trace ids a dispatch's spans hang off: taken from the inbound
@@ -22,12 +23,10 @@ import { parseRayId } from "../../../shared/ray-id";
  * `rayHeader` is the Cloudflare Ray ID the runtime forwarded alongside the
  * `traceparent` (`x-lunora-ray-id`). It is re-validated here and carried on the
  * anchor so every span and log line of the dispatch stamps it; absent or
- * malformed, the anchor simply has none. Informational only.
+ * malformed, the anchor simply has none. Informational only — see
+ * {@link parseRayId}.
  */
-export const resolveTraceAnchor = (
-    traceparent: string | undefined,
-    rayHeader?: null | string,
-): { rayId?: string; rootSpanId: string; sampled: boolean; traceId: string } => {
+export const resolveTraceAnchor = (traceparent: string | undefined, rayHeader?: null | string): TraceAnchor & { sampled: boolean } => {
     const inbound = parseTraceparent(traceparent);
     const rayId = parseRayId(rayHeader);
 

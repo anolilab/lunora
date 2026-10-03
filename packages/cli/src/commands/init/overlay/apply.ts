@@ -11,6 +11,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
+import { DEFAULT_OBSERVABILITY } from "@lunora/config/cloudflare";
 import { dirname, join } from "@visulima/path";
 
 import type { Logger } from "../../../util/logger";
@@ -174,7 +175,16 @@ export const ShardDO = app.ShardDO;
 export default app;
 `;
 
-/** `wrangler.jsonc` — the SHARD Durable Object binding + migration. `__NAME__` is substituted. */
+/** `DEFAULT_OBSERVABILITY` as a one-line JSONC object, spaced like the rest of {@link WRANGLER}. */
+const OBSERVABILITY_JSONC = `{ ${Object.entries(DEFAULT_OBSERVABILITY)
+    .map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`)
+    .join(", ")} }`;
+
+/**
+ * `wrangler.jsonc` — the SHARD Durable Object binding + migration, and the
+ * observability block `lunora dev` would otherwise reconcile in. `__NAME__` is
+ * substituted.
+ */
 const WRANGLER = `{
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "__NAME__",
@@ -185,7 +195,7 @@ const WRANGLER = `{
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "observability": ${OBSERVABILITY_JSONC},
 }
 `;
 

@@ -8,6 +8,8 @@
  */
 import type { WorkflowIR } from "@lunora/codegen";
 
+import { isPlainObject } from "./guards";
+
 interface WorkflowSetting {
     /** The declaration's value, in wrangler's shape; `undefined` when not declared. */
     of: (workflow: WorkflowIR) => unknown;
@@ -23,8 +25,6 @@ const WORKFLOW_SETTINGS: ReadonlyArray<WorkflowSetting> = [
 
 /** The top-level keys those settings live under — what a binding moved into an export carries over. */
 const WORKFLOW_SETTING_KEYS: ReadonlyArray<string> = [...new Set(WORKFLOW_SETTINGS.map(({ path }) => path[0]))];
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Read a leaf path out of an untrusted parsed entry. */
 const settingLeaf = (entry: unknown, path: ReadonlyArray<string>): unknown => {
@@ -57,4 +57,4 @@ const workflowSettingsFor = (workflow: WorkflowIR): Record<string, unknown> => {
 };
 
 export type { WorkflowSetting };
-export { isPlainObject, settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor };
+export { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor };
