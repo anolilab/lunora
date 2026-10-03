@@ -29,9 +29,19 @@ export const normaliseFleets = (fleets: ReadonlyArray<FleetSummary>): FleetSumma
     return [...byAlias.values()].toSorted((a, b) => (a.alias < b.alias ? -1 : 1)).slice(0, HOSTD_PROTOCOL_LIMITS.maxFleets);
 };
 
+/** The job kinds whose success moves a box's fleets. */
+const FLEET_JOBS: ReadonlySet<HostdJob["kind"]> = new Set(["deploy", "destroy", "reload"]);
+
+/**
+ * Whether `job` finishing with `outcome` moves the box's fleets — what
+ * {@link fleetsAfterJob} answers a list for. Only a job that succeeded does: a
+ * failed deploy leaves celld serving what it served.
+ */
+export const jobMovesFleets = (job: HostdJob, outcome: JobOutcome): boolean => outcome.ok && FLEET_JOBS.has(job.kind);
+
 /**
  * The fleets after `job` finished with `outcome`, or `undefined` when the job
- * says nothing about them. Only a job that succeeded moves the list: a failed
+ * says nothing about them ({@link jobMovesFleets}). Only a job that succeeded moves the list: a failed
  * deploy leaves celld serving what it served, and the next `hello` corrects
  * anything else.
  *
@@ -40,7 +50,7 @@ export const normaliseFleets = (fleets: ReadonlyArray<FleetSummary>): FleetSumma
  * - `destroy` → the alias is gone.
  */
 export const fleetsAfterJob = (fleets: ReadonlyArray<FleetSummary>, job: HostdJob, outcome: JobOutcome): FleetSummary[] | undefined => {
-    if (!outcome.ok) {
+    if (!jobMovesFleets(job, outcome)) {
         return undefined;
     }
 

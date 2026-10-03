@@ -3,7 +3,7 @@ import { HOSTD_PROTOCOL_LIMITS } from "@lunora/hostd/protocol";
 import { describe, expect, it } from "vitest";
 
 import { createDiagnoseCollector, DIAGNOSE_TIMEOUT_MS } from "../src/boxes/diagnose";
-import { fleetsAfterJob, normaliseFleets } from "../src/boxes/fleets";
+import { fleetsAfterJob, jobMovesFleets, normaliseFleets } from "../src/boxes/fleets";
 import type { BoxSession } from "../src/boxes/session-client";
 import { handleBoxDiagnoseRoute } from "../src/deploy/routes/boxes";
 import type { RouterEnv } from "../src/deploy/routes/shared";
@@ -203,5 +203,13 @@ describe("box fleets", () => {
         expect(fleetsAfterJob(fleets, { alias: "web", deleteData: false, kind: "destroy" }, { ok: true })).toStrictEqual([]);
         expect(fleetsAfterJob(fleets, deploy, { error: { code: "X", message: "no" }, ok: false })).toBeUndefined();
         expect(fleetsAfterJob(fleets, { kind: "diagnose" }, { ok: true })).toBeUndefined();
+    });
+
+    it("says which finished jobs move the fleets, without building a list", () => {
+        expect(jobMovesFleets(deploy, { ok: true })).toBe(true);
+        expect(jobMovesFleets({ alias: "web", deleteData: false, kind: "destroy" }, { ok: true })).toBe(true);
+        expect(jobMovesFleets({ alias: "web", kind: "reload" }, { ok: true })).toBe(true);
+        expect(jobMovesFleets(deploy, { error: { code: "X", message: "no" }, ok: false })).toBe(false);
+        expect(jobMovesFleets({ kind: "diagnose" }, { ok: true })).toBe(false);
     });
 });

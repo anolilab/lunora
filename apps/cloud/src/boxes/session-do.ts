@@ -23,7 +23,7 @@ import { DurableObject } from "cloudflare:workers";
 
 import type { ControlPlaneStore } from "../d1-store";
 import { controlPlaneDatabase } from "../d1-store";
-import { fleetsAfterJob } from "./fleets";
+import { fleetsAfterJob, jobMovesFleets } from "./fleets";
 import { versionKey } from "./hostd-releases";
 import type { JobOutcome } from "./jobs";
 import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "./jobs";
@@ -631,7 +631,7 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
     private async recordFleets(boxId: string, job: HostdJob, outcome: JobOutcome): Promise<void> {
         const database = this.database();
 
-        if (database === undefined || fleetsAfterJob([], job, outcome) === undefined) {
+        if (database === undefined || !jobMovesFleets(job, outcome)) {
             return;
         }
 
