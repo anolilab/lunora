@@ -123,6 +123,24 @@ describe("discover/mutators", () => {
         ]);
     });
 
+    it("registers a renamed mutator export under the name the module exports", () => {
+        expect.assertions(1);
+
+        // The dispatch table reads `mutators.<exportName>` off the module
+        // namespace; the local `createPost` is not exported, so registering it
+        // under that name wired `undefined`.
+        writeMutators(`
+            import { defineMutator } from "@lunora/server";
+
+            const createPost = defineMutator({ owner: "userId", server: async () => {} });
+            export { createPost as makePost };
+        `);
+
+        expect(discoverMutators(newProject(), workdir)).toEqual([
+            { args: {}, exportName: "makePost", filePath: "mutators", line: 4, owner: "userId", returnType: "void" },
+        ]);
+    });
+
     it("discovers a defineMutator imported from the generated _generated/server re-export", () => {
         expect.assertions(1);
 

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import discoverFunctions from "../../src/discover/functions";
 import discoverKvKeyAccesses from "../../src/discover/kv-key-accesses";
 import type { FunctionIR } from "../../src/ir";
 
@@ -128,6 +129,26 @@ describe("discoverKvKeyAccesses", () => {
 
         expect(found).toHaveLength(1);
         expect(found[0]).toMatchObject({ visibility: "internal" });
+    });
+
+    it("stamps the visibility of a procedure exported under another name", () => {
+        expect.assertions(2);
+
+        // `export { warm as warmCache }`: attribution names the site `warmCache`,
+        // and discovery now registers the function under that same name, so the
+        // internal stamp applies instead of the site reading as unattributed.
+        write(
+            "cache.ts",
+            `import { internalMutation } from "@lunora/server";
+const warm = internalMutation(async ({ ctx, args }) => { await ctx.kv.put(args.cacheKey, args.blob); });
+export { warm as warmCache };`,
+        );
+
+        const functions = discoverFunctions(project, join(workdir, "lunora"));
+        const found = discoverKvKeyAccesses(project, join(workdir, "lunora"), functions);
+
+        expect(functions.map((entry) => [entry.exportName, entry.visibility])).toEqual([["warmCache", "internal"]]);
+        expect(found).toMatchObject([{ scope: { kind: "export", name: "warmCache" }, visibility: "internal" }]);
     });
 
     it("leaves visibility undefined when the access can't be attributed to a supplied function", () => {
