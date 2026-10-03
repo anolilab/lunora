@@ -33,7 +33,7 @@ describe("table_without_insert", () => {
     it("flags only the tables with no discovered insert", () => {
         expect.assertions(2);
 
-        const inserts: AdvisorInsertWrite[] = [{ exportName: "send", file: "messages", line: 1, table: "messages" }];
+        const inserts: AdvisorInsertWrite[] = [{ scope: { kind: "export", name: "send" }, file: "messages", line: 1, table: "messages" }];
         const findings = run(inserts);
 
         expect(findings).toHaveLength(1);
@@ -49,7 +49,7 @@ describe("table_without_insert", () => {
     it("ignores inserts whose table argument wasn't a string literal", () => {
         expect.assertions(1);
 
-        const inserts: AdvisorInsertWrite[] = [{ exportName: "dynamic", file: "f", line: 1, table: "" }];
+        const inserts: AdvisorInsertWrite[] = [{ scope: { kind: "export", name: "dynamic" }, file: "f", line: 1, table: "" }];
 
         expect(run(inserts)).toHaveLength(2);
     });

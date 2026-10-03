@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `ctx.storage.<bucket>.<method>(key, …)` call whose R2 object key is derived
  * from the handler's `args` with no server-side scoping — the input the
@@ -9,14 +11,14 @@
  * codegen feeder; runtime callers don't supply it, so the lint finds nothing there.
  */
 export interface AdvisorStorageKeyAccess {
-    /** The exported binding name of the procedure performing the storage call. */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** 1-based line of the storage call, or `0` when unknown. */
     line: number;
     /** The bucket method invoked with the arg-derived key, e.g. `get` / `put` / `delete` / `download`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 
     /**
      * Visibility of the enclosing procedure. `internal` procedures are not

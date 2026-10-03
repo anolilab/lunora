@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a `ctx.db` write (`insert` / `replace` / `patch` / `insertManyUnsafe`)
@@ -42,9 +43,9 @@ const ownerFieldFromArgsNotAuth: Lint = {
                 return [];
             }
 
-            const where = `\`${write.method}\` in \`${write.exportName}\` (${write.file}:${write.line.toString()})`;
+            const where = `\`${write.method}\` in \`${callSiteLabel(write.scope)}\` (${write.file}:${write.line.toString()})`;
             const metadata = {
-                exportName: write.exportName,
+                ...callSiteMetadata(write.scope),
                 field: write.field,
                 file: write.file,
                 line: write.line,

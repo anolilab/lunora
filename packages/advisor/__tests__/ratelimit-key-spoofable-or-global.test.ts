@@ -9,8 +9,8 @@ import type { AdvisorRatelimitKeySelector } from "../src/ratelimit-key-selectors
 const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: v.string() }) }));
 
 const selectors: AdvisorRatelimitKeySelector[] = [
-    { callee: "rateLimit", exportName: "sendMessage", file: "chat", limitName: "send", line: 4 },
-    { callee: "dbRateLimit", exportName: "requestOtp", file: "auth", limitName: "otp", line: 9 },
+    { callee: "rateLimit", scope: { kind: "export", name: "sendMessage" }, file: "chat", limitName: "send", line: 4 },
+    { callee: "dbRateLimit", scope: { kind: "export", name: "requestOtp" }, file: "auth", limitName: "otp", line: 9 },
 ];
 
 describe("ratelimit_key_spoofable_or_global", () => {

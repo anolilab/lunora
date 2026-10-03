@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags an action's `ctx.fetch(url, …)` whose URL is derived from the handler's
@@ -34,8 +35,8 @@ const actionFetchSsrf: Lint = {
         return context.argumentDerivedFetches.map((fetchCall) =>
             emit(actionFetchSsrf, {
                 cacheKey: `action_fetch_ssrf:${fetchCall.file}:${fetchCall.line.toString()}`,
-                detail: `\`ctx.fetch\` in \`${fetchCall.exportName}\` (${fetchCall.file}:${fetchCall.line.toString()}) fetches a URL derived from \`args\` — a server-side request forgery vector. Validate the URL against a host allowlist and reject private/link-local targets before fetching.`,
-                metadata: { exportName: fetchCall.exportName, file: fetchCall.file, line: fetchCall.line },
+                detail: `\`ctx.fetch\` in \`${callSiteLabel(fetchCall.scope)}\` (${fetchCall.file}:${fetchCall.line.toString()}) fetches a URL derived from \`args\` — a server-side request forgery vector. Validate the URL against a host allowlist and reject private/link-local targets before fetching.`,
+                metadata: { ...callSiteMetadata(fetchCall.scope), file: fetchCall.file, line: fetchCall.line },
             }),
         );
     },

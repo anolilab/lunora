@@ -10,11 +10,11 @@ const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: 
 
 const rows: AdvisorIdentityClaimRead[] = [
     // undeclared claim read → flagged.
-    { declared: false, exportName: "postsPolicy", file: "policy", line: 4, key: "role" },
+    { declared: false, scope: { kind: "export", name: "postsPolicy" }, file: "policy", line: 4, key: "role" },
     // declared claim read → not flagged.
-    { declared: true, exportName: "postsPolicy", file: "policy", line: 6, key: "tenantId" },
+    { declared: true, scope: { kind: "export", name: "postsPolicy" }, file: "policy", line: 6, key: "tenantId" },
     // userId (always declared) → not flagged.
-    { declared: true, exportName: "postsPolicy", file: "policy", line: 8, key: "userId" },
+    { declared: true, scope: { kind: "export", name: "postsPolicy" }, file: "policy", line: 8, key: "userId" },
 ];
 
 describe("identity_undeclared_claim_trusted", () => {

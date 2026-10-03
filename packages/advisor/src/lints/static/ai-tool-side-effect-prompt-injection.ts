@@ -1,6 +1,7 @@
 import type { AdvisorAiToolSideEffect } from "../../ai-tool-side-effects";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a `generateText` / `streamText` call whose model input is user-derived
@@ -37,13 +38,13 @@ const aiToolSideEffectPromptInjection: Lint = {
         return context.aiToolSideEffects
             .filter((row: AdvisorAiToolSideEffect) => row.userInputDerived)
             .map((row) => {
-                const location = `\`${row.exportName}\` (${row.file}:${row.line.toString()})`;
+                const location = `\`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()})`;
 
                 return emit(aiToolSideEffectPromptInjection, {
                     cacheKey: `ai_tool_side_effect_prompt_injection:${row.file}:${row.line.toString()}`,
                     detail: `\`${row.method}\` in ${location} feeds user-derived input to a model whose tools reach \`${row.sideEffect}\`. An injected instruction can steer the model into firing that side effect.`,
                     metadata: {
-                        exportName: row.exportName,
+                        ...callSiteMetadata(row.scope),
                         file: row.file,
                         line: row.line,
                         method: row.method,

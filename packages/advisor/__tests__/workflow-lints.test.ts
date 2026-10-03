@@ -46,7 +46,7 @@ describe("workflow_unused", () => {
     it("clears a workflow that is started somewhere", () => {
         expect.assertions(1);
 
-        const calls: AdvisorWorkflowCall[] = [{ exportName: "create", file: "channels", line: 4, workflow: "channelWelcome" }];
+        const calls: AdvisorWorkflowCall[] = [{ scope: { kind: "export", name: "create" }, file: "channels", line: 4, workflow: "channelWelcome" }];
 
         expect(workflowUnused.run(context({ workflowCalls: calls, workflows: [WELCOME] }))).toHaveLength(0);
     });
@@ -54,7 +54,7 @@ describe("workflow_unused", () => {
     it("flags only the workflows with no call site", () => {
         expect.assertions(1);
 
-        const calls: AdvisorWorkflowCall[] = [{ exportName: "create", file: "channels", line: 4, workflow: "channelWelcome" }];
+        const calls: AdvisorWorkflowCall[] = [{ scope: { kind: "export", name: "create" }, file: "channels", line: 4, workflow: "channelWelcome" }];
         const findings = workflowUnused.run(context({ workflowCalls: calls, workflows: [WELCOME, CLEANUP] }));
 
         expect(findings.map((finding) => finding.metadata.workflow)).toStrictEqual(["nightlyCleanup"]);
@@ -64,7 +64,7 @@ describe("workflow_unused", () => {
         expect.assertions(1);
 
         // A dynamic get(<expr>) could target any workflow — flagging unused would be a false positive.
-        const calls: AdvisorWorkflowCall[] = [{ exportName: "dynamic", file: "channels", line: 9, workflow: "" }];
+        const calls: AdvisorWorkflowCall[] = [{ scope: { kind: "export", name: "dynamic" }, file: "channels", line: 9, workflow: "" }];
 
         expect(workflowUnused.run(context({ workflowCalls: calls, workflows: [WELCOME, CLEANUP] }))).toHaveLength(0);
     });
@@ -81,7 +81,7 @@ describe("workflow_unknown_target", () => {
     it("flags a call referencing an undeclared workflow", () => {
         expect.assertions(2);
 
-        const calls: AdvisorWorkflowCall[] = [{ exportName: "create", file: "channels", line: 4, workflow: "channelWelcom" }];
+        const calls: AdvisorWorkflowCall[] = [{ scope: { kind: "export", name: "create" }, file: "channels", line: 4, workflow: "channelWelcom" }];
         const findings = workflowUnknownTarget.run(context({ workflowCalls: calls, workflows: [WELCOME] }));
 
         expect(findings).toHaveLength(1);
@@ -96,7 +96,7 @@ describe("workflow_unknown_target", () => {
     it("clears a call referencing a declared workflow", () => {
         expect.assertions(1);
 
-        const calls: AdvisorWorkflowCall[] = [{ exportName: "create", file: "channels", line: 4, workflow: "channelWelcome" }];
+        const calls: AdvisorWorkflowCall[] = [{ scope: { kind: "export", name: "create" }, file: "channels", line: 4, workflow: "channelWelcome" }];
 
         expect(workflowUnknownTarget.run(context({ workflowCalls: calls, workflows: [WELCOME] }))).toHaveLength(0);
     });
@@ -104,19 +104,38 @@ describe("workflow_unknown_target", () => {
     it("ignores calls with a dynamic (non-literal) name", () => {
         expect.assertions(1);
 
-        const calls: AdvisorWorkflowCall[] = [{ exportName: "dynamic", file: "channels", line: 9, workflow: "" }];
+        const calls: AdvisorWorkflowCall[] = [{ scope: { kind: "export", name: "dynamic" }, file: "channels", line: 9, workflow: "" }];
 
         expect(workflowUnknownTarget.run(context({ workflowCalls: calls, workflows: [WELCOME] }))).toHaveLength(0);
     });
 
-    it("names a call in a helper no export calls by the helper, not an empty export", () => {
-        expect.assertions(2);
+    it("reports a typo in a helper shared by two exports once, named by the helper", () => {
+        expect.assertions(3);
 
-        const calls: AdvisorWorkflowCall[] = [{ exportName: "", file: "channels", helper: "kickOff", line: 12, workflow: "channelWelcom" }];
-        const [finding] = workflowUnknownTarget.run(context({ workflowCalls: calls, workflows: [WELCOME] }));
+        const calls: AdvisorWorkflowCall[] = [
+            { file: "channels", line: 12, scope: { callers: ["create", "restart"], kind: "helper", name: "kickOff" }, workflow: "channelWelcom" },
+        ];
+        const findings = workflowUnknownTarget.run(context({ workflowCalls: calls, workflows: [WELCOME] }));
 
-        expect(finding?.cacheKey).toBe("workflow_unknown_target:channels:kickOff:channelWelcom");
-        expect(finding?.detail).toContain('in "kickOff" (channels)');
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["workflow_unknown_target:channels:kickOff:channelWelcom"]);
+        expect(findings[0]?.detail).toContain("in `kickOff` (a helper called by `create`, `restart`) (channels)");
+        expect(findings[0]?.metadata).toStrictEqual({
+            callers: ["create", "restart"],
+            file: "channels",
+            helper: "kickOff",
+            line: 12,
+            workflow: "channelWelcom",
+        });
+    });
+
+    it("does not count a start in a helper no export calls as a use", () => {
+        expect.assertions(1);
+
+        const calls: AdvisorWorkflowCall[] = [{ file: "channels", line: 3, scope: { callers: [], kind: "helper", name: "dead" }, workflow: "channelWelcome" }];
+
+        expect(workflowUnused.run(context({ workflowCalls: calls, workflows: [WELCOME] })).map((finding) => finding.metadata["workflow"])).toStrictEqual([
+            "channelWelcome",
+        ]);
     });
 });
 
@@ -170,6 +189,23 @@ describe("workflow_duplicate_step_name", () => {
             // eslint-disable-next-line no-secrets/no-secrets -- the lint's rule id, not a credential
             name: "workflow_duplicate_step_name",
         });
+    });
+
+    it("names the handler's file when the steps come from a handler declared elsewhere", () => {
+        expect.assertions(1);
+
+        const workflows: AdvisorWorkflow[] = [
+            {
+                exportName: "onboarding",
+                handlerFile: "src/flow",
+                steps: [
+                    { line: 3, method: "do", name: "greet" },
+                    { line: 9, method: "do", name: "greet" },
+                ],
+            },
+        ];
+
+        expect(workflowDuplicateStepName.run(context({ workflows }))[0]?.detail).toContain("again at line 9 of src/flow");
     });
 
     it("flags a name reused across different step methods (the cache key is the name)", () => {

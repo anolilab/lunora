@@ -13,7 +13,7 @@ const dispatch = (overrides: Partial<AdvisorPrivilegedDispatch> = {}): AdvisorPr
     return {
         dispatchKind: "workflow",
         file: "workflows",
-        handlerExport: "onboard",
+        scope: { kind: "export", name: "onboard" },
         line: 4,
         targetExport: "send",
         targetFile: "messages",
@@ -95,7 +95,7 @@ describe("privileged_dispatch_unvalidated_payload", () => {
         expect.assertions(1);
 
         const findings = privilegedDispatchUnvalidatedPayload.run({
-            privilegedDispatches: [dispatch({ dispatchKind: "queue", file: "queues", handlerExport: "emailQueue" })],
+            privilegedDispatches: [dispatch({ dispatchKind: "queue", file: "queues", scope: { kind: "export", name: "emailQueue" } })],
             rlsProcedures: [procedure()],
             schema: schema(),
         });

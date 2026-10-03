@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a `createAuth({...})` call that loads `scim()` on an adapter with no native
@@ -43,8 +44,8 @@ const authScimWithoutTransactions: Lint = {
             .map((config) =>
                 emit(authScimWithoutTransactions, {
                     cacheKey: `auth_scim_without_transactions:${config.file}:${config.line.toString()}`,
-                    detail: `\`createAuth\` in \`${config.exportName}\` (${config.file}:${config.line.toString()}) loads \`scim()\` on an adapter without native transactions, so the SCIM plugin will refuse to serve and every provisioning request from your IdP fails. Host the auth tables in a Durable Object (\`.auth({ namespace })\`) or on Postgres/MySQL via \`@lunora/hyperdrive\`.`,
-                    metadata: { exportName: config.exportName, file: config.file, line: config.line },
+                    detail: `\`createAuth\` in \`${callSiteLabel(config.scope)}\` (${config.file}:${config.line.toString()}) loads \`scim()\` on an adapter without native transactions, so the SCIM plugin will refuse to serve and every provisioning request from your IdP fails. Host the auth tables in a Durable Object (\`.auth({ namespace })\`) or on Postgres/MySQL via \`@lunora/hyperdrive\`.`,
+                    metadata: { ...callSiteMetadata(config.scope), file: config.file, line: config.line },
                 }),
             );
     },

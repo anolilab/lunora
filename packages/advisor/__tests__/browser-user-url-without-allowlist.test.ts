@@ -10,8 +10,8 @@ import browserUserUrlWithoutAllowlist from "../src/lints/static/browser-user-url
 const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: v.string() }) }));
 
 const accesses: AdvisorBrowserUrlAccess[] = [
-    { exportName: "snap", file: "shots", line: 4, method: "screenshot" },
-    { exportName: "render", file: "shots", line: 9, method: "pdf" },
+    { scope: { kind: "export", name: "snap" }, file: "shots", line: 4, method: "screenshot" },
+    { scope: { kind: "export", name: "render" }, file: "shots", line: 9, method: "pdf" },
 ];
 
 const createBrowser = (keys: string[], trueKeys: string[] = []): AdvisorConfigCall => {

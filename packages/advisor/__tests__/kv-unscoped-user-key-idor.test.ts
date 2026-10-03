@@ -13,8 +13,8 @@ describe("kv_unscoped_user_key_idor", () => {
         expect.assertions(4);
 
         const kvKeyAccesses: AdvisorKvKeyAccess[] = [
-            { exportName: "readEntry", file: "entries", line: 4, method: "get" },
-            { exportName: "writeEntry", file: "entries", line: 9, method: "put" },
+            { scope: { kind: "export", name: "readEntry" }, file: "entries", line: 4, method: "get" },
+            { scope: { kind: "export", name: "writeEntry" }, file: "entries", line: 9, method: "put" },
         ];
         const findings = kvUnscopedUserKeyIdor.run({ kvKeyAccesses, schema: schema() });
 
@@ -36,7 +36,9 @@ describe("kv_unscoped_user_key_idor", () => {
     it("drops an internal procedure's access to INFO/INTERNAL instead of the build-failing ERROR", () => {
         expect.assertions(3);
 
-        const kvKeyAccesses: AdvisorKvKeyAccess[] = [{ exportName: "warmCache", file: "cache", line: 12, method: "put", visibility: "internal" }];
+        const kvKeyAccesses: AdvisorKvKeyAccess[] = [
+            { scope: { kind: "export", name: "warmCache" }, file: "cache", line: 12, method: "put", visibility: "internal" },
+        ];
         const findings = kvUnscopedUserKeyIdor.run({ kvKeyAccesses, schema: schema() });
 
         expect(findings).toHaveLength(1);
@@ -53,8 +55,8 @@ describe("kv_unscoped_user_key_idor", () => {
         expect.assertions(3);
 
         const kvKeyAccesses: AdvisorKvKeyAccess[] = [
-            { exportName: "readEntry", file: "entries", line: 4, method: "get", visibility: "public" },
-            { exportName: "orphan", file: "entries", line: 7, method: "get" },
+            { scope: { kind: "export", name: "readEntry" }, file: "entries", line: 4, method: "get", visibility: "public" },
+            { scope: { kind: "export", name: "orphan" }, file: "entries", line: 7, method: "get" },
         ];
         const findings = kvUnscopedUserKeyIdor.run({ kvKeyAccesses, schema: schema() });
 

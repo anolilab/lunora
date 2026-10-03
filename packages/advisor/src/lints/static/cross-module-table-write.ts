@@ -1,7 +1,7 @@
 import { moduleOf } from "../../../../../shared/architecture-manifest";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel } from "../helpers";
+import { callSiteDescription, callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a function that writes to a table another module declares it owns
@@ -21,10 +21,9 @@ import { callSiteLabel } from "../helpers";
  * batch writes and facade writes all count; a write whose table is unreadable
  * (an untyped id) is skipped.
  *
- * A write inside a same-file helper arrives attributed to each export calling
- * the helper, so moving the write into a helper does not hide it. One in a helper
- * no export calls arrives with `exportName: ""` and is still flagged, named by
- * the helper. The fix that does satisfy the lint is putting the write in the
+ * A write inside a same-file helper is reported once, named by the helper and
+ * listing the exports calling it, so moving the write into a helper does not hide
+ * it — and one in a helper no export calls is still flagged. The fix that does satisfy the lint is putting the write in the
  * owner's files: an exported owner-module helper taking the caller's `ctx`, or a
  * registered owner mutation called through `ctx.runMutation`.
  */
@@ -47,16 +46,13 @@ const crossModuleTableWrite: Lint = {
             return [];
         }
 
-        // One finding per function and table, however many writes it makes.
+        // One finding per function (or helper) and table, however many writes it makes.
         const seen = new Set<string>();
 
         return writes.flatMap((write) => {
             const owner = owners.get(write.table);
             const writer = moduleOf(modules, write.file);
-
-            // A write no export reaches (`exportName: ""`) is named by its helper.
-            const caller = callSiteLabel(write);
-            const cacheKey = `cross_module_table_write:${write.file}:${caller}:${write.table}`;
+            const cacheKey = `cross_module_table_write:${write.file}:${callSiteLabel(write.scope)}:${write.table}`;
 
             if (owner === undefined || owner.name === writer || seen.has(cacheKey)) {
                 return [];
@@ -65,17 +61,14 @@ const crossModuleTableWrite: Lint = {
             seen.add(cacheKey);
 
             const ownedBy = owner.installed === true ? `the installed component \`${owner.name}\`` : `module \`${owner.name}\``;
-            const orphan = write.helper === undefined ? "at module scope" : "a non-exported helper no exported function calls";
-            const where = write.exportName === "" ? `${write.file}, ${orphan}` : write.file;
 
             return [
                 emit(crossModuleTableWrite, {
                     cacheKey,
-                    detail: `\`${caller}\` (${where}) writes to \`${write.table}\`, which ${ownedBy} owns, from ${writer === undefined ? "outside every module" : `module \`${writer}\``}.`,
+                    detail: `${callSiteDescription(write.scope)} (${write.file}) writes to \`${write.table}\`, which ${ownedBy} owns, from ${writer === undefined ? "outside every module" : `module \`${writer}\``}.`,
                     metadata: {
-                        exportName: write.exportName,
+                        ...callSiteMetadata(write.scope),
                         file: write.file,
-                        ...(write.exportName === "" ? { helper: caller, line: write.line } : {}),
                         owner: owner.name,
                         table: write.table,
                         ...(owner.installed === true ? { installed: true } : {}),

@@ -1,6 +1,7 @@
 import { dedupeCacheKeys } from "../../dedupe-cache-keys";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a `ctx.authApi.<method>(...)` call whose argument object omits `headers`.
@@ -44,8 +45,8 @@ const authApiCallWithoutHeaders: Lint = {
                 .map((call) =>
                     emit(authApiCallWithoutHeaders, {
                         cacheKey: `auth_api_call_without_headers:${call.file}:${call.line.toString()}:${call.method}`,
-                        detail: `\`ctx.authApi.${call.method || "<method>"}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) is called without \`headers\` — better-auth skips session authorization, so this runs with full privileges. Pass the inbound \`headers\`.`,
-                        metadata: { exportName: call.exportName, file: call.file, line: call.line, method: call.method },
+                        detail: `\`ctx.authApi.${call.method || "<method>"}(…)\` in ${callSiteLabel(call.scope)} (${call.file}:${call.line.toString()}) is called without \`headers\` — better-auth skips session authorization, so this runs with full privileges. Pass the inbound \`headers\`.`,
+                        metadata: { ...callSiteMetadata(call.scope), file: call.file, line: call.line, method: call.method },
                     }),
                 ),
         );

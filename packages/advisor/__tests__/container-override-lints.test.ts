@@ -10,8 +10,8 @@ import containerStartEnableInternetOverride from "../src/lints/static/container-
 const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: v.string() }) }));
 
 const containerOverrides: AdvisorContainerOverride[] = [
-    { detail: "enableInternet: true", exportName: "boot", file: "launch", kind: "enable_internet", line: 3 },
-    { detail: "allow", exportName: "openUp", file: "egress", kind: "egress_relaxation", line: 5 },
+    { detail: "enableInternet: true", scope: { kind: "export", name: "boot" }, file: "launch", kind: "enable_internet", line: 3 },
+    { detail: "allow", scope: { kind: "export", name: "openUp" }, file: "egress", kind: "egress_relaxation", line: 5 },
 ];
 
 describe("container_start_enable_internet_override", () => {

@@ -13,8 +13,8 @@ describe("vectors_namespace_from_user_input", () => {
         expect.assertions(4);
 
         const vectorNamespaceAccesses: AdvisorVectorNamespaceAccess[] = [
-            { exportName: "searchDocs", file: "search", line: 4, method: "query" },
-            { exportName: "indexDoc", file: "search", line: 9, method: "upsert" },
+            { scope: { kind: "export", name: "searchDocs" }, file: "search", line: 4, method: "query" },
+            { scope: { kind: "export", name: "indexDoc" }, file: "search", line: 9, method: "upsert" },
         ];
         const findings = vectorsNamespaceFromUserInput.run({ schema: schema(), vectorNamespaceAccesses });
 

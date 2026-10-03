@@ -1,6 +1,7 @@
 import type { AdvisorBrowserUrlAccess } from "../../browser-url-accesses";
 import type { Lint } from "../../types";
 import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a `ctx.browser.<method>(url, …)` call whose navigation URL is derived
@@ -30,12 +31,12 @@ const browserUserUrlWithoutAllowlist: Lint = makeArgumentDerivedSinkLint<Advisor
     description:
         "A `ctx.browser.<method>(url, …)` call navigates to a URL derived from the handler's `args` with no server-side scoping, and no `createBrowser` allowlist contains it. The default guard blocks private targets but not arbitrary public URLs, so any caller can make the headless browser an open-proxy / SSRF tool (fetch arbitrary third-party URLs, DNS-rebind to internal hosts).",
     detail: (access) =>
-        `\`ctx.browser.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) navigates to a URL derived from \`args\` with no server-side scoping, and no \`createBrowser\` allowlist contains it — the default guard blocks private targets but not arbitrary public URLs, so any caller can turn the headless browser into an open-proxy / SSRF tool. Pin \`allowedHosts\` (and/or \`resolveDns\`) on \`createBrowser({...})\`, and derive the URL from server-trusted state where possible.`,
+        `\`ctx.browser.${access.method}\` in \`${callSiteLabel(access.scope)}\` (${access.file}:${access.line.toString()}) navigates to a URL derived from \`args\` with no server-side scoping, and no \`createBrowser\` allowlist contains it — the default guard blocks private targets but not arbitrary public URLs, so any caller can turn the headless browser into an open-proxy / SSRF tool. Pin \`allowedHosts\` (and/or \`resolveDns\`) on \`createBrowser({...})\`, and derive the URL from server-trusted state where possible.`,
     facing: "EXTERNAL",
     getAccesses: (context) => context.browserUrlAccesses,
     level: "WARN",
     metadata: (access) => {
-        return { exportName: access.exportName, file: access.file, line: access.line, method: access.method };
+        return { ...callSiteMetadata(access.scope), file: access.file, line: access.line, method: access.method };
     },
     name: "browser_user_url_without_allowlist",
     remediation:

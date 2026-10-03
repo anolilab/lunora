@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Level, Lint } from "../../types";
-import { queryReadLocation, shardKindsByTable, uniqueReadSites } from "../helpers";
+import { callSiteMetadata, queryReadLocation, shardKindsByTable } from "../helpers";
 
 /**
  * How a finding is worded and rated per storage tier — what the read actually
@@ -64,7 +64,7 @@ const unboundedCollect: Lint = {
         const findings = [];
         const shardKinds = shardKindsByTable(context.schema);
 
-        for (const read of uniqueReadSites(context.queries ?? [])) {
+        for (const read of context.queries ?? []) {
             // Not a candidate at all: bounded or narrowed, or a dynamic table we
             // cannot name.
             if (read.terminal !== "collect" || read.hasIndex || read.table === "") {
@@ -91,7 +91,7 @@ const unboundedCollect: Lint = {
                     cacheKey: `unbounded_collect:${read.file}:${read.line.toString()}:${read.table}`,
                     detail: `Query on "${read.table}" at ${location} calls .collect() with no index and no filter — ${scope(read.table)}.${subscriptionCost}`,
                     level,
-                    metadata: { exportName: read.exportName, file: read.file, line: read.line, shardKind: shardKind ?? "unknown", table: read.table },
+                    metadata: { ...callSiteMetadata(read.scope), file: read.file, line: read.line, shardKind: shardKind ?? "unknown", table: read.table },
                 }),
             );
         }

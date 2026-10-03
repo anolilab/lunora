@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel } from "../helpers";
+import { callSiteDescription, callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * A correctness lint: every `ctx.workflows.get("name")` call must reference a
@@ -34,16 +34,13 @@ const workflowUnknownTarget: Lint = {
         // A dynamic name (`""`) is not statically resolvable, so not a confirmed typo.
         return context.workflowCalls
             .filter((call) => call.workflow !== "" && !declared.has(call.workflow))
-            .map((call) => {
-                // A call no export reaches (`exportName: ""`) is named by its helper.
-                const caller = callSiteLabel(call);
-
-                return emit(workflowUnknownTarget, {
-                    cacheKey: `workflow_unknown_target:${call.file}:${caller}:${call.workflow}`,
-                    detail: `\`ctx.workflows.get("${call.workflow}")\` in "${caller}" (${call.file}) references workflow "${call.workflow}", which is not declared in lunora/workflows.ts.`,
-                    metadata: { exportName: call.exportName, file: call.file, line: call.line, workflow: call.workflow },
-                });
-            });
+            .map((call) =>
+                emit(workflowUnknownTarget, {
+                    cacheKey: `workflow_unknown_target:${call.file}:${callSiteLabel(call.scope)}:${call.workflow}`,
+                    detail: `\`ctx.workflows.get("${call.workflow}")\` in ${callSiteDescription(call.scope)} (${call.file}) references workflow "${call.workflow}", which is not declared in lunora/workflows.ts.`,
+                    metadata: { ...callSiteMetadata(call.scope), file: call.file, line: call.line, workflow: call.workflow },
+                }),
+            );
     },
     source: "static",
     title: "Workflow call references unknown workflow",

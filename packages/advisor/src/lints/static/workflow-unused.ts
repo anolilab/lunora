@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { isReachableSite } from "../helpers";
 
 /**
  * Flags a declared workflow that nothing starts.
@@ -35,7 +36,8 @@ const workflowUnused: Lint = {
             return [];
         }
 
-        const calls = context.workflowCalls;
+        // A call in dead code — a helper no export calls, or module scope — starts nothing.
+        const calls = context.workflowCalls.filter((call) => isReachableSite(call.scope));
 
         // A dynamic `get(<expr>)` could target any workflow — can't prove any are
         // unused, so stay silent rather than emit false positives.

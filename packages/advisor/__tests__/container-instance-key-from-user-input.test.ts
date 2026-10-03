@@ -13,8 +13,8 @@ describe("container_instance_key_from_user_input", () => {
         expect.assertions(4);
 
         const containerKeyAccesses: AdvisorContainerKeyAccess[] = [
-            { exportName: "startJob", file: "jobs", line: 4, method: "get" },
-            { exportName: "resumeJob", file: "jobs", line: 9, method: "get" },
+            { scope: { kind: "export", name: "startJob" }, file: "jobs", line: 4, method: "get" },
+            { scope: { kind: "export", name: "resumeJob" }, file: "jobs", line: 9, method: "get" },
         ];
         const findings = containerInstanceKeyFromUserInput.run({ containerKeyAccesses, schema: schema() });
 

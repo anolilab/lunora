@@ -10,9 +10,9 @@ const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: 
 
 const rows: AdvisorAiToolSideEffect[] = [
     // user-derived input + side-effecting tool → flagged.
-    { exportName: "agent", file: "agent", line: 4, method: "generateText", sideEffect: "ctx.db.insert", userInputDerived: true },
+    { scope: { kind: "export", name: "agent" }, file: "agent", line: 4, method: "generateText", sideEffect: "ctx.db.insert", userInputDerived: true },
     // server-authored input + side-effecting tool → not flagged.
-    { exportName: "report", file: "report", line: 9, method: "streamText", sideEffect: "ctx.fetch", userInputDerived: false },
+    { scope: { kind: "export", name: "report" }, file: "report", line: 9, method: "streamText", sideEffect: "ctx.fetch", userInputDerived: false },
 ];
 
 describe("ai_tool_side_effect_prompt_injection", () => {

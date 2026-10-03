@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Security-shaped key tokens naming a *protection* the flag toggles on
@@ -181,8 +182,8 @@ const flagGatesSecurityWithUnsafeDefault: Lint = {
             return [
                 emit(flagGatesSecurityWithUnsafeDefault, {
                     cacheKey: `flag_gates_security_with_unsafe_default:${row.file}:${row.line.toString()}`,
-                    detail: `\`ctx.flags.boolean("${row.key}", ${String(row.defaultValue)})\` in \`${row.exportName}\` (${row.file}:${row.line.toString()}) fails open to the permissive branch — a provider outage returns \`${String(row.defaultValue)}\`, ${harm}. Fail closed: default it to \`${String(polarity.safeDefault)}\`.`,
-                    metadata: { defaultValue: row.defaultValue, exportName: row.exportName, file: row.file, key: row.key, line: row.line },
+                    detail: `\`ctx.flags.boolean("${row.key}", ${String(row.defaultValue)})\` in \`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()}) fails open to the permissive branch — a provider outage returns \`${String(row.defaultValue)}\`, ${harm}. Fail closed: default it to \`${String(polarity.safeDefault)}\`.`,
+                    metadata: { defaultValue: row.defaultValue, ...callSiteMetadata(row.scope), file: row.file, key: row.key, line: row.line },
                 }),
             ];
         });

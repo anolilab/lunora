@@ -1,3 +1,4 @@
+import type { AdvisorCallSiteScope } from "../call-site-scope";
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { AdvisorQueryRead } from "../queries";
 import type { AdvisorSchema, AdvisorTable } from "../schema";
@@ -200,39 +201,80 @@ export const queryReadLocation = (read: Pick<AdvisorQueryRead, "file" | "line">)
     read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
 
 /**
- * One read per source site. The feeder records a read inside a shared helper
- * once per export calling the helper — the same `file:line` with a different
- * `exportName` — and the query lints judge the read itself, so each site is
- * reported once (attributed to its first caller), not once per caller.
+ * The name a call-site finding gives the code it sits in — the export, the
+ * helper, or `<module>` at module scope. Line-free, so a cache key built from it
+ * (and a dismissal saved against that key) survives the code moving; an export's
+ * label is its name, exactly as before helpers were attributed.
  */
-export const uniqueReadSites = <Read extends AdvisorQueryRead>(reads: ReadonlyArray<Read>): Read[] => {
-    const seen = new Set<string>();
-
-    return reads.filter((read) => {
-        // Everything but the caller; `JSON.stringify` drops the `undefined` key.
-        const key = JSON.stringify({ ...read, exportName: undefined });
-
-        if (seen.has(key)) {
-            return false;
+export const callSiteLabel = (scope: AdvisorCallSiteScope): string => {
+    switch (scope.kind) {
+        case "export":
+        case "helper": {
+            return scope.name;
         }
+        default: {
+            return "<module>";
+        }
+    }
+};
 
-        seen.add(key);
+/** The exported functions a site runs on behalf of: its export, its helper's callers, or none. */
+export const callSiteCallers = (scope: AdvisorCallSiteScope): ReadonlyArray<string> => {
+    switch (scope.kind) {
+        case "export": {
+            return [scope.name];
+        }
+        case "helper": {
+            return scope.callers;
+        }
+        default: {
+            return [];
+        }
+    }
+};
 
-        return true;
-    });
+/** Whether any export reaches the site — an orphan helper or module-scope code is dead for a usage lint. */
+export const isReachableSite = (scope: AdvisorCallSiteScope): boolean => callSiteCallers(scope).length > 0;
+
+/**
+ * The finding metadata naming a site's code: `exportName` for an export (the key
+ * the advisor map attributes a finding to a procedure by), `helper` plus the
+ * exports reaching it for a helper — the map credits each — and nothing at
+ * module scope.
+ */
+export const callSiteMetadata = (scope: AdvisorCallSiteScope): Record<string, ReadonlyArray<string> | string> => {
+    switch (scope.kind) {
+        case "export": {
+            return { exportName: scope.name };
+        }
+        case "helper": {
+            return { callers: scope.callers, helper: scope.name };
+        }
+        default: {
+            return {};
+        }
+    }
 };
 
 /**
- * The name a call-site finding gives its caller: the export, or — for a call no
- * export reaches (`exportName: ""`) — the helper it sits in, or its line at
- * module scope. Keeps finding text and cache keys from being built out of `""`.
+ * How a finding's detail names a site's code: `` `send` `` for an export,
+ * `` `openInvoice` (a helper called by `a`, `b`) `` for a helper, and
+ * `module scope` at module scope.
  */
-export const callSiteLabel = (site: { exportName: string; helper?: string; line: number }): string => {
-    if (site.exportName !== "") {
-        return site.exportName;
+export const callSiteDescription = (scope: AdvisorCallSiteScope): string => {
+    switch (scope.kind) {
+        case "export": {
+            return `\`${scope.name}\``;
+        }
+        case "helper": {
+            return scope.callers.length === 0
+                ? `\`${scope.name}\` (a non-exported helper no exported function calls)`
+                : `\`${scope.name}\` (a helper called by ${scope.callers.map((caller) => `\`${caller}\``).join(", ")})`;
+        }
+        default: {
+            return "module scope";
+        }
     }
-
-    return site.helper ?? `line ${site.line.toString()}`;
 };
 
 /**

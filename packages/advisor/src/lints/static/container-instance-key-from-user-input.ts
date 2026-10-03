@@ -1,6 +1,7 @@
 import type { AdvisorContainerKeyAccess } from "../../container-key-accesses";
 import type { Lint } from "../../types";
 import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a `ctx.containers.<exportName>.get(name, …)` call whose instance key
@@ -27,12 +28,12 @@ const containerInstanceKeyFromUserInput: Lint = makeArgumentDerivedSinkLint<Advi
     description:
         "A `ctx.containers.<name>.get` call routes to a container instance using a key derived from the handler's `args` with no server-side scoping. Any caller can supply another tenant's key and reach that tenant's container instance — a cross-tenant insecure direct object reference (IDOR).",
     detail: (access) =>
-        `\`ctx.containers.*.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) routes to a container instance using a key derived from \`args\` with no server-side scoping — any caller can reach another tenant's container (IDOR). Derive the key from a server-trusted identity (e.g. \`\${ctx.auth.userId}\`).`,
+        `\`ctx.containers.*.${access.method}\` in \`${callSiteLabel(access.scope)}\` (${access.file}:${access.line.toString()}) routes to a container instance using a key derived from \`args\` with no server-side scoping — any caller can reach another tenant's container (IDOR). Derive the key from a server-trusted identity (e.g. \`\${ctx.auth.userId}\`).`,
     facing: "EXTERNAL",
     getAccesses: (context) => context.containerKeyAccesses,
     level: "WARN",
     metadata: (access) => {
-        return { exportName: access.exportName, file: access.file, line: access.line, method: access.method };
+        return { ...callSiteMetadata(access.scope), file: access.file, line: access.line, method: access.method };
     },
     name: "container_instance_key_from_user_input",
     remediation: `Derive the container instance key from a server-trusted identity (e.g. \`\${ctx.auth.userId}\`) or a record the caller owns — never pass request input straight to \`ctx.containers.<name>.get\`.`,

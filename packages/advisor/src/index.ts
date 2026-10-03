@@ -132,6 +132,7 @@ export type { AdvisorArgumentValidator } from "./argument-validators";
 export type { AdvisorAuthConfig } from "./auth-config";
 export type { AdvisorAuthApiCall } from "./authapi-calls";
 export type { AdvisorBrowserUrlAccess } from "./browser-url-accesses";
+export type { AdvisorCallSiteScope } from "./call-site-scope";
 export type { AdvisorConfigCall } from "./config-calls";
 export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";

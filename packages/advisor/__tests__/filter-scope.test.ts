@@ -22,7 +22,7 @@ const schema = () =>
     );
 
 const read = (table: string, overrides: Partial<AdvisorQueryRead> = {}): AdvisorQueryRead => {
-    return { exportName: "list", file: "access", hasFilter: true, hasIndex: false, line: 7, table, ...overrides };
+    return { scope: { kind: "export", name: "list" }, file: "access", hasFilter: true, hasIndex: false, line: 7, table, ...overrides };
 };
 
 describe("filter_without_index storage-tier awareness", () => {

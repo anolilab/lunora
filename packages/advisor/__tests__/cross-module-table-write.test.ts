@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorInsertWrite, LintContext } from "../src";
+import type { AdvisorInsertWrite, AdvisorTableWrite, LintContext } from "../src";
 import { fromServerSchema } from "../src";
 import crossModuleTableWrite from "../src/lints/static/cross-module-table-write";
 
@@ -18,7 +18,7 @@ const MODULES = [
 ];
 
 const insert = (file: string, table = "invoices"): AdvisorInsertWrite => {
-    return { exportName: "create", file, line: 3, table };
+    return { scope: { kind: "export", name: "create" }, file, line: 3, table };
 };
 
 describe("cross_module_table_write", () => {
@@ -78,10 +78,10 @@ describe("cross_module_table_write", () => {
     it("counts by-id and facade writes, and reports a function once per table", () => {
         expect.assertions(2);
 
-        const tableWrites = [
-            { exportName: "create", file: "accounts/signup", line: 4, method: "patch", table: "invoices" },
-            { exportName: "create", file: "accounts/signup", line: 5, method: "delete", table: "invoices" },
-            { exportName: "close", file: "accounts/close", line: 2, method: "upsert", table: "invoices" },
+        const tableWrites: AdvisorTableWrite[] = [
+            { file: "accounts/signup", line: 4, method: "patch", scope: { kind: "export", name: "create" }, table: "invoices" },
+            { file: "accounts/signup", line: 5, method: "delete", scope: { kind: "export", name: "create" }, table: "invoices" },
+            { file: "accounts/close", line: 2, method: "upsert", scope: { kind: "export", name: "close" }, table: "invoices" },
         ];
         const findings = crossModuleTableWrite.run(context({ modules: MODULES, tableWrites }));
 
@@ -89,35 +89,52 @@ describe("cross_module_table_write", () => {
         expect(findings[0]?.detail).toContain("writes to `invoices`");
     });
 
-    it("flags a write in a helper no export calls, named by the helper rather than an empty export", () => {
+    it("reports a write in a shared helper once, naming the helper and the exports calling it", () => {
         expect.assertions(3);
+
+        const scope = { callers: ["signupTransitive", "signupViaHelper"], kind: "helper" as const, name: "openInvoice" };
+        const findings = crossModuleTableWrite.run(
+            context({
+                modules: MODULES,
+                tableWrites: [
+                    { file: "accounts/signup", line: 9, method: "patch", scope, table: "invoices" },
+                    { file: "accounts/signup", line: 10, method: "delete", scope, table: "invoices" },
+                ],
+            }),
+        );
+
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["cross_module_table_write:accounts/signup:openInvoice:invoices"]);
+        expect(findings[0]?.detail).toBe(
+            "`openInvoice` (a helper called by `signupTransitive`, `signupViaHelper`) (accounts/signup) writes to `invoices`, which module `billing` owns, from module `accounts`.",
+        );
+        expect(findings[0]?.metadata).toStrictEqual({
+            callers: ["signupTransitive", "signupViaHelper"],
+            file: "accounts/signup",
+            helper: "openInvoice",
+            owner: "billing",
+            table: "invoices",
+            writer: "accounts",
+        });
+    });
+
+    it("still flags a write in a helper no export calls, and keys module scope without a line", () => {
+        expect.assertions(2);
 
         const findings = crossModuleTableWrite.run(
             context({
                 modules: MODULES,
                 tableWrites: [
-                    { exportName: "", file: "accounts/signup", helper: "voidInvoice", line: 9, method: "delete", table: "invoices" },
-                    { exportName: "", file: "accounts/signup", helper: "voidInvoice", line: 10, method: "patch", table: "invoices" },
-                    { exportName: "", file: "accounts/boot", line: 2, method: "patch", table: "invoices" },
+                    { file: "accounts/signup", line: 9, method: "delete", scope: { callers: [], kind: "helper", name: "voidInvoice" }, table: "invoices" },
+                    { file: "accounts/boot", line: 2, method: "patch", scope: { kind: "module" }, table: "invoices" },
                 ],
             }),
         );
 
+        // Line-free keys: a saved dismissal survives the code moving.
         expect(findings.map((finding) => finding.cacheKey)).toStrictEqual([
             "cross_module_table_write:accounts/signup:voidInvoice:invoices",
-            "cross_module_table_write:accounts/boot:line 2:invoices",
+            "cross_module_table_write:accounts/boot:<module>:invoices",
         ]);
-        expect(findings[0]?.detail).toBe(
-            "`voidInvoice` (accounts/signup, a non-exported helper no exported function calls) writes to `invoices`, which module `billing` owns, from module `accounts`.",
-        );
-        expect(findings[0]?.metadata).toStrictEqual({
-            exportName: "",
-            file: "accounts/signup",
-            helper: "voidInvoice",
-            line: 9,
-            owner: "billing",
-            table: "invoices",
-            writer: "accounts",
-        });
+        expect(findings[0]?.detail).toContain("`voidInvoice` (a non-exported helper no exported function calls)");
     });
 });

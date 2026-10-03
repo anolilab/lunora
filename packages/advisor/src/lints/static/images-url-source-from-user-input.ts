@@ -1,6 +1,7 @@
 import type { AdvisorImageDeliveryUrlAccess } from "../../image-delivery-url-accesses";
 import type { Lint } from "../../types";
 import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a `buildImageDeliveryUrl({ key, … })` call (`@lunora/bindings/images`)
@@ -25,12 +26,12 @@ const imagesUrlSourceFromUserInput: Lint = makeArgumentDerivedSinkLint<AdvisorIm
     description:
         "A `buildImageDeliveryUrl({ key, … })` call's `key` — the CDN transform's source image, an absolute URL or an origin-relative key — is derived from the handler's `args` with no server-side scoping, so any caller can point the CDN's on-the-fly transform at an attacker-chosen origin (SSRF / open proxy) or an arbitrary key under the account's own store.",
     detail: (access) =>
-        `\`buildImageDeliveryUrl\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) builds its delivery URL from a \`key\` derived from \`args\` with no server-side scoping — any caller can point the CDN's on-the-fly transform at an attacker-chosen origin or store key. Validate \`key\` against an allowlist, or derive it from server-trusted state.`,
+        `\`buildImageDeliveryUrl\` in \`${callSiteLabel(access.scope)}\` (${access.file}:${access.line.toString()}) builds its delivery URL from a \`key\` derived from \`args\` with no server-side scoping — any caller can point the CDN's on-the-fly transform at an attacker-chosen origin or store key. Validate \`key\` against an allowlist, or derive it from server-trusted state.`,
     facing: "EXTERNAL",
     getAccesses: (context) => context.imageDeliveryUrlAccesses,
     level: "WARN",
     metadata: (access) => {
-        return { exportName: access.exportName, file: access.file, line: access.line };
+        return { ...callSiteMetadata(access.scope), file: access.file, line: access.line };
     },
     name: "images_url_source_from_user_input",
     remediation:

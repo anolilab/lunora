@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `ctx.ai.run(model, …)` call whose model-id argument is derived from the
  * handler's `args` with no server-side scoping — the input the
@@ -12,10 +14,10 @@
  * so the lint finds nothing there.
  */
 export interface AdvisorAiRawRun {
-    /** The exported binding name of the procedure performing the `ctx.ai.run` call. */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** 1-based line of the `ctx.ai.run` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 }

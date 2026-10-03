@@ -1,6 +1,7 @@
 import emit from "../../finding";
 import type { AdvisorStorageUpload } from "../../storage-uploads";
 import type { Lint } from "../../types";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /** The two `ctx.storage` URL signers whose `expiresInSeconds` shares R2/S3's 7-day ceiling. */
 const SIGNER_METHODS = new Set(["getPresignedUrl", "getSignedUrl"]);
@@ -71,7 +72,7 @@ const storagePresignedUrlForPrivateContent: Lint = {
             .map((row) => {
                 const native = isNativePresignedCall(row);
                 const nearCeiling = isNearExpiryCeiling(row);
-                const location = `\`${row.exportName}\` (${row.file}:${row.line.toString()})`;
+                const location = `\`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()})`;
 
                 let detail: string;
 
@@ -88,7 +89,7 @@ const storagePresignedUrlForPrivateContent: Lint = {
                     detail,
                     metadata: {
                         expiresInSeconds: row.expiresInSeconds,
-                        exportName: row.exportName,
+                        ...callSiteMetadata(row.scope),
                         file: row.file,
                         line: row.line,
                         method: row.method,

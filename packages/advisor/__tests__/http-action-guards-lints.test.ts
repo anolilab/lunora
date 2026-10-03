@@ -10,13 +10,13 @@ const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: 
 
 const rows: AdvisorHttpActionGuard[] = [
     // httpAction that mutates without reading ctx.auth → flagged.
-    { exportName: "webhook", file: "hook", kind: "httpAction", line: 3, readsAuth: false, sideEffect: "runMutation" },
+    { scope: { kind: "export", name: "webhook" }, file: "hook", kind: "httpAction", line: 3, readsAuth: false, sideEffect: "runMutation" },
     // httpAction that reads ctx.auth → not flagged.
-    { exportName: "guarded", file: "guarded", kind: "httpAction", line: 5, readsAuth: true, sideEffect: "runMutation" },
+    { scope: { kind: "export", name: "guarded" }, file: "guarded", kind: "httpAction", line: 5, readsAuth: true, sideEffect: "runMutation" },
     // typed httpRoute POST that writes to ctx.db without auth → flagged, carries the verb.
-    { exportName: "submit", file: "route", kind: "httpRoute", line: 7, method: "POST", readsAuth: false, sideEffect: "db.insert" },
+    { scope: { kind: "export", name: "submit" }, file: "route", kind: "httpRoute", line: 7, method: "POST", readsAuth: false, sideEffect: "db.insert" },
     // typed httpRoute that reads ctx.auth → not flagged.
-    { exportName: "safe", file: "route", kind: "httpRoute", line: 12, method: "PUT", readsAuth: true, sideEffect: "runAction" },
+    { scope: { kind: "export", name: "safe" }, file: "route", kind: "httpRoute", line: 12, method: "PUT", readsAuth: true, sideEffect: "runAction" },
 ];
 
 describe("http_action_missing_auth_guard", () => {

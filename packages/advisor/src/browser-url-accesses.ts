@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `ctx.browser.<method>(url, …)` call whose navigation URL (`arguments[0]`)
  * is derived from the handler's `args` with no server-side scoping — the input
@@ -11,12 +13,12 @@
  * there.
  */
 export interface AdvisorBrowserUrlAccess {
-    /** The exported binding name of the procedure performing the `ctx.browser` call. */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** 1-based line of the `ctx.browser` call, or `0` when unknown. */
     line: number;
     /** The browser method invoked: `content` / `pdf` / `scrape` / `screenshot`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 }

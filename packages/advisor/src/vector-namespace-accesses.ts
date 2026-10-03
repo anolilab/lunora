@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `ctx.vectors.<method>(indexName, input)` call whose `input.namespace` is
  * derived from the handler's `args` with no server-side scoping — the input the
@@ -11,12 +13,12 @@
  * the lint finds nothing there.
  */
 export interface AdvisorVectorNamespaceAccess {
-    /** The exported binding name of the procedure performing the `ctx.vectors` access. */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** 1-based line of the `ctx.vectors` call, or `0` when unknown. */
     line: number;
     /** The `ctx.vectors` method invoked: `query` / `upsert` / `upsertNow`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 }

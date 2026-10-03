@@ -1,7 +1,7 @@
 import type { AdvisorFailOpenGuard } from "../../fail-open-guards";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { matchesNamePhrase } from "../helpers";
+import { callSiteCallers, callSiteLabel, callSiteMetadata, matchesNamePhrase } from "../helpers";
 
 /**
  * Auth/payment-sensitive flow phrases. A guard on a procedure whose export name
@@ -20,7 +20,8 @@ const SENSITIVE_PHRASES = ["signin", "signIn", "signup", "signUp", "login", "log
 
 /** Whether either the guarded procedure's export name or its rate-limit `name` looks auth/payment-sensitive. */
 const guardsSensitiveFlow = (row: AdvisorFailOpenGuard): boolean =>
-    matchesNamePhrase(row.exportName, SENSITIVE_PHRASES) || matchesNamePhrase(row.limitName, SENSITIVE_PHRASES);
+    [callSiteLabel(row.scope), ...callSiteCallers(row.scope)].some((name) => matchesNamePhrase(name, SENSITIVE_PHRASES)) ||
+    matchesNamePhrase(row.limitName, SENSITIVE_PHRASES);
 
 /**
  * Flags a `rateLimit`/`dbRateLimit`/`verifyTurnstileMiddleware` guard configured
@@ -58,8 +59,8 @@ const ratelimitMiddlewareFailOpen: Lint = {
             .map((row) =>
                 emit(ratelimitMiddlewareFailOpen, {
                     cacheKey: `ratelimit_middleware_fail_open:${row.file}:${row.line.toString()}`,
-                    detail: `\`${row.callee}(...)\` in \`${row.exportName}\` (${row.file}:${row.line.toString()}) sets \`failOpen: true\` while guarding a sensitive flow — a limiter/siteverify outage then admits every request instead of rejecting it.`,
-                    metadata: { callee: row.callee, exportName: row.exportName, file: row.file, limitName: row.limitName, line: row.line },
+                    detail: `\`${row.callee}(...)\` in \`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()}) sets \`failOpen: true\` while guarding a sensitive flow — a limiter/siteverify outage then admits every request instead of rejecting it.`,
+                    metadata: { callee: row.callee, ...callSiteMetadata(row.scope), file: row.file, limitName: row.limitName, line: row.line },
                 }),
             );
     },

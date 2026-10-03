@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 const containerRuntimeEgressRelaxation: Lint = {
     categories: ["SECURITY"],
@@ -22,8 +23,8 @@ const containerRuntimeEgressRelaxation: Lint = {
             .map((override) =>
                 emit(containerRuntimeEgressRelaxation, {
                     cacheKey: `container_runtime_egress_relaxation:${override.file}:${override.line.toString()}`,
-                    detail: `\`${override.exportName}\` calls \`.egress.${override.detail}(...)\` at runtime, mutating the container's egress firewall.`,
-                    metadata: { exportName: override.exportName, file: override.file, line: override.line, method: override.detail },
+                    detail: `\`${callSiteLabel(override.scope)}\` calls \`.egress.${override.detail}(...)\` at runtime, mutating the container's egress firewall.`,
+                    metadata: { ...callSiteMetadata(override.scope), file: override.file, line: override.line, method: override.detail },
                 }),
             );
     },

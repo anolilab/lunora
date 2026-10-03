@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a `createAuth({...})` call with `emailAndPassword.enabled: true` and no
@@ -36,8 +37,8 @@ const authEmailVerificationDisabled: Lint = {
             .map((config) =>
                 emit(authEmailVerificationDisabled, {
                     cacheKey: `auth_email_verification_disabled:${config.file}:${config.line.toString()}`,
-                    detail: `\`createAuth\` in \`${config.exportName}\` (${config.file}:${config.line.toString()}) enables \`emailAndPassword\` with no \`requireEmailVerification: true\`, so an account is usable before its email is proven. Set \`emailAndPassword.requireEmailVerification: true\`.`,
-                    metadata: { exportName: config.exportName, file: config.file, line: config.line },
+                    detail: `\`createAuth\` in \`${callSiteLabel(config.scope)}\` (${config.file}:${config.line.toString()}) enables \`emailAndPassword\` with no \`requireEmailVerification: true\`, so an account is usable before its email is proven. Set \`emailAndPassword.requireEmailVerification: true\`.`,
+                    metadata: { ...callSiteMetadata(config.scope), file: config.file, line: config.line },
                 }),
             );
     },

@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One tracked `ctx.storage.<bucket>.<method>(...)` upload/signing call — the
  * shared input for the storage config-hygiene security lints
@@ -16,8 +18,6 @@ export interface AdvisorStorageUpload {
     analyzable: boolean;
     /** Numeric literal value of an `expiresInSeconds` option, when statically known (`getSignedUrl` / `getPresignedUrl` only). */
     expiresInSeconds?: number;
-    /** The exported binding name of the procedure performing the call. */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** 1-based line of the call, or `0` when unknown. */
@@ -26,4 +26,6 @@ export interface AdvisorStorageUpload {
     method: "generateUploadUrl" | "getPresignedUrl" | "getSignedUrl" | "store" | "upload";
     /** Options-object keys present at the call site (empty when not `analyzable`, or when no options argument was passed). */
     presentKeys: string[];
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 }

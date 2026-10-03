@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `ctx.kv.<method>(key, …)` call whose namespace key is derived from the
  * handler's `args` with no server-side scoping — the input the
@@ -11,14 +13,14 @@
  * there.
  */
 export interface AdvisorKvKeyAccess {
-    /** The exported binding name of the procedure performing the `ctx.kv` access. */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** 1-based line of the `ctx.kv` call, or `0` when unknown. */
     line: number;
     /** The `ctx.kv` method invoked: `get` / `getRaw` / `getWithMetadata` / `put` / `delete`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 
     /**
      * Visibility of the enclosing procedure. `internal` procedures are not

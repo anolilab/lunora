@@ -1,6 +1,7 @@
 import type { Lint } from "../../types";
 import type { AdvisorVectorNamespaceAccess } from "../../vector-namespace-accesses";
 import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
+import { callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a `ctx.vectors.query`/`upsert`/`upsertNow` call whose `namespace`
@@ -26,12 +27,12 @@ const vectorsNamespaceFromUserInput: Lint = makeArgumentDerivedSinkLint<AdvisorV
     description:
         "A `ctx.vectors.query`/`upsert`/`upsertNow` call uses a `namespace` derived from the handler's `args` with no server-side scoping. A Vectorize namespace partitions one index into isolated sub-collections, so an unscoped namespace lets any caller read or poison another tenant's vectors.",
     detail: (access) =>
-        `\`ctx.vectors.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) uses a Vectorize namespace derived from \`args\` with no server-side scoping — any caller can read or poison another tenant's vectors. Derive the namespace from a server-trusted identity (e.g. \`\${ctx.auth.orgId}\`), never from \`args\`.`,
+        `\`ctx.vectors.${access.method}\` in \`${callSiteLabel(access.scope)}\` (${access.file}:${access.line.toString()}) uses a Vectorize namespace derived from \`args\` with no server-side scoping — any caller can read or poison another tenant's vectors. Derive the namespace from a server-trusted identity (e.g. \`\${ctx.auth.orgId}\`), never from \`args\`.`,
     facing: "EXTERNAL",
     getAccesses: (context) => context.vectorNamespaceAccesses,
     level: "WARN",
     metadata: (access) => {
-        return { exportName: access.exportName, file: access.file, line: access.line, method: access.method };
+        return { ...callSiteMetadata(access.scope), file: access.file, line: access.line, method: access.method };
     },
     name: "vectors_namespace_from_user_input",
     remediation: `Derive the \`namespace\` from a server-trusted identity (e.g. \`\${ctx.auth.orgId}\`), never from \`args\`.`,
