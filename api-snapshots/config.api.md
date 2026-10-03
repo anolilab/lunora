@@ -2256,6 +2256,7 @@ interface WranglerConfig {
     images?: {
         binding?: string;
     };
+    k2?: ReadonlyArray<unknown>;
     kv_namespaces?: ReadonlyArray<{
         binding?: string;
         id?: string;
