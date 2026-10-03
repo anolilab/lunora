@@ -18,28 +18,41 @@ const CAS_ATTEMPTS = 5;
  */
 const PROVIDER_OWNED_FIELDS = ["bytesWritten", "ETag", "id", "name", "size", "status"] as const satisfies ReadonlyArray<keyof File>;
 
-/**
- * The metadata key `@visulima/storage`'s chunked-REST handler keeps its list of
- * received chunks under. The handler adds a chunk to it BEFORE the provider
- * stores (or refuses) the chunk, and decides from the list alone whether the
- * upload is complete. So the provider never stores the list, and answers it
- * from its own offset instead: see {@link withStoredChunks}. This works around
- * visulima/visulima#892 (https://github.com/visulima/visulima/issues/892) and
- * can go once that is fixed upstream.
+/*
+ * visulima/visulima#892 — the chunked-REST chunk list. Four pieces:
+ * `CHUNKS_KEY`, `withStoredChunks` (answers the list on `get`), `withoutChunks`
+ * and the stripping in `save` (never stores it).
+ *
+ * `@visulima/storage`'s chunked-REST handler keeps the chunks it has received
+ * in the upload's metadata (`_chunks`) and decides from that list alone whether
+ * the upload is complete. 2.0.25 records a chunk only after the provider's
+ * write succeeds, which fixes #892 for a refused chunk. It still misses a chunk
+ * whose body was cut off mid-request: the write fails, so the chunk is never
+ * recorded, but this provider keeps the bytes that arrived (as TUS requires)
+ * and the client resumes from the offset `HEAD` reports. The list then has a
+ * hole at the start and the upload is never reported complete. So the provider
+ * answers the list from what it has actually stored, `[0, bytesWritten)`, and
+ * never stores the handler's version. Drop all four pieces once upstream
+ * derives completion from the provider's offset.
  */
+
+/** The metadata key the chunked-REST handler keeps its received chunks under (visulima/visulima#892). */
 const CHUNKS_KEY = "_chunks";
 
 /** The metadata flag the chunked-REST create sets on an upload. */
 const CHUNKED_UPLOAD_KEY = "_chunkedUpload";
 
+const isChunkedUpload = (file: FileRecord): boolean => file.metadata[CHUNKED_UPLOAD_KEY] === true;
+
 /**
- * The record with the chunked-REST chunk list it can vouch for: the one run of
- * bytes the provider has stored, `[0, bytesWritten)`. A chunk the provider
- * refused (out of order, or overlapping what is stored) therefore never counts
- * towards completion, in the `PATCH` that follows or in a `HEAD`.
+ * The record with the chunk list this provider can vouch for: the one run of
+ * bytes it has stored, `[0, bytesWritten)` (visulima/visulima#892).
+ *
+ * `Object.fromEntries` rather than a spread: `@typescript-eslint/no-misused-spread`
+ * rejects spreading `metadata`, whose declared type is a class.
  */
 const withStoredChunks = (file: FileRecord): FileRecord => {
-    if (file.metadata[CHUNKED_UPLOAD_KEY] !== true) {
+    if (!isChunkedUpload(file)) {
         return file;
     }
 
@@ -49,14 +62,21 @@ const withStoredChunks = (file: FileRecord): FileRecord => {
     return { ...file, metadata: Object.fromEntries([...Object.entries(file.metadata), [CHUNKS_KEY, chunks]]) };
 };
 
-/** The record without the chunked-REST chunk list, which is never stored. */
+/**
+ * A chunked-REST record without the chunk list, which is never stored
+ * (visulima/visulima#892). Any other upload keeps a metadata key of that name.
+ */
 const withoutChunks = (file: FileRecord): FileRecord => {
-    if (!(CHUNKS_KEY in file.metadata)) {
+    if (!isChunkedUpload(file) || !(CHUNKS_KEY in file.metadata)) {
         return file;
     }
 
     return { ...file, metadata: Object.fromEntries(Object.entries(file.metadata).filter(([key]) => key !== CHUNKS_KEY)) };
 };
+
+/** Two records that differ at most in `modifiedAt`, which every `update()` bumps. */
+const sameRecord = (a: FileRecord, b: FileRecord): boolean =>
+    JSON.stringify({ ...a, modifiedAt: undefined }) === JSON.stringify({ ...b, modifiedAt: undefined });
 
 interface StoredState {
     etag: string;
@@ -105,7 +125,8 @@ class R2UploadStateStore extends MetaStorage {
 
     /**
      * Compare-and-swap loop: read, `change`, write on the etag read. `change`
-     * may throw to give up (a lost lease, say).
+     * may throw to give up (a lost lease, say), or answer the state it was
+     * given to write nothing.
      */
     public async swap(id: string, change: (state: UploadState) => UploadState): Promise<UploadState> {
         for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt += 1) {
@@ -117,6 +138,10 @@ class R2UploadStateStore extends MetaStorage {
             }
 
             const next = change(stored.state);
+
+            if (next === stored.state) {
+                return next;
+            }
 
             // eslint-disable-next-line no-await-in-loop -- see above
             const etag = await this.write(id, next, stored.etag);
@@ -145,7 +170,11 @@ class R2UploadStateStore extends MetaStorage {
      * the caller's changes the base way, then saves. This lays that record over
      * the current state under a compare-and-swap, keeping the progress fields
      * from the stored record, so a metadata update can never rewind an upload.
-     * The chunked-REST chunk list is dropped: `get` derives it.
+     *
+     * The chunked-REST chunk list is dropped: `get` derives it
+     * (visulima/visulima#892). That makes the handler's per-chunk list update
+     * a no-op apart from `modifiedAt`, so a record that differs in nothing
+     * else is not written: no conditional put on every chunk.
      */
     public override async save(id: string, file: File): Promise<File> {
         const next = await this.swap(id, (state) => {
@@ -154,6 +183,10 @@ class R2UploadStateStore extends MetaStorage {
 
             for (const field of PROVIDER_OWNED_FIELDS) {
                 (record as Record<string, unknown>)[field] = state.file[field];
+            }
+
+            if (sameRecord(record, state.file)) {
+                return state;
             }
 
             return { ...state, file: record };

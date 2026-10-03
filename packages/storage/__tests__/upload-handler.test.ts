@@ -9,11 +9,12 @@
  * is gated by RLS (denied uploads are rejected, no admin gating involved).
  */
 import { MemoryStorage } from "@visulima/storage/provider/memory";
-import { createTusAdapter, UploadControl } from "@visulima/storage-client";
+import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
 import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
+import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
 
 const ENDPOINT = "https://test.local/upload";
 const B64 = (value: string): string => Buffer.from(value).toString("base64");
@@ -129,9 +130,14 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         wire.restore();
 
         expect(result.bytesWritten ?? 0).toBe(2_000_000);
-        // Progress is monotonic and reaches 100.
-        expect(progress.at(-1)).toBe(100);
+        // Progress is live and monotonic. It stops one chunk short of 100:
+        // `@visulima/storage`'s TUS handler answers the completing PATCH with
+        // 200, the client accepts only 204, so it re-reads the offset with HEAD
+        // and finishes without a last progress event. (2.0.24's MemoryStorage
+        // marked an upload complete early and hid this.)
         expect(progress.length).toBeGreaterThan(1);
+        expect(progress).toStrictEqual(progress.toSorted((a, b) => a - b));
+        expect(progress.at(-1)).toBeGreaterThan(90);
         // The upload went through the RLS route (POST create + PATCH chunks), never an admin path.
         expect(wire.requests.some((entry) => entry.method === "POST")).toBe(true);
         expect(wire.requests.some((entry) => entry.method === "PATCH")).toBe(true);
@@ -181,7 +187,7 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 
             expect(created.status).toBe(200);
 
-            const { id } = await created.json();
+            const { id } = await created.json<{ id: string }>();
 
             return id;
         };
@@ -270,7 +276,9 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         const cut = 100 * 1024;
         const first = await driver.patch(location, 0, bytes.slice(0, cut));
 
-        expect(first.status).toBe(200);
+        // A partial chunk is 204; the one that completes the upload is 200.
+        // (2.0.24's MemoryStorage completed the upload early: 200 here, then 204.)
+        expect(first.status).toBe(204);
         expect(Number(first.headers.get("upload-offset"))).toBe(cut);
 
         // A HEAD while paused still reports the persisted offset — resume anchor.
@@ -279,7 +287,7 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         // "Resume": finish from the reported offset.
         const rest = await driver.patch(location, cut, bytes.slice(cut));
 
-        expect(rest.status).toBe(204);
+        expect(rest.status).toBe(200);
         expect(Number(rest.headers.get("upload-offset"))).toBe(total);
     });
 
@@ -304,7 +312,8 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 
         const finished = await driver.patch(location, resumeOffset, bytes.slice(resumeOffset));
 
-        expect(finished.status).toBe(204);
+        // The completing chunk answers 200 (a partial one 204).
+        expect(finished.status).toBe(200);
         expect(Number(finished.headers.get("upload-offset"))).toBe(total);
     });
 
@@ -740,58 +749,89 @@ describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
 });
 
 describe("createUploadHandler chunked REST", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("uploads a file end to end: POST init, two in-order PATCHes, HEAD reports it complete (visulima/visulima#884)", async () => {
         expect.hasAssertions();
 
         // `@visulima/storage` 2.0.8 to 2.0.22 answered every chunked-REST PATCH
         // with 400: its create never marked the upload as chunked.
         const storage = new MemoryStorage({ path: "/upload" });
-        const handler = createUploadHandler({ protocol: "chunked-rest", silent: true, storage });
+        const driver = chunkedRest(createUploadHandler({ protocol: "chunked-rest", silent: true, storage }));
         const bytes = new TextEncoder().encode("0123456789");
+        const location = await driver.create(bytes.byteLength, "text/plain");
 
-        const created = await handler.fetch(
-            new Request(ENDPOINT, {
-                headers: { "content-type": "text/plain", "x-chunked-upload": "true", "x-total-size": String(bytes.byteLength) },
-                method: "POST",
-            }),
-        );
-
-        expect(created.status).toBe(201);
-        expect(created.headers.get("x-chunked-upload")).toBe("true");
-
-        const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
-        const patch = async (offset: number, chunk: Uint8Array<ArrayBuffer>): Promise<Response> =>
-            handler.fetch(
-                new Request(location, {
-                    body: chunk,
-                    headers: { "content-length": String(chunk.byteLength), "content-type": "application/octet-stream", "x-chunk-offset": String(offset) },
-                    method: "PATCH",
-                }),
-            );
-
-        const first = await patch(0, bytes.slice(0, 5));
+        const first = await driver.patch(location, 0, bytes.slice(0, 5));
 
         expect(first.status).toBe(202);
         expect(first.headers.get("x-upload-offset")).toBe("5");
         expect(first.headers.get("x-upload-complete")).toBe("false");
 
-        const second = await patch(5, bytes.slice(5));
+        const second = await driver.patch(location, 5, bytes.slice(5));
 
         expect(second.status).toBe(200);
         expect(second.headers.get("x-upload-offset")).toBe("10");
         expect(second.headers.get("x-upload-complete")).toBe("true");
 
-        const head = await handler.fetch(new Request(location, { method: "HEAD" }));
+        const head = await driver.head(location);
 
         expect(head.status).toBe(200);
         expect(head.headers.get("x-upload-complete")).toBe("true");
         expect(head.headers.get("x-upload-offset")).toBe("10");
 
         // Read back from the provider: the upload route itself is write-only.
-        const id = (location.split("/").pop() ?? "").replace(/\.[^.]*$/u, "");
-        const stored = await storage.get({ id });
+        const stored = await storage.get({ id: uploadId(location) });
 
         expect(Buffer.from(stored.content).toString()).toBe("0123456789");
+    });
+
+    it("stores chunks sent out of order at their offsets (visulima/visulima#893)", async () => {
+        expect.hasAssertions();
+
+        const storage = new MemoryStorage({ path: "/upload" });
+        const driver = chunkedRest(createUploadHandler({ protocol: "chunked-rest", silent: true, storage }));
+        const location = await driver.create(10, "text/plain");
+
+        const second = await driver.patch(location, 5, new TextEncoder().encode("BBBBB"));
+
+        expect(second.status).toBe(202);
+        expect(second.headers.get("x-upload-complete")).toBe("false");
+
+        const first = await driver.patch(location, 0, new TextEncoder().encode("AAAAA"));
+
+        expect(first.status).toBe(200);
+        expect(first.headers.get("x-upload-complete")).toBe("true");
+
+        const stored = await storage.get({ id: uploadId(location) });
+
+        expect(Buffer.from(stored.content).toString()).toBe("AAAAABBBBB");
+    });
+
+    it("lets the bundled client finish a multi-chunk upload through the write-only route (visulima/visulima#895)", async () => {
+        expect.hasAssertions();
+
+        const storage = new MemoryStorage({ path: "/upload" });
+        const route = routedFetch(createUploadHandler({ protocol: "chunked-rest", silent: true, storage }));
+
+        vi.stubGlobal("fetch", route.fetch);
+
+        const bytes = new Uint8Array(40_000).map((_, index) => index % 251);
+        const adapter = createChunkedRestAdapter({ chunkSize: 10_000, endpoint: ENDPOINT, retry: false });
+        const result = await adapter.upload(new File([bytes], "four.bin", { type: "application/octet-stream" }));
+
+        expect(result).toMatchObject({ bytesWritten: 40_000, status: "completed" });
+        expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(4);
+        // The client never asks for the file's bytes. Its four chunks run in
+        // parallel, and over MemoryStorage their `_chunks` updates race, so no
+        // PATCH may report the upload complete; it then tries `/metadata`, gets
+        // 405, and builds the result from what it knows.
+        expect(route.requests.filter((request) => request.startsWith("GET") && !request.endsWith("/metadata"))).toStrictEqual([]);
+
+        const stored = await storage.get({ id: result.id });
+
+        expect(Buffer.from(stored.content).equals(Buffer.from(bytes))).toBe(true);
     });
 
     it("answers PATCH with a Location of <collection>/<id>.<ext>, without the id repeated (2.0.24)", async () => {
