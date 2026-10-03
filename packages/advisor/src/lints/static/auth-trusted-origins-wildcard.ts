@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `createAuth({...})` call whose `trustedOrigins` array literal
@@ -37,8 +37,8 @@ const authTrustedOriginsWildcard: Lint = {
             .map((config) =>
                 emit(authTrustedOriginsWildcard, {
                     cacheKey: `auth_trusted_origins_wildcard:${config.file}:${config.line.toString()}`,
-                    detail: `\`createAuth\` in \`${callSiteLabel(config.scope)}\` (${config.file}:${config.line.toString()}) sets \`trustedOrigins\` to include \`"*"\`, disabling CSRF/origin validation for every request. List the specific origins your deployment serves instead.`,
-                    metadata: { ...callSiteMetadata(config.scope), file: config.file, line: config.line },
+                    detail: `\`createAuth\` in ${callSiteWhere(config)} sets \`trustedOrigins\` to include \`"*"\`, disabling CSRF/origin validation for every request. List the specific origins your deployment serves instead.`,
+                    metadata: { ...callSiteFields(config) },
                 }),
             );
     },

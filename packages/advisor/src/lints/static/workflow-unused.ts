@@ -1,6 +1,6 @@
+import { isReachableSite } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { isReachableSite } from "../helpers";
 
 /**
  * Flags a declared workflow that nothing starts.

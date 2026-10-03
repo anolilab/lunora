@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Level, Lint } from "../../types";
-import { callSiteMetadata, queryReadLocation, shardKindsByTable } from "../helpers";
+import { callSiteFields, queryReadLocation, shardKindsByTable } from "../helpers";
 
 /**
  * How a finding is worded and rated per storage tier — what the read actually
@@ -91,7 +91,7 @@ const unboundedCollect: Lint = {
                     cacheKey: `unbounded_collect:${read.file}:${read.line.toString()}:${read.table}`,
                     detail: `Query on "${read.table}" at ${location} calls .collect() with no index and no filter — ${scope(read.table)}.${subscriptionCost}`,
                     level,
-                    metadata: { ...callSiteMetadata(read.scope), file: read.file, line: read.line, shardKind: shardKind ?? "unknown", table: read.table },
+                    metadata: { ...callSiteFields(read), shardKind: shardKind ?? "unknown", table: read.table },
                 }),
             );
         }

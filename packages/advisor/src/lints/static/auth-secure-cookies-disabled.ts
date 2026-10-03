@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `createAuth({...})` call whose `advanced.useSecureCookies` is
@@ -40,8 +40,8 @@ const authSecureCookiesDisabled: Lint = {
             .map((config) =>
                 emit(authSecureCookiesDisabled, {
                     cacheKey: `auth_secure_cookies_disabled:${config.file}:${config.line.toString()}`,
-                    detail: `\`createAuth\` in \`${callSiteLabel(config.scope)}\` (${config.file}:${config.line.toString()}) sets \`advanced.useSecureCookies: false\`, so the session cookie ships without \`Secure\` even on an HTTPS deployment. Remove the override and let Lunora's secure-by-default posture apply.`,
-                    metadata: { ...callSiteMetadata(config.scope), file: config.file, line: config.line },
+                    detail: `\`createAuth\` in ${callSiteWhere(config)} sets \`advanced.useSecureCookies: false\`, so the session cookie ships without \`Secure\` even on an HTTPS deployment. Remove the override and let Lunora's secure-by-default posture apply.`,
+                    metadata: { ...callSiteFields(config) },
                 }),
             );
     },

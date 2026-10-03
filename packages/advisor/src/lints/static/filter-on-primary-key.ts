@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteMetadata, queryReadLocation } from "../helpers";
+import { callSiteFields, queryReadLocation } from "../helpers";
 
 /**
  * Flags `ctx.db.query("t").filter((d) => d._id === x)` — a full scan for a row
@@ -39,7 +39,7 @@ const filterOnPrimaryKey: Lint = {
                 return emit(filterOnPrimaryKey, {
                     cacheKey: `filter_on_primary_key:${read.file}:${read.line.toString()}:${read.table}`,
                     detail: `Query on "${read.table}" at ${location} filters on \`_id\` — it scans "${read.table}" to find a row \`ctx.db.get(id)\` addresses directly.`,
-                    metadata: { ...callSiteMetadata(read.scope), file: read.file, line: read.line, table: read.table },
+                    metadata: { ...callSiteFields(read), table: read.table },
                 });
             }),
     source: "static",

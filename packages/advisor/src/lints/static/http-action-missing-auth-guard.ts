@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /** Human-readable surface name for a finding's prose. */
 const surfaceLabel = (kind: "httpAction" | "httpRoute", method?: string): string =>
@@ -52,12 +52,10 @@ const httpActionMissingAuthGuard: Lint = {
 
                 return emit(httpActionMissingAuthGuard, {
                     cacheKey: `http_action_missing_auth_guard:${row.file}:${row.line.toString()}`,
-                    detail: `${surface} \`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()}) calls \`ctx.${row.sideEffect}\` but never reads \`ctx.auth\` — an anonymous caller can drive this write. Authenticate the request before the side effect.`,
+                    detail: `${surface} ${callSiteWhere(row)} calls \`ctx.${row.sideEffect}\` but never reads \`ctx.auth\` — an anonymous caller can drive this write. Authenticate the request before the side effect.`,
                     metadata: {
-                        ...callSiteMetadata(row.scope),
-                        file: row.file,
+                        ...callSiteFields(row),
                         kind: row.kind,
-                        line: row.line,
                         sideEffect: row.sideEffect,
                         ...(row.method ? { method: row.method } : {}),
                     },

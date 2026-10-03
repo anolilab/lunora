@@ -1,6 +1,7 @@
+import { callSiteMetadata } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteWhere } from "../helpers";
 
 /**
  * Flags a `ctx.run`/`context.run` back into a Lunora function from inside a
@@ -59,7 +60,7 @@ const privilegedDispatchUnvalidatedPayload: Lint = {
 
                 return emit(privilegedDispatchUnvalidatedPayload, {
                     cacheKey: `privileged_dispatch_unvalidated_payload:${dispatch.file}:${dispatch.line.toString()}`,
-                    detail: `The ${handlerKind} handler \`${callSiteLabel(dispatch.scope)}\` (${dispatch.file}:${dispatch.line.toString()}) forwards its untrusted ${payloadSource} straight into \`${dispatch.targetFile}.${dispatch.targetExport}\`, which is guarded by \`.use(rls(...))\`. The handler runs under the system identity with RLS disabled, so the target's row policy is bypassed — any ownership/identity field the payload controls lets a caller act as another user or write across tenants. Re-derive the identity keys from server-trusted state before dispatching, or route through a function that re-checks the caller.`,
+                    detail: `The ${handlerKind} handler ${callSiteWhere(dispatch)} forwards its untrusted ${payloadSource} straight into \`${dispatch.targetFile}.${dispatch.targetExport}\`, which is guarded by \`.use(rls(...))\`. The handler runs under the system identity with RLS disabled, so the target's row policy is bypassed — any ownership/identity field the payload controls lets a caller act as another user or write across tenants. Re-derive the identity keys from server-trusted state before dispatching, or route through a function that re-checks the caller.`,
                     metadata: {
                         dispatchKind: dispatch.dispatchKind,
                         file: dispatch.file,

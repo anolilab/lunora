@@ -1,7 +1,7 @@
 import emit from "../../finding";
 import type { AdvisorPaymentWebhook } from "../../payment-webhooks";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * The `webhookToleranceSeconds` ceiling above which a replay window is treated as
@@ -49,16 +49,14 @@ const paymentWebhookWideTolerance: Lint = {
         return context.paymentWebhooks
             .filter((row) => isWide(row))
             .map((row) => {
-                const location = `\`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()})`;
+                const location = callSiteWhere(row);
 
                 return emit(paymentWebhookWideTolerance, {
                     cacheKey: `payment_webhook_wide_tolerance:${row.file}:${row.line.toString()}`,
                     detail: `\`${row.callee}\` in ${location} sets \`webhookToleranceSeconds\` to ${(row.toleranceSeconds ?? 0).toString()}s (default 300s). That replay window keeps captured signed events valid long after capture.`,
                     metadata: {
                         callee: row.callee,
-                        ...callSiteMetadata(row.scope),
-                        file: row.file,
-                        line: row.line,
+                        ...callSiteFields(row),
                         toleranceSeconds: row.toleranceSeconds,
                     },
                 });

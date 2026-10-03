@@ -120,6 +120,7 @@ type AdvisorCallSiteScope = {
     callers: ReadonlyArray<string>;
     kind: "helper";
     name: string;
+    untracked?: true;
 } | {
     kind: "export";
     name: string;
@@ -897,6 +898,18 @@ type BaselineComparison = {
 };
 ```
 
+### `CallSiteMetadata` (type)
+
+```ts
+type CallSiteMetadata = {
+    callers: ReadonlyArray<string>;
+    helper: string;
+    untracked?: true;
+} | {
+    exportName: string;
+} | Record<never, never>;
+```
+
 ### `Category` (type)
 
 ```ts
@@ -1255,6 +1268,30 @@ const browserUserUrlWithoutAllowlist: Lint;
 const byCodepoint: (a: string, b: string) => number;
 ```
 
+### `callSiteCallers` (const)
+
+```ts
+const callSiteCallers: (scope: AdvisorCallSiteScope) => ReadonlyArray<string>;
+```
+
+### `callSiteDescription` (const)
+
+```ts
+const callSiteDescription: (scope: AdvisorCallSiteScope) => string;
+```
+
+### `callSiteLabel` (const)
+
+```ts
+const callSiteLabel: (scope: AdvisorCallSiteScope) => string;
+```
+
+### `callSiteMetadata` (const)
+
+```ts
+const callSiteMetadata: (scope: AdvisorCallSiteScope) => CallSiteMetadata;
+```
+
 ### `circularFk` (const)
 
 ```ts
@@ -1429,6 +1466,14 @@ const gradeFromScore: (score: number) => Grade;
 const hardcodedSecret: Lint;
 ```
 
+### `helperRole` (const)
+
+```ts
+const helperRole: (scope: Extract<AdvisorCallSiteScope, {
+    kind: "helper";
+}>) => string;
+```
+
 ### `hotShard` (const)
 
 ```ts
@@ -1481,6 +1526,12 @@ const indexUtilization: Lint;
 
 ```ts
 const insertManyUnsafeUserData: Lint;
+```
+
+### `isReachableSite` (const)
+
+```ts
+const isReachableSite: (scope: AdvisorCallSiteScope) => boolean;
 ```
 
 ### `kvUnscopedUserKeyIdor` (const)
@@ -1661,6 +1712,12 @@ const ratelimitKeySpoofableOrGlobal: Lint;
 
 ```ts
 const ratelimitMiddlewareFailOpen: Lint;
+```
+
+### `readCallSiteCallers` (const)
+
+```ts
+const readCallSiteCallers: (metadata: Readonly<Record<string, unknown>>) => string[];
 ```
 
 ### `relationReferencesUnknownField` (const)

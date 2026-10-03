@@ -1,7 +1,7 @@
 import { moduleOf } from "../../../../../shared/architecture-manifest";
+import { callSiteDescription, callSiteLabel, callSiteMetadata } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteDescription, callSiteLabel, callSiteMetadata } from "../helpers";
 
 /**
  * Flags a function that writes to a table another module declares it owns

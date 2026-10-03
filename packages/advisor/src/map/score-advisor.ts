@@ -1,3 +1,4 @@
+import { readCallSiteCallers } from "../call-site-scope";
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { Finding } from "../types";
 import { coverageFromScore, gradeFromScore, procedureWeight, projectWeight, scoreGlobal, scoreProcedure, weightFor, worstLevel } from "./score";
@@ -27,22 +28,6 @@ const readString = (metadata: Record<string, unknown>, key: string): string | un
     const value = metadata[key];
 
     return typeof value === "string" ? value : undefined;
-};
-
-/**
- * The procedures a finding names: its `exportName`, or — for a finding in a
- * shared helper — the `callers` list of the exports reaching it.
- */
-const readCallers = (metadata: Record<string, unknown>): string[] => {
-    const exportName = readString(metadata, "exportName");
-
-    if (exportName !== undefined) {
-        return [exportName];
-    }
-
-    const { callers } = metadata;
-
-    return Array.isArray(callers) ? callers.filter((caller): caller is string => typeof caller === "string") : [];
 };
 
 /** `file#exportName` — the stable identity shared by procedures and baseline rows. */
@@ -88,7 +73,7 @@ const attributeFindings = (
     for (const finding of findings) {
         const file = readString(finding.metadata, "file");
         // A finding in a shared helper names the exports calling it; each is credited.
-        const callers = readCallers(finding.metadata);
+        const callers = readCallSiteCallers(finding.metadata);
         const owners = file === undefined ? [] : callers.flatMap((exportName) => checksById.get(procedureId(file, exportName)) ?? []);
         const buckets = owners.length === 0 ? [projectChecks] : owners;
 

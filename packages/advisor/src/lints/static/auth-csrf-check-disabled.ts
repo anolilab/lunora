@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `createAuth({...})` call whose `advanced.disableCSRFCheck` is
@@ -38,8 +38,8 @@ const authCsrfCheckDisabled: Lint = {
             .map((config) =>
                 emit(authCsrfCheckDisabled, {
                     cacheKey: `auth_csrf_check_disabled:${config.file}:${config.line.toString()}`,
-                    detail: `\`createAuth\` in \`${callSiteLabel(config.scope)}\` (${config.file}:${config.line.toString()}) sets \`advanced.disableCSRFCheck: true\`, turning off origin validation for state-changing auth requests. Remove the flag and rely on \`trustedOrigins\` instead.`,
-                    metadata: { ...callSiteMetadata(config.scope), file: config.file, line: config.line },
+                    detail: `\`createAuth\` in ${callSiteWhere(config)} sets \`advanced.disableCSRFCheck: true\`, turning off origin validation for state-changing auth requests. Remove the flag and rely on \`trustedOrigins\` instead.`,
+                    metadata: { ...callSiteFields(config) },
                 }),
             );
     },

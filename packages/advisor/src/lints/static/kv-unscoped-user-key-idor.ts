@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `ctx.kv` read/write whose namespace key is derived from the handler's
@@ -34,11 +34,9 @@ const kvUnscopedUserKeyIdor: Lint = {
         }
 
         return context.kvKeyAccesses.map((access) => {
-            const where = `\`ctx.kv.${access.method}\` in \`${callSiteLabel(access.scope)}\` (${access.file}:${access.line.toString()})`;
+            const where = `\`ctx.kv.${access.method}\` in ${callSiteWhere(access)}`;
             const metadata = {
-                ...callSiteMetadata(access.scope),
-                file: access.file,
-                line: access.line,
+                ...callSiteFields(access),
                 method: access.method,
                 visibility: access.visibility ?? "unknown",
             };

@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `ctx.mail`/`ctx.email` `send`/`queue` call whose recipient field
@@ -36,8 +36,8 @@ const mailRecipientFromRequestInput: Lint = {
         return context.mailRecipientAccesses.map((access) =>
             emit(mailRecipientFromRequestInput, {
                 cacheKey: `mail_recipient_from_request_input:${access.file}:${access.line.toString()}`,
-                detail: `\`ctx.mail.${access.method}\` in \`${callSiteLabel(access.scope)}\` (${access.file}:${access.line.toString()}) sets a recipient field (to/cc/bcc) derived from \`args\` with no server-side scoping — any caller can direct mail to an arbitrary address (open relay / spam amplifier). Derive the recipient from server-trusted state instead (e.g. \`ctx.auth.user.email\`).`,
-                metadata: { ...callSiteMetadata(access.scope), file: access.file, line: access.line, method: access.method },
+                detail: `\`ctx.mail.${access.method}\` in ${callSiteWhere(access)} sets a recipient field (to/cc/bcc) derived from \`args\` with no server-side scoping — any caller can direct mail to an arbitrary address (open relay / spam amplifier). Derive the recipient from server-trusted state instead (e.g. \`ctx.auth.user.email\`).`,
+                metadata: { ...callSiteFields(access), method: access.method },
             }),
         );
     },

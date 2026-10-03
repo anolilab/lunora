@@ -30,6 +30,17 @@ describe("table_without_insert", () => {
         expect(run([]).map((finding) => finding.metadata.table)).toStrictEqual(["channels", "messages"]);
     });
 
+    it("ignores an insert in dead code, but counts one reached from code outside any export", () => {
+        expect.assertions(1);
+
+        const inserts: AdvisorInsertWrite[] = [
+            { file: "messages", line: 1, scope: { callers: [], kind: "helper", name: "dead" }, table: "messages" },
+            { file: "channels", line: 1, scope: { callers: [], kind: "helper", name: "viaRoute", untracked: true }, table: "channels" },
+        ];
+
+        expect(run(inserts).map((finding) => finding.metadata.table)).toStrictEqual(["messages"]);
+    });
+
     it("flags only the tables with no discovered insert", () => {
         expect.assertions(2);
 

@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteMetadata, queryReadLocation, shardKindsByTable } from "../helpers";
+import { callSiteFields, queryReadLocation, shardKindsByTable } from "../helpers";
 
 /**
  * Flags a query read that calls `.filter()` without first narrowing with
@@ -41,7 +41,7 @@ const filterWithoutIndex: Lint = {
 
             const location = queryReadLocation(read);
             const shardKind = shardKindByTable.get(read.table);
-            const metadata = { ...callSiteMetadata(read.scope), file: read.file, line: read.line, shardKind: shardKind ?? "unknown", table: read.table };
+            const metadata = { ...callSiteFields(read), shardKind: shardKind ?? "unknown", table: read.table };
             const cacheKey = `filter_without_index:${read.file}:${read.line.toString()}:${read.table}`;
 
             // A `.shardBy()` table's rows are partitioned across Durable Objects

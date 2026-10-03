@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /** `ctx.storage` methods that accept the `UploadOptions` `maxSize` guard. */
 const UPLOAD_METHODS = new Set(["store", "upload"]);
@@ -47,8 +47,8 @@ const storageUploadWithoutMaxSize: Lint = {
             .map((row) =>
                 emit(storageUploadWithoutMaxSize, {
                     cacheKey: `storage_upload_without_max_size:${row.file}:${row.line.toString()}`,
-                    detail: `\`ctx.storage.${row.method}\` in \`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()}) has no \`maxSize\` cap — a caller can push an unbounded body into R2, exhausting storage/billing.`,
-                    metadata: { ...callSiteMetadata(row.scope), file: row.file, line: row.line, method: row.method },
+                    detail: `\`ctx.storage.${row.method}\` in ${callSiteWhere(row)} has no \`maxSize\` cap — a caller can push an unbounded body into R2, exhausting storage/billing.`,
+                    metadata: { ...callSiteFields(row), method: row.method },
                 }),
             );
     },

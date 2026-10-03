@@ -1,6 +1,7 @@
+import { callSiteDescription, callSiteLabel } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteDescription, callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields } from "../helpers";
 
 /**
  * A correctness lint: every `ctx.workflows.get("name")` call must reference a
@@ -38,7 +39,7 @@ const workflowUnknownTarget: Lint = {
                 emit(workflowUnknownTarget, {
                     cacheKey: `workflow_unknown_target:${call.file}:${callSiteLabel(call.scope)}:${call.workflow}`,
                     detail: `\`ctx.workflows.get("${call.workflow}")\` in ${callSiteDescription(call.scope)} (${call.file}) references workflow "${call.workflow}", which is not declared in lunora/workflows.ts.`,
-                    metadata: { ...callSiteMetadata(call.scope), file: call.file, line: call.line, workflow: call.workflow },
+                    metadata: { ...callSiteFields(call), workflow: call.workflow },
                 }),
             );
     },

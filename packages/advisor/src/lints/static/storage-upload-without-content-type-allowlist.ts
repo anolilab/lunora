@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /** `ctx.storage` methods that accept the `UploadOptions` `allowedContentTypes` guard. */
 const UPLOAD_METHODS = new Set(["store", "upload"]);
@@ -44,8 +44,8 @@ const storageUploadWithoutContentTypeAllowlist: Lint = {
             .map((row) =>
                 emit(storageUploadWithoutContentTypeAllowlist, {
                     cacheKey: `storage_upload_without_content_type_allowlist:${row.file}:${row.line.toString()}`,
-                    detail: `\`ctx.storage.${row.method}\` in \`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()}) has no \`allowedContentTypes\` allowlist — any content-type is accepted, including \`text/html\`/\`image/svg+xml\`, a stored-XSS risk if the object is served from \`publicBaseUrl\`.`,
-                    metadata: { ...callSiteMetadata(row.scope), file: row.file, line: row.line, method: row.method },
+                    detail: `\`ctx.storage.${row.method}\` in ${callSiteWhere(row)} has no \`allowedContentTypes\` allowlist — any content-type is accepted, including \`text/html\`/\`image/svg+xml\`, a stored-XSS risk if the object is served from \`publicBaseUrl\`.`,
+                    metadata: { ...callSiteFields(row), method: row.method },
                 }),
             );
     },

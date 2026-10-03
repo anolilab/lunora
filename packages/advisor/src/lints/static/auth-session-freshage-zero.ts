@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `createAuth({...})` call whose `session.freshAge` is explicitly the
@@ -39,8 +39,8 @@ const authSessionFreshageZero: Lint = {
             .map((config) =>
                 emit(authSessionFreshageZero, {
                     cacheKey: `auth_session_freshage_zero:${config.file}:${config.line.toString()}`,
-                    detail: `\`createAuth\` in \`${callSiteLabel(config.scope)}\` (${config.file}:${config.line.toString()}) sets \`session.freshAge: 0\`, disabling the recent-reauth check for sensitive operations. Remove the override or set a real window.`,
-                    metadata: { ...callSiteMetadata(config.scope), file: config.file, line: config.line },
+                    detail: `\`createAuth\` in ${callSiteWhere(config)} sets \`session.freshAge: 0\`, disabling the recent-reauth check for sensitive operations. Remove the override or set a real window.`,
+                    metadata: { ...callSiteFields(config) },
                 }),
             );
     },

@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `ctx.ai.run(model, …)` call whose model-id argument is derived from
@@ -38,8 +38,8 @@ const aiRawRunEscapeHatch: Lint = {
         return context.aiRawRuns.map((access) =>
             emit(aiRawRunEscapeHatch, {
                 cacheKey: `ai_raw_run_escape_hatch:${access.file}:${access.line.toString()}`,
-                detail: `\`ctx.ai.run\` in \`${callSiteLabel(access.scope)}\` (${access.file}:${access.line.toString()}) selects its model from \`args\` with no server-side scoping — any caller can pick an arbitrary model, bypassing the typed AI-SDK layer's cap/schema. Select the model from a fixed server-side allowlist instead.`,
-                metadata: { ...callSiteMetadata(access.scope), file: access.file, line: access.line },
+                detail: `\`ctx.ai.run\` in ${callSiteWhere(access)} selects its model from \`args\` with no server-side scoping — any caller can pick an arbitrary model, bypassing the typed AI-SDK layer's cap/schema. Select the model from a fixed server-side allowlist instead.`,
+                metadata: { ...callSiteFields(access) },
             }),
         );
     },

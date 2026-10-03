@@ -1,7 +1,7 @@
 import emit from "../../finding";
 import type { AdvisorHttpHeaderWrite } from "../../http-header-writes";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /** Human-readable phrasing for how the header was written, for a finding's prose. */
 const VIA_LABELS: Record<AdvisorHttpHeaderWrite["via"], string> = {
@@ -49,12 +49,10 @@ const httpActionResponseHeaderInjection: Lint = {
 
             return emit(httpActionResponseHeaderInjection, {
                 cacheKey: `http_action_response_header_injection:${row.file}:${row.line.toString()}`,
-                detail: `\`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()}) writes ${header} from raw request input via ${VIA_LABELS[row.via]} with no CR/LF guard — a caller can smuggle \`\\r\\n\` to inject headers or split the response. Route the value through \`isSafeHeaderValue\` or \`encodeURIComponent\` first.`,
+                detail: `${callSiteWhere(row)} writes ${header} from raw request input via ${VIA_LABELS[row.via]} with no CR/LF guard — a caller can smuggle \`\\r\\n\` to inject headers or split the response. Route the value through \`isSafeHeaderValue\` or \`encodeURIComponent\` first.`,
                 metadata: {
-                    ...callSiteMetadata(row.scope),
-                    file: row.file,
+                    ...callSiteFields(row),
                     headerName: row.headerName,
-                    line: row.line,
                     via: row.via,
                 },
             });

@@ -1,7 +1,15 @@
-import type { AdvisorCallSiteScope } from "../call-site-scope";
+import type { AdvisorCallSiteScope, CallSiteMetadata } from "../call-site-scope";
+import { callSiteMetadata, helperRole } from "../call-site-scope";
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { AdvisorQueryRead } from "../queries";
 import type { AdvisorSchema, AdvisorTable } from "../schema";
+
+/** A feeder row that names a call site: its scope and where it sits. */
+interface CallSiteRow {
+    file: string;
+    line: number;
+    scope: AdvisorCallSiteScope;
+}
 
 /**
  * Personally-identifiable-information column names. Kept deliberately tight to
@@ -201,80 +209,30 @@ export const queryReadLocation = (read: Pick<AdvisorQueryRead, "file" | "line">)
     read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
 
 /**
- * The name a call-site finding gives the code it sits in — the export, the
- * helper, or `<module>` at module scope. Line-free, so a cache key built from it
- * (and a dismissal saved against that key) survives the code moving; an export's
- * label is its name, exactly as before helpers were attributed.
+ * Where a finding's detail places a call site: `` `send` (messages:12) `` for an
+ * export, `` `openInvoice` (accounts/signup:9; a helper called by `a`, `b`) ``
+ * for a helper — so every lint names the exported functions a helper's site runs
+ * for — and `module scope (boot:2)` at module scope.
  */
-export const callSiteLabel = (scope: AdvisorCallSiteScope): string => {
-    switch (scope.kind) {
-        case "export":
+export const callSiteWhere = (row: CallSiteRow): string => {
+    const at = `${row.file}:${row.line.toString()}`;
+
+    switch (row.scope.kind) {
+        case "export": {
+            return `\`${row.scope.name}\` (${at})`;
+        }
         case "helper": {
-            return scope.name;
+            return `\`${row.scope.name}\` (${at}; ${helperRole(row.scope)})`;
         }
         default: {
-            return "<module>";
+            return `module scope (${at})`;
         }
     }
 };
 
-/** The exported functions a site runs on behalf of: its export, its helper's callers, or none. */
-export const callSiteCallers = (scope: AdvisorCallSiteScope): ReadonlyArray<string> => {
-    switch (scope.kind) {
-        case "export": {
-            return [scope.name];
-        }
-        case "helper": {
-            return scope.callers;
-        }
-        default: {
-            return [];
-        }
-    }
-};
-
-/** Whether any export reaches the site — an orphan helper or module-scope code is dead for a usage lint. */
-export const isReachableSite = (scope: AdvisorCallSiteScope): boolean => callSiteCallers(scope).length > 0;
-
-/**
- * The finding metadata naming a site's code: `exportName` for an export (the key
- * the advisor map attributes a finding to a procedure by), `helper` plus the
- * exports reaching it for a helper — the map credits each — and nothing at
- * module scope.
- */
-export const callSiteMetadata = (scope: AdvisorCallSiteScope): Record<string, ReadonlyArray<string> | string> => {
-    switch (scope.kind) {
-        case "export": {
-            return { exportName: scope.name };
-        }
-        case "helper": {
-            return { callers: scope.callers, helper: scope.name };
-        }
-        default: {
-            return {};
-        }
-    }
-};
-
-/**
- * How a finding's detail names a site's code: `` `send` `` for an export,
- * `` `openInvoice` (a helper called by `a`, `b`) `` for a helper, and
- * `module scope` at module scope.
- */
-export const callSiteDescription = (scope: AdvisorCallSiteScope): string => {
-    switch (scope.kind) {
-        case "export": {
-            return `\`${scope.name}\``;
-        }
-        case "helper": {
-            return scope.callers.length === 0
-                ? `\`${scope.name}\` (a non-exported helper no exported function calls)`
-                : `\`${scope.name}\` (a helper called by ${scope.callers.map((caller) => `\`${caller}\``).join(", ")})`;
-        }
-        default: {
-            return "module scope";
-        }
-    }
+/** A call-site finding's location metadata: its {@link callSiteMetadata} plus `file` and `line`. */
+export const callSiteFields = (row: CallSiteRow): CallSiteMetadata & { file: string; line: number } => {
+    return { ...callSiteMetadata(row.scope), file: row.file, line: row.line };
 };
 
 /**

@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `ctx.sql` tagged-template that splices an unparameterized
@@ -34,8 +34,8 @@ const sqlInjectionRisk: Lint = {
         return context.sqlInterpolations.map((interpolation) =>
             emit(sqlInjectionRisk, {
                 cacheKey: `sql_injection_risk:${interpolation.file}:${interpolation.line.toString()}`,
-                detail: `\`ctx.sql\` in \`${callSiteLabel(interpolation.scope)}\` (${interpolation.file}:${interpolation.line.toString()}) interpolates a string-building expression instead of a bound value — a SQL-injection vector. Pass the value through a bound placeholder so the driver parameterizes it.`,
-                metadata: { ...callSiteMetadata(interpolation.scope), file: interpolation.file, line: interpolation.line },
+                detail: `\`ctx.sql\` in ${callSiteWhere(interpolation)} interpolates a string-building expression instead of a bound value — a SQL-injection vector. Pass the value through a bound placeholder so the driver parameterizes it.`,
+                metadata: { ...callSiteFields(interpolation) },
             }),
         );
     },

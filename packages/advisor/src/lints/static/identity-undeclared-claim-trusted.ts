@@ -1,7 +1,7 @@
 import emit from "../../finding";
 import type { AdvisorIdentityClaimRead } from "../../identity-claim-reads";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags an authorization read of an identity claim that is **not** in the app's
@@ -37,16 +37,14 @@ const identityUndeclaredClaimTrusted: Lint = {
         return context.identityClaimReads
             .filter((row: AdvisorIdentityClaimRead) => !row.declared)
             .map((row) => {
-                const location = `\`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()})`;
+                const location = callSiteWhere(row);
 
                 return emit(identityUndeclaredClaimTrusted, {
                     cacheKey: `identity_undeclared_claim_trusted:${row.file}:${row.line.toString()}:${row.key}`,
                     detail: `\`${row.key}\` in ${location} is read off \`identity\` but is not declared in \`defineIdentity({ ... })\`. Undeclared claims are forwarded unvalidated, so this authorization decision trusts a forgeable value.`,
                     metadata: {
-                        ...callSiteMetadata(row.scope),
-                        file: row.file,
+                        ...callSiteFields(row),
                         key: row.key,
-                        line: row.line,
                     },
                 });
             });

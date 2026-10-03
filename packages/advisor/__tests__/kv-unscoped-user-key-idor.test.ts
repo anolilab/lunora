@@ -29,6 +29,18 @@ describe("kv_unscoped_user_key_idor", () => {
         expect(findings[1]?.cacheKey).toBe("kv_unscoped_user_key_idor:entries:9");
     });
 
+    it("names a helper's exported callers, and keeps ERROR when untracked code reaches it", () => {
+        expect.assertions(2);
+
+        const kvKeyAccesses: AdvisorKvKeyAccess[] = [
+            { file: "files", line: 2, method: "get", scope: { callers: ["internalRead"], kind: "helper", name: "read", untracked: true } },
+        ];
+        const [finding] = kvUnscopedUserKeyIdor.run({ kvKeyAccesses, schema: schema() });
+
+        expect(finding?.level).toBe("ERROR");
+        expect(finding?.detail).toContain("`read` (files:2; a helper called by `internalRead` and by code outside any export)");
+    });
+
     // ERROR is the build-failing tier (`strictAdvisories` defaults on in CI), and
     // "any caller can read/overwrite/delete another user's entry" is false by
     // construction for a procedure no caller can reach. Mirrors the identical

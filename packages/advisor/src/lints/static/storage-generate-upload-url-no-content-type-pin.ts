@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteLabel, callSiteMetadata } from "../helpers";
+import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
  * Flags a `ctx.storage.generateUploadUrl(key, …)` call whose options argument
@@ -46,8 +46,8 @@ const storageGenerateUploadUrlNoContentTypePin: Lint = {
             .map((row) =>
                 emit(storageGenerateUploadUrlNoContentTypePin, {
                     cacheKey: `storage_generate_upload_url_no_content_type_pin:${row.file}:${row.line.toString()}`,
-                    detail: `\`ctx.storage.generateUploadUrl\` in \`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()}) has no \`contentType\` pin — the signed PUT it mints declares no expected type for the serving route to check, and bypasses \`upload()\`'s \`allowedContentTypes\`/\`maxSize\` guards.`,
-                    metadata: { ...callSiteMetadata(row.scope), file: row.file, line: row.line },
+                    detail: `\`ctx.storage.generateUploadUrl\` in ${callSiteWhere(row)} has no \`contentType\` pin — the signed PUT it mints declares no expected type for the serving route to check, and bypasses \`upload()\`'s \`allowedContentTypes\`/\`maxSize\` guards.`,
+                    metadata: { ...callSiteFields(row) },
                 }),
             );
     },

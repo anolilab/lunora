@@ -1,7 +1,8 @@
+import { callSiteCallers, callSiteLabel } from "../../call-site-scope";
 import type { AdvisorFailOpenGuard } from "../../fail-open-guards";
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { callSiteCallers, callSiteLabel, callSiteMetadata, matchesNamePhrase } from "../helpers";
+import { callSiteFields, callSiteWhere, matchesNamePhrase } from "../helpers";
 
 /**
  * Auth/payment-sensitive flow phrases. A guard on a procedure whose export name
@@ -59,8 +60,8 @@ const ratelimitMiddlewareFailOpen: Lint = {
             .map((row) =>
                 emit(ratelimitMiddlewareFailOpen, {
                     cacheKey: `ratelimit_middleware_fail_open:${row.file}:${row.line.toString()}`,
-                    detail: `\`${row.callee}(...)\` in \`${callSiteLabel(row.scope)}\` (${row.file}:${row.line.toString()}) sets \`failOpen: true\` while guarding a sensitive flow — a limiter/siteverify outage then admits every request instead of rejecting it.`,
-                    metadata: { callee: row.callee, ...callSiteMetadata(row.scope), file: row.file, limitName: row.limitName, line: row.line },
+                    detail: `\`${row.callee}(...)\` in ${callSiteWhere(row)} sets \`failOpen: true\` while guarding a sensitive flow — a limiter/siteverify outage then admits every request instead of rejecting it.`,
+                    metadata: { callee: row.callee, ...callSiteFields(row), limitName: row.limitName },
                 }),
             );
     },
