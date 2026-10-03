@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/server";
 import { randomSecret } from "../src/deploy/keys";
 import type { TargetId } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
+import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
@@ -183,6 +184,34 @@ export const remove = internalMutation
             target: domain?.hostname,
         });
     });
+
+/**
+ * Queue the certificates of the domains matching `where` for release, ahead of
+ * deleting those domain rows (`projects.remove`, `organizations.purgeDeleted`).
+ * A mutation cannot reach the issuer, and deleting the row alone would orphan
+ * the certificate — still routing its hostname, and billed per hostname — with
+ * nothing left that names it. The hourly certificate sweep releases each
+ * through the issuer recorded with it, then forgets it.
+ */
+export const queueCertificateReleases = async (
+    context: MutationContext,
+    where: { organizationId: Id<"organizations"> } | { projectId: Id<"projects"> },
+): Promise<void> => {
+    const { page } = await context.db.domains.findMany({ where });
+
+    for (const domain of page) {
+        if (domain.customHostnameId != null && domain.certificateIssuer != null && domain.certificateScope != null) {
+            // eslint-disable-next-line no-await-in-loop -- one scope's domains are few
+            await context.db.insert("certificateReleases", {
+                certificateIssuer: domain.certificateIssuer,
+                certificateScope: domain.certificateScope,
+                customHostnameId: domain.customHostnameId,
+                hostname: domain.hostname,
+                queuedAt: context.now,
+            });
+        }
+    }
+};
 
 /**
  * Record a verification outcome. SYSTEM only — dispatched by the edge verify

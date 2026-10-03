@@ -408,6 +408,7 @@ class AppBuilder<Env extends object> {
             ["builds", { mode: { kind: "global" } }],
             ["buildLogs", { mode: { kind: "global" } }],
             ["domains", { mode: { kind: "global" } }],
+            ["certificateReleases", { mode: { kind: "global" } }],
             ["secrets", { mode: { kind: "global" } }],
             ["tenantBackups", { mode: { kind: "global" } }],
             ["boxes", { mode: { kind: "global" } }],

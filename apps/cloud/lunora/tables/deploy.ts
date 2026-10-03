@@ -282,6 +282,23 @@ export const deployTables = {
         .index("by_hostname", ["hostname"], { unique: true })
         .index("by_project", ["projectId"]),
 
+    // Custom-domain certificates whose domain row is gone — its project deleted
+    // or its organization purged — queued for the hourly certificate sweep to
+    // release through the issuer recorded with them, then forget. A mutation
+    // cannot call the issuer, and a certificate left behind keeps routing its
+    // hostname and is billed per hostname (`src/domains/certificate-sweep.ts`).
+    // Not org-scoped on purpose: it must outlive the organization it came from.
+    certificateReleases: defineTable({
+        attempts: v.optional(v.number()),
+        certificateIssuer: deployTarget,
+        certificateScope: v.string(),
+        customHostnameId: v.string(),
+        hostname: v.string(),
+        // Why the last release failed, as the issuer said it.
+        lastError: v.optional(v.string()),
+        queuedAt: v.number(),
+    }).global(),
+
     // Tenant environment secrets (§7). Stored AES-256-GCM encrypted at the edge
     // (`src/secrets/crypto.ts`) — only ciphertext + IV live here. Materialized +
     // decrypted at deploy time into the tenant Worker's script secrets.

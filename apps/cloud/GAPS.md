@@ -538,7 +538,9 @@ domain that just verified, and the verify route records `customHostnameId` /
 certificate sweep re-reads each certificate through that issuer until it is
 `active`; `POST /v1/domains/remove` releases the custom hostname through that
 issuer — whatever the project's target is by then — before the row goes
-(`domains.remove` is internal). The Domains tab shows the
+(`domains.remove` is internal). Deleting a project or purging an organization
+queues its domains' certificates in `certificateReleases` before the rows go;
+the certificate sweep releases each through its issuer, then forgets it. The Domains tab shows the
 certificate state. Tested against a fake REST port and a stubbed fetch only.
 
 **Still 🌐:** SSL for SaaS enabled on the zone with a fallback origin the

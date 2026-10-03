@@ -263,6 +263,18 @@ export const domains = sqliteTable("domains", {
     by_hostname: uniqueIndex("by_hostname").on(t.hostname),
 }));
 
+export const certificateReleases = sqliteTable("certificateReleases", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    attempts: real("attempts"),
+    certificateIssuer: text("certificateIssuer", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">().notNull(),
+    certificateScope: text("certificateScope").notNull(),
+    customHostnameId: text("customHostnameId").notNull(),
+    hostname: text("hostname").notNull(),
+    lastError: text("lastError"),
+    queuedAt: real("queuedAt").notNull(),
+});
+
 export const secrets = sqliteTable("secrets", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

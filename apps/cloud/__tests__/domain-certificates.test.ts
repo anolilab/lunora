@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "../lunora/_generated/api.js";
 import { recordCertificate, removalTarget, remove } from "../lunora/domains";
+import { purgeDeleted } from "../lunora/organizations";
+import { remove as removeProject } from "../lunora/projects";
 import { certificateBadge } from "../src/client/domains";
 import type { CloudflareApi, CustomHostname } from "../src/cloudflare/api";
 import { createHttpCloudflareApi } from "../src/cloudflare/api";
@@ -27,6 +29,36 @@ import { memoryStore } from "./support/memory-store";
  */
 
 const ZONE = "saas-zone";
+
+/** Every table `organizations.purgeDeleted` reads, so the double answers each. */
+const PURGED_TABLES = [
+    "alertRuleState",
+    "alertRules",
+    "alerts",
+    "aliasOwnership",
+    "auditLog",
+    "boxEnrolments",
+    "boxes",
+    "buildLogs",
+    "builds",
+    "cloudflareAccounts",
+    "dashboards",
+    "deployKeys",
+    "githubInstallations",
+    "incidents",
+    "invitations",
+    "issues",
+    "members",
+    "metricPoints",
+    "observations",
+    "overageDebits",
+    "platformUsage",
+    "projects",
+    "secrets",
+    "tenantLogs",
+    "uptimeChecks",
+    "uptimeState",
+];
 
 /** What a stubbed `fetch` is called with. */
 type FetchInput = Request | string | URL;
@@ -534,7 +566,7 @@ describe(runCertificateSweep, () => {
             now: 100,
         });
 
-        expect(result).toStrictEqual({ checked: 2, failed: 0, issued: 1 });
+        expect(result).toStrictEqual({ checked: 2, failed: 0, issued: 1, released: 0, releaseFailed: 0 });
         expect(refreshed).toStrictEqual(["ch_1", "ch_2"]);
         expect(store.tables["domains"]?.find((row) => row["_id"] === "dom_pending")).toMatchObject({ certificateError: null, certificateStatus: "active" });
         expect(store.tables["domains"]?.find((row) => row["_id"] === "dom_gone")).toMatchObject({
@@ -564,7 +596,102 @@ describe(runCertificateSweep, () => {
             now: 100,
         });
 
-        expect(result).toStrictEqual({ checked: MAX_CERTIFICATES_PER_TICK, failed: MAX_CERTIFICATES_PER_TICK, issued: 0 });
+        expect(result).toStrictEqual({ checked: MAX_CERTIFICATES_PER_TICK, failed: MAX_CERTIFICATES_PER_TICK, issued: 0, released: 0, releaseFailed: 0 });
+    });
+
+    it("releases the queued certificates of deleted domains through their issuer, then forgets them", async () => {
+        const store = memoryStore({
+            certificateReleases: [
+                { _id: "rel_1", ...ISSUED_HERE, customHostnameId: "ch_1", hostname: "a.example.com", queuedAt: 1 },
+                { _id: "rel_2", ...ISSUED_HERE, customHostnameId: "ch_2", hostname: "b.example.com", queuedAt: 2 },
+                // Another cell's zone: its own control plane releases it.
+                {
+                    _id: "rel_3",
+                    certificateIssuer: "cloudflare-wfp",
+                    certificateScope: "other-zone",
+                    customHostnameId: "ch_3",
+                    hostname: "c.example.com",
+                    queuedAt: 0,
+                },
+            ],
+            domains: [],
+        });
+        const released: string[] = [];
+        const result = await runCertificateSweep({
+            database: store,
+            issuerOf: issuerIn({
+                release: (id) => {
+                    if (id === "ch_2") {
+                        return Promise.reject(new Error("upstream down"));
+                    }
+
+                    released.push(id);
+
+                    return Promise.resolve();
+                },
+            }),
+            log: () => undefined,
+            now: 100,
+        });
+
+        expect(result).toMatchObject({ released: 1, releaseFailed: 1 });
+        expect(released).toStrictEqual(["ch_1"]);
+        // Released → forgotten; failed → kept with its error for the next tick; another zone's → untouched.
+        expect(store.tables["certificateReleases"]?.map((row) => row["_id"])).toStrictEqual(["rel_2", "rel_3"]);
+        expect(store.tables["certificateReleases"]?.[0]).toMatchObject({ attempts: 1, lastError: "upstream down" });
+    });
+});
+
+describe("deleting what a certificate belongs to", () => {
+    const certified = { certificateIssuer: "cloudflare-wfp", certificateScope: ZONE, customHostnameId: "ch_1", hostname: "app.example.com" };
+    const releasesQueued = (ops: ReturnType<typeof makeCtx>["ops"]) =>
+        ops.flatMap((op) => (op.kind === "insert" && op.table === "certificateReleases" ? [op.document] : []));
+
+    it("queues a deleted project's certificates for release before its domain rows go", async () => {
+        const { ctx, ops } = makeCtx({
+            aliasOwnership: [],
+            buildLogs: [],
+            builds: [],
+            deployments: [],
+            domains: [
+                { _id: "dom_1", organizationId: "org_1", projectId: "proj_1", ...certified },
+                // Never verified: no certificate to release.
+                { _id: "dom_2", hostname: "plain.example.com", organizationId: "org_1", projectId: "proj_1" },
+            ],
+            members: [owner("org_1")],
+            projects: [{ _id: "proj_1", organizationId: "org_1" }],
+            secrets: [],
+        });
+
+        await removeProject.handler(ctx, { id: "proj_1" as never, organizationId: "org_1" as never });
+
+        expect(releasesQueued(ops)).toStrictEqual([
+            { certificateIssuer: "cloudflare-wfp", certificateScope: ZONE, customHostnameId: "ch_1", hostname: "app.example.com", queuedAt: ctx.now },
+        ]);
+
+        const queuedAt = ops.findIndex((op) => op.kind === "insert" && op.table === "certificateReleases");
+        const domainDeletedAt = ops.findIndex((op) => op.kind === "delete" && op.id === "dom_1");
+
+        expect(queuedAt).toBeLessThan(domainDeletedAt);
+    });
+
+    it("queues a purged organization's certificates for release", async () => {
+        const now = 400 * 24 * 60 * 60 * 1000;
+        const tables: Record<string, Record<string, unknown>[]> = Object.fromEntries(PURGED_TABLES.map((table) => [table, []]));
+        const { ctx, ops } = makeCtx(
+            {
+                ...tables,
+                deployments: [],
+                domains: [{ _id: "dom_1", organizationId: "org_1", projectId: "proj_1", ...certified }],
+                organizations: [{ _id: "org_1", deletionRequestedAt: 1 }],
+            },
+            { now },
+        );
+
+        await expect(purgeDeleted.handler(ctx, {})).resolves.toStrictEqual({ purged: 1 });
+        expect(releasesQueued(ops)).toStrictEqual([
+            { certificateIssuer: "cloudflare-wfp", certificateScope: ZONE, customHostnameId: "ch_1", hostname: "app.example.com", queuedAt: now },
+        ]);
     });
 });
 

@@ -5,6 +5,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { releaseIdleAliases } from "./deployments";
+import { queueCertificateReleases } from "./domains";
 import { rateLimit } from "./guards";
 import { purgeScopedRows } from "./purge";
 import { boundedString, LIMITS } from "./validators";
@@ -292,7 +293,10 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
     for (const organization of due) {
         const organizationId = organization._id;
 
+        // Before the domain rows go: they are what names each certificate to release.
         // eslint-disable-next-line no-await-in-loop -- one org purged at a time keeps the writer simple
+        await queueCertificateReleases(context, { organizationId });
+        // eslint-disable-next-line no-await-in-loop -- see above
         await purgeScopedRows(context, orgScopedTables, { organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above
         await releaseIdleAliases(context, { organizationId });

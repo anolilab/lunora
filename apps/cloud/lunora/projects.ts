@@ -11,6 +11,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { claimFirstFreeAlias, pendingTeardown, releaseIdleAliases } from "./deployments";
+import { queueCertificateReleases } from "./domains";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
 import { purgeScopedRows } from "./purge";
@@ -392,6 +393,8 @@ export const remove = mutation
 
         const { now } = context;
 
+        // Before the domain rows go: they are what names each certificate to release.
+        await queueCertificateReleases(context, { projectId: id });
         await purgeScopedRows(context, PROJECT_SCOPED_TABLES, { projectId: id });
         await releaseIdleAliases(context, { projectId: id });
 
