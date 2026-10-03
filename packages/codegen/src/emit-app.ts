@@ -125,16 +125,11 @@ interface EmitAppOptions {
 }
 
 /**
- * The long-tail `ctx.*` capabilities wired straight through to the generated
- * `createShardDO` config — binding-backed ones (ai/kv/analytics/images/browser)
- * are OPTIONAL overrides (the shard already auto-resolves the conventional
- * `env.AI`/`env.KV`/… binding), while `vectors` / `hyperdrive` / `payment`
- * need explicit construction. Each method's parameter is derived from the
- * generated config type, so no per-capability type imports are needed.
- * {@link APP_METHOD_CAPABILITIES} lists them in table order; the used ones are
- * those in `options.capabilities`.
+ * {@link EmitAppOptions} after {@link emitApp} has normalised `hasVectors` — the
+ * gate's verdict AND the declared index count — once, so every builder reads a
+ * plain boolean instead of re-deriving (or `=== true`-guarding) it.
  */
-const usedLongTail = (options: EmitAppOptions): typeof APP_METHOD_CAPABILITIES => APP_METHOD_CAPABILITIES.filter(({ key }) => options.capabilities.has(key));
+type ResolvedAppOptions = Omit<EmitAppOptions, "hasVectors"> & { readonly hasVectors: boolean };
 
 /**
  * The `.vectors()` builder method — `shardExtras`-backed like the long tail, but
@@ -144,14 +139,23 @@ const usedLongTail = (options: EmitAppOptions): typeof APP_METHOD_CAPABILITIES =
  */
 const VECTORS_APP_METHOD: AppMethodFacet = { configKey: "vectors", doc: "Wire the Vectorize index map backing `ctx.vectors`.", method: "vectors" };
 
-/** The `shardExtras`-backed builder methods emitted: the used long tail, then `.vectors()` when declared. */
-const shardExtrasMethods = (options: EmitAppOptions): ReadonlyArray<AppMethodFacet> => [
-    ...usedLongTail(options).map(({ appMethod }) => appMethod),
-    ...(options.hasVectors === true ? [VECTORS_APP_METHOD] : []),
+/**
+ * The `shardExtras`-backed builder methods emitted, wired straight through to the
+ * generated `createShardDO` config: the used long-tail capabilities in table
+ * order ({@link APP_METHOD_CAPABILITIES} filtered to `options.capabilities`),
+ * then `.vectors()` when declared. Binding-backed ones (ai/kv/analytics/images/
+ * browser) are OPTIONAL overrides (the shard already auto-resolves the
+ * conventional `env.AI`/`env.KV`/… binding), while `vectors` / `hyperdrive` /
+ * `payment` need explicit construction. Each method's parameter is derived from
+ * the generated config type, so no per-capability type imports are needed.
+ */
+const shardExtrasMethods = (options: ResolvedAppOptions): ReadonlyArray<AppMethodFacet> => [
+    ...APP_METHOD_CAPABILITIES.filter(({ key }) => options.capabilities.has(key)).map(({ appMethod }) => appMethod),
+    ...(options.hasVectors ? [VECTORS_APP_METHOD] : []),
 ];
 
-/** Whether any long-tail (`shardExtras`-backed) capability method is emitted. */
-const hasAnyLongTail = (options: EmitAppOptions): boolean => shardExtrasMethods(options).length > 0;
+/** Whether the builder carries a `shardExtras` field — any `shardExtras`-backed method is emitted. */
+const hasShardExtras = (options: ResolvedAppOptions): boolean => shardExtrasMethods(options).length > 0;
 
 /**
  * The `defineIdentity(...)` contract import — a VALUE (not `import type`) so it
@@ -196,7 +200,7 @@ const buildGlobalImports = (hasGlobal: boolean): string[] =>
 const buildNotifyImports = (hasNotify: boolean): string[] => (hasNotify ? [`import notifyConfig from "../notify.js";`] : []);
 
 /** Whether any `onEmail` agents were discovered (⇒ wire the worker `email()` handler). */
-const hasEmailAgents = (options: EmitAppOptions): boolean => (options.emailAgents?.length ?? 0) > 0;
+const hasEmailAgents = (options: ResolvedAppOptions): boolean => (options.emailAgents?.length ?? 0) > 0;
 
 /**
  * Inbound-email wiring imports: the `dispatchAgentEmail` factory (a VALUE from
@@ -206,7 +210,7 @@ const hasEmailAgents = (options: EmitAppOptions): boolean => (options.emailAgent
  * opt-in add-on the umbrella never re-exports, so this is unconditionally
  * `@lunora/agent/inbound` regardless of `useUmbrella`.
  */
-const buildInboundImports = (options: EmitAppOptions): string[] =>
+const buildInboundImports = (options: ResolvedAppOptions): string[] =>
     hasEmailAgents(options) ? [`import { dispatchAgentEmail } from "@lunora/agent/inbound";`] : [];
 
 /**
@@ -215,18 +219,18 @@ const buildInboundImports = (options: EmitAppOptions): string[] =>
  * generated `email()` handler dispatches. Empty (byte-identical output) when no
  * `onEmail` agent is declared.
  */
-const buildAgentDefinitionsImport = (options: EmitAppOptions): string[] =>
+const buildAgentDefinitionsImport = (options: ResolvedAppOptions): string[] =>
     hasEmailAgents(options) ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
 
 /** The schema declares at least one `.shardBy()` table, so the app can wire a shard registry. */
-const hasShardedTables = (options: EmitAppOptions): boolean => options.tables.some((table) => isShardByTable(table));
+const hasShardedTables = (options: ResolvedAppOptions): boolean => options.tables.some((table) => isShardByTable(table));
 
 /**
  * The runtime module's own type and value import lines. Which symbols each side
  * needs is driven entirely by the enabled capabilities, so it is kept next to
  * the other per-capability builders rather than inline in {@link buildImportLines}.
  */
-const buildRuntimeImports = (options: EmitAppOptions): string[] => {
+const buildRuntimeImports = (options: ResolvedAppOptions): string[] => {
     const { hasFramework, hasGlobal, hasHyperdriveGlobal, hasQueue, useUmbrella } = options;
     const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
 
@@ -262,7 +266,7 @@ const buildRuntimeImports = (options: EmitAppOptions): string[] => {
 };
 
 /** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
-const buildImportLines = (options: EmitAppOptions): string[] => {
+const buildImportLines = (options: ResolvedAppOptions): string[] => {
     const {
         hasAccess,
         hasAuth,
@@ -293,7 +297,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
               ]
             : []),
         ...buildKvImports(hasKvIntrospector),
-        ...buildVectorImports(options.hasVectors === true),
+        ...buildVectorImports(options.hasVectors),
         ...(hasScheduler
             ? [`import type { DurableObjectNamespaceLike } from "@lunora/scheduler";`, `import { createScheduler } from "@lunora/scheduler";`]
             : []),
@@ -323,12 +327,12 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
-        ...(options.hasVectors === true ? [`import { LUNORA_VECTOR_INDEXES } from "./vectors.js";`] : []),
+        ...(options.hasVectors ? [`import { LUNORA_VECTOR_INDEXES } from "./vectors.js";`] : []),
     ];
 };
 
 /** Per-capability declaration interfaces (the shapes the fluent methods accept). */
-const buildDeclarationBlocks = (options: EmitAppOptions): string[] => [
+const buildDeclarationBlocks = (options: ResolvedAppOptions): string[] => [
     ...(options.hasStorage
         ? [
               `/** \`.storage(...)\` declaration — one bucket (required) plus optional extra named buckets and signed-URL config. Backs \`ctx.storage\` AND the studio file browser. */
@@ -399,7 +403,7 @@ interface AuthDeclaration<Env> {
 ];
 
 /** Builder instance fields (private state recorded by the fluent methods). */
-const buildFieldLines = (options: EmitAppOptions): string[] => [
+const buildFieldLines = (options: ResolvedAppOptions): string[] => [
     ...(options.hasAccess ? [`    private accessSelector?: Selector<Env, CreateAccessResolverOptions | undefined>;`] : []),
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
@@ -414,7 +418,7 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
     `    private httpRouterApp?: HttpRouterLike;`,
     `    private readonly routeMap: Record<string, Route> = {};`,
     ...(options.hasScheduler ? [`    private schedulerDeclaration?: SchedulerDeclaration<Env>;`] : []),
-    ...(hasAnyLongTail(options) ? [`    private readonly shardExtras: Partial<ShardConfig> = {};`] : []),
+    ...(hasShardExtras(options) ? [`    private readonly shardExtras: Partial<ShardConfig> = {};`] : []),
     ...(hasShardedTables(options) ? [`    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike>;`] : []),
     `    private shardSelector?: Selector<Env, ShardNamespaceLike>;`,
     ...(options.hasSourcedTables ? [`    private sourceClientFactory?: NonNullable<ShardConfig["sourceClient"]>;`] : []),
@@ -432,7 +436,7 @@ const buildFieldLines = (options: EmitAppOptions): string[] => [
  * `strictFunctionTypes`. Spelled out rather than reusing `Selector<Env, T>` because
  * `Selector` returns `T | undefined` and these factories do not.
  */
-const buildLongTailMethods = (options: EmitAppOptions): string[] =>
+const buildLongTailMethods = (options: ResolvedAppOptions): string[] =>
     shardExtrasMethods(options).map(
         ({ configKey, doc, method }) => `    /** ${doc} */
     public ${method}(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["${configKey}"]>>): this {
@@ -443,7 +447,7 @@ const buildLongTailMethods = (options: EmitAppOptions): string[] =>
     );
 
 /** Fluent capability methods (always-on ones plus the feature-gated ones). */
-const buildMethodBlocks = (options: EmitAppOptions): string[] => [
+const buildMethodBlocks = (options: ResolvedAppOptions): string[] => [
     ...(options.hasAccess
         ? [
               `    /** Wire Cloudflare Access (Zero Trust) — feeds the verified Access identity into \`ctx.auth\` / RLS via \`resolveIdentity\`. Call it with no argument when the Access policy is attached to the Worker (the identity arrives on the execution context; nothing to configure); pass \`teamDomain\` + \`aud\` for a hostname-scoped Access application, whose \`Cf-Access-Jwt-Assertion\` JWT is verified against your team JWKS. When \`.auth(...)\` is also configured, Access is composed ahead of it (Access wins when it authenticated the caller; everyone else falls through to the app session). */
@@ -625,7 +629,7 @@ const buildMethodBlocks = (options: EmitAppOptions): string[] => [
 ];
 
 /** The body of the `createShardDO({ ... })` call — the DO-side capability factories. */
-const buildShardFactoryBody = (options: EmitAppOptions): string => {
+const buildShardFactoryBody = (options: ResolvedAppOptions): string => {
     // A `.global()` table's `defineTrigger` handlers get their `ctx.scheduler`
     // from the writer's own option — the shard-side factory below does nothing
     // for them. Without this the store falls back to a stub that throws, so
@@ -761,7 +765,7 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
                   `            ...(this.storageDeclaration ? { storage: (rawEnv: Record<string, unknown>, origin?: string) => this.resolveStorage(rawEnv as Env, origin) } : {}),`,
               ]
             : []),
-        ...(hasAnyLongTail(options) ? [`            ...this.shardExtras,`] : []),
+        ...(hasShardExtras(options) ? [`            ...this.shardExtras,`] : []),
     ];
 
     return entries.length > 0 ? `\n${entries.join("\n")}\n        ` : "";
@@ -772,7 +776,7 @@ const buildShardFactoryBody = (options: EmitAppOptions): string => {
  * users, sessions, and credentials, so it must live where every other DO does.
  * Only once the move is acknowledged — see {@link EmitAppOptions.jurisdictionPinsAuth}.
  */
-const doAuthJurisdictionLine = (options: EmitAppOptions): string =>
+const doAuthJurisdictionLine = (options: ResolvedAppOptions): string =>
     options.jurisdiction && options.jurisdictionPinsAuth === true
         ? `
                 // The schema's jurisdiction pins the auth object like every other DO.
@@ -790,7 +794,7 @@ const shardingLiteral = (shardMode: TableIR["shardMode"]): string =>
  * `listSchemaTables` / `resolveTableSharding`, and — for a schema with
  * `.shardBy()` tables — the coordinator over the declared shard registry.
  */
-const buildTableShardingLines = (options: EmitAppOptions): string[] => [
+const buildTableShardingLines = (options: ResolvedAppOptions): string[] => [
     // Export's answer to "every table". Shard discovery unions each named table's
     // live shard keys, so an export that names none discovers none — which is how
     // `lunora export` with no `--tables`, and the scheduled backup with
@@ -824,7 +828,7 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
 ];
 
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
-const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
+const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
     ...buildTableShardingLines(options),
     ...(options.hasScheduler
         ? [
@@ -904,7 +908,7 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
     // Embedders live on the schema's `.vectorize()` options and are not reachable
     // from here, so `queryIndex` is withheld and similarity search reports
     // `VECTOR_QUERY_UNSUPPORTED`; listing indexes and their live stats works.
-    ...(options.hasVectors === true
+    ...(options.hasVectors
         ? [
               `        if (this.shardExtras.vectors) {
             options.vectorIntrospector = createVectorAdminIntrospector({
@@ -1080,7 +1084,7 @@ ${options.voiceAgents
 ];
 
 /** The `shardDO` + spec fields the worker always (or conditionally) carries. */
-const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
+const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     `            cronJobs: LUNORA_CRONS,`,
     `            functions: LUNORA_FUNCTIONS,`,
     // The declared `defineIdentity(...)` contract — wires the runtime trust
@@ -1133,7 +1137,7 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
  * falls back to a throwing stub without one. Resolving in one place is what
  * keeps `ctx.scheduler.runAfter(...)` working on both sides of the same app.
  */
-const buildSchedulerHelper = (options: EmitAppOptions): string => {
+const buildSchedulerHelper = (options: ResolvedAppOptions): string => {
     if (!options.hasScheduler) {
         return "";
     }
@@ -1490,7 +1494,7 @@ const buildGlobalCdcApplier =
         : "";
 
 /** The `export type { ... }` list — only the declaration types that were emitted. */
-const buildExportedTypes = (options: EmitAppOptions): string =>
+const buildExportedTypes = (options: ResolvedAppOptions): string =>
     [
         ...(options.hasAuth ? ["AuthDeclaration"] : []),
         "ComposedApp",
@@ -1552,7 +1556,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     // make it. The `vectors` usage flag (an `@lunora/bindings/vectors` import)
     // does not decide the method — no `appMethod` hangs off that row.
     const hasVectors = (rawOptions.hasVectors ?? true) && (rawOptions.vectorIndexCount ?? 0) > 0;
-    const options: EmitAppOptions = { ...rawOptions, hasVectors };
+    const options: ResolvedAppOptions = { ...rawOptions, hasVectors };
     const { hasAuth } = options;
 
     const declarationBlocks = buildDeclarationBlocks(options);

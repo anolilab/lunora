@@ -71,8 +71,8 @@ interface EmitServerOptions {
     /**
      * The package-backed capabilities the app uses (post platform gate). Each
      * used row of the `CAPABILITIES` table with a `serverCtxField` lands on the
-     * ctx interfaces its `tier` names; `payments` gates its bespoke ActionCtx
-     * field, and `ai` the `env.AI` binding field, off the same set.
+     * ctx interfaces its `tier` names; `ai` also gates the `env.AI` binding
+     * field off the same set.
      */
     capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
@@ -137,17 +137,11 @@ const emitServer = ({
     workflows = [],
 }: EmitServerOptions = {}): string => {
     const base = baseSpecifiers(useUmbrella);
-    const hasPayments = capabilities.has("payments");
     /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
     // The union of declared storage buckets, narrowing `ctx.storage.bucket(name)`.
     const storageBucketUnion = buildStorageBucketNames(schema ?? { tables: [], vectorIndexes: [] }, storageRuleBuckets)
         .map((name) => JSON.stringify(name))
         .join(" | ");
-    // The typed `ctx.payments` facade lives on ActionCtx only (payment ops are
-    // external calls), and `@lunora/payment` is imported only when used.
-    const paymentsTypeImport = hasPayments ? `import type { LunoraPayment } from "@lunora/payment";\n` : "";
-    const paymentsActionField = hasPayments ? `\n    readonly payments: LunoraPayment;` : "";
-
     // Same gating for containers: container calls are external I/O, so the
     // typed `ctx.containers` record lives on ActionCtx only. One property per
     // `lunora/containers.ts` export, each a `ContainerAccessor` handle — or a
@@ -223,7 +217,7 @@ export type Env = CloudflareBindings;`;
     // spliced onto a tier the table does not declare for it.
     const capabilityFields = (tiers: ReadonlyArray<CapabilityTier>): string =>
         CAPABILITIES.map((capability) =>
-            capability.serverCtxField !== undefined && tiers.includes(capability.tier) && capabilities.has(capability.key) ? capability.serverCtxField : "",
+            capability.tier !== undefined && tiers.includes(capability.tier) && capabilities.has(capability.key) ? capability.serverCtxField : "",
         ).join("");
     const everyCapabilityFields = capabilityFields(["every"]);
     const actionCapabilityFields = capabilityFields(["every", "action"]);
@@ -517,7 +511,7 @@ export type {
 } from "${base.serverDataModel}";
 
 import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
-${vectorsTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${servicesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
+${vectorsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${servicesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /**
@@ -655,7 +649,7 @@ export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${vec
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${vectorsOmit}${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "asId" | "query" | "get"> & DatabaseWriterFacade & { asId: TypedAsId; query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${actionCapabilityFields}${paymentsActionField}${containersActionField}${flagsContextField}${notifyContextField}${servicesActionField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${vectorsWriterContextField}${actionCapabilityFields}${containersActionField}${flagsContextField}${notifyContextField}${servicesActionField}${envContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${authContextField}
 }
 
 /**

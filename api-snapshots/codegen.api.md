@@ -2019,6 +2019,8 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "payments";
         readonly moduleSpecifier: "@lunora/payment";
         readonly requiredPackage: "@lunora/payment";
+        readonly serverCtxField: "\n    readonly payments: import(\"@lunora/payment\").LunoraPayment;";
+        readonly tier: "action";
     },
     {
         readonly appMethod: {

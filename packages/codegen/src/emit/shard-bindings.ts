@@ -1,4 +1,4 @@
-import type { BespokeShardKey, CapabilityKey, ShardBindingFacet, ShardEnvBinding } from "../capabilities";
+import type { BespokeShardKey, CapabilityDescriptor, CapabilityKey, ShardBindingFacet, ShardEnvBinding } from "../capabilities";
 import { CAPABILITIES } from "../capabilities";
 import type { EnvIR } from "../ir";
 import renderJsonData from "../json-data";
@@ -36,16 +36,18 @@ const emitRelationFanout = (hasGlobalTables: boolean): { importFragment: string;
 
 /**
  * Render a module-level throwing stub for the generated shard: a `const`
- * (`declaration` is its head, e.g. `"kvStub: Kv"`) whose every method throws
- * the `missing` statement. Methods are `async` unless listed in `sync`; `cast`
+ * (`declaration` is its head, e.g. `"kvStub: Kv"`) whose every method throws an
+ * `Error` carrying `message` — plain text, rendered with `JSON.stringify`, so
+ * write it unescaped. Methods are `async` unless listed in `sync`; `cast`
  * appends an `as unknown as …` tail after the closing brace.
  */
 const renderThrowingStub = (
     declaration: string,
-    missing: string,
+    message: string,
     methods: ReadonlyArray<string>,
     { cast = "", sync = [] }: { cast?: string; sync?: ReadonlyArray<string> } = {},
 ): string => {
+    const missing = `throw new Error(${JSON.stringify(message)});`;
     const members = methods.map((method) => `    ${method}: ${sync.includes(method) ? "" : "async "}() => {\n        ${missing}\n    },`).join("\n");
 
     return `\nconst ${declaration} = {\n${members}\n}${cast};\n`;
@@ -371,7 +373,8 @@ const emitAccessFragments = (): CapabilityShardFragments => {
  */
 /* eslint-disable no-secrets/no-secrets -- the emitted ctx-builder reads conventional R2 SQL env var names (R2_SQL_ACCOUNT_ID / CLOUDFLARE_ACCOUNT_ID), not credentials */
 const emitR2sqlFragments = (): CapabilityShardFragments => {
-    const r2sqlMissing = `throw new Error("ctx.r2sql: no R2 SQL credentials found. Set \\\`R2_SQL_TOKEN\\\`, \\\`R2_SQL_ACCOUNT_ID\\\` (or \\\`CLOUDFLARE_ACCOUNT_ID\\\`), and \\\`R2_SQL_BUCKET\\\` in your env/.dev.vars, or pass an \\\`r2sql\\\` config thunk to createShardDO().");`;
+    const r2sqlMissing =
+        "ctx.r2sql: no R2 SQL credentials found. Set `R2_SQL_TOKEN`, `R2_SQL_ACCOUNT_ID` (or `CLOUDFLARE_ACCOUNT_ID`), and `R2_SQL_BUCKET` in your env/.dev.vars, or pass an `r2sql` config thunk to createShardDO().";
 
     return {
         build: `
@@ -407,8 +410,6 @@ const emitR2sqlFragments = (): CapabilityShardFragments => {
  * `x402Stub` — a rail whose `fetch` throws — when no `x402` config is passed.
  */
 const emitX402Fragments = (): CapabilityShardFragments => {
-    const x402Missing = `throw new Error("ctx.x402: no pay rail configured. Pass \\\`x402\\\` to createShardDO().");`;
-
     return {
         // Built lazily off `secrets` (the Secrets Store facade already in scope) and
         // the `config.x402` thunk over env; falls back to `x402Stub`.
@@ -419,7 +420,10 @@ const emitX402Fragments = (): CapabilityShardFragments => {
 `,
         configField: `\n    x402?: (env: Record<string, unknown>) => X402PayConfig;`,
         importLines: [`import type { X402Pay, X402PayConfig } from "@lunora/x402/pay";`, `import { lazyX402Pay } from "@lunora/x402/pay";`],
-        stub: renderThrowingStub("x402Stub: X402Pay", x402Missing, ["fetch"], { cast: " as unknown as X402Pay", sync: ["fetch"] }),
+        stub: renderThrowingStub("x402Stub: X402Pay", "ctx.x402: no pay rail configured. Pass `x402` to createShardDO().", ["fetch"], {
+            cast: " as unknown as X402Pay",
+            sync: ["fetch"],
+        }),
     };
 };
 
@@ -430,6 +434,18 @@ const BESPOKE_SHARD_FRAGMENTS: Readonly<Record<BespokeShardKey, () => Capability
     r2sql: emitR2sqlFragments,
     x402: emitX402Fragments,
 };
+
+/** A used row whose ShardDO build is a bespoke emitter — `BespokeShardKey` is derived from exactly these rows. */
+type BespokeShardRow = CapabilityDescriptor & { readonly key: BespokeShardKey; readonly shardBinding: "bespoke" };
+
+/** A used row whose ShardDO build is the uniform {@link ShardBindingFacet} shape. */
+type UniformShardRow = CapabilityDescriptor & { readonly key: CapabilityKey; readonly shardBinding: ShardBindingFacet };
+
+const isBespokeShardRow = (capability: CapabilityDescriptor & { readonly key: CapabilityKey }): capability is BespokeShardRow =>
+    capability.shardBinding === "bespoke";
+
+const isUniformShardRow = (capability: CapabilityDescriptor & { readonly key: CapabilityKey }): capability is UniformShardRow =>
+    typeof capability.shardBinding === "object";
 
 /** Indentation of a statement inside the emitted `buildCtx` body. */
 const BUILD_INDENT = "            ";
@@ -489,9 +505,7 @@ ${BUILD_INDENT}]);
  */
 const emitBindingClientFragments = (property: string, moduleSpecifier: string, facet: ShardBindingFacet): CapabilityShardFragments => {
     const { binding, clientType } = facet;
-    const stub = renderThrowingStub(`${property}Stub: ${clientType}`, `throw new Error(${JSON.stringify(facet.missingMessage)});`, facet.stubMethods, {
-        sync: facet.syncStubMethods,
-    });
+    const stub = renderThrowingStub(`${property}Stub: ${clientType}`, facet.missingMessage, facet.stubMethods, { sync: facet.syncStubMethods });
 
     if (binding === undefined) {
         return {
@@ -554,21 +568,19 @@ const emitCapabilityShardWiring = (capabilities: ReadonlySet<CapabilityKey>): Ca
     let everyFields = "";
     let stubs = "";
 
-    for (const capability of CAPABILITIES) {
-        const { key, shardBinding } = capability;
+    for (const capability of CAPABILITIES.filter(({ key }) => capabilities.has(key))) {
+        let fragments: CapabilityShardFragments;
 
-        if (shardBinding === undefined || !capabilities.has(key)) {
+        if (isBespokeShardRow(capability)) {
+            fragments = BESPOKE_SHARD_FRAGMENTS[capability.key]();
+        } else if (isUniformShardRow(capability)) {
+            fragments = emitBindingClientFragments(capability.contextProperty, capability.moduleSpecifier, capability.shardBinding);
+        } else {
+            // No `shardBinding`: the row's ShardDO build, if any, is hand-wired (`payments`).
             continue;
         }
 
         const property = capability.contextProperty;
-        // A row is marked bespoke exactly when `BESPOKE_SHARD_FRAGMENTS` has its
-        // emitter (`BespokeShardKey` is derived from the same marker), so the cast
-        // only restates what the table's types already guarantee.
-        const fragments =
-            shardBinding === "bespoke"
-                ? BESPOKE_SHARD_FRAGMENTS[key as BespokeShardKey]()
-                : emitBindingClientFragments(property, capability.moduleSpecifier, shardBinding);
 
         importLines.push(...fragments.importLines);
         configFields += fragments.configField;
