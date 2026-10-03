@@ -3,10 +3,11 @@
  * identifier the edge stamps on every request as the `cf-ray` header, and the key
  * Cloudflare Traces, Workers Logs and Security Events are searched by.
  *
- * `@lunora/runtime` reads it at the Worker entry and forwards it to the shard
- * Durable Object under {@link RAY_ID_HEADER}, alongside `traceparent`;
- * `@lunora/do` reads it back there so shard-side logs and spans carry it too.
- * Both sides parse through {@link parseRayId}, so they agree on what a Ray ID is.
+ * `@lunora/runtime` reads it off {@link CF_RAY_HEADER} at the Worker entry, ONCE
+ * per request, and forwards it to the shard Durable Object under
+ * {@link RAY_ID_HEADER}, alongside `traceparent`; `@lunora/do` reads it back there
+ * so shard-side logs and spans carry it too. Both sides parse through
+ * {@link parseRayId}, so they agree on what a Ray ID is.
  *
  * The Ray ID is **informational only**: it is a cross-navigation key into
  * Cloudflare's own tooling, never an authorization or routing input. It is
@@ -14,6 +15,9 @@
  * host does), and every consumer treats absence as the normal case.
  * Keep this file genuinely zero-dependency so inlining stays sound.
  */
+
+/** The header the Cloudflare edge stamps the Ray ID on, on every inbound request. */
+export const CF_RAY_HEADER = "cf-ray";
 
 /**
  * The internal header the runtime forwards the parsed Ray ID to the shard on.
@@ -37,6 +41,10 @@ const RAY_ID_PATTERN = /^([\da-f]{16})(?:-[a-z]{3,4})?$/i;
  * because the value is echoed into log lines and span attributes — off the edge
  * the header is whatever the caller typed, and anything that is not a Ray ID is
  * simply not one.
+ *
+ * Every `rayId` field in Lunora holds this function's output and is
+ * **informational only** — the module doc above is the one statement of what
+ * that means; other doc comments link here rather than restating it.
  */
 export const parseRayId = (header: null | string | undefined): string | undefined => {
     if (header === null || header === undefined) {

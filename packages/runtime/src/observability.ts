@@ -76,8 +76,8 @@ export interface ObservabilityEvent {
      * and Workers Logs are searched by, so a Lunora event can be followed to the
      * platform's view of the same request. Exported on the SERVER span as
      * `cloudflare.ray_id`, the attribute Cloudflare's own Workers traces use.
-     * Informational only — never an authorization input. Absent off the edge
-     * (`wrangler dev` does not set `cf-ray`).
+     * Absent off the edge. Informational only, as `parseRayId` in
+     * `shared/ray-id.ts` defines it.
      */
     rayId?: string;
     /** URL scheme of the inbound request (e.g. `"https"`). */

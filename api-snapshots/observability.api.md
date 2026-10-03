@@ -1191,11 +1191,8 @@ const redactArgs: (value: unknown, captureRaw?: boolean) => unknown;
 ### `resolveTraceAnchor` (const)
 
 ```ts
-const resolveTraceAnchor: (traceparent: string | undefined, rayHeader?: null | string) => {
-    rayId?: string;
-    rootSpanId: string;
+const resolveTraceAnchor: (traceparent: string | undefined, rayHeader?: null | string) => TraceAnchor & {
     sampled: boolean;
-    traceId: string;
 };
 ```
 

@@ -235,7 +235,7 @@ describe("otel-trace", () => {
 
             const headers: Record<string, string> = {};
 
-            injectTraceContext(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER })).trace, headers);
+            injectTraceContext(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER }), { rayId: RAY_ID }).trace, headers);
 
             expect(headers[RAY_ID_HEADER]).toBe(RAY_ID);
             expect(headers.traceparent).toBeDefined();
@@ -253,33 +253,30 @@ describe("otel-trace", () => {
     });
 
     describe("ray id", () => {
-        it("reads the cf-ray header onto the dispatch trace, dropping the colo suffix", () => {
+        it("carries the caller's already-parsed Ray ID onto the dispatch trace", () => {
             expect.assertions(1);
 
-            expect(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER })).trace.rayId).toBe(RAY_ID);
+            expect(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER }), { rayId: RAY_ID }).trace.rayId).toBe(RAY_ID);
         });
 
-        it("reads it whether or not the upstream traceparent is trusted", () => {
+        it("carries it whether or not the upstream traceparent is trusted", () => {
             expect.assertions(2);
 
             // The Ray ID steers nothing, so there is no trust decision to gate it on.
-            expect(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER, traceparent: SAMPLED_TRACEPARENT })).trace.rayId).toBe(RAY_ID);
-            expect(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER, traceparent: SAMPLED_TRACEPARENT }), { trustInbound: true }).trace.rayId).toBe(
-                RAY_ID,
-            );
+            expect(beginDispatchTrace(requestWith({ traceparent: SAMPLED_TRACEPARENT }), { rayId: RAY_ID }).trace.rayId).toBe(RAY_ID);
+            expect(beginDispatchTrace(requestWith({ traceparent: SAMPLED_TRACEPARENT }), { rayId: RAY_ID, trustInbound: true }).trace.rayId).toBe(RAY_ID);
         });
 
-        it("leaves it absent off the edge (wrangler dev sets no cf-ray)", () => {
+        it("leaves it absent when the caller has none (off the edge)", () => {
             expect.assertions(1);
 
             expect(beginDispatchTrace(requestWith({})).trace).not.toHaveProperty("rayId");
         });
 
-        it("drops a malformed cf-ray rather than echoing it into logs", () => {
-            expect.assertions(2);
+        it("does not re-read cf-ray itself: the Worker entry parses it once and passes it in", () => {
+            expect.assertions(1);
 
-            expect(beginDispatchTrace(requestWith({ "cf-ray": "not-a-ray-id" })).trace).not.toHaveProperty("rayId");
-            expect(beginDispatchTrace(requestWith({ "cf-ray": `${RAY_ID}-FRA, ${RAY_ID}` })).trace).not.toHaveProperty("rayId");
+            expect(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER })).trace).not.toHaveProperty("rayId");
         });
     });
 });

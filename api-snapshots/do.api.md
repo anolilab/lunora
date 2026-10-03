@@ -353,11 +353,7 @@ abstract class ShardDO {
     }): void;
     protected getCurrentTraceparent(): string | undefined;
     protected getCurrentSampleErrors(): boolean | undefined;
-    protected getCurrentTrace(): {
-        rayId?: string;
-        rootSpanId: string;
-        traceId: string;
-    } | undefined;
+    protected getCurrentTrace(): TraceAnchor | undefined;
     protected getCurrentIdentity(): Record<string, unknown> | undefined;
     protected isSystemDispatch(): boolean;
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult>;
