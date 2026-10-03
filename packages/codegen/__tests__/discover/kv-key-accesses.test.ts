@@ -38,7 +38,7 @@ describe("discoverKvKeyAccesses", () => {
         const found = discoverKvKeyAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "read", file: "read", line: 1, method: "get" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "read" }, file: "read", line: 1, method: "get" });
     });
 
     it("flags a put with an args-derived key", () => {
@@ -49,7 +49,7 @@ describe("discoverKvKeyAccesses", () => {
         const found = discoverKvKeyAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "save", method: "put" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "save" }, method: "put" });
     });
 
     it("flags a delete with an args-derived key", () => {
@@ -60,7 +60,7 @@ describe("discoverKvKeyAccesses", () => {
         const found = discoverKvKeyAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "remove", method: "delete" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "remove" }, method: "delete" });
     });
 
     it("flags an args value reached through one local const hop", () => {

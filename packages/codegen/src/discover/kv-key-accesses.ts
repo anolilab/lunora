@@ -2,6 +2,7 @@ import type { Project } from "ts-morph";
 
 import type { FunctionIR, KvKeyAccessIR } from "../ir";
 import { discoverArgumentDerivedAccesses } from "./argument-derived-accesses";
+import { callerVisibilityOf } from "./attribution";
 
 /**
  * The `ctx.kv` methods whose first argument is a per-entry namespace key. `list`
@@ -39,7 +40,7 @@ const discoverKvKeyAccesses = (project: Project, lunoraDirectory: string, functi
     });
 
     return accesses.map((access) => {
-        const visibility = visibilityByKey.get(`${access.file}:${access.exportName}`);
+        const visibility = callerVisibilityOf(access.scope, (exportName) => visibilityByKey.get(`${access.file}:${exportName}`));
 
         return visibility === undefined ? access : { ...access, visibility };
     });

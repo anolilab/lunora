@@ -1,9 +1,10 @@
 import type { CallExpression, Identifier, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { RatelimitKeySelectorIR } from "../ir";
 import { collectCallRows, limitNameOf, optionsObjectLiteral, propertyInitializer } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 
 /** The `@lunora/ratelimit` middleware factories whose third argument carries a `key` selector. */
@@ -139,7 +140,7 @@ const ratelimitKeySelectorInCall = (call: CallExpression, relativePath: string):
         return undefined;
     }
 
-    return { callee, exportName: enclosingExportName(call), file: relativePath, limitName: limitNameOf(call), line: call.getStartLineNumber() };
+    return { callee, scope: callSiteScopeOf(call), file: relativePath, limitName: limitNameOf(call), line: call.getStartLineNumber() };
 };
 
 /**

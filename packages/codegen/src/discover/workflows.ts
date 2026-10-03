@@ -9,7 +9,9 @@ import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { WorkflowIR, WorkflowStepIR } from "../ir";
-import { findObjectProperty, handlerDeclarationOf, handlerSiteOf, stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
+import type { HandlerReference } from "./handler-reference";
+import { resolveHandlerReference } from "./handler-reference";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
 const WORKFLOWS_FILENAME = "workflows.ts";
@@ -264,19 +266,18 @@ const resolveWorkflowConfig = (argument: Node | undefined): ObjectLiteralExpress
 
 /**
  * The `handler` property's function: the inline one, or — for a reference — the
- * declaration it resolves to, plus that declaration's call-site key when it is
- * exported from a lunora file (see `handlerSiteOf`).
+ * function it resolves to (see `resolveHandlerReference`).
  */
-const handlerOfWorkflow = (argument: ObjectLiteralExpression, lunoraDirectory: string): { body: Node | undefined; site: WorkflowIR["handlerSite"] } => {
+const handlerOfWorkflow = (argument: ObjectLiteralExpression, lunoraDirectory: string): Partial<HandlerReference> => {
     const property = findObjectProperty(argument, "handler");
-    const resolved = handlerDeclarationOf(property);
+    const resolved = resolveHandlerReference(property, lunoraDirectory);
 
     if (resolved !== undefined) {
-        return { body: resolved.body, site: handlerSiteOf(resolved, lunoraDirectory) };
+        return resolved;
     }
 
     // An inline `handler: async (ctx) => …` or `async handler(ctx) { … }` method.
-    return { body: property !== undefined && Node.isPropertyAssignment(property) ? property.getInitializer() : property, site: undefined };
+    return { body: property !== undefined && Node.isPropertyAssignment(property) ? property.getInitializer() : property };
 };
 
 /** Lift one exported `defineWorkflow({...})` declaration into {@link WorkflowIR}. */
@@ -297,6 +298,7 @@ const workflowFromCall = (call: CallExpression, exportName: string, lunoraDirect
         exportName,
         name: workflowDefaultName(exportName),
         steps: stepsFromHandler(handler.body),
+        ...(handler.file === undefined ? {} : { handlerFile: handler.file }),
         ...(handler.site === undefined ? {} : { handlerSite: handler.site }),
     };
 

@@ -43,7 +43,13 @@ describe("discoverContainerOverrides", () => {
         const found = discoverContainerOverrides(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ detail: "enableInternet: true", exportName: "boot", file: "launch", kind: "enable_internet", line: 3 });
+        expect(found[0]).toMatchObject({
+            detail: "enableInternet: true",
+            scope: { kind: "export", name: "boot" },
+            file: "launch",
+            kind: "enable_internet",
+            line: 3,
+        });
     });
 
     it("does not flag a bare .start() or a .start({ cpu: 2 }) with no enableInternet", () => {
@@ -80,9 +86,9 @@ export const c = action(async ({ ctx }) => {
         const found = discoverContainerOverrides(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(3);
-        expect(found[0]).toMatchObject({ detail: "allow", exportName: "a", kind: "egress_relaxation" });
-        expect(found[1]).toMatchObject({ detail: "deny", exportName: "b", kind: "egress_relaxation" });
-        expect(found[2]).toMatchObject({ detail: "setAllowed", exportName: "c", kind: "egress_relaxation" });
+        expect(found[0]).toMatchObject({ detail: "allow", scope: { kind: "export", name: "a" }, kind: "egress_relaxation" });
+        expect(found[1]).toMatchObject({ detail: "deny", scope: { kind: "export", name: "b" }, kind: "egress_relaxation" });
+        expect(found[2]).toMatchObject({ detail: "setAllowed", scope: { kind: "export", name: "c" }, kind: "egress_relaxation" });
     });
 
     it("does not flag a non-mutating egress method", () => {

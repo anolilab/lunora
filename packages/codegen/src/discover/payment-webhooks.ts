@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { PaymentWebhookIR } from "../ir";
 import { collectCallRows, findObjectProperty } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 
 /**
@@ -39,7 +39,7 @@ const paymentWebhookInCall = (call: CallExpression, relativePath: string): Payme
 
     return {
         callee: callee as PaymentWebhookIR["callee"],
-        exportName: enclosingExportName(call),
+        scope: callSiteScopeOf(call),
         file: relativePath,
         line: call.getStartLineNumber(),
         ...(toleranceSeconds === undefined ? {} : { toleranceSeconds }),

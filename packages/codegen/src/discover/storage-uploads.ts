@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { StorageUploadIR } from "../ir";
 import { collectCallRows, propertyKeyName } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * `ctx.storage.<bucket>.<method>` calls this feeder inspects, mapped to the
@@ -111,7 +111,7 @@ const storageUploadInCall = (call: CallExpression, relativePath: string): Storag
     }
 
     return {
-        exportName: enclosingExportName(call),
+        scope: callSiteScopeOf(call),
         file: relativePath,
         line: call.getStartLineNumber(),
         method: matched.method as StorageUploadIR["method"],

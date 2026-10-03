@@ -10,6 +10,7 @@ import { formatAdvisories, lintSchema, toAdvisorContext } from "../src/advisor";
 import { errorAdvisoryNames } from "../src/blocking";
 import discoverSchema from "../src/discover/schema";
 import { runCodegen } from "../src/index";
+import type { QueryReadIR } from "../src/ir";
 import emittedJsonData from "./emitted-json-data";
 
 /** Build a `SchemaIR` from in-memory schema source (no disk). */
@@ -457,7 +458,7 @@ describe("toAdvisorContext (codegen → advisor coverage map)", () => {
 
         // The read sits inside the exported `list` query, so the finding belongs on
         // that procedure's row rather than in the catch-all project bucket.
-        const reads = [{ exportName: "list", file: "posts", hasFilter: true, hasIndex: false, line: 2, table: "posts" }];
+        const reads: QueryReadIR[] = [{ file: "posts", hasFilter: true, hasIndex: false, line: 2, scope: { kind: "export", name: "list" }, table: "posts" }];
         const procedures = [
             {
                 analyzableBody: true,

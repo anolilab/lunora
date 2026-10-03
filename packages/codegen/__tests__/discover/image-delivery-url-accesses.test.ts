@@ -40,7 +40,7 @@ describe("discoverImageDeliveryUrlAccesses", () => {
         const found = discoverImageDeliveryUrlAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "url", file: "deliver", line: 1 });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "url" }, file: "deliver", line: 1 });
     });
 
     it("flags an args-derived key reached through one local const hop", () => {

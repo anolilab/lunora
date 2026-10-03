@@ -6,6 +6,7 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import discoverQueries from "../../src/discover/queries";
+import { scopeName } from "../call-site-fixture";
 
 const FUNCTIONS = `
     import { query } from "@lunora/server";
@@ -51,7 +52,7 @@ describe("discoverQueries", () => {
     });
 
     /** The single read discovered inside a given exported query. */
-    const readIn = (exportName: string) => discoverQueries(project, join(workdir, "lunora")).find((read) => read.exportName === exportName);
+    const readIn = (exportName: string) => discoverQueries(project, join(workdir, "lunora")).find((read) => scopeName(read.scope) === exportName);
 
     it("returns every read, tagging filter, index presence, and table", () => {
         expect.assertions(4);

@@ -646,12 +646,13 @@ export interface WorkflowIR {
     exportName: string;
 
     /**
-     * Where the `handler:` is declared when it is a reference to a function
-     * exported from a lunora source file (`handler: onboard`, imported from
-     * `onboarding/flow.ts`) rather than written inline — the call-site key the
-     * architecture graph attributes that function's own call sites through.
+     * The file declaring the `handler:` when it is a function passed by reference
+     * and declared in another file — the file {@link WorkflowIR.steps}' lines are
+     * in. Lunora-relative inside `lunora/`, project-relative outside it.
      */
-    handlerSite?: { exportName: string; file: string };
+    handlerFile?: string;
+    /** See {@link HandlerSiteIR}. */
+    handlerSite?: HandlerSiteIR;
     /** Static `limits` literal → `exports.<Class>.limits`. */
     limits?: { steps?: number };
 
@@ -676,7 +677,7 @@ export interface WorkflowIR {
      * (Cloudflare memoizes by name, so the second call silently returns the
      * first's cached result). Calls with a non-literal name are omitted (not
      * statically comparable). A handler passed by reference is followed to its
-     * declaration; the lines are then in that file ({@link WorkflowIR.handlerSite}).
+     * declaration; the lines are then in {@link WorkflowIR.handlerFile}.
      */
     steps: ReadonlyArray<WorkflowStepIR>;
 }
@@ -769,13 +770,8 @@ export interface QueueIR {
     /** The `lunora/queues.ts` export name, e.g. `emailQueue`. */
     exportName: string;
 
-    /**
-     * Where the `handler:` is declared when it is a reference to a function
-     * exported from a lunora source file (`handler: onboard`, imported from
-     * `onboarding/flow.ts`) rather than written inline — the call-site key the
-     * architecture graph attributes that function's own call sites through.
-     */
-    handlerSite?: { exportName: string; file: string };
+    /** See {@link HandlerSiteIR}. */
+    handlerSite?: HandlerSiteIR;
     /** How the queue is consumed: `"push"` (a worker `queue()` handler) or `"pull"` (external HTTP). */
     mode: "pull" | "push";
 
@@ -848,20 +844,56 @@ export interface ModuleIR {
 }
 
 /**
- * One call-site edge of the architecture graph, attributed to the exported
- * declaration it sits in (`exportName` is `""` inside a non-exported helper).
+ * Who a discovered call site runs on behalf of — the one attribution every
+ * per-call-site IR carries (see `discover/attribution`).
+ *
+ * `export`: lexically inside an exported top-level declaration. `name` is the
+ * EXPORTED name — `export const send = …` → `send`, `export default …` →
+ * `default`, `const run = …; export { run as start }` → `start`.
+ *
+ * `helper`: inside a top-level, non-exported `function` / `const` of the same
+ * file. `callers` are the exports that reach it through same-file value
+ * references (a call, or the helper passed on as a value), transitively and
+ * sorted; a type-only reference (`typeof helper`) does not count. Empty for an
+ * orphan helper no export reaches.
+ *
+ * `module`: at module scope, outside every top-level declaration.
+ *
+ * A site is recorded once; consumers fan out over its callers.
+ */
+export type CallSiteScope = { callers: ReadonlyArray<string>; kind: "helper"; name: string } | { kind: "export"; name: string } | { kind: "module" };
+
+/**
+ * Where a queue or workflow `handler:` passed by reference is declared, when it is
+ * exported from a lunora source file — `defineWorkflow({ handler: onboard })` with
+ * `onboard` exported from `lunora/onboarding/flow.ts` gives
+ * `{ exportName: "onboard", file: "onboarding/flow" }`. The architecture graph
+ * attributes that export's own call sites to the queue or workflow node, so its
+ * calls are not reported as "not a registered function". `exportName` is the
+ * exported name (`export { run as start }` → `start`).
+ */
+export interface HandlerSiteIR {
+    exportName: string;
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+}
+
+/**
+ * One call-site edge of the architecture graph, attributed through its
+ * {@link CallSiteScope}.
  * Exactly one of `target` / `reason` is set: `target` is a `namespace:export`
  * function key (`call` / `schedule`) or a queue / topic export name (`enqueue` /
  * `publish`); `reason` says why the target could not be read statically.
  */
 export interface CallEdgeIR {
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     /** 1-based line of the call. */
     line: number;
     reason?: string;
+    /** Who the call runs on behalf of. */
+    scope: CallSiteScope;
     target?: string;
 }
 
@@ -944,22 +976,12 @@ export interface FlagsIR {
  * unused-workflow heuristic rather than producing a false positive).
  */
 export interface WorkflowCallIR {
-    /**
-     * Export binding name of the function performing the call, e.g. `create`. A
-     * call inside a same-file helper is attributed to each export referencing the
-     * helper (one record per export); `""` when none does.
-     */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
-
-    /**
-     * Set only when `exportName` is `""`: the non-exported top-level helper the
-     * call sits in, which no exported function references (an orphan helper).
-     */
-    helper?: string;
     /** 1-based line of the `get(...)` call. */
     line: number;
+    /** Who the call runs on behalf of. */
+    scope: CallSiteScope;
     /** The referenced workflow export name, or `""` when the argument is not a string literal. */
     workflow: string;
 }
@@ -972,8 +994,6 @@ export interface WorkflowCallIR {
  * dynamic table — not lintable).
  */
 export interface QueryReadIR {
-    /** Exported procedure the read sits in, or `""` at module scope. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
 
@@ -990,6 +1010,8 @@ export interface QueryReadIR {
     hasIndex: boolean;
     /** 1-based line of the `query(...)` call. */
     line: number;
+    /** Who the read runs on behalf of. */
+    scope: CallSiteScope;
     /** Queried table name, or `""` when the argument is not a string literal. */
     table: string;
 
@@ -1015,8 +1037,6 @@ export interface QueryReadIR {
  * `AdvisorInsertWrite`.
  */
 export interface AuthApiCallIR {
-    /** Export binding name of the function performing the call, e.g. "createOrg". */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** True when the call's argument object includes a `headers` property. */
@@ -1025,6 +1045,8 @@ export interface AuthApiCallIR {
     line: number;
     /** The better-auth method invoked (e.g. `banUser`); empty when not statically known. */
     method: string;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1034,25 +1056,19 @@ export interface AuthApiCallIR {
  * edges and the `cross_module_table_write` lint.
  */
 export interface TableWriteIR {
-    /**
-     * Export binding name of the function performing the write. A write inside a
-     * same-file helper is attributed to each export referencing the helper (one
-     * record per export); `""` when none does.
-     */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
-
-    /**
-     * Set only when `exportName` is `""`: the non-exported top-level helper the
-     * call sits in, which no exported function references (an orphan helper).
-     */
-    helper?: string;
     /** 1-based line of the call. */
     line: number;
     /** The writer method called, e.g. `patch`, `deleteMany`, `upsert`. */
     method: string;
-    /** Target table; `""` when it can't be read (an untyped id, a non-literal name). */
+    /** Who the write runs on behalf of. */
+    scope: CallSiteScope;
+
+    /**
+     * Target table; `""` when it can't be read (an untyped id, a non-literal
+     * name). A union id (`Id<"a"> | Id<"b">`) gives one record per table.
+     */
     table: string;
 }
 
@@ -1064,22 +1080,12 @@ export interface TableWriteIR {
  * {@link InsertWriteIR.table} is `""` when the argument is not a string literal.
  */
 export interface InsertWriteIR {
-    /**
-     * Export binding name of the function performing the insert, e.g. "send". An
-     * insert inside a same-file helper is attributed to each export referencing
-     * the helper (one record per export); `""` when none does.
-     */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
-
-    /**
-     * Set only when `exportName` is `""`: the non-exported top-level helper the
-     * call sits in, which no exported function references (an orphan helper).
-     */
-    helper?: string;
     /** 1-based line of the `insert(...)` call. */
     line: number;
+    /** Who the insert runs on behalf of. */
+    scope: CallSiteScope;
     /** Target table name, or `""` when the argument is not a string literal. */
     table: string;
 }
@@ -1498,12 +1504,12 @@ export interface SecretLiteralIR {
  * identical to `AdvisorSqlInterpolation`.
  */
 export interface SqlInterpolationIR {
-    /** Export binding name of the procedure performing the `ctx.sql` call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the interpolation, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1516,12 +1522,12 @@ export interface SqlInterpolationIR {
  * identical to `AdvisorArgumentDerivedFetch`.
  */
 export interface ArgumentDerivedFetchIR {
-    /** Export binding name of the action performing the `ctx.fetch` call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.fetch` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1535,14 +1541,14 @@ export interface ArgumentDerivedFetchIR {
  * prefix, not a per-entry key). Structurally identical to `AdvisorKvKeyAccess`.
  */
 export interface KvKeyAccessIR {
-    /** Export binding name of the procedure performing the `ctx.kv` access. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.kv` call, or `0` when unknown. */
     line: number;
     /** The `ctx.kv` method invoked: `get` / `getRaw` / `getWithMetadata` / `put` / `delete`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 
     /**
      * Visibility of the enclosing procedure. `internal` procedures have no
@@ -1588,8 +1594,6 @@ export interface UnrestrictedWhereBranchIR {
 }
 
 export interface OwnerFieldWriteIR {
-    /** Export binding name of the procedure performing the write. */
-    exportName: string;
     /** The identity column being written from `args` (e.g. `userId`). */
     field: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
@@ -1617,6 +1621,9 @@ export interface OwnerFieldWriteIR {
      */
     ownerScoped?: true;
 
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
+
     /**
      * Visibility of the enclosing procedure. `internal` procedures are not
      * reachable by a caller, so the lint's premise ("any caller can write rows
@@ -1638,14 +1645,14 @@ export interface OwnerFieldWriteIR {
  * Structurally identical to `AdvisorStorageKeyAccess`.
  */
 export interface StorageKeyAccessIR {
-    /** Export binding name of the procedure performing the storage call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the storage call, or `0` when unknown. */
     line: number;
     /** The bucket method invoked with the arg-derived key, e.g. `get` / `put` / `delete` / `download`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 
     /**
      * Visibility of the enclosing procedure. `internal` procedures have no
@@ -1669,14 +1676,14 @@ export interface StorageKeyAccessIR {
  * identical to `AdvisorContainerKeyAccess`.
  */
 export interface ContainerKeyAccessIR {
-    /** Export binding name of the procedure performing the `ctx.containers` access. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.containers.*.get` call, or `0` when unknown. */
     line: number;
     /** The container accessor method invoked — always `get`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1690,12 +1697,12 @@ export interface ContainerKeyAccessIR {
  * normal usage and is never inspected). Structurally identical to `AdvisorAiRawRun`.
  */
 export interface AiRawRunIR {
-    /** Export binding name of the procedure performing the `ctx.ai.run` call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.ai.run` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1709,14 +1716,14 @@ export interface AiRawRunIR {
  * here. Structurally identical to `AdvisorVectorNamespaceAccess`.
  */
 export interface VectorNamespaceAccessIR {
-    /** Export binding name of the procedure performing the `ctx.vectors` access. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.vectors` call, or `0` when unknown. */
     line: number;
     /** The `ctx.vectors` method invoked: `query` / `upsert` / `upsertNow`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1730,14 +1737,14 @@ export interface VectorNamespaceAccessIR {
  * `AdvisorMailRecipientAccess`.
  */
 export interface MailRecipientAccessIR {
-    /** Export binding name of the procedure performing the `ctx.mail`/`ctx.email` call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.mail`/`ctx.email` call, or `0` when unknown. */
     line: number;
     /** The mailer method invoked: `send` / `queue`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1749,14 +1756,14 @@ export interface MailRecipientAccessIR {
  * `resolveDns`. Structurally identical to `AdvisorBrowserUrlAccess`.
  */
 export interface BrowserUrlAccessIR {
-    /** Export binding name of the procedure performing the `ctx.browser` call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `ctx.browser` call, or `0` when unknown. */
     line: number;
     /** The browser method invoked: `content` / `pdf` / `scrape` / `screenshot`. */
     method: string;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1771,14 +1778,14 @@ export interface BrowserUrlAccessIR {
 export interface ContainerOverrideIR {
     /** e.g. the egress method name, or `"enableInternet: true"`. */
     detail: string;
-    /** Export binding name of the procedure performing the call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** Which override shape matched. */
     kind: "egress_relaxation" | "enable_internet";
     /** 1-based line of the call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1795,12 +1802,12 @@ export interface ContainerOverrideIR {
  * identical to `AdvisorImageDeliveryUrlAccess`.
  */
 export interface ImageDeliveryUrlAccessIR {
-    /** Export binding name of the procedure performing the `buildImageDeliveryUrl` call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `buildImageDeliveryUrl` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1822,8 +1829,6 @@ export interface AuthConfigIR {
     disableCsrfCheck: boolean;
     /** `emailAndPassword.enabled === true`. */
     emailPasswordEnabled: boolean;
-    /** Export binding name enclosing the `createAuth(...)` call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the `createAuth(...)` call, or `0` when unknown. */
@@ -1834,6 +1839,8 @@ export interface AuthConfigIR {
     /** `trustedOrigins` array literal contains a `"*"` element. */
     /** `plugins` includes `scim(...)` while `database` is a non-transactional Lunora adapter — a combination that throws at runtime. */
     scimOnNonTransactionalAdapter: boolean;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
     /** `advanced.useSecureCookies === false`. */
     secureCookiesDisabled: boolean;
     /** `session.freshAge === 0` (explicit literal). */
@@ -1856,14 +1863,14 @@ export interface AuthConfigIR {
 export interface RatelimitKeySelectorIR {
     /** The `rateLimit`/`dbRateLimit` callee invoked. */
     callee: string;
-    /** Export binding name of the procedure whose `.use(...)` chain carries the call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** The rate limit's `name` argument (the second positional argument), or `""` when not a string literal. */
     limitName: string;
     /** 1-based line of the `rateLimit`/`dbRateLimit` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1882,10 +1889,10 @@ export interface PrivilegedDispatchIR {
     dispatchKind: "queue" | "workflow";
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
-    /** Export binding name of the handler performing the dispatch. */
-    handlerExport: string;
     /** 1-based line of the dispatch call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
     /** Export name of the dispatched target (`send` in `api.messages.send`). */
     targetExport: string;
     /** File path of the dispatched target relative to `lunora/` (`messages` in `api.messages.send`). */
@@ -1928,8 +1935,6 @@ export interface StorageUploadIR {
     analyzable: boolean;
     /** Numeric literal value of an `expiresInSeconds` option, when statically known (`getSignedUrl` / `getPresignedUrl` only). */
     expiresInSeconds?: number;
-    /** Export binding name of the procedure performing the call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the call, or `0` when unknown. */
@@ -1938,6 +1943,8 @@ export interface StorageUploadIR {
     method: "generateUploadUrl" | "getPresignedUrl" | "getSignedUrl" | "store" | "upload";
     /** Options-object keys present at the call site (empty when not `analyzable`, or when no options argument was passed). */
     presentKeys: string[];
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -1952,8 +1959,6 @@ export interface StorageUploadIR {
  * `AdvisorHttpActionGuard`.
  */
 export interface HttpActionGuardIR {
-    /** Export binding name of the handler (or `"<module>"` when mounted inline / not a named binding). */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** Which HTTP surface the handler is: a raw `httpAction` or a typed `httpRoute` route. */
@@ -1964,6 +1969,8 @@ export interface HttpActionGuardIR {
     method?: string;
     /** `true` when the handler reads `ctx.auth` (a direct member access or a `const { auth } = ctx` destructure). */
     readsAuth: boolean;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
     /** The first side effect found, as a stable label: `runMutation`, `runAction`, or `db.<method>`. */
     sideEffect: string;
 }
@@ -1983,14 +1990,14 @@ export interface HttpActionGuardIR {
  * identical to `AdvisorHttpHeaderWrite`.
  */
 export interface HttpHeaderWriteIR {
-    /** Export binding name of the enclosing handler, or `"<module>"` when mounted inline. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** The header name being written (`"location"`), or `""` when the key is not a string literal. */
     headerName: string;
     /** 1-based line of the request-tainted header value. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
     /** How the header was written. */
     via: "headers-append" | "headers-ctor" | "headers-set" | "response-init";
 }
@@ -2009,8 +2016,6 @@ export interface HttpHeaderWriteIR {
 export interface FailOpenGuardIR {
     /** The middleware factory at the call site: `rateLimit` / `dbRateLimit` / `verifyTurnstileMiddleware`. */
     callee: string;
-    /** Export binding name of the procedure the guard is attached to, or `"<module>"` at file scope. */
-    exportName: string;
     /** `true` only when the options literal set `failOpen: true` as a boolean literal; a non-literal or absent option is treated as fail-closed. */
     failOpen: boolean;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
@@ -2019,6 +2024,8 @@ export interface FailOpenGuardIR {
     limitName: string;
     /** 1-based line of the middleware call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /* eslint-disable no-secrets/no-secrets -- the referenced advisor evidence type name in the doc comment, not a credential */
@@ -2035,14 +2042,14 @@ export interface FailOpenGuardIR {
 export interface FlagSecurityDefaultIR {
     /** The boolean-literal default returned on a provider outage (fail-open value). */
     defaultValue: boolean;
-    /** Export binding name of the procedure performing the flag read, or `"<module>"` at file scope. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** The flag key — the first string-literal argument of `ctx.flags.boolean`. */
     key: string;
     /** 1-based line of the `ctx.flags.boolean` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /* eslint-enable no-secrets/no-secrets -- re-enable after the FlagSecurityDefaultIR doc block */
@@ -2084,14 +2091,14 @@ export interface FlagReadIR {
  * Structurally identical to `AdvisorAiToolSideEffect`.
  */
 export interface AiToolSideEffectIR {
-    /** Export binding name of the procedure performing the call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the generation call, or `0` when unknown. */
     line: number;
     /** The generation entrypoint invoked. */
     method: "generateText" | "streamText";
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
     /** The privileged side-effect sink a model-callable tool reaches (`ctx.db.insert`, `ctx.run`, `ctx.fetch`, …). */
     sideEffect: string;
     /** `true` when a model-input option is derived from the handler's `args` (a bare `args.x`, or a name destructured from `args`). */
@@ -2109,14 +2116,14 @@ export interface AiToolSideEffectIR {
 export interface IdentityClaimReadIR {
     /** `true` when `key` is a declared claim (in the `defineIdentity` contract, or the always-present `userId`). */
     declared: boolean;
-    /** Export binding name of the enclosing declaration (`<module>` at file scope). */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** The claim key read off the identity bag. */
     key: string;
     /** 1-based line of the read, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**
@@ -2130,12 +2137,12 @@ export interface IdentityClaimReadIR {
 export interface PaymentWebhookIR {
     /** The adapter factory invoked. */
     callee: "createAutumnAdapter" | "createDodoPaymentsAdapter" | "createPolarAdapter" | "createStripeAdapter";
-    /** Export binding name of the enclosing declaration (`<module>` at file scope). */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the construction, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
     /** Statically-known `webhookToleranceSeconds` literal, when present and a plain numeric literal. */
     toleranceSeconds?: number;
 }

@@ -47,7 +47,7 @@ describe("discoverPrivilegedDispatches", () => {
         const found = discover();
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ dispatchKind: "workflow", handlerExport: "onboard", targetExport: "send", targetFile: "messages" });
+        expect(found[0]).toMatchObject({ dispatchKind: "workflow", scope: { kind: "export", name: "onboard" }, targetExport: "send", targetFile: "messages" });
     });
 
     it("flags a workflow dispatch reading context.params directly in the args", () => {
@@ -81,7 +81,7 @@ describe("discoverPrivilegedDispatches", () => {
         const found = discover();
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ dispatchKind: "queue", handlerExport: "emailQueue", targetExport: "send", targetFile: "email" });
+        expect(found[0]).toMatchObject({ dispatchKind: "queue", scope: { kind: "export", name: "emailQueue" }, targetExport: "send", targetFile: "email" });
     });
 
     it("flags a topic subscription dispatch forwarding a message body field", () => {
@@ -102,7 +102,7 @@ export const welcome = defineSubscription(signups, {
         const found = discover();
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ dispatchKind: "queue", handlerExport: "welcome", targetExport: "deleteUser", targetFile: "admin" });
+        expect(found[0]).toMatchObject({ dispatchKind: "queue", scope: { kind: "export", name: "welcome" }, targetExport: "deleteUser", targetFile: "admin" });
     });
 
     it("resolves an internal.<dir>.<file>.<export> target to a nested file path", () => {

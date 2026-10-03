@@ -37,7 +37,7 @@ describe("discoverAiRawRuns", () => {
         const found = discoverAiRawRuns(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "infer", file: "run", line: 1 });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "infer" }, file: "run", line: 1 });
     });
 
     it("flags a destructured `args` model id — the form the ai registry item uses", () => {

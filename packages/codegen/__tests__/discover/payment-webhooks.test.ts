@@ -38,7 +38,7 @@ describe("discoverPaymentWebhooks", () => {
         const rows = discoverPaymentWebhooks(project, join(workdir, "lunora"));
 
         expect(rows).toHaveLength(1);
-        expect(rows[0]).toMatchObject({ callee: "createStripeAdapter", exportName: "adapter", toleranceSeconds: 86_400 });
+        expect(rows[0]).toMatchObject({ callee: "createStripeAdapter", scope: { kind: "export", name: "adapter" }, toleranceSeconds: 86_400 });
     });
 
     it("records createPolarAdapter with no tolerance option", () => {

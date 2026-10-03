@@ -7,13 +7,16 @@
  */
 import type { ArchitectureEdge, ArchitectureEdgeKind, ArchitectureManifest, ArchitectureNode, UnresolvedEdge } from "../../../shared/architecture-manifest";
 import { moduleOf } from "../../../shared/architecture-manifest";
+import { exportedCallersOf } from "./discover/attribution";
 import { QUEUES_FILENAME } from "./discover/queues";
 import { WORKFLOWS_FILENAME } from "./discover/workflows";
 import { GENERATED_HEADER } from "./emit";
 import type {
     CallEdgeIR,
+    CallSiteScope,
     CronJobIR,
     FunctionIR,
+    HandlerSiteIR,
     HttpRouteIR,
     InsertWriteIR,
     ModuleIR,
@@ -55,17 +58,23 @@ interface ArchitectureInput extends CallSites {
 /** Where an edge points: a node id, or why it could not be read. */
 type EdgeTarget = { reason: string } | { to: string };
 
+/** Where a pending edge starts: a call-site key, a node id directly, or nowhere (and why). */
+type EdgeSource = { exportName: string } | { from: string } | { unattributed: string };
+
 /**
- * One edge, normalised. A call site names its origin by `file` + `exportName`; a
- * declaration edge (a subscription, a cron target) names it directly in `from`.
+ * One edge, normalised. A call site names its origin by `file` + `exportName`
+ * (one pending edge per exported caller); a declaration edge (a subscription, a
+ * cron target) names it directly in `from`.
  */
-type PendingEdge = EdgeTarget & {
-    exportName: string;
-    file: string;
-    from?: string;
-    kind: ArchitectureEdgeKind;
-    line: number;
-};
+type PendingEdge = EdgeSource &
+    EdgeTarget & {
+        file: string;
+        kind: ArchitectureEdgeKind;
+        line: number;
+    };
+
+/** One call site before it is fanned out over its callers. */
+type CallSite = EdgeTarget & { file: string; kind: ArchitectureEdgeKind; line: number; scope: CallSiteScope };
 
 /** The node-id prefix a call-site edge's `target` names. */
 const CALL_TARGET_KIND: Readonly<Record<CallEdgeIR["kind"], string>> = {
@@ -89,24 +98,44 @@ const siteKey = (file: string, exportName: string): string => `${sanitizeNamespa
 const literalTarget = (prefix: string, name: string, what: string): EdgeTarget =>
     name === "" ? { reason: `the ${what} is not a string literal` } : { to: `${prefix}:${name}` };
 
-/** Every call-site input in the one {@link PendingEdge} shape. */
-const callSiteEdges = (input: ArchitectureInput): PendingEdge[] => [
-    ...input.callEdges.map((edge): PendingEdge => {
+/** Every call-site input in the one {@link CallSite} shape. */
+const callSites = (input: ArchitectureInput): CallSite[] => [
+    ...input.callEdges.map((edge): CallSite => {
         const target: EdgeTarget =
             edge.target === undefined ? { reason: edge.reason ?? "unreadable target" } : { to: `${CALL_TARGET_KIND[edge.kind]}:${edge.target}` };
 
-        return { exportName: edge.exportName, file: edge.file, kind: edge.kind, line: edge.line, ...target };
+        return { file: edge.file, kind: edge.kind, line: edge.line, scope: edge.scope, ...target };
     }),
-    ...input.queries.map((read): PendingEdge => {
-        return { exportName: read.exportName, file: read.file, kind: "read", line: read.line, ...literalTarget("table", read.table, "table name") };
+    ...input.queries.map((read): CallSite => {
+        return { file: read.file, kind: "read", line: read.line, scope: read.scope, ...literalTarget("table", read.table, "table name") };
     }),
-    ...[...input.inserts, ...input.tableWrites].map((write): PendingEdge => {
-        return { exportName: write.exportName, file: write.file, kind: "write", line: write.line, ...literalTarget("table", write.table, "written table") };
+    ...[...input.inserts, ...input.tableWrites].map((write): CallSite => {
+        return { file: write.file, kind: "write", line: write.line, scope: write.scope, ...literalTarget("table", write.table, "written table") };
     }),
-    ...input.workflowCalls.map((call): PendingEdge => {
-        return { exportName: call.exportName, file: call.file, kind: "start", line: call.line, ...literalTarget("workflow", call.workflow, "workflow name") };
+    ...input.workflowCalls.map((call): CallSite => {
+        return { file: call.file, kind: "start", line: call.line, scope: call.scope, ...literalTarget("workflow", call.workflow, "workflow name") };
     }),
 ];
+
+/** Why a site no export reaches cannot be drawn. */
+const UNATTRIBUTED_REASON: Readonly<Record<Exclude<CallSiteScope["kind"], "export">, string>> = {
+    helper: "inside a non-exported helper",
+    module: "at module scope",
+};
+
+/** Every call site as one pending edge per exported caller — or one unattributed edge when no export reaches it. */
+const callSiteEdges = (input: ArchitectureInput): PendingEdge[] =>
+    callSites(input).flatMap(({ scope, ...site }): PendingEdge[] => {
+        const callers = exportedCallersOf(scope);
+
+        if (callers.length === 0) {
+            return [{ ...site, unattributed: UNATTRIBUTED_REASON[scope.kind === "export" ? "module" : scope.kind] }];
+        }
+
+        return callers.map((exportName) => {
+            return { ...site, exportName };
+        });
+    });
 
 /** Subscription and cron-target edges, which come from declarations rather than call sites. */
 const declarationEdges = (input: ArchitectureInput): PendingEdge[] => [
@@ -115,7 +144,6 @@ const declarationEdges = (input: ArchitectureInput): PendingEdge[] => [
             ? []
             : [
                   {
-                      exportName: queue.exportName,
                       file: QUEUES_MODULE,
                       from: `topic:${queue.topic}`,
                       kind: "subscribe",
@@ -130,7 +158,6 @@ const declarationEdges = (input: ArchitectureInput): PendingEdge[] => [
         const to = workflowTarget ?? functionTarget;
 
         return {
-            exportName: cron.name,
             file: CRONS_MODULE,
             from: `cron:${cron.name}`,
             kind: "trigger",
@@ -150,25 +177,29 @@ const withModule = (fields: Omit<ArchitectureNode, "module">, moduleName: string
 
 /**
  * Every node, plus the call sites that can originate an edge: `namespace:export`
- * of a function, route, queue handler or workflow → its node id.
+ * of a function, route, queue handler or workflow → its node ids. A handler
+ * passed by reference to several queues or workflows originates edges from each.
  */
-const buildNodes = (input: ArchitectureInput): { nodes: Map<string, ArchitectureNode>; sites: Map<string, string> } => {
+const buildNodes = (input: ArchitectureInput): { nodes: Map<string, ArchitectureNode>; sites: Map<string, string[]> } => {
     const nodes = new Map<string, ArchitectureNode>();
-    const sites = new Map<string, string>();
+    const sites = new Map<string, string[]>();
     const owners = tableOwners(input.modules);
-    const add = (entry: ArchitectureNode, ...entrySites: ReadonlyArray<string | undefined>): void => {
+    const addSite = (site: string, id: string): void => {
+        sites.set(site, [...(sites.get(site) ?? []), id]);
+    };
+    const add = (entry: ArchitectureNode, site?: string): void => {
         nodes.set(entry.id, entry);
 
-        for (const site of entrySites) {
-            if (site !== undefined) {
-                sites.set(site, entry.id);
-            }
+        if (site !== undefined) {
+            addSite(site, entry.id);
         }
     };
-    // A handler passed by reference (`handler: onboard`, exported from another
-    // file) runs its call sites under that file's export, not the declaring one.
-    const handlerSiteKey = (site: { exportName: string; file: string } | undefined): string | undefined =>
-        site === undefined ? undefined : siteKey(site.file, site.exportName);
+    // A handler passed by reference (`handler: onboard`) runs its call sites under its own export.
+    const addHandlerSite = (site: HandlerSiteIR | undefined, id: string): void => {
+        if (site !== undefined) {
+            addSite(siteKey(site.file, site.exportName), id);
+        }
+    };
 
     for (const definition of input.functions) {
         const key = siteKey(definition.filePath, definition.exportName);
@@ -191,11 +222,8 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
     for (const queue of input.queues) {
         const detail = queue.topic === undefined ? {} : { detail: "subscription" };
 
-        add(
-            { ...detail, id: `queue:${queue.exportName}`, kind: "queue", name: queue.exportName },
-            siteKey(QUEUES_MODULE, queue.exportName),
-            handlerSiteKey(queue.handlerSite),
-        );
+        add({ ...detail, id: `queue:${queue.exportName}`, kind: "queue", name: queue.exportName }, siteKey(QUEUES_MODULE, queue.exportName));
+        addHandlerSite(queue.handlerSite, `queue:${queue.exportName}`);
     }
 
     for (const topic of input.topics) {
@@ -203,11 +231,8 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
     }
 
     for (const workflow of input.workflows) {
-        add(
-            { id: `workflow:${workflow.exportName}`, kind: "workflow", name: workflow.exportName },
-            siteKey(WORKFLOWS_MODULE, workflow.exportName),
-            handlerSiteKey(workflow.handlerSite),
-        );
+        add({ id: `workflow:${workflow.exportName}`, kind: "workflow", name: workflow.exportName }, siteKey(WORKFLOWS_MODULE, workflow.exportName));
+        addHandlerSite(workflow.handlerSite, `workflow:${workflow.exportName}`);
     }
 
     for (const cron of input.crons) {
@@ -228,32 +253,48 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
     return { nodes, sites };
 };
 
-/** Why a call site has no source node: outside every export, or inside one that registers nothing. */
-const missingSourceReason = (exportName: string): string => {
-    if (exportName === "") {
-        return "inside a non-exported helper";
+/** Why a call site's export has no source node: it registers nothing. */
+const missingSourceReason = (exportName: string): string =>
+    exportName === "default" ? "the default export is not a registered function" : `"${exportName}" is not a registered function`;
+
+/** The node ids an edge starts from, or the reason it has none. */
+const sourcesOf = (edge: PendingEdge, sites: ReadonlyMap<string, ReadonlyArray<string>>): ReadonlyArray<string> | { reason: string } => {
+    if ("from" in edge) {
+        return [edge.from];
     }
 
-    return exportName === "default" ? "the default export is not a registered function" : `"${exportName}" is not a registered function`;
+    if ("unattributed" in edge) {
+        return { reason: edge.unattributed };
+    }
+
+    return sites.get(siteKey(edge.file, edge.exportName)) ?? { reason: missingSourceReason(edge.exportName) };
 };
 
-/** The drawn edge, or the reason it cannot be drawn. */
+/** The drawn edges, or the reason the edge cannot be drawn. */
 const resolveEdge = (
     edge: PendingEdge,
-    sites: ReadonlyMap<string, string>,
+    sites: ReadonlyMap<string, ReadonlyArray<string>>,
     nodes: ReadonlyMap<string, ArchitectureNode>,
-): { drawn: ArchitectureEdge } | { reason: string } => {
+): { drawn: ArchitectureEdge[] } | { reason: string } => {
     if ("reason" in edge) {
         return { reason: edge.reason };
     }
 
-    const from = edge.from ?? sites.get(siteKey(edge.file, edge.exportName));
+    const sources = sourcesOf(edge, sites);
 
-    if (from === undefined) {
-        return { reason: missingSourceReason(edge.exportName) };
+    if ("reason" in sources) {
+        return sources;
     }
 
-    return nodes.has(edge.to) ? { drawn: { from, kind: edge.kind, to: edge.to } } : { reason: `${edge.to} is not declared` };
+    const { to } = edge;
+
+    return nodes.has(to)
+        ? {
+              drawn: sources.map((from) => {
+                  return { from, kind: edge.kind, to };
+              }),
+          }
+        : { reason: `${to} is not declared` };
 };
 
 const edgeKey = (edge: ArchitectureEdge): string => `${edge.from}|${edge.kind}|${edge.to}`;
@@ -271,7 +312,9 @@ const buildArchitecture = (input: ArchitectureInput): ArchitectureManifest => {
         const result = resolveEdge(edge, sites, nodes);
 
         if ("drawn" in result) {
-            edges.set(edgeKey(result.drawn), result.drawn);
+            for (const drawn of result.drawn) {
+                edges.set(edgeKey(drawn), drawn);
+            }
         } else {
             const entry = { file: edge.file, kind: edge.kind, line: edge.line, reason: result.reason };
 

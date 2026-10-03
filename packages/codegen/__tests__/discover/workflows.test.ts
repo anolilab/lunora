@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverWorkflows } from "../../src/discover/workflows";
 import { emitServer, emitShard, emitWorkflows } from "../../src/emit";
 import type { SchemaIR } from "../../src/ir";
+import { markerLine } from "../call-site-fixture";
 
 let workdir: string;
 
@@ -189,18 +190,17 @@ describe("discover/workflows", () => {
         expect(discoverWorkflows(newProject(), workdir)[0]?.steps).toEqual([{ line: 8, method: "do", name: "open" }]);
     });
 
-    it("follows a handler imported from another lunora file: its steps, and its call-site key", () => {
-        expect.assertions(2);
+    it("follows a handler imported from another lunora file: its steps, its file, and its call-site key", () => {
+        expect.assertions(3);
+
+        const flow = `export const onboard = async (ctx) => {
+    await ctx.step.do("welcome", () => undefined); // @welcome
+    await ctx.step.sleep("pause", "1 day"); // @pause
+};
+`;
 
         mkdirSync(join(workdir, "onboarding"));
-        writeFileSync(
-            join(workdir, "onboarding", "flow.ts"),
-            `export const onboard = async (ctx) => {
-    await ctx.step.do("welcome", () => undefined);
-    await ctx.step.sleep("pause", "1 day");
-};
-`,
-        );
+        writeFileSync(join(workdir, "onboarding", "flow.ts"), flow);
         writeWorkflows(`
             import { defineWorkflow } from "@lunora/workflow";
             import { onboard } from "./onboarding/flow";
@@ -210,16 +210,58 @@ describe("discover/workflows", () => {
 
         const [workflow] = discoverWorkflows(newProject(), workdir);
 
-        // The step lines are lines of onboarding/flow.ts, which `handlerSite` names.
+        // The step lines are lines of onboarding/flow.ts, which `handlerFile` names.
         expect(workflow?.steps).toEqual([
-            { line: 2, method: "do", name: "welcome" },
-            { line: 3, method: "sleep", name: "pause" },
+            { line: markerLine(flow, "welcome"), method: "do", name: "welcome" },
+            { line: markerLine(flow, "pause"), method: "sleep", name: "pause" },
         ]);
+        expect(workflow?.handlerFile).toBe("onboarding/flow");
         expect(workflow?.handlerSite).toStrictEqual({ exportName: "onboard", file: "onboarding/flow" });
     });
 
-    it("follows a local shorthand handler for its steps without a handler site", () => {
+    it("names the EXPORTED name of a handler renamed and re-exported, or default-exported", () => {
         expect.assertions(2);
+
+        mkdirSync(join(workdir, "flow"));
+        writeFileSync(join(workdir, "flow", "impl.ts"), `const run = async (ctx) => { await ctx.step.do("x", () => 1); };\nexport { run as start };\n`);
+        writeFileSync(join(workdir, "flow", "index.ts"), `export { start } from "./impl";\n`);
+        writeFileSync(join(workdir, "dflt.ts"), `const go = async (ctx) => { await ctx.step.do("d", () => 1); };\nexport default go;\n`);
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+            import { start } from "./flow";
+            import go from "./dflt";
+
+            export const a = defineWorkflow({ handler: start });
+            export const b = defineWorkflow({ handler: go });
+        `);
+
+        const [a, b] = discoverWorkflows(newProject(), workdir);
+
+        expect(a?.handlerSite).toStrictEqual({ exportName: "start", file: "flow/impl" });
+        expect(b?.handlerSite).toStrictEqual({ exportName: "default", file: "dflt" });
+    });
+
+    it("names a handler file outside lunora/ relative to the project root, with no call-site key", () => {
+        expect.assertions(2);
+
+        const lunora = join(workdir, "lunora");
+
+        mkdirSync(join(workdir, "src"));
+        mkdirSync(lunora);
+        writeFileSync(join(workdir, "src", "flow.ts"), `export const onboard = async (ctx) => { await ctx.step.do("x", () => 1); };\n`);
+        writeFileSync(
+            join(lunora, "workflows.ts"),
+            `import { defineWorkflow } from "@lunora/workflow";\nimport { onboard } from "../src/flow";\nexport const onboarding = defineWorkflow({ handler: onboard });\n`,
+        );
+
+        const [workflow] = discoverWorkflows(newProject(), lunora);
+
+        expect(workflow?.handlerFile).toBe("src/flow");
+        expect(workflow).not.toHaveProperty("handlerSite");
+    });
+
+    it("follows a local shorthand handler for its steps without a handler file or site", () => {
+        expect.assertions(3);
 
         writeWorkflows(`
             import { defineWorkflow } from "@lunora/workflow";
@@ -234,6 +276,7 @@ describe("discover/workflows", () => {
         const [workflow] = discoverWorkflows(newProject(), workdir);
 
         expect(workflow?.steps).toEqual([{ line: 5, method: "do", name: "only" }]);
+        expect(workflow).not.toHaveProperty("handlerFile");
         expect(workflow).not.toHaveProperty("handlerSite");
     });
 

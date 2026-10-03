@@ -45,7 +45,7 @@ describe("discoverHttpHeaderWrites", () => {
         const found = discover();
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "echo", headerName: "x-host", via: "response-init" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "echo" }, headerName: "x-host", via: "response-init" });
     });
 
     it("records a URL/query value set via headers.set on a Headers instance", () => {
@@ -63,7 +63,7 @@ describe("discoverHttpHeaderWrites", () => {
         const found = discover();
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "go", headerName: "location", via: "headers-set" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "go" }, headerName: "location", via: "headers-set" });
     });
 
     it("records a request-body field reflected into a Response.json header", () => {
@@ -80,7 +80,7 @@ describe("discoverHttpHeaderWrites", () => {
         const found = discover();
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "tag", headerName: "x-echo", via: "response-init" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "tag" }, headerName: "x-echo", via: "response-init" });
     });
 
     it("records a request value in a concise-body arrow (new Response as the arrow body)", () => {

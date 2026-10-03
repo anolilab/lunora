@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { FailOpenGuardIR } from "../ir";
 import { collectCallRows, findObjectProperty, limitNameOf, optionsObjectLiteral } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 
 /**
@@ -61,7 +61,7 @@ const failOpenGuardInCall = (call: CallExpression, relativePath: string): FailOp
 
     return {
         callee,
-        exportName: enclosingExportName(call),
+        scope: callSiteScopeOf(call),
         failOpen: setsFailOpenTrue(call.getArguments()[optionsIndex]),
         file: relativePath,
         limitName: RATE_LIMIT_CALLEES.has(callee) ? limitNameOf(call) : "",

@@ -3,7 +3,8 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { CallEdgeIR } from "../ir";
 import sanitizeNamespace from "../paths";
-import { exportAttributionsOf, functionReferenceSegments, listLunoraSourceFiles, lunoraRelativePath, RUN_METHODS } from "./ast";
+import { collectCallRows, collectNodeRows, functionReferenceSegments, RUN_METHODS } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * A function reference as the `namespace:export` key the function registry uses.
@@ -55,7 +56,7 @@ const SURFACE_METHODS: ReadonlyMap<string, { kind: "enqueue" | "publish"; surfac
     ["sendBatch", { kind: "enqueue", surface: "queues" }],
 ]);
 
-type CallSiteEdge = Omit<CallEdgeIR, "exportName" | "file" | "line">;
+type CallSiteEdge = Omit<CallEdgeIR, "file" | "line" | "scope">;
 
 /** A `run*` call: drawn when its reference is static, reported when an explicit `runQuery`/… target is not. */
 const runEdge = (method: string, reference: TsNode | undefined): CallSiteEdge | undefined => {
@@ -102,53 +103,30 @@ const edgeOf = (call: CallExpression): CallSiteEdge | undefined => {
     return producer === undefined || target === undefined ? undefined : { kind: producer.kind, target };
 };
 
+/** The {@link CallEdgeIR} of a site, or `undefined` when it carries no edge. */
+const edgeRecord = (site: TsNode, file: string, edge: CallSiteEdge | undefined): CallEdgeIR | undefined =>
+    edge === undefined ? undefined : { ...edge, file, line: site.getStartLineNumber(), scope: callSiteScopeOf(site) };
+
 /**
  * Discover the call-site edges of the architecture graph: every function →
  * function call (`ctx.run*`), scheduled dispatch (`ctx.scheduler.runAfter/runAt`),
  * enqueue (`ctx.queues.<q>.send`), topic publish (`ctx.topics.<t>.publish`) and
  * service use (`ctx.services.<s>.<member>`; a destructured `ctx.services` is not seen) in
- * `lunora/`, attributed to the exported declaration it sits in. Purely syntactic
+ * `lunora/`, one record per site with its `CallSiteScope`. Purely syntactic
  * — no type checker — so a reference held in a variable is recorded with a
- * `reason` instead of a `target`. A call inside a same-file helper is recorded once
- * per export that reaches the helper (see `enclosingExportNames`); one no export
- * reaches carries `exportName: ""`, and the manifest builder reports it rather
- * than guessing.
+ * `reason` instead of a `target`; the manifest builder reports it, and a site no
+ * export reaches, rather than guessing.
  */
-const discoverCallEdges = (project: Project, lunoraDirectory: string): CallEdgeIR[] => {
-    const edges: CallEdgeIR[] = [];
+const discoverCallEdges = (project: Project, lunoraDirectory: string): CallEdgeIR[] => [
+    ...collectCallRows(project, lunoraDirectory, (call, file) => edgeRecord(call, file, edgeOf(call))),
+    // `ctx.services.<name>.<member>`, called or not: an RPC method has an
+    // arbitrary name, and a fetch service is as often handed to a client
+    // (`fetch: ctx.services.parser.fetch`) as called in place.
+    ...collectNodeRows(project, lunoraDirectory, SyntaxKind.PropertyAccessExpression, (access, file) => {
+        const service = surfaceMemberOf(access, "services");
 
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const file = lunoraRelativePath(lunoraDirectory, filePath);
-
-        // One edge per export the site is attributed to, all at the site's own line.
-        const record = (site: TsNode, edge: CallSiteEdge): void => {
-            for (const { exportName } of exportAttributionsOf(site)) {
-                edges.push({ ...edge, exportName, file, line: site.getStartLineNumber() });
-            }
-        };
-
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            const edge = edgeOf(call);
-
-            if (edge !== undefined) {
-                record(call, edge);
-            }
-        }
-
-        // `ctx.services.<name>.<member>`, called or not: an RPC method has an
-        // arbitrary name, and a fetch service is as often handed to a client
-        // (`fetch: ctx.services.parser.fetch`) as called in place.
-        for (const access of sourceFile.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
-            const service = surfaceMemberOf(access, "services");
-
-            if (service !== undefined) {
-                record(access, { kind: "invoke", target: service });
-            }
-        }
-    }
-
-    return edges;
-};
+        return edgeRecord(access, file, service === undefined ? undefined : { kind: "invoke", target: service });
+    }),
+];
 
 export default discoverCallEdges;

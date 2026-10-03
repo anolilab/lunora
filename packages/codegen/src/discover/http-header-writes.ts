@@ -1,9 +1,10 @@
 import type { CallExpression, NewExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, isRequestInputDerived, referencesRequestInput, singleHopInitializer } from "../argument-taint";
-import type { HttpHeaderWriteIR } from "../ir";
+import { isRequestInputDerived, referencesRequestInput, singleHopInitializer } from "../argument-taint";
+import type { CallSiteScope, HttpHeaderWriteIR } from "../ir";
 import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 import type { InspectableHandler } from "./functions/handler";
 import { inlineHandler } from "./functions/handler";
@@ -93,10 +94,10 @@ const resolveObjectLiteral = (node: TsNode | undefined): ObjectLiteralExpression
 
 /** Context threaded through the site collectors — the emit target plus the source attribution. */
 interface CollectContext {
-    exportName: string;
     relativePath: string;
     requestName: string;
     rows: HttpHeaderWriteIR[];
+    scope: CallSiteScope;
 }
 
 /**
@@ -111,7 +112,7 @@ const collectFromHeadersObject = (headersObject: ObjectLiteralExpression, via: H
 
             if (valueNode !== undefined && isUnsafe(valueNode, context.requestName)) {
                 context.rows.push({
-                    exportName: context.exportName,
+                    scope: context.scope,
                     file: context.relativePath,
                     headerName: staticHeaderName(property.getNameNode()),
                     line: valueNode.getStartLineNumber(),
@@ -123,7 +124,7 @@ const collectFromHeadersObject = (headersObject: ObjectLiteralExpression, via: H
 
             if (isUnsafe(valueNode, context.requestName)) {
                 context.rows.push({
-                    exportName: context.exportName,
+                    scope: context.scope,
                     file: context.relativePath,
                     headerName: propertyKeyName(property),
                     line: valueNode.getStartLineNumber(),
@@ -198,7 +199,7 @@ const collectFromCallExpression = (call: CallExpression, context: CollectContext
 
         if (valueNode !== undefined && isUnsafe(valueNode, context.requestName)) {
             context.rows.push({
-                exportName: context.exportName,
+                scope: context.scope,
                 file: context.relativePath,
                 headerName: staticHeaderName(call.getArguments()[0]),
                 line: valueNode.getStartLineNumber(),
@@ -250,7 +251,7 @@ const headerWritesFromCall = (call: CallExpression, relativePath: string): HttpH
 
     const rows: HttpHeaderWriteIR[] = [];
 
-    headerWritesInHandler(handler, { exportName: enclosingExportName(call), relativePath, requestName: nameNode.getText(), rows });
+    headerWritesInHandler(handler, { scope: callSiteScopeOf(call), relativePath, requestName: nameNode.getText(), rows });
 
     return rows;
 };

@@ -40,7 +40,7 @@ describe("discoverHttpActionGuards", () => {
         const found = discoverHttpActionGuards(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "webhook", kind: "httpAction", readsAuth: false, sideEffect: "runMutation" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "webhook" }, kind: "httpAction", readsAuth: false, sideEffect: "runMutation" });
         expect(found[0]?.method).toBeUndefined();
     });
 
@@ -118,7 +118,13 @@ describe("discoverHttpActionGuards", () => {
         const found = discoverHttpActionGuards(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "submit", kind: "httpRoute", method: "POST", readsAuth: false, sideEffect: "runMutation" });
+        expect(found[0]).toMatchObject({
+            scope: { kind: "export", name: "submit" },
+            kind: "httpRoute",
+            method: "POST",
+            readsAuth: false,
+            sideEffect: "runMutation",
+        });
     });
 
     it("detects the side effect of a concise-body arrow handler (call as the body)", () => {
@@ -132,7 +138,13 @@ describe("discoverHttpActionGuards", () => {
         const found = discoverHttpActionGuards(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "submit", kind: "httpRoute", method: "POST", readsAuth: false, sideEffect: "runMutation" });
+        expect(found[0]).toMatchObject({
+            scope: { kind: "export", name: "submit" },
+            kind: "httpRoute",
+            method: "POST",
+            readsAuth: false,
+            sideEffect: "runMutation",
+        });
     });
 
     it("respects a ctx alias in a httpRoute destructure for both side-effect and auth detection", () => {
@@ -157,7 +169,7 @@ describe("discoverHttpActionGuards", () => {
 
         const [row] = discoverHttpActionGuards(project, join(workdir, "lunora"));
 
-        expect(row).toMatchObject({ exportName: "<module>", kind: "httpAction", readsAuth: false });
+        expect(row).toMatchObject({ scope: { kind: "module" }, kind: "httpAction", readsAuth: false });
     });
 
     it("skips a signed-webhook handler that forwards a module-level signature-header allowlist", () => {
@@ -219,7 +231,7 @@ describe("discoverHttpActionGuards", () => {
         const found = discoverHttpActionGuards(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "ingest", readsAuth: false, sideEffect: "runMutation" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "ingest" }, readsAuth: false, sideEffect: "runMutation" });
     });
 
     it("skips a signed-webhook handler that reads through a single-name module constant", () => {
@@ -262,7 +274,7 @@ describe("discoverHttpActionGuards", () => {
         const found = discoverHttpActionGuards(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "ingest", readsAuth: false, sideEffect: "runMutation" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "ingest" }, readsAuth: false, sideEffect: "runMutation" });
     });
 
     it("still records a handler that reads a signature header off something other than its request", () => {
@@ -284,7 +296,7 @@ describe("discoverHttpActionGuards", () => {
         const found = discoverHttpActionGuards(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "ingest", readsAuth: false, sideEffect: "runMutation" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "ingest" }, readsAuth: false, sideEffect: "runMutation" });
     });
 
     it("skips a named-function or wrapped handler (unresolvable body — fail-safe)", () => {

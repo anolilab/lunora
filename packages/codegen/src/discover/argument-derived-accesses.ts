@@ -1,8 +1,10 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough } from "../argument-taint";
+import type { CallSiteScope } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * The sink method name when `node` is a `<receiver>.<method>` property access
@@ -53,7 +55,7 @@ const accessInCall = (call: CallExpression, relativePath: string, config: Argume
         return undefined;
     }
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber(), method };
+    return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber(), method };
 };
 
 /** Arg-derived, unscoped sink accesses matching `config` in one source file. */
@@ -81,14 +83,14 @@ const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, conf
  * this shape.
  */
 export interface ArgumentDerivedAccessIR {
-    /** Export binding name of the procedure performing the sink call. */
-    exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     /** 1-based line of the sink call, or `0` when unknown. */
     line: number;
     /** The sink method invoked (one of `config.methods`). */
     method: string;
+    /** Who the site runs on behalf of — see {@link CallSiteScope}. */
+    scope: CallSiteScope;
 }
 
 /**

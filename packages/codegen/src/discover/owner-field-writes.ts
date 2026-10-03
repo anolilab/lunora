@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { callerVisibilityOf, callSiteScopeOf, exportedCallersOf } from "./attribution";
 
 /**
  * Ownership / identity columns whose value must come from the server-trusted
@@ -242,19 +243,22 @@ const identityWritesInObjectLiteral = (
         // A value that references `ctx` is server-scoped even when it also embeds
         // `args`, so it is not flagged — mirrors the shared taint convention.
         if (isArgumentDerived(value) && !isScopedByContext(value)) {
-            const exportName = enclosingExportName(call);
+            const scope = callSiteScopeOf(call);
+            const callers = exportedCallersOf(scope);
             // Recorded either way — the lint decides what to do with it. Dropping it
             // here would make the feeder the only place that knows the write
             // happened, and the sibling `visibility` stamp two lines down is the
-            // precedent for annotating rather than discarding.
-            const ownerScoped = ownerFieldOf(exportName) === name && resolvesToOwnerArgument(value, name);
+            // precedent for annotating rather than discarding. A write in a shared
+            // helper is owner-scoped only when EVERY caller declares this field its
+            // owner, failing toward reporting.
+            const ownerScoped = callers.length > 0 && callers.every((caller) => ownerFieldOf(caller) === name) && resolvesToOwnerArgument(value, name);
 
             rows.push({
-                exportName,
                 field: name,
                 file: relativePath,
                 line: call.getStartLineNumber(),
                 method,
+                scope,
                 ...(ownerScoped && { ownerScoped: true }),
             });
         }
@@ -292,7 +296,7 @@ const ownerFieldWritesInSourceFile = (
 
     for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
         for (const write of ownerFieldWritesInCall(call, relativePath, (exportName) => declarationOf(exportName).owner)) {
-            const { visibility } = declarationOf(write.exportName);
+            const visibility = callerVisibilityOf(write.scope, (exportName) => declarationOf(exportName).visibility);
 
             found.push(visibility === undefined ? write : { ...write, visibility });
         }

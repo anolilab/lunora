@@ -53,7 +53,7 @@ describe("discoverIdentityClaimReads", () => {
 
         const [row] = discoverIdentityClaimReads(project, join(workdir, "lunora"));
 
-        expect(row).toMatchObject({ declared: false, exportName: "p", key: "role" });
+        expect(row).toMatchObject({ declared: false, scope: { kind: "export", name: "p" }, key: "role" });
     });
 
     it("treats the always-present userId as declared even if not in the map body", () => {

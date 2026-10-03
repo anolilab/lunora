@@ -160,7 +160,7 @@ describe("discoverOwnerFieldWrites", () => {
         const found = discoverOwnerFieldWrites(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "create", field: "userId", file: "create", line: 1, method: "insert" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "create" }, field: "userId", file: "create", line: 1, method: "insert" });
     });
 
     it("flags a patch whose partial sets ownerId from args", () => {

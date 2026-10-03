@@ -37,7 +37,7 @@ describe("discoverBrowserUrlAccesses", () => {
         const found = discoverBrowserUrlAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "grab", file: "shot", line: 1, method: "screenshot" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "grab" }, file: "shot", line: 1, method: "screenshot" });
     });
 
     it("flags a destructured `args` url — the form the browser registry item ships", () => {
@@ -51,7 +51,7 @@ describe("discoverBrowserUrlAccesses", () => {
         const found = discoverBrowserUrlAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "grab", file: "destructured", method: "screenshot" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "grab" }, file: "destructured", method: "screenshot" });
     });
 
     it("flags each of pdf/content/scrape with an args-derived url", () => {

@@ -34,11 +34,11 @@ interface AgentIR {
 
 ```ts
 interface AuthApiCallIR {
-    exportName: string;
     file: string;
     hasHeaders: boolean;
     line: number;
     method: string;
+    scope: CallSiteScope;
 }
 ```
 
@@ -390,10 +390,9 @@ interface IndexSnapshot {
 
 ```ts
 interface InsertWriteIR {
-    exportName: string;
     file: string;
-    helper?: string;
     line: number;
+    scope: CallSiteScope;
     table: string;
 }
 ```
@@ -671,12 +670,12 @@ const QUEUES_FILENAME = "queues.ts";
 
 ```ts
 interface QueryReadIR {
-    exportName: string;
     file: string;
     filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
     line: number;
+    scope: CallSiteScope;
     table: string;
     terminal?: string;
 }
@@ -688,10 +687,7 @@ interface QueryReadIR {
 interface QueueIR {
     bindingName: string;
     exportName: string;
-    handlerSite?: {
-        exportName: string;
-        file: string;
-    };
+    handlerSite?: HandlerSiteIR;
     mode: "pull" | "push";
     name: string;
     topic?: string;
@@ -1100,10 +1096,8 @@ interface WorkflowIR {
         successRetention?: string;
     };
     exportName: string;
-    handlerSite?: {
-        exportName: string;
-        file: string;
-    };
+    handlerFile?: string;
+    handlerSite?: HandlerSiteIR;
     limits?: {
         steps?: number;
     };
@@ -1681,9 +1675,9 @@ interface AdminRouteIR {
 
 ```ts
 interface AiRawRunIR {
-    exportName: string;
     file: string;
     line: number;
+    scope: CallSiteScope;
 }
 ```
 
@@ -1691,10 +1685,10 @@ interface AiRawRunIR {
 
 ```ts
 interface AiToolSideEffectIR {
-    exportName: string;
     file: string;
     line: number;
     method: "generateText" | "streamText";
+    scope: CallSiteScope;
     sideEffect: string;
     userInputDerived: boolean;
 }
@@ -1704,9 +1698,9 @@ interface AiToolSideEffectIR {
 
 ```ts
 interface ArgumentDerivedFetchIR {
-    exportName: string;
     file: string;
     line: number;
+    scope: CallSiteScope;
 }
 ```
 
@@ -1729,11 +1723,11 @@ interface AuthConfigIR {
     analyzable: boolean;
     disableCsrfCheck: boolean;
     emailPasswordEnabled: boolean;
-    exportName: string;
     file: string;
     line: number;
     requireEmailVerification: boolean;
     scimOnNonTransactionalAdapter: boolean;
+    scope: CallSiteScope;
     secureCookiesDisabled: boolean;
     sessionFreshAgeZero: boolean;
     trustedOriginsWildcard: boolean;
@@ -1744,10 +1738,10 @@ interface AuthConfigIR {
 
 ```ts
 interface BrowserUrlAccessIR {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2131,6 +2125,21 @@ const CAPABILITY_ROWS: readonly [
 ];
 ```
 
+### `CallSiteScope` (type)
+
+```ts
+type CallSiteScope = {
+    callers: ReadonlyArray<string>;
+    kind: "helper";
+    name: string;
+} | {
+    kind: "export";
+    name: string;
+} | {
+    kind: "module";
+};
+```
+
 ### `ColumnMetaIR` (interface)
 
 ```ts
@@ -2179,10 +2188,10 @@ interface ContainerIRBase {
 
 ```ts
 interface ContainerKeyAccessIR {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2191,10 +2200,10 @@ interface ContainerKeyAccessIR {
 ```ts
 interface ContainerOverrideIR {
     detail: string;
-    exportName: string;
     file: string;
     kind: "egress_relaxation" | "enable_internet";
     line: number;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2322,11 +2331,11 @@ interface ExternalSourceIR {
 ```ts
 interface FailOpenGuardIR {
     callee: string;
-    exportName: string;
     failOpen: boolean;
     file: string;
     limitName: string;
     line: number;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2346,10 +2355,10 @@ interface FlagReadIR {
 ```ts
 interface FlagSecurityDefaultIR {
     defaultValue: boolean;
-    exportName: string;
     file: string;
     key: string;
     line: number;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2363,16 +2372,25 @@ interface GeoIndexIR {
 }
 ```
 
+### `HandlerSiteIR` (interface)
+
+```ts
+interface HandlerSiteIR {
+    exportName: string;
+    file: string;
+}
+```
+
 ### `HttpActionGuardIR` (interface)
 
 ```ts
 interface HttpActionGuardIR {
-    exportName: string;
     file: string;
     kind: "httpAction" | "httpRoute";
     line: number;
     method?: string;
     readsAuth: boolean;
+    scope: CallSiteScope;
     sideEffect: string;
 }
 ```
@@ -2381,10 +2399,10 @@ interface HttpActionGuardIR {
 
 ```ts
 interface HttpHeaderWriteIR {
-    exportName: string;
     file: string;
     headerName: string;
     line: number;
+    scope: CallSiteScope;
     via: "headers-append" | "headers-ctor" | "headers-set" | "response-init";
 }
 ```
@@ -2394,10 +2412,10 @@ interface HttpHeaderWriteIR {
 ```ts
 interface IdentityClaimReadIR {
     declared: boolean;
-    exportName: string;
     file: string;
     key: string;
     line: number;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2413,9 +2431,9 @@ interface IdentityIR {
 
 ```ts
 interface ImageDeliveryUrlAccessIR {
-    exportName: string;
     file: string;
     line: number;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2429,10 +2447,10 @@ type JurisdictionIR = "eu" | "fedramp" | "us";
 
 ```ts
 interface KvKeyAccessIR {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: CallSiteScope;
     visibility?: "internal" | "public";
 }
 ```
@@ -2441,10 +2459,10 @@ interface KvKeyAccessIR {
 
 ```ts
 interface MailRecipientAccessIR {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2541,12 +2559,12 @@ interface NormalizeIdAuthorizationIR {
 
 ```ts
 interface OwnerFieldWriteIR {
-    exportName: string;
     field: string;
     file: string;
     line: number;
     method: string;
     ownerScoped?: true;
+    scope: CallSiteScope;
     visibility?: "internal" | "public";
 }
 ```
@@ -2556,9 +2574,9 @@ interface OwnerFieldWriteIR {
 ```ts
 interface PaymentWebhookIR {
     callee: "createAutumnAdapter" | "createDodoPaymentsAdapter" | "createPolarAdapter" | "createStripeAdapter";
-    exportName: string;
     file: string;
     line: number;
+    scope: CallSiteScope;
     toleranceSeconds?: number;
 }
 ```
@@ -2569,8 +2587,8 @@ interface PaymentWebhookIR {
 interface PrivilegedDispatchIR {
     dispatchKind: "queue" | "workflow";
     file: string;
-    handlerExport: string;
     line: number;
+    scope: CallSiteScope;
     targetExport: string;
     targetFile: string;
 }
@@ -2630,10 +2648,10 @@ interface RankSortKeyIR {
 ```ts
 interface RatelimitKeySelectorIR {
     callee: string;
-    exportName: string;
     file: string;
     limitName: string;
     line: number;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2734,9 +2752,9 @@ interface SoftDeleteReadIR {
 
 ```ts
 interface SqlInterpolationIR {
-    exportName: string;
     file: string;
     line: number;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2755,10 +2773,10 @@ interface StaleMigrationImportIR {
 
 ```ts
 interface StorageKeyAccessIR {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: CallSiteScope;
     visibility?: "internal" | "public";
 }
 ```
@@ -2769,11 +2787,11 @@ interface StorageKeyAccessIR {
 interface StorageUploadIR {
     analyzable: boolean;
     expiresInSeconds?: number;
-    exportName: string;
     file: string;
     line: number;
     method: "generateUploadUrl" | "getPresignedUrl" | "getSignedUrl" | "store" | "upload";
     presentKeys: string[];
+    scope: CallSiteScope;
 }
 ```
 
@@ -2781,11 +2799,10 @@ interface StorageUploadIR {
 
 ```ts
 interface TableWriteIR {
-    exportName: string;
     file: string;
-    helper?: string;
     line: number;
     method: string;
+    scope: CallSiteScope;
     table: string;
 }
 ```
@@ -2825,10 +2842,10 @@ interface UnrestrictedWhereBranchIR {
 
 ```ts
 interface VectorNamespaceAccessIR {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: CallSiteScope;
 }
 ```
 
@@ -2836,10 +2853,9 @@ interface VectorNamespaceAccessIR {
 
 ```ts
 interface WorkflowCallIR {
-    exportName: string;
     file: string;
-    helper?: string;
     line: number;
+    scope: CallSiteScope;
     workflow: string;
 }
 ```

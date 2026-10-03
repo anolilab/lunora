@@ -4,9 +4,9 @@ import { join } from "node:path";
 import type { Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { IdentityClaimReadIR } from "../ir";
 import { listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 import { IDENTITY_FILENAME } from "./identity";
 
@@ -117,7 +117,7 @@ const claimReadsInSourceFile = (sourceFile: SourceFile, relativePath: string, de
 
         found.push({
             declared: key === ALWAYS_DECLARED_CLAIM || declared.has(key),
-            exportName: enclosingExportName(node),
+            scope: callSiteScopeOf(node),
             file: relativePath,
             key,
             line: node.getStartLineNumber(),

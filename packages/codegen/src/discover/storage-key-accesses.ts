@@ -2,6 +2,7 @@ import type { Project } from "ts-morph";
 
 import type { FunctionIR, StorageKeyAccessIR } from "../ir";
 import { discoverArgumentDerivedAccesses } from "./argument-derived-accesses";
+import { callerVisibilityOf } from "./attribution";
 
 /**
  * The `ctx.storage.<bucket>.<method>(...)` bucket methods whose first argument is a
@@ -66,7 +67,7 @@ const discoverStorageKeyAccesses = (project: Project, lunoraDirectory: string, f
     });
 
     return accesses.map((access) => {
-        const visibility = visibilityByKey.get(`${access.file}:${access.exportName}`);
+        const visibility = callerVisibilityOf(access.scope, (exportName) => visibilityByKey.get(`${access.file}:${exportName}`));
 
         return visibility === undefined ? access : { ...access, visibility };
     });

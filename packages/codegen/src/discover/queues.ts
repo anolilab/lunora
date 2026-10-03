@@ -7,8 +7,9 @@ import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, P
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
-import type { QueueIR, TopicIR } from "../ir";
-import { findObjectProperty, handlerDeclarationOf, handlerSiteOf, stringPropertyFor } from "./ast";
+import type { HandlerSiteIR, QueueIR, TopicIR } from "../ir";
+import { findObjectProperty, stringPropertyFor } from "./ast";
+import { resolveHandlerReference } from "./handler-reference";
 
 /** The only file queues may be declared in — mirrors `lunora/workflows.ts`. */
 const QUEUES_FILENAME = "queues.ts";
@@ -91,16 +92,13 @@ const queueNameOverride = (argument: ObjectLiteralExpression, exportName: string
  * of `defineSubscription(topic, {...})` is the same shape as `defineQueue({...})`
  * minus `mode` (a subscription is always a push consumer).
  */
-const queueFromConfig = (argument: ObjectLiteralExpression, exportName: string, topic: string | undefined, lunoraDirectory: string): QueueIR => {
-    // `handler: processEmail` imported from another file: its call sites belong to this queue.
-    const handlerSite = handlerSiteOf(handlerDeclarationOf(findObjectProperty(argument, "handler")), lunoraDirectory);
+const queueFromConfig = (argument: ObjectLiteralExpression, exportName: string, topic: string | undefined): QueueIR => {
     const ir: QueueIR = {
         bindingName: queueBindingName(exportName),
         exportName,
         mode: "push",
         name: queueNameOverride(argument, exportName) ?? queueDefaultName(exportName),
         ...(topic === undefined ? {} : { topic }),
-        ...(handlerSite === undefined ? {} : { handlerSite }),
         tuning: {},
     };
 
@@ -138,14 +136,14 @@ const queueFromConfig = (argument: ObjectLiteralExpression, exportName: string, 
 };
 
 /** Lift one exported `defineQueue({...})` declaration into {@link QueueIR}. */
-const queueFromCall = (call: CallExpression, exportName: string, lunoraDirectory: string): QueueIR => {
+const queueFromCall = (call: CallExpression, exportName: string): QueueIR => {
     const argument = call.getArguments()[0];
 
     if (!argument || !Node.isObjectLiteralExpression(argument)) {
         throw diagnosticAt(call, `queue "${exportName}": defineQueue must be passed an inline object literal`);
     }
 
-    return queueFromConfig(argument, exportName, undefined, lunoraDirectory);
+    return queueFromConfig(argument, exportName, undefined);
 };
 
 /**
@@ -154,7 +152,7 @@ const queueFromCall = (call: CallExpression, exportName: string, lunoraDirectory
  * the same file — that is what lets codegen wire `ctx.topics.<topic>` to this
  * subscription's binding without evaluating anything.
  */
-const subscriptionFromCall = (call: CallExpression, exportName: string, topics: ReadonlySet<string>, lunoraDirectory: string): QueueIR => {
+const subscriptionFromCall = (call: CallExpression, exportName: string, topics: ReadonlySet<string>): QueueIR => {
     const [topicArgument, configArgument] = call.getArguments();
 
     if (!topicArgument || !Node.isIdentifier(topicArgument) || !topics.has(topicArgument.getText())) {
@@ -165,7 +163,7 @@ const subscriptionFromCall = (call: CallExpression, exportName: string, topics: 
         throw diagnosticAt(call, `subscription "${exportName}": defineSubscription must be passed an inline object literal`);
     }
 
-    return queueFromConfig(configArgument, exportName, topicArgument.getText(), lunoraDirectory);
+    return queueFromConfig(configArgument, exportName, topicArgument.getText());
 };
 
 /** One exported `define*(...)` call in `lunora/queues.ts`. */
@@ -211,16 +209,16 @@ const factoryExports = (source: SourceFile): FactoryExport[] => {
 };
 
 /** Collect the queues (subscriptions included) and topics one source file declares. */
-const queuesFromSource = (source: SourceFile, lunoraDirectory: string): { queues: QueueIR[]; topics: TopicIR[] } => {
+const queuesFromSource = (source: SourceFile): { queues: QueueIR[]; topics: TopicIR[] } => {
     const exports = factoryExports(source);
     const topicNames = new Set(exports.filter((entry) => entry.factory === "defineTopic").map((entry) => entry.exportName));
     const queues: QueueIR[] = [];
 
     for (const entry of exports) {
         if (entry.factory === "defineQueue") {
-            queues.push(queueFromCall(entry.call, entry.exportName, lunoraDirectory));
+            queues.push(queueFromCall(entry.call, entry.exportName));
         } else if (entry.factory === "defineSubscription") {
-            queues.push(subscriptionFromCall(entry.call, entry.exportName, topicNames, lunoraDirectory));
+            queues.push(subscriptionFromCall(entry.call, entry.exportName, topicNames));
         }
     }
 
@@ -229,6 +227,29 @@ const queuesFromSource = (source: SourceFile, lunoraDirectory: string): { queues
     });
 
     return { queues, topics };
+};
+
+/**
+ * Export name → {@link HandlerSiteIR} of every queue whose `handler:` is a function
+ * exported from a lunora file (`handler: processEmail`, imported). Read in a pass
+ * of its own so the queue builders stay free of the lunora directory.
+ */
+const handlerSitesOf = (source: SourceFile, lunoraDirectory: string): Map<string, HandlerSiteIR> => {
+    const sites = new Map<string, HandlerSiteIR>();
+
+    for (const entry of factoryExports(source)) {
+        const config = entry.call.getArguments()[entry.factory === "defineSubscription" ? 1 : 0];
+        const site =
+            config !== undefined && Node.isObjectLiteralExpression(config)
+                ? resolveHandlerReference(findObjectProperty(config, "handler"), lunoraDirectory)?.site
+                : undefined;
+
+        if (site !== undefined) {
+            sites.set(entry.exportName, site);
+        }
+    }
+
+    return sites;
 };
 
 /**
@@ -285,8 +306,15 @@ const discoverQueueDeclarations = (project: Project, lunoraDirectory: string): {
     }
 
     const source = project.getSourceFile(queuesPath) ?? project.addSourceFileAtPath(queuesPath);
-    const { queues, topics } = queuesFromSource(source, lunoraDirectory);
-    const sortedQueues = queues.toSorted((a, b) => a.exportName.localeCompare(b.exportName));
+    const { queues, topics } = queuesFromSource(source);
+    const handlerSites = handlerSitesOf(source, lunoraDirectory);
+    const sortedQueues = queues
+        .map((queue) => {
+            const handlerSite = handlerSites.get(queue.exportName);
+
+            return handlerSite === undefined ? queue : { ...queue, handlerSite };
+        })
+        .toSorted((a, b) => a.exportName.localeCompare(b.exportName));
 
     assertUniqueNames(sortedQueues);
 

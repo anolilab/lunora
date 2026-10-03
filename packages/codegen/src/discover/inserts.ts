@@ -1,8 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { InsertWriteIR } from "../ir";
-import { exportAttributionsOf, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { collectCallRows, isDatabaseAccessor } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * True for a `ctx.db.insert(...)` (or bare `db.insert(...)`) call — the database
@@ -65,34 +66,15 @@ const tableOf = (call: CallExpression): string => {
 };
 
 /**
- * Discover `ctx.db.insert("table", …)` writes under the lunora source directory
- * and attribute each to the exported function (and file) performing it. An
- * insert inside a same-file helper is recorded once per export that reaches the
- * helper (see `enclosingExportNames`), at the insert's own line; one no export
- * reaches is kept with `exportName: ""` and the helper's name, so it is reported
- * rather than lost. A non-literal table argument is kept with `table: ""`.
+ * Discover `ctx.db.insert("table", …)` writes under the lunora source directory,
+ * one record per call site with its `CallSiteScope` — so an insert inside a
+ * same-file helper carries the exports calling the helper, and one in a helper
+ * no export calls is kept rather than lost. A non-literal table argument is kept
+ * with `table: ""`.
  */
-const discoverInserts = (project: Project, lunoraDirectory: string): InsertWriteIR[] => {
-    const writes: InsertWriteIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
-
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            if (!isDatabaseInsertCall(call)) {
-                continue;
-            }
-
-            const table = tableOf(call);
-
-            for (const attribution of exportAttributionsOf(call)) {
-                writes.push({ ...attribution, file: relativePath, line: call.getStartLineNumber(), table });
-            }
-        }
-    }
-
-    return writes;
-};
+const discoverInserts = (project: Project, lunoraDirectory: string): InsertWriteIR[] =>
+    collectCallRows(project, lunoraDirectory, (call, file): InsertWriteIR | undefined =>
+        isDatabaseInsertCall(call) ? { file, line: call.getStartLineNumber(), scope: callSiteScopeOf(call), table: tableOf(call) } : undefined,
+    );
 
 export default discoverInserts;

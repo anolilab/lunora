@@ -1,8 +1,9 @@
 import type { CallExpression, Node as TsNode, Project, Type } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { TableWriteIR } from "../ir";
-import { exportAttributionsOf, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { collectCallRows, isDatabaseAccessor } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /** `ctx.db.<method>(id, …)` writes whose first argument is an `Id<"table">`. */
 const BY_ID = new Set(["delete", "hardDelete", "patch", "replace", "restore"]);
@@ -64,27 +65,35 @@ const tablesOfIdArgument = (argument: TsNode, method: string): string[] => {
     return tablesOfIdType(type, argument);
 };
 
+/**
+ * One table write: the method, and the tables it targets — `undefined` when they
+ * cannot be read (an untyped id, a non-literal name).
+ */
+interface Write {
+    method: string;
+    tables: ReadonlyArray<string> | undefined;
+}
+
+/** The {@link TableWriteIR.table} an unreadable target is recorded under. */
+const UNREADABLE_TABLE = "";
+
 /** The tables a `ctx.db.<method>(first, …)` write names, or `undefined` when `method` is not a write. */
-const databaseWriteTables = (method: string, first: TsNode | undefined): string[] | undefined => {
+const databaseWrite = (method: string, first: TsNode | undefined): Write | undefined => {
     if (BY_NAME.has(method)) {
-        return [first !== undefined && Node.isStringLiteral(first) ? first.getLiteralText() : ""];
+        return { method, tables: first !== undefined && Node.isStringLiteral(first) ? [first.getLiteralText()] : undefined };
     }
 
     if (BY_ID.has(method) || method === "deleteMany" || method === "patchMany") {
         const tables = first === undefined ? [] : tablesOfIdArgument(first, method);
 
-        return tables.length === 0 ? [""] : tables;
+        return { method, tables: tables.length === 0 ? undefined : tables };
     }
 
     return undefined;
 };
 
-/**
- * The `{ method, tables }` one call writes, or `undefined` when it is not a table
- * write. `tables` is `[""]` when the table can't be read (an untyped id, a
- * non-literal name), so the write is still recorded.
- */
-const writeOf = (call: CallExpression): { method: string; tables: string[] } | undefined => {
+/** The {@link Write} one call makes, or `undefined` when it is not a table write. */
+const writeOf = (call: CallExpression): Write | undefined => {
     const callee = call.getExpression();
 
     if (!Node.isPropertyAccessExpression(callee)) {
@@ -95,9 +104,7 @@ const writeOf = (call: CallExpression): { method: string; tables: string[] } | u
     const receiver = callee.getExpression();
 
     if (isDatabaseAccessor(receiver)) {
-        const tables = databaseWriteTables(method, call.getArguments()[0]);
-
-        return tables === undefined ? undefined : { method, tables };
+        return databaseWrite(method, call.getArguments()[0]);
     }
 
     // `ctx.db.<table>.<method>(…)` — the facade puts the table in the receiver.
@@ -111,35 +118,25 @@ const writeOf = (call: CallExpression): { method: string; tables: string[] } | u
 /**
  * Discover every table write besides a plain `ctx.db.insert("table", …)` (that is
  * `discoverInserts`): by-id writes (`patch`/`replace`/`delete`/…), batch writes,
- * and the `ctx.db.<table>.*` facade. A by-id write reads its table off the id's
- * `Id<"table">` type through the type checker, so `table` is `""` when the id
- * is untyped (a plain `string`), and a union id (`Id<"a"> | Id<"b">`) records one
- * write per table. Attribution follows `discoverInserts`: once per export that
- * reaches the call, or `exportName: ""` plus the helper's name when none does.
+ * and the `ctx.db.<table>.*` facade, each with its `CallSiteScope`. A by-id
+ * write reads its table off the id's `Id<"table">` type through the type checker:
+ * a union id (`Id<"a"> | Id<"b">`) gives one record per table, and an untyped id
+ * (a plain `string`) one record with `table: ""`.
  */
-const discoverTableWrites = (project: Project, lunoraDirectory: string): TableWriteIR[] => {
-    const writes: TableWriteIR[] = [];
+const discoverTableWrites = (project: Project, lunoraDirectory: string): TableWriteIR[] =>
+    collectCallRows(project, lunoraDirectory, (call, file): TableWriteIR[] | undefined => {
+        const write = writeOf(call);
 
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const file = lunoraRelativePath(lunoraDirectory, filePath);
-
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            const write = writeOf(call);
-
-            if (write === undefined) {
-                continue;
-            }
-
-            for (const attribution of exportAttributionsOf(call)) {
-                for (const table of write.tables) {
-                    writes.push({ ...attribution, file, line: call.getStartLineNumber(), method: write.method, table });
-                }
-            }
+        if (write === undefined) {
+            return undefined;
         }
-    }
 
-    return writes;
-};
+        const scope = callSiteScopeOf(call);
+        const line = call.getStartLineNumber();
+
+        return (write.tables ?? [UNREADABLE_TABLE]).map((table) => {
+            return { file, line, method: write.method, scope, table };
+        });
+    });
 
 export default discoverTableWrites;

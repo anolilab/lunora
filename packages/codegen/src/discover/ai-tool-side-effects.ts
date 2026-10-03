@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, referencesArgs } from "../argument-taint";
+import { referencesArgs } from "../argument-taint";
 import type { AiToolSideEffectIR } from "../ir";
 import { bindingKeyName, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 
 /** The AI SDK text-generation entrypoints that accept a `tools` map — the injection sink surface. Matched by callee name, `import`-agnostic like the other feeders. */
@@ -163,7 +164,7 @@ const generationsInSourceFile = (sourceFile: SourceFile, relativePath: string): 
         }
 
         rows.push({
-            exportName: enclosingExportName(call),
+            scope: callSiteScopeOf(call),
             file: relativePath,
             line: call.getStartLineNumber(),
             method: callee as AiToolSideEffectIR["method"],

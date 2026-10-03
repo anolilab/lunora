@@ -1,7 +1,7 @@
 import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { bindingKeyName, enclosingExportName as enclosingExportNameOf } from "./discover/ast";
+import { bindingKeyName } from "./discover/ast";
 
 /**
  * The parameter binding element that declares `name`, searched from the
@@ -312,11 +312,3 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
 
     return false;
 };
-
-/**
- * The export name of the declaration enclosing `node` — the
- * {@link import("./discover/ast").enclosingExportName} walk — with `"<module>"`
- * instead of `""` when the node sits in no exported declaration (an inline-mounted
- * handler) — the sentinel the taint feeders' IR documents.
- */
-export const enclosingExportName = (node: TsNode): string => enclosingExportNameOf(node) || "<module>";
