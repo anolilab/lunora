@@ -1203,21 +1203,21 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // and attached only for an `action` so query/mutation ctx never carry them.
             if (isAction) {
 
-            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
-            // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
-            // function path + trace id into createAi, which folds them into the
-            // gateway's `metadata`. Mirror the tracer's anchor guard — a deferred
-            // subscription re-run must not borrow a concurrent dispatch's trace, so
-            // read `getCurrentTrace()` only on the synchronous (non-threaded-identity) path.
-            const aiTrace = options.identity ? undefined : this.getCurrentTrace();
-            // `telemetry` gives every model call an `ai.generate` / `ai.stream` span
-            // and `gen_ai.usage.*` token + cost counters attributed to this function.
-            const ai: LunoraAi = createAi({
-                binding: aiBinding as AiBindingLike | undefined,
-                env: env as Record<string, unknown>,
-                metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
-                telemetry: { metrics, trace },
-            });
+                const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
+                // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
+                // function path + trace id into createAi, which folds them into the
+                // gateway's `metadata`. Mirror the tracer's anchor guard — a deferred
+                // subscription re-run must not borrow a concurrent dispatch's trace, so
+                // read `getCurrentTrace()` only on the synchronous (non-threaded-identity) path.
+                const aiTrace = options.identity ? undefined : this.getCurrentTrace();
+                // `telemetry` gives every model call an `ai.generate` / `ai.stream` span
+                // and `gen_ai.usage.*` token + cost counters attributed to this function.
+                const ai: LunoraAi = createAi({
+                    binding: aiBinding as AiBindingLike | undefined,
+                    env: env as Record<string, unknown>,
+                    metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
+                    telemetry: { metrics, trace },
+                });
                 ctx.ai = ai;
             }
 

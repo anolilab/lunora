@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";
@@ -483,12 +483,19 @@ class AppBuilder<Env extends object> {
             // than more emitted code: request-path logic in generated output can only be
             // typechecked, never unit-tested.
             const authWiring = createDoAuthWiring({
+                // The OAuth discovery documents (an `mcp()` resource's metadata, the
+                // issuer's) are derived here from the declared options, so the worker
+                // forwards only those exact paths and no other probe reaches the object.
+                // Memoised on the declaration: a framework-hosted worker rebuilds these
+                // options per request, and `options(env)` rebuilds every plugin.
+                discoveryPaths: authDiscoveryPathsFor(authDeclaration, env),
                 internalSecret: authDeclaration.internalSecret?.(env),
                 namespace: authNamespace(env),
                 objectName: authDeclaration.objectName?.(env),
             });
 
             options.authHandler = authWiring.authHandler;
+            options.authDiscoveryHandler = authWiring.discoveryHandler;
             options.resolveIdentity = authWiring.resolveIdentity;
             // The audit log lives in the object like every other auth table, so the feed
             // reads through it rather than querying D1.
@@ -505,6 +512,13 @@ class AppBuilder<Env extends object> {
                 const auth = getAuth();
 
                 return auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined);
+            };
+            // The OAuth discovery documents outside `/api/auth` (served only with an
+            // `mcp()` or `oauthProvider()` plugin, and only after the app's own routes).
+            options.authDiscoveryHandler = (request) => {
+                const auth = getAuth();
+
+                return auth ? handleAuthDiscoveryRequest(auth, request) : Promise.resolve(undefined);
             };
             options.resolveIdentity = async (request) => {
                 const auth = getAuth();
@@ -798,8 +812,8 @@ interface LunoraConfig<Env extends object = object> {
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
     /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */
     remote?: boolean;
-    /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class. Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
-    services?: Record<string, { dir: string; entrypoint?: string }>;
+    /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class (`rpc: false` binds that class but calls it with plain `fetch`, without importing the service's sources). Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
+    services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
     /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. Must be a literal: `runCodegen` resolves it synchronously by PARSING this file, so a computed value is not seen — `lunora verify` reports `platform_unreadable_target` rather than defaulting in silence. */
     target?: string;
 }

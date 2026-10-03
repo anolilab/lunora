@@ -67,6 +67,8 @@ const markerEnd = (id) => `{/* /generated:${id} */}`;
  */
 const BINDING_LABELS = {
     ai: "Workers AI",
+    ai_search: "AI Search",
+    ai_search_namespace: "AI Search namespaces",
     analytics_engine: "Analytics Engine",
     artifacts: "Artifacts",
     assets: "Static assets",
@@ -82,6 +84,7 @@ const BINDING_LABELS = {
     queue_consumer: "Queue consumers",
     queue_producer: "Queue producers",
     r2: "R2",
+    service: "Service bindings",
     stream: "Stream",
     vectorize: "Vectorize",
     vpc_network: "VPC networks",

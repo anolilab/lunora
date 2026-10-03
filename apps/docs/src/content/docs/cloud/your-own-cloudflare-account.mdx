@@ -126,29 +126,32 @@ from that same check, so it shows what the deploy actually enforces.
 
 {/* generated:capabilities:cloudflare-workers — written from apps/cloud/src/provision-contract.ts by apps/docs/scripts/generate-target-capabilities.js. Do not edit by hand. */}
 
-| Binding               | `wrangler` type    | Available             | Why not                                                                                                                                       |
-| --------------------- | ------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Analytics Engine      | `analytics_engine` | Yes — created for you |                                                                                                                                               |
-| D1                    | `d1`               | Yes — created for you |                                                                                                                                               |
-| KV                    | `kv`               | Yes — created for you |                                                                                                                                               |
-| Queue producers       | `queue_producer`   | Yes — created for you |                                                                                                                                               |
-| R2                    | `r2`               | Yes — created for you |                                                                                                                                               |
-| Browser Rendering     | `browser`          | Yes                   |                                                                                                                                               |
-| Durable Objects       | `durable_object`   | Yes                   |                                                                                                                                               |
-| Images                | `images`           | Yes                   |                                                                                                                                               |
-| Queue consumers       | `queue_consumer`   | Yes                   |                                                                                                                                               |
-| Static assets         | `assets`           | Yes                   |                                                                                                                                               |
-| Workers AI            | `ai`               | Yes                   |                                                                                                                                               |
-| Artifacts             | `artifacts`        | No                    | an Artifacts namespace is an account resource the provision box does not create or bind yet.                                                  |
-| Containers            | `container`        | No                    | a container needs its image built and pushed to your account's registry on every deploy, which the provision box does not do yet.             |
-| Hyperdrive            | `hyperdrive`       | No                    | a Hyperdrive config needs your database's connection string, which the binding manifest does not carry; connect to it from an action instead. |
-| Media Transformations | `media`            | No                    | the provision box does not bind Media Transformations yet.                                                                                    |
-| Pipelines             | `pipeline`         | No                    | a pipeline needs its stream and sink configured, which wrangler.jsonc does not carry.                                                         |
-| Stream                | `stream`           | No                    | the provision box does not bind Stream yet.                                                                                                   |
-| Vectorize             | `vectorize`        | No                    | an index needs its dimensions and metric, which wrangler.jsonc does not carry.                                                                |
-| VPC networks          | `vpc_network`      | No                    | the provision box does not bind a VPC network yet.                                                                                            |
-| VPC services          | `vpc_service`      | No                    | the provision box does not bind a VPC service yet.                                                                                            |
-| Workflows             | `workflow`         | No                    | a plain Worker can run Workflows, but the provision box does not register a prebuilt bundle's Workflow class yet.                             |
+| Binding               | `wrangler` type       | Available             | Why not                                                                                                                                       |
+| --------------------- | --------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Analytics Engine      | `analytics_engine`    | Yes — created for you |                                                                                                                                               |
+| D1                    | `d1`                  | Yes — created for you |                                                                                                                                               |
+| KV                    | `kv`                  | Yes — created for you |                                                                                                                                               |
+| Queue producers       | `queue_producer`      | Yes — created for you |                                                                                                                                               |
+| R2                    | `r2`                  | Yes — created for you |                                                                                                                                               |
+| Browser Rendering     | `browser`             | Yes                   |                                                                                                                                               |
+| Durable Objects       | `durable_object`      | Yes                   |                                                                                                                                               |
+| Images                | `images`              | Yes                   |                                                                                                                                               |
+| Queue consumers       | `queue_consumer`      | Yes                   |                                                                                                                                               |
+| Static assets         | `assets`              | Yes                   |                                                                                                                                               |
+| Workers AI            | `ai`                  | Yes                   |                                                                                                                                               |
+| AI Search             | `ai_search`           | No                    | the provision box does not bind an AI Search instance yet.                                                                                    |
+| AI Search namespaces  | `ai_search_namespace` | No                    | the provision box does not bind an AI Search namespace yet.                                                                                   |
+| Artifacts             | `artifacts`           | No                    | an Artifacts namespace is an account resource the provision box does not create or bind yet.                                                  |
+| Containers            | `container`           | No                    | a container needs its image built and pushed to your account's registry on every deploy, which the provision box does not do yet.             |
+| Hyperdrive            | `hyperdrive`          | No                    | a Hyperdrive config needs your database's connection string, which the binding manifest does not carry; connect to it from an action instead. |
+| Media Transformations | `media`               | No                    | the provision box does not bind Media Transformations yet.                                                                                    |
+| Pipelines             | `pipeline`            | No                    | a pipeline needs its stream and sink configured, which wrangler.jsonc does not carry.                                                         |
+| Service bindings      | `service`             | No                    | a service binding needs its sibling Worker deployed alongside, which a project's deploy does not ship yet.                                    |
+| Stream                | `stream`              | No                    | the provision box does not bind Stream yet.                                                                                                   |
+| Vectorize             | `vectorize`           | No                    | an index needs its dimensions and metric, which wrangler.jsonc does not carry.                                                                |
+| VPC networks          | `vpc_network`         | No                    | the provision box does not bind a VPC network yet.                                                                                            |
+| VPC services          | `vpc_service`         | No                    | the provision box does not bind a VPC service yet.                                                                                            |
+| Workflows             | `workflow`            | No                    | a plain Worker can run Workflows, but the provision box does not register a prebuilt bundle's Workflow class yet.                             |
 
 Beyond bindings, this target does not have:
 

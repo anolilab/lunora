@@ -270,6 +270,8 @@ export type DeployKind = "dev" | "preview" | "production";
 
 /** Why `celld-vps` refuses each binding type celld does not run — exactly those, or this fails to compile. */
 const CELLD_VPS_REFUSALS: Readonly<Record<Exclude<BindingType, keyof CelldReleaseBindings>, string>> = {
+    ai_search: "AI Search is not a celld binding type",
+    ai_search_namespace: "an AI Search namespace is a Cloudflare account resource with no celld equivalent",
     ai: "Workers AI is not a celld binding; call a model over fetch instead (celld routes `<provider>/<model>` through LUNORA_AI_PROXY_URL, not an env.AI binding)",
     analytics_engine: "Analytics Engine is not a celld binding type",
     artifacts: "an Artifacts namespace is a Cloudflare account resource with no celld equivalent",
@@ -279,6 +281,7 @@ const CELLD_VPS_REFUSALS: Readonly<Record<Exclude<BindingType, keyof CelldReleas
     images: "the Images binding is not a celld binding type",
     media: "the Media Transformations binding is not a celld binding type",
     pipeline: "Pipelines is not a celld binding type",
+    service: "a service binding needs its sibling Worker in the same celld fleet, and a box runs one fleet per project",
     stream: "Stream is not a celld binding type",
     vectorize: "Vectorize is not a celld binding type",
     vpc_network: "a VPC network is a Cloudflare account resource with no celld equivalent",
@@ -319,6 +322,8 @@ export const BINDING_SUPPORT = {
     "celld-vps": CELLD_VPS_SUPPORT,
     "cloudflare-wfp": {
         ai: "bound",
+        ai_search: "unsupported",
+        ai_search_namespace: "unsupported",
         analytics_engine: "provisioned",
         artifacts: "unsupported",
         assets: "bound",
@@ -336,6 +341,7 @@ export const BINDING_SUPPORT = {
         queue_consumer: "routed",
         queue_producer: "provisioned",
         r2: "provisioned",
+        service: "unsupported",
         stream: "unsupported",
         vectorize: "unsupported",
         vpc_network: "unsupported",
@@ -353,6 +359,8 @@ export const BINDING_SUPPORT = {
      */
     "cloudflare-workers": {
         ai: "bound",
+        ai_search: "unsupported",
+        ai_search_namespace: "unsupported",
         analytics_engine: "provisioned",
         artifacts: "unsupported",
         assets: "bound",
@@ -368,6 +376,7 @@ export const BINDING_SUPPORT = {
         queue_consumer: "bound",
         queue_producer: "provisioned",
         r2: "provisioned",
+        service: "unsupported",
         stream: "unsupported",
         vectorize: "unsupported",
         vpc_network: "unsupported",
@@ -388,11 +397,14 @@ export type UnsupportedType<T extends TargetId> = {
 export const UNSUPPORTED_REASONS: { [T in TargetId]: Record<UnsupportedType<T>, string> } = {
     "celld-vps": CELLD_VPS_REFUSALS,
     "cloudflare-wfp": {
+        ai_search: "an AI Search instance is an account resource the provision box does not create or bind yet",
+        ai_search_namespace: "an AI Search namespace is an account resource the provision box does not create or bind yet",
         artifacts: "an Artifacts namespace is an account resource the provision box does not create or bind yet",
         container: "containers need an image built and pushed per deploy, which Workers for Platforms cannot run",
         hyperdrive: "Hyperdrive points at your own database; bring-your-own origins are not supported on Lunora Cloud yet",
         media: "the Media Transformations binding is not bound to dispatch-namespace scripts yet",
         pipeline: "a pipeline needs its stream and sink configured, which wrangler.jsonc does not carry",
+        service: "a service binding needs its sibling Worker deployed alongside, which a project's deploy does not ship yet",
         stream: "a Stream binding is not bound to dispatch-namespace scripts yet",
         vectorize: "an index needs its dimensions and metric, which wrangler.jsonc does not carry",
         vpc_network: "a VPC network reaches into your own infrastructure; bring-your-own networks are not supported on Lunora Cloud yet",
@@ -400,12 +412,15 @@ export const UNSUPPORTED_REASONS: { [T in TargetId]: Record<UnsupportedType<T>, 
         workflow: "Workflows register per account script, and Workers for Platforms scripts have no such registration yet",
     },
     "cloudflare-workers": {
+        ai_search: "the provision box does not bind an AI Search instance yet",
+        ai_search_namespace: "the provision box does not bind an AI Search namespace yet",
         artifacts: "an Artifacts namespace is an account resource the provision box does not create or bind yet",
         container: "a container needs its image built and pushed to your account's registry on every deploy, which the provision box does not do yet",
         hyperdrive:
             "a Hyperdrive config needs your database's connection string, which the binding manifest does not carry; connect to it from an action instead",
         media: "the provision box does not bind Media Transformations yet",
         pipeline: "a pipeline needs its stream and sink configured, which wrangler.jsonc does not carry",
+        service: "a service binding needs its sibling Worker deployed alongside, which a project's deploy does not ship yet",
         stream: "the provision box does not bind Stream yet",
         vectorize: "an index needs its dimensions and metric, which wrangler.jsonc does not carry",
         vpc_network: "the provision box does not bind a VPC network yet",
