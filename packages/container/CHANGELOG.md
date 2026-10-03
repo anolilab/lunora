@@ -1,3 +1,9 @@
+## @lunora/container [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.66...@lunora/container@1.0.0-alpha.67) (2026-10-03)
+
+### Bug Fixes
+
+* cloudflare oct 2026 limits + observability block ([#942](https://github.com/anolilab/lunora/issues/942)) ([6145c8c](https://github.com/anolilab/lunora/commit/6145c8cfd7d5ca5fb7ff1eb1a862b93c8bc5657e))
+
 ## @lunora/container [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.65...@lunora/container@1.0.0-alpha.66) (2026-10-02)
 
 ### Features
