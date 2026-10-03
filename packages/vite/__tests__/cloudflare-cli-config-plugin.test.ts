@@ -78,6 +78,23 @@ describe(cloudflareCliConfigPlugin, () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
+    it("still registers and warns under LUNORA_CODEGEN=0 with every check switched off", () => {
+        expect.assertions(2);
+
+        vi.stubEnv("LUNORA_CODEGEN", "0");
+        writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+        const plugin = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, studio: false, validateWrangler: false }).find(
+            (candidate) => candidate.name === "lunora:cf-config-warning",
+        );
+        const warn = vi.fn<(message: string) => void>();
+
+        runConfigResolved(plugin as Plugin, warn);
+
+        expect(plugin).toBeDefined();
+        expect(warn).toHaveBeenCalledTimes(1);
+    });
+
     it("runs on build as well as serve, and is registered even with validateWrangler off", () => {
         expect.assertions(2);
 

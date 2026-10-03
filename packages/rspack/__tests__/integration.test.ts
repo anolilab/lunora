@@ -158,10 +158,16 @@ describe("rspack build (real compiler)", () => {
         }
     });
 
-    it("warns about a cloudflare.config.ts on a one-shot build", async () => {
+    // `LUNORA_CODEGEN=0` must not silence it: the warning is the first thing a
+    // session does, ahead of every codegen and validation switch.
+    it.each([
+        ["", "codegen on"],
+        ["0", "LUNORA_CODEGEN=0"],
+    ])("warns about a cloudflare.config.ts on a one-shot build (LUNORA_CODEGEN=%j, %s)", async (codegen) => {
         expect.assertions(2);
 
         vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+        vi.stubEnv("LUNORA_CODEGEN", codegen);
 
         const root = fixture();
 
@@ -322,37 +328,47 @@ describe("rspack watch (real compiler)", () => {
         expect(builds.length).toBeLessThanOrEqual(3);
     }, 60_000);
 
-    it("warns about a cloudflare.config.ts once per session, not on every pass", async () => {
-        expect.assertions(2);
+    // Under `LUNORA_CODEGEN=0` a watch pass returns before any codegen work, and
+    // the warning used to sit behind that return.
+    it.each([
+        ["", "codegen on"],
+        ["0", "LUNORA_CODEGEN=0"],
+    ])(
+        "warns about a cloudflare.config.ts once per session, not on every pass (LUNORA_CODEGEN=%j, %s)",
+        async (codegen) => {
+            expect.assertions(2);
 
-        vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+            vi.stubEnv("LUNORA_CODEGEN", codegen);
 
-        const root = fixture();
+            const root = fixture();
 
-        writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
+            writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
 
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-        try {
-            const { builds } = await watchRun(
-                root,
-                () => {
-                    // Release the process-tree guard, so only the plugin calling it
-                    // from its once-per-session slot (not every pass) keeps the
-                    // rebuild's pass quiet.
-                    vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
-                    writeFileSync(join(root, "lunora", "schema.ts"), `${SCHEMA}\n// touched\n`, "utf8");
-                },
-                { expectedBuilds: 2, settleMs: 2000 },
-            );
+            try {
+                const { builds } = await watchRun(
+                    root,
+                    () => {
+                        // Release the process-tree guard, so only the plugin calling it
+                        // from its once-per-session slot (not every pass) keeps the
+                        // rebuild's pass quiet.
+                        vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+                        writeFileSync(join(root, "lunora", "schema.ts"), `${SCHEMA}\n// touched\n`, "utf8");
+                    },
+                    { expectedBuilds: 2, settleMs: 2000 },
+                );
 
-            expect(builds.length).toBeGreaterThanOrEqual(2);
-            expect(cfWarnings(warn)).toHaveLength(1);
-        } finally {
-            warn.mockRestore();
-            vi.unstubAllEnvs();
-        }
-    }, 60_000);
+                expect(builds.length).toBeGreaterThanOrEqual(2);
+                expect(cfWarnings(warn)).toHaveLength(1);
+            } finally {
+                warn.mockRestore();
+                vi.unstubAllEnvs();
+            }
+        },
+        60_000,
+    );
 
     it("scaffolds .dev.vars, which only runs when watchMode is actually true", async () => {
         expect.assertions(3);

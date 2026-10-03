@@ -78,19 +78,8 @@ const consoleLogger: CodegenLogger = {
 };
 
 /**
- * Warn once per process tree about a Cloudflare CLI config beside the wrangler
- * config (#964). Called from the once-per-session slots only — the dev
- * preparation below, and the first pass of a one-shot build — never per rebuild.
- */
-const warnCloudflareCliConfig = (options: ResolvedLunoraRspackOptions): void => {
-    warnCloudflareCliConfigOnce(options.projectRoot, (message) => {
-        consoleLogger.warn(lunoraLine(message));
-    });
-};
-
-/**
- * Prepare `.dev.vars`, nudge for the agent rules and warn about a `cf` config — the
- * watch-mode startup courtesies `lunora dev` and `@lunora/vite` both perform.
+ * Prepare `.dev.vars` and nudge for the agent rules — the watch-mode-only
+ * courtesies `lunora dev` and `@lunora/vite` both perform at startup.
  *
  * `.dev.vars` is gitignored, so a fresh clone has none and the Worker that
  * `wrangler dev` boots alongside this build throws on its first required secret.
@@ -114,8 +103,6 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
     if (!detectAgentRules(options.projectRoot).installed && claimAgentRulesHint()) {
         consoleLogger.warn(`\n${lunoraLine(AGENT_RULES_HINT)}\n`);
     }
-
-    warnCloudflareCliConfig(options);
 };
 
 /**
@@ -151,6 +138,9 @@ class LunoraRspackPlugin {
 
     /** Guards the once-per-session startup work from re-running on every rebuild. */
     #started = false;
+
+    /** Whether this session already ran {@link #announce} — kept apart from `#started`, which the codegen switches gate. */
+    #announced = false;
 
     /** Content hash of everything codegen reads, from the last pass that ran. */
     #lastFingerprint: string | undefined;
@@ -191,6 +181,8 @@ class LunoraRspackPlugin {
      * Idempotent: the pass below sees `#started` and skips its own call.
      */
     public async prepareDevSession(): Promise<void> {
+        this.#announce();
+
         if (this.#started) {
             return;
         }
@@ -263,23 +255,24 @@ class LunoraRspackPlugin {
     }
 
     /**
-     * The once-per-session startup work, run by the first pass only. A watch
-     * session gets the dev courtesies ({@link prepareDevSession}, which includes
-     * the `cf` config warning); a one-shot build skips those but still gets the
-     * warning, since a build is where someone reaches for `cf deploy` next.
+     * The first thing a session does, ahead of every codegen and validation
+     * switch (`LUNORA_CODEGEN=0`, `validateWrangler: false`, a skipped pass, a
+     * failing `.dev.vars` scaffold): warn about a Cloudflare CLI config beside
+     * the wrangler config (#964). Once per session here, and once per process
+     * tree through the shared guard, so `lunora dev` having warned already keeps
+     * it quiet. Runs in watch mode and one-shot builds alike — a build is where
+     * someone reaches for `cf deploy` next.
      */
-    async #startSession(watching: boolean): Promise<void> {
-        if (this.#started) {
+    #announce(): void {
+        if (this.#announced) {
             return;
         }
 
-        if (watching) {
-            await prepareDevSession(this.#options);
+        this.#announced = true;
 
-            return;
-        }
-
-        warnCloudflareCliConfig(this.#options);
+        warnCloudflareCliConfigOnce(this.#options.projectRoot, (message) => {
+            consoleLogger.warn(lunoraLine(message));
+        });
     }
 
     /**
@@ -287,6 +280,8 @@ class LunoraRspackPlugin {
      * schema advisory is reported as a build error.
      */
     async #pass(watching: boolean): Promise<void> {
+        this.#announce();
+
         // A DEV switch, honoured only in watch mode. A one-shot build must keep
         // generating, because the escalation in `#generate` is the only thing that
         // fails a build on an ERROR-level advisory or platform diagnostic —
@@ -339,7 +334,9 @@ class LunoraRspackPlugin {
             // read-only directory would otherwise reject the hook and end the watch
             // session — the one thing this plugin promises never to do. Leaving
             // `#started` unset on failure lets the next rebuild retry it.
-            await this.#startSession(watching);
+            if (!this.#started && watching) {
+                await prepareDevSession(this.#options);
+            }
 
             this.#started = true;
 
