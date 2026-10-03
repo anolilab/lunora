@@ -1,4 +1,4 @@
-import { CELLD_RELEASE_BINDING_TYPES, releaseResourceName } from "@lunora/config/celld";
+import { CELLD_RELEASE_BINDINGS, releaseResourceName } from "@lunora/config/celld";
 import { LunoraError } from "@lunora/errors";
 import { CELLD_CAPABILITIES } from "@lunora/platform";
 import { describe, expect, it } from "vitest";
@@ -138,24 +138,22 @@ describe("celld-vps agrees with celld's capability matrix", () => {
 });
 
 // The box builds its celld config from the stored release with `@lunora/config/celld`
-// (plan 458 W3); it must refuse exactly what this table refuses, and name every
-// resource exactly as the other targets do.
-describe("the box's celld config agrees with the celld-vps row", () => {
-    it("runs exactly the binding types the row does not refuse", () => {
-        const runs = (Object.entries(BINDING_SUPPORT["celld-vps"]) as [BindingType, string][])
-            .filter(([, support]) => support !== "unsupported")
-            .map(([type]) => type);
+// (plan 458 W3); the celld-vps row and tenantResourceName are built from that
+// module, so they cannot drift. This checks the build, which a cast types.
+describe("the celld-vps row is built from the box's celld config", () => {
+    it("rates every binding type celld runs as celld does, and refuses the rest", () => {
+        for (const [type, support] of Object.entries(BINDING_SUPPORT["celld-vps"]) as [BindingType, string][]) {
+            expect(support).toBe((CELLD_RELEASE_BINDINGS as Partial<Record<BindingType, string>>)[type] ?? "unsupported");
+        }
 
-        expect([...CELLD_RELEASE_BINDING_TYPES].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(runs.toSorted((a, b) => a.localeCompare(b)));
+        expect(Object.keys(BINDING_SUPPORT["celld-vps"]).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            Object.keys(BINDING_SUPPORT["cloudflare-wfp"]).toSorted((a, b) => a.localeCompare(b)),
+        );
     });
 
-    it.each([
-        ["my-app", "DB", "d1"],
-        ["app-b", "USER_FILES", "r2"],
-        ["shop", "JOBS", "queue_producer"],
-        ["a", "Cache", "kv"],
-    ] as const)("names %s's %s (%s) as tenantResourceName does", (alias, binding, type) => {
-        expect(releaseResourceName(alias, binding)).toBe(tenantResourceName(alias, { binding, type }));
+    it("names resources as the box does, Analytics Engine datasets with `_`", () => {
+        expect(tenantResourceName("my-app", { binding: "USER_FILES", type: "r2" })).toBe(releaseResourceName("my-app", "USER_FILES"));
+        expect(tenantResourceName("my-app", { binding: "EVENTS", type: "analytics_engine" })).toBe("my_app__events");
     });
 });
 

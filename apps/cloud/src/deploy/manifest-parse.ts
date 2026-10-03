@@ -5,7 +5,7 @@
  * reads only the target's static tables (`BINDING_SUPPORT`,
  * `UNSUPPORTED_REASONS`) — never a driver.
  */
-import { isAlias } from "@lunora/hostd/protocol";
+import { isReleaseAlias } from "@lunora/config/celld";
 
 import type { AssetFile, AssetsUpload, BindingRequirement, BindingType, DeployManifest, TargetId } from "../provision-contract";
 import { BINDING_SUPPORT, tenantResourceName, unsupportedReason } from "../provision-contract";
@@ -378,7 +378,7 @@ export const parsePayload = (
 ): Parsed<{ assets: AssetsUpload | undefined; manifest: DeployManifest }> => {
     // The script name is the project alias: it becomes the public subdomain and
     // keys every per-project resource, so it must be a shape that cannot collide.
-    if (!isAlias(alias)) {
+    if (!isReleaseAlias(alias)) {
         return { error: "scriptName must be lowercase letters and digits in dash-separated runs, at most 63 characters" };
     }
 

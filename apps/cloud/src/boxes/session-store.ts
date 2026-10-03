@@ -7,8 +7,9 @@
  * the scheduled sweeps write from (`src/server.ts`). A revoked row is never
  * moved back to `online` or `offline` — revocation is final.
  */
+import { isReleaseAlias } from "@lunora/config/celld";
 import type { BoxResources, BoxVersions, FleetSummary, RouteEntry } from "@lunora/hostd/protocol";
-import { HOSTD_PROTOCOL_LIMITS, isAlias, isHostname } from "@lunora/hostd/protocol";
+import { HOSTD_PROTOCOL_LIMITS, isHostname } from "@lunora/hostd/protocol";
 
 import type { ControlPlaneStore } from "../d1-store";
 import { normaliseFleets } from "./fleets";
@@ -133,14 +134,14 @@ const projectRoutes = async (database: ControlPlaneStore, project: ProjectRow, d
     const routes: [string, string][] = [];
 
     for (const { alias, status } of deployments as { alias?: null | string; status: string }[]) {
-        if (alias != null && ROUTED_STATUSES.has(status) && isAlias(alias) && isHostname(defaultHost(alias))) {
+        if (alias != null && ROUTED_STATUSES.has(status) && isReleaseAlias(alias) && isHostname(defaultHost(alias))) {
             routes.push([defaultHost(alias), alias]);
         }
     }
 
     const production = project.activeScriptName;
 
-    if (production == null || !isAlias(production)) {
+    if (production == null || !isReleaseAlias(production)) {
         return routes;
     }
 

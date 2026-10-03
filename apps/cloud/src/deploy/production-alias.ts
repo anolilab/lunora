@@ -12,9 +12,7 @@
  * slug with a short form of the organization id, then that with a random
  * suffix.
  */
-
-/** Longest alias: one DNS label. */
-const MAX_ALIAS_LENGTH = 63;
+import { MAX_RELEASE_ALIAS_LENGTH } from "@lunora/config/celld";
 
 /** Characters of the organization id in the second candidate. */
 const ORG_SUFFIX_LENGTH = 8;
@@ -25,7 +23,7 @@ const RANDOM_SUFFIX_LENGTH = 4;
 /** Last-resort candidates tried after the deterministic two. */
 export const RANDOM_ATTEMPTS = 3;
 
-/** Lowercase `[a-z0-9]` runs joined by single dashes — the alias grammar (`isAlias`). */
+/** Lowercase `[a-z0-9]` runs joined by single dashes — the alias grammar (`isReleaseAlias`). */
 const toLabel = (value: string): string => {
     let label = "";
 
@@ -42,7 +40,7 @@ const toLabel = (value: string): string => {
 
 /** `base`, cut so `-{suffix}` still fits one label, with the suffix appended. */
 const withSuffix = (base: string, suffix: string): string => {
-    const room = MAX_ALIAS_LENGTH - suffix.length - 1;
+    const room = MAX_RELEASE_ALIAS_LENGTH - suffix.length - 1;
     const cut = base.length > room ? toLabel(base.slice(0, room)) : base;
 
     return `${cut}-${suffix}`;
@@ -66,7 +64,7 @@ const randomSuffix = (count: number): string => {
  * character becomes `app`.
  */
 export const productionAliasCandidates = (slug: string, organizationId: string, random: (count: number) => string = randomSuffix): string[] => {
-    const base = toLabel(toLabel(slug).slice(0, MAX_ALIAS_LENGTH)) || "app";
+    const base = toLabel(toLabel(slug).slice(0, MAX_RELEASE_ALIAS_LENGTH)) || "app";
     const organization = toLabel(organizationId).replaceAll("-", "").slice(0, ORG_SUFFIX_LENGTH) || "org";
     const scoped = withSuffix(base, organization);
 

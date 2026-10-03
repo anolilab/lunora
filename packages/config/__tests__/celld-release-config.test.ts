@@ -3,7 +3,14 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import type { CelldReleaseManifest, CelldReleaseOptions } from "../src/celld";
-import { CELLD_RELEASE_BINDING_TYPES, celldConfigFromRelease, CelldReleaseConfigError, releaseResourceName } from "../src/celld";
+import {
+    CELLD_RELEASE_BINDING_TYPES,
+    celldConfigFromRelease,
+    CelldReleaseConfigError,
+    isReleaseAlias,
+    MAX_RELEASE_ALIAS_LENGTH,
+    releaseResourceName,
+} from "../src/celld";
 import type { BindingRequirement } from "../src/cloudflare/binding-manifest";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`__fixtures__/celld-release/${name}`, import.meta.url), "utf8"));
@@ -149,6 +156,20 @@ describe(releaseResourceName, () => {
         expect.assertions(1);
 
         expect(releaseResourceName("app", "B_DB")).not.toBe(releaseResourceName("app-b", "DB"));
+    });
+});
+
+describe(isReleaseAlias, () => {
+    it("accepts one DNS label of dash-separated [a-z0-9] runs, at most 63 characters", () => {
+        expect.assertions(6);
+
+        expect(isReleaseAlias("my-app-2")).toBe(true);
+        expect(isReleaseAlias("a".repeat(MAX_RELEASE_ALIAS_LENGTH))).toBe(true);
+        expect(isReleaseAlias("a".repeat(MAX_RELEASE_ALIAS_LENGTH + 1))).toBe(false);
+        // `--` is what keeps releaseResourceName injective.
+        expect(isReleaseAlias("my--app")).toBe(false);
+        expect(isReleaseAlias("-app")).toBe(false);
+        expect(isReleaseAlias("My_App")).toBe(false);
     });
 });
 

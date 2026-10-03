@@ -368,10 +368,13 @@ included). As built:
   `new_sqlite_classes` migration under one tag (celld v0.6.0 accepts a
   growing class list under the same tag); a KV-backed class or a binding to
   another Worker's class is refused;
-- resource names: `@lunora/config` cannot import `apps/cloud` (D17), so
-  `releaseResourceName` restates `tenantResourceName`'s `{alias}--{binding}`
-  rule, and `apps/cloud/__tests__/binding-support.test.ts` pins the two —
-  and the refused binding types against the `celld-vps` row — together;
+- resource names, the alias grammar and the binding types celld runs live in
+  `@lunora/config/celld` (`releaseResourceName`, `isReleaseAlias`,
+  `CELLD_RELEASE_BINDINGS`); `apps/cloud` imports them —
+  `tenantResourceName` adds only the Analytics Engine `-` → `_` swap, and the
+  `celld-vps` binding row is built from the map (§11). The provision
+  container's `plan.mjs` cannot import TypeScript, so it keeps a copy of the
+  alias rule that `__tests__/provision-plan.test.ts` pins to the config export;
 - the full golden fixture passes a real `celld deploy --dry-run` (run by hand
   against v0.6.0; not yet wired into the `test:celld` lane).
 

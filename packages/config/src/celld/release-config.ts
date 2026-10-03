@@ -14,9 +14,13 @@
  * project moved between targets keeps its names. Durable Object classes must
  * be SQLite-backed: celld creates nothing else, so one cumulative
  * `new_sqlite_classes` migration lists them all. Binding types celld cannot run
- * are refused by name, all at once, before anything is written: the same set
- * the `celld-vps` row of the control plane's binding table refuses
- * (`apps/cloud/src/provision-contract.ts`, where a test pins the two together).
+ * are refused by name, all at once, before anything is written.
+ *
+ * This module is the one home of those rules: the alias grammar
+ * ({@link isReleaseAlias}), the resource names ({@link releaseResourceName}) and
+ * the binding types celld runs ({@link CELLD_RELEASE_BINDINGS}). `apps/cloud`
+ * builds its `celld-vps` binding row and its `tenantResourceName` from them, so
+ * the control plane and the box cannot disagree.
  *
  * The result goes through {@link projectCelldConfig}, the projection every celld
  * deploy uses, so it can only ever hold the top-level keys celld accepts.
@@ -85,38 +89,59 @@ const MIGRATION_TAG = "lunora-v1";
 const DEFAULT_COMPATIBILITY_FLAGS: ReadonlyArray<string> = ["nodejs_compat"];
 
 /**
- * The binding types a celld fleet runs, and so a release may carry. Every other
- * type is refused. Kept equal to the types the `celld-vps` row of the control
- * plane's binding table does not mark `unsupported`.
+ * The binding types a celld fleet runs, and so a release may carry, with how
+ * each is satisfied: `provisioned` — a per-project resource this config names
+ * ({@link releaseResourceName}); `bound` — bound as the manifest declares it.
+ * Every other type is refused. The control plane's `celld-vps` binding row is
+ * built from this map.
  */
-const CELLD_RELEASE_BINDING_TYPES: ReadonlySet<BindingRequirement["type"]> = new Set([
-    "assets",
-    "d1",
-    "durable_object",
-    "kv",
-    "queue_consumer",
-    "queue_producer",
-    "r2",
-    "workflow",
-]);
+interface CelldReleaseBindings {
+    readonly assets: "bound";
+    readonly d1: "provisioned";
+    readonly durable_object: "bound";
+    readonly kv: "provisioned";
+    readonly queue_consumer: "bound";
+    readonly queue_producer: "provisioned";
+    readonly r2: "provisioned";
+    readonly workflow: "bound";
+}
 
-/** One DNS label: dash-separated runs of `[a-z0-9]`, at most 63 characters — the alias rule of every target. */
-const ALIAS_PATTERN = /^[a-z\d]+(?:-[a-z\d]+)*$/u;
+/** {@link CelldReleaseBindings} as a value. */
+const CELLD_RELEASE_BINDINGS: CelldReleaseBindings = {
+    assets: "bound",
+    d1: "provisioned",
+    durable_object: "bound",
+    kv: "provisioned",
+    queue_consumer: "bound",
+    queue_producer: "provisioned",
+    r2: "provisioned",
+    workflow: "bound",
+};
 
-const MAX_ALIAS_LENGTH = 63;
+/** The binding types celld runs ({@link CELLD_RELEASE_BINDINGS}' keys). */
+const CELLD_RELEASE_BINDING_TYPES: ReadonlySet<BindingRequirement["type"]> = new Set(Object.keys(CELLD_RELEASE_BINDINGS) as BindingRequirement["type"][]);
+
+/** One DNS label: dash-separated runs of `[a-z0-9]` — the alias rule of every target. */
+const RELEASE_ALIAS_PATTERN: RegExp = /^[a-z\d]+(?:-[a-z\d]+)*$/u;
+
+/** Longest alias: one DNS label. */
+const MAX_RELEASE_ALIAS_LENGTH = 63;
 
 /** The tightest name limit across the named resource types (R2 buckets, queues). */
 const MAX_RESOURCE_NAME = 63;
 
+/** Whether `alias` is a deployment alias: one DNS label of dash-separated `[a-z0-9]` runs, at most 63 characters. */
+const isReleaseAlias = (alias: string): boolean => alias.length <= MAX_RELEASE_ALIAS_LENGTH && RELEASE_ALIAS_PATTERN.test(alias);
+
 /**
  * The per-project name of a D1 database, KV namespace, R2 bucket or queue:
  * `{alias}--{binding}`, the binding lowercased with `_` → `-`. Injective, since an
- * alias never contains `--`; the same rule `apps/cloud` names Workers for
- * Platforms resources with.
+ * alias never contains `--`; `apps/cloud`'s `tenantResourceName` names every
+ * target's resources with it.
  * @throws {CelldReleaseConfigError} when the alias is malformed or the name is over 63 characters.
  */
 const releaseResourceName = (alias: string, binding: string): string => {
-    if (alias.length > MAX_ALIAS_LENGTH || !ALIAS_PATTERN.test(alias)) {
+    if (!isReleaseAlias(alias)) {
         throw new CelldReleaseConfigError(`alias "${alias}" must be dash-separated runs of [a-z0-9], at most 63 characters`);
     }
 
@@ -290,12 +315,17 @@ const celldConfigFromRelease = (manifest: CelldReleaseManifest, options: CelldRe
     return projected;
 };
 
-export type { CelldReleaseAssetsConfig, CelldReleaseManifest, CelldReleaseOptions, CelldReleaseRefusal };
+export type { CelldReleaseAssetsConfig, CelldReleaseBindings, CelldReleaseManifest, CelldReleaseOptions, CelldReleaseRefusal };
 export {
     CELLD_RELEASE_ASSETS_DIRECTORY,
     CELLD_RELEASE_BINDING_TYPES,
+    CELLD_RELEASE_BINDINGS,
     CELLD_RELEASE_MAIN,
     celldConfigFromRelease,
     CelldReleaseConfigError,
+    isReleaseAlias,
+    MAX_RELEASE_ALIAS_LENGTH,
+    MAX_RESOURCE_NAME,
+    RELEASE_ALIAS_PATTERN,
     releaseResourceName,
 };

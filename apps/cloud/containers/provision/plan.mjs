@@ -52,6 +52,13 @@ class PlanError extends Error {}
 // Control-plane-issued identifiers. They name Alchemy stacks and the stage (which
 // must also satisfy Alchemy's `--stage` pattern) and Cloudflare scripts.
 const LABEL = /^[a-z0-9][a-z0-9_-]{0,62}$/u;
+// The deployment alias: one DNS label of dash-separated `[a-z0-9]` runs, at most
+// 63 characters. A copy of `RELEASE_ALIAS_PATTERN` / `MAX_RELEASE_ALIAS_LENGTH`
+// in `@lunora/config/celld`, the rule's one home: this file ships as plain JS
+// in the provision container and cannot import it, so
+// `__tests__/provision-plan.test.ts` pins the two together.
+const ALIAS_PATTERN = /^[a-z\d]+(?:-[a-z\d]+)*$/u;
+const MAX_ALIAS_LENGTH = 63;
 // `env` property names: JavaScript identifiers, as the deploy handler enforces.
 const BINDING_NAME = /^[A-Za-z_]\w{0,63}$/u;
 const CLASS_NAME = /^[A-Za-z_$][\w$]{0,127}$/u;
@@ -79,6 +86,21 @@ const expect = (value, pattern, what) => {
     }
 
     return value;
+};
+
+/**
+ * Assert a job's alias follows the alias rule ({@link ALIAS_PATTERN}).
+ * @param {unknown} value The job's untrusted alias.
+ * @returns {string} The alias.
+ */
+const expectAlias = (value) => {
+    const alias = expect(value, ALIAS_PATTERN, "alias");
+
+    if (alias.length > MAX_ALIAS_LENGTH) {
+        throw new PlanError(`alias ${JSON.stringify(alias)} is not valid`);
+    }
+
+    return alias;
 };
 
 /**
@@ -267,7 +289,7 @@ const planCrons = (crons, target) => {
  * @returns {{ project: ProjectStack, worker: WorkerStack }} Both stacks' declarations.
  */
 const planDeploy = (spec, controlPlaneScript, target) => {
-    const alias = expect(spec.alias, LABEL, "alias");
+    const alias = expectAlias(spec.alias);
 
     if (typeof spec.bundle !== "string" || spec.bundle === "") {
         throw new PlanError("the job carries no bundle");
@@ -402,7 +424,7 @@ const planDeploy = (spec, controlPlaneScript, target) => {
  */
 const planJob = (job, options) => {
     if (job.action === "destroy") {
-        const alias = expect(job.alias, LABEL, "alias");
+        const alias = expectAlias(job.alias);
 
         return {
             ...planTarget(job.target),
@@ -431,4 +453,4 @@ const planJob = (job, options) => {
     };
 };
 
-export { assetRelativePath, DEFAULT_COMPATIBILITY_DATE, PlanError, planJob };
+export { ALIAS_PATTERN, assetRelativePath, DEFAULT_COMPATIBILITY_DATE, MAX_ALIAS_LENGTH, PlanError, planJob };

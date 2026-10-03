@@ -1738,6 +1738,12 @@ const writeLinkedProject: (projectRoot: string, link: LinkedProject) => string;
 const CELLD_RELEASE_ASSETS_DIRECTORY = "assets";
 ```
 
+### `CELLD_RELEASE_BINDINGS` (const)
+
+```ts
+const CELLD_RELEASE_BINDINGS: CelldReleaseBindings;
+```
+
 ### `CELLD_RELEASE_BINDING_TYPES` (const)
 
 ```ts
@@ -1757,6 +1763,21 @@ interface CelldReleaseAssetsConfig {
     html_handling?: "auto-trailing-slash" | "drop-trailing-slash" | "force-trailing-slash" | "none";
     not_found_handling?: "404-page" | "none" | "single-page-application";
     run_worker_first?: boolean | ReadonlyArray<string>;
+}
+```
+
+### `CelldReleaseBindings` (interface)
+
+```ts
+interface CelldReleaseBindings {
+    readonly assets: "bound";
+    readonly d1: "provisioned";
+    readonly durable_object: "bound";
+    readonly kv: "provisioned";
+    readonly queue_consumer: "bound";
+    readonly queue_producer: "provisioned";
+    readonly r2: "provisioned";
+    readonly workflow: "bound";
 }
 ```
 
@@ -1803,10 +1824,34 @@ interface CelldReleaseRefusal {
 }
 ```
 
+### `MAX_RELEASE_ALIAS_LENGTH` (const)
+
+```ts
+const MAX_RELEASE_ALIAS_LENGTH = 63;
+```
+
+### `MAX_RESOURCE_NAME` (const)
+
+```ts
+const MAX_RESOURCE_NAME = 63;
+```
+
+### `RELEASE_ALIAS_PATTERN` (const)
+
+```ts
+const RELEASE_ALIAS_PATTERN: RegExp;
+```
+
 ### `celldConfigFromRelease` (const)
 
 ```ts
 const celldConfigFromRelease: (manifest: CelldReleaseManifest, options: CelldReleaseOptions) => Config;
+```
+
+### `isReleaseAlias` (const)
+
+```ts
+const isReleaseAlias: (alias: string) => boolean;
 ```
 
 ### `releaseResourceName` (const)

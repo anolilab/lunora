@@ -17,8 +17,9 @@
  * `lunora build --emit-bindings` writes — so the cloud never re-derives what an
  * app needs from `wrangler.jsonc` by hand.
  */
+import type { CelldReleaseBindings } from "@lunora/config/celld";
+import { CELLD_RELEASE_BINDINGS, isReleaseAlias, releaseResourceName } from "@lunora/config/celld";
 import type { BindingRequirement } from "@lunora/config/cloudflare";
-import { isAlias } from "@lunora/hostd/protocol";
 
 export type { BindingRequirement } from "@lunora/config/cloudflare";
 
@@ -258,6 +259,36 @@ export type CellTargetId = Exclude<TargetId, AccountTargetId | BoxTargetId>;
 
 export type DeployKind = "dev" | "preview" | "production";
 
+/** Why `celld-vps` refuses each binding type celld does not run — exactly those, or this fails to compile. */
+const CELLD_VPS_REFUSALS: Readonly<Record<Exclude<BindingType, keyof CelldReleaseBindings>, string>> = {
+    ai: "Workers AI is not a celld binding; call a model over fetch instead (celld routes `<provider>/<model>` through LUNORA_AI_PROXY_URL, not an env.AI binding)",
+    analytics_engine: "Analytics Engine is not a celld binding type",
+    artifacts: "an Artifacts namespace is a Cloudflare account resource with no celld equivalent",
+    browser: "Browser Rendering is not a celld binding type",
+    container: "celld runs containers only with Docker on the node, and Lunora Cloud keeps managed boxes Docker-free for now",
+    hyperdrive: "Hyperdrive is not a celld binding type; connect to your database from an action instead",
+    images: "the Images binding is not a celld binding type",
+    media: "the Media Transformations binding is not a celld binding type",
+    pipeline: "Pipelines is not a celld binding type",
+    stream: "Stream is not a celld binding type",
+    vectorize: "Vectorize is not a celld binding type",
+    vpc_network: "a VPC network is a Cloudflare account resource with no celld equivalent",
+    vpc_service: "a VPC service is a Cloudflare account resource with no celld equivalent",
+};
+
+/** The `celld-vps` binding row: celld's own map, every other type `unsupported`. */
+type CelldVpsSupport = { readonly [K in BindingType]: K extends keyof CelldReleaseBindings ? CelldReleaseBindings[K] : "unsupported" };
+
+/**
+ * {@link CelldVpsSupport} as a value. Built rather than spelled out, so the
+ * box's celld config ({@link CELLD_RELEASE_BINDINGS}) is the one list; the cast
+ * restates the spread in the mapped type TypeScript cannot follow it into.
+ */
+const CELLD_VPS_SUPPORT = {
+    ...Object.fromEntries(Object.keys(CELLD_VPS_REFUSALS).map((type) => [type, "unsupported"])),
+    ...CELLD_RELEASE_BINDINGS,
+} as CelldVpsSupport;
+
 /**
  * How each target satisfies each binding type ({@link BindingSupport}).
  *
@@ -268,34 +299,15 @@ export type DeployKind = "dev" | "preview" | "production";
  */
 export const BINDING_SUPPORT = {
     /**
-     * A customer box running celld (plan 458), rated from celld's own capability
-     * matrix (`@lunora/platform`'s `CELLD_CAPABILITIES`) — never looser than it,
-     * and stricter only where `__tests__/binding-support.test.ts` lists why.
-     * Queue consumers and crons are celld's own, not routed: celld delivers them.
+     * A customer box running celld (plan 458): exactly what the box's own celld
+     * config runs (`CELLD_RELEASE_BINDINGS` in `@lunora/config/celld`, which
+     * also says what is provisioned), every other type refused with its reason
+     * in {@link UNSUPPORTED_REASONS}. Never looser than celld's capability
+     * matrix (`@lunora/platform`'s `CELLD_CAPABILITIES`), stricter only where
+     * `__tests__/binding-support.test.ts` lists why. Queue consumers and crons
+     * are celld's own, not routed: celld delivers them.
      */
-    "celld-vps": {
-        ai: "unsupported",
-        analytics_engine: "unsupported",
-        artifacts: "unsupported",
-        assets: "bound",
-        browser: "unsupported",
-        container: "unsupported",
-        d1: "provisioned",
-        durable_object: "bound",
-        hyperdrive: "unsupported",
-        images: "unsupported",
-        kv: "provisioned",
-        media: "unsupported",
-        pipeline: "unsupported",
-        queue_consumer: "bound",
-        queue_producer: "provisioned",
-        r2: "provisioned",
-        stream: "unsupported",
-        vectorize: "unsupported",
-        vpc_network: "unsupported",
-        vpc_service: "unsupported",
-        workflow: "bound",
-    },
+    "celld-vps": CELLD_VPS_SUPPORT,
     "cloudflare-wfp": {
         ai: "bound",
         analytics_engine: "provisioned",
@@ -365,21 +377,7 @@ export type UnsupportedType<T extends TargetId> = {
  * error, so each is worded for the host it describes.
  */
 export const UNSUPPORTED_REASONS: { [T in TargetId]: Record<UnsupportedType<T>, string> } = {
-    "celld-vps": {
-        ai: "Workers AI is not a celld binding; call a model over fetch instead (celld routes `<provider>/<model>` through LUNORA_AI_PROXY_URL, not an env.AI binding)",
-        analytics_engine: "Analytics Engine is not a celld binding type",
-        artifacts: "an Artifacts namespace is a Cloudflare account resource with no celld equivalent",
-        browser: "Browser Rendering is not a celld binding type",
-        container: "celld runs containers only with Docker on the node, and Lunora Cloud keeps managed boxes Docker-free for now",
-        hyperdrive: "Hyperdrive is not a celld binding type; connect to your database from an action instead",
-        images: "the Images binding is not a celld binding type",
-        media: "the Media Transformations binding is not a celld binding type",
-        pipeline: "Pipelines is not a celld binding type",
-        stream: "Stream is not a celld binding type",
-        vectorize: "Vectorize is not a celld binding type",
-        vpc_network: "a VPC network is a Cloudflare account resource with no celld equivalent",
-        vpc_service: "a VPC service is a Cloudflare account resource with no celld equivalent",
-    },
+    "celld-vps": CELLD_VPS_REFUSALS,
     "cloudflare-wfp": {
         artifacts: "an Artifacts namespace is an account resource the provision box does not create or bind yet",
         container: "containers need an image built and pushed per deploy, which Workers for Platforms cannot run",
@@ -411,33 +409,20 @@ export const UNSUPPORTED_REASONS: { [T in TargetId]: Record<UnsupportedType<T>, 
 export const unsupportedReason = (target: TargetId, type: BindingType): string | undefined =>
     (UNSUPPORTED_REASONS[target] as Readonly<Partial<Record<BindingType, string>>>)[type];
 
-/** Cloudflare's tightest name limit across the provisioned types (R2 buckets, queues). */
-const MAX_RESOURCE_NAME = 63;
-
 /**
- * The account-unique name of a per-project resource: `{alias}--{binding}`.
+ * The account-unique name of a per-project resource: `{alias}--{binding}`
+ * (`releaseResourceName` in `@lunora/config/celld`, the one implementation the
+ * box's celld config uses too).
  *
  * Keyed by the project alias (stable across releases) and the binding name, so
- * a re-deploy reuses the resource and a rollback sees the same data. The binding
- * is lowercased with `_` → `-` (binding names are `[A-Za-z_]\w*`, so this only
- * folds case — the handler refuses bindings that differ only in case). Analytics
- * Engine datasets swap `-` for `_`, the only separator they allow.
- *
- * Injective because an alias never contains `--`: two different tenants can never
- * be handed the same database. A single `-` separator was not — alias `app` +
- * binding `B_DB` and alias `app-b` + binding `DB` both named `app-b-db`.
+ * a re-deploy reuses the resource and a rollback sees the same data, and a
+ * project moved between targets keeps its names. Injective because an alias
+ * never contains `--`. The one thing added here: Analytics Engine datasets
+ * swap `-` for `_`, the only separator they allow.
  * @throws when the alias is malformed or the name exceeds 63 characters.
  */
 export const tenantResourceName = (alias: string, requirement: Pick<BindingRequirement, "binding" | "type">): string => {
-    if (!isAlias(alias)) {
-        throw new Error(`alias "${alias}" must be dash-separated runs of [a-z0-9], at most 63 characters`);
-    }
-
-    const name = `${alias}--${requirement.binding.toLowerCase().replaceAll("_", "-")}`;
-
-    if (name.length > MAX_RESOURCE_NAME) {
-        throw new Error(`resource name "${name}" exceeds ${String(MAX_RESOURCE_NAME)} characters; shorten the project name or binding ${requirement.binding}`);
-    }
+    const name = releaseResourceName(alias, requirement.binding);
 
     return requirement.type === "analytics_engine" ? name.replaceAll("-", "_") : name;
 };
@@ -447,7 +432,7 @@ export const aliasOfResourceName = (name: string): string | undefined => {
     const separator = name.indexOf("--");
     const alias = separator === -1 ? "" : name.slice(0, separator);
 
-    return isAlias(alias) && separator + 2 < name.length ? alias : undefined;
+    return isReleaseAlias(alias) && separator + 2 < name.length ? alias : undefined;
 };
 
 /**

@@ -1,7 +1,8 @@
+import { MAX_RELEASE_ALIAS_LENGTH, RELEASE_ALIAS_PATTERN } from "@lunora/config/celld";
 import { describe, expect, it } from "vitest";
 
 import type { ProvisionJob } from "../containers/provision/plan.mjs";
-import { assetRelativePath, DEFAULT_COMPATIBILITY_DATE, PlanError, planJob } from "../containers/provision/plan.mjs";
+import { ALIAS_PATTERN, assetRelativePath, DEFAULT_COMPATIBILITY_DATE, MAX_ALIAS_LENGTH, PlanError, planJob } from "../containers/provision/plan.mjs";
 import type { BindingRequirement } from "../src/provision-contract";
 import { BINDING_SUPPORT as BINDING_SUPPORT_BY_TARGET, tenantResourceName } from "../src/provision-contract";
 
@@ -411,6 +412,16 @@ describe("provision plan: a customer's own account (cloudflare-workers)", () => 
         expect.assertions(2);
 
         refuse(deployJob([], { crons: ["* * * * *"] }), /cannot carry cron triggers/u);
+    });
+});
+
+describe("the provision plan's alias rule", () => {
+    // plan.mjs ships as plain JS in the provision container and cannot import
+    // `@lunora/config`, so it carries a copy of the alias rule; this keeps the copy exact.
+    it("is the one `@lunora/config/celld` defines", () => {
+        expect(ALIAS_PATTERN.source).toBe(RELEASE_ALIAS_PATTERN.source);
+        expect(ALIAS_PATTERN.flags).toBe(RELEASE_ALIAS_PATTERN.flags);
+        expect(MAX_ALIAS_LENGTH).toBe(MAX_RELEASE_ALIAS_LENGTH);
     });
 });
 
