@@ -1,6 +1,7 @@
 import { moduleOf } from "../../../../../shared/architecture-manifest";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteLabel } from "../helpers";
 
 /**
  * Flags a function that writes to a table another module declares it owns
@@ -19,6 +20,13 @@ import type { Lint } from "../../types";
  * by-id writes (`patch`/`replace`/`delete`, the table read off the id's type),
  * batch writes and facade writes all count; a write whose table is unreadable
  * (an untyped id) is skipped.
+ *
+ * A write inside a same-file helper arrives attributed to each export calling
+ * the helper, so moving the write into a helper does not hide it. One in a helper
+ * no export calls arrives with `exportName: ""` and is still flagged, named by
+ * the helper. The fix that does satisfy the lint is putting the write in the
+ * owner's files: an exported owner-module helper taking the caller's `ctx`, or a
+ * registered owner mutation called through `ctx.runMutation`.
  */
 const crossModuleTableWrite: Lint = {
     categories: ["SCHEMA"],
@@ -28,7 +36,7 @@ const crossModuleTableWrite: Lint = {
     level: "WARN",
     name: "cross_module_table_write",
     remediation:
-        "Move the write behind a function in the owning module and call that instead (`ctx.runMutation(internal.<owner>.<fn>, …)`), or move the table's ownership to the module that writes it. For a component's table, call the function the component exports for that write.",
+        "Move the write into the owning module and call it from there: an exported helper in the owner's files that takes the caller's `ctx` (`openInvoice(ctx, …)`) keeps the write in the caller's invocation, and a registered owner mutation runs through `ctx.runMutation(internal.<owner>.<fn>, …)`. Or move the table's ownership to the module that writes it. For a component's table, call the function the component exports for that write.",
     run: (context) => {
         const modules = context.modules ?? [];
         const owners = new Map(modules.flatMap((entry) => entry.tables.map((table) => [table, entry] as const)));
@@ -46,7 +54,9 @@ const crossModuleTableWrite: Lint = {
             const owner = owners.get(write.table);
             const writer = moduleOf(modules, write.file);
 
-            const cacheKey = `cross_module_table_write:${write.file}:${write.exportName}:${write.table}`;
+            // A write no export reaches (`exportName: ""`) is named by its helper.
+            const caller = callSiteLabel(write);
+            const cacheKey = `cross_module_table_write:${write.file}:${caller}:${write.table}`;
 
             if (owner === undefined || owner.name === writer || seen.has(cacheKey)) {
                 return [];
@@ -55,14 +65,17 @@ const crossModuleTableWrite: Lint = {
             seen.add(cacheKey);
 
             const ownedBy = owner.installed === true ? `the installed component \`${owner.name}\`` : `module \`${owner.name}\``;
+            const orphan = write.helper === undefined ? "at module scope" : "a non-exported helper no exported function calls";
+            const where = write.exportName === "" ? `${write.file}, ${orphan}` : write.file;
 
             return [
                 emit(crossModuleTableWrite, {
                     cacheKey,
-                    detail: `\`${write.exportName}\` (${write.file}) writes to \`${write.table}\`, which ${ownedBy} owns, from ${writer === undefined ? "outside every module" : `module \`${writer}\``}.`,
+                    detail: `\`${caller}\` (${where}) writes to \`${write.table}\`, which ${ownedBy} owns, from ${writer === undefined ? "outside every module" : `module \`${writer}\``}.`,
                     metadata: {
                         exportName: write.exportName,
                         file: write.file,
+                        ...(write.exportName === "" ? { helper: caller, line: write.line } : {}),
                         owner: owner.name,
                         table: write.table,
                         ...(owner.installed === true ? { installed: true } : {}),

@@ -95,4 +95,21 @@ describe("unbounded_collect", () => {
         // `filter-scope.test.ts` — it is a property of `Map`, not of either lint.
         expect(unboundedCollect.run({ queries: [read("unknownTable")], schema: schema() })[0]?.detail).toContain("loads every row");
     });
+
+    it("reports a read in a helper shared by several exports once", () => {
+        expect.assertions(2);
+
+        // The feeder records the helper's read once per exported caller, at the same line.
+        const queries = [read("notes", { exportName: "list" }), read("notes", { exportName: "search" })];
+
+        expect(unboundedCollect.run({ queries, schema: schema() })).toHaveLength(1);
+        expect(
+            filterWithoutIndex.run({
+                queries: queries.map((query) => {
+                    return { ...query, hasFilter: true };
+                }),
+                schema: schema(),
+            }),
+        ).toHaveLength(1);
+    });
 });

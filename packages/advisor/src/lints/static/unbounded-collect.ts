@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Level, Lint } from "../../types";
-import { queryReadLocation, shardKindsByTable } from "../helpers";
+import { queryReadLocation, shardKindsByTable, uniqueReadSites } from "../helpers";
 
 /**
  * How a finding is worded and rated per storage tier — what the read actually
@@ -64,7 +64,7 @@ const unboundedCollect: Lint = {
         const findings = [];
         const shardKinds = shardKindsByTable(context.schema);
 
-        for (const read of context.queries ?? []) {
+        for (const read of uniqueReadSites(context.queries ?? [])) {
             // Not a candidate at all: bounded or narrowed, or a dynamic table we
             // cannot name.
             if (read.terminal !== "collect" || read.hasIndex || read.table === "") {

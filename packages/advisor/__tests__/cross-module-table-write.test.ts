@@ -88,4 +88,36 @@ describe("cross_module_table_write", () => {
         expect(findings.map((finding) => finding.metadata["exportName"])).toStrictEqual(["create", "close"]);
         expect(findings[0]?.detail).toContain("writes to `invoices`");
     });
+
+    it("flags a write in a helper no export calls, named by the helper rather than an empty export", () => {
+        expect.assertions(3);
+
+        const findings = crossModuleTableWrite.run(
+            context({
+                modules: MODULES,
+                tableWrites: [
+                    { exportName: "", file: "accounts/signup", helper: "voidInvoice", line: 9, method: "delete", table: "invoices" },
+                    { exportName: "", file: "accounts/signup", helper: "voidInvoice", line: 10, method: "patch", table: "invoices" },
+                    { exportName: "", file: "accounts/boot", line: 2, method: "patch", table: "invoices" },
+                ],
+            }),
+        );
+
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual([
+            "cross_module_table_write:accounts/signup:voidInvoice:invoices",
+            "cross_module_table_write:accounts/boot:line 2:invoices",
+        ]);
+        expect(findings[0]?.detail).toBe(
+            "`voidInvoice` (accounts/signup, a non-exported helper no exported function calls) writes to `invoices`, which module `billing` owns, from module `accounts`.",
+        );
+        expect(findings[0]?.metadata).toStrictEqual({
+            exportName: "",
+            file: "accounts/signup",
+            helper: "voidInvoice",
+            line: 9,
+            owner: "billing",
+            table: "invoices",
+            writer: "accounts",
+        });
+    });
 });

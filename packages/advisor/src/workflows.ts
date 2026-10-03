@@ -28,6 +28,13 @@ export interface AdvisorWorkflow {
     exportName: string;
 
     /**
+     * Where the handler is declared when it is passed by reference from another
+     * lunora file (`handler: onboard`); the {@link AdvisorWorkflow.steps} lines are
+     * then lines of that file.
+     */
+    handlerSite?: { exportName: string; file: string };
+
+    /**
      * The durable step labels discovered in the handler body, in source order —
      * the duplicate-step-name input. Cloudflare memoizes a step by its name, so a
      * name used twice makes the second call silently return the first's cached
@@ -39,10 +46,16 @@ export interface AdvisorWorkflow {
 
 /** One `ctx.workflows.get("name")` call discovered in a function body. */
 export interface AdvisorWorkflowCall {
-    /** The exported function performing the call (e.g. `create`). */
+    /**
+     * The exported function performing the call (e.g. `create`). A call inside a
+     * same-file helper is attributed to every export that calls the helper; `""`
+     * when no export does (see {@link AdvisorWorkflowCall.helper}).
+     */
     exportName: string;
     /** Source file the call appears in (relative to the lunora dir, no extension). */
     file: string;
+    /** Set only when `exportName` is `""`: the non-exported helper the call sits in, which no export calls. */
+    helper?: string;
     /** 1-based line of the `get(...)` call, or `0` when unknown. */
     line: number;
     /** The referenced workflow export name; empty when the `get(...)` argument is not a string literal. */

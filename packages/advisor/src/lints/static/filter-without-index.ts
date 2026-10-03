@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { queryReadLocation, shardKindsByTable } from "../helpers";
+import { queryReadLocation, shardKindsByTable, uniqueReadSites } from "../helpers";
 
 /**
  * Flags a query read that calls `.filter()` without first narrowing with
@@ -26,7 +26,7 @@ const filterWithoutIndex: Lint = {
         const findings = [];
         const shardKindByTable = shardKindsByTable(context.schema);
 
-        for (const read of context.queries ?? []) {
+        for (const read of uniqueReadSites(context.queries ?? [])) {
             // Only an *unindexed* filter on a known table is a scan we can name.
             if (!read.hasFilter || read.hasIndex || read.table === "") {
                 continue;

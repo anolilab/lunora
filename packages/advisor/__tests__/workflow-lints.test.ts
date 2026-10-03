@@ -108,6 +108,16 @@ describe("workflow_unknown_target", () => {
 
         expect(workflowUnknownTarget.run(context({ workflowCalls: calls, workflows: [WELCOME] }))).toHaveLength(0);
     });
+
+    it("names a call in a helper no export calls by the helper, not an empty export", () => {
+        expect.assertions(2);
+
+        const calls: AdvisorWorkflowCall[] = [{ exportName: "", file: "channels", helper: "kickOff", line: 12, workflow: "channelWelcom" }];
+        const [finding] = workflowUnknownTarget.run(context({ workflowCalls: calls, workflows: [WELCOME] }));
+
+        expect(finding?.cacheKey).toBe("workflow_unknown_target:channels:kickOff:channelWelcom");
+        expect(finding?.detail).toContain('in "kickOff" (channels)');
+    });
 });
 
 // eslint-disable-next-line no-secrets/no-secrets -- the lint's rule id, not a credential

@@ -311,6 +311,7 @@ interface AdvisorIndexHit {
 interface AdvisorInsertWrite {
     exportName: string;
     file: string;
+    helper?: string;
     line: number;
     table: string;
 }
@@ -804,6 +805,10 @@ interface AdvisorVectorNamespaceAccess {
 ```ts
 interface AdvisorWorkflow {
     exportName: string;
+    handlerSite?: {
+        exportName: string;
+        file: string;
+    };
     steps?: ReadonlyArray<AdvisorWorkflowStep>;
 }
 ```
@@ -814,6 +819,7 @@ interface AdvisorWorkflow {
 interface AdvisorWorkflowCall {
     exportName: string;
     file: string;
+    helper?: string;
     line: number;
     workflow: string;
 }

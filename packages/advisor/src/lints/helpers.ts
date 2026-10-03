@@ -200,6 +200,42 @@ export const queryReadLocation = (read: Pick<AdvisorQueryRead, "file" | "line">)
     read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
 
 /**
+ * One read per source site. The feeder records a read inside a shared helper
+ * once per export calling the helper — the same `file:line` with a different
+ * `exportName` — and the query lints judge the read itself, so each site is
+ * reported once (attributed to its first caller), not once per caller.
+ */
+export const uniqueReadSites = <Read extends AdvisorQueryRead>(reads: ReadonlyArray<Read>): Read[] => {
+    const seen = new Set<string>();
+
+    return reads.filter((read) => {
+        // Everything but the caller; `JSON.stringify` drops the `undefined` key.
+        const key = JSON.stringify({ ...read, exportName: undefined });
+
+        if (seen.has(key)) {
+            return false;
+        }
+
+        seen.add(key);
+
+        return true;
+    });
+};
+
+/**
+ * The name a call-site finding gives its caller: the export, or — for a call no
+ * export reaches (`exportName: ""`) — the helper it sits in, or its line at
+ * module scope. Keeps finding text and cache keys from being built out of `""`.
+ */
+export const callSiteLabel = (site: { exportName: string; helper?: string; line: number }): string => {
+    if (site.exportName !== "") {
+        return site.exportName;
+    }
+
+    return site.helper ?? `line ${site.line.toString()}`;
+};
+
+/**
  * Table name -> declared storage tier, for the query lints that word a finding
  * by where the rows actually live (`shardBy` reads one Durable Object, `global`
  * reads D1, `root` reads the single DO). A `Map` so a table named `toString`

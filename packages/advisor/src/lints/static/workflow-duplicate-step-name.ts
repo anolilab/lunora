@@ -87,7 +87,7 @@ const workflowDuplicateStepName: Lint = {
                 findings.push(
                     emit(workflowDuplicateStepName, {
                         cacheKey: `workflow_duplicate_step_name:${workflow.exportName}:${step.name}`,
-                        detail: `Workflow "${workflow.exportName}" reuses the durable step name "${step.name}" (first at line ${String(firstLine)}, again at line ${String(step.line)}). The second call returns the first's cached result instead of running.`,
+                        detail: `Workflow "${workflow.exportName}" reuses the durable step name "${step.name}" (first at line ${String(firstLine)}, again at line ${String(step.line)}${workflow.handlerSite === undefined ? "" : ` of ${workflow.handlerSite.file}`}). The second call returns the first's cached result instead of running.`,
                         metadata: { firstLine, line: step.line, stepName: step.name, workflow: workflow.exportName },
                     }),
                 );

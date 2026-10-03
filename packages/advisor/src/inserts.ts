@@ -6,10 +6,16 @@
  * don't supply it, so the lint simply finds nothing there.
  */
 export interface AdvisorInsertWrite {
-    /** The exported function performing the insert (e.g. `send`). */
+    /**
+     * The exported function performing the insert (e.g. `send`). A write inside a
+     * same-file helper is attributed to every export that calls the helper; `""`
+     * when no export does (see {@link AdvisorInsertWrite.helper}).
+     */
     exportName: string;
     /** Source file the insert appears in (relative to the lunora dir, no extension). */
     file: string;
+    /** Set only when `exportName` is `""`: the non-exported helper the write sits in, which no export calls. */
+    helper?: string;
     /** 1-based line of the `insert(...)` call, or `0` when unknown. */
     line: number;
     /** The inserted table; empty when the `insert(...)` argument is not a string literal. */
