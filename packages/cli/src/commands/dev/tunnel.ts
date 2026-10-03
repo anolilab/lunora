@@ -15,19 +15,25 @@
  * transport guard refuses the forwarded requests a tunnel produces, and nothing
  * here relaxes that.
  */
-import { readLiveDevServerState } from "@lunora/config";
+import { setTimeout as sleep } from "node:timers/promises";
+
+import { updateDevServerState } from "@lunora/config";
+import { coerce, gte } from "semver";
 
 import type { Logger } from "../../util/logger";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
+import pollDevServerState from "./dev-state-poll";
+import { spawnLongLivedChild } from "./supervise";
+import type { DevCommandPlan, DevTunnelRequest, LongLivedSpawner } from "./types";
 
 /** First release with protected quick tunnels (`--allowed-mail`), per Cloudflare's announcement. */
 const CLOUDFLARED_MIN_VERSION = "2026.9.3";
 
 const CLOUDFLARED_INSTALL_URL = "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/";
 
-/** `cloudflared --version` prints `cloudflared version 2026.9.3 (built …)`. */
-const VERSION_PATTERN = /version (\d+)\.(\d+)\.(\d+)/u;
+/** `cloudflared --version` prints `cloudflared version 2026.9.3 (built …)`; a source build prints `DEV`. */
+const VERSION_PATTERN = /version (\S+)/u;
 
 /** The URL a quick tunnel is assigned. */
 const QUICK_TUNNEL_URL = /https:\/\/[\da-z-]+\.trycloudflare\.com/u;
@@ -38,22 +44,13 @@ const GRACE_PERIOD = "1s";
 /** How long `close()` waits for cloudflared to exit before letting dev finish anyway. */
 const CLOSE_TIMEOUT_MS = 5000;
 
+/** How long the Vite flavors wait for `@lunora/vite` to record the URL Vite listens on. */
+const VITE_ORIGIN_TIMEOUT_MS = 60_000;
+
+const VITE_ALLOWED_HOSTS_HINT =
+    'Vite answers 403 for hosts it does not know — add `server: { allowedHosts: [".trycloudflare.com"] }` to vite.config if the URL is blocked.';
+
 type CloudflaredCheck = { message: string; ok: false } | { ok: true; version: string | undefined };
-
-/** Is `found` (`[year, month, patch]`) at least {@link CLOUDFLARED_MIN_VERSION}? */
-const meetsMinimumVersion = (found: ReadonlyArray<number>): boolean => {
-    const minimum = CLOUDFLARED_MIN_VERSION.split(".").map(Number);
-
-    for (const [index, part] of minimum.entries()) {
-        const value = found[index] ?? 0;
-
-        if (value !== part) {
-            return value > part;
-        }
-    }
-
-    return true;
-};
 
 /**
  * Probe the installed `cloudflared` with `--version`. Missing or older than
@@ -77,15 +74,13 @@ const checkCloudflared = async (spawner: Spawner): Promise<CloudflaredCheck> => 
         return { message: `--tunnel needs \`cloudflared\` ${CLOUDFLARED_MIN_VERSION} or newer, and it is not on your PATH. ${install}`, ok: false };
     }
 
-    const match = VERSION_PATTERN.exec(output);
+    const version = coerce(VERSION_PATTERN.exec(output)?.[1])?.version;
 
-    if (match === null) {
+    if (version === undefined) {
         return { ok: true, version: undefined };
     }
 
-    const version = `${match[1] ?? ""}.${match[2] ?? ""}.${match[3] ?? ""}`;
-
-    if (!meetsMinimumVersion([Number(match[1]), Number(match[2]), Number(match[3])])) {
+    if (!gte(version, CLOUDFLARED_MIN_VERSION)) {
         return {
             message: `--tunnel needs \`cloudflared\` ${CLOUDFLARED_MIN_VERSION} or newer (protected quick tunnels); found ${version}. ${install}`,
             ok: false,
@@ -95,7 +90,32 @@ const checkCloudflared = async (spawner: Spawner): Promise<CloudflaredCheck> => 
     return { ok: true, version };
 };
 
-/** The `cloudflared` arguments for a quick tunnel to `origin`, each `--allow-mail` value passed through as `--allowed-mail`. */
+/**
+ * Normalize `--allow-mail` values: each value may be a comma-separated list, so
+ * its parts are trimmed and empty ones dropped, and a value left with no parts
+ * is dropped entirely — `--allow-mail ""` must not count as protection. Parts
+ * without an `@` are returned in `invalid` for the caller to refuse.
+ */
+const normalizeAllowMail = (values: ReadonlyArray<string> | undefined): { entries: string[]; invalid: string[] } => {
+    const entries: string[] = [];
+    const invalid: string[] = [];
+
+    for (const value of values ?? []) {
+        const parts = value
+            .split(",")
+            .map((part) => part.trim())
+            .filter((part) => part.length > 0);
+
+        if (parts.length > 0) {
+            invalid.push(...parts.filter((part) => !part.includes("@")));
+            entries.push(parts.join(","));
+        }
+    }
+
+    return { entries, invalid };
+};
+
+/** The `cloudflared` arguments for a quick tunnel to `origin`, each `--allow-mail` entry passed through as `--allowed-mail`. */
 const buildCloudflaredArgs = (origin: string, allowMail: ReadonlyArray<string>): string[] => [
     "tunnel",
     "--url",
@@ -116,7 +136,7 @@ interface CloudflaredLine {
 }
 
 /**
- * Read one stderr line of `cloudflared --output json`. Every log line is a
+ * Read one output line of `cloudflared --output json`. Every log line is a
  * zerolog object (`{"level":"info","time":…,"message":…}`) and the assigned URL
  * arrives as the `message` of one of them — a row of the ASCII box cloudflared
  * draws around it. A line that is not JSON (an older binary, or a panic) is
@@ -149,47 +169,85 @@ const printPublicWarning = (logger: Logger): void => {
     logger.warn("     (repeat --allow-mail, pass a comma-separated list, or allow a whole domain with '*@example.com')");
 };
 
-interface DevTunnelOptions {
-    /** `--allow-mail` values; empty opens a public tunnel. */
-    allowMail: ReadonlyArray<string>;
-    logger: Logger;
-    /** Printed once the URL is known — e.g. the Vite `allowedHosts` hint. */
-    onUrlHint?: string;
+/** Where the tunnel points: an origin the CLI owns, or the one `@lunora/vite` records once Vite listens. */
+type TunnelOrigin = { kind: "fixed"; origin: string } | { kind: "vite" };
 
-    /**
-     * The origin to tunnel, or how to wait for it (the Vite flavors only learn
-     * theirs once Vite listens). Resolving `undefined` skips the tunnel; the
-     * resolver is responsible for saying why.
-     */
-    origin: string | ((signal: AbortSignal) => Promise<string | undefined>);
-    /** Injection seam for tests — defaults to the real child-process spawner. */
+/** A resolved origin plus the PID whose `.lunora/dev.json` record the tunnel URL is written into. */
+interface ResolvedOrigin {
+    origin: string;
+    ownerPid: number;
+}
+
+/**
+ * Wait for `@lunora/vite` to record the URL Vite actually listens on — on the
+ * Vite flavors the CLI's own origin is only a pre-listen guess, and tunneling a
+ * guessed port would point the public URL at nothing. Gives up after
+ * `timeoutMs` (logging why) or when `signal` aborts.
+ */
+const waitForViteOrigin = async (
+    cwd: string,
+    logger: Logger,
+    signal: AbortSignal,
+    { intervalMs, timeoutMs = VITE_ORIGIN_TIMEOUT_MS }: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<ResolvedOrigin | undefined> => {
+    const resolved = await pollDevServerState(cwd, (state) => (state?.mode === "vite" ? { origin: state.url, ownerPid: state.pid } : undefined), {
+        intervalMs,
+        signal,
+        timeoutMs,
+    });
+
+    if (resolved === undefined && !signal.aborted) {
+        logger.warn(`--tunnel: the Vite dev server did not report its URL within ${String(timeoutMs / 1000)}s — continuing without a tunnel.`);
+    }
+
+    return resolved;
+};
+
+interface DevTunnelOptions {
+    /** Normalized `--allow-mail` entries; empty opens a public tunnel. */
+    allowMail: ReadonlyArray<string>;
+    /** Project root: where the tunnel URL is recorded, and where the Vite flavors' record is read. */
+    cwd: string;
+    logger: Logger;
+    origin: TunnelOrigin;
+    /** Injection seam for tests — the one-shot spawner for the `--version` probe. */
     spawner?: Spawner;
+    /** Injection seam for tests — starts the long-lived `cloudflared tunnel` child. */
+    startChild?: LongLivedSpawner;
 }
 
 interface DevTunnelHandle {
     /** Stop `cloudflared` and wait (bounded) for it to exit. Idempotent. */
     close: () => Promise<void>;
-    /** Settles with the public URL as soon as it is assigned, or `undefined` once the tunnel ends without one. */
-    url: Promise<string | undefined>;
 }
 
 /**
  * Start the tunnel in the background and return immediately — dev's banner and
- * supervision do not wait on it. The URL is printed when cloudflared reports it.
+ * supervision do not wait on it. The URL is printed when cloudflared reports it,
+ * and written to `.lunora/dev.json` as `tunnelUrl` for `dev status` and a
+ * `--background` start.
  */
 const startDevTunnel = (options: DevTunnelOptions): DevTunnelHandle => {
-    const { allowMail, logger } = options;
-    const spawner = options.spawner ?? defaultSpawner;
+    const { allowMail, cwd, logger } = options;
+    const isPublic = allowMail.length === 0;
     const controller = new AbortController();
-    let closing = false;
-    let assigned: string | undefined;
-    let settleUrl: (value: string | undefined) => void = () => {};
-    const url = new Promise<string | undefined>((resolve) => {
-        settleUrl = resolve;
-    });
+    const { signal } = controller;
+    // A function, not `signal.aborted` inline: the abort happens while `run`
+    // awaits the child, which flow analysis cannot see.
+    const isShuttingDown = (): boolean => signal.aborted;
+
+    // Ctrl-C reaches cloudflared directly (same process group) and it exits on
+    // its own, before teardown calls `close()` — marking the shutdown here keeps
+    // that exit from being reported as a tunnel that died under a running server.
+    const onShutdownSignal = (): void => {
+        controller.abort();
+    };
+
+    process.once("SIGINT", onShutdownSignal);
+    process.once("SIGTERM", onShutdownSignal);
 
     const run = async (): Promise<void> => {
-        const check = await checkCloudflared(spawner);
+        const check = await checkCloudflared(options.spawner ?? defaultSpawner);
 
         if (!check.ok) {
             logger.error(check.message);
@@ -202,17 +260,22 @@ const startDevTunnel = (options: DevTunnelOptions): DevTunnelHandle => {
             logger.warn(`could not read the cloudflared version — --tunnel needs ${CLOUDFLARED_MIN_VERSION} or newer; trying anyway.`);
         }
 
-        const origin = typeof options.origin === "string" ? options.origin : await options.origin(controller.signal);
+        const target =
+            options.origin.kind === "fixed" ? { origin: options.origin.origin, ownerPid: process.pid } : await waitForViteOrigin(cwd, logger, signal);
 
-        if (origin === undefined || controller.signal.aborted) {
+        if (target === undefined || signal.aborted) {
             return;
         }
 
-        if (allowMail.length === 0) {
+        if (isPublic) {
             printPublicWarning(logger);
         }
 
-        logger.info(`starting a Cloudflare quick tunnel to ${origin}${allowMail.length > 0 ? " (email one-time-PIN protected)" : ""}…`);
+        logger.info(`starting a Cloudflare quick tunnel to ${target.origin}${isPublic ? "" : " (email one-time-PIN protected)"}…`);
+
+        let assigned: string | undefined;
+        // Written from the child's error callback, read after it exits.
+        const outcome = { failedToStart: false };
 
         const onLine = (line: string): void => {
             if (line.length === 0) {
@@ -223,16 +286,17 @@ const startDevTunnel = (options: DevTunnelOptions): DevTunnelHandle => {
 
             if (parsed.url !== undefined && assigned === undefined) {
                 assigned = parsed.url;
-                settleUrl(assigned);
-                logger.success(`  ➜  Tunnel:     ${parsed.url}${allowMail.length > 0 ? "" : "  (PUBLIC)"}`);
+                logger.success(`  ➜  Tunnel:     ${parsed.url}${isPublic ? "  (PUBLIC)" : ""}`);
 
-                if (allowMail.length > 0) {
+                if (!isPublic) {
                     logger.info(`     Allowed:    ${allowMail.join(", ")} — visitors confirm with a one-time PIN; a session lasts up to 4 hours`);
                 }
 
-                if (options.onUrlHint !== undefined) {
-                    logger.info(`     ${options.onUrlHint}`);
+                if (options.origin.kind === "vite") {
+                    logger.info(`     ${VITE_ALLOWED_HOSTS_HINT}`);
                 }
+
+                updateDevServerState(cwd, { tunnelUrl: parsed.url }, { expectedPid: target.ownerPid });
 
                 return;
             }
@@ -244,102 +308,93 @@ const startDevTunnel = (options: DevTunnelOptions): DevTunnelHandle => {
             }
         };
 
-        try {
-            const result = await spawner({
-                args: buildCloudflaredArgs(origin, allowMail),
-                command: "cloudflared",
-                onStderrLine: onLine,
-                signal: controller.signal,
-                // cloudflared logs to stderr; keep anything on stdout off a `--json` stream.
-                stdoutToStderr: true,
-            });
+        const child = (options.startChild ?? spawnLongLivedChild)(
+            // A real executable: no shell wrapper, so `kill` reaches cloudflared itself on Windows too.
+            { args: buildCloudflaredArgs(target.origin, allowMail), command: "cloudflared", direct: true },
+            onLine,
+            (error) => {
+                outcome.failedToStart = true;
+                logger.error(`could not start cloudflared (${error.message}) — continuing without a tunnel.`);
+            },
+        );
+        const stop = (): void => {
+            child.kill("SIGTERM");
+        };
 
-            if (!closing) {
-                logger.warn(
-                    assigned === undefined
-                        ? `cloudflared exited (${String(result.code)}) before a tunnel URL was assigned — continuing without a tunnel.`
-                        : `cloudflared exited (${String(result.code)}) — the tunnel is closed; the dev server keeps running.`,
-                );
-            }
-        } catch (error: unknown) {
-            logger.error(`could not start cloudflared (${error instanceof Error ? error.message : String(error)}) — continuing without a tunnel.`);
+        signal.addEventListener("abort", stop, { once: true });
+
+        const code = await child.exited;
+
+        signal.removeEventListener("abort", stop);
+
+        if (assigned !== undefined) {
+            updateDevServerState(cwd, { tunnelUrl: undefined }, { expectedPid: target.ownerPid });
         }
+
+        if (isShuttingDown() || outcome.failedToStart) {
+            return;
+        }
+
+        logger.warn(
+            assigned === undefined
+                ? `cloudflared exited (${String(code)}) before a tunnel URL was assigned — continuing without a tunnel.`
+                : `cloudflared exited (${String(code)}) — the tunnel is closed; the dev server keeps running.`,
+        );
     };
 
-    // Resolve-only by construction: every failure above is logged, never thrown.
-    // Settling `url` here covers every run that ends without one.
-    const finished = run()
-        .catch(() => undefined)
-        .then(() => {
-            settleUrl(assigned);
-
-            return undefined;
-        });
+    const finished = run().catch((error: unknown) => {
+        logger.error(`--tunnel failed (${error instanceof Error ? error.message : String(error)}) — continuing without a tunnel.`);
+    });
 
     return {
         close: async () => {
-            closing = true;
+            process.off("SIGINT", onShutdownSignal);
+            process.off("SIGTERM", onShutdownSignal);
             controller.abort();
-
-            let timer: NodeJS.Timeout | undefined;
-
-            await Promise.race([
-                finished,
-                new Promise<void>((resolve) => {
-                    timer = setTimeout(resolve, CLOSE_TIMEOUT_MS);
-                    timer.unref();
-                }),
-            ]);
-            clearTimeout(timer);
+            await Promise.race([finished, sleep(CLOSE_TIMEOUT_MS, undefined, { ref: false })]);
         },
-        url,
     };
 };
 
 /**
- * Wait for `@lunora/vite` to record the URL Vite actually listens on — on the
- * Vite flavors the CLI's own origin is only a pre-listen guess, and tunneling a
- * guessed port would point the public URL at nothing. Gives up after
- * `timeoutMs` (logging why) or when `signal` aborts.
+ * `--tunnel` for a planned dev run. Where the CLI owns the worker's port — the
+ * wrangler flavor, which also covers the celld target and `--no-worker` — the
+ * planned origin is the real one. On the Vite flavors (where `--no-worker`
+ * does not apply) it is a pre-listen guess, so the tunnel waits for the URL
+ * `@lunora/vite` records once Vite listens.
  */
-const waitForViteOrigin = async (
-    cwd: string,
-    logger: Logger,
-    signal: AbortSignal,
-    { intervalMs = 500, timeoutMs = 60_000 }: { intervalMs?: number; timeoutMs?: number } = {},
-): Promise<string | undefined> => {
-    const deadline = Date.now() + timeoutMs;
+const startTunnelForPlan = (parameters: {
+    cwd: string;
+    logger: Logger;
+    plan: Pick<DevCommandPlan, "flavor" | "workerOrigin">;
+    tunnel: DevTunnelRequest | undefined;
+}): DevTunnelHandle | undefined => {
+    const { cwd, logger, plan, tunnel } = parameters;
 
-    while (!signal.aborted) {
-        const state = readLiveDevServerState(cwd);
-
-        if (state?.mode === "vite") {
-            return state.url;
-        }
-
-        if (Date.now() >= deadline) {
-            logger.warn(`--tunnel: the Vite dev server did not report its URL within ${String(timeoutMs / 1000)}s — continuing without a tunnel.`);
-
-            return undefined;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- polling: each wait depends on the previous read
-        await new Promise<void>((resolve) => {
-            setTimeout(resolve, intervalMs).unref();
-        });
+    if (tunnel === undefined) {
+        return undefined;
     }
 
-    return undefined;
+    return startDevTunnel({
+        allowMail: tunnel.allowMail,
+        cwd,
+        logger,
+        origin: plan.flavor === "wrangler" ? { kind: "fixed", origin: plan.workerOrigin } : { kind: "vite" },
+        spawner: tunnel.spawner,
+        startChild: tunnel.startChild,
+    });
 };
 
-export type { CloudflaredCheck, CloudflaredLine, DevTunnelHandle, DevTunnelOptions };
+export type { CloudflaredCheck, CloudflaredLine, DevTunnelHandle, DevTunnelOptions, TunnelOrigin };
 export {
     buildCloudflaredArgs,
     checkCloudflared,
     CLOUDFLARED_INSTALL_URL,
     CLOUDFLARED_MIN_VERSION,
+    normalizeAllowMail,
     parseCloudflaredLine,
     printPublicWarning,
     startDevTunnel,
+    startTunnelForPlan,
     waitForViteOrigin,
 };

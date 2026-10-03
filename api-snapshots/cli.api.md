@@ -186,7 +186,6 @@ interface DeployedIdentity {
 
 ```ts
 interface DevCommandOptions {
-    allowMail?: ReadonlyArray<string>;
     apiSpec?: ApiSpec;
     codegen?: boolean;
     cwd?: string;
@@ -212,8 +211,7 @@ interface DevCommandOptions {
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
-    tunnel?: boolean;
-    tunnelSpawner?: Spawner;
+    tunnel?: DevTunnelRequest;
     waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
@@ -594,8 +592,6 @@ interface SpawnDescriptor {
     cwd?: string;
     env?: Readonly<Record<string, string>>;
     input?: string;
-    onStderrLine?: (line: string) => void;
-    signal?: AbortSignal;
     stdoutToStderr?: boolean;
 }
 ```
@@ -693,7 +689,7 @@ const createLogger: () => Logger;
 ### `createRecordingSpawner` (const)
 
 ```ts
-const createRecordingSpawner: (exitCode?: number, respond?: (descriptor: SpawnDescriptor) => Promise<SpawnResult> | SpawnResult) => {
+const createRecordingSpawner: (exitCode?: number) => {
     calls: RecordedSpawn[];
     spawner: Spawner;
 };
@@ -1014,6 +1010,16 @@ interface DevRemotePlan {
 }
 ```
 
+### `DevTunnelRequest` (interface)
+
+```ts
+interface DevTunnelRequest {
+    allowMail: ReadonlyArray<string>;
+    spawner?: Spawner;
+    startChild?: LongLivedSpawner;
+}
+```
+
 ### `DockerProbe` (type)
 
 ```ts
@@ -1183,6 +1189,24 @@ interface ListRemoteSecretsResult {
     names: ReadonlyArray<string>;
     ok: boolean;
 }
+```
+
+### `LongLivedDescriptor` (interface)
+
+```ts
+interface LongLivedDescriptor {
+    args: ReadonlyArray<string>;
+    command: string;
+    cwd?: string;
+    direct?: boolean;
+    env?: Readonly<Record<string, string>>;
+}
+```
+
+### `LongLivedSpawner` (type)
+
+```ts
+type LongLivedSpawner = (descriptor: LongLivedDescriptor, onLine: (line: string, kind: "stderr" | "stdout") => void, onError?: (error: Error) => void) => WorkerProcess;
 ```
 
 ### `OfferDeps` (interface)

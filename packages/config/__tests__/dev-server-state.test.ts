@@ -42,6 +42,7 @@ describe("dev-server-state", () => {
             readyAt: "2026-01-01T00:00:02.000Z",
             startedAt: "2026-01-01T00:00:00.000Z",
             studioUrl: "http://127.0.0.1:6173",
+            tunnelUrl: "https://quiet-marble-otter.trycloudflare.com",
             url: "http://localhost:8787",
         });
 
@@ -54,6 +55,7 @@ describe("dev-server-state", () => {
             readyAt: "2026-01-01T00:00:02.000Z",
             startedAt: "2026-01-01T00:00:00.000Z",
             studioUrl: "http://127.0.0.1:6173",
+            tunnelUrl: "https://quiet-marble-otter.trycloudflare.com",
             url: "http://localhost:8787",
         });
     });

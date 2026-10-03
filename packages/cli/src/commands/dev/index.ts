@@ -33,7 +33,7 @@ const devCommand: Command = {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "dev",
-    // KEEP IN SYNC with `daemonArguments` in `./lifecycle.ts`: a new flag that
+    // KEEP IN SYNC with `daemonArguments` in `./daemon-arguments.ts`: a new flag that
     // must reach a `--background` daemon has to be forwarded there explicitly.
     options: [
         { description: `Which API spec(s) codegen emits: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },

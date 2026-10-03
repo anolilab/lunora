@@ -1,19 +1,29 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { clearDevServerState } from "@lunora/config";
+import { clearDevServerState, readDevServerState, writeDevServerState } from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { devFlagConflict, runDevCommand } from "../../src/commands/dev/handler";
 import type { DevOptions } from "../../src/commands/dev/index";
-import { startBackground } from "../../src/commands/dev/lifecycle";
+import { runDevBackground, runDevStatus, startBackground } from "../../src/commands/dev/lifecycle";
+import { spawnLongLivedChild } from "../../src/commands/dev/supervise";
 import type { DevTunnelHandle } from "../../src/commands/dev/tunnel";
-import { buildCloudflaredArgs, checkCloudflared, CLOUDFLARED_INSTALL_URL, parseCloudflaredLine, startDevTunnel } from "../../src/commands/dev/tunnel";
+import {
+    buildCloudflaredArgs,
+    checkCloudflared,
+    CLOUDFLARED_INSTALL_URL,
+    normalizeAllowMail,
+    parseCloudflaredLine,
+    startDevTunnel,
+    startTunnelForPlan,
+    waitForViteOrigin,
+} from "../../src/commands/dev/tunnel";
+import type { LongLivedDescriptor, LongLivedSpawner } from "../../src/commands/dev/types";
 import type { Logger } from "../../src/util/logger";
-import type { SpawnDescriptor, SpawnResult } from "../../src/util/spawn";
-import { createRecordingSpawner } from "../../src/util/spawn";
+import type { Spawner } from "../../src/util/spawn";
 
 interface Recorded {
     lines: { level: keyof Logger; message: string }[];
@@ -34,41 +44,105 @@ const recordingLogger = (): Recorded => {
     };
 };
 
-const URL_LINE = JSON.stringify({
-    level: "info",
-    message: "|  https://quiet-marble-otter.trycloudflare.com                                              |",
-    time: "2026-10-03T10:00:00Z",
-});
-
-/**
- * A recording spawner that answers `cloudflared --version` with `version`, and
- * runs the tunnel as a long-lived child: it emits `tunnelLines` on stderr, then
- * stays up until its `signal` aborts — like the real child under dev.
- */
-const cloudflaredSpawner = (version: string | undefined, tunnelLines: string[] = [URL_LINE]): ReturnType<typeof createRecordingSpawner> =>
-    createRecordingSpawner(0, async (descriptor: SpawnDescriptor): Promise<SpawnResult> => {
-        if (descriptor.args[0] === "--version") {
-            if (version === undefined) {
-                throw new LunoraError("LOCAL_DEPENDENCY_MISSING", "`cloudflared` is not installed or not on your PATH — nothing was run.");
-            }
-
-            return { code: 0, stdout: `cloudflared version ${version} (built 2026-09-24-1531 UTC)\n` };
-        }
-
-        for (const line of tunnelLines) {
-            descriptor.onStderrLine?.(line);
-        }
-
-        return await new Promise<SpawnResult>((resolve) => {
-            descriptor.signal?.addEventListener("abort", () => {
-                resolve({ code: 0 });
-            });
-        });
-    });
+const TUNNEL_URL = "https://quiet-marble-otter.trycloudflare.com";
+const URL_LINE = JSON.stringify({ level: "info", message: `|  ${TUNNEL_URL}                                              |`, time: "2026-10-03T10:00:00Z" });
 
 const text = (recorded: Recorded): string => recorded.lines.map((line) => line.message).join("\n");
 
+/** A one-shot spawner answering `cloudflared --version` — `undefined` means "not on PATH". */
+const versionProbe =
+    (version: string | undefined): Spawner =>
+    async () => {
+        if (version === undefined) {
+            throw new LunoraError("LOCAL_DEPENDENCY_MISSING", "`cloudflared` is not installed or not on your PATH — nothing was run.");
+        }
+
+        return { code: 0, stdout: `cloudflared version ${version} (built 2026-09-24-1531 UTC)\n` };
+    };
+
+interface FakeChild {
+    calls: LongLivedDescriptor[];
+    /** Signals the child received. */
+    killed: NodeJS.Signals[];
+    startChild: LongLivedSpawner;
+}
+
+/**
+ * A recording long-lived spawner standing in for `cloudflared tunnel`: it emits
+ * `lines` on stderr and stays up until killed — or exits on its own with
+ * `exitCode` when one is given.
+ */
+const fakeCloudflared = (lines: string[] = [URL_LINE], exitCode?: number): FakeChild => {
+    const calls: LongLivedDescriptor[] = [];
+    const killed: NodeJS.Signals[] = [];
+
+    const startChild: LongLivedSpawner = (descriptor, onLine) => {
+        calls.push(descriptor);
+
+        let end: (code: number) => void = () => {};
+        const exited = new Promise<number>((resolve) => {
+            end = resolve;
+        });
+
+        queueMicrotask(() => {
+            for (const line of lines) {
+                onLine(line, "stderr");
+            }
+
+            if (exitCode !== undefined) {
+                end(exitCode);
+            }
+        });
+
+        return {
+            exited,
+            kill: (signal) => {
+                killed.push(signal);
+                end(0);
+            },
+        };
+    };
+
+    return { calls, killed, startChild };
+};
+
+/** A logger that resolves `printed` when the `Tunnel:` line is logged. */
+const waitForTunnelLine = (recorded: Recorded): { logger: Logger; printed: Promise<string> } => {
+    let resolvePrinted: (message: string) => void = () => {};
+    const printed = new Promise<string>((resolve) => {
+        resolvePrinted = resolve;
+    });
+
+    return {
+        logger: {
+            ...recorded.logger,
+            success: (message) => {
+                recorded.logger.success(message);
+
+                if (message.includes("Tunnel:")) {
+                    resolvePrinted(message);
+                }
+            },
+        },
+        printed,
+    };
+};
+
 describe("lunora dev --tunnel", () => {
+    let workdir: string;
+    let tunnel: DevTunnelHandle | undefined;
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-dev-tunnel-"));
+    });
+
+    afterEach(async () => {
+        await tunnel?.close();
+        tunnel = undefined;
+        clearDevServerState(workdir);
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
     describe(buildCloudflaredArgs, () => {
         it("opens a public quick tunnel with JSON logs when no --allow-mail is given", () => {
             expect.assertions(1);
@@ -84,12 +158,30 @@ describe("lunora dev --tunnel", () => {
             ]);
         });
 
-        it("passes every --allow-mail value through verbatim as --allowed-mail", () => {
+        it("passes every --allow-mail entry through as --allowed-mail", () => {
             expect.assertions(1);
 
             expect(
                 buildCloudflaredArgs("http://localhost:8787", ["alice@example.com", "bob@example.com,carol@example.com", "*@example.org"]).slice(7),
             ).toStrictEqual(["--allowed-mail", "alice@example.com", "--allowed-mail", "bob@example.com,carol@example.com", "--allowed-mail", "*@example.org"]);
+        });
+    });
+
+    describe(normalizeAllowMail, () => {
+        it('trims entries and drops empty ones, so `--allow-mail ""` is not protection', () => {
+            expect.assertions(2);
+
+            expect(normalizeAllowMail(["", "  ", " , "])).toStrictEqual({ entries: [], invalid: [] });
+            expect(normalizeAllowMail([" alice@example.com ", "bob@example.com, ,*@example.org"])).toStrictEqual({
+                entries: ["alice@example.com", "bob@example.com,*@example.org"],
+                invalid: [],
+            });
+        });
+
+        it("reports parts without an @", () => {
+            expect.assertions(1);
+
+            expect(normalizeAllowMail(["alice@example.com,bob", "example.org"]).invalid).toStrictEqual(["bob", "example.org"]);
         });
     });
 
@@ -99,7 +191,7 @@ describe("lunora dev --tunnel", () => {
 
             const parsed = parseCloudflaredLine(URL_LINE);
 
-            expect(parsed.url).toBe("https://quiet-marble-otter.trycloudflare.com");
+            expect(parsed.url).toBe(TUNNEL_URL);
             expect(parsed.level).toBe("info");
         });
 
@@ -127,14 +219,14 @@ describe("lunora dev --tunnel", () => {
         it("accepts the minimum version and newer", async () => {
             expect.assertions(2);
 
-            await expect(checkCloudflared(cloudflaredSpawner("2026.9.3").spawner)).resolves.toStrictEqual({ ok: true, version: "2026.9.3" });
-            await expect(checkCloudflared(cloudflaredSpawner("2026.10.0").spawner)).resolves.toStrictEqual({ ok: true, version: "2026.10.0" });
+            await expect(checkCloudflared(versionProbe("2026.9.3"))).resolves.toStrictEqual({ ok: true, version: "2026.9.3" });
+            await expect(checkCloudflared(versionProbe("2026.10.0"))).resolves.toStrictEqual({ ok: true, version: "2026.10.0" });
         });
 
         it("rejects an older cloudflared with the install link", async () => {
             expect.assertions(3);
 
-            const check = await checkCloudflared(cloudflaredSpawner("2026.9.2").spawner);
+            const check = await checkCloudflared(versionProbe("2026.9.2"));
 
             expect(check.ok).toBe(false);
             expect(check.ok ? "" : check.message).toContain("found 2026.9.2");
@@ -144,7 +236,7 @@ describe("lunora dev --tunnel", () => {
         it("reports a missing cloudflared with the install link", async () => {
             expect.assertions(2);
 
-            const check = await checkCloudflared(cloudflaredSpawner(undefined).spawner);
+            const check = await checkCloudflared(versionProbe(undefined));
 
             expect(check.ok ? "" : check.message).toContain("not on your PATH");
             expect(check.ok ? "" : check.message).toContain(CLOUDFLARED_INSTALL_URL);
@@ -153,168 +245,288 @@ describe("lunora dev --tunnel", () => {
         it("lets an unparseable version (a source build) through", async () => {
             expect.assertions(1);
 
-            const { spawner } = createRecordingSpawner(0, () => {
-                return { code: 0, stdout: "cloudflared version DEV (built unknown)\n" };
+            await expect(
+                checkCloudflared(async () => {
+                    return { code: 0, stdout: "cloudflared version DEV (built unknown)\n" };
+                }),
+            ).resolves.toStrictEqual({
+                ok: true,
+                version: undefined,
             });
-
-            await expect(checkCloudflared(spawner)).resolves.toStrictEqual({ ok: true, version: undefined });
         });
     });
 
     describe(startDevTunnel, () => {
-        let tunnel: DevTunnelHandle | undefined;
-
-        afterEach(async () => {
-            await tunnel?.close();
-            tunnel = undefined;
-        });
-
-        it("prints the URL and a prominent public warning without --allow-mail", async () => {
+        it("prints the URL and a prominent public warning without --allow-mail, and records the URL", async () => {
             expect.assertions(5);
 
+            writeDevServerState(workdir, { mode: "cli", pid: process.pid, url: "http://localhost:8787" });
+
             const recorded = recordingLogger();
-            const { calls, spawner } = cloudflaredSpawner("2026.9.3");
+            const { logger, printed } = waitForTunnelLine(recorded);
+            const child = fakeCloudflared();
 
-            tunnel = startDevTunnel({ allowMail: [], logger: recorded.logger, origin: "http://localhost:8787", spawner });
+            tunnel = startDevTunnel({
+                allowMail: [],
+                cwd: workdir,
+                logger,
+                origin: { kind: "fixed", origin: "http://localhost:8787" },
+                spawner: versionProbe("2026.9.3"),
+                startChild: child.startChild,
+            });
 
-            await expect(tunnel.url).resolves.toBe("https://quiet-marble-otter.trycloudflare.com");
-            expect(recorded.lines).toContainEqual({ level: "success", message: "  ➜  Tunnel:     https://quiet-marble-otter.trycloudflare.com  (PUBLIC)" });
+            await expect(printed).resolves.toBe(`  ➜  Tunnel:     ${TUNNEL_URL}  (PUBLIC)`);
+            expect(text(recorded)).toContain("PUBLIC TUNNEL: anyone with the tunnel URL can reach this dev server");
+            expect(text(recorded)).toContain("lunora dev --tunnel --allow-mail you@example.com");
+            expect(child.calls[0]?.args.includes("--allowed-mail")).toBe(false);
+            expect(readDevServerState(workdir)?.tunnelUrl).toBe(TUNNEL_URL);
+        });
 
-            const warnings = recorded.lines.filter((line) => line.level === "warn").map((line) => line.message);
-
-            expect(warnings.join("\n")).toContain("PUBLIC TUNNEL: anyone with the tunnel URL can reach this dev server");
-            expect(warnings.join("\n")).toContain("lunora dev --tunnel --allow-mail you@example.com");
-            expect(calls.map((call) => call.descriptor.args.includes("--allowed-mail"))).toStrictEqual([false, false]);
-        }, 10_000);
-
-        it("passes --allow-mail through and prints no public warning", async () => {
+        it("passes --allow-mail through, spawns cloudflared without a shell, and prints no public warning", async () => {
             expect.assertions(4);
 
             const recorded = recordingLogger();
-            const { calls, spawner } = cloudflaredSpawner("2026.9.3");
-            let resolveUrl: (() => void) | undefined;
-            const urlPrinted = new Promise<void>((resolve) => {
-                resolveUrl = resolve;
+            const { logger, printed } = waitForTunnelLine(recorded);
+            const child = fakeCloudflared();
+
+            tunnel = startDevTunnel({
+                allowMail: ["alice@example.com", "*@example.org"],
+                cwd: workdir,
+                logger,
+                origin: { kind: "fixed", origin: "http://localhost:8787" },
+                spawner: versionProbe("2026.9.3"),
+                startChild: child.startChild,
             });
-            const logger: Logger = {
-                ...recorded.logger,
-                success: (message) => {
-                    recorded.logger.success(message);
-                    resolveUrl?.();
-                },
-            };
+            await printed;
 
-            tunnel = startDevTunnel({ allowMail: ["alice@example.com", "*@example.org"], logger, origin: "http://localhost:8787", spawner });
-            await urlPrinted;
-
-            const tunnelCall = calls[1]?.descriptor;
-
-            expect(tunnelCall?.command).toBe("cloudflared");
-            expect(tunnelCall?.args).toStrictEqual([
-                "tunnel",
-                "--url",
-                "http://localhost:8787",
-                "--output",
-                "json",
-                "--grace-period",
-                "1s",
-                "--allowed-mail",
-                "alice@example.com",
-                "--allowed-mail",
-                "*@example.org",
-            ]);
+            expect(child.calls[0]).toStrictEqual({
+                args: [
+                    "tunnel",
+                    "--url",
+                    "http://localhost:8787",
+                    "--output",
+                    "json",
+                    "--grace-period",
+                    "1s",
+                    "--allowed-mail",
+                    "alice@example.com",
+                    "--allowed-mail",
+                    "*@example.org",
+                ],
+                command: "cloudflared",
+                direct: true,
+            });
             expect(text(recorded)).not.toContain("PUBLIC");
             expect(text(recorded)).toContain("Allowed:    alice@example.com, *@example.org");
+            expect(text(recorded)).not.toContain("allowedHosts");
         });
 
-        it("stops the cloudflared child on close", async () => {
-            expect.assertions(2);
+        it("stops the cloudflared child on close, without reporting it as a dead tunnel", async () => {
+            expect.assertions(3);
 
-            const { calls, spawner } = cloudflaredSpawner("2026.9.3");
             const recorded = recordingLogger();
+            const { logger, printed } = waitForTunnelLine(recorded);
+            const child = fakeCloudflared();
+            const listenersBefore = process.listenerCount("SIGINT");
 
-            tunnel = startDevTunnel({ allowMail: [], logger: recorded.logger, origin: "http://localhost:8787", spawner });
-
-            await expect.poll(() => calls.length).toBe(2);
-
+            tunnel = startDevTunnel({
+                allowMail: [],
+                cwd: workdir,
+                logger,
+                origin: { kind: "fixed", origin: "http://localhost:8787" },
+                spawner: versionProbe("2026.9.3"),
+                startChild: child.startChild,
+            });
+            await printed;
             await tunnel.close();
 
-            expect(calls[1]?.descriptor.signal?.aborted).toBe(true);
+            expect(child.killed).toStrictEqual(["SIGTERM"]);
+            expect(text(recorded)).not.toContain("cloudflared exited");
+            // The shutdown-signal listeners are detached again.
+            expect(process.listenerCount("SIGINT")).toBe(listenersBefore);
+        });
+
+        it("treats a Ctrl-C that reaches cloudflared first as shutdown, not a dead tunnel", async () => {
+            expect.assertions(2);
+
+            const recorded = recordingLogger();
+            const { logger, printed } = waitForTunnelLine(recorded);
+            const child = fakeCloudflared();
+            const before = new Set(process.listeners("SIGINT"));
+
+            tunnel = startDevTunnel({
+                allowMail: [],
+                cwd: workdir,
+                logger,
+                origin: { kind: "fixed", origin: "http://localhost:8787" },
+                spawner: versionProbe("2026.9.3"),
+                startChild: child.startChild,
+            });
+            await printed;
+
+            // The terminal delivers SIGINT to the whole process group, so
+            // cloudflared goes down while teardown has not reached `close()` yet.
+            // Invoke the tunnel's own listener rather than emitting the signal
+            // process-wide, which would reach the test runner's handlers too.
+            const onSigint = process.listeners("SIGINT").find((listener) => !before.has(listener));
+
+            onSigint?.("SIGINT");
+
+            await expect.poll(() => child.killed).toStrictEqual(["SIGTERM"]);
+
+            expect(text(recorded)).not.toContain("the dev server keeps running");
         });
 
         it("carries on without a tunnel when cloudflared is missing", async () => {
-            expect.assertions(3);
+            expect.assertions(2);
 
             const recorded = recordingLogger();
-            const { calls, spawner } = cloudflaredSpawner(undefined);
+            const child = fakeCloudflared();
 
-            tunnel = startDevTunnel({ allowMail: [], logger: recorded.logger, origin: "http://localhost:8787", spawner });
+            tunnel = startDevTunnel({
+                allowMail: [],
+                cwd: workdir,
+                logger: recorded.logger,
+                origin: { kind: "fixed", origin: "http://localhost:8787" },
+                spawner: versionProbe(undefined),
+                startChild: child.startChild,
+            });
 
-            await expect(tunnel.url).resolves.toBeUndefined();
+            await expect.poll(() => text(recorded)).toContain("continuing without a tunnel");
             // Only the version probe ran — no tunnel was attempted.
-            expect(calls).toHaveLength(1);
-            expect(text(recorded)).toContain("continuing without a tunnel");
+            expect(child.calls).toHaveLength(0);
         });
 
         it("carries on without a tunnel when cloudflared is too old", async () => {
-            expect.assertions(3);
+            expect.assertions(2);
 
             const recorded = recordingLogger();
-            const { calls, spawner } = cloudflaredSpawner("2025.11.1");
+            const child = fakeCloudflared();
 
-            tunnel = startDevTunnel({ allowMail: ["alice@example.com"], logger: recorded.logger, origin: "http://localhost:8787", spawner });
+            tunnel = startDevTunnel({
+                allowMail: ["alice@example.com"],
+                cwd: workdir,
+                logger: recorded.logger,
+                origin: { kind: "fixed", origin: "http://localhost:8787" },
+                spawner: versionProbe("2025.11.1"),
+                startChild: child.startChild,
+            });
 
-            await expect(tunnel.url).resolves.toBeUndefined();
-            expect(calls).toHaveLength(1);
-            expect(recorded.lines.find((line) => line.level === "error")?.message).toContain("needs `cloudflared` 2026.9.3 or newer");
+            await expect.poll(() => recorded.lines.find((line) => line.level === "error")?.message).toContain("needs `cloudflared` 2026.9.3 or newer");
+            expect(child.calls).toHaveLength(0);
         });
 
         it("warns when cloudflared exits before assigning a URL, and surfaces its error lines", async () => {
-            expect.assertions(3);
+            expect.assertions(2);
 
             const recorded = recordingLogger();
-            const { spawner } = createRecordingSpawner(0, (descriptor) => {
-                if (descriptor.args[0] === "--version") {
-                    return { code: 0, stdout: "cloudflared version 2026.9.3\n" };
-                }
+            const child = fakeCloudflared([JSON.stringify({ level: "error", message: '"invalid" is not a valid email address' })], 1);
 
-                descriptor.onStderrLine?.(JSON.stringify({ level: "error", message: '"invalid" is not a valid email address' }));
-
-                return { code: 1 };
+            tunnel = startDevTunnel({
+                allowMail: ["invalid@"],
+                cwd: workdir,
+                logger: recorded.logger,
+                origin: { kind: "fixed", origin: "http://localhost:8787" },
+                spawner: versionProbe("2026.9.3"),
+                startChild: child.startChild,
             });
 
-            tunnel = startDevTunnel({ allowMail: ["invalid"], logger: recorded.logger, origin: "http://localhost:8787", spawner });
-
-            await expect(tunnel.url).resolves.toBeUndefined();
+            await expect.poll(() => text(recorded)).toContain("cloudflared exited (1) before a tunnel URL was assigned — continuing without a tunnel.");
             expect(text(recorded)).toContain('[cloudflared] "invalid" is not a valid email address');
-            expect(text(recorded)).toContain("cloudflared exited (1) before a tunnel URL was assigned — continuing without a tunnel.");
+        });
+    });
+
+    describe(waitForViteOrigin, () => {
+        it("resolves with the URL and PID @lunora/vite records, ignoring the CLI's provisional record", async () => {
+            expect.assertions(1);
+
+            writeDevServerState(workdir, { mode: "cli", pid: process.pid, url: "http://localhost:5173" });
+            setTimeout(() => {
+                writeDevServerState(workdir, { mode: "vite", pid: process.pid, url: "http://localhost:5174" });
+            }, 30);
+
+            await expect(
+                waitForViteOrigin(workdir, recordingLogger().logger, new AbortController().signal, { intervalMs: 10, timeoutMs: 2000 }),
+            ).resolves.toStrictEqual({
+                origin: "http://localhost:5174",
+                ownerPid: process.pid,
+            });
+        });
+
+        it("gives up after the timeout and says why", async () => {
+            expect.assertions(2);
+
+            const recorded = recordingLogger();
+
+            await expect(waitForViteOrigin(workdir, recorded.logger, new AbortController().signal, { intervalMs: 10, timeoutMs: 50 })).resolves.toBeUndefined();
+            expect(text(recorded)).toContain("did not report its URL");
+        });
+
+        it("stops quietly when aborted", async () => {
+            expect.assertions(2);
+
+            const recorded = recordingLogger();
+            const controller = new AbortController();
+            const waiting = waitForViteOrigin(workdir, recorded.logger, controller.signal, { intervalMs: 1000, timeoutMs: 60_000 });
+
+            controller.abort();
+
+            await expect(waiting).resolves.toBeUndefined();
+            expect(recorded.lines).toHaveLength(0);
+        });
+    });
+
+    describe(startTunnelForPlan, () => {
+        it("starts nothing without a tunnel request", () => {
+            expect.assertions(1);
+
+            expect(
+                startTunnelForPlan({
+                    cwd: workdir,
+                    logger: recordingLogger().logger,
+                    plan: { flavor: "wrangler", workerOrigin: "http://localhost:8787" },
+                    tunnel: undefined,
+                }),
+            ).toBeUndefined();
+        });
+
+        it("tunnels the URL Vite records on the vite flavor — not the pre-listen guess — with the allowedHosts hint", async () => {
+            expect.assertions(3);
+
+            writeDevServerState(workdir, { mode: "vite", pid: process.pid, url: "http://localhost:5174" });
+
+            const recorded = recordingLogger();
+            const { logger, printed } = waitForTunnelLine(recorded);
+            const child = fakeCloudflared();
+
+            tunnel = startTunnelForPlan({
+                cwd: workdir,
+                logger,
+                plan: { flavor: "vite", workerOrigin: "http://localhost:5173" },
+                tunnel: { allowMail: [], spawner: versionProbe("2026.9.3"), startChild: child.startChild },
+            });
+            await printed;
+
+            expect(child.calls[0]?.args.slice(0, 3)).toStrictEqual(["tunnel", "--url", "http://localhost:5174"]);
+            expect(text(recorded)).toContain('allowedHosts: [".trycloudflare.com"]');
+            expect(readDevServerState(workdir)?.tunnelUrl).toBe(TUNNEL_URL);
         });
     });
 
     describe("runDevCommand", () => {
-        let workdir: string;
-
-        beforeEach(() => {
-            workdir = mkdtempSync(join(tmpdir(), "lunora-cli-dev-tunnel-"));
-        });
-
-        afterEach(() => {
-            rmSync(workdir, { force: true, recursive: true });
-        });
-
         it("tunnels the worker origin — never the studio port — and stops cloudflared when dev exits", async () => {
-            expect.assertions(4);
+            expect.assertions(3);
 
             const recorded = recordingLogger();
-            const { calls, spawner } = cloudflaredSpawner("2026.9.3");
-            let endWorker: ((code: number) => void) | undefined;
+            const child = fakeCloudflared();
+            let endWorker: (code: number) => void = () => {};
             const logger: Logger = {
                 ...recorded.logger,
                 success: (message) => {
                     recorded.logger.success(message);
 
                     if (message.includes("Tunnel:")) {
-                        endWorker?.(0);
+                        endWorker(0);
                     }
                 },
             };
@@ -335,67 +547,189 @@ describe("lunora dev --tunnel", () => {
                         kill: () => {},
                     };
                 },
-                tunnel: true,
-                tunnelSpawner: spawner,
+                tunnel: { allowMail: [], spawner: versionProbe("2026.9.3"), startChild: child.startChild },
             });
 
-            const tunnelCall = calls[1]?.descriptor;
-
             expect(result.code).toBe(0);
-            expect(tunnelCall?.args.slice(0, 3)).toStrictEqual(["tunnel", "--url", "http://localhost:8787"]);
-            expect(tunnelCall?.args.join(" ")).not.toContain("6173");
-            expect(tunnelCall?.signal?.aborted).toBe(true);
+            expect(child.calls[0]?.args.slice(0, 3)).toStrictEqual(["tunnel", "--url", "http://localhost:8787"]);
+            expect(child.killed).toStrictEqual(["SIGTERM"]);
         });
     });
 
     describe(devFlagConflict, () => {
-        it("refuses --allow-mail without --tunnel, and accepts it with one", () => {
-            expect.assertions(3);
+        const base = { allowMail: undefined, local: undefined, remote: undefined, tunnel: undefined };
 
-            expect(devFlagConflict({ allowMail: ["alice@example.com"], local: undefined, remote: undefined, tunnel: undefined })).toContain("add `--tunnel`");
-            expect(devFlagConflict({ allowMail: ["alice@example.com"], local: undefined, remote: undefined, tunnel: true })).toBeUndefined();
-            expect(devFlagConflict({ allowMail: undefined, local: undefined, remote: undefined, tunnel: true })).toBeUndefined();
+        it("refuses --allow-mail without --tunnel, and accepts it with one", () => {
+            expect.assertions(2);
+
+            expect(devFlagConflict({ ...base, allowMail: ["alice@example.com"] })).toContain("add `--tunnel`");
+            expect(devFlagConflict({ ...base, allowMail: ["alice@example.com"], tunnel: true })).toBeUndefined();
+        });
+
+        it("refuses an entry that is not an email address", () => {
+            expect.assertions(1);
+
+            expect(devFlagConflict({ ...base, allowMail: ["alice@example.com,bob"], tunnel: true })).toContain('not "bob"');
+        });
+
+        it("ignores an empty --allow-mail rather than counting it as protection", () => {
+            expect.assertions(1);
+
+            expect(devFlagConflict({ ...base, allowMail: [""] })).toBeUndefined();
         });
     });
 
     describe("background mode", () => {
-        let workdir: string;
-
-        beforeEach(() => {
-            workdir = mkdtempSync(join(tmpdir(), "lunora-cli-dev-tunnel-bg-"));
-        });
-
         afterEach(() => {
             clearDevServerState(workdir, process.pid);
-            rmSync(workdir, { force: true, recursive: true });
         });
 
-        it("forwards --tunnel and every --allow-mail to the daemon", async () => {
-            expect.assertions(1);
-
-            const seen: ReadonlyArray<string>[] = [];
+        const startRecording = async (options: Partial<DevOptions>): Promise<{ args: ReadonlyArray<string>; tunnel?: boolean }[]> => {
+            const seen: { args: ReadonlyArray<string>; tunnel?: boolean }[] = [];
 
             await startBackground({
                 cwd: workdir,
                 jsonLogs: false,
                 logger: recordingLogger().logger,
-                options: { allowMail: ["alice@example.com", "*@example.org"], tunnel: true } as DevOptions,
+                options: options as DevOptions,
                 remote: false,
-                run: async (options: { command: { args: ReadonlyArray<string> } }) => {
-                    seen.push(options.command.args);
+                run: async (run) => {
+                    seen.push({ args: run.command.args, tunnel: run.tunnel });
 
                     return { code: 0 };
                 },
             });
 
+            return seen;
+        };
+
+        it("forwards --tunnel and every --allow-mail to the daemon", async () => {
+            expect.assertions(2);
+
+            const [seen] = await startRecording({ allowMail: ["alice@example.com", "*@example.org"], tunnel: true });
+
             // An unforwarded --allow-mail would turn a protected tunnel public in the daemon.
-            expect(seen[0]?.slice(seen[0].indexOf("--tunnel"))).toStrictEqual([
+            expect(seen?.args.slice(seen.args.indexOf("--tunnel"))).toStrictEqual([
                 "--tunnel",
                 "--allow-mail",
                 "alice@example.com",
                 "--allow-mail",
                 "*@example.org",
             ]);
+            expect(seen?.tunnel).toBe(true);
+        });
+
+        it("runs a tunneled Vite project through the daemon, which owns cloudflared, instead of the bare Vite script", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/vite": "1.0.0" }, name: "app" }), "utf8");
+            writeFileSync(join(workdir, "vite.config.ts"), "export default {};\n", "utf8");
+
+            const [tunneled] = await startRecording({ allowMail: ["alice@example.com"], tunnel: true });
+
+            clearDevServerState(workdir, process.pid);
+
+            const [plain] = await startRecording({});
+
+            expect(tunneled?.args).toContain("--tunnel");
+            expect(tunneled?.args[0]).toBe(process.argv[1] ?? "lunora");
+            // Without --tunnel the Vite dev script still runs directly.
+            expect(plain?.args).not.toContain("--tunnel");
+        });
+
+        it("prints the tunnel URL the daemon records once the server is ready", async () => {
+            expect.assertions(1);
+
+            const recorded = recordingLogger();
+
+            await runDevBackground({
+                command: { args: [], command: "unused" },
+                cwd: workdir,
+                json: false,
+                logger: recorded.logger,
+                pollIntervalMs: 10,
+                probe: async () => true,
+                spawnDetached: () => {
+                    // The "daemon": records itself, then the tunnel URL a moment later.
+                    writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:8787" });
+                    setTimeout(() => {
+                        writeDevServerState(workdir, { mode: "cli", pid: process.ppid, tunnelUrl: TUNNEL_URL, url: "http://localhost:8787" });
+                    }, 30);
+
+                    return { exited: new Promise<number>(() => {}), pid: process.ppid };
+                },
+                tunnel: true,
+                tunnelUrlTimeoutMs: 2000,
+            });
+
+            expect(recorded.lines).toContainEqual({ level: "success", message: `  Tunnel: ${TUNNEL_URL}` });
+        });
+
+        it("points at status and logs when the tunnel URL has not arrived", async () => {
+            expect.assertions(1);
+
+            const recorded = recordingLogger();
+
+            await runDevBackground({
+                command: { args: [], command: "unused" },
+                cwd: workdir,
+                json: false,
+                logger: recorded.logger,
+                pollIntervalMs: 10,
+                probe: async () => true,
+                spawnDetached: () => {
+                    writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:8787" });
+
+                    return { exited: new Promise<number>(() => {}), pid: process.ppid };
+                },
+                tunnel: true,
+                tunnelUrlTimeoutMs: 50,
+            });
+
+            expect(text(recorded)).toContain("`lunora dev status` shows it once cloudflared reports one; `lunora dev logs`");
+        });
+
+        it("shows the tunnel URL in `lunora dev status`", () => {
+            expect.assertions(1);
+
+            writeDevServerState(workdir, { mode: "cli", pid: process.pid, tunnelUrl: TUNNEL_URL, url: "http://localhost:8787" });
+
+            const recorded = recordingLogger();
+
+            runDevStatus({ cwd: workdir, json: false, logger: recorded.logger });
+
+            expect(text(recorded)).toContain(`Tunnel: ${TUNNEL_URL}`);
+        });
+    });
+
+    describe(spawnLongLivedChild, () => {
+        it("hands over each output line — split chunks rejoined — and stops on kill", async () => {
+            expect.assertions(2);
+
+            const lines: string[] = [];
+            const child = spawnLongLivedChild(
+                {
+                    args: [
+                        "-e",
+                        String.raw`process.stderr.write("first li"); setTimeout(() => process.stderr.write("ne\nsecond\n"), 50); setInterval(() => {}, 1000);`,
+                    ],
+                    command: process.execPath,
+                    direct: true,
+                },
+                (line) => {
+                    lines.push(line);
+
+                    if (lines.length === 2) {
+                        child.kill("SIGTERM");
+                    }
+                },
+            );
+
+            const code = await child.exited;
+
+            expect(lines).toStrictEqual(["first line", "second"]);
+            // Killed by a signal: reported as a failure code.
+            expect(code).toBe(1);
         });
     });
 });

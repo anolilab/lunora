@@ -45,6 +45,8 @@ import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { printJson } from "../../util/output-format";
 import { spawnShellCompat } from "../../util/spawn";
+import daemonArguments from "./daemon-arguments";
+import pollDevServerState from "./dev-state-poll";
 import type { DevOptions } from "./index";
 
 /** Grace period `dev stop` allows for a clean SIGTERM shutdown before SIGKILL. */
@@ -285,7 +287,29 @@ const printBackgroundBanner = (logger: Logger, state: DevServerState): void => {
         logger.info(`  Studio: ${state.studioUrl}`);
     }
 
+    if (state.tunnelUrl !== undefined) {
+        logger.info(`  Tunnel: ${state.tunnelUrl}`);
+    }
+
     printLifecycleHints(logger);
+};
+
+/** How long a `--background --tunnel` start waits, after ready, for cloudflared to report the URL. */
+const TUNNEL_URL_WAIT_MS = 30_000;
+
+/**
+ * After a `--background --tunnel` start is ready, wait (bounded) for the tunnel
+ * URL the daemon records once cloudflared reports it — the one URL a background
+ * start would otherwise only write to the log nobody is reading.
+ */
+const reportBackgroundTunnel = async (cwd: string, logger: Logger, pollIntervalMs: number, timeoutMs: number): Promise<void> => {
+    const tunnelUrl = await pollDevServerState(cwd, (state) => state?.tunnelUrl, { intervalMs: pollIntervalMs, timeoutMs });
+
+    if (tunnelUrl === undefined) {
+        logger.warn("  Tunnel: no URL yet — `lunora dev status` shows it once cloudflared reports one; `lunora dev logs` says why if it does not.");
+    } else {
+        logger.success(`  Tunnel: ${tunnelUrl}`);
+    }
 };
 
 interface BackgroundCommandOptions {
@@ -305,6 +329,10 @@ interface BackgroundCommandOptions {
     readyTimeoutMs?: number;
     /** Injection seam for tests — defaults to the real detached spawner. */
     spawnDetached?: DetachedSpawner;
+    /** `--tunnel` was requested: after ready, wait for and print the tunnel URL. */
+    tunnel?: boolean;
+    /** Injection seam for tests — how long to wait for the tunnel URL (defaults to {@link TUNNEL_URL_WAIT_MS}). */
+    tunnelUrlTimeoutMs?: number;
 }
 
 /** Outcome of the readiness wait: server ready (with its record), child death, or deadline. */
@@ -404,6 +432,10 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
     if (outcome.status === "ready") {
         printBackgroundBanner(logger, outcome.state);
 
+        if (options.tunnel === true && outcome.state.tunnelUrl === undefined) {
+            await reportBackgroundTunnel(cwd, logger, options.pollIntervalMs ?? POLL_INTERVAL_MS, options.tunnelUrlTimeoutMs ?? TUNNEL_URL_WAIT_MS);
+        }
+
         return { code: 0 };
     }
 
@@ -480,86 +512,6 @@ const withViteChildEnv = (options: { codegen?: boolean; remote?: boolean }): { e
 };
 
 /**
- * Rebuild the argv a detached daemon `lunora dev` re-invocation needs, from the
- * already-parsed options. `--background`/`--json` are deliberately NOT
- * forwarded: the daemon must run the foreground path (its detachment marker is
- * {@link DEV_DAEMON_ENV}), and JSON logging travels as `LUNORA_LOG_JSON=1` env.
- *
- * KEEP IN SYNC with the `dev` option table in `./index.ts`: any new flag that
- * must reach the detached daemon has to be forwarded here explicitly, or a
- * background start will silently drop it.
- */
-const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
-    const args = ["dev"];
-
-    if (options.apiSpec !== undefined) {
-        args.push("--api-spec", options.apiSpec);
-    }
-
-    if (options.port !== undefined) {
-        args.push("--port", String(options.port));
-    }
-
-    if (options.workerPort !== undefined) {
-        args.push("--worker-port", String(options.workerPort));
-    }
-
-    // The daemon is the process that spawns `wrangler dev`, so an unforwarded
-    // `--inspector-port` would leave the background run on wrangler's own
-    // upward walk — the exact failure the flag exists to stop.
-    if (options.inspectorPort !== undefined) {
-        args.push("--inspector-port", String(options.inspectorPort));
-    }
-
-    // Forwarded, or a `--background` run would emit nothing: the daemon child is
-    // the process that knows the resolved origin, and the supervisor asking for
-    // the manifest is the same one that wanted the server detached.
-    if (options.emitBindings !== undefined) {
-        args.push("--emit-bindings", options.emitBindings);
-    }
-
-    if (options.codegen === false) {
-        args.push("--no-codegen");
-    }
-
-    if (options.studio === false) {
-        args.push("--no-studio");
-    }
-
-    if (options.worker === false) {
-        args.push("--no-worker");
-    }
-
-    // Forwarded explicitly, like every other flag here: the daemon is a fresh
-    // process that re-parses argv, so an unforwarded flag is silently dropped.
-    // `lunora.config.*`'s target still reaches it (the daemon re-reads the config),
-    // which is what makes a missing `--target` look accepted and do nothing.
-    if (options.target !== undefined) {
-        args.push("--target", options.target);
-    }
-
-    // The daemon owns the tunnel's cloudflared child, so both halves must reach it;
-    // an unforwarded `--allow-mail` would turn a protected tunnel into a public one.
-    if (options.tunnel === true) {
-        args.push("--tunnel");
-
-        for (const entry of options.allowMail ?? []) {
-            args.push("--allow-mail", entry);
-        }
-    }
-
-    if (remote) {
-        args.push("--remote");
-    }
-
-    if (options.local === true) {
-        args.push("--local");
-    }
-
-    return args;
-};
-
-/**
  * Detach the dev server as a managed background process and block until it is
  * ready: the project's dev script directly for a Vite project (its dev-state
  * plugin writes the record), else this same CLI re-invoked as the daemon.
@@ -615,7 +567,11 @@ const startBackground = async (context: {
     const handoff = { [DEV_HANDOFF_ENV]: String(process.pid) };
 
     try {
-        if (flavor === "vite") {
+        // `--tunnel` needs a process that owns the cloudflared child, and the
+        // bare Vite dev script is not one — so a tunneled Vite project runs
+        // through the daemon, which spawns Vite itself and tunnels the URL Vite
+        // records (the same arrangement as a foreground `lunora dev --tunnel`).
+        if (flavor === "vite" && options.tunnel !== true) {
             // This branch spawns the framework dev script directly — it does not
             // go through `planDevCommand`, so anything {@link withViteChildEnv}
             // does not carry is dropped for good.
@@ -635,6 +591,7 @@ const startBackground = async (context: {
             env: handoff,
             json: jsonLogs,
             logger,
+            tunnel: options.tunnel === true,
         });
     } finally {
         // Drop the provisional record unless a child already superseded it.
@@ -870,6 +827,7 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
             running: true,
             startedAt: state.startedAt,
             studioUrl: state.studioUrl,
+            tunnelUrl: state.tunnelUrl,
             uptimeSeconds,
             url: state.url,
         });
@@ -891,6 +849,10 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
 
     if (state.studioUrl !== undefined) {
         logger.info(`  Studio: ${state.studioUrl}`);
+    }
+
+    if (state.tunnelUrl !== undefined) {
+        logger.info(`  Tunnel: ${state.tunnelUrl}`);
     }
 
     if (state.logFile !== undefined) {

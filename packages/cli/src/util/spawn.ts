@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 import { LunoraError } from "@lunora/errors";
 
@@ -58,22 +59,6 @@ export interface SpawnDescriptor {
      * line or in env. When absent, stdin is inherited from the parent.
      */
     input?: string;
-
-    /**
-     * Receive the child's stderr one line at a time, as it arrives, instead of
-     * having it inherited by the parent — for a long-running child whose output
-     * carries something the caller must act on while it is still running (the
-     * public URL `cloudflared` logs for `lunora dev --tunnel`). The callback
-     * owns display: nothing is teed unless `captureStderr` is also set.
-     */
-    onStderrLine?: (line: string) => void;
-
-    /**
-     * Stop the child: aborting it sends SIGTERM (Node's `spawn` `signal`
-     * option), and the result then resolves with the child's exit like any
-     * other exit, rather than rejecting with an `AbortError`.
-     */
-    signal?: AbortSignal;
 
     /**
      * Route the child's stdout to the parent's STDERR instead of stdout. Set in
@@ -154,8 +139,9 @@ export const defaultSpawner: Spawner = (descriptor) =>
         const wantCapture = descriptor.captureStdout === true;
         const wantSilentCapture = descriptor.captureStdoutSilently === true;
         // When the caller pipes input we need a writable stdin handle — "inherit"
-        // gives us the parent's stdin which we can't write to. stderr always stays
-        // inherited so errors land where the user can see them. stdout is normally
+        // gives us the parent's stdin which we can't write to. stderr is inherited
+        // so errors land where the user can see them, unless `captureStderr` pipes
+        // it (still teed to the parent below). stdout is normally
         // inherited; in `--format json` mode it is mapped to the parent's stderr fd
         // (2) so the child's human output never pollutes the JSON on stdout; and in
         // either capture mode it is piped so we can buffer it (and, for
@@ -168,54 +154,31 @@ export const defaultSpawner: Spawner = (descriptor) =>
             stdout = 2;
         }
         const exec = spawnShellCompat(descriptor.command, descriptor.args);
-        const pipeStderr = descriptor.captureStderr === true || descriptor.onStderrLine !== undefined;
         const child = nodeSpawn(exec.command, exec.args, {
             cwd: descriptor.cwd ?? process.cwd(),
             env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
             shell: exec.shell,
-            signal: descriptor.signal,
-            stdio: [hasInput ? "pipe" : "inherit", stdout, pipeStderr ? "pipe" : "inherit"],
+            stdio: [hasInput ? "pipe" : "inherit", stdout, descriptor.captureStderr === true ? "pipe" : "inherit"],
         });
 
+        // Decoders, not `chunk.toString()`: a multi-byte character split across
+        // two chunks would otherwise decode as two replacement characters.
+        const stdoutDecoder = new StringDecoder("utf8");
+        const stderrDecoder = new StringDecoder("utf8");
         let captured = "";
         let capturedError = "";
 
         if (descriptor.captureStderr === true && child.stderr) {
             child.stderr.on("data", (chunk: Buffer) => {
-                capturedError += chunk.toString("utf8");
+                capturedError += stderrDecoder.write(chunk);
                 // Tee to the parent so the user still sees the tool's own output.
                 process.stderr.write(chunk);
             });
         }
 
-        const { onStderrLine } = descriptor;
-
-        if (onStderrLine !== undefined && child.stderr) {
-            let pending = "";
-
-            child.stderr.on("data", (chunk: Buffer) => {
-                pending += chunk.toString("utf8");
-
-                const lines = pending.split("\n");
-
-                // The last element is the (possibly incomplete) line still arriving.
-                pending = lines.pop() ?? "";
-
-                for (const line of lines) {
-                    onStderrLine(line.trimEnd());
-                }
-            });
-            child.stderr.on("end", () => {
-                if (pending.length > 0) {
-                    onStderrLine(pending.trimEnd());
-                    pending = "";
-                }
-            });
-        }
-
         if ((wantCapture || wantSilentCapture) && child.stdout) {
             child.stdout.on("data", (chunk: Buffer) => {
-                captured += chunk.toString("utf8");
+                captured += stdoutDecoder.write(chunk);
 
                 if (wantCapture) {
                     // Tee to the parent so the user still sees live deploy progress.
@@ -227,12 +190,6 @@ export const defaultSpawner: Spawner = (descriptor) =>
         }
 
         child.on("error", (error) => {
-            // An aborted `signal` is a requested stop, not a failure: Node kills
-            // the child and the `exit` handler below reports how it ended.
-            if (error.name === "AbortError") {
-                return;
-            }
-
             // The single chokepoint for "that program isn't installed": every
             // shell-out in the CLI goes through this spawner, and Node reports a
             // command that isn't on PATH as an `ENOENT` on the child (no PID, no
@@ -259,8 +216,8 @@ export const defaultSpawner: Spawner = (descriptor) =>
             // OOM-killed `tsc` must not read as a clean type-check.
             resolve({
                 code: code ?? (signal ? 1 : 0),
-                stderr: descriptor.captureStderr === true ? capturedError : undefined,
-                stdout: wantCapture || wantSilentCapture ? captured : undefined,
+                stderr: descriptor.captureStderr === true ? capturedError + stderrDecoder.end() : undefined,
+                stdout: wantCapture || wantSilentCapture ? captured + stdoutDecoder.end() : undefined,
             });
         });
 
@@ -282,21 +239,15 @@ export interface RecordedSpawn {
 
 /**
  * Test helper: returns a spawner that records every invocation and resolves
- * with the configured exit code — or, when `respond` is given, with whatever it
- * returns for that descriptor (captured stdout for a `--version` probe, or a
- * result that settles only once the descriptor's `signal` aborts, for a
- * long-running child).
+ * with the configured exit code.
  */
-export const createRecordingSpawner = (
-    exitCode = 0,
-    respond?: (descriptor: SpawnDescriptor) => Promise<SpawnResult> | SpawnResult,
-): { calls: RecordedSpawn[]; spawner: Spawner } => {
+export const createRecordingSpawner = (exitCode = 0): { calls: RecordedSpawn[]; spawner: Spawner } => {
     const calls: RecordedSpawn[] = [];
 
-    const spawner: Spawner = async (descriptor) => {
+    const spawner: Spawner = (descriptor) => {
         calls.push({ descriptor });
 
-        return respond === undefined ? { code: exitCode } : await respond(descriptor);
+        return Promise.resolve({ code: exitCode });
     };
 
     return { calls, spawner };

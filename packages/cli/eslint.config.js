@@ -152,10 +152,10 @@ export default createConfig(
     // bundles it into `dist` and keeps it off the manifest consumers install
     // (the same trick `@lunora/agent` / `@lunora/server` use for the internal
     // `@lunora/dispatch` and `@lunora/search-core`). `import/no-extraneous-
-    // dependencies` reads that as a mistake, so it is scoped off for the one
-    // file that imports it rather than suppressed at the import site.
+    // dependencies` reads that as a mistake, so it is scoped off for the files
+    // that import it rather than suppressed at the import site.
     {
-        files: ["**/commands/add/features.ts"],
+        files: ["**/commands/add/features.ts", "**/commands/dev/tunnel.ts"],
         rules: {
             "import/no-extraneous-dependencies": "off",
         },
