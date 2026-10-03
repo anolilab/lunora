@@ -454,15 +454,20 @@ const declaredFile = (request: Request, protocol: UploadProtocol): { contentType
  * would otherwise buffer the whole chunk in memory to verify it, about twice
  * `maxChecksumBufferSize` at peak, which a few concurrent requests could use to
  * exhaust an isolate. The binding provider answered the same before 2.0.26,
- * and neither the TUS client nor `Tus-Extension` offers checksums there.
+ * and neither the TUS client nor `Tus-Extension` offers checksums there. Only
+ * the requests that carry bytes are refused: upstream verifies the header on
+ * `PATCH`, and on a `POST` that uploads with its create it would store the
+ * bytes without checking them. `HEAD`, `DELETE` and `OPTIONS` ignore it.
  */
 const tusRefusal = (request: Request, verifiesChecksums: boolean): Response | undefined => {
-    if (request.method === "POST" || request.method === "PATCH") {
-        const parsed = tusMetadata(request.headers.get("Upload-Metadata") ?? "");
+    if (request.method !== "POST" && request.method !== "PATCH") {
+        return undefined;
+    }
 
-        if ("error" in parsed) {
-            return errorResponse("tus", 400, { code: "BadRequestError", message: parsed.error, name: "BadRequestError" });
-        }
+    const parsed = tusMetadata(request.headers.get("Upload-Metadata") ?? "");
+
+    if ("error" in parsed) {
+        return errorResponse("tus", 400, { code: "BadRequestError", message: parsed.error, name: "BadRequestError" });
     }
 
     if (!verifiesChecksums && request.headers.has("Upload-Checksum")) {
@@ -477,14 +482,26 @@ const tusRefusal = (request: Request, verifiesChecksums: boolean): Response | un
 };
 
 /**
- * A TUS `OPTIONS` answer without `Tus-Checksum-Algorithm`, for a route that
- * refuses `Upload-Checksum`: upstream lists the algorithms it can verify by
- * buffering, which this route does not let it do.
+ * A TUS `OPTIONS` answer that offers no checksums, for a route that refuses
+ * `Upload-Checksum`: upstream lists the algorithms it can verify by buffering,
+ * and its base storage always lists the `checksum` extension, neither of which
+ * this route lets it use. Every other extension is kept.
  */
 const withoutChecksumAlgorithms = (response: Response): Response => {
     const headers = new Headers(response.headers);
+    const extensions = headers.get("Tus-Extension");
 
     headers.delete("Tus-Checksum-Algorithm");
+
+    if (extensions !== null) {
+        headers.set(
+            "Tus-Extension",
+            extensions
+                .split(",")
+                .filter((extension) => extension.trim() !== "checksum")
+                .join(","),
+        );
+    }
 
     return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
 };

@@ -545,6 +545,32 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             expect(refusing.headers.has("tus-checksum-algorithm")).toBe(false);
             expect(refusing.headers.get("tus-resumable")).toBe("1.0.0");
             expect(verifying.headers.get("tus-checksum-algorithm")).toContain("sha256");
+
+            const extensions = (response: Response): string[] => (response.headers.get("tus-extension") ?? "").split(",");
+
+            expect(extensions(verifying)).toContain("checksum");
+            expect(extensions(refusing)).toStrictEqual(extensions(verifying).filter((extension) => extension !== "checksum"));
+        });
+
+        it.each(["HEAD", "DELETE", "OPTIONS"])("lets %s carry Upload-Checksum through, as upstream ignores it there", async (method) => {
+            expect.hasAssertions();
+
+            const authorize = vi.fn<() => boolean>(() => true);
+            const route = createUploadHandler({ authorize, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+            const tus = rawTus(route);
+            const plain = await tus.create(4, "plain.bin");
+            const summed = await tus.create(4, "summed.bin");
+            const send = async (url: string, headers: Record<string, string>): Promise<Response> =>
+                route.fetch(new Request(method === "OPTIONS" ? ENDPOINT : url, { headers: { "Tus-Resumable": "1.0.0", ...headers }, method }));
+
+            authorize.mockClear();
+
+            const without = await send(plain, {});
+            const withChecksum = await send(summed, { "Upload-Checksum": "sha256 AAAA" });
+
+            expect(withChecksum.status).toBe(without.status);
+            expect(withChecksum.status).toBeLessThan(300);
+            expect(authorize).toHaveBeenCalledTimes(2);
         });
 
         it("refuses a buffered checksummed chunk just over 16 MiB (413) before reading any of it", async () => {
@@ -639,8 +665,11 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         it("refuses an invalid Upload-Metadata on a PATCH too, where upstream also reads it", async () => {
             expect.hasAssertions();
 
-            const { route } = cappedRoute(new MemoryStorage({ path: "/upload" }));
+            const { authorize, route } = cappedRoute(new MemoryStorage({ path: "/upload" }));
             const location = await rawTus(route).create(4, "a.bin");
+
+            authorize.mockClear();
+
             const response = await route.fetch(
                 new Request(location, {
                     body: new Uint8Array(4),
@@ -655,6 +684,8 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             );
 
             expect(response.status).toBe(400);
+            // Upstream answers this PATCH 400 too: only the gate shows the route refused it.
+            expect(authorize).not.toHaveBeenCalled();
             await expect(rawTus(route).head(location)).resolves.toBe(0);
         });
 
