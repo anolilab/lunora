@@ -324,6 +324,10 @@ interface HostSpanLike {
     }) => unknown;
     setAttribute: (key: string, value: boolean | number | string | undefined) => unknown;
     setAttributes?: (attributes: Record<string, boolean | number | string>) => unknown;
+    setStatus?: (status: {
+        code: "error" | "ok" | "unset";
+        message?: string;
+    }) => unknown;
 }
 ```
 
@@ -959,6 +963,18 @@ interface TracerDeps {
 
 ```ts
 const appendRequestLogEntry: (sql: SqlExec, entry: AppendRequestLogEntry, options?: RequestLogWriteOptions) => void;
+```
+
+### `applyHostRootSpan` (const)
+
+```ts
+const applyHostRootSpan: (tracing: HostTracingLike | undefined, root: {
+    attributes?: Record<string, LogFields[string]>;
+    error?: {
+        message: string;
+        serverFault: boolean;
+    };
+}) => void;
 ```
 
 ### `buildSecurityAudit` (const)

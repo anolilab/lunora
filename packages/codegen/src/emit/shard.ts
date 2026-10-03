@@ -621,6 +621,9 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
                 ...(config.maxRelationKeys === undefined ? {} : { maxRelationKeys: config.maxRelationKeys }),
                 ...(config.reactiveCache ? { reactiveCache: config.reactiveCache === true ? {} : config.reactiveCache } : {}),
                 ...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),
+                // The same sink \`buildCtx\` resolves, made reachable before any ctx
+                // exists — a trigger that fails first still flushes and fuses.
+                ...(config.observability === undefined ? {} : { telemetrySink: () => config.observability?.((env ?? {}) as Record<string, unknown>) }),
             });
 ${sourceBootstrap}${ttlBootstrap}        }
 

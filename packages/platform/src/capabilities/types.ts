@@ -325,7 +325,8 @@ export interface PlatformCapabilities {
          * tracing shows one nested tree instead of two unrelated ones — the
          * sink's `fuseCloudflareTraces` opt-in, which reaches `cloudflare:workers`'
          * `tracing.enterSpan` (plus, where present, `getActiveSpan` for the
-         * invocation root and a span's `setAttributes` / `recordException`).
+         * invocation root and a span's `setAttributes` / `recordException` /
+         * `setStatus`).
          *
          * Rated because it is the one telemetry surface that reaches past
          * `ShardHost` into a provider API. Everything else in the pipeline is

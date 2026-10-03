@@ -614,6 +614,18 @@ spans go to your sink but are not re-emitted as Cloudflare custom spans (only
 `ctx.trace` spans are), while the summary counters ride the dispatch root span,
 whose attributes are mirrored onto Cloudflare's invocation span.
 
+A fused `ctx.trace` span that fails gets an `exception` event
+(`span.recordException`) and an `error` span status (`span.setStatus`), both
+with the redacted message, so Cloudflare's trace view shows it as failed. A
+successful span's status stays unset, as OTel instrumentation leaves it.
+
+Cloudflare's invocation span is marked failed in two cases: when an RPC
+dispatch answers with a 5xx, whether or not the handler recorded any
+telemetry, and whenever a trigger such as an alarm throws. An RPC that answers
+with a 4xx, such as a validation, auth or not-found error, leaves it unset.
+Both methods are feature-detected, so on a runtime without them the span
+simply carries the error attributes.
+
 If you run your own Drizzle instance against Hyperdrive **outside** `ctx.sql`,
 Lunora does not see those queries.
 [`cloudflare-drizzle-tracing`](https://github.com/Cherry/cloudflare-drizzle-tracing)'s

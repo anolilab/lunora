@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SpanHandle, TracerDeps } from "../src/context-telemetry";
 import { createTracer } from "../src/context-telemetry";
 import type { HostSpanLike, HostTracingLike } from "../src/host-span";
-import { setHostSpanAttributes } from "../src/host-span";
+import { applyHostRootSpan, setHostSpanAttributes } from "../src/host-span";
 
 /**
  * Unit coverage for the opt-in Cloudflare custom-spans bridge in
@@ -299,6 +299,215 @@ describe("createTracer cloudflare custom-spans bridge", () => {
         expect(bags).toHaveLength(1);
         expect(bags[0]).toMatchObject({ "error.message": "kaboom", "lunora.function_path": "messages:list", "lunora.ok": false });
         expect(exceptions).toStrictEqual([{ message: "kaboom", name: "TypeError" }]);
+    });
+});
+
+describe("createTracer cloudflare span status", () => {
+    type Status = Parameters<NonNullable<HostSpanLike["setStatus"]>>[0];
+
+    /** A fake CF span that also records every `setStatus` call. */
+    const makeStatusSpan = (isTraced = true): HostSpanLike & { readonly statuses: Status[] } => {
+        const statuses: Status[] = [];
+
+        return {
+            isTraced,
+            setAttribute: () => undefined,
+            setStatus: (status) => {
+                statuses.push(status);
+            },
+            statuses,
+        };
+    };
+
+    it("sets error status with the redacted message on a failed span", async () => {
+        expect.assertions(2);
+
+        const span = makeStatusSpan();
+        const { trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(
+            trace("span", () => {
+                throw new Error("User 12345 not found");
+            }),
+        ).rejects.toThrow("User 12345 not found");
+
+        // The redacted message — the host exports this span, so it must not
+        // carry the raw one (`standardRules` masks a bare 5-digit run as `<DL>`).
+        expect(span.statuses).toStrictEqual([{ code: "error", message: "User <DL> not found" }]);
+    });
+
+    it("never sets a status on a successful span (OTel leaves it unset)", async () => {
+        expect.assertions(2);
+
+        const span = makeStatusSpan();
+        const { trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(trace("span", () => "ok")).resolves.toBe("ok");
+        expect(span.statuses).toHaveLength(0);
+    });
+
+    it("never sets a status on an untraced span", async () => {
+        expect.assertions(2);
+
+        const span = makeStatusSpan(false);
+        const { recorded, trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(
+            trace("span", () => {
+                throw new Error("kaboom");
+            }),
+        ).rejects.toThrow("kaboom");
+
+        expect({ recorded: recorded.length, statuses: span.statuses }).toStrictEqual({ recorded: 1, statuses: [] });
+    });
+
+    it("sets the status even when the attribute mirror throws", async () => {
+        expect.assertions(2);
+
+        const statuses: Status[] = [];
+        const span: HostSpanLike = {
+            isTraced: true,
+            setAttribute: () => {
+                throw new Error("attribute sink down");
+            },
+            setStatus: (status) => {
+                statuses.push(status);
+            },
+        };
+        const { trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(
+            trace("span", () => {
+                throw new Error("kaboom");
+            }),
+        ).rejects.toThrow("kaboom");
+
+        expect(statuses).toStrictEqual([{ code: "error", message: "kaboom" }]);
+    });
+
+    it("still mirrors a failure onto a span without setStatus (older runtime)", async () => {
+        expect.assertions(3);
+
+        const span = makeFakeSpan();
+        const { recorded, trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(
+            trace("span", () => {
+                throw new Error("kaboom");
+            }),
+        ).rejects.toThrow("kaboom");
+
+        expect(recorded[0]).toMatchObject({ ok: false });
+        expect(new Map(span.writes).get("error.message")).toBe("kaboom");
+    });
+});
+
+describe(applyHostRootSpan, () => {
+    type Status = Parameters<NonNullable<HostSpanLike["setStatus"]>>[0];
+
+    /** A fake invocation span recording status and attribute writes; setters can be made to throw. */
+    const makeRootSpan = (options: { isTraced?: boolean; throwOnAttributes?: boolean; throwOnStatus?: boolean } = {}) => {
+        const statuses: Status[] = [];
+        const bags: Record<string, boolean | number | string>[] = [];
+        const span: HostSpanLike = {
+            isTraced: options.isTraced ?? true,
+            setAttribute: () => undefined,
+            setAttributes: (attributes) => {
+                if (options.throwOnAttributes === true) {
+                    throw new Error("attribute sink down");
+                }
+
+                bags.push(attributes);
+            },
+            setStatus: (status) => {
+                if (options.throwOnStatus === true) {
+                    throw new Error("status sink down");
+                }
+
+                statuses.push(status);
+            },
+        };
+        const tracing: HostTracingLike = { enterSpan: (_name, callback) => callback(span), getActiveSpan: () => span };
+
+        return { bags, statuses, tracing };
+    };
+
+    it("sets error status for a server fault (an RPC answered 5xx)", () => {
+        expect.assertions(1);
+
+        const root = makeRootSpan();
+
+        applyHostRootSpan(root.tracing, { error: { message: "internal error", serverFault: true } });
+
+        expect(root.statuses).toStrictEqual([{ code: "error", message: "internal error" }]);
+    });
+
+    it("leaves the status unset for a client fault (an RPC answered 4xx)", () => {
+        expect.assertions(2);
+
+        const root = makeRootSpan();
+
+        applyHostRootSpan(root.tracing, { attributes: { "order.id": "o-1" }, error: { message: "not yours", serverFault: false } });
+
+        expect(root.statuses).toStrictEqual([]);
+        // The attributes still land — only the status is withheld.
+        expect(root.bags).toStrictEqual([{ "order.id": "o-1" }]);
+    });
+
+    it("sets error status for a trigger that threw, whatever the error's code", () => {
+        expect.assertions(1);
+
+        const root = makeRootSpan();
+
+        // A trigger passes `serverFault: true` unconditionally: it re-throws, so
+        // there is no client response to call a 4xx.
+        applyHostRootSpan(root.tracing, { error: { message: "FORBIDDEN", serverFault: true } });
+
+        expect(root.statuses).toStrictEqual([{ code: "error", message: "FORBIDDEN" }]);
+    });
+
+    it("is a no-op without tracing or without getActiveSpan", () => {
+        expect.assertions(1);
+
+        const failure = { error: { message: "x", serverFault: true } };
+
+        expect(() => {
+            applyHostRootSpan(undefined, failure);
+            applyHostRootSpan({ enterSpan: (_name, callback) => callback(makeFakeSpan()) }, failure);
+        }).not.toThrow();
+    });
+
+    it("writes nothing to an untraced span", () => {
+        expect.assertions(2);
+
+        const root = makeRootSpan({ isTraced: false });
+
+        applyHostRootSpan(root.tracing, { attributes: { a: 1 }, error: { message: "x", serverFault: true } });
+
+        expect(root.statuses).toStrictEqual([]);
+        expect(root.bags).toStrictEqual([]);
+    });
+
+    it("swallows a throwing setStatus and still mirrors the attributes", () => {
+        expect.assertions(2);
+
+        const root = makeRootSpan({ throwOnStatus: true });
+
+        expect(() => {
+            applyHostRootSpan(root.tracing, { attributes: { a: 1 }, error: { message: "x", serverFault: true } });
+        }).not.toThrow();
+        expect(root.bags).toStrictEqual([{ a: 1 }]);
+    });
+
+    it("does not let a throwing attribute setter drop the status", () => {
+        expect.assertions(2);
+
+        const root = makeRootSpan({ throwOnAttributes: true });
+
+        expect(() => {
+            applyHostRootSpan(root.tracing, { attributes: { a: 1 }, error: { message: "x", serverFault: true } });
+        }).not.toThrow();
+        expect(root.statuses).toStrictEqual([{ code: "error", message: "x" }]);
     });
 });
 
