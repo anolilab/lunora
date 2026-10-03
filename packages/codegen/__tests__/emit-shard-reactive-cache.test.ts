@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { CapabilityKey } from "../src/capabilities";
 import { emitFunctions, emitShard } from "../src/emit";
 import { emitApp } from "../src/emit-app";
 
@@ -119,28 +120,20 @@ describe("emitShard — reactive cache wiring", () => {
 
 /** Minimal `EmitAppOptions` with every capability off. */
 const appOptions = {
+    capabilities: new Set<CapabilityKey>(),
     hasAccess: false,
-    hasAi: false,
-    hasAnalytics: false,
     hasAuth: false,
-    hasBrowser: false,
     hasFramework: false,
     hasGlobal: false,
-    hasHyperdrive: false,
     hasHyperdriveGlobal: false,
-    hasImages: false,
-    hasKv: false,
     hasKvIntrospector: false,
     hasNotify: false,
-    hasPayments: false,
     hasQueue: false,
-    hasR2sql: false,
     hasScheduler: false,
     hasSourcedTables: false,
     hasStorage: false,
     hasVectors: false,
     hasWorkflow: false,
-    hasX402: false,
     tables: [],
     useUmbrella: false,
     wantsArchitecture: false,

@@ -1,3 +1,26 @@
+## @lunora/container [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.66...@lunora/container@1.0.0-alpha.67) (2026-10-03)
+
+### Bug Fixes
+
+* cloudflare oct 2026 limits + observability block ([#942](https://github.com/anolilab/lunora/issues/942)) ([6145c8c](https://github.com/anolilab/lunora/commit/6145c8cfd7d5ca5fb7ff1eb1a862b93c8bc5657e))
+
+## @lunora/container [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.65...@lunora/container@1.0.0-alpha.66) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+
+## @lunora/container [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.64...@lunora/container@1.0.0-alpha.65) (2026-10-02)
+
+### Features
+
+* **container:** Sandbox SDK 1.0 parity (spawn, terminal, files, backups, mounts) ([#932](https://github.com/anolilab/lunora/issues/932)) ([207b674](https://github.com/anolilab/lunora/commit/207b674982f2f2e722d0bad529acc88d09cc2f41))
+
 ## @lunora/container [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.63...@lunora/container@1.0.0-alpha.64) (2026-09-30)
 
 ### Features

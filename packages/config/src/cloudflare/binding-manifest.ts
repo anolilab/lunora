@@ -55,7 +55,7 @@ interface BindingRequirement {
      * exports it before publishing.
      */
     className?: string;
-    /** Bucket name (`r2`), database name (`d1`), dataset (`analytics_engine`), queue name (`queue`), index (`vectorize`), stream (`pipeline`), namespace (`artifacts`). */
+    /** Bucket name (`r2`), database name (`d1`), dataset (`analytics_engine`), queue name (`queue`), index (`vectorize`), stream (`pipeline`), namespace (`artifacts`, `ai_search_namespace`), instance (`ai_search`), Worker name (`service`). */
     resource?: string;
     /** Remote resource id, when the config declares one (`d1`, `kv`, `hyperdrive`, `vpc_service`, `vpc_network`). */
     resourceId?: string;
@@ -64,6 +64,8 @@ interface BindingRequirement {
     /** The kind of resource, keyed to the wrangler section it came from. */
     type:
         | "ai"
+        | "ai_search"
+        | "ai_search_namespace"
         | "analytics_engine"
         | "artifacts"
         | "assets"
@@ -79,6 +81,7 @@ interface BindingRequirement {
         | "queue_consumer"
         | "queue_producer"
         | "r2"
+        | "service"
         | "stream"
         | "vectorize"
         | "vpc_network"
@@ -146,6 +149,8 @@ const NON_BINDING_FIELDS = new Set([
  */
 interface ManifestConfigShape extends WranglerConfigShape {
     ai?: { binding?: string };
+    ai_search?: ReadonlyArray<{ binding?: string; instance_name?: string }>;
+    ai_search_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string }>;
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
     artifacts?: ReadonlyArray<{ binding?: string; namespace?: string }>;
     /** Static assets carry a real `binding` the Worker reads (`env.ASSETS`). */
@@ -161,6 +166,8 @@ interface ManifestConfigShape extends WranglerConfigShape {
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string }>;
     /** Adds `consumers` — the Alchemy translation models producers only. */
     queues?: { consumers?: ReadonlyArray<{ queue?: string }>; producers?: ReadonlyArray<{ binding?: string; queue?: string }> };
+    /** Service bindings to sibling Workers; `service` is the Worker name. */
+    services?: ReadonlyArray<{ binding?: string; entrypoint?: string; service?: string }>;
     stream?: { binding?: string };
     vectorize?: ReadonlyArray<{ binding?: string; index_name?: string }>;
     vpc_networks?: ReadonlyArray<{ binding?: string; network_id?: string; tunnel_id?: string }>;
@@ -190,6 +197,9 @@ const ARRAY_SECTIONS: ReadonlyArray<{
     resourceKey?: ReadonlyArray<string> | string;
     type: BindingRequirement["type"];
 }> = [
+    // An `ai_search` instance must exist at deploy time; a namespace is created by wrangler if missing.
+    { bindingKey: "binding", field: "ai_search", resourceKey: "instance_name", type: "ai_search" },
+    { bindingKey: "binding", field: "ai_search_namespaces", resourceKey: "namespace", type: "ai_search_namespace" },
     { bindingKey: "binding", field: "analytics_engine_datasets", resourceKey: "dataset", type: "analytics_engine" },
     { bindingKey: "binding", field: "artifacts", resourceKey: "namespace", type: "artifacts" },
     // Keyed by `class_name`, not `name`: a wrangler `containers[]` entry has no
@@ -204,6 +214,7 @@ const ARRAY_SECTIONS: ReadonlyArray<{
     { bindingKey: "binding", field: "kv_namespaces", resourceIdKey: "id", type: "kv" },
     { bindingKey: "binding", field: "pipelines", resourceKey: ["stream", "pipeline"], type: "pipeline" },
     { bindingKey: "binding", field: "r2_buckets", resourceKey: "bucket_name", type: "r2" },
+    { bindingKey: "binding", field: "services", resourceKey: "service", type: "service" },
     { bindingKey: "binding", field: "vectorize", resourceKey: "index_name", type: "vectorize" },
     { bindingKey: "binding", field: "vpc_networks", resourceIdKey: ["tunnel_id", "network_id"], type: "vpc_network" },
     { bindingKey: "binding", field: "vpc_services", resourceIdKey: "service_id", type: "vpc_service" },

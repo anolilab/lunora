@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { RAY_ID_HEADER } from "../../../shared/ray-id";
 import { beginDispatchTrace, extractTraceContext, injectTraceContext, isSampled, SAMPLED_FLAG, sanitizeTraceState, UNSAMPLED_FLAG } from "../src/otel-trace";
 
 /** A well-formed, sampled inbound traceparent. */
@@ -7,6 +8,10 @@ const UPSTREAM_TRACE_ID = "0af7651916cd43dd8448eb211c80319c";
 const UPSTREAM_SPAN_ID = "b7ad6b7169203331";
 const SAMPLED_TRACEPARENT = `00-${UPSTREAM_TRACE_ID}-${UPSTREAM_SPAN_ID}-01`;
 const UNSAMPLED_TRACEPARENT = `00-${UPSTREAM_TRACE_ID}-${UPSTREAM_SPAN_ID}-00`;
+
+/** A Cloudflare Ray ID, and the `cf-ray` header the edge stamps it as (with the colo suffix). */
+const RAY_ID = "8f2a1b3c4d5e6f70";
+const RAY_HEADER = `${RAY_ID}-FRA`;
 
 const requestWith = (headers: Record<string, string>): Request => new Request("https://app.example/_lunora/rpc", { headers, method: "POST" });
 
@@ -223,6 +228,58 @@ describe("otel-trace", () => {
             injectTraceContext(beginDispatchTrace(requestWith({})).trace, headers);
 
             expect(headers.tracestate).toBeUndefined();
+        });
+
+        it("forwards the Cloudflare Ray ID to the shard alongside the traceparent", () => {
+            expect.assertions(2);
+
+            const headers: Record<string, string> = {};
+
+            injectTraceContext(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER })).trace, headers);
+
+            expect(headers[RAY_ID_HEADER]).toBe(RAY_ID);
+            expect(headers.traceparent).toBeDefined();
+        });
+
+        it("sends no Ray ID header when the request carried none", () => {
+            expect.assertions(1);
+
+            const headers: Record<string, string> = {};
+
+            injectTraceContext(beginDispatchTrace(requestWith({})).trace, headers);
+
+            expect(headers[RAY_ID_HEADER]).toBeUndefined();
+        });
+    });
+
+    describe("ray id", () => {
+        it("reads the cf-ray header onto the dispatch trace, dropping the colo suffix", () => {
+            expect.assertions(1);
+
+            expect(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER })).trace.rayId).toBe(RAY_ID);
+        });
+
+        it("reads it whether or not the upstream traceparent is trusted", () => {
+            expect.assertions(2);
+
+            // The Ray ID steers nothing, so there is no trust decision to gate it on.
+            expect(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER, traceparent: SAMPLED_TRACEPARENT })).trace.rayId).toBe(RAY_ID);
+            expect(beginDispatchTrace(requestWith({ "cf-ray": RAY_HEADER, traceparent: SAMPLED_TRACEPARENT }), { trustInbound: true }).trace.rayId).toBe(
+                RAY_ID,
+            );
+        });
+
+        it("leaves it absent off the edge (wrangler dev sets no cf-ray)", () => {
+            expect.assertions(1);
+
+            expect(beginDispatchTrace(requestWith({})).trace).not.toHaveProperty("rayId");
+        });
+
+        it("drops a malformed cf-ray rather than echoing it into logs", () => {
+            expect.assertions(2);
+
+            expect(beginDispatchTrace(requestWith({ "cf-ray": "not-a-ray-id" })).trace).not.toHaveProperty("rayId");
+            expect(beginDispatchTrace(requestWith({ "cf-ray": `${RAY_ID}-FRA, ${RAY_ID}` })).trace).not.toHaveProperty("rayId");
         });
     });
 });

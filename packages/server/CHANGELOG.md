@@ -1,3 +1,38 @@
+## @lunora/server [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.170...@lunora/server@1.0.0-alpha.171) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.105
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.107
+* **@lunora/observability:** upgraded to 1.0.0-alpha.116
+
+## @lunora/server [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.169...@lunora/server@1.0.0-alpha.170) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.104
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.106
+* **@lunora/values:** upgraded to 1.0.0-alpha.59
+* **@lunora/observability:** upgraded to 1.0.0-alpha.115
+
+## @lunora/server [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.168...@lunora/server@1.0.0-alpha.169) (2026-10-02)
+
+### Bug Fixes
+
+* services dev session, rpc fetch binding, and docs/codegen nits ([#935](https://github.com/anolilab/lunora/issues/935)) ([b89bbd3](https://github.com/anolilab/lunora/commit/b89bbd34c0a8d83cd8eae3d60abda3fe7cacdb88))
+
+## @lunora/server [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.167...@lunora/server@1.0.0-alpha.168) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.103
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.105
+* **@lunora/observability:** upgraded to 1.0.0-alpha.114
+
 ## @lunora/server [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.166...@lunora/server@1.0.0-alpha.167) (2026-10-02)
 
 ### Performance Improvements

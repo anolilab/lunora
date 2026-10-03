@@ -41,9 +41,14 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "emulated",
-            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so `@cf/…` ids, `ctx.ai.run` and their `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway. celld's experimental CELLD_AI_URL Workers AI adapter is a daemon-level escape hatch, not a binding on env",
+            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway. celld's experimental CELLD_AI_URL Workers AI adapter is a daemon-level escape hatch, not a binding on env",
+        },
+        aiSearch: {
+            level: "unsupported",
+            note: "AI Search is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so codegen omits `ctx.aiSearch`. A REST-backed emulation (account id + API token over fetch) was considered and not built: the REST and binding APIs differ, and nobody on this target has asked for it",
         },
         analytics: { level: "unsupported", note: "Analytics Engine is not a celld binding type" },
+        artifacts: { level: "unsupported", note: "Artifacts is not a celld binding type" },
         authJurisdictionMove: {
             level: "unsupported",
             note: "celld implements no jurisdictions — a fleet has only the machines you run, and `newUniqueId({ jurisdiction })` / `namespace.jurisdiction()` throw — so there is no jurisdiction-pinned auth object to copy into, and a schema that pins auth with `.jurisdiction(…)` fails closed",
@@ -61,9 +66,13 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "unsupported",
             note: "celld refuses container snapshots, and the durable_object scheduling policy (a start that picks its image from ctx.container.images) has not been verified against celld — rated unsupported until it is",
         },
+        containerSandboxTools: {
+            level: "unsupported",
+            note: "The backup and mount helpers route storage traffic through interceptOutboundHttp, which celld does not implement (see `containerEgressPolicy`), and the file helpers need the native ctx.container.exec(), which has not been verified against celld — rated unsupported until a TCK run proves both",
+        },
         containers: {
             level: "native",
-            note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `LunoraContainer` on `@cloudflare/containers` runs as published — a request routes worker → container Durable Object → the container's port. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral). An egress policy is refused (see `containerEgressPolicy`), as are `inspect()` and snapshots; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally. Whether celld implements the native `ctx.container.exec()` is not verified; where it does not, `exec` falls back to the image serving `/__lunora/exec`",
+            note: "`containers` entries give a SQLite-backed Durable Object class a `ctx.container` handle, and `LunoraContainer` on `@cloudflare/containers` runs as published — a request routes worker → container Durable Object → the container's port. celld rates the service Experimental. The container always runs on the node that owns its cell, so every node serving a container class needs a Docker or Podman daemon; a cell moving nodes destroys its container (disk is ephemeral). An egress policy is refused (see `containerEgressPolicy`), as are `inspect()` and snapshots; instance-type disk size is not enforced, and `max_instances` converges fleet-wide rather than holding centrally. Whether celld implements the native `ctx.container.exec()` is not verified; where it does not, `exec` falls back to the image serving `/__lunora/exec`, and spawn() / terminal(), which have no such fallback, refuse with NOT_IMPLEMENTED",
         },
         cronTriggers: {
             level: "native",

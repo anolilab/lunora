@@ -1,5 +1,7 @@
 /** The slice of `wrangler.jsonc` the binding reconciler reads and rewrites, and the step each reconcile returns. */
 
+import type { WranglerObservability } from "./wrangler-config";
+
 interface DurableObjectBinding {
     class_name?: string;
     name?: string;
@@ -67,8 +69,13 @@ interface ExportEntry {
 
 interface WranglerShape {
     ai?: { binding?: string };
-    // Self-describing: { binding, dataset } with no remote id — auto-writeable (see reconcileAnalytics).
+    // Self-describing: { binding, namespace } — the `default` namespace exists on every account
+    // and wrangler creates a missing one on deploy, so there is nothing to mint (see reconcileSelfDescribingArray).
+    ai_search_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string }>;
+    // Self-describing: { binding, dataset } with no remote id — auto-writeable (see reconcileSelfDescribingArray).
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
+    // Hint-only: the namespace's jurisdiction is fixed at creation — warned, never written.
+    artifacts?: ReadonlyArray<{ binding?: string; namespace?: string }>;
     // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileBrowser).
     browser?: { binding?: string };
     containers?: ReadonlyArray<ContainerEntry>;
@@ -88,7 +95,7 @@ interface WranglerShape {
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string }>;
     migrations?: ReadonlyArray<MigrationEntry | null | undefined>;
     name?: string;
-    observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
+    observability?: WranglerObservability;
     // Hint-only: the `pipeline` name is a remote resource Lunora can't mint — warned, never written.
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string; stream?: string }>;
     // Cloudflare Queues — producers + consumers, both reconciled from `lunora/queues.ts`.

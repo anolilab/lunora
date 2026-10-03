@@ -68,6 +68,39 @@ describe("lunora dev", () => {
             ]);
         });
 
+        it("runs a service's custom build in the service's folder, from a copy the plan cleans up", () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), `{ "name": "app", "main": "src/index.ts" }\n`);
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { rusty: { dir: "./services/rusty" } } };\n`);
+            mkdirSync(join(workdir, "services", "rusty"), { recursive: true });
+            writeFileSync(
+                join(workdir, "services", "rusty", "wrangler.jsonc"),
+                `{ "name": "rusty", "main": "build/worker/shim.mjs", "build": { "command": "./build.sh" } }\n`,
+            );
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+            const { args } = plan.wrangler;
+            const serviceConfig = args.at(-1) as string;
+
+            // wrangler runs a secondary config's build in the process cwd (the app),
+            // so the service runs from a copy whose build.cwd is its own folder.
+            expect(serviceConfig).not.toBe(join(workdir, "services", "rusty", "wrangler.jsonc"));
+            expect(JSON.parse(readFileSync(serviceConfig, "utf8")).build.cwd).toBe(join(workdir, "services", "rusty"));
+            expect(args[args.indexOf(serviceConfig) - 1]).toBe("--config");
+
+            plan.serviceConfigCleanup?.();
+
+            expect(existsSync(serviceConfig)).toBe(false);
+        });
+
+        it("passes --local to wrangler dev when asked, before the services' configs", () => {
+            expect.assertions(2);
+
+            expect(planDevCommand({ cwd: workdir, logger: silentLogger() }).wrangler.args).not.toContain("--local");
+            expect(planDevCommand({ cwd: workdir, local: true, logger: silentLogger() }).wrangler.args).toContain("--local");
+        });
+
         it("plans an attached run with --no-worker, keeping codegen + studio", () => {
             expect.assertions(4);
 

@@ -179,7 +179,7 @@ const WRANGLER = `{
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "__NAME__",
     "main": "src/server.ts",
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],

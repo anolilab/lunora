@@ -1,3 +1,47 @@
+## @lunora/agent [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.163...@lunora/agent@1.0.0-alpha.164) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.171
+* **@lunora/container:** upgraded to 1.0.0-alpha.67
+
+## @lunora/agent [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.162...@lunora/agent@1.0.0-alpha.163) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.106
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/mail:** upgraded to 1.0.0-alpha.95
+* **@lunora/server:** upgraded to 1.0.0-alpha.170
+* **@lunora/values:** upgraded to 1.0.0-alpha.59
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.70
+* **@lunora/container:** upgraded to 1.0.0-alpha.66
+
+## @lunora/agent [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.161...@lunora/agent@1.0.0-alpha.162) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.169
+
+## @lunora/agent [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.160...@lunora/agent@1.0.0-alpha.161) (2026-10-02)
+
+### Features
+
+* **container:** Sandbox SDK 1.0 parity (spawn, terminal, files, backups, mounts) ([#932](https://github.com/anolilab/lunora/issues/932)) ([207b674](https://github.com/anolilab/lunora/commit/207b674982f2f2e722d0bad529acc88d09cc2f41))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.168
+* **@lunora/container:** upgraded to 1.0.0-alpha.65
+
 ## @lunora/agent [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.159...@lunora/agent@1.0.0-alpha.160) (2026-10-02)
 
 

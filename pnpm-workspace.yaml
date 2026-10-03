@@ -356,6 +356,10 @@ catalogs:
     # Exact-pinned for the same reason as @cloudflare/workers-types below: the patch
     # in `patchedDependencies` is version-pinned, so a caret would break the install.
     "@cloudflare/containers": 0.3.7
+    # Exact-pinned: `@lunora/container/do` wraps its Files / DirectoryBackup / S3Mount
+    # helpers, which speak a versioned frame protocol to the `sandbox-shim` binary in
+    # the app's image. A bump must be checked against the shim in `cloudflare/sandbox`.
+    "@cloudflare/sandbox": 1.0.0
     # Exact-pinned: `@lunora/browser` tracks a verified-good Playwright-on-Workers
     # release, and bumps are vetted against a live worker.
     #
@@ -824,6 +828,12 @@ catalogs:
     # expiry, and permissions. Shipped as its own package in the 1.7 line; there is
     # no `apiKey` in better-auth's own plugin barrel.
     "@better-auth/api-key": 1.7.3
+    # Client ID Metadata Documents — the client-registration path MCP 2026-07-28
+    # pins (`metadataProfile: "mcp-2026-07-28"`), re-exported as `cimd` from
+    # `@lunora/auth/plugins` (plan 461). Lockstep with the family like the rest; note
+    # that 1.7.7 changes what `metadataFetchPolicy.minimumFetchInterval` means (a
+    # pacing interval for failed fetches only), so re-read it on the family bump.
+    "@better-auth/cimd": 1.7.3
     # Direct dependency: the DO/D1 schema builders read better-auth's own table and
     # index resolution out of `@better-auth/core/db/internal`
     # (`getAuthTablesWithResolvedIndexes`, `getDatabaseFieldIndexName`), and

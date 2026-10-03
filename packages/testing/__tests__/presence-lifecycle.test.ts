@@ -3,6 +3,7 @@ import { definePresence, defineSchema, defineTable, presenceExtension, v } from 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 // A lifecycle hook forwards its event verbatim, so its registered handler types
 // the event arg as the framework-fixed `never`. Build a shape-checked event and
@@ -20,21 +21,19 @@ const lifecycleEvent = (overrides: Partial<LifecycleEvent>): never =>
 const presence = definePresence({ ttlMs: 10_000 });
 const schema = defineSchema({ rooms: defineTable({ name: v.string() }) }).extend(presenceExtension);
 
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 const start = (): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema);
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
 
 describe("presence onDisconnect (end-to-end)", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("removes the presence row immediately on disconnect, before any TTL elapses", async () => {

@@ -101,6 +101,22 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AiWebSearchItem` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchProvider` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `DEFAULT_MODEL_PRICES` (const)
 
 ```ts

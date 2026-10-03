@@ -23,9 +23,12 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         services: [],
         signals: [],
         usesAi: false,
+        usesAiSearch: false,
         usesAnalytics: false,
+        usesArtifacts: false,
         usesAuth: false,
         usesBrowser: false,
+        usesCimdWorkers: false,
         usesHyperdrive: false,
         usesFlags: false,
         usesImages: false,
@@ -364,6 +367,56 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().r2_buckets).toBeUndefined();
     });
 
+    it("warns about a missing artifacts binding, naming the schema's jurisdiction, and never writes one", () => {
+        expect.assertions(3);
+
+        const unpinned = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }));
+        const pinned = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
+
+        expect(unpinned.warnings.join(" ")).toMatch(/add an "artifacts" binding/u);
+        expect(pinned.warnings.join(" ")).toMatch(/"jurisdiction": "us"/u);
+        // The namespace's residency is fixed at creation, so nothing is auto-written.
+        expect(readConfig().artifacts).toBeUndefined();
+    });
+
+    describe("an existing artifacts binding", () => {
+        const wranglerWith = (bindings: ReadonlyArray<string>): void => {
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "artifacts": [${bindings.map((binding) => `{ "binding": "${binding}", "namespace": "default" }`).join(", ")}],
+}
+`,
+                "utf8",
+            );
+        };
+
+        it("reminds about the .artifacts() override, not the full setup hint, when only another name is bound", () => {
+            expect.assertions(3);
+
+            // Usually a valid `.artifacts()` override, which reconcile can't see.
+            wranglerWith(["REPOS"]);
+
+            const warnings = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ");
+
+            expect(warnings).toContain('"REPOS" is bound, but none is named "ARTIFACTS"');
+            expect(warnings).toContain("`.artifacts()`");
+            expect(warnings).not.toMatch(/add an "artifacts" binding/u);
+        });
+
+        it("stays quiet once a binding named ARTIFACTS exists", () => {
+            expect.assertions(1);
+
+            wranglerWith(["REPOS", "ARTIFACTS"]);
+
+            expect(reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ")).not.toMatch(/ctx\.artifacts/u);
+        });
+    });
+
     it("keeps warning about pipelines until the binding codegen resolves actually exists", () => {
         expect.assertions(3);
 
@@ -621,6 +674,78 @@ describe("reconcileWranglerBindings", () => {
         const second = reconcileWranglerBindings(root, baseInferred({ usesAnalytics: true }));
 
         expect(second.changed).toBe(false);
+    });
+
+    it("auto-writes the AI_SEARCH namespace binding when ctx.aiSearch is inferred, idempotently", () => {
+        expect.assertions(3);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(first.added).toContain("AI_SEARCH (AI Search namespace)");
+        // No `remote: true`: wrangler proxies an AI Search binding remotely in plain dev already.
+        expect(readConfig().ai_search_namespaces).toStrictEqual([{ binding: "AI_SEARCH", namespace: "default" }]);
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("leaves a hand-written ai_search_namespaces entry alone instead of adding AI_SEARCH beside it", () => {
+        expect.assertions(3);
+
+        const block = `    "ai_search_namespaces": [{ "binding": "DOCS_SEARCH", "namespace": "docs", "remote": true }],\n`;
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(result.changed).toBe(false);
+        expect(result.added).not.toContain("AI_SEARCH (AI Search namespace)");
+        expect(readConfig().ai_search_namespaces).toStrictEqual([{ binding: "DOCS_SEARCH", namespace: "docs", remote: true }]);
+    });
+
+    it.each([
+        ["an ai_search instance", `    "ai_search": [{ "binding": "AI_SEARCH", "instance_name": "docs" }],\n`, "ai_search"],
+        ["a KV namespace", `    "kv_namespaces": [{ "binding": "AI_SEARCH", "id": "abc" }],\n`, "kv_namespaces"],
+        ["a queue producer", `    "queues": { "producers": [{ "binding": "AI_SEARCH", "queue": "search-jobs" }] },\n`, "queues.producers"],
+        ["a var", `    "vars": { "AI_SEARCH": "on" },\n`, "vars"],
+        ["a rate limiter", `    "ratelimits": [{ "name": "AI_SEARCH", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],\n`, "ratelimits"],
+        ["an unsafe binding", `    "unsafe": { "bindings": [{ "name": "AI_SEARCH", "type": "metadata" }] },\n`, "unsafe.bindings"],
+        ["a logfwdr binding", `    "logfwdr": { "bindings": [{ "name": "AI_SEARCH", "destination": "logs" }] },\n`, "logfwdr.bindings"],
+        ["a wasm module", `    "wasm_modules": { "AI_SEARCH": "./search.wasm" },\n`, "wasm_modules"],
+        ["a text blob", `    "text_blobs": { "AI_SEARCH": "./search.txt" },\n`, "text_blobs"],
+        ["a data blob", `    "data_blobs": { "AI_SEARCH": "./search.bin" },\n`, "data_blobs"],
+        ["a required secret", `    "secrets": { "required": ["AI_SEARCH"] },\n`, "secrets.required"],
+    ])("does not write AI_SEARCH when %s already holds the name, and says why", (_label, block, owner) => {
+        expect.assertions(4);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        // Writing it would make wrangler reject the config: "AI_SEARCH assigned to multiple bindings".
+        expect(result.added).not.toContain("AI_SEARCH (AI Search namespace)");
+        expect(readConfig().ai_search_namespaces).toBeUndefined();
+        expect(result.warnings.some((warning) => warning.startsWith("ai_search_namespaces: not adding"))).toBe(true);
+        expect(result.warnings.some((warning) => warning.includes(`already bound by \`${owner}\``))).toBe(true);
+    });
+
+    it("does not write AI_SEARCH when a Durable Object binding already holds the name", () => {
+        expect.assertions(3);
+
+        // `durable_objects` is already in the base config, so the name goes into its existing list.
+        const config = MINIMAL_WRANGLER.replace(
+            `"bindings": [{ "name": "SHARD"`,
+            `"bindings": [{ "name": "AI_SEARCH", "class_name": "Search" }, { "name": "SHARD"`,
+        );
+
+        writeFileSync(join(root, "wrangler.jsonc"), config, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(result.added).not.toContain("AI_SEARCH (AI Search namespace)");
+        expect(readConfig().ai_search_namespaces).toBeUndefined();
+        expect(result.warnings.some((warning) => warning.includes("already bound by `durable_objects.bindings`"))).toBe(true);
     });
 
     it("auto-writes the LOADER worker_loaders binding when jsCodeTool is inferred, idempotently", () => {

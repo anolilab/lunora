@@ -310,6 +310,34 @@ export const ERROR_CATALOG = {
     },
     AUTH_NOT_CONFIGURED: { status: 400, title: "Auth admin not configured" },
     AUTH_OP_NOT_SUPPORTED: { status: 400, title: "Auth admin operation not supported" },
+
+    /**
+     * MCP OAuth wiring mistakes, raised while the auth instance or MCP route is
+     * built (plan 461). Not `internal`, for the same reason as the auth migrator
+     * entry above: the message is fixed configuration guidance (at most echoing
+     * the app's own configured `resource` value), raised before any request is
+     * served, so it carries no backend detail and redacting it would hide the fix.
+     */
+    AUTH_CIMD_FETCH_NOT_PUBLIC: {
+        hint: 'Add "global_fetch_strictly_public" to "compatibility_flags" in wrangler.jsonc, so CIMD metadata fetches cannot reach private addresses. `lunora doctor` reports it as `cimd-fetch-not-strictly-public`.',
+        status: 500,
+        title: "CIMD transport needs the global_fetch_strictly_public flag",
+    },
+    AUTH_MCP_RESOURCE_AMBIGUOUS: {
+        hint: 'Use `mcp` from "@lunora/auth/plugins" (not `@better-auth/mcp`) and pass the plugin object as is: it records its `resource`, which the worker needs to serve the protected-resource metadata when the provider names several resources.',
+        status: 500,
+        title: "MCP resource cannot be told apart from the provider's other resources",
+    },
+    AUTH_MCP_RESOURCE_INVALID: {
+        hint: "Pass `resource` to `requireMcpAuth` (and `mcp()`) as the absolute URL of the MCP route, e.g. `https://app.example.com/mcp`: issued tokens are audience-bound to it.",
+        status: 500,
+        title: "MCP resource missing or not an absolute URL",
+    },
+    MCP_STEP_UP_MISCONFIGURED: {
+        hint: "Give `createAuthedMcpFetchHandler`'s `stepUp` a non-empty `scope` (such as `lunora:write`) and a `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`), or leave `stepUp` out.",
+        status: 500,
+        title: "MCP step-up misconfigured",
+    },
     BACKUP_NOT_CONFIGURED: { status: 500, title: "Scheduled backup not configured" },
     BACKUP_RETENTION_NOT_CONFIGURED: {
         hint: [

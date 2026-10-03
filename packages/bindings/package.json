@@ -1,9 +1,11 @@
 {
     "name": "@lunora/bindings",
-    "version": "1.0.0-alpha.89",
-    "description": "Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql — one install, per-binding subpaths",
+    "version": "1.0.0-alpha.92",
+    "description": "Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts, ctx.aiSearch — one install, per-binding subpaths",
     "keywords": [
+        "ai-search",
         "analytics",
+        "artifacts",
         "cloudflare",
         "images",
         "kv",
@@ -58,6 +60,14 @@
             "types": "./dist/r2sql/index.d.ts",
             "import": "./dist/r2sql/index.mjs"
         },
+        "./artifacts": {
+            "types": "./dist/artifacts/index.d.ts",
+            "import": "./dist/artifacts/index.mjs"
+        },
+        "./ai-search": {
+            "types": "./dist/ai-search/index.d.ts",
+            "import": "./dist/ai-search/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -78,8 +88,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.48",
-        "@lunora/platform": "1.0.0-alpha.48"
+        "@lunora/errors": "1.0.0-alpha.49",
+        "@lunora/platform": "1.0.0-alpha.51"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",

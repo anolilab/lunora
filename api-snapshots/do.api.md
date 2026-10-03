@@ -354,6 +354,7 @@ abstract class ShardDO {
     protected getCurrentTraceparent(): string | undefined;
     protected getCurrentSampleErrors(): boolean | undefined;
     protected getCurrentTrace(): {
+        rayId?: string;
         rootSpanId: string;
         traceId: string;
     } | undefined;
@@ -950,6 +951,7 @@ interface SpanEvent {
     ok: boolean;
     parentSpanId: string;
     dispatch?: boolean;
+    rayId?: string;
     sampled?: boolean;
     shardKey?: string;
     spanId: string;

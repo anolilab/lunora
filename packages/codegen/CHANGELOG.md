@@ -1,3 +1,84 @@
+## @lunora/codegen [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.250...@lunora/codegen@1.0.0-alpha.251) (2026-10-03)
+
+### Code Refactoring
+
+* **codegen:** capability-table follow-up and config binding inference fix ([#945](https://github.com/anolilab/lunora/issues/945)) ([66b7d12](https://github.com/anolilab/lunora/commit/66b7d12d905bc98132f72c621e2823d6b1e2bcd7))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.182
+* **@lunora/agent:** upgraded to 1.0.0-alpha.164
+* **@lunora/container:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+* **@lunora/queue:** upgraded to 1.0.0-alpha.87
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.105
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.92
+* **@lunora/do:** upgraded to 1.0.0-alpha.189
+* **@lunora/server:** upgraded to 1.0.0-alpha.171
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.107
+
+## @lunora/codegen [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.249...@lunora/codegen@1.0.0-alpha.250) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.181
+* **@lunora/agent:** upgraded to 1.0.0-alpha.163
+* **@lunora/container:** upgraded to 1.0.0-alpha.66
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+* **@lunora/queue:** upgraded to 1.0.0-alpha.86
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.104
+* **@lunora/values:** upgraded to 1.0.0-alpha.59
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.70
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.91
+* **@lunora/do:** upgraded to 1.0.0-alpha.188
+* **@lunora/server:** upgraded to 1.0.0-alpha.170
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.106
+
+## @lunora/codegen [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.248...@lunora/codegen@1.0.0-alpha.249) (2026-10-02)
+
+### Features
+
+* fetch-only service entrypoints, ctx.services test fakes, resumable upload docs ([#938](https://github.com/anolilab/lunora/issues/938)) ([6b3ff8a](https://github.com/anolilab/lunora/commit/6b3ff8a2728663e053587ee03f9b8a059bcc1177))
+
+## @lunora/codegen [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.247...@lunora/codegen@1.0.0-alpha.248) (2026-10-02)
+
+### Bug Fixes
+
+* services dev session, rpc fetch binding, and docs/codegen nits ([#935](https://github.com/anolilab/lunora/issues/935)) ([b89bbd3](https://github.com/anolilab/lunora/commit/b89bbd34c0a8d83cd8eae3d60abda3fe7cacdb88))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.180
+* **@lunora/agent:** upgraded to 1.0.0-alpha.162
+* **@lunora/server:** upgraded to 1.0.0-alpha.169
+
+## @lunora/codegen [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.246...@lunora/codegen@1.0.0-alpha.247) (2026-10-02)
+
+### Features
+
+* **container:** Sandbox SDK 1.0 parity (spawn, terminal, files, backups, mounts) ([#932](https://github.com/anolilab/lunora/issues/932)) ([207b674](https://github.com/anolilab/lunora/commit/207b674982f2f2e722d0bad529acc88d09cc2f41))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.179
+* **@lunora/agent:** upgraded to 1.0.0-alpha.161
+* **@lunora/container:** upgraded to 1.0.0-alpha.65
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+* **@lunora/queue:** upgraded to 1.0.0-alpha.85
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.103
+* **@lunora/do:** upgraded to 1.0.0-alpha.187
+* **@lunora/server:** upgraded to 1.0.0-alpha.168
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.105
+
 ## @lunora/codegen [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.245...@lunora/codegen@1.0.0-alpha.246) (2026-10-02)
 
 

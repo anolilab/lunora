@@ -16,7 +16,7 @@
  * config it reports which binding entries are eligible for remote mode. The
  * stateless storage + service bindings whose wrangler schema accepts
  * `"remote": true` qualify (D1, KV, R2, Vectorize, Queue producers, Services,
- * AI); Durable Objects are never remoted, because a Lunora shard's
+ * AI, AI Search); Durable Objects are never remoted, because a Lunora shard's
  * authoritative state is its DO SQLite and CF has no remote-DO mode — shards run
  * locally while their data deps point at production (the PLAN5 §5.3 boundary).
  *
@@ -54,6 +54,11 @@ import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
  */
 const REMOTE_ELIGIBLE_KEYS = {
     ai: { label: "AI", shape: "object" },
+    // Both AI Search sections are remote in plain `wrangler dev` already (wrangler
+    // rates them "never has a local simulator"); tagging them here only silences
+    // its "may incur usage charges" warning under `LUNORA_REMOTE`.
+    ai_search: { label: "AI Search", shape: "array" },
+    ai_search_namespaces: { label: "AI Search namespace", shape: "array" },
     d1_databases: { label: "D1", shape: "array" },
     kv_namespaces: { label: "KV", shape: "array" },
     queues: { label: "Queue", shape: "producers" },
@@ -93,6 +98,8 @@ interface RemoteBindingPlan {
 /** The structural slice of a wrangler config the remote planner reads. */
 interface RemoteWranglerShape {
     ai?: BindingEntry | null;
+    ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
+    ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: { producers?: ReadonlyArray<BindingEntry | null | undefined> } | null;
@@ -360,4 +367,12 @@ const resolveRemoteEnabled = (inputs: RemoteEnableInputs): boolean => {
 };
 
 export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape };
-export { injectRemoteFlags, isRemoteEnvEnabled, materializeRemoteWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled };
+export {
+    createCleanup,
+    injectRemoteFlags,
+    isRemoteEnvEnabled,
+    materializeRemoteWranglerConfig,
+    planRemoteBindings,
+    REMOTE_ELIGIBLE_KEYS,
+    resolveRemoteEnabled,
+};

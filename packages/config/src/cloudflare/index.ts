@@ -20,6 +20,7 @@ export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
 export type { BindingManifest, BindingRequirement, ManifestConfigShape } from "./binding-manifest";
 export { BINDING_MANIFEST_VERSION, buildBindingManifest } from "./binding-manifest";
 export { default as CLOUDFLARE_DRIVER } from "./cloudflare-driver";
+export { default as GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG } from "./compatibility-flags";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
@@ -37,10 +38,21 @@ export {
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,
 } from "./remote-bindings";
+export type { ServiceDevConfigs } from "./service-dev-config";
+export { materializeServiceDevConfigs } from "./service-dev-config";
 export { withTailConsumer } from "./validate-settings";
 export type { WranglerCacheShape } from "./workers-cache";
 export { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
-export type { TailConsumer, WranglerConfig, WranglerContainerEntry, WranglerValidationReport, WranglerWorkflowEntry } from "./wrangler-config";
+export type {
+    TailConsumer,
+    WranglerConfig,
+    WranglerContainerEntry,
+    WranglerObservability,
+    WranglerObservabilityLogs,
+    WranglerObservabilityTraces,
+    WranglerValidationReport,
+    WranglerWorkflowEntry,
+} from "./wrangler-config";
 export type { WranglerEnvironmentMerge } from "./wrangler-environment";
 export { mergeWranglerEnvironment } from "./wrangler-environment";
 export type { ReadWranglerResult } from "./wrangler-path";

@@ -3,7 +3,7 @@ import type { QueuesResult, WorkflowsResult } from "@lunora/shard-engine";
 import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
 import { subscriptionsOf } from "../ir";
 import renderJsonData from "../json-data";
-import { emitAiFragments, renderThrowingStub } from "./shard-bindings";
+import { renderThrowingStub } from "./shard-bindings";
 import { assertIdentifier, GENERATED_HEADER } from "./shared";
 
 /**
@@ -29,9 +29,12 @@ const emitContainers = (containers: ReadonlyArray<ContainerIR>, jurisdiction?: J
             assertIdentifier(container.exportName, `container export "${container.exportName}"`);
             assertIdentifier(container.className, `container class "${container.className}"`);
 
+            // A `sandbox: true` container gets the Sandbox SDK helpers from its base.
+            const base = container.sandbox === true ? "LunoraSandboxContainer" : "LunoraContainer";
+
             return `/** Container DO for the \`${container.exportName}\` definition (binding \`${container.bindingName}\`). */
-export class ${container.className} extends LunoraContainer {
-    public constructor(ctx: ConstructorParameters<typeof LunoraContainer>[0], env: Record<string, unknown>) {
+export class ${container.className} extends ${base} {
+    public constructor(ctx: ConstructorParameters<typeof ${base}>[0], env: Record<string, unknown>) {
         super(ctx, env, ${container.exportName}, "${container.exportName}"${jurisdictionArgument});
     }
 }
@@ -40,6 +43,20 @@ export class ${container.className} extends LunoraContainer {
         .join("\n");
 
     const imports = containers.map((container) => container.exportName).join(", ");
+    // Only when a container opts in, so an app that never does neither exports
+    // the gateways nor loads `@cloudflare/sandbox`.
+    const hasSandbox = containers.some((container) => container.sandbox === true);
+    const plainImport = containers.some((container) => container.sandbox !== true) ? `import { LunoraContainer } from "@lunora/container/do";\n` : "";
+    const sandboxImport = hasSandbox ? `import { LunoraSandboxContainer } from "@lunora/container/sandbox";\n` : "";
+    const sandboxExports = hasSandbox
+        ? `
+/**
+ * \`DirectoryBackup\` and \`S3Mount\` route a \`sandbox: true\` container's storage
+ * traffic through these WorkerEntrypoints, so the deployed worker must export them.
+ */
+export { DirectoryBackupGateway, S3Gateway } from "@lunora/container/sandbox";
+`
+        : "";
 
     return `${GENERATED_HEADER}/**
  * Container-enabled Durable Object classes for the containers declared in
@@ -53,19 +70,18 @@ export class ${container.className} extends LunoraContainer {
  * \`handle.egress\` controls) routes container outbound traffic through this
  * WorkerEntrypoint, so it too must be exported by the deployed worker.
  */
-import { LunoraContainer } from "@lunora/container/do";
-
+${plainImport}${sandboxImport}
 import { ${imports} } from "../containers.js";
 
 export { ContainerProxy } from "@lunora/container/do";
-
+${sandboxExports}
 ${classes}`;
 };
 
 /**
  * The `ctx.containers` code fragments woven into the generated ShardDO, or
- * empty strings when the project declares no containers. Mirrors
- * {@link emitAiFragments}: the gating lives here, not as inline ternaries in
+ * empty strings when the project declares no containers. Mirrors the
+ * capability fragment emitters in `shard-bindings.ts`: the gating lives here, not as inline ternaries in
  * `emitShard`. The spec list is emitted as a `LUNORA_CONTAINERS` const
  * and handed to `createContainerContext`, which resolves the `CONTAINER_*`
  * Durable Object bindings off `env` lazily (a missing binding only throws when
@@ -431,7 +447,7 @@ const emitServiceFragments = (services: ReadonlyArray<ServiceBindingIR>, serverS
             assertIdentifier(service.name, `service "${service.name}"`);
             assertIdentifier(service.binding, `service binding "${service.binding}"`);
 
-            return `    { binding: "${service.binding}", name: "${service.name}"${service.entrypoint === undefined ? "" : ", rpc: true"} },`;
+            return `    { binding: "${service.binding}", name: "${service.name}"${service.rpcEntrypoint === undefined ? "" : ", rpc: true"} },`;
         })
         .join("\n");
 
@@ -627,39 +643,6 @@ const emitPaymentFragments = (
 };
 
 /**
- * The bespoke `ctx.x402` fragments (mirrors {@link emitPaymentFragments}). The
- * pay rail signs and settles USDC per request, so — like `ctx.payments` — it is
- * built inline rather than from a capability row's `serverCtxField`.
- *
- * `lazyX402Pay` keeps `buildCtx` synchronous: it returns immediately and builds
- * the real (async, secret-reading, signer-importing) rail on the first `fetch`,
- * memoising it so one spend-policy state is shared for the ctx's lifetime. The
- * wallet secret is read through `ctx.secrets` (a Secrets Store binding), which is
- * why `getSecret` closes over the in-scope `secrets` facade. Falls back to
- * `x402Stub` — a rail whose `fetch` throws — when no `x402` config is passed.
- */
-const emitX402Fragments = (hasX402: boolean): { build: string; configField: string; imports: ReadonlyArray<string>; stub: string } => {
-    if (!hasX402) {
-        return { build: "", configField: "", imports: [], stub: "" };
-    }
-
-    const x402Missing = `throw new Error("ctx.x402: no pay rail configured. Pass \\\`x402\\\` to createShardDO().");`;
-
-    return {
-        imports: [`import type { X402Pay, X402PayConfig } from "@lunora/x402/pay";`, `import { lazyX402Pay } from "@lunora/x402/pay";`],
-        // Built lazily off `secrets` (the Secrets Store facade already in scope) and
-        // the `config.x402` thunk over env; falls back to `x402Stub`.
-        build: `
-            const x402: X402Pay = config.x402
-                ? lazyX402Pay(config.x402(env), { getSecret: (name: string) => secrets.get(name) })
-                : x402Stub;
-`,
-        configField: `\n    x402?: (env: Record<string, unknown>) => X402PayConfig;`,
-        stub: renderThrowingStub("x402Stub: X402Pay", x402Missing, ["fetch"], { cast: " as unknown as X402Pay", sync: ["fetch"] }),
-    };
-};
-
-/**
  * The `@lunora/do` type names the generated shard imports. The base set is always
  * present; `WorkflowsResult` / `QueuesResult` are added only when the project
  * declares workflows / queues (their `*Metadata()` overrides reference them),
@@ -725,5 +708,4 @@ export {
     emitWorkflowFragments,
     emitWorkflows,
     emitWorkflowsMetadataFragments,
-    emitX402Fragments,
 };

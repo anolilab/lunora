@@ -468,6 +468,14 @@ export const operator = defineAgent({
     same bound `exec` has always had: the body is buffered in a 128MB isolate
     shared with every other in-flight request.
 
+- **`containerFsTool(name, opts?)`** has the same `ls` / `read` / `write` /
+  `rm` / `stat` ops as `fsTool`, but on the **container's own disk**, the one
+  `containerTool`'s `exec` runs against. It addresses the same per-thread
+  instance, so a file the model writes is the file its next command sees. The
+  container needs `sandbox: true` in `lunora/containers.ts` (see the container
+  docs). Paths are scoped under `opts.root` (default `/workspace`), a `write`
+  creates missing parent directories, and the writing ops are gated by default.
+
 - **`fsTool(bucket, opts?)`** exposes a persistent, **R2-backed virtual
   filesystem**. `op` is `ls` / `read` / `write` (with `content`) / `rm` / `stat`,
   over the R2 binding named `bucket`. Every path is scoped under `opts.root` (e.g.
@@ -492,6 +500,32 @@ action runs on an action ctx, which is where `ctx.browser` lives (and
 injects that peer, so the browser op throws a directed error until it is wired.
 Payloads are replay-stable, so a workflow replay re-encodes identical bytes to
 identical text.
+
+## Web search (`webSearchTool`)
+
+`webSearchTool(opts?)` lets the model search the web through the Cloudflare
+Web Search API (`ctx.ai.websearch` in `@lunora/ai`). The model passes a
+`query`; the tool returns up to `limit` results (default 5, max 10), each with
+a `url`, a `title` and, when the provider has one, a `description`.
+
+```ts
+import { defineAgent, webSearchTool } from "@lunora/agent";
+
+export const researcher = defineAgent({
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    tools: { search: webSearchTool({ provider: "exa" }) },
+});
+```
+
+It calls the `AI` binding directly from the tool's durable step: a search is a
+read, so a step retry only repeats the query, and there is no dispatcher action
+to register. A missing binding, a rejected request or an unreadable response
+comes back to the model as the tool result, so the run carries on; a throttled
+or failed search throws and is retried, and a gateway or credential problem
+(`UNAUTHORIZED` / `FORBIDDEN` / `NOT_FOUND`) fails the run so you see it.
+A search bills a provider key stored on the gateway (`byokAlias`, else the
+`default` alias) or, without one, AI Gateway credits; `gatewayId` overrides
+the gateway.
 
 ## Code mode (`codeTool`)
 

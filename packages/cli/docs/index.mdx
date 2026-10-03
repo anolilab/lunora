@@ -36,6 +36,7 @@ lunora mcp serve [--allow-writes]       # the stdio MCP server your editor spawn
             [--no-docs] [--url u] [--token t]
 lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
             [--inspector-port n]
+            [--remote | --local]
             [--no-studio] [--no-codegen]
 lunora codegen [--api-spec <spec>]      # one-shot codegen
             [--format <pretty|json>]
@@ -362,38 +363,40 @@ describes everything that was checked, not only what went wrong.
 Branch on `finding.code`, never on `message`: the codes are the contract, the
 prose is not. New codes are added over time; treat an unknown one as advisory.
 
-| Code                             | Level | Meaning                                                                             |
-| -------------------------------- | ----- | ----------------------------------------------------------------------------------- |
-| `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).                |
-| `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                        |
-| `ai-binding-missing`             | warn  | `ctx.ai` is used with no `ai` binding and no `LUNORA_AI_PROXY_URL`.                 |
-| `ai-gateway-default`             | info  | No `LUNORA_AI_GATEWAY_ID` or proxy; slugs route through the `default` AI Gateway.   |
-| `ai-gateway-token-unused`        | warn  | `LUNORA_AI_GATEWAY_TOKEN` is set, but `ctx.ai`'s binding path cannot send it.       |
-| `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                              |
-| `cpu-limit-missing`              | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                               |
-| `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                                |
-| `declared-export-missing`        | fail  | A declared container / workflow / agent is not exported by the worker entry.        |
-| `declared-export-ok`             | pass  | A declared container / workflow / agent is exported by the worker entry.            |
-| `declared-export-unchecked`      | warn  | Binding inference failed, so the worker-entry export check could not run.           |
-| `dev-vars-missing-secret`        | warn  | `.dev.vars` has secret-looking keys left at placeholder values.                     |
-| `email-destination-placeholder`  | warn  | A `send_email` binding has a placeholder `destination_address`.                     |
-| `r2-lifecycle-unset`             | info  | An R2 bucket may lack an abort-incomplete-multipart lifecycle rule.                 |
-| `scheduler-origin-missing`       | warn  | A `SchedulerDO` is declared but `LUNORA_ORIGIN_URL` is missing from wrangler.       |
-| `schema-unreadable`              | fail  | `lunora/schema.ts` could not be parsed, so schema-derived checks were skipped.      |
-| `service-workers-dev`            | warn  | A `lunora.config` service is still public on `workers.dev` with no route.           |
-| `stale-lunora-json`              | warn  | `lunora.json` is present but no longer read (`lunora.config.*` replaced it).        |
-| `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.              |
-| `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                          |
-| `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting).        |
-| `version-skew-channels`          | warn  | `@lunora/*` packages mix release channels (stable + alpha).                         |
-| `version-skew-cores`             | warn  | `@lunora/*` packages span different `major.minor.patch` versions.                   |
-| `wrangler-advisory`              | warn  | A wrangler.jsonc warning no more specific check claimed.                            |
-| `wrangler-class-unexported`      | fail  | A `durable_objects` / `workflows` `class_name` is not exported by the worker entry. |
-| `wrangler-invalid`               | fail  | A wrangler.jsonc validation error no more specific check claimed.                   |
-| `wrangler-missing`               | fail  | No `wrangler.jsonc` was found.                                                      |
-| `wrangler-shard-binding-missing` | fail  | `wrangler.jsonc` is missing the `SHARD` durable-object binding.                     |
-| `wrangler-shard-binding-ok`      | pass  | `wrangler.jsonc` declares the `SHARD` durable-object binding.                       |
-| `wrangler-unparseable`           | fail  | `wrangler.jsonc` was found but is not valid JSONC.                                  |
+| Code                             | Level | Meaning                                                                                  |
+| -------------------------------- | ----- | ---------------------------------------------------------------------------------------- |
+| `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).                     |
+| `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                             |
+| `ai-binding-missing`             | warn  | `ctx.ai` is used with no `ai` binding and no `LUNORA_AI_PROXY_URL`.                      |
+| `ai-gateway-default`             | info  | No `LUNORA_AI_GATEWAY_ID` or proxy; slugs route through the `default` AI Gateway.        |
+| `ai-gateway-token-unused`        | warn  | `LUNORA_AI_GATEWAY_TOKEN` is set, but `ctx.ai`'s binding path cannot send it.            |
+| `cimd-fetch-not-strictly-public` | warn  | `@lunora/auth/cimd/workers` is imported without the `global_fetch_strictly_public` flag. |
+| `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                                   |
+| `cpu-limit-missing`              | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                                    |
+| `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                                     |
+| `declared-export-missing`        | fail  | A declared container / workflow / agent is not exported by the worker entry.             |
+| `declared-export-ok`             | pass  | A declared container / workflow / agent is exported by the worker entry.                 |
+| `declared-export-unchecked`      | warn  | Binding inference failed, so the worker-entry export check could not run.                |
+| `dev-vars-missing-secret`        | warn  | `.dev.vars` has secret-looking keys left at placeholder values.                          |
+| `email-destination-placeholder`  | warn  | A `send_email` binding has a placeholder `destination_address`.                          |
+| `observability-full-sampling`    | info  | Logs or traces sample every request; Workers Observability is billed from 2026-12-01.    |
+| `r2-lifecycle-unset`             | info  | An R2 bucket may lack an abort-incomplete-multipart lifecycle rule.                      |
+| `scheduler-origin-missing`       | warn  | A `SchedulerDO` is declared but `LUNORA_ORIGIN_URL` is missing from wrangler.            |
+| `schema-unreadable`              | fail  | `lunora/schema.ts` could not be parsed, so schema-derived checks were skipped.           |
+| `service-workers-dev`            | warn  | A `lunora.config` service is still public on `workers.dev` with no route.                |
+| `stale-lunora-json`              | warn  | `lunora.json` is present but no longer read (`lunora.config.*` replaced it).             |
+| `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.                   |
+| `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                               |
+| `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting).             |
+| `version-skew-channels`          | warn  | `@lunora/*` packages mix release channels (stable + alpha).                              |
+| `version-skew-cores`             | warn  | `@lunora/*` packages span different `major.minor.patch` versions.                        |
+| `wrangler-advisory`              | warn  | A wrangler.jsonc warning no more specific check claimed.                                 |
+| `wrangler-class-unexported`      | fail  | A `durable_objects` / `workflows` `class_name` is not exported by the worker entry.      |
+| `wrangler-invalid`               | fail  | A wrangler.jsonc validation error no more specific check claimed.                        |
+| `wrangler-missing`               | fail  | No `wrangler.jsonc` was found.                                                           |
+| `wrangler-shard-binding-missing` | fail  | `wrangler.jsonc` is missing the `SHARD` durable-object binding.                          |
+| `wrangler-shard-binding-ok`      | pass  | `wrangler.jsonc` declares the `SHARD` durable-object binding.                            |
+| `wrangler-unparseable`           | fail  | `wrangler.jsonc` was found but is not valid JSONC.                                       |
 
 ### `lunora dev`
 
@@ -408,7 +411,15 @@ lunora dev --port 7000           # custom studio port
 lunora dev --worker-port 8790    # custom wrangler dev port
 lunora dev --inspector-port 9235 # pin wrangler's devtools inspector port
 lunora dev --no-studio           # Worker + codegen only
+lunora dev --local               # no remote proxy session (CI without Cloudflare credentials)
 ```
+
+A binding with no local mode (`ai`), in the app or in a `lunora.config`
+service, makes `wrangler dev` open a remote proxy session, and in a shell with
+no Cloudflare credentials that session fails and takes the whole dev session
+with it. `--local` starts it without the proxy; a call to such a binding then
+fails instead. It cannot be combined with `--remote`, and it overrides a remote
+default from `LUNORA_REMOTE` or `lunora.config`.
 
 When 8787 is taken, the worker lands on the next free port so two projects can
 run side by side. That silent move is refused when `.dev.vars` pins the worker

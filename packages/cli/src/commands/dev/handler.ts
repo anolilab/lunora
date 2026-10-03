@@ -459,7 +459,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     const plan = await buildDevPlan({ ...options, flavor, target });
     // Torn down on every exit path, including a throw during startup (the
     // `finally`).
-    const handles: Teardown = { remoteCleanup: plan.remote.cleanup };
+    const handles: Teardown = { remoteCleanup: plan.remote.cleanup, serviceConfigCleanup: plan.serviceConfigCleanup };
 
     try {
         // Lockfile check: a live `.lunora/dev.json` means a dev server is
@@ -698,11 +698,22 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
     // flag wins, then `LUNORA_REMOTE` in the environment, then the `remote`
     // key in the project's `lunora.config.*` (a project default). See
     // `resolveRemoteEnabled` in @lunora/config.
-    const remote = resolveRemoteEnabled({
-        configPreference: readProjectRemotePreference(cwd),
-        envValue: process.env["LUNORA_REMOTE"],
-        flag: options.remote,
-    });
+    // `--local` is the opposite request, so the two flags together are a usage
+    // error; on its own it beats a remote default from the env or the config.
+    if (options.local === true && options.remote === true) {
+        logger.error("dev: `--local` and `--remote` are mutually exclusive — pass at most one.");
+
+        return { code: EXIT_CODE.USAGE };
+    }
+
+    const remote =
+        options.local === true
+            ? false
+            : resolveRemoteEnabled({
+                  configPreference: readProjectRemotePreference(cwd),
+                  envValue: process.env["LUNORA_REMOTE"],
+                  flag: options.remote,
+              });
 
     if (!isDaemon && (options.background === true || agent !== undefined)) {
         // Idempotent start: a live server means success, not a conflict.
@@ -723,6 +734,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         emitBindings: options.emitBindings,
         inspectorPort: options.inspectorPort,
         jsonLogs,
+        local: options.local,
         logger,
         port: options.port,
         remote,

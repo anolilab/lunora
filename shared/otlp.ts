@@ -323,6 +323,11 @@ const OTLP_SPAN_KIND: Record<OtlpSpanKind, number> = {
  * `exception.*` keys stay reserved for the exception span-*event* the runtime
  * emits separately.
  *
+ * `rayId` is the one key outside both namespaces: `cloudflare.ray_id` is what
+ * Cloudflare's own Workers traces carry the Ray ID under (there is no OTel
+ * semantic convention for it), so matching it lets one collector query find the
+ * Lunora spans and the platform's spans for the same request.
+ *
  * Every emit path MUST reference these constants; a literal `"lunora.…"`
  * attribute string in an emitter is a drift bug.
  */
@@ -332,6 +337,7 @@ const LUNORA_ATTR: Readonly<{
     errorType: "error.type";
     functionPath: "lunora.function_path";
     ok: "lunora.ok";
+    rayId: "cloudflare.ray_id";
     shardKey: "lunora.shard_key";
     userId: "lunora.user_id";
 }> = Object.freeze({
@@ -340,6 +346,7 @@ const LUNORA_ATTR: Readonly<{
     errorType: "error.type",
     functionPath: "lunora.function_path",
     ok: "lunora.ok",
+    rayId: "cloudflare.ray_id",
     shardKey: "lunora.shard_key",
     userId: "lunora.user_id",
 } as const);

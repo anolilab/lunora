@@ -250,6 +250,11 @@ export interface SpanEvent {
      */
     dispatch?: boolean;
     /**
+     * Cloudflare Ray ID of the request this span ran under (see
+     * `shared/ray-id.ts`), exported as `cloudflare.ray_id`. Absent off the edge.
+     */
+    rayId?: string;
+    /**
      * The trace's settled W3C `sampled` verdict, stamped as the span leaves for a
      * sink. Absent means no verdict reached this tier, which every consumer reads
      * as keep.

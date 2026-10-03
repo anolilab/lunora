@@ -19,9 +19,12 @@ const inferred = (services: ServiceBindingIR[] | undefined): InferredBindings =>
         services,
         signals: [],
         usesAi: false,
+        usesAiSearch: false,
         usesAnalytics: false,
+        usesArtifacts: false,
         usesAuth: false,
         usesBrowser: false,
+        usesCimdWorkers: false,
         usesFlags: false,
         usesHyperdrive: false,
         usesImages: false,
@@ -51,7 +54,7 @@ describe("reconcileServices", () => {
     const service = (name: string, worker: string, envWorkers: Record<string, string> = {}, entrypoint?: string): ServiceBindingIR => {
         return {
             binding: `SERVICE_${name.toUpperCase()}`,
-            ...(entrypoint === undefined ? {} : { entrypoint }),
+            ...(entrypoint === undefined ? {} : { entrypoint, rpcEntrypoint: entrypoint }),
             envWorkers,
             main: join(root, "services", name, "src/index.ts"),
             name,

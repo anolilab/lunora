@@ -198,8 +198,10 @@ interface DevCommandOptions {
     hasIpv6Loopback?: () => boolean;
     inspectorPort?: number;
     jsonLogs?: boolean;
+    local?: boolean;
     logger: Logger;
     materializeRemote?: typeof materializeRemoteWranglerConfig;
+    materializeServiceConfigs?: typeof materializeServiceDevConfigs;
     port?: number;
     probeReady?: ReadinessProbe;
     remote?: boolean;
@@ -225,6 +227,7 @@ interface DevCommandPlan {
     ipv4LoopbackForced: boolean;
     remote: DevRemotePlan;
     runsCodegenWatch: boolean;
+    serviceConfigCleanup?: () => void;
     sidecar?: SpawnDescriptor & {
         tag: string;
     };

@@ -1,37 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApp } from "../src/emit-app";
-
-/** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
-const baseOptions = {
-    hasAccess: false,
-    hasAi: false,
-    hasAnalytics: false,
-    hasAuth: false,
-    hasBrowser: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdrive: false,
-    hasHyperdriveGlobal: false,
-    hasImages: false,
-    hasKv: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasPayments: false,
-    hasQueue: false,
-    hasR2sql: false,
-    hasScheduler: false,
-    hasSourcedTables: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    hasX402: false,
-    tables: [],
-    useUmbrella: false,
-    wantsArchitecture: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+import baseOptions from "./emit-app-options";
 
 describe("emitApp — vectors", () => {
     // `emitApp` normalises `hasVectors` to `hasVectors && vectorIndexCount > 0`,
@@ -68,5 +38,18 @@ describe("emitApp — vectors", () => {
 
         expect(output).not.toContain("createVectorAdminIntrospector");
         expect(output).not.toContain(".vectors(): the schema declares vector index(es)");
+    });
+
+    // The `.vectors()` builder follows the declaration verdict, never the
+    // `vectors` usage flag (an `@lunora/bindings/vectors` import), so the usage
+    // set means exactly "used" and is never rewritten to carry the verdict.
+    it("emits .vectors() off the declared index, never off the vectors usage flag", () => {
+        expect.assertions(2);
+
+        const usedButUndeclared = emitApp({ ...baseOptions, capabilities: new Set(["vectors"]), hasVectors: true, vectorIndexCount: 0 });
+        const declaredButUnused = emitApp({ ...baseOptions, hasVectors: true, vectorIndexCount: 1 });
+
+        expect(usedButUndeclared).not.toContain("public vectors(");
+        expect(declaredButUnused).toContain("public vectors(factory: (env: Env)");
     });
 });

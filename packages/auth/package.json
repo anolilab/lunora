@@ -1,6 +1,6 @@
 {
     "name": "@lunora/auth",
-    "version": "1.0.0-alpha.181",
+    "version": "1.0.0-alpha.184",
     "description": "Auth for Lunora — a thin better-auth wrapper: email/password, OAuth, plugins, D1-backed",
     "keywords": [
         "auth",
@@ -55,6 +55,14 @@
         "./plugins/enterprise/client": {
             "types": "./dist/plugins-enterprise-client.d.ts",
             "import": "./dist/plugins-enterprise-client.mjs"
+        },
+        "./cimd/node": {
+            "types": "./dist/cimd-node.d.ts",
+            "import": "./dist/cimd-node.mjs"
+        },
+        "./cimd/workers": {
+            "types": "./dist/cimd-workers.d.ts",
+            "import": "./dist/cimd-workers.mjs"
         },
         "./middleware": {
             "types": "./dist/middleware.d.ts",
@@ -113,12 +121,13 @@
     },
     "dependencies": {
         "@better-auth/api-key": "catalog:auth",
+        "@better-auth/cimd": "catalog:auth",
         "@better-auth/mcp": "catalog:auth",
         "@better-auth/oauth-provider": "catalog:auth",
         "@better-auth/passkey": "catalog:auth",
         "@better-auth/scim": "catalog:auth",
-        "@lunora/errors": "1.0.0-alpha.48",
-        "@lunora/values": "1.0.0-alpha.58",
+        "@lunora/errors": "1.0.0-alpha.49",
+        "@lunora/values": "1.0.0-alpha.59",
         "@visulima/disposable-email-domains": "catalog:email",
         "@visulima/email-verifier": "catalog:email",
         "@visulima/free-email-domains": "catalog:email",
@@ -129,7 +138,9 @@
         "@better-auth/sso": "catalog:auth",
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/server": "1.0.0-alpha.167",
+        "@lunora/config": "1.0.0-alpha.294",
+        "@lunora/runtime": "1.0.0-alpha.172",
+        "@lunora/server": "1.0.0-alpha.171",
         "@types/better-sqlite3": "catalog:tooling",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

@@ -16,6 +16,22 @@ import type { ContainerExecOptions, ContainerExecResult } from "./exec";
 import { CONTAINER_EXEC_HEADER, execViaFetch, pathMatchesAnyDecoding } from "./exec";
 import type { DurableObjectJurisdiction } from "./jurisdiction";
 import { applyJurisdiction } from "./jurisdiction";
+import type {
+    ContainerBackupOptions,
+    ContainerFileContent,
+    ContainerFileOptions,
+    ContainerMountRequest,
+    ContainerSandboxControls,
+    DirectoryBackupRecord,
+    S3MountInspection,
+    SandboxDirectoryEntry,
+    SandboxFileStat,
+} from "./sandbox-types";
+import type { ContainerProcess, ContainerSpawnOptions, ContainerSpawnRequest, SpawnResult } from "./spawn";
+import { toContainerProcess, toSpawnRequest } from "./spawn";
+import type { ContainerTerminalOptions } from "./terminal";
+import { openTerminal } from "./terminal";
+import createTestDisk from "./test-files";
 import type { ContainerRuntimeInstanceType, ContainerSnapshot } from "./types";
 
 /**
@@ -86,10 +102,25 @@ interface ContainerStubLike {
     destroy?: () => Promise<void>;
     fetch: (input: Request) => Promise<Response>;
     getState?: () => Promise<ContainerInstanceState>;
+    lunoraBackup?: (directory: string, options?: ContainerBackupOptions) => Promise<DirectoryBackupRecord>;
+    lunoraDeleteBackup?: (backup: DirectoryBackupRecord) => Promise<void>;
     /** The container DO's exec entry (`LunoraContainer.lunoraExec`), the only way a request reaches `/__lunora/exec`. */
     lunoraExec?: (request: Request) => Promise<Response>;
+    lunoraInspectMount?: (path: string) => Promise<S3MountInspection>;
+    lunoraMkdir?: (path: string, options?: ContainerFileOptions & { recursive?: boolean }) => Promise<void>;
+    lunoraMount?: (request: ContainerMountRequest) => Promise<void>;
+    lunoraReadDirectory?: (path: string, options?: ContainerFileOptions) => Promise<SandboxDirectoryEntry[]>;
+    lunoraReadFile?: (path: string, options?: ContainerFileOptions) => Promise<Response>;
+    lunoraRemove?: (path: string, options?: ContainerFileOptions & { force?: boolean; recursive?: boolean }) => Promise<void>;
+    lunoraRename?: (source: string, destination: string, options?: ContainerFileOptions) => Promise<void>;
+    lunoraRestore?: (backup: DirectoryBackupRecord, options?: { directory?: string }) => Promise<void>;
     /** The container DO's snapshot entry (`LunoraContainer.lunoraSnapshot`). */
     lunoraSnapshot?: (options?: { name?: string }) => Promise<ContainerSnapshot>;
+    /** The container DO's streaming-exec entry (`LunoraContainer.lunoraSpawn`). */
+    lunoraSpawn?: (request: ContainerSpawnRequest) => Promise<SpawnResult>;
+    lunoraStat?: (path: string, options?: ContainerFileOptions) => Promise<SandboxFileStat>;
+    lunoraUnmount?: (path: string) => Promise<void>;
+    lunoraWriteFile?: (path: string, content: ContainerFileContent, options?: ContainerFileOptions) => Promise<void>;
     removeAllowedHost?: (hostname: string) => Promise<void>;
     removeDeniedHost?: (hostname: string) => Promise<void>;
     renewActivityTimeout?: () => Promise<void>;
@@ -192,11 +223,37 @@ interface ContainerInstanceHandle extends ContainerHandle {
      * Memory and processes are not captured.
      */
     snapshot: (options?: { name?: string }) => Promise<ContainerSnapshot>;
+
+    /**
+     * Start a process and stream it, rather than buffer it the way `exec`
+     * does: its stdout/stderr arrive as streams, `stdin` can be piped, and the
+     * process can be killed or (under `pty`) resized while it runs. Needs the
+     * runtime's native exec; the container is started first when it is not
+     * running, and kept awake until the process exits.
+     */
+    spawn: (command: string, options?: ContainerSpawnOptions) => Promise<ContainerProcess>;
     /** Explicitly start the instance, optionally with per-instance env/entrypoint. */
     start: (options?: ContainerStartOptions) => Promise<void>;
     /** Stop the instance (optionally with a signal); it can start again on the next request. */
     stop: (signal?: number | string) => Promise<void>;
+
+    /**
+     * Answer a WebSocket upgrade `request` with a browser terminal: a shell
+     * (default `sh`) on a PTY, bridged to the socket. Binary frames are
+     * keystrokes, a text frame `{"cols":n,"rows":n}` resizes, and the socket
+     * closes when the shell exits. Authenticate the request first — whoever
+     * holds the socket has a shell in the container. Call it from a Worker
+     * route (see {@link getContainer}) and return the response as-is.
+     */
+    terminal: (request: Request, options?: ContainerTerminalOptions) => Promise<Response>;
 }
+
+/**
+ * A named instance of a `defineContainer({ sandbox: true })` container: the
+ * {@link ContainerInstanceHandle} plus the Sandbox SDK helpers — structured
+ * file operations, directory backups to R2 and S3-compatible bucket mounts.
+ */
+interface SandboxContainerInstanceHandle extends ContainerInstanceHandle, ContainerSandboxControls {}
 
 /**
  * Runtime egress-firewall controls for a named instance (`handle.egress.*`).
@@ -262,6 +319,11 @@ interface ContainerAccessor {
      * is not retry-safe here; use `.get()`/`.any()` for those.
      */
     pool: (options?: PoolOptions) => ContainerHandle;
+}
+
+/** `ctx.containers.<name>` for a `defineContainer({ sandbox: true })` container: `.get()` adds the sandbox helpers. */
+interface SandboxContainerAccessor extends ContainerAccessor {
+    get: (name: string, options?: InstanceRetryOptions) => SandboxContainerInstanceHandle;
 }
 
 /**
@@ -711,15 +773,58 @@ const handleFor = (
 /** Lifecycle/egress RPCs `instanceHandleFor` forwards to the container DO stub. */
 type ContainerStubMethod = keyof Omit<ContainerStubLike, "fetch" | "lunoraExec">;
 
+/** The RPCs only `LunoraSandboxContainer` (a `sandbox: true` container) exposes. */
+const SANDBOX_METHODS: ReadonlySet<ContainerStubMethod> = new Set([
+    "lunoraBackup",
+    "lunoraDeleteBackup",
+    "lunoraInspectMount",
+    "lunoraMkdir",
+    "lunoraMount",
+    "lunoraReadDirectory",
+    "lunoraReadFile",
+    "lunoraRemove",
+    "lunoraRename",
+    "lunoraRestore",
+    "lunoraStat",
+    "lunoraUnmount",
+    "lunoraWriteFile",
+]);
+
 /** Invoke an optional lifecycle/egress RPC on a stub, with a directed error if the runtime doesn't expose it. */
-const lifecycleCall = async <Result>(stub: ContainerStubLike, method: ContainerStubMethod, binding: string, argument?: unknown): Promise<Result> => {
+const lifecycleCall = async <Result>(stub: ContainerStubLike, method: ContainerStubMethod, binding: string, ...args: unknown[]): Promise<Result> => {
     const rpc = stub[method];
 
     if (typeof rpc !== "function") {
-        throw new TypeError(`ctx.containers: the "${binding}" container DO does not expose ${method}() — is @lunora/container/do up to date?`);
+        throw SANDBOX_METHODS.has(method)
+            ? new LunoraError(
+                  "BAD_REQUEST",
+                  `ctx.containers: the "${binding}" container DO does not expose ${method}() — sandbox helpers need \`sandbox: true\` in its defineContainer() definition`,
+              )
+            : new TypeError(`ctx.containers: the "${binding}" container DO does not expose ${method}() — is @lunora/container/do up to date?`);
     }
 
-    return (rpc as (argument?: unknown) => Promise<Result>)(argument);
+    return (rpc as (...args: unknown[]) => Promise<Result>)(...args);
+};
+
+/** The sandbox helpers on a named instance, each one RPC on the container DO. */
+const sandboxControlsFor = (stub: () => ContainerStubLike, binding: string): ContainerSandboxControls => {
+    return {
+        backup: async (directory, options) => lifecycleCall(stub(), "lunoraBackup", binding, directory, options),
+        deleteBackup: async (backup) => lifecycleCall(stub(), "lunoraDeleteBackup", binding, backup),
+        files: {
+            mkdir: async (path, options) => lifecycleCall(stub(), "lunoraMkdir", binding, path, options),
+            readDirectory: async (path, options) => lifecycleCall(stub(), "lunoraReadDirectory", binding, path, options),
+            readFile: async (path, options) => lifecycleCall(stub(), "lunoraReadFile", binding, path, options),
+            remove: async (path, options) => lifecycleCall(stub(), "lunoraRemove", binding, path, options),
+            rename: async (source, destination, options) => lifecycleCall(stub(), "lunoraRename", binding, source, destination, options),
+            stat: async (path, options) => lifecycleCall(stub(), "lunoraStat", binding, path, options),
+            writeFile: async (path, content, options) => lifecycleCall(stub(), "lunoraWriteFile", binding, path, content, options),
+        },
+        inspectMount: async (path) => lifecycleCall(stub(), "lunoraInspectMount", binding, path),
+        mount: async (request) => lifecycleCall(stub(), "lunoraMount", binding, request),
+        restore: async (backup, options) => lifecycleCall(stub(), "lunoraRestore", binding, backup, options),
+        unmount: async (path) => lifecycleCall(stub(), "lunoraUnmount", binding, path),
+    };
 };
 
 /**
@@ -738,25 +843,35 @@ const egressControlsFor = (stub: () => ContainerStubLike, binding: string): Cont
     };
 };
 
-/** A named-instance handle: `fetch`/`.port()` plus the container DO's lifecycle + egress RPCs. */
+/**
+ * A named-instance handle: `fetch`/`.port()` plus the container DO's
+ * lifecycle, egress, spawn and sandbox RPCs. The sandbox helpers are always
+ * wired; their types appear only on a `sandbox: true` container's accessor,
+ * and the DO of any other container answers them with a directed error.
+ */
 const instanceHandleFor = (
     namespace: ContainerNamespaceLike,
     spec: ContainerBindingSpec,
     instanceName: string,
     options?: InstanceRetryOptions,
     trace?: OutboundTraceContext,
-): ContainerInstanceHandle => {
+): SandboxContainerInstanceHandle => {
     const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
+    const spawn: ContainerInstanceHandle["spawn"] = async (command, spawnOptions = {}) =>
+        toContainerProcess(await lifecycleCall<SpawnResult>(stub(), "lunoraSpawn", spec.binding, toSpawnRequest(command, spawnOptions)), spawnOptions.signal);
 
     return {
         ...coldStartRetryingHandle(async (request, signal) => sendToStub(stub(), request, signal), handleLabel(spec), options, undefined, trace),
+        ...sandboxControlsFor(stub, spec.binding),
         destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
         egress: egressControlsFor(stub, spec.binding),
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
         renewActivityTimeout: async () => lifecycleCall(stub(), "renewActivityTimeout", spec.binding),
         snapshot: async (snapshotOptions) => lifecycleCall(stub(), "lunoraSnapshot", spec.binding, snapshotOptions),
+        spawn,
         start: async (startOptions) => lifecycleCall(stub(), "start", spec.binding, startOptions),
         stop: async (signal) => lifecycleCall(stub(), "stop", spec.binding, signal),
+        terminal: async (request, terminalOptions) => openTerminal(spawn, request, terminalOptions),
     };
 };
 
@@ -947,28 +1062,84 @@ const createContainerContext = (
 };
 
 /**
+ * A named container instance straight off the Worker `env`, for code that has
+ * no `ctx.containers` — typically an `httpRouter` route that opens a
+ * {@link ContainerInstanceHandle.terminal} or proxies a preview port, both of
+ * which must hand a WebSocket upgrade response back to the browser. The
+ * binding is derived from `exportName` exactly as codegen derives it. Pass
+ * {@link SandboxContainerInstanceHandle} as the type argument for a
+ * `sandbox: true` container.
+ *
+ * ```ts
+ * app.get("/terminal", async (c) => getContainer(c.env, "box", userId).terminal(c.req.raw));
+ * ```
+ */
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- the caller names the handle type for the container it addresses (sandbox or not); there is nothing to infer it from
+const getContainer = <Handle extends ContainerInstanceHandle = ContainerInstanceHandle>(
+    env: Record<string, unknown>,
+    exportName: string,
+    name: string,
+    options: InstanceRetryOptions & { jurisdiction?: DurableObjectJurisdiction } = {},
+): Handle => {
+    const { jurisdiction, ...retry } = options;
+    const spec: ContainerBindingSpec = { binding: containerBindingName(exportName), exportName };
+    const accessor = createContainerContext(env, [spec], jurisdiction)[exportName] as ContainerAccessor;
+
+    return accessor.get(name, retry) as Handle;
+};
+
+/**
  * A test handler: receives the request plus the targeted instance name.
  */
 type ContainerTestHandler = (request: Request, instance: { name: string }) => Promise<Response> | Response;
 
+/** What the test double cannot run: there is no process to stream and no bucket to back up to or mount. */
+const unsupportedInTests = (operation: string) => (): Promise<never> =>
+    Promise.reject(
+        new LunoraError(
+            "NOT_IMPLEMENTED",
+            `createContainerTestContext: ${operation}() needs a real container — the test double has no processes or buckets. Stub the handle method in your test instead.`,
+        ),
+    );
+
 /**
  * A fake DO namespace backing the test double: every instance's `fetch` plays
- * the user's handler, and the lifecycle/egress RPCs are inert (resolve void / a
- * stub state). Built so the double reuses the *real* `instanceHandleFor` /
+ * the user's handler, the lifecycle/egress RPCs are inert (resolve void / a
+ * stub state), and the sandbox file RPCs work on an in-memory disk per
+ * instance. Built so the double reuses the *real* `instanceHandleFor` /
  * `handleFor` wiring — it can't drift from the production handle shape — while
  * staying Docker-free. `idFromName` is identity so the handler sees the
  * instance name unchanged.
  */
 const testNamespaceFor = (handler: ContainerTestHandler): ContainerNamespaceLike => {
+    const disks = new Map<string, ReturnType<typeof createTestDisk>>();
     const stubFor = (name: string): ContainerStubLike => {
+        const disk = disks.get(name) ?? createTestDisk();
+
+        disks.set(name, disk);
+
         return {
             allowHost: () => Promise.resolve(),
             denyHost: () => Promise.resolve(),
             destroy: () => Promise.resolve(),
             fetch: (request) => Promise.resolve(handler(request, { name })),
+            lunoraBackup: unsupportedInTests("backup"),
+            lunoraDeleteBackup: unsupportedInTests("deleteBackup"),
             lunoraExec: (request) => Promise.resolve(handler(request, { name })),
+            lunoraInspectMount: unsupportedInTests("inspectMount"),
+            lunoraMkdir: disk.mkdir,
+            lunoraMount: unsupportedInTests("mount"),
+            lunoraReadDirectory: disk.readDirectory,
+            lunoraReadFile: disk.readFile,
+            lunoraRemove: disk.remove,
+            lunoraRename: disk.rename,
+            lunoraRestore: unsupportedInTests("restore"),
             lunoraSnapshot: (options) =>
                 Promise.resolve({ id: `test-snapshot-${name}`, size: 0, ...(options?.name === undefined ? {} : { name: options.name }) }),
+            lunoraSpawn: unsupportedInTests("spawn"),
+            lunoraStat: disk.stat,
+            lunoraUnmount: unsupportedInTests("unmount"),
+            lunoraWriteFile: disk.writeFile,
             getState: () => Promise.resolve({ lastChange: 0 }),
             removeAllowedHost: () => Promise.resolve(),
             removeDeniedHost: () => Promise.resolve(),
@@ -1039,7 +1210,9 @@ export type {
     ContainerTestHandler,
     InstanceRetryOptions,
     PoolOptions,
+    SandboxContainerAccessor,
+    SandboxContainerInstanceHandle,
 };
-export { createContainerContext, createContainerTestContext };
+export { createContainerContext, createContainerTestContext, getContainer };
 
 export { type DurableObjectJurisdiction } from "./jurisdiction";

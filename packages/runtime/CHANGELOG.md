@@ -1,3 +1,46 @@
+## @lunora/runtime [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.171...@lunora/runtime@1.0.0-alpha.172) (2026-10-03)
+
+### Features
+
+* **observability:** attach the cloudflare ray id to logs and spans ([#943](https://github.com/anolilab/lunora/issues/943)) ([b871bc8](https://github.com/anolilab/lunora/commit/b871bc89f4bf64c76f5716577dfff3d352ec3519))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.92
+* **@lunora/observability:** upgraded to 1.0.0-alpha.116
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+* **@lunora/do:** upgraded to 1.0.0-alpha.189
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.107
+
+## @lunora/runtime [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.170...@lunora/runtime@1.0.0-alpha.171) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.91
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/observability:** upgraded to 1.0.0-alpha.115
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+* **@lunora/do:** upgraded to 1.0.0-alpha.188
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.106
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.70
+
+## @lunora/runtime [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.169...@lunora/runtime@1.0.0-alpha.170) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.90
+* **@lunora/observability:** upgraded to 1.0.0-alpha.114
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+* **@lunora/do:** upgraded to 1.0.0-alpha.187
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.105
+
 ## @lunora/runtime [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.168...@lunora/runtime@1.0.0-alpha.169) (2026-10-02)
 
 

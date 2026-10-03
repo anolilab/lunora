@@ -64,6 +64,12 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
         attributes.push(encodeAttribute(LUNORA_ATTR.shardKey, event.shardKey));
     }
 
+    // `cloudflare.ray_id` — the key Cloudflare's own Workers traces use, so one
+    // collector query finds this span and the platform's spans for the request.
+    if (event.rayId !== undefined) {
+        attributes.push(encodeAttribute(LUNORA_ATTR.rayId, event.rayId));
+    }
+
     // HTTP response status code is present on every RPC span. Successful
     // dispatches carry no explicit status in the event, so we default to 200;
     // error events use the error's HTTP-ish status.
@@ -132,7 +138,7 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
  * rule, free to drift apart. One implementation, asserted once.
  */
 const encodeSignalAttributes = (
-    reserved: { errorType?: string; functionPath: string; shardKey?: string; userId?: string },
+    reserved: { errorType?: string; functionPath: string; rayId?: string; shardKey?: string; userId?: string },
     caller: Record<string, unknown> | undefined,
 ): OtlpAttribute[] => {
     const byKey = new Map<string, OtlpAttribute>([[LUNORA_ATTR.functionPath, encodeAttribute(LUNORA_ATTR.functionPath, reserved.functionPath)]]);
@@ -143,6 +149,10 @@ const encodeSignalAttributes = (
 
     if (reserved.userId !== undefined) {
         byKey.set(LUNORA_ATTR.userId, encodeAttribute(LUNORA_ATTR.userId, reserved.userId));
+    }
+
+    if (reserved.rayId !== undefined) {
+        byKey.set(LUNORA_ATTR.rayId, encodeAttribute(LUNORA_ATTR.rayId, reserved.rayId));
     }
 
     if (reserved.errorType !== undefined) {
@@ -173,7 +183,7 @@ const encodeSignalAttributes = (
 const otlpSpanBody = (event: SpanEvent): unknown => {
     const span: Record<string, unknown> = {
         attributes: encodeSignalAttributes(
-            { errorType: event.error?.type, functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId },
+            { errorType: event.error?.type, functionPath: event.functionPath, rayId: event.rayId, shardKey: event.shardKey, userId: event.userId },
             event.attributes,
         ),
         endTimeUnixNano: otlpUnixNano(event.startTs + event.durationMs),
@@ -290,7 +300,10 @@ const otlpLogBody = (event: LogEvent): unknown => {
     const logRecord: Record<string, unknown> = {
         // Caller-supplied structured fields become log-record attributes so a
         // pipeline can filter/index on them; precedence per `encodeSignalAttributes`.
-        attributes: encodeSignalAttributes({ functionPath: event.functionPath, shardKey: event.shardKey, userId: event.userId }, event.fields),
+        attributes: encodeSignalAttributes(
+            { functionPath: event.functionPath, rayId: event.rayId, shardKey: event.shardKey, userId: event.userId },
+            event.fields,
+        ),
         body: { stringValue: event.message },
         severityNumber: OTLP_SEVERITY[event.level],
         severityText: event.level.toUpperCase(),

@@ -1,3 +1,31 @@
+## @lunora/storage [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.99...@lunora/storage@1.0.0-alpha.100) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+
+## @lunora/storage [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.98...@lunora/storage@1.0.0-alpha.99) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+
+## @lunora/storage [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.97...@lunora/storage@1.0.0-alpha.98) (2026-10-02)
+
+### Features
+
+* fetch-only service entrypoints, ctx.services test fakes, resumable upload docs ([#938](https://github.com/anolilab/lunora/issues/938)) ([6b3ff8a](https://github.com/anolilab/lunora/commit/6b3ff8a2728663e053587ee03f9b8a059bcc1177))
+
+## @lunora/storage [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.96...@lunora/storage@1.0.0-alpha.97) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+
 ## @lunora/storage [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.95...@lunora/storage@1.0.0-alpha.96) (2026-10-02)
 
 

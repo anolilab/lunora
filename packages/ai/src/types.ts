@@ -12,6 +12,13 @@ import type { AiGatewayMetadata } from "./gateway";
  */
 export interface AiBindingLike {
     run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+
+    /**
+     * Web Search API (beta). Optional because runtimes and test doubles that
+     * predate it have no such method; `ctx.ai.websearch` reports that instead of
+     * a bare `TypeError`.
+     */
+    websearch?: (input: Omit<AiWebSearchOptions, "gatewayId"> & { gatewayId: string; query: string }) => Promise<Response>;
 }
 
 /**
@@ -198,6 +205,60 @@ export interface LunoraAiOptions {
 }
 
 /**
+ * A search provider the Web Search API brokers. Each one runs under Cloudflare's
+ * Zero Data Retention terms. A search bills a provider key stored on the gateway
+ * when there is one (the `default` alias unless `byokAlias` names another),
+ * otherwise AI Gateway credits at list price.
+ * @experimental
+ */
+export type AiWebSearchProvider = "ceramic" | "exa" | "linkup";
+
+/**
+ * Options for `ctx.ai.websearch(...)`.
+ * @experimental
+ */
+export interface AiWebSearchOptions {
+    /** Alias of a provider key stored on the gateway to bill instead of the `default` alias. Without a stored key, gateway credits pay. */
+    byokAlias?: string;
+
+    /**
+     * The AI Gateway that brokers and bills the search. Defaults to the gateway
+     * `ctx.ai` routes inference through (`LUNORA_AI_GATEWAY_ID`), else the
+     * account's `default` gateway.
+     */
+    gatewayId?: string;
+    /** Maximum results, 1–10. Defaults to 10. */
+    limit?: number;
+    /** Defaults to `"ceramic"`. */
+    provider?: AiWebSearchProvider;
+}
+
+/**
+ * One result. Web search is discovery only: a result describes a page, and
+ * reading the page is a separate `fetch` of its `url`. The optional fields are
+ * present only when the provider returns them.
+ * @experimental
+ */
+export interface AiWebSearchItem {
+    description?: string;
+    faviconUrl?: string;
+    imageUrl?: string;
+    /** Naive (no timezone) ISO-8601 datetime, e.g. `"2025-11-30T04:39:48"`. */
+    lastModifiedDate?: string;
+    title: string;
+    url: string;
+}
+
+/**
+ * What `ctx.ai.websearch(...)` resolves to.
+ * @experimental
+ */
+export interface AiWebSearchResult {
+    items: AiWebSearchItem[];
+    metadata: { latencyMs: number; query: string; requestId: string };
+}
+
+/**
  * A model to run against. The AI SDK's {@link LanguageModel} already admits a
  * bare `string`, so this alias covers both arms of the provider-agnostic seam:
  * a string id is resolved by `ctx.ai.model` — a Workers AI id (`@cf/…`), a
@@ -245,6 +306,14 @@ export interface LunoraAi {
      * supplied.
      */
     run: (model: string, inputs: Record<string, unknown>, options?: AiRunOptions) => Promise<unknown>;
+
+    /**
+     * Search the web through the binding's Web Search API (beta) to ground a
+     * response in live information. Billed to a stored provider key or AI Gateway
+     * credits (see {@link AiWebSearchProvider}). Throws if no
+     * binding was supplied, or if the runtime's binding has no `websearch()`.
+     */
+    websearch: (query: string, options?: AiWebSearchOptions) => Promise<AiWebSearchResult>;
     /** The underlying Workers AI provider — `ai.workersai("@cf/...")` for a raw model. */
     workersai: WorkersAiProviderLike;
 }

@@ -13,6 +13,7 @@ import { toAdvisorContext } from "./advisor";
 import { applyAdvisorFloor } from "./advisor-floor";
 import type { CallSites } from "./architecture";
 import { buildArchitecture, emitArchitectureModule } from "./architecture";
+import assertArtifactsJurisdiction from "./assert-artifacts-jurisdiction";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
 import { buildDeclarationSurface } from "./declaration-surface";
 import discoverAdminRoutes from "./discover/admin-routes";
@@ -633,6 +634,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // pass 1 infer against the previous run's declarations.
     const {
         agents,
+        capabilities,
         containers,
         crons,
         dataModelContent,
@@ -658,6 +660,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // before would start it out empty, and nothing else about the upgrade
     // changes the schema, so this is the one place that can stop it.
     assertJurisdictionMoveAcknowledged(schema, schema.jurisdiction === undefined ? undefined : findDoAuthDeclaration(project, lunoraDirectory));
+    // Artifacts namespaces exist only in `eu` / `us`, so a FedRAMP-pinned app has nowhere
+    // compliant to put its repos.
+    assertArtifactsJurisdiction(schema, featureUsage.artifacts);
 
     const outputDirectory = join(lunoraDirectory, "_generated");
     const dataModelPath = join(outputDirectory, "dataModel.ts");
@@ -939,28 +944,18 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         advisories: advisories.filter((advisory) => advisory.name !== "procedure_type_check_unavailable"),
         advisorProcedures: advisorContext?.procedureProtections ?? [],
         agents,
+        capabilities,
         containers,
         env,
         flagKeys,
-        hasAccessFacade: featureUsage.access,
-        hasAi: featureUsage.ai,
-        hasAnalytics: featureUsage.analytics,
-        hasBrowser: featureUsage.browser,
         hasFlags,
-        hasHyperdrive: featureUsage.hyperdrive,
-        hasImages: featureUsage.images,
-        hasKv: featureUsage.kv,
         hasNotify,
-        hasPayments: featureUsage.payments,
-        hasPipelines: featureUsage.pipelines,
-        hasR2sql: featureUsage.r2sql,
         // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
         // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
         // so the DO kept the whole Vectorize wiring on a host rating
         // `vectorStore: "unsupported"` — a `generated.shard` byte-identical to
         // the Cloudflare one while the type surface was withheld.
         hasVectors: vectorStoreSupported,
-        hasX402: featureUsage.x402,
         maskMetadata,
         mutators,
         queues,
@@ -1006,6 +1001,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `createWorker` options. Lives in generated code (not the dependency-free
     // `@lunora/runtime`) so it can import the add-on packages the app installed.
     const appContent = emitApp({
+        // Usage-only, never a dependency signal: each long-tail method's
+        // parameter type reads `ShardConfig[configKey]` (e.g. `.kv()` reads
+        // `ShardConfig["kv"]`), and the shard emits that config field on the
+        // same usage set — so the method can never reference a missing type.
+        capabilities,
         // Inbound-email agents (`defineAgent({ onEmail })`) → wire the worker's
         // top-level `email()` handler to each agent's exported workflow so
         // received mail starts a durable run. Empty for email-free (and agent-free)
@@ -1016,10 +1016,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                 return { className: agent.className, exportName: agent.exportName };
             }),
         hasAccess: dependencies.has("@lunora/cloudflare-access"),
-        hasAi: featureUsage.ai,
-        hasAnalytics: featureUsage.analytics,
         hasAuth: dependencies.has("@lunora/auth"),
-        hasBrowser: featureUsage.browser,
         // Worker-composition framework adapters expose a `withLunora` over
         // `withFrameworkWorker`; when one is installed, surface `.buildFrameworkWorker()`.
         // So does a hand-composed entry — an app that folds its framework's SSR
@@ -1036,21 +1033,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // app-builder wiring); Hyperdrive-backed globals are gated separately by
         // `hasHyperdriveGlobal` so an app picks the right binding+package.
         hasGlobal: schema.tables.some((table) => isD1GlobalTable(table)),
-        hasHyperdrive: featureUsage.hyperdrive,
         hasHyperdriveGlobal: schema.tables.some((table) => isHyperdriveGlobalTable(table)),
-        hasImages: featureUsage.images,
-        // The `.kv()` builder's parameter type reads `ShardConfig["kv"]`, and that
-        // config field is emitted on the usage signal — so this MUST stay
-        // usage-only or the emitted method references a type that is not there.
-        hasKv: featureUsage.kv,
         // Auto-wire the studio's KV introspector on the SAME condition the nav
         // gates its tab on (`studioFeatures.kv` = ctx.kv usage OR a declared
         // `@lunora/bindings` dep), so a visible KV tab always has a working
         // backend — never the reverse.
         hasKvIntrospector: studioFeatures.kv,
         hasNotify,
-        hasPayments: featureUsage.payments,
-        hasR2sql: featureUsage.r2sql,
         hasQueue: queues.some((queue) => queue.mode === "push"),
         hasScheduler: studioFeatures.scheduler,
         // The same schema signal `emitShard` gates the shard config's source-client
@@ -1064,7 +1053,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // flag meant two different things depending on which emitter read it.
         hasVectors: vectorStoreSupported,
         hasWorkflow: workflows.length > 0,
-        hasX402: featureUsage.x402,
         // The single `defineIdentity(...)` contract (Plan 080). Wires
         // `options.identity` so the runtime trust boundary validates every
         // resolved identity before it becomes `ctx.auth`; `undefined` keeps the

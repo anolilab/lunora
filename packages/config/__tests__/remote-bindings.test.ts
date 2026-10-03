@@ -78,6 +78,24 @@ describe("planRemoteBindings", () => {
         expect(plans[0]?.path).toEqual([]);
     });
 
+    it("remotes both AI Search sections by array index", () => {
+        expect.assertions(2);
+
+        const plans = planRemoteBindings({
+            ai_search: [{ binding: "BLOG_SEARCH" }],
+            ai_search_namespaces: [{ binding: "AI_SEARCH" }],
+        });
+
+        expect(plans).toStrictEqual([
+            { binding: "BLOG_SEARCH", kind: "AI Search", path: [0], section: "ai_search" },
+            { binding: "AI_SEARCH", kind: "AI Search namespace", path: [0], section: "ai_search_namespaces" },
+        ]);
+        expect(
+            readJsonc(injectRemoteFlags(`{ "ai_search_namespaces": [{ "binding": "AI_SEARCH", "namespace": "default" }] }`, plans.slice(1)))
+                .ai_search_namespaces,
+        ).toStrictEqual([{ binding: "AI_SEARCH", namespace: "default", remote: true }]);
+    });
+
     it("never lists durable_objects, queue consumers, or other remote-ineligible kinds", () => {
         expect.assertions(1);
 

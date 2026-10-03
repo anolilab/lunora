@@ -23,6 +23,7 @@ const devCommand: Command = {
         ["lunora dev --worker-port 8080", "Use a custom wrangler dev port"],
         ["lunora dev --inspector-port 9235", "Pin wrangler's devtools inspector port instead of letting it walk up from 9229"],
         ["lunora dev --remote", "Proxy D1/KV/R2 to the deployed worker (also LUNORA_REMOTE=1)"],
+        ["lunora dev --local", "Start no remote proxy session, e.g. in CI where a service's `ai` binding has no credentials"],
     ],
     group: "Develop",
     loader: () =>
@@ -82,6 +83,12 @@ const devCommand: Command = {
         { description: "Run codegen on startup and watch for changes (default)", name: "codegen", type: Boolean },
         { description: "Don't run codegen — no watch, no startup generate (or set LUNORA_CODEGEN=0)", name: "no-codegen", type: Boolean },
         { description: "Proxy D1/KV/R2 bindings to the deployed worker (or set LUNORA_REMOTE=1)", name: "remote", type: Boolean },
+        {
+            description:
+                "Pass --local to wrangler dev: no remote proxy session, so an `ai` binding (in the app or a service) cannot stop dev from starting without Cloudflare credentials — it fails when called instead",
+            name: "local",
+            type: Boolean,
+        },
     ],
 };
 
@@ -100,6 +107,7 @@ export type DevOptions = CreateOptions<{
     "inspector-port": number | undefined;
     json: boolean | undefined;
     lines: number | undefined;
+    local: boolean | undefined;
     port: number | undefined;
     remote: boolean | undefined;
     studio: boolean | undefined;

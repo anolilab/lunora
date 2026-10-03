@@ -2,6 +2,7 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 
 import { emitApp } from "../src/emit-app";
+import allOffOptions from "./emit-app-options";
 
 /**
  * Plan 336: the D1 bookmark wiring lives in `buildExec`, the module-level
@@ -16,35 +17,7 @@ import { emitApp } from "../src/emit-app";
  */
 
 /** Minimal `EmitAppOptions` with every capability off except `.global()`. */
-const baseOptions = {
-    hasAccess: false,
-    hasAi: false,
-    hasAnalytics: false,
-    hasAuth: false,
-    hasBrowser: false,
-    hasFramework: false,
-    hasGlobal: true,
-    hasHyperdrive: false,
-    hasHyperdriveGlobal: false,
-    hasImages: false,
-    hasKv: false,
-    hasKvIntrospector: false,
-    hasNotify: false,
-    hasPayments: false,
-    hasQueue: false,
-    hasR2sql: false,
-    hasScheduler: false,
-    hasSourcedTables: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    hasX402: false,
-    tables: [],
-    useUmbrella: false,
-    wantsArchitecture: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+const baseOptions = { ...allOffOptions, hasGlobal: true };
 
 /** A minimal double for the structural D1 binding `buildExec` accepts. */
 interface FakeD1Database {

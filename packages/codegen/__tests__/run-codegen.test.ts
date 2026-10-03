@@ -983,7 +983,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
 
             expect(result.generated.shard).toContain('import { createAi } from "@lunora/ai"');
             expect(result.generated.shard).toContain("ctx.ai = ai;");
-            expect(result.generated.server).toContain("readonly ai: LunoraAi;");
+            expect(result.generated.server).toContain('readonly ai: import("@lunora/ai").LunoraAi;');
         });
 
         it("does not wire @lunora/payment for a project that doesn't use it", () => {
@@ -2133,13 +2133,13 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated builder-method signature, not a credential
             expect(result.generated.app).toContain('public x402(factory: (env: Env) => ReturnType<NonNullable<ShardConfig["x402"]>>): this');
             // …the typed rail rides the ActionCtx…
-            expect(result.generated.server).toContain("readonly x402: X402Pay;");
+            expect(result.generated.server).toContain('readonly x402: import("@lunora/x402/pay").X402Pay;');
             // …and the value is attached only inside the action-only `if (isAction)` block.
             expect(result.generated.shard).toContain("ctx.x402 = x402;");
         });
 
         it("emits app.ts with the .auth() method when @lunora/auth is a declared dependency", () => {
-            expect.assertions(4);
+            expect.assertions(5);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -2151,14 +2151,17 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             expect(result.generated.app).toContain("public auth(");
             expect(result.generated.app).toContain(
-                'import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
+                'import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
             );
             expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));");
+            // The OAuth discovery documents (plan 461 B): served by the auth instance
+            // as the worker's last matcher, after the app's own routes.
+            expect(result.generated.app).toContain("return auth ? handleAuthDiscoveryRequest(auth, request) : Promise.resolve(undefined);");
             expect(result.generated.app).toContain("await ensureMigrated(");
         });
 
         it("emits the Durable-Object-backed auth branch alongside the D1 one", () => {
-            expect.assertions(7);
+            expect.assertions(9);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -2184,6 +2187,10 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             expect(app).toContain("options.authAuditReader = authWiring.auditReader;");
             // The copy/purge admin ops for a jurisdiction move; `undefined` until pinned.
             expect(app).toContain("options.authJurisdictionMove = authWiring.jurisdictionMove;");
+            // Discovery paths are derived in the worker, so only those exact paths
+            // cost a round-trip to the object.
+            expect(app).toContain("discoveryPaths: authDiscoveryPathsFor(authDeclaration, env),");
+            expect(app).toContain("options.authDiscoveryHandler = authWiring.discoveryHandler;");
 
             // Both modes must be rejected together — silently doing nothing is worse.
             expect(app).toContain("pass either `d1` or `namespace`, not both");
@@ -4326,7 +4333,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard({ schema, hasAi: true });
+            const output = emitShard({ capabilities: new Set(["ai"]), schema });
 
             // Pull the AI helper + binding type, expose the override config field,
             // and assemble ctx.ai (built from env.AI; createAi itself throws on use
@@ -4364,7 +4371,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard({ hasKv: true, schema });
+            const output = emitShard({ capabilities: new Set(["kv"]), schema });
 
             expect(output).toContain('import { createKv } from "@lunora/bindings/kv"');
             expect(output).toContain("kv?: (env: Record<string, unknown>) => KVNamespaceLike;");
@@ -4380,7 +4387,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard({ hasAnalytics: true, schema });
+            const output = emitShard({ capabilities: new Set(["analytics"]), schema });
 
             expect(output).toContain('import { createAnalytics } from "@lunora/bindings/analytics"');
             expect(output).toContain("analytics?: (env: Record<string, unknown>) => AnalyticsEngineDatasetLike;");
@@ -4396,7 +4403,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard({ hasImages: true, schema });
+            const output = emitShard({ capabilities: new Set(["images"]), schema });
 
             expect(output).toContain('import { createImages } from "@lunora/bindings/images"');
             expect(output).toContain("images?: (env: Record<string, unknown>) => ImagesBindingLike;");
@@ -4412,7 +4419,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard({ hasHyperdrive: true, schema });
+            const output = emitShard({ capabilities: new Set(["hyperdrive"]), schema });
 
             expect(output).toContain('import type { SqlClient } from "@lunora/hyperdrive";');
             expect(output).toContain("sql?: (env: Record<string, unknown>) => SqlClient;");
@@ -4430,7 +4437,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard({ hasBrowser: true, schema });
+            const output = emitShard({ capabilities: new Set(["browser"]), schema });
 
             expect(output).toContain('import type { Browser } from "@lunora/browser";');
             expect(output).toContain("browser?: (env: Record<string, unknown>) => Browser;");
@@ -4450,7 +4457,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // means generated code stops satisfying its own declared type — the
             // defect class this test exists for. It pins the surface;
             // widen it deliberately when `Browser` grows.
-            const output = emitShard({ hasBrowser: true, schema: { tables: [], vectorIndexes: [] } });
+            const output = emitShard({ capabilities: new Set(["browser"]), schema: { tables: [], vectorIndexes: [] } });
 
             for (const member of [
                 "cancelCrawl",
@@ -4494,7 +4501,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // The base ctx object literal runs the closing `};` that ends with the
             // workflows/payments fields — slice everything BEFORE the `isAction`
             // gate so we only inspect the shared (query/mutation/action) ctx body.
-            const output = emitShard({ hasBrowser: true, hasHyperdrive: true, hasImages: true, schema });
+            const output = emitShard({ capabilities: new Set(["browser", "hyperdrive", "images"]), schema });
             const baseCtxBody = output.slice(0, output.indexOf("const isAction ="));
 
             // None of the three action-only helpers are spliced into the shared ctx
@@ -4509,7 +4516,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard({ schema, hasPayments: true });
+            const output = emitShard({ capabilities: new Set(["payments"]), schema });
 
             expect(output).toContain('import { paymentsFromContext } from "@lunora/payment"');
             expect(output).toContain("payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;");
@@ -4533,7 +4540,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("adds a typed ctx.payments to the generated ActionCtx when payments are used", () => {
             expect.assertions(4);
 
-            const withPayments = emitServer({ hasPayments: true });
+            const withPayments = emitServer({ capabilities: new Set(["payments"]) });
 
             expect(withPayments).toContain('import type { LunoraPayment } from "@lunora/payment";');
             expect(withPayments).toContain("readonly payments: LunoraPayment;");
@@ -4549,7 +4556,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard({ hasX402: true, schema });
+            const output = emitShard({ capabilities: new Set(["x402"]), schema });
 
             expect(output).toContain('import { lazyX402Pay } from "@lunora/x402/pay";');
             expect(output).toContain("x402?: (env: Record<string, unknown>) => X402PayConfig;");
@@ -4569,7 +4576,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             // Slice everything BEFORE the `isAction` gate to inspect only the shared
             // (query/mutation/action) ctx body: the money-spending rail must never appear there.
-            const withX402 = emitShard({ hasX402: true, schema });
+            const withX402 = emitShard({ capabilities: new Set(["x402"]), schema });
             const baseCtxBody = withX402.slice(0, withX402.indexOf("const isAction ="));
 
             expect(baseCtxBody).not.toContain("\n                x402,");
@@ -4585,10 +4592,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("adds a typed ctx.x402 to the generated ActionCtx when the pay rail is used (and not otherwise)", () => {
             expect.assertions(4);
 
-            const withX402 = emitServer({ hasX402: true });
+            const withX402 = emitServer({ capabilities: new Set(["x402"]) });
 
-            expect(withX402).toContain('import type { X402Pay } from "@lunora/x402/pay";');
-            expect(withX402).toContain("readonly x402: X402Pay;");
+            // Typed inline and on ActionCtx ONLY — the field appears exactly once.
+            expect(withX402.split('readonly x402: import("@lunora/x402/pay").X402Pay;')).toHaveLength(2);
+            expect(withX402).not.toContain("import type { X402Pay }");
 
             const withoutX402 = emitServer({});
 
@@ -4599,10 +4607,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("adds a typed ctx.ai to the generated ActionCtx when AI is used (and not otherwise)", () => {
             expect.assertions(4);
 
-            const withAi = emitServer({ hasAi: true });
+            const withAi = emitServer({ capabilities: new Set(["ai"]) });
 
-            expect(withAi).toContain('import type { LunoraAi } from "@lunora/ai";');
-            expect(withAi).toContain("readonly ai: LunoraAi;");
+            // Typed inline and on ActionCtx ONLY — the field appears exactly once.
+            expect(withAi.split('readonly ai: import("@lunora/ai").LunoraAi;')).toHaveLength(2);
+            expect(withAi).not.toContain("import type { LunoraAi }");
 
             const withoutAi = emitServer({});
 
@@ -4632,7 +4641,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                         image: { buildContext: ".", dockerfilePath: "Dockerfile", kind: "dockerfile" },
                     },
                 ],
-                hasAi: true,
+                capabilities: new Set(["ai"]),
                 workflows: [{ className: "OrdersWorkflow", exportName: "orders", name: "orders", steps: [] }],
             });
 
@@ -4644,7 +4653,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("wires ctx.kv onto EVERY ctx (a KV read is allowed in deterministic handlers)", () => {
             expect.assertions(4);
 
-            const withKv = emitServer({ hasKv: true });
+            const withKv = emitServer({ capabilities: new Set(["kv"]) });
             const queryCtx = ctxInterface(withKv, "QueryCtx");
             const mutationCtx = ctxInterface(withKv, "MutationCtx");
             const actionCtx = ctxInterface(withKv, "ActionCtx");
@@ -4658,7 +4667,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("wires ctx.analytics onto EVERY ctx (write-only fire-and-forget side effect)", () => {
             expect.assertions(4);
 
-            const withAnalytics = emitServer({ hasAnalytics: true });
+            const withAnalytics = emitServer({ capabilities: new Set(["analytics"]) });
 
             expect(ctxInterface(withAnalytics, "QueryCtx")).toContain('readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;');
             expect(ctxInterface(withAnalytics, "MutationCtx")).toContain('readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;');
@@ -4669,7 +4678,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("wires ctx.sql (Hyperdrive) onto ActionCtx ONLY — never query/mutation (determinism)", () => {
             expect.assertions(4);
 
-            const withSql = emitServer({ hasHyperdrive: true });
+            const withSql = emitServer({ capabilities: new Set(["hyperdrive"]) });
 
             expect(ctxInterface(withSql, "ActionCtx")).toContain('readonly sql: import("@lunora/hyperdrive").SqlClient;');
             expect(ctxInterface(withSql, "QueryCtx")).not.toContain("readonly sql:");
@@ -4680,7 +4689,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("wires ctx.browser onto ActionCtx ONLY — never query/mutation (determinism)", () => {
             expect.assertions(4);
 
-            const withBrowser = emitServer({ hasBrowser: true });
+            const withBrowser = emitServer({ capabilities: new Set(["browser"]) });
 
             expect(ctxInterface(withBrowser, "ActionCtx")).toContain('readonly browser: import("@lunora/browser").Browser;');
             expect(ctxInterface(withBrowser, "QueryCtx")).not.toContain("readonly browser:");
@@ -4691,7 +4700,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("wires ctx.images onto ActionCtx ONLY — never query/mutation (determinism)", () => {
             expect.assertions(4);
 
-            const withImages = emitServer({ hasImages: true });
+            const withImages = emitServer({ capabilities: new Set(["images"]) });
 
             expect(ctxInterface(withImages, "ActionCtx")).toContain('readonly images: import("@lunora/bindings/images").Images;');
             expect(ctxInterface(withImages, "QueryCtx")).not.toContain("readonly images:");
@@ -4702,7 +4711,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("wires ctx.pipelines onto ActionCtx ONLY — never query/mutation", () => {
             expect.assertions(4);
 
-            const withPipelines = emitServer({ hasPipelines: true });
+            const withPipelines = emitServer({ capabilities: new Set(["pipelines"]) });
 
             expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@lunora/bindings/pipelines").PipelineClient;');
             expect(ctxInterface(withPipelines, "QueryCtx")).not.toContain("readonly pipelines:");

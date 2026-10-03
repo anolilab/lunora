@@ -1,3 +1,5 @@
+import type { BespokeShardKey, CapabilityKey, ShardBindingFacet, ShardEnvBinding } from "../capabilities";
+import { CAPABILITIES } from "../capabilities";
 import type { EnvIR } from "../ir";
 import renderJsonData from "../json-data";
 
@@ -33,50 +35,6 @@ const emitRelationFanout = (hasGlobalTables: boolean): { importFragment: string;
 };
 
 /**
- * The `ctx.ai` code fragments woven into the generated ShardDO, or empty strings
- * when the project doesn't use Workers AI. Extracted from `emitShard` so
- * its body stays flat (the gating lives here, not as inline ternaries).
- */
-const emitAiFragments = (hasAi: boolean): { build: string; configField: string } => {
-    if (!hasAi) {
-        return { build: "", configField: "" };
-    }
-
-    return {
-        // Build ctx.ai from the resolved Workers AI binding (a `config.ai` thunk
-        // override, else `env.AI`). createAi is provider-agnostic — a Workers AI id,
-        // a `"<provider>/<model>"` slug routed through AI Gateway (or the
-        // `LUNORA_AI_PROXY_URL` proxy on a host without the binding), or any AI SDK
-        // model object — and with no binding it returns a facade whose calls throw a
-        // directed error, so there is no stub here. An ActionCtx-only helper:
-        // inference is external, non-deterministic I/O, so a query/mutation ctx
-        // never carries it.
-        build: `
-            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
-            // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
-            // function path + trace id into createAi, which folds them into the
-            // gateway's \`metadata\`. Mirror the tracer's anchor guard — a deferred
-            // subscription re-run must not borrow a concurrent dispatch's trace, so
-            // read \`getCurrentTrace()\` only on the synchronous (non-threaded-identity) path.
-            const aiTrace = options.identity ? undefined : this.getCurrentTrace();
-            // \`telemetry\` gives every model call an \`ai.generate\` / \`ai.stream\` span
-            // and \`gen_ai.usage.*\` token + cost counters attributed to this function.
-            const ai: LunoraAi = createAi({
-                binding: aiBinding as AiBindingLike | undefined,
-                env: env as Record<string, unknown>,
-                metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
-                telemetry: { metrics, trace },
-            });
-`,
-        // Optional override for the Workers AI binding. When omitted, ctx.ai is
-        // built from `env.AI` (the conventional binding the config layer
-        // auto-reconciles); the thunk lets a caller point it elsewhere or inject
-        // a double in tests.
-        configField: `\n    ai?: (env: Record<string, unknown>) => AiBindingLike;`,
-    };
-};
-
-/**
  * Render a module-level throwing stub for the generated shard: a `const`
  * (`declaration` is its head, e.g. `"kvStub: Kv"`) whose every method throws
  * the `missing` statement. Methods are `async` unless listed in `sync`; `cast`
@@ -93,29 +51,24 @@ const renderThrowingStub = (
     return `\nconst ${declaration} = {\n${members}\n}${cast};\n`;
 };
 
-interface HelperFragments {
+/** What one capability row contributes to the generated ShardDO, before it is placed by tier. */
+interface CapabilityShardFragments {
     /** Lines built inside `buildCtx` (resolve the binding, construct the helper, else fall to the stub). */
     build: string;
     /** Optional `ShardDOConfig` field declaration (the config thunk override). */
     configField: string;
-    /** Property woven into the `ctx` object literal (e.g. `\n                kv,`). */
-    contextField: string;
     /** `import` lines added to the generated ShardDO module. */
-    importLines: string[];
+    importLines: ReadonlyArray<string>;
     /** Module-level throwing stub the build falls back to when no binding/thunk resolves. */
     stub: string;
 }
 
+/** A declaration-gated helper's fragments: a capability's, plus the property it weaves into the `ctx` object literal itself (e.g. `\n                flags,`). */
+type HelperFragments = CapabilityShardFragments & { contextField: string };
+
 const EMPTY_HELPER_FRAGMENTS: HelperFragments = { build: "", configField: "", contextField: "", importLines: [], stub: "" };
 
-/**
- * `ctx.kv` (Workers KV) fragments, mirroring {@link emitAiFragments}. KV reads
- * are allowed in deterministic read paths (like `ctx.db`), so this rides EVERY
- * ctx (query/mutation/action). The binding resolves from a `config.kv` thunk
- * override, else the conventional `env.KV`; absent both, every method throws a
- * directed error via `kvStub`.
- */
-/* eslint-disable no-secrets/no-secrets -- the flagged high-entropy strings are emitted identifiers (`markUnvouchableReads(kvBinding`), not credentials. */
+/* eslint-disable no-secrets/no-secrets -- the flagged string is the emitted `ShardDOConfig.shardRegistry` field name in the docblock below, not a credential. */
 
 /**
  * The shard registry wiring, for a schema with `.shardBy()` tables: the
@@ -146,35 +99,6 @@ const SHARDED_TABLES: ReadonlySet<string> = new Set([${[...shardedTableNames].ma
 `,
     };
 };
-
-const emitKvFragments = (hasKv: boolean): HelperFragments => {
-    if (!hasKv) {
-        return EMPTY_HELPER_FRAGMENTS;
-    }
-
-    const kvMissing = `throw new Error("ctx.kv: no KV binding found. Add a \\\`kv_namespaces\\\` binding (env.KV) to wrangler.jsonc, or pass \\\`kv\\\` to createShardDO().");`;
-
-    return {
-        build: `
-            const kvBinding = config.kv?.(env) ?? (env as Record<string, unknown>).KV;
-            // KV is not this shard's SQLite, so nothing appends a \`__cdc_log\` entry
-            // when a value changes — a subscription that read one can never be proven
-            // current on reconnect and must re-snapshot. Reads only; \`put\`/\`delete\`
-            // are writes and stay unstamped.
-            const kv: Kv = markUnvouchableReads(kvBinding ? createKv({ namespace: kvBinding as KVNamespaceLike }) : kvStub, options.onRead, [
-                "get",
-                "getRaw",
-                "getWithMetadata",
-                "list",
-            ]);
-`,
-        configField: `\n    kv?: (env: Record<string, unknown>) => KVNamespaceLike;`,
-        contextField: `\n                kv,`,
-        importLines: [`import type { Kv, KVNamespaceLike } from "@lunora/bindings/kv";`, `import { createKv } from "@lunora/bindings/kv";`],
-        stub: renderThrowingStub("kvStub: Kv", kvMissing, ["delete", "get", "getRaw", "getWithMetadata", "list", "put"]),
-    };
-};
-
 /* eslint-enable no-secrets/no-secrets */
 
 /* eslint-disable no-secrets/no-secrets -- the flagged string is the `flag_read_in_subscription` advisory's rule id, quoted in the docblock below, not a credential. */
@@ -282,33 +206,6 @@ const emitEnvFragments = (env: EnvIR | undefined): HelperFragments => {
 };
 
 /**
- * `ctx.access` (verified Cloudflare Access identity) fragments. Rides EVERY ctx —
- * a deterministic read of the per-request identity, like `ctx.auth`. The facade
- * is built **synchronously** from the resolved `identity`/`userId` locals already
- * in scope at the ctx-build site (the same source `ctx.auth` uses), via the
- * package's pure `accessFacade(identity, userId)` factory — so a global
- * `ctx.access` adds only one object construction per request: no I/O, and no
- * JWT re-verification (that happened once at the edge in `resolveIdentity`).
- * `accessFacade` returns the anonymous facade when no identity is present, so
- * there is no stub fallback.
- */
-const emitAccessFragments = (hasAccessFacade: boolean): HelperFragments => {
-    if (!hasAccessFacade) {
-        return EMPTY_HELPER_FRAGMENTS;
-    }
-
-    return {
-        build: `
-            const access = accessFacade(identity, userId);
-`,
-        configField: "",
-        contextField: `\n                access,`,
-        importLines: [`import { accessFacade } from "@lunora/cloudflare-access/context";`],
-        stub: "",
-    };
-};
-
-/**
  * The studio + reactive feature-flag fragments woven into the generated ShardDO,
  * or empty strings when the project wires no flags:
  * - `constant`: `LUNORA_FLAG_KEYS`, the statically-discovered `ctx.flags.<type>` reads (key + value type) the overrides iterate.
@@ -405,147 +302,75 @@ const LUNORA_FLAG_KEYS = ${renderJsonData(flagKeys, `ReadonlyArray<{ key: string
 };
 
 /**
- * `ctx.analytics` (Analytics Engine) fragments. Writes are fire-and-forget and
- * sampled — not a determinism hazard for reads — so this rides EVERY ctx. The
- * binding resolves from a `config.analytics` thunk override, else the
- * conventional `env.ANALYTICS`. `createAnalytics` takes the binding POSITIONALLY
- * (not an options object). Absent a binding, both methods throw via
- * `analyticsStub`.
+ * `ctx.ai` (Workers AI). Bespoke because the build threads the dispatch's
+ * function path, trace id and telemetry into `createAi`. createAi is
+ * provider-agnostic — a Workers AI id, a `"<provider>/<model>"` slug routed
+ * through AI Gateway (or the `LUNORA_AI_PROXY_URL` proxy on a host without the
+ * binding), or any AI SDK model object — and with no binding it returns a facade
+ * whose calls throw a directed error, so there is no stub here.
  */
-const emitAnalyticsFragments = (hasAnalytics: boolean): HelperFragments => {
-    if (!hasAnalytics) {
-        return EMPTY_HELPER_FRAGMENTS;
-    }
-
-    const analyticsMissing = `throw new Error("ctx.analytics: no Analytics Engine binding found. Add an \\\`analytics_engine_datasets\\\` binding (env.ANALYTICS) to wrangler.jsonc, or pass \\\`analytics\\\` to createShardDO().");`;
-
+const emitAiFragments = (): CapabilityShardFragments => {
     return {
+        // Build ctx.ai from the resolved Workers AI binding (a `config.ai` thunk
+        // override, else `env.AI`).
         build: `
-            const analyticsBinding = config.analytics?.(env) ?? (env as Record<string, unknown>).ANALYTICS;
-            const analytics: AnalyticsClient = analyticsBinding ? createAnalytics(analyticsBinding as AnalyticsEngineDatasetLike) : analyticsStub;
+            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
+            // Correlate AI-Gateway-routed calls with the Lunora trace: thread the
+            // function path + trace id into createAi, which folds them into the
+            // gateway's \`metadata\`. Mirror the tracer's anchor guard — a deferred
+            // subscription re-run must not borrow a concurrent dispatch's trace, so
+            // read \`getCurrentTrace()\` only on the synchronous (non-threaded-identity) path.
+            const aiTrace = options.identity ? undefined : this.getCurrentTrace();
+            // \`telemetry\` gives every model call an \`ai.generate\` / \`ai.stream\` span
+            // and \`gen_ai.usage.*\` token + cost counters attributed to this function.
+            const ai: LunoraAi = createAi({
+                binding: aiBinding as AiBindingLike | undefined,
+                env: env as Record<string, unknown>,
+                metadata: { functionPath: options.functionPath, traceId: aiTrace?.traceId },
+                telemetry: { metrics, trace },
+            });
 `,
-        configField: `\n    analytics?: (env: Record<string, unknown>) => AnalyticsEngineDatasetLike;`,
-        contextField: `\n                analytics,`,
-        importLines: [
-            `import type { AnalyticsClient, AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";`,
-            `import { createAnalytics } from "@lunora/bindings/analytics";`,
-        ],
-        stub: renderThrowingStub("analyticsStub: AnalyticsClient", analyticsMissing, ["track", "writeDataPoint"], { sync: ["track", "writeDataPoint"] }),
+        // Optional override for the Workers AI binding. When omitted, ctx.ai is
+        // built from `env.AI` (the conventional binding the config layer
+        // auto-reconciles); the thunk lets a caller point it elsewhere or inject
+        // a double in tests.
+        configField: `\n    ai?: (env: Record<string, unknown>) => AiBindingLike;`,
+        importLines: [`import type { AiBindingLike, LunoraAi } from "@lunora/ai";`, `import { createAi } from "@lunora/ai";`],
+        stub: "",
     };
 };
 
 /**
- * `ctx.images` (Cloudflare Images transforms) fragments. ActionCtx ONLY:
- * transforms are non-deterministic compute/network I/O, so the build is attached
- * to the ctx object only when the executing function is an action (see the
- * `isAction` gate in `buildCtx`). The binding resolves from a `config.images`
- * thunk override, else the conventional `env.IMAGES`; absent both, methods throw
- * via `imagesStub`.
+ * `ctx.access` (verified Cloudflare Access identity). Bespoke because the facade
+ * is built **synchronously** from the resolved `identity`/`userId` locals already
+ * in scope at the ctx-build site (the same source `ctx.auth` uses), via the
+ * package's pure `accessFacade(identity, userId)` factory — so a global
+ * `ctx.access` adds only one object construction per request: no I/O, and no
+ * JWT re-verification (that happened once at the edge in `resolveIdentity`).
+ * `accessFacade` returns the anonymous facade when no identity is present, so
+ * there is no config thunk and no stub fallback.
  */
-const emitImagesFragments = (hasImages: boolean): HelperFragments => {
-    if (!hasImages) {
-        return EMPTY_HELPER_FRAGMENTS;
-    }
-
-    const imagesMissing = `throw new Error("ctx.images: no Images binding found. Add an \\\`images\\\` binding (env.IMAGES) to wrangler.jsonc, or pass \\\`images\\\` to createShardDO().");`;
-
+const emitAccessFragments = (): CapabilityShardFragments => {
     return {
         build: `
-            const imagesBinding = config.images?.(env) ?? (env as Record<string, unknown>).IMAGES;
-            const images: Images = imagesBinding ? createImages({ binding: imagesBinding as ImagesBindingLike }) : imagesStub;
+            const access = accessFacade(identity, userId);
 `,
-        configField: `\n    images?: (env: Record<string, unknown>) => ImagesBindingLike;`,
-        // ActionCtx-only: woven onto the action ctx object, never query/mutation.
-        contextField: `\n                images,`,
-        importLines: [`import type { Images, ImagesBindingLike } from "@lunora/bindings/images";`, `import { createImages } from "@lunora/bindings/images";`],
-        stub: renderThrowingStub("imagesStub: Images", imagesMissing, ["info", "transform"]),
+        configField: "",
+        importLines: [`import { accessFacade } from "@lunora/cloudflare-access/context";`],
+        stub: "",
     };
 };
 
 /**
- * `ctx.sql` (Hyperdrive — external Postgres/MySQL) fragments. ActionCtx ONLY:
- * external SQL is non-deterministic and non-reactive. `createHyperdrive` returns
- * connection info, NOT a `SqlClient` — a `SqlClient` needs a user-chosen driver
- * (postgres/pg/mysql2 via `fromPostgresJs`/`fromNodePg`/`fromMysql2`), so codegen
- * does NOT auto-construct it. We emit a REQUIRED `config.sql` thunk; absent it,
- * `sqlStub.query` throws a directed error pointing at the driver wiring.
- */
-const emitHyperdriveFragments = (hasHyperdrive: boolean): HelperFragments => {
-    if (!hasHyperdrive) {
-        return EMPTY_HELPER_FRAGMENTS;
-    }
-
-    const sqlMissing = `throw new Error("ctx.sql: provide a \\\`sql\\\` config thunk that builds a SqlClient from your driver, e.g. \\\`sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))\\\`.");`;
-
-    return {
-        build: `
-            const sql: SqlClient = config.sql ? config.sql(env) : sqlStub;
-`,
-        configField: `\n    sql?: (env: Record<string, unknown>) => SqlClient;`,
-        // ActionCtx-only: woven onto the action ctx object, never query/mutation.
-        contextField: `\n                sql,`,
-        importLines: [`import type { SqlClient } from "@lunora/hyperdrive";`],
-        stub: renderThrowingStub("sqlStub: SqlClient", sqlMissing, ["query"]),
-    };
-};
-
-/**
- * `ctx.browser` (Browser Rendering) fragments. ActionCtx ONLY: non-deterministic
- * network I/O. `createBrowser` needs an injected Playwright `launch` (the optional
- * `@cloudflare/playwright` peer); to keep the generated server dependency-light we
- * do NOT import it here. We emit a config-thunk-first build; absent the
- * `config.browser` thunk, every method throws a directed error via `browserStub`.
- */
-const emitBrowserFragments = (hasBrowser: boolean): HelperFragments => {
-    if (!hasBrowser) {
-        return EMPTY_HELPER_FRAGMENTS;
-    }
-
-    const browserMissing = `throw new Error("ctx.browser: provide a \\\`browser\\\` config thunk, e.g. \\\`browser: (env) => createBrowser({ binding: env.BROWSER, launch })\\\` with \\\`import { launch } from '@cloudflare/playwright'\\\`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.");`;
-
-    return {
-        build: `
-            const browser: Browser = config.browser ? config.browser(env) : browserStub;
-`,
-        configField: `\n    browser?: (env: Record<string, unknown>) => Browser;`,
-        // ActionCtx-only: woven onto the action ctx object, never query/mutation.
-        contextField: `\n                browser,`,
-        // Type-only import: the generated build never calls `createBrowser`
-        // (the `config.browser` thunk owns construction, injecting the optional
-        // `@cloudflare/playwright` peer the worker stays free of), so only the
-        // `Browser` type is referenced here.
-        importLines: [`import type { Browser } from "@lunora/browser";`],
-        stub: renderThrowingStub("browserStub: Browser", browserMissing, [
-            "cancelCrawl",
-            "connect",
-            "content",
-            "crawl",
-            "crawlResult",
-            "launch",
-            "pdf",
-            "quickAction",
-            "scrape",
-            "screenshot",
-            "sessions",
-        ]),
-    };
-};
-
-/**
- * `ctx.r2sql` (R2 SQL — serverless queries over Apache Iceberg) fragments.
- * ActionCtx ONLY: R2 SQL has no Workers binding (every query is an HTTPS
- * round-trip), so it is non-deterministic external I/O and non-reactive, exactly
- * like `ctx.sql`. Unlike a binding, the client needs an account id + API token +
- * bucket, so the build resolves them from a `config.r2sql` thunk first, else the
- * conventional `env.R2_SQL_TOKEN` + `env.R2_SQL_ACCOUNT_ID`/`env.CLOUDFLARE_ACCOUNT_ID`
- * + `env.R2_SQL_BUCKET`; absent both, every method throws via `r2sqlStub`.
+ * `ctx.r2sql` (R2 SQL — serverless queries over Apache Iceberg). Bespoke because
+ * R2 SQL has no Workers binding (every query is an HTTPS round-trip): the client
+ * needs an account id + API token + bucket, so the build resolves them from a
+ * `config.r2sql` thunk first, else the conventional `env.R2_SQL_TOKEN` +
+ * `env.R2_SQL_ACCOUNT_ID`/`env.CLOUDFLARE_ACCOUNT_ID` + `env.R2_SQL_BUCKET`;
+ * absent both, every method throws via `r2sqlStub`.
  */
 /* eslint-disable no-secrets/no-secrets -- the emitted ctx-builder reads conventional R2 SQL env var names (R2_SQL_ACCOUNT_ID / CLOUDFLARE_ACCOUNT_ID), not credentials */
-const emitR2sqlFragments = (hasR2sql: boolean): HelperFragments => {
-    if (!hasR2sql) {
-        return EMPTY_HELPER_FRAGMENTS;
-    }
-
+const emitR2sqlFragments = (): CapabilityShardFragments => {
     const r2sqlMissing = `throw new Error("ctx.r2sql: no R2 SQL credentials found. Set \\\`R2_SQL_TOKEN\\\`, \\\`R2_SQL_ACCOUNT_ID\\\` (or \\\`CLOUDFLARE_ACCOUNT_ID\\\`), and \\\`R2_SQL_BUCKET\\\` in your env/.dev.vars, or pass an \\\`r2sql\\\` config thunk to createShardDO().");`;
 
     return {
@@ -561,9 +386,6 @@ const emitR2sqlFragments = (hasR2sql: boolean): HelperFragments => {
                   : r2sqlStub;
 `,
         configField: `\n    r2sql?: (env: Record<string, unknown>) => R2SqlClient;`,
-        // ActionCtx-only: attached via the \`ctx.r2sql = r2sql\` assignment in the
-        // \`isAction\` block, never the every-ctx object literal.
-        contextField: "",
         importLines: [`import type { R2SqlClient } from "@lunora/bindings/r2sql";`, `import { createR2Sql } from "@lunora/bindings/r2sql";`],
         // The stub is typed `R2SqlClient`, so TS flags a missing method at build
         // time — but it must stay structurally in sync with that interface
@@ -576,51 +398,200 @@ const emitR2sqlFragments = (hasR2sql: boolean): HelperFragments => {
 /* eslint-enable no-secrets/no-secrets */
 
 /**
- * `ctx.pipelines` (Cloudflare Pipelines — R2-backed streaming ingestion)
- * fragments. ActionCtx ONLY: ingestion is external, fire-and-forget I/O (like
- * `ctx.images`). The client ships from `@lunora/bindings/pipelines` (the other "emit data
- * to a sink" surface). The binding resolves from a `config.pipelines` thunk
- * override, else the conventional `env.PIPELINES`; absent both, `send` throws via
- * `pipelinesStub`.
+ * `ctx.x402` (the x402 agent-wallet pay rail). Bespoke because `lazyX402Pay`
+ * keeps `buildCtx` synchronous: it returns immediately and builds the real
+ * (async, secret-reading, signer-importing) rail on the first `fetch`, memoising
+ * it so one spend-policy state is shared for the ctx's lifetime. The wallet
+ * secret is read through `ctx.secrets` (a Secrets Store binding), which is why
+ * `getSecret` closes over the in-scope `secrets` facade. Falls back to
+ * `x402Stub` — a rail whose `fetch` throws — when no `x402` config is passed.
  */
-const emitPipelinesFragments = (hasPipelines: boolean): HelperFragments => {
-    if (!hasPipelines) {
-        return EMPTY_HELPER_FRAGMENTS;
-    }
-
-    const pipelinesMissing = `throw new Error("ctx.pipelines: no Pipelines binding found. Add a \\\`pipelines\\\` binding (env.PIPELINES) to wrangler.jsonc, or pass \\\`pipelines\\\` to createShardDO().");`;
+const emitX402Fragments = (): CapabilityShardFragments => {
+    const x402Missing = `throw new Error("ctx.x402: no pay rail configured. Pass \\\`x402\\\` to createShardDO().");`;
 
     return {
+        // Built lazily off `secrets` (the Secrets Store facade already in scope) and
+        // the `config.x402` thunk over env; falls back to `x402Stub`.
         build: `
-            const pipelinesBinding = config.pipelines?.(env) ?? (env as Record<string, unknown>).PIPELINES;
-            const pipelines: PipelineClient = pipelinesBinding ? createPipelines({ binding: pipelinesBinding as PipelineBindingLike }) : pipelinesStub;
+            const x402: X402Pay = config.x402
+                ? lazyX402Pay(config.x402(env), { getSecret: (name: string) => secrets.get(name) })
+                : x402Stub;
 `,
-        configField: `\n    pipelines?: (env: Record<string, unknown>) => PipelineBindingLike;`,
-        // ActionCtx-only: attached via the \`ctx.pipelines = pipelines\` assignment
-        // in the \`isAction\` block, never the every-ctx object literal.
-        contextField: "",
-        importLines: [
-            `import type { PipelineBindingLike, PipelineClient } from "@lunora/bindings/pipelines";`,
-            `import { createPipelines } from "@lunora/bindings/pipelines";`,
-        ],
-        stub: renderThrowingStub("pipelinesStub: PipelineClient", pipelinesMissing, ["send"]),
+        configField: `\n    x402?: (env: Record<string, unknown>) => X402PayConfig;`,
+        importLines: [`import type { X402Pay, X402PayConfig } from "@lunora/x402/pay";`, `import { lazyX402Pay } from "@lunora/x402/pay";`],
+        stub: renderThrowingStub("x402Stub: X402Pay", x402Missing, ["fetch"], { cast: " as unknown as X402Pay", sync: ["fetch"] }),
     };
 };
 
+/** The bespoke ShardDO emitters, one per `shardBinding: "bespoke"` row — exhaustive over {@link BespokeShardKey}. */
+const BESPOKE_SHARD_FRAGMENTS: Readonly<Record<BespokeShardKey, () => CapabilityShardFragments>> = {
+    access: emitAccessFragments,
+    ai: emitAiFragments,
+    r2sql: emitR2sqlFragments,
+    x402: emitX402Fragments,
+};
+
+/** Indentation of a statement inside the emitted `buildCtx` body. */
+const BUILD_INDENT = "            ";
+
+/**
+ * The value a {@link ShardEnvBinding} build assigns: the factory call over the
+ * resolved binding (or the binding itself when it IS the client), else the stub.
+ */
+const renderBindingValue = (property: string, clientType: string, binding: ShardEnvBinding): string => {
+    const local = `${property}Binding`;
+    const { factory } = binding;
+    let construct = `(${local} as ${clientType})`;
+
+    if (factory !== undefined) {
+        const argument = `${local} as ${binding.bindingType ?? clientType}`;
+
+        construct = factory.option === undefined ? `${factory.name}(${argument})` : `${factory.name}({ ${factory.option}: ${argument} })`;
+    }
+
+    return `${local} ? ${construct} : ${property}Stub`;
+};
+
+/* eslint-disable no-secrets/no-secrets -- the flagged string is the emitted `markUnvouchableReads` helper name, not a credential. */
+
+/**
+ * The `buildCtx` lines for a binding-resolving helper: resolve `config.<prop>`
+ * else `env.<NAME>`, build the client, else fall to the stub — wrapped in
+ * `markUnvouchableReads` when the facet lists read methods.
+ */
+const renderBindingBuild = (property: string, clientType: string, binding: ShardEnvBinding): string => {
+    const value = renderBindingValue(property, clientType, binding);
+    const resolve = `${BUILD_INDENT}const ${property}Binding = config.${property}?.(env) ?? (env as Record<string, unknown>).${binding.envName};\n`;
+    const reads = binding.unvouchableReads ?? [];
+
+    if (reads.length === 0) {
+        return `\n${resolve}${BUILD_INDENT}const ${property}: ${clientType} = ${value};\n`;
+    }
+
+    return `\n${resolve}${BUILD_INDENT}// ${binding.envName} is not this shard's SQLite, so nothing appends a \`__cdc_log\` entry
+${BUILD_INDENT}// when a value changes — a subscription that read one can never be proven
+${BUILD_INDENT}// current on reconnect and must re-snapshot. Reads only; writes stay unstamped.
+${BUILD_INDENT}const ${property}: ${clientType} = markUnvouchableReads(${value}, options.onRead, [
+${reads.map((method) => `${BUILD_INDENT}    ${JSON.stringify(method)},`).join("\n")}
+${BUILD_INDENT}]);
+`;
+};
+/* eslint-enable no-secrets/no-secrets */
+
+/**
+ * The generic ShardDO wiring for a {@link ShardBindingFacet} row — the shape
+ * shared by `ctx.kv` / `ctx.analytics` / `ctx.images` / `ctx.pipelines`
+ * (resolve `config.<prop>?.(env) ?? env.<NAME>`, build via the factory, else the
+ * throwing stub) and the thunk-only `ctx.sql` / `ctx.browser` (no `binding`: the
+ * `config.<prop>` thunk returns the client, else the stub). The stub is annotated
+ * with the client type, never cast, so a method missing from `stubMethods` fails
+ * the generated file's type check.
+ */
+const emitBindingClientFragments = (property: string, moduleSpecifier: string, facet: ShardBindingFacet): CapabilityShardFragments => {
+    const { binding, clientType } = facet;
+    const stub = renderThrowingStub(`${property}Stub: ${clientType}`, `throw new Error(${JSON.stringify(facet.missingMessage)});`, facet.stubMethods, {
+        sync: facet.syncStubMethods,
+    });
+
+    if (binding === undefined) {
+        return {
+            build: `\n${BUILD_INDENT}const ${property}: ${clientType} = config.${property} ? config.${property}(env) : ${property}Stub;\n`,
+            configField: `\n    ${property}?: (env: Record<string, unknown>) => ${clientType};`,
+            importLines: [`import type { ${clientType} } from "${moduleSpecifier}";`],
+            stub,
+        };
+    }
+
+    const bindingType = binding.bindingType ?? clientType;
+    const typeNames = [...new Set([bindingType, clientType])].toSorted((left, right) => left.localeCompare(right));
+
+    return {
+        build: renderBindingBuild(property, clientType, binding),
+        configField: `\n    ${property}?: (env: Record<string, unknown>) => ${bindingType};`,
+        importLines: [
+            `import type { ${typeNames.join(", ")} } from "${moduleSpecifier}";`,
+            ...(binding.factory === undefined ? [] : [`import { ${binding.factory.name} } from "${moduleSpecifier}";`]),
+        ],
+        stub,
+    };
+};
+
+/**
+ * Everything the used capabilities contribute to the generated ShardDO, already
+ * concatenated in table order and split by the tier each row declares.
+ */
+interface CapabilityShardWiring {
+    /** ActionCtx-only builds, run inside the `isAction` block. */
+    actionBuild: string;
+    /** ActionCtx-only ctx properties (each named after its local), attached in the `isAction` block. */
+    actionFields: ReadonlyArray<string>;
+    /** `ShardDOConfig` override-thunk fields. */
+    configFields: string;
+    /** Every-ctx builds, run before the ctx object literal. */
+    everyBuild: string;
+    /** Every-ctx properties spliced into the ctx object literal. */
+    everyFields: string;
+    /** `import` lines for the generated ShardDO module. */
+    importLines: ReadonlyArray<string>;
+    /** Module-level throwing stubs. */
+    stubs: string;
+}
+
+/**
+ * Wire every used capability that declares a `shardBinding` into the generated
+ * ShardDO, walking {@link CAPABILITIES} in table order. The row's `tier` decides
+ * where the helper lands: `"every"` rides the ctx object literal of every
+ * function kind; `"action"` is built and attached only when the executing
+ * function is an action, so a query/mutation ctx never carries the property at
+ * runtime (matching its absence from `QueryCtx`/`MutationCtx`).
+ */
+const emitCapabilityShardWiring = (capabilities: ReadonlySet<CapabilityKey>): CapabilityShardWiring => {
+    const actionFields: string[] = [];
+    const importLines: string[] = [];
+    let actionBuild = "";
+    let configFields = "";
+    let everyBuild = "";
+    let everyFields = "";
+    let stubs = "";
+
+    for (const capability of CAPABILITIES) {
+        const { key, shardBinding } = capability;
+
+        if (shardBinding === undefined || !capabilities.has(key)) {
+            continue;
+        }
+
+        const property = capability.contextProperty;
+        // A row is marked bespoke exactly when `BESPOKE_SHARD_FRAGMENTS` has its
+        // emitter (`BespokeShardKey` is derived from the same marker), so the cast
+        // only restates what the table's types already guarantee.
+        const fragments =
+            shardBinding === "bespoke"
+                ? BESPOKE_SHARD_FRAGMENTS[key as BespokeShardKey]()
+                : emitBindingClientFragments(property, capability.moduleSpecifier, shardBinding);
+
+        importLines.push(...fragments.importLines);
+        configFields += fragments.configField;
+        stubs += fragments.stub;
+
+        if (capability.tier === "every") {
+            everyBuild += fragments.build;
+            everyFields += `\n                ${property},`;
+        } else {
+            actionBuild += fragments.build;
+            actionFields.push(property);
+        }
+    }
+
+    return { actionBuild, actionFields, configFields, everyBuild, everyFields, importLines, stubs };
+};
+
 export {
-    emitAccessFragments,
-    emitAiFragments,
-    emitAnalyticsFragments,
-    emitBrowserFragments,
+    emitCapabilityShardWiring,
     emitEnvFragments,
     emitFlagsFragments,
     emitFlagsOverrides,
-    emitHyperdriveFragments,
-    emitImagesFragments,
-    emitKvFragments,
     emitNotifyFragments,
-    emitPipelinesFragments,
-    emitR2sqlFragments,
     emitRelationFanout,
     emitShardRegistryFragments,
     renderThrowingStub,

@@ -101,13 +101,14 @@ const imageFromExpression = (expression: Expression, exportName: string): Contai
 };
 
 /**
- * Keys codegen writes into wrangler.jsonc (`image`, `images`, `name`,
- * `max_instances`, `instance_type`, `image_vars`, `rollout_*`,
- * `scheduling_policy`). Unlike the runtime-only fields
- * the generated class reads off the imported definition, these exist only if
+ * Keys codegen must read statically: the ones it writes into wrangler.jsonc
+ * (`image`, `images`, `name`, `max_instances`, `instance_type`, `image_vars`,
+ * `rollout_*`, `scheduling_policy`), plus `sandbox`, which decides what the
+ * generated `containers.ts` exports. Unlike the runtime-only fields the
+ * generated class reads off the imported definition, these exist only if
  * codegen can read them — so one it cannot read is an error, never a skip.
  */
-const WRANGLER_KEYS = new Set(["buildArgs", "image", "images", "instanceType", "maxInstances", "name", "rollout", "schedulingPolicy"]);
+const STATIC_KEYS = new Set(["buildArgs", "image", "images", "instanceType", "maxInstances", "name", "rollout", "sandbox", "schedulingPolicy"]);
 
 /** The `rollout` keys codegen lifts into wrangler.jsonc. */
 const ROLLOUT_KEYS = new Set(["gracePeriodSeconds", "stepPercentage"]);
@@ -559,6 +560,16 @@ const liftContainerEntry = (
             policy.rollout = rolloutLiteral(initializer, exportName);
             break;
         }
+        case "sandbox": {
+            const sandbox = booleanLiteral(initializer);
+
+            if (sandbox === undefined) {
+                throw diagnosticAt(initializer, `container "${exportName}": \`sandbox\` must be a static true/false literal`);
+            }
+
+            base.sandbox = sandbox;
+            break;
+        }
         case "sleepAfter": {
             base.sleepAfter = stringOrNumberLiteral(initializer);
             break;
@@ -597,7 +608,7 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
         throw diagnosticAt(call, `container "${exportName}": defineContainer must be passed an inline object literal`);
     }
 
-    const entries = staticEntries(argument, WRANGLER_KEYS, `container "${exportName}"`);
+    const entries = staticEntries(argument, STATIC_KEYS, `container "${exportName}"`);
     const schedulingPolicy = schedulingPolicyOf(entries, exportName);
     const target = {
         base: { bindingName: containerBindingName(exportName), className: containerClassName(exportName), exportName } as ContainerBaseIR,

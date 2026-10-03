@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { LunoraTestOptions } from "../src/index";
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 const { mutation, query } = initLunora.dataModel().create();
 
@@ -81,21 +82,19 @@ const listMemos = query.use(rlsForTest(definePolicies([readPublicMemos]))).query
 const firstMemo = query.use(rlsForTest(definePolicies([readPublicMemos]))).query(async ({ ctx }) => ctx.db.query("memos").first());
 const takeMemos = query.use(rlsForTest(definePolicies([readPublicMemos]))).query(async ({ ctx }) => ctx.db.query("memos").take(10));
 
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 const start = (options?: LunoraTestOptions): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema, options);
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
 
 describe("lunoraTest — RLS enforcement", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("rejects a query dispatched against a protected table by a procedure that never engaged RLS", async () => {

@@ -1,3 +1,41 @@
+## @lunora/react [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.179...@lunora/react@1.0.0-alpha.180) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.170
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.104
+
+## @lunora/react [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.178...@lunora/react@1.0.0-alpha.179) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.169
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.103
+
+## @lunora/react [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.177...@lunora/react@1.0.0-alpha.178) (2026-10-02)
+
+### Features
+
+* fetch-only service entrypoints, ctx.services test fakes, resumable upload docs ([#938](https://github.com/anolilab/lunora/issues/938)) ([6b3ff8a](https://github.com/anolilab/lunora/commit/6b3ff8a2728663e053587ee03f9b8a059bcc1177))
+
+## @lunora/react [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.176...@lunora/react@1.0.0-alpha.177) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.102
+
+## @lunora/react [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.175...@lunora/react@1.0.0-alpha.176) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.168
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.101
+
 ## @lunora/react [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.174...@lunora/react@1.0.0-alpha.175) (2026-10-02)
 
 

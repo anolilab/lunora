@@ -2,7 +2,7 @@
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "{{name}}",
     "main": "src/server.ts",
-    "compatibility_date": "2026-06-10",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     // The SPA `rsbuild build` writes. Unknown paths fall back to `index.html` so
     // client-side routes deep-link; `/_lunora/*` always reaches the Worker first,

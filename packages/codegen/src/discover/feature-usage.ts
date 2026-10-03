@@ -1,4 +1,4 @@
-import type { Project, SourceFile } from "ts-morph";
+import type { ImportDeclaration, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
@@ -103,6 +103,57 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
 };
 
 /**
+ * Whether an import declaration compiles away: `import type { … } from "…"`, or
+ * a named-only import whose every specifier is `type`-qualified
+ * (`import { type A, type B } from "…"`). Such an import names a capability's
+ * types without using it — an events-only queue consumer importing a payload
+ * type, say — so it must not flip the usage probe and wire `ctx.<cap>` (nor,
+ * through {@link sourceCapabilitySignals}, `@lunora/config`'s binding inference).
+ * A side-effect import (`import "…"`), a default or namespace import, or a
+ * named list with at least one value specifier still counts.
+ */
+const isTypeOnlyImport = (declaration: ImportDeclaration): boolean => {
+    if (declaration.isTypeOnly()) {
+        return true;
+    }
+
+    const named = declaration.getNamedImports();
+
+    return (
+        declaration.getDefaultImport() === undefined &&
+        declaration.getNamespaceImport() === undefined &&
+        named.length > 0 &&
+        named.every((specifier) => specifier.isTypeOnly())
+    );
+};
+
+/** The two per-file signals the capability probe reads. */
+interface SourceCapabilitySignals {
+    /** The `ctx` helper names the file reads — see {@link contextPropertiesRead}. */
+    contextReads: ReadonlySet<string>;
+    /** Module specifiers of the file's static imports that survive compilation (type-only ones dropped — see {@link isTypeOnlyImport}). */
+    valueImports: ReadonlySet<string>;
+}
+
+/**
+ * The capability signals of one source file: its value-import specifiers and its
+ * `ctx.<property>` reads. The single reading behind codegen's usage probe —
+ * exported so `@lunora/config`'s binding inference marks a capability used on
+ * exactly the same imports and reads (matched against `CAPABILITY_PROBES`).
+ */
+const sourceCapabilitySignals = (sourceFile: SourceFile): SourceCapabilitySignals => {
+    return {
+        contextReads: contextPropertiesRead(sourceFile),
+        valueImports: new Set(
+            sourceFile
+                .getImportDeclarations()
+                .filter((declaration) => !isTypeOnlyImport(declaration))
+                .map((declaration) => declaration.getModuleSpecifierValue()),
+        ),
+    };
+};
+
+/**
  * Detect code-usage of every package-backed feature across the function files
  * under `lunora/`, in a single pass. The result feeds both worker gating (`ai` /
  * `payments`) and — via `buildStudioFeatures` — the studio nav.
@@ -117,21 +168,20 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const importSpecifiers = new Set(sourceFile.getImportDeclarations().map((declaration) => declaration.getModuleSpecifierValue()));
-        const contextProperties = contextPropertiesRead(sourceFile);
+        const { contextReads, valueImports } = sourceCapabilitySignals(sourceFile);
 
         for (const capability of CAPABILITIES) {
             if (usage[capability.key]) {
                 continue;
             }
 
-            if (importSpecifiers.has(capability.moduleSpecifier)) {
+            if (valueImports.has(capability.moduleSpecifier)) {
                 usage[capability.key] = true;
 
                 continue;
             }
 
-            if (capability.contextProperty !== undefined && contextProperties.has(capability.contextProperty)) {
+            if (capability.contextProperty !== undefined && contextReads.has(capability.contextProperty)) {
                 usage[capability.key] = true;
             }
         }
@@ -144,5 +194,5 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
     return usage;
 };
 
-export { contextPropertiesRead, discoverFeatureUsage };
-export type { FeatureUsage };
+export { contextPropertiesRead, discoverFeatureUsage, sourceCapabilitySignals };
+export type { FeatureUsage, SourceCapabilitySignals };

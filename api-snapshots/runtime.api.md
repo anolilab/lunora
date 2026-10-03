@@ -1162,6 +1162,7 @@ interface LogEvent {
     functionPath: string;
     level: ContextLogLevel;
     message: string;
+    rayId?: string;
     shardKey?: string;
     spanId?: string;
     traceId?: string;
@@ -1362,6 +1363,7 @@ interface ObservabilityEvent {
     parentSpanId?: string;
     path?: string;
     port?: number;
+    rayId?: string;
     scheme?: string;
     shardKey?: string;
     spanId?: string;
@@ -2106,6 +2108,7 @@ interface SpanEvent {
     ok: boolean;
     parentSpanId: string;
     dispatch?: boolean;
+    rayId?: string;
     sampled?: boolean;
     shardKey?: string;
     spanId: string;
@@ -2241,6 +2244,7 @@ interface WorkerOptions {
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;
+    authDiscoveryHandler?: (request: Request) => Promise<Response | undefined>;
     authHandler?: (request: Request) => Promise<Response | undefined>;
     authJurisdictionMove?: AuthJurisdictionMove;
     authorizeFanOut?: (identity: ResolvedIdentity | null, table: string, functionPath: string) => boolean | Promise<boolean>;

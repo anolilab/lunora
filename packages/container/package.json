@@ -1,6 +1,6 @@
 {
     "name": "@lunora/container",
-    "version": "1.0.0-alpha.64",
+    "version": "1.0.0-alpha.67",
     "description": "Cloudflare Containers for Lunora: defineContainer, generated Container DO classes, and the ctx.containers action surface",
     "keywords": [
         "cloudflare",
@@ -50,6 +50,10 @@
             "types": "./dist/otel.d.ts",
             "import": "./dist/otel.mjs"
         },
+        "./sandbox": {
+            "types": "./dist/sandbox/index.d.ts",
+            "import": "./dist/sandbox/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -70,7 +74,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.48"
+        "@cloudflare/sandbox": "catalog:cloudflare",
+        "@lunora/errors": "1.0.0-alpha.49"
     },
     "devDependencies": {
         "@cloudflare/containers": "catalog:cloudflare",

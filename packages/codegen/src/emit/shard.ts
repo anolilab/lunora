@@ -4,6 +4,7 @@ import type { AdvisorProcedure, AdvisoryFinding, MaskPoliciesResult, RlsPolicies
 
 import type { SchemaSnapshot } from "../../../../shared/schema-snapshot";
 import { hashSchemaSnapshot, serializeSchemaSnapshot } from "../../../../shared/schema-snapshot";
+import type { CapabilityKey } from "../capabilities";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "../global-backend";
 import type {
     AgentIR,
@@ -24,19 +25,11 @@ import { isShardByTable, plainQueues } from "../ir";
 import renderJsonData from "../json-data";
 import ADMIN_WRITE_METHODS from "./shard-admin";
 import {
-    emitAccessFragments,
-    emitAiFragments,
-    emitAnalyticsFragments,
-    emitBrowserFragments,
+    emitCapabilityShardWiring,
     emitEnvFragments,
     emitFlagsFragments,
     emitFlagsOverrides,
-    emitHyperdriveFragments,
-    emitImagesFragments,
-    emitKvFragments,
     emitNotifyFragments,
-    emitPipelinesFragments,
-    emitR2sqlFragments,
     emitRelationFanout,
     emitShardRegistryFragments,
     renderThrowingStub,
@@ -55,7 +48,6 @@ import {
     emitTopicFragments,
     emitWorkflowFragments,
     emitWorkflowsMetadataFragments,
-    emitX402Fragments,
 } from "./shard-runtime";
 import { emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
 import emitExternalSourceFragments from "./shard-sources";
@@ -68,33 +60,18 @@ interface EmitShardOptions {
     advisorProcedures?: ReadonlyArray<AdvisorProcedureProtection>;
     /** Agents declared via `defineAgent` exports in `lunora/agents.ts` — wires the typed `ctx.agents` producers. */
     agents?: ReadonlyArray<AgentIR>;
+    /** The package-backed capabilities the app uses (post platform gate) — each row of the `CAPABILITIES` table it names is wired per its `shardBinding` / `tier`. */
+    capabilities?: ReadonlySet<CapabilityKey>;
+
     containers?: ReadonlyArray<ContainerIR>;
     /** The single `defineEnv(...)` contract declared in `lunora/env.ts` — applies the accessor to the worker `env` to populate `ctx.env`. */
     env?: EnvIR;
     /** Statically-discovered `ctx.flags.<type>("key")` reads — the studio Flags page + reactive evaluation iterate these. */
     flagKeys?: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>;
-    /** A `lunora/` source reads `ctx.access` — wires the verified Cloudflare Access facade onto every ctx. */
-    hasAccessFacade?: boolean;
-    hasAi?: boolean;
-    /** A `lunora/` source reads `ctx.analytics` — wires the Analytics Engine write helper onto every ctx. */
-    hasAnalytics?: boolean;
-    /** A `lunora/` source reads `ctx.browser` — wires `ctx.browser` onto the ActionCtx only. */
-    hasBrowser?: boolean;
     /** The project declares `lunora/flags.ts` — wires `ctx.flags` (OpenFeature) onto every ctx. */
     hasFlags?: boolean;
-    /** A `lunora/` source reads `ctx.sql` (Hyperdrive) — wires `ctx.sql` onto the ActionCtx only. */
-    hasHyperdrive?: boolean;
-    /** A `lunora/` source reads `ctx.images` — wires `ctx.images` onto the ActionCtx only. */
-    hasImages?: boolean;
-    /** A `lunora/` source reads `ctx.kv` — wires `ctx.kv` onto every ctx. */
-    hasKv?: boolean;
     /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
     hasNotify?: boolean;
-    hasPayments?: boolean;
-    /** A `lunora/` source reads `ctx.pipelines` — wires `ctx.pipelines` onto the ActionCtx only. */
-    hasPipelines?: boolean;
-    /** A `lunora/` source reads `ctx.r2sql` (R2 SQL) — wires `ctx.r2sql` onto the ActionCtx only. */
-    hasR2sql?: boolean;
 
     /**
      * The target platform supports a vector store. `false` withholds the whole
@@ -104,8 +81,6 @@ interface EmitShardOptions {
      * `emitApp` withhold from the type surface for the same verdict.
      */
     hasVectors?: boolean;
-    /** A `lunora/` source reads `ctx.x402` — wires the agent-wallet pay rail onto the ActionCtx only. */
-    hasX402?: boolean;
     maskMetadata?: MaskMetadataIR;
     /** Custom mutators declared via `defineMutator` in `lunora/mutators.ts` — wires the `isCustomMutator` push-protocol override. */
     mutators?: ReadonlyArray<MutatorIR>;
@@ -135,28 +110,18 @@ interface EmitShardOptions {
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
-/* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each Cloudflare-capability fragment behind its own `has*`/length flag to assemble dense generated TS; the branching is the per-binding emission contract, not refactorable logic */
+/* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each declaration-driven fragment behind its own flag/length check to assemble dense generated TS; the branching is the per-feature emission contract, not refactorable logic */
 const emitShard = ({
     advisories = [],
     advisorProcedures = [],
     agents = [],
+    capabilities = new Set(),
     containers = [],
     env,
     flagKeys = [],
-    hasAccessFacade = false,
-    hasAi = false,
-    hasAnalytics = false,
-    hasBrowser = false,
     hasFlags = false,
-    hasHyperdrive = false,
-    hasImages = false,
-    hasKv = false,
     hasNotify = false,
-    hasPayments = false,
-    hasPipelines = false,
-    hasR2sql = false,
     hasVectors = true,
-    hasX402 = false,
     maskMetadata,
     mutators = [],
     queues = [],
@@ -191,23 +156,15 @@ const emitShard = ({
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.stringify(hashSchemaSnapshot(schemaSnapshot))}, json: ${JSON.stringify(schemaSnapshotJson)} };
 `;
     const snapshotArgument = schemaSnapshot === undefined ? "" : ", schemaSnapshot: LUNORA_SCHEMA_SNAPSHOT";
-    const { build: aiBuild, configField: aiConfigField } = emitAiFragments(hasAi);
-    // New Cloudflare-capability helpers, mirroring `emitAiFragments`. `kv` /
-    // `analytics` ride EVERY ctx (deterministic-read / fire-and-forget-write);
-    // `images` / `sql` / `browser` are ActionCtx-only (external, non-deterministic
-    // I/O) and are woven onto the action ctx object only — see the `isAction` gate.
-    const accessFragments = emitAccessFragments(hasAccessFacade);
-    const kvFragments = emitKvFragments(hasKv);
+    // The package-backed `ctx.*` helpers, wired off the CAPABILITIES table in
+    // table order. Each row's `tier` places it: `"every"` (e.g. `kv`, `analytics`,
+    // `access`) on every ctx, `"action"` (e.g. `ai`, `images`, `sql`, `browser`)
+    // on the action ctx object only — see the `isAction` gate.
+    const capabilityWiring = emitCapabilityShardWiring(capabilities);
     const flagsFragments = emitFlagsFragments(hasFlags, base.flags);
     const flagsOverrides = emitFlagsOverrides(flagKeys, hasFlags, base.flags);
     const notifyFragments = emitNotifyFragments(hasNotify);
     const envFragments = emitEnvFragments(env);
-    const analyticsFragments = emitAnalyticsFragments(hasAnalytics);
-    const imagesFragments = emitImagesFragments(hasImages);
-    const hyperdriveFragments = emitHyperdriveFragments(hasHyperdrive);
-    const browserFragments = emitBrowserFragments(hasBrowser);
-    const r2sqlFragments = emitR2sqlFragments(hasR2sql);
-    const pipelinesFragments = emitPipelinesFragments(hasPipelines);
     const { build: queuesBuild, contextField: queuesContextField, importLines: queueImportLines, specs: queueSpecs } = emitQueueFragments(plainQueues(queues));
     const { build: topicsBuild, contextField: topicsContextField, importLines: topicImportLines, specs: topicSpecs } = emitTopicFragments(topics, queues);
     const servicesFragments = emitServiceFragments(services, base.server);
@@ -230,12 +187,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         contextField: paymentsContextField,
         imports: paymentsImports,
         stub: paymentStub,
-    } = emitPaymentFragments(hasPayments);
-    // `ctx.x402` is ActionCtx-only and money-spending, so — like `ctx.sql` /
-    // `ctx.browser` / `ctx.images` — it is built AND attached only inside the
-    // `if (isAction)` block below (it exposes no `contextField`: a query/mutation
-    // ctx never carries the property at runtime, not just in types).
-    const { build: x402Build, configField: x402ConfigField, imports: x402Imports, stub: x402Stub } = emitX402Fragments(hasX402);
+    } = emitPaymentFragments(capabilities.has("payments"));
     // Drift guard + the data we emit: the advisor's `Finding`s must stay
     // assignable to the DO's `AdvisoryFinding` (the generated `LUNORA_ADVISORIES`
     // is typed against it). This assignment fails `tsc` if the two shapes drift —
@@ -405,22 +357,11 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         );
     }
 
-    if (hasAi) {
-        importLines.push(`import type { AiBindingLike, LunoraAi } from "@lunora/ai";`, `import { createAi } from "@lunora/ai";`);
-    }
-
     importLines.push(
-        ...accessFragments.importLines,
-        ...kvFragments.importLines,
+        ...capabilityWiring.importLines,
         ...flagsFragments.importLines,
         ...notifyFragments.importLines,
         ...envFragments.importLines,
-        ...analyticsFragments.importLines,
-        ...imagesFragments.importLines,
-        ...hyperdriveFragments.importLines,
-        ...browserFragments.importLines,
-        ...r2sqlFragments.importLines,
-        ...pipelinesFragments.importLines,
         ...containerImportLines,
         ...workflowImportLines,
         ...queueImportLines,
@@ -428,7 +369,6 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         ...servicesFragments.importLines,
         ...agentImportLines,
         ...paymentsImports,
-        ...x402Imports,
         ``,
         `import schema from "../schema.js";`,
         // Local-first sync registries are pulled in alongside the function table
@@ -748,31 +688,21 @@ ${schema.tables
     // the notify facade needs `log`/`metrics`, which are built later in the context
     // builder, so its build is injected after them via `notifyBuild` below. Its
     // `contextField` (the `notify` / `push` ctx keys) still rides `everyContextField`.
-    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${analyticsFragments.build}${envFragments.build}${secretsBuild}`;
-    const everyContextField = `${accessFragments.contextField}${kvFragments.contextField}${flagsFragments.contextField}${notifyFragments.contextField}${analyticsFragments.contextField}${envFragments.contextField}\n                secrets,`;
+    const everyContextBuild = `${capabilityWiring.everyBuild}${flagsFragments.build}${envFragments.build}${secretsBuild}`;
+    const everyContextField = `${capabilityWiring.everyFields}${flagsFragments.contextField}${notifyFragments.contextField}${envFragments.contextField}\n                secrets,`;
     // The relocated notify build — emitted after `log`/`metrics` are in scope.
     const notifyBuild = notifyFragments.build;
 
-    // `ctx.images` / `ctx.sql` (Hyperdrive) / `ctx.browser` are ActionCtx-ONLY:
-    // external, non-deterministic I/O the typed `ActionCtx` exposes but
-    // `QueryCtx`/`MutationCtx` do not. We enforce that at the VALUE level too —
-    // the binds run AND the props are attached only when the executing function
-    // is an `action`, so a query/mutation handler never even has `ctx.sql` on the
-    // object (its type already forbids it; this makes the runtime match). Gated
-    // behind a single `isAction` check derived from the dispatch registry.
-    // Each helper's ctx field is named after its local, so one list drives both
-    // the attach here and the strip from a composed query's view of an action ctx.
-    const actionOnlyFields = [
-        ...(hasAi ? ["ai"] : []),
-        ...(hasImages ? ["images"] : []),
-        ...(hasHyperdrive ? ["sql"] : []),
-        ...(hasBrowser ? ["browser"] : []),
-        ...(hasR2sql ? ["r2sql"] : []),
-        ...(hasPipelines ? ["pipelines"] : []),
-        ...(hasX402 ? ["x402"] : []),
-        ...(services.length > 0 ? ["services"] : []),
-    ];
-    const actionOnlyBuild = `${aiBuild}${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${x402Build}${servicesFragments.build}`;
+    // The ActionCtx-ONLY helpers (`tier: "action"` capabilities, then services): external, non-deterministic I/O the typed
+    // `ActionCtx` exposes but `QueryCtx`/`MutationCtx` do not. We enforce that at
+    // the VALUE level too — the binds run AND the props are attached only when the
+    // executing function is an `action`, so a query/mutation handler never even
+    // has `ctx.sql` on the object (its type already forbids it; this makes the
+    // runtime match). Each helper's ctx field is named after its local, so one
+    // list drives both the attach here and the strip from a composed query's view
+    // of an action ctx.
+    const actionOnlyFields = [...capabilityWiring.actionFields, ...(services.length > 0 ? ["services"] : [])];
+    const actionOnlyBuild = `${capabilityWiring.actionBuild}${servicesFragments.build}`;
 
     return `${GENERATED_HEADER}${importLines.join("\n")}
 
@@ -846,9 +776,9 @@ export interface ShardDOConfig {
     /** \`unknown\` because \`@lunora/scheduler\`'s \`Scheduler\` is not assignable to \`SchedulerLike\`; the shard casts it. */
     scheduler?: (env: Record<string, unknown>) => unknown;
     /** \`origin\` is the origin the current \`/rpc\` request reached the worker on — the fallback base for signed object URLs when no \`publicBaseUrl\` is configured. \`undefined\` off the synchronous dispatch path. */
-    storage?: (env: Record<string, unknown>, origin?: string) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}${shardRegistryFragments.configField}
+    storage?: (env: Record<string, unknown>, origin?: string) => unknown;${vectorsConfigField}${capabilityWiring.configFields}${flagsFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}${shardRegistryFragments.configField}
 }
-${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "head", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${x402Stub}
+${renderThrowingStub("schedulerStub", schedulerMissing, ["cancel", "runAfter", "runAt"])}${renderThrowingStub("storageStub", storageMissing, ["delete", "download", "getMetadata", "getSignedUrl", "getUrl", "head", "list", "upload"], { sync: ["getUrl"] })}${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${capabilityWiring.stubs}${paymentStub}
 ${DISPATCH_RUN_SOURCE}
 
 /**

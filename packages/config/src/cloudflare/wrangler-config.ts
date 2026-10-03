@@ -19,6 +19,39 @@ interface TailConsumer {
     service?: string;
 }
 
+/**
+ * `observability.traces` — Workers Traces. `destinations` names OpenTelemetry
+ * export destinations configured in the dashboard; `persist: false` exports
+ * without also storing in Cloudflare (default `true`).
+ * https://developers.cloudflare.com/workers/observability/opentelemetry-export/
+ */
+interface WranglerObservabilityTraces {
+    destinations?: ReadonlyArray<string>;
+    enabled?: boolean;
+    /** Fraction of requests traced, 0–1. */
+    head_sampling_rate?: number;
+    persist?: boolean;
+}
+
+/**
+ * `observability.logs` — Workers Logs. Same export knobs as traces, plus
+ * `invocation_logs` (the per-invocation summary line; default `true`).
+ */
+interface WranglerObservabilityLogs extends WranglerObservabilityTraces {
+    invocation_logs?: boolean;
+}
+
+/** The wrangler `observability` block (Workers Logs + Traces). */
+interface WranglerObservability {
+    enabled?: boolean;
+    /** Fraction of requests logged, 0–1 (wrangler's default is 1: every request). */
+    head_sampling_rate?: number;
+    /** Workers Issues — detects and groups production failures. */
+    issues?: { enabled?: boolean };
+    logs?: WranglerObservabilityLogs;
+    traces?: WranglerObservabilityTraces;
+}
+
 /** A wrangler `containers[]` entry (parsed from untrusted JSONC). */
 interface WranglerContainerEntry {
     class_name?: string;
@@ -72,6 +105,12 @@ interface WranglerConfig {
     // Workers AI binding (`env.AI`). Self-describing { binding }; parsed from
     // untrusted JSONC, so it may be `null`.
     ai?: { binding?: unknown } | null;
+    // AI Search single-instance bindings (`{ binding, instance_name }`). The
+    // instance must already exist at deploy time; only the shape is checked.
+    ai_search?: ReadonlyArray<{ binding?: string; instance_name?: string; remote?: boolean } | null | undefined>;
+    // AI Search namespace bindings (`{ binding, namespace }`) — what `ctx.aiSearch`
+    // reads. Wrangler creates a missing namespace on deploy.
+    ai_search_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string; remote?: boolean } | null | undefined>;
     // Analytics Engine datasets (self-describing: { binding, dataset }, dataset
     // defaults to the binding name). See `validateAnalyticsBindings`.
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string } | null | undefined>;
@@ -164,11 +203,7 @@ interface WranglerConfig {
     // outbound fetch). Cert material lives in Cloudflare, referenced by id. See
     // `validateMtlsCertificates`.
     mtls_certificates?: ReadonlyArray<{ binding?: string; certificate_id?: string } | null | undefined>;
-    observability?: {
-        enabled?: boolean;
-        head_sampling_rate?: number;
-        logs?: { enabled?: boolean; head_sampling_rate?: number; invocation_logs?: boolean };
-    };
+    observability?: WranglerObservability;
     // Pipelines (R2-backed streaming ingestion). The `pipeline` name is a remote
     // resource (`wrangler pipelines create`) Lunora can't mint — warn, don't
     // fail. See `validatePipelineBindings`.
@@ -190,7 +225,9 @@ interface WranglerConfig {
     // consumer can name the real bucket in a diagnostic instead of the binding
     // alias. Entries stay nullable: the shared array validator reports a
     // non-object entry itself, so narrowing here would only move the failure.
-    r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string } | null | undefined>;
+    // `jurisdiction` addresses a bucket created inside a data-residency
+    // jurisdiction (`wrangler r2 bucket create --jurisdiction`).
+    r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string; jurisdiction?: string } | null | undefined>;
     // The secret names the Worker requires (`wrangler dev` loads only these from
     // `.dev.vars`; `wrangler deploy` fails while one is unset). Untrusted JSONC,
     // so `validateSecretsRequired` checks it is a list of names.
@@ -236,4 +273,14 @@ interface WranglerValidationReport {
     warnings: string[];
 }
 
-export type { TailConsumer, WranglerConfig, WranglerContainerEntry, WranglerQueueConsumer, WranglerValidationReport, WranglerWorkflowEntry };
+export type {
+    TailConsumer,
+    WranglerConfig,
+    WranglerContainerEntry,
+    WranglerObservability,
+    WranglerObservabilityLogs,
+    WranglerObservabilityTraces,
+    WranglerQueueConsumer,
+    WranglerValidationReport,
+    WranglerWorkflowEntry,
+};

@@ -77,6 +77,38 @@ describe("buildBindingManifest", () => {
         expect(manifest.unknown).toStrictEqual([]);
     });
 
+    it("models a service binding by the Worker it calls, instead of reporting services as unknown", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            services: [
+                { binding: "SERVICE_PARSER", service: "document-parser" },
+                { binding: "SERVICE_GATEWAY", entrypoint: "Gateway", service: "llm-gateway" },
+            ],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "SERVICE_GATEWAY", resource: "llm-gateway", type: "service" },
+            { binding: "SERVICE_PARSER", resource: "document-parser", type: "service" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
+    it("models both AI Search sections instead of reporting them as unknown", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            ai_search: [{ binding: "BLOG_SEARCH", instance_name: "blog" }],
+            ai_search_namespaces: [{ binding: "AI_SEARCH", namespace: "default" }],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "BLOG_SEARCH", resource: "blog", type: "ai_search" },
+            { binding: "AI_SEARCH", resource: "default", type: "ai_search_namespace" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
     it("marks a durable object sqlite only when this worker declares the class", () => {
         expect.assertions(1);
 

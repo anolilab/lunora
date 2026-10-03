@@ -278,13 +278,16 @@ interface PlatformCapabilities {
     features: {
         agents?: Capability;
         ai?: Capability;
+        aiSearch?: Capability;
         analytics?: Capability;
+        artifacts?: Capability;
         authJurisdictionMove?: Capability;
         browser?: Capability;
         commitOrderedTables?: Capability;
         containerEgressPolicy?: Capability;
         containerRuntimeScheduling?: Capability;
         containers?: Capability;
+        containerSandboxTools?: Capability;
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
         durableStreams?: Capability;

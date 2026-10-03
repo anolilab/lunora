@@ -16,6 +16,9 @@ export { diffSchemaSnapshots, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot }
 export type { LintSchemaOptions } from "./advisor";
 export { formatAdvisories, lintSchema, toAdvisorContext } from "./advisor";
 export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnosticNames, sortedUniqueNames } from "./blocking";
+// The capability table's usage-probe facets, read by `@lunora/config` (see below).
+export type { CapabilityKey } from "./capabilities";
+export { CAPABILITY_PROBES } from "./capabilities";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { AGENTS_FILENAME, discoverAgents } from "./discover/agents";
 // The canonical `lunora/` source walk — exported so a consumer deciding what
@@ -25,6 +28,11 @@ export { listLunoraSourceFiles } from "./discover/ast";
 export { default as discoverAuthApiCalls } from "./discover/authapi-calls";
 export { CONTAINERS_FILENAME, discoverContainers } from "./discover/containers";
 export { default as discoverCrons } from "./discover/crons";
+// The capability probe's per-file reading (value imports + `ctx.<property>`
+// reads) — exported, with the table's probe facets above, so `@lunora/config`'s
+// binding inference marks a capability used on exactly the signals codegen does.
+export type { SourceCapabilitySignals } from "./discover/feature-usage";
+export { sourceCapabilitySignals } from "./discover/feature-usage";
 export { discoverFlags, FLAGS_FILENAME } from "./discover/flags";
 export { default as discoverFunctions } from "./discover/functions";
 export { default as discoverHttpRoutes } from "./discover/http-routes";

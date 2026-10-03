@@ -29,8 +29,8 @@
  * something the app declares in its schema or a declaration file). The
  * gate-bearing keys are:
  *
- * `agents`, `ai`, `analytics`, `browser`, `commitOrderedTables`,
- * `containerEgressPolicy`, `containerRuntimeScheduling`, `containers`,
+ * `agents`, `ai`, `aiSearch`, `analytics`, `artifacts`, `browser`, `commitOrderedTables`,
+ * `containerEgressPolicy`, `containerRuntimeScheduling`, `containerSandboxTools`, `containers`,
  * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
@@ -81,7 +81,7 @@
  * for exactly this — `PlatformSignals` in `platform-target.ts`, the second gate
  * pass that diagnoses app-declared features with no `ctx.*` capability row
  * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
- * `containerRuntimeScheduling`, `cronTriggers`,
+ * `containerRuntimeScheduling`, `containerSandboxTools`, `cronTriggers`,
  * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
  * `relationGraph`, `secrets`, `services`, `topics`, `vectorStore`, `workflowRollback`,
  * `workflowSchedules`).
@@ -147,8 +147,23 @@ export interface PlatformCapabilities {
          * `ctx.trace` / `ctx.metrics`, which need no key.
          */
         ai?: Capability;
+
+        /**
+         * Cloudflare AI Search (formerly AutoRAG) — `ctx.aiSearch`, the raw
+         * `ai_search_namespaces` binding passed through as-is, on ActionCtx only.
+         *
+         * Its own key rather than a facet of `ai` or `vectorStore`: it is a
+         * managed retrieval service (chunking, embedding, the hybrid index and
+         * reranking all live on the instance), not inference and not a vector
+         * index a host could stand in for. No Lunora host contract carries it —
+         * a second host would have to supply an `AiSearchNamespace` look-alike.
+         * Gate-bearing through `CAPABILITY_TO_FEATURE`.
+         */
+        aiSearch?: Capability;
         /** Analytics / observability sinks. */
         analytics?: Capability;
+        /** Git-backed versioned repos via an Artifacts binding (`ctx.artifacts`). */
+        artifacts?: Capability;
 
         /**
          * Copying DO-backed auth from its un-pinned object into the
@@ -224,6 +239,19 @@ export interface PlatformCapabilities {
          * result back should say so in this note.
          */
         containers?: Capability;
+
+        /**
+         * The Sandbox SDK helpers on a `defineContainer({ sandbox: true })`
+         * container: structured file operations (`Files`), directory backups to
+         * R2 (`DirectoryBackup`) and S3-compatible bucket mounts (`S3Mount`),
+         * from `@cloudflare/sandbox`. All three run the `sandbox-shim` helper
+         * through the native `ctx.container.exec()`, and the backup and mount
+         * helpers route the container's storage traffic through Worker
+         * entrypoints via `interceptOutboundHttp`. A host that runs a container
+         * but has neither cannot carry them. Gate-bearing: codegen sets the
+         * `containerSandboxTools` `PlatformSignals` flag off `ContainerIR.sandbox`.
+         */
+        containerSandboxTools?: Capability;
 
         /**
          * DECLARED cron triggers — the `cronJobs()` registrations codegen lifts

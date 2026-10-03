@@ -155,6 +155,8 @@ describe("wranglerToAlchemy", () => {
 
         const { source, unsupported } = wranglerToAlchemy({
             ...BASE,
+            ai_search: [{ binding: "BLOG_SEARCH", instance_name: "blog" }],
+            ai_search_namespaces: [{ binding: "AI_SEARCH", namespace: "default" }],
             assets: { binding: "STATIC", directory: "./public" },
             flagship: [{ app_id: "app-abc", binding: "FLAGS" }],
             hyperdrive: [{ binding: "PG", id: "hd-1" }],
@@ -165,6 +167,8 @@ describe("wranglerToAlchemy", () => {
         } as WranglerConfigShape);
 
         expect(unsupported.toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "ai_search",
+            "ai_search_namespaces",
             `assets.binding "STATIC" (Alchemy 2 always binds assets as ASSETS)`,
             "flagship",
             "hyperdrive (Alchemy creates a Hyperdrive config from origin credentials wrangler.jsonc does not carry)",

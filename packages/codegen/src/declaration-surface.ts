@@ -37,6 +37,8 @@ import { LunoraError } from "@lunora/errors";
 import type { Project } from "ts-morph";
 
 import assertRequiredPackages from "./assert-required-packages";
+import type { CapabilityKey } from "./capabilities";
+import { usedCapabilities } from "./capabilities";
 import { discoverAgents } from "./discover/agents";
 import { discoverContainers } from "./discover/containers";
 import discoverCrons from "./discover/crons";
@@ -128,6 +130,8 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
  */
 interface DeclarationSurface {
     agents: ReadonlyArray<AgentIR>;
+    /** {@link DeclarationSurface.featureUsage} as the capability set every emitter takes — derived once, here. */
+    capabilities: ReadonlySet<CapabilityKey>;
     containers: ReadonlyArray<ContainerIR>;
     /** Cron jobs discovered from `cronJobs()` registrations — read by the platform gate here, emitted downstream. */
     crons: ReadonlyArray<CronJobIR>;
@@ -289,6 +293,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // Read off the container IR: the policy is deploy configuration codegen
         // already lifts statically, so no separate AST signal is needed.
         containerRuntimeScheduling: containers.some((container) => container.schedulingPolicy === "durable_object"),
+        containerSandboxTools: containers.some((container) => container.sandbox === true),
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
         queues: queues.length > 0,
@@ -314,6 +319,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         workflowSchedules: workflows.some((workflow) => workflow.schedules !== undefined),
     });
     const featureUsage = platformGate.usage;
+    const capabilities = usedCapabilities(featureUsage);
     // The gate's `vectorStore` verdict, named once for both consumers below.
     // `undefined` means the app never declared a vector index, which must not
     // withhold anything; only an explicit `false` is a rejection.
@@ -349,6 +355,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
 
     return {
         agents,
+        capabilities,
         containers,
         crons,
         dataModelContent: emitDataModel(schema),
@@ -369,25 +376,15 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         queues,
         serverContent: emitServer({
             agents,
+            capabilities,
             containers,
             env,
-            hasAccessFacade: featureUsage.access,
-            hasAi: featureUsage.ai,
-            hasAnalytics: featureUsage.analytics,
-            hasBrowser: featureUsage.browser,
             // The gate's verdict, not the raw declaration: a `.vectorize()` column
             // declares the feature without importing anything, so `featureUsage`
             // never sees it. The emitter AND's it with `schema.vectorIndexes`.
             hasVectors: vectorStoreSupported,
             hasFlags,
-            hasHyperdrive: featureUsage.hyperdrive,
-            hasImages: featureUsage.images,
-            hasKv: featureUsage.kv,
             hasNotify,
-            hasPayments: featureUsage.payments,
-            hasPipelines: featureUsage.pipelines,
-            hasR2sql: featureUsage.r2sql,
-            hasX402: featureUsage.x402,
             identity,
             queues,
             schema,

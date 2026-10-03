@@ -229,26 +229,113 @@ await ctx.containers.agentComputer.get(otherTaskId).start({ snapshot: saved }); 
     supports this. Codegen refuses `schedulingPolicy: "durable_object"` with a `platform_unsupported_feature` diagnostic on the Node and celld targets.
 </Callout>
 
-### Sandbox SDK helpers
+## Sandbox helpers: files, backups and bucket mounts
 
-A `LunoraContainer` is already the Durable Object that owns its container, which
-is the model [Sandbox SDK 1.0](https://developers.cloudflare.com/sandbox/) is
-built on. Its helpers take `ctx.container` directly, so a hand-authored subclass
-can use them next to the per-instance images and snapshots above. Examples are
-`Files` for streaming file I/O, `S3Mount` for mounting an R2 bucket, and
-`DirectoryBackup` for saving a directory to R2. `Files` needs the image to ship
-the SDK's `sandbox-shim`:
+[Sandbox SDK 1.0](https://developers.cloudflare.com/sandbox/) moved container
+control into the app's own Durable Object, which is what a `LunoraContainer`
+already is. Its three helpers, `Files`, `DirectoryBackup` and `S3Mount`, are
+built in. Opt a container in with `sandbox: true`. The helpers run Cloudflare's
+`sandbox-shim` binary inside the container, which must be at
+`/usr/local/bin/sandbox-shim`. Cloudflare publishes it as the image
+`cloudflare/sandbox`, which contains nothing but the shim. Copy it into your own
+image, pinned to the version matching `@cloudflare/sandbox`:
+
+```dockerfile title="containers/workspace/Dockerfile"
+FROM debian:trixie-slim
+COPY --from=docker.io/cloudflare/sandbox:1.0.0 /usr/local/bin/sandbox-shim /usr/local/bin/sandbox-shim
+```
+
+```ts title="lunora/containers.ts"
+export const workspace = defineContainer({
+    image: "./containers/workspace",
+    sandbox: true,
+    backups: { bucket: "WORKSPACE_BACKUPS", prefix: "workspaces/" },
+});
+```
+
+`sandbox` must be a `true`/`false` literal: codegen reads it to decide what the
+generated container class extends and which Worker entrypoints to export. An app
+that never opts in never loads `@cloudflare/sandbox`.
+
+### Files
+
+`ctx.containers.workspace.get(id).files` reads and writes the instance's own
+disk, the same disk `exec` and `spawn` run against. It starts the container if
+it is stopped.
 
 ```ts
-import { Files } from "@cloudflare/sandbox";
-import { LunoraContainer } from "@lunora/container/do";
+const box = ctx.containers.workspace.get(userId);
 
-export class AgentComputerContainer extends LunoraContainer {
-    public async writeTask(script: string): Promise<void> {
-        await new Files(this.ctx.container!).writeFile("/tmp/task.sh", script);
-    }
-}
+await box.files.mkdir("/workspace/src", { recursive: true });
+await box.files.writeFile("/workspace/src/main.ts", source);
+
+const entries = await box.files.readDirectory("/workspace/src");
+const text = await (await box.files.readFile("/workspace/out.log")).text();
 ```
+
+`readFile` streams: the response body applies backpressure to the read inside
+the container, so a large file never sits in Worker memory. `writeFile` takes a
+string, bytes or a `ReadableStream`. A filesystem failure rejects with a
+`LunoraError` whose `data.errno` is the Linux code: `ENOENT` is `NOT_FOUND`,
+`EACCES`/`EPERM` are `FORBIDDEN`, and `EEXIST`/`ENOTEMPTY`/`EBUSY` are
+`CONFLICT`.
+
+### Backups
+
+`backup(directory)` saves a directory to the R2 bucket named in `backups` and
+returns a plain record. Store it, and pass it to `restore` later, on this
+instance or another, even one running a newer image:
+
+```ts
+const record = await box.backup("/workspace", { exclude: ["node_modules"], gitignore: true });
+await ctx.runMutation(internal.workspaces.saveBackup, { userId, record });
+
+// Later, on a fresh instance:
+await ctx.containers.workspace.get(userId).restore(record);
+```
+
+The container never holds bucket credentials. Each backup or restore goes
+through the `DirectoryBackupGateway` Worker entrypoint, which grants the
+container access to exactly one object for the length of that one operation, and
+every restore checks the object's SHA-256. A restore swaps the directory in only
+after the download is verified, so a rejected restore leaves the target as it
+was. `deleteBackup(record)` removes the object.
+
+`snapshot()` (above) and `backup()` differ in scope. A snapshot captures the
+whole filesystem and restores only into the same container. A backup captures
+one directory into your own bucket and restores across images.
+
+### Bucket mounts
+
+`mount()` attaches an S3-compatible bucket (R2, S3, GCS) at a path inside the
+container. Credentials are passed by **secret name**: the Durable Object reads
+them from the Worker env, and the `S3Gateway` entrypoint signs every storage
+request, so the keys never enter the container.
+
+```ts
+await box.mount({
+    path: "/mnt/datasets",
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    region: "auto",
+    bucket: "datasets",
+    access: "read-only",
+    credentials: { accessKeyIdSecret: "R2_ACCESS_KEY_ID", secretAccessKeySecret: "R2_SECRET_ACCESS_KEY" },
+});
+```
+
+For R2 this needs an R2 API token's S3 keys; an R2 bucket binding is not used.
+A mounted path is not a POSIX filesystem, so don't use it for locks or atomic
+renames. `inspectMount(path)` reports a mount's state, and `unmount(path)`
+removes it.
+
+<Callout type="warn">
+    A bucket mount cannot be combined with an egress policy (`allowedHosts`, `deniedHosts`, `interceptHttps`, outbound handlers or the runtime `egress`
+    controls) on the same container: the policy's catch-all would take the mount's storage traffic. `mount()` refuses with `BAD_REQUEST` in that case. Backups
+    do work with an egress policy, because their route is registered before the policy's catch-all at every start.
+</Callout>
+
+Codegen refuses `sandbox: true` on the Node and celld targets with a
+`platform_unsupported_feature` diagnostic (`containerSandboxTools`).
 
 ## Running a command: `exec`
 
@@ -355,6 +442,108 @@ cannot open it either.
     pauses for a human on `exec` and on any non-idempotent `fetch`. A `fetch` cannot be used to reach the exec route around that gate — `/__lunora/*` is
     reserved and `handle.fetch` refuses it — but restrict what can run inside the container too, rather than relying on the caller.
 </Callout>
+
+## Streaming a process: `spawn`
+
+`exec` buffers: it returns once the command has exited, with at most 1MB of
+output. `spawn` is the streaming counterpart for long builds, live logs and
+interactive programs. It needs the runtime's native exec, and is available on
+named instances (`.get(name)`), since a process belongs to one container:
+
+```ts
+const process = await ctx.containers.codeRunner.get(userId).spawn("pnpm", {
+    args: ["test", "--reporter=dot"],
+    cwd: "/workspace",
+    timeoutMs: 600_000,
+});
+
+for await (const chunk of process.stdout!) {
+    // Forward to a client, write to R2, …
+}
+
+const code = await process.exitCode;
+```
+
+The result carries `stdout`/`stderr` streams, `exitCode` (a promise), `kill()`
+and the process `pid`. The container finishes a process's output, and settles
+its exit code, only while every output stream is being drained. Lunora drains
+both for you into a 1MB buffer per stream, so you can read them in any order,
+or await `exitCode` before reading, as long as the stream you are not reading
+stays under that size. For a noisier process, read both concurrently. Pass `stdin: true` to get a writable `stdin`, or a
+`ReadableStream` to pipe in as the whole input. Pass `pty: { cols, rows }` to
+run on a pseudo-terminal: stderr is merged into `stdout`, and `resize()` works.
+An `AbortSignal` in `signal` kills the process.
+
+The container is started if it is stopped, and kept awake until the process
+exits. `sleepAfter` does not stop it underneath a running process. A spawned
+process has no default deadline, so set `timeoutMs` for anything that should not
+run indefinitely.
+
+## Browser terminal
+
+`terminal(request)` answers a WebSocket upgrade with a shell on a PTY, bridged to
+the socket. Browser routes have no `ctx.containers`, so reach the instance with
+`getContainer(env, exportName, name)`:
+
+```ts title="lunora/http.ts"
+import { getContainer } from "@lunora/container";
+
+app.get("/terminal", async (c) => {
+    const userId = await requireUser(c); // whoever holds the socket has a shell
+    return getContainer(c.env, "workspace", userId).terminal(c.req.raw, { command: "bash", cwd: "/workspace" });
+});
+```
+
+The wire protocol is what xterm.js speaks. **Binary** frames are keystrokes, and
+a **text** frame `{"cols":120,"rows":40}` resizes the terminal. Any other text
+frame counts as keystrokes too. Output arrives as
+binary frames, the socket closes with `1000` when the shell exits, and closing
+the socket kills the shell. The initial size comes from the request's
+`?cols=&rows=` search params, else `80×24`.
+
+```ts title="client"
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
+
+const term = new Terminal();
+const fit = new FitAddon();
+term.loadAddon(fit);
+term.open(element);
+fit.fit();
+
+const socket = new WebSocket(`wss://${location.host}/terminal?cols=${term.cols}&rows=${term.rows}`);
+socket.binaryType = "arraybuffer";
+socket.onmessage = (event) => term.write(new Uint8Array(event.data));
+term.onData((data) => socket.send(new TextEncoder().encode(data)));
+term.onResize(({ cols, rows }) => socket.send(JSON.stringify({ cols, rows })));
+```
+
+The bridge runs where `terminal()` is called, on top of `spawn`. No WebSocket
+crosses into the container Durable Object, which keeps its reserved
+`/__lunora/*` routes closed to request content.
+
+## Previews
+
+A dev server in the container is already reachable through `fetch`: route a
+browser request to its port with `.port(n)`, WebSocket upgrades (HMR) included.
+
+```ts title="lunora/http.ts"
+app.all("/previews/:id/*", async (c) => {
+    await requireOwner(c, c.req.param("id"));
+    const path = c.req.path.replace(`/previews/${c.req.param("id")}`, "") || "/";
+    const url = new URL(path + new URL(c.req.url).search, "http://container");
+
+    return getContainer(c.env, "workspace", c.req.param("id")).port(5173).fetch(new Request(url, c.req.raw));
+});
+```
+
+The server sees `Host: container`, and a link that starts with `/` leaves the
+`/previews/<id>` prefix. Use relative links, or serve each preview on its own
+hostname: a wildcard route (`*.preview.example.com/*`) where the Worker reads
+the instance id from the subdomain, so the app runs at `/` and absolute links
+work. To share a preview, mint an expiring token, store it, and check it in the
+route before forwarding. Authenticate whoever mints the token, because a token
+is access to the dev server.
 
 ## Multi-port containers
 
@@ -690,6 +879,178 @@ ENTRYPOINT ["node", "server.mjs"]
 Disk is **ephemeral**: every (re)start gives a fresh filesystem. For
 persistence, write to [`@lunora/storage`](/docs/packages/storage) (R2).
 
+## Pushing to a Cloudflare Artifacts repo
+
+A container's disk is ephemeral. When what it produces is a tree of files you
+want history and diffs for (an agent's workspace, a generated site, a build
+output), push it to a [Cloudflare Artifacts](/docs/packages/bindings#artifacts--lunorabindingsartifacts)
+repo. The Artifacts binding can't write files, so the push comes from `git` inside
+the container, authenticated with short-lived tokens the action mints.
+
+The build runs code the container fetched (`pnpm install`, `pnpm run build`, and
+every dependency's scripts). The recipe keeps tokens out of the build's
+environment and out of the checkout, which stops a careless build from picking
+one up. It does **not** isolate the push from a build that is trying to: see
+[the rules below](#keeping-the-token-contained) before you run code you don't trust.
+
+```ts
+import { internalAction } from "@/lunora/_generated/server";
+import { v } from "@lunora/values";
+
+// Single-quoted: `exec` runs the command unshelled, so `sh -c` expands the
+// variables inside the container. `core.hooksPath=/dev/null` and `--no-verify`
+// keep hooks the build may have written from running.
+const CHECKOUT =
+    'rm -rf /work && if [ "$EMPTY" = 1 ]; then git init -b "$BRANCH" /work; else git -c core.hooksPath=/dev/null clone --branch "$BRANCH" "$REMOTE" /work; fi';
+const BUILD = "pnpm install --frozen-lockfile && pnpm run build";
+// Prints `unchanged` instead of committing when the build changed nothing.
+const COMMIT =
+    'git -C /work add -A && if git -C /work diff --cached --quiet; then echo unchanged; else git -C /work -c core.hooksPath=/dev/null -c user.name=lunora -c user.email=bot@example.com commit --no-verify -q -m "$MESSAGE"; fi';
+const PUSH = 'git -C /work -c core.hooksPath=/dev/null push "$REMOTE" "HEAD:$BRANCH"';
+
+/**
+ * Hand a token to one `git` process as an `http.<remote>.extraHeader` through
+ * git's `GIT_CONFIG_*` environment: it is in neither the command line nor
+ * `/work/.git/config`, and it is sent only to `remote`, so a `url.*.insteadOf`
+ * rewrite can't redirect it to another host. The `?expires=` suffix is not part
+ * of the secret.
+ */
+const gitAuthEnv = (remote: string, plaintext: string): Record<string, string> => {
+    return {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: `http.${remote}.extraHeader`,
+        GIT_CONFIG_VALUE_0: `Authorization: Basic ${btoa(`x:${plaintext.split("?expires=")[0] ?? ""}`)}`,
+    };
+};
+
+// Internal: only your own code decides who may push to which repo.
+export const buildAndPush = internalAction.input({ repo: v.string(), sessionId: v.string() }).action(async ({ ctx, args }) => {
+    const { defaultBranch, remote } = await ctx.artifacts.info(args.repo);
+    // A freshly created repo has no commit, so no branch to clone yet.
+    const empty = (await ctx.artifacts.withRepo(args.repo, (repo) => repo.log({ limit: 1 }))).length === 0;
+    const box = ctx.containers.workspace.get(args.sessionId);
+    const base = { BRANCH: defaultBranch, MESSAGE: `build ${args.sessionId}`, REMOTE: remote };
+    const live = new Set<string>();
+
+    const mint = async (scope: "read" | "write") => {
+        const token = await ctx.artifacts.withRepo(args.repo, (repo) => repo.createToken(scope, 600));
+
+        live.add(token.id);
+
+        return token;
+    };
+    // A failed revoke must not mask the result; the token still expires on its own.
+    const revoke = async (id: string): Promise<void> => {
+        live.delete(id);
+
+        try {
+            await ctx.artifacts.withRepo(args.repo, (repo) => repo.revokeToken(id));
+        } catch (error: unknown) {
+            ctx.log.warn("artifacts token revoke failed", { error, tokenId: id });
+        }
+    };
+
+    try {
+        const readToken = empty ? undefined : await mint("read");
+        const checkout = await box.exec("sh", {
+            args: ["-c", CHECKOUT],
+            env: { ...base, EMPTY: empty ? "1" : "0", ...(readToken === undefined ? {} : gitAuthEnv(remote, readToken.plaintext)) },
+            timeoutMs: 120_000,
+        });
+
+        // The read token's job is done before any of the repo's code runs.
+        if (readToken !== undefined) {
+            await revoke(readToken.id);
+        }
+
+        if (checkout.code !== 0) {
+            throw new Error(`checkout failed (exit ${String(checkout.code)})`);
+        }
+
+        // No token in this env. Install and build logs routinely pass exec's 1MB
+        // output default, so raise the cap (or have the build write less).
+        const build = await box.exec("sh", { args: ["-c", BUILD], cwd: "/work", maxOutputBytes: 16 * 1024 * 1024, timeoutMs: 600_000 });
+
+        if (build.code !== 0) {
+            throw new Error(`build failed (exit ${String(build.code)})`);
+        }
+
+        const commit = await box.exec("sh", { args: ["-c", COMMIT], env: base, timeoutMs: 60_000 });
+
+        if (commit.code !== 0) {
+            throw new Error(`commit failed (exit ${String(commit.code)})`);
+        }
+
+        if (commit.stdout.trim() === "unchanged") {
+            return { changed: false, pushed: false };
+        }
+
+        // The write token exists only now, and only in the push's environment.
+        const writeToken = await mint("write");
+        const push = await box.exec("sh", { args: ["-c", PUSH], env: { ...base, ...gitAuthEnv(remote, writeToken.plaintext) }, timeoutMs: 120_000 });
+
+        return { changed: true, pushed: push.code === 0 };
+    } finally {
+        // Revoke by id whatever happened — the write token, and the read token if the checkout threw.
+        for (const id of [...live]) {
+            await revoke(id);
+        }
+    }
+});
+```
+
+After the push, `ctx.artifacts.withRepo(repo, (r) => r.readFile({ ref: defaultBranch, path }))`
+reads the pushed files back from any action, with no container running. The
+checkout starts from `rm -rf /work`, so calling the action again on the same
+session starts clean.
+
+### Keeping the token contained
+
+- **Mint late, and only for the step that needs it.** The clone gets a read
+  token that is revoked as soon as the checkout ends. The write token is minted
+  after the build and only exists in the push's environment. The install, build
+  and commit run with neither. Hooks are disabled on every `git` step, so a
+  `.git/hooks` or `core.hooksPath` the build wrote doesn't run with a token in
+  its environment.
+- **Pass the token through `GIT_CONFIG_*`, never through `args`, a URL or a log
+  line.** It never lands in `/work/.git/config` or in a process's arguments, and
+  the header is scoped to the repo's remote. Don't print it, don't return it from
+  the action, and don't leave `set -x` on in a script that uses it.
+- **If the build runs code you don't trust, push from a separate container
+  session.** Everything above shares one container with the build, and a build
+  that wants the token can still reach the push:
+    - a process it leaves running reads the push's environment from
+      `/proc/<pid>/environ`;
+    - it writes `~/.gitconfig` or `/etc/gitconfig` (a proxy, a credential
+      helper, its own `http.*.extraHeader`), which the push's `-c` flags don't
+      override;
+    - it rewrites `/work/.git/config`, for example a `core.fsmonitor` command;
+    - it puts its own `git` earlier on `PATH`.
+
+    So for untrusted code, build in one session and move only the output out:
+    with `sandbox: true`, `backup()` the output directory (never its `.git`)
+    and `restore()` it into a fresh session the build never ran in (see
+    [Backups](#backups)), or copy it through R2 with
+    [`@lunora/storage`](/docs/packages/storage). Clone, commit and push from
+    that fresh session. The hardening above is for builds you trust; it is not
+    a sandbox.
+
+- **The image needs `git`.** `node:22-slim` doesn't include it, so add
+  `RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates`
+  to the Dockerfile.
+
+This is a different trust model from saving files to R2 with
+[`@lunora/storage`](/docs/packages/storage), where the Worker holds the
+credentials and the container never sees them. Here a repo-scoped write
+credential lives inside the container for the length of the push. Choose
+Artifacts when you want Git history, diffs and forks of the output, or want
+other Git clients to clone it. Choose R2 when you want an opaque snapshot
+restored as is.
+
+For repos too large to clone on every start, mount them with
+[ArtifactFS](https://developers.cloudflare.com/artifacts/guides/artifact-fs/)
+inside the image. That is an image-level choice Lunora doesn't wrap.
+
 ## Local development
 
 `lunora dev` (and `vite dev`) build and run containers locally through the
@@ -718,6 +1079,12 @@ const containers = createContainerTestContext({
 
 // Inject `containers` as ctx.containers when exercising the action.
 ```
+
+A named instance from the double also has `files`, backed by an in-memory disk
+per instance with Linux-shaped errors (`ENOENT`, `EEXIST`, `ENOTEMPTY`), so a
+handler that writes and reads container files can be tested without Docker.
+`spawn`, `backup`/`restore` and `mount` reject with `NOT_IMPLEMENTED`: there is
+no process or bucket behind the double, so stub those handle methods in the test.
 
 Run the real container behind `lunora dev` for integration tests; keep those in
 a Docker-enabled CI job, separate from the default unit-test matrix.

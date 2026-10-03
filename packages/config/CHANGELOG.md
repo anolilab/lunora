@@ -1,3 +1,49 @@
+## @lunora/config [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.293...@lunora/config@1.0.0-alpha.294) (2026-10-03)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+* fetch-only service entrypoints, ctx.services test fakes, resumable upload docs ([#938](https://github.com/anolilab/lunora/issues/938)) ([6b3ff8a](https://github.com/anolilab/lunora/commit/6b3ff8a2728663e053587ee03f9b8a059bcc1177))
+
+### Bug Fixes
+
+* cloudflare oct 2026 limits + observability block ([#942](https://github.com/anolilab/lunora/issues/942)) ([6145c8c](https://github.com/anolilab/lunora/commit/6145c8cfd7d5ca5fb7ff1eb1a862b93c8bc5657e))
+
+### Code Refactoring
+
+* **codegen:** capability-table follow-up and config binding inference fix ([#945](https://github.com/anolilab/lunora/issues/945)) ([66b7d12](https://github.com/anolilab/lunora/commit/66b7d12d905bc98132f72c621e2823d6b1e2bcd7))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.251
+* **@lunora/container:** upgraded to 1.0.0-alpha.67
+* **@lunora/seed:** upgraded to 1.0.0-alpha.179
+* **@lunora/studio:** upgraded to 1.0.0-alpha.253
+
+## @lunora/config [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.292...@lunora/config@1.0.0-alpha.293) (2026-10-02)
+
+### Bug Fixes
+
+* services dev session, rpc fetch binding, and docs/codegen nits ([#935](https://github.com/anolilab/lunora/issues/935)) ([b89bbd3](https://github.com/anolilab/lunora/commit/b89bbd34c0a8d83cd8eae3d60abda3fe7cacdb88))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.248
+* **@lunora/seed:** upgraded to 1.0.0-alpha.178
+* **@lunora/studio:** upgraded to 1.0.0-alpha.250
+
+## @lunora/config [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.291...@lunora/config@1.0.0-alpha.292) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.247
+* **@lunora/container:** upgraded to 1.0.0-alpha.65
+* **@lunora/seed:** upgraded to 1.0.0-alpha.177
+* **@lunora/studio:** upgraded to 1.0.0-alpha.249
+
 ## @lunora/config [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.290...@lunora/config@1.0.0-alpha.291) (2026-10-02)
 
 

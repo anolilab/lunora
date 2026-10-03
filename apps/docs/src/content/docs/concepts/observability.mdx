@@ -404,6 +404,19 @@ If an inbound `traceparent` is dropped while this option is unset, Lunora logs a
 one-time hint naming it, because a broken waterfall shouldn't be silent. Setting
 the option to `false` keeps the behaviour and silences the hint.
 
+:::note[Cloudflare Traces and its incoming propagation policy]
+[Cloudflare Traces](https://blog.cloudflare.com/cloudflare-tracing/) adds a
+zone-level _incoming propagation policy_ that decides whether the edge accepts a
+W3C `traceparent` from upstream. Lunora still treats the `traceparent` that
+reaches the worker as caller-controlled: Cloudflare does not document a
+forge-proof header the edge mints, so the worker cannot tell an edge-issued
+context from one a client sent. Keep `trustInboundTraceContext` off unless the
+zone policy guarantees that no client-supplied `traceparent` reaches the worker
+(for example, the zone strips or replaces it and the worker has no other route
+in). Adopting Cloudflare's native OpenTelemetry API is tracked in
+[#939](https://github.com/anolilab/lunora/issues/939).
+:::
+
 :::tip[Keep span names low-cardinality]
 Put the varying part in the attributes, not the name: `ctx.trace("stripe.charge", …, { orderId })`, never a name interpolated from the order id. A name
 built from an id makes every span its own group in a collector, which is exactly
@@ -455,6 +468,48 @@ Pair it with `"observability": { "logs": { "invocation_logs": true } }`, which
 the templates also ship — the Query Builder groups on the per-invocation summary
 line, and without it only explicit `console` events survive, leaving the
 group-by nothing to group.
+
+### From a Lunora log to Cloudflare Traces
+
+On Cloudflare, every request carries a **Ray ID**: the edge stamps it as the
+`cf-ray` header, and it is the key [Cloudflare Traces](https://blog.cloudflare.com/cloudflare-tracing/),
+Workers Logs and Security Events are searched by. Lunora reads it at the Worker
+entry and carries it through the request:
+
+| Where                                                          | Field                         |
+| -------------------------------------------------------------- | ----------------------------- |
+| the worker's per-request `onRpc` event                         | `rayId`                       |
+| the RPC dispatch `SERVER` span (`otlpSink`)                    | `cloudflare.ray_id` attribute |
+| `ctx.log` events: `onLog`, the Workers Logs line, OTLP record  | `rayId` / `cloudflare.ray_id` |
+| `ctx.trace`, `ctx.fetch` and `ctx.db` spans on the shard       | `rayId` / `cloudflare.ray_id` |
+| the shard's per-request Workers Logs event (`type: "request"`) | `rayId`                       |
+
+The value is the bare 16-hex id, with the data-center suffix (`-FRA`) dropped.
+That suffix names a colo, not the request. `cloudflare.ray_id` is the same
+attribute Cloudflare's own Workers traces use, so one collector query on it finds
+both Lunora's spans and the platform's spans for a request.
+
+To jump from a Lunora log line to the Cloudflare trace:
+
+1. Copy `rayId` off the log line: the Workers Logs event, the `onRpc` event, or
+   the `cloudflare.ray_id` attribute in your OTLP backend.
+2. In your worker's observability view in the Cloudflare dashboard, filter traces
+   (or logs) on `cloudflare.ray_id` equal to that value.
+
+The reverse works too. A Ray ID taken from a Cloudflare error page or a support
+ticket finds the matching Lunora events by filtering on `rayId` /
+`cloudflare.ray_id`.
+
+The Ray ID is **informational only**. It is never used for authorization or
+routing, it is not echoed onto client-visible responses, and a malformed value
+is dropped rather than logged. It is a Cloudflare-only signal: `wrangler dev`
+(Miniflare) does not set `cf-ray`, and neither does any other host, so locally
+every event simply has no `rayId`. Dispatches that no HTTP request started, such
+as alarms, cron jobs and subscription re-runs, have none either.
+
+Wiring Lunora's spans into Cloudflare's native trace tree, rather than linking
+the two by Ray ID, is tracked in
+[#939](https://github.com/anolilab/lunora/issues/939).
 
 ### Generation spans (AI)
 
@@ -536,6 +591,14 @@ a regression against. Reach for `sampling` first; use `onlyErrors` on a sink who
 only job is failures (a Sentry or alerting destination sitting alongside a
 sampled `otlpSink`).
 :::
+
+`sampling` is Lunora's own export decision. Cloudflare's Workers Logs and Traces
+sample separately, through `observability.head_sampling_rate` and
+`observability.traces.head_sampling_rate` in `wrangler.jsonc`. Lunora writes
+`head_sampling_rate: 1` by default and never lowers a rate you set. Workers
+Observability is billed from 2026-12-01 (Free caps ingestion at 0.5 GB/day; Paid
+includes 50 GB per billing cycle, then $0.25/GB), so `lunora doctor` reports an
+`observability-full-sampling` info finding while either rate is still 1.
 
 ### Traces are kept or dropped whole
 
@@ -849,6 +912,7 @@ Worker spans carry these attributes:
 | `server.port`               | if known     | the inbound port (int)                    |
 | `user_agent.original`       | if known     | the inbound `User-Agent`                  |
 | `lunora.shard_key`          | if sharded   | the shard key                             |
+| `cloudflare.ray_id`         | on the edge  | the request's Cloudflare Ray ID           |
 | `error.type`                | on error     | the Lunora error `code`                   |
 | `lunora.error_status`       | on error     | the HTTP/RPC status (int)                 |
 | `lunora.fanout.table`       | on a fan-out | the table fanned across                   |
@@ -886,7 +950,7 @@ upper-cased level; `severityNumber` maps as:
 | `fatal`        | 21               |
 
 Worker log records also carry `lunora.function_path`, and `lunora.shard_key` /
-`lunora.user_id` when known. Structured `fields` (below) become additional
+`lunora.user_id` / `cloudflare.ray_id` when known. Structured `fields` (below) become additional
 log-record attributes, and each record carries its dispatch's `trace_id` /
 `span_id` so a line links back to its RPC span.
 

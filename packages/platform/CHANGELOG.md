@@ -1,3 +1,21 @@
+## @lunora/platform [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.50...@lunora/platform@1.0.0-alpha.51) (2026-10-03)
+
+### Features
+
+* **observability:** attach the cloudflare ray id to logs and spans ([#943](https://github.com/anolilab/lunora/issues/943)) ([b871bc8](https://github.com/anolilab/lunora/commit/b871bc89f4bf64c76f5716577dfff3d352ec3519))
+
+## @lunora/platform [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.49...@lunora/platform@1.0.0-alpha.50) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+## @lunora/platform [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.48...@lunora/platform@1.0.0-alpha.49) (2026-10-02)
+
+### Features
+
+* **container:** Sandbox SDK 1.0 parity (spawn, terminal, files, backups, mounts) ([#932](https://github.com/anolilab/lunora/issues/932)) ([207b674](https://github.com/anolilab/lunora/commit/207b674982f2f2e722d0bad529acc88d09cc2f41))
+
 ## @lunora/platform [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.47...@lunora/platform@1.0.0-alpha.48) (2026-10-02)
 
 ### Features

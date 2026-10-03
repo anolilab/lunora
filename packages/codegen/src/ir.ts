@@ -576,6 +576,14 @@ export interface ContainerIRBase {
     name?: string;
 
     /**
+     * `true` when the definition opts in to the Sandbox SDK helpers
+     * (`defineContainer({ sandbox: true })`). Must be a literal: it decides
+     * whether the generated `containers.ts` exports the sandbox gateways, and
+     * it raises the `containerSandboxTools` platform signal.
+     */
+    sandbox?: boolean;
+
+    /**
      * The static `sleepAfter` value, when it was a literal. `undefined` means
      * omitted (platform default `"10m"`) or non-literal. Lifted for the advisor.
      */
@@ -849,7 +857,7 @@ export interface CallEdgeIR {
 export interface ServiceBindingIR {
     /** The `services[].binding` Lunora writes, e.g. `SERVICE_DOCUMENT_PARSER`. */
     binding: string;
-    /** The exported `WorkerEntrypoint` class for an RPC service; absent for a fetch service. */
+    /** The exported `WorkerEntrypoint` class the binding targets; absent for the Worker's default export. */
     entrypoint?: string;
 
     /**
@@ -868,6 +876,15 @@ export interface ServiceBindingIR {
      * route of its own: `""` for the top level, else the environment name.
      */
     publicScopes: ReadonlyArray<string>;
+
+    /**
+     * The `WorkerEntrypoint` class the service is typed — and wired — as an RPC
+     * stub of. Equal to {@link ServiceBindingIR.entrypoint} for an RPC service;
+     * absent for a fetch service, including a named entrypoint declared
+     * `rpc: false`, which is called with plain `fetch` and so needs no import of
+     * the service's sources.
+     */
+    rpcEntrypoint?: string;
     /** The Worker's own `name` from its wrangler config — the `services[].service` target. */
     worker: string;
     /** Absolute path of the service's wrangler config. */

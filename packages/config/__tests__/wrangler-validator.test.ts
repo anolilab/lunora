@@ -147,6 +147,71 @@ describe("wrangler-validator", () => {
             expect(report.errors.some((line) => line.includes("YYYY-MM-DD"))).toBe(true);
         });
 
+        describe("the Durable Object pending-I/O keep-alive", () => {
+            const base: WranglerConfig = {
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+            };
+            const isKeepAliveWarning = (line: string): boolean => line.includes("durable_object_io_tasks_prevent_eviction");
+
+            it("warns, without failing, when compatibility_date predates 2026-10-01", () => {
+                expect.assertions(2);
+
+                const report = validateWranglerConfig({ ...base, compatibility_date: "2026-09-30" });
+
+                expect(report.valid).toBe(true);
+                expect(report.warnings.filter((line) => isKeepAliveWarning(line))).toHaveLength(1);
+            });
+
+            it("does not warn from 2026-10-01 on", () => {
+                expect.assertions(1);
+
+                const report = validateWranglerConfig({ ...base, compatibility_date: "2026-10-01" });
+
+                expect(report.warnings.some((line) => isKeepAliveWarning(line))).toBe(false);
+            });
+
+            it.each(["durable_object_io_tasks_prevent_eviction", "durable_object_io_tasks_do_not_prevent_eviction"])(
+                "does not warn when %s is set explicitly",
+                (flag) => {
+                    expect.assertions(1);
+
+                    const report = validateWranglerConfig({ ...base, compatibility_date: REQUIRED_COMPATIBILITY_DATE, compatibility_flags: [flag] });
+
+                    expect(report.warnings.some((line) => isKeepAliveWarning(line))).toBe(false);
+                },
+            );
+
+            it("reads compatibility_flags from the env block it validates", () => {
+                expect.assertions(2);
+
+                const wrangler: WranglerConfig = {
+                    ...base,
+                    compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                    env: { production: { ...base, compatibility_flags: ["durable_object_io_tasks_prevent_eviction"] } },
+                };
+
+                expect(validateWranglerConfig(wrangler, undefined, "production").warnings.some((line) => isKeepAliveWarning(line))).toBe(false);
+                expect(validateWranglerConfig(wrangler).warnings.some((line) => isKeepAliveWarning(line))).toBe(true);
+            });
+        });
+
+        it("runs the jurisdiction checks for a schema pinned to one", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(
+                {
+                    compatibility_date: "2026-10-01",
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+                    r2_buckets: [{ binding: "UPLOADS", bucket_name: "uploads" }],
+                },
+                { hasD1GlobalTable: false, hasHyperdriveGlobalTable: false, jurisdiction: "eu" },
+            );
+
+            expect(report.warnings).toStrictEqual([expect.stringContaining('r2_buckets[0] ("UPLOADS") names no jurisdiction')]);
+        });
+
         it("does not throw and reports a tail_consumers entry that is null", () => {
             expect.assertions(2);
 
@@ -2489,10 +2554,79 @@ export const schema = defineSchema({
         });
     });
 
+    describe("observability logs + traces export blocks", () => {
+        const withObservability = (observability: unknown): WranglerConfig =>
+            ({ compatibility_date: REQUIRED_COMPATIBILITY_DATE, observability }) as WranglerConfig;
+
+        it("accepts the full documented block without errors or warnings", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(
+                withObservability({
+                    enabled: true,
+                    head_sampling_rate: 1,
+                    issues: { enabled: true },
+                    logs: { destinations: ["logs-destination"], enabled: true, head_sampling_rate: 0.6, invocation_logs: true, persist: false },
+                    traces: { destinations: ["tracing-destination"], enabled: true, head_sampling_rate: 0.05, persist: false },
+                }),
+            );
+
+            expect(report.errors.join(" ")).not.toContain("observability");
+            expect(report.warnings.join(" ")).not.toContain("observability");
+        });
+
+        it("warns on a typo'd key at every level", () => {
+            expect.assertions(4);
+
+            const report = validateWranglerConfig(
+                withObservability({
+                    enabled: true,
+                    issues: { enable: true },
+                    logs: { destination: ["logs-destination"] },
+                    trace: { enabled: true },
+                    traces: { head_sample_rate: 0.1 },
+                }),
+            );
+            const warnings = report.warnings.join(" ");
+
+            expect(warnings).toContain("observability.trace is not a documented wrangler key");
+            expect(warnings).toContain("observability.logs.destination is not a documented wrangler key");
+            expect(warnings).toContain("observability.traces.head_sample_rate is not a documented wrangler key");
+            expect(warnings).toContain("observability.issues.enable is not a documented wrangler key");
+        });
+
+        it("rejects wrong types in the traces block", () => {
+            expect.assertions(4);
+
+            const report = validateWranglerConfig(
+                withObservability({ traces: { destinations: "tracing-destination", enabled: "yes", head_sampling_rate: 2, persist: "false" } }),
+            );
+            const errors = report.errors.join(" ");
+
+            expect(errors).toContain("observability.traces.enabled must be a boolean");
+            expect(errors).toContain("observability.traces.persist must be a boolean");
+            expect(errors).toContain("observability.traces.head_sampling_rate must be a number in [0, 1]");
+            expect(errors).toContain("observability.traces.destinations must be an array of destination names");
+        });
+
+        it("rejects wrong types in the logs block and a non-object traces / issues block", () => {
+            expect.assertions(5);
+
+            const report = validateWranglerConfig(withObservability({ enabled: 1, issues: true, logs: { destinations: ["ok", 42], persist: 0 }, traces: [] }));
+            const errors = report.errors.join(" ");
+
+            expect(errors).toContain("observability.enabled must be a boolean");
+            expect(errors).toContain("observability.logs.destinations must be an array");
+            expect(errors).toContain("observability.logs.persist must be a boolean");
+            expect(errors).toContain("observability.traces must be an object");
+            expect(errors).toContain("observability.issues must be an object");
+        });
+    });
+
     describe("containers", () => {
         const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
             return {
-                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_date: "2026-10-01",
                 containers: [{ class_name: "TranscoderContainer", image: "./containers/transcoder/Dockerfile", max_instances: 2 }],
                 durable_objects: {
                     bindings: [
@@ -2596,8 +2730,18 @@ export const schema = defineSchema({
             expect(outOfBounds.errors.join(" ")).toContain("vcpu must be a positive number");
         });
 
-        it("rejects custom instance types that violate the memory/vcpu and disk/memory ratios", () => {
-            expect.assertions(4);
+        it("rejects custom instance types below 1 vCPU or under 3 GiB memory per vCPU, and allows 20 GB disk at any memory", () => {
+            expect.assertions(6);
+
+            const belowMinVcpu = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { memory_mib: 4096, vcpu: 0.5 }, max_instances: 1 },
+                    ],
+                }),
+            );
+
+            expect(belowMinVcpu.errors.join(" ")).toContain("needs ≥ 1 vCPU (got 0.5)");
 
             const tooLittleMemory = validateWranglerConfig(
                 baseConfig({
@@ -2609,15 +2753,31 @@ export const schema = defineSchema({
 
             expect(tooLittleMemory.errors.join(" ")).toContain("≥ 3 GiB");
 
-            const tooMuchDisk = validateWranglerConfig(
+            // 20 GB disk with only 3 GiB memory — the old 2-GB-per-GiB ratio would have capped this at 6 GB.
+            const maxDiskSmallMemory = validateWranglerConfig(
                 baseConfig({
                     containers: [
-                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 20_000, memory_mib: 4096 }, max_instances: 1 },
+                        {
+                            class_name: "TranscoderContainer",
+                            image: "./x/Dockerfile",
+                            instance_type: { disk_mb: 20_000, memory_mib: 3072, vcpu: 1 },
+                            max_instances: 1,
+                        },
                     ],
                 }),
             );
 
-            expect(tooMuchDisk.errors.join(" ")).toContain("≤ 2 GB disk");
+            expect(maxDiskSmallMemory.errors).toEqual([]);
+
+            const tooMuchDisk = validateWranglerConfig(
+                baseConfig({
+                    containers: [
+                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 20_001, memory_mib: 4096 }, max_instances: 1 },
+                    ],
+                }),
+            );
+
+            expect(tooMuchDisk.errors.join(" ")).toContain("disk_mb must be a positive number ≤ 20000");
 
             const valid = validateWranglerConfig(
                 baseConfig({
@@ -2662,7 +2822,7 @@ export const schema = defineSchema({
     describe("workflows", () => {
         const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
             return {
-                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_date: "2026-10-01",
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
                 migrations: [{ new_sqlite_classes: ["ShardDO"] }],
                 workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }],
@@ -2937,6 +3097,15 @@ export const schema = defineSchema({
             expect(validateWranglerConfig(validBase({ vpc_services: [{ binding: "PRIVATE_API" }] })).errors.join(" ")).toContain('non-empty "service_id"');
             expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS", namespace: "default" }] })).valid).toBe(true);
             expect(validateWranglerConfig(validBase({ artifacts: [{ binding: "ARTIFACTS" }] })).errors.join(" ")).toContain('non-empty "namespace"');
+        });
+
+        it("accepts well-formed AI Search bindings and rejects ones missing their namespace or instance", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ ai_search_namespaces: [{ binding: "AI_SEARCH", namespace: "default" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ ai_search_namespaces: [{ binding: "AI_SEARCH" }] })).errors.join(" ")).toContain('non-empty "namespace"');
+            expect(validateWranglerConfig(validBase({ ai_search: [{ binding: "BLOG_SEARCH", instance_name: "blog", remote: true }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ ai_search: [{ binding: "BLOG_SEARCH" }] })).errors.join(" ")).toContain('non-empty "instance_name"');
         });
 
         it("requires exactly one of tunnel_id / network_id on a vpc_networks entry", () => {
@@ -3305,7 +3474,7 @@ export const schema = defineSchema({
 
             const report = validateWranglerConfig(
                 {
-                    compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                    compatibility_date: "2026-10-01",
                     compatibility_flags: ["nodejs_compat"],
                     d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "lunora-example-team-chat" }],
                     durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },

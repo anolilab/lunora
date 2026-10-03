@@ -50,6 +50,15 @@ describe("ctx.services (workerd)", () => {
         await expect(response.text()).resolves.toBe("parsed /detached");
     });
 
+    it("hands an RPC service's fetch to a client detached", async () => {
+        expect.assertions(1);
+
+        const client = { fetch: services().gateway.fetch };
+        const response = await client.fetch("https://gateway/detached");
+
+        await expect(response.text()).resolves.toBe("gateway /detached");
+    });
+
     it("calls a WorkerEntrypoint method over RPC", async () => {
         expect.assertions(1);
 

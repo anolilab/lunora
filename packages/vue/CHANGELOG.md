@@ -1,3 +1,35 @@
+## @lunora/vue [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.207...@lunora/vue@1.0.0-alpha.208) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.170
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.104
+
+## @lunora/vue [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.206...@lunora/vue@1.0.0-alpha.207) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.169
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.103
+
+## @lunora/vue [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.205...@lunora/vue@1.0.0-alpha.206) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.102
+
+## @lunora/vue [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.204...@lunora/vue@1.0.0-alpha.205) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.168
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.101
+
 ## @lunora/vue [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.203...@lunora/vue@1.0.0-alpha.204) (2026-10-02)
 
 

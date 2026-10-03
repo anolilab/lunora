@@ -2,6 +2,7 @@ import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 const { internalMutation, mutation, query } = initLunora.dataModel().create();
 
@@ -35,21 +36,19 @@ const sendViaInternal = mutation
 
 // Track every harness so each test's in-memory SQLite handle is closed in
 // afterEach — exercising the harness `close()` API and leaking no native handles.
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 const start = (): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema);
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
 
 describe("lunoraTest", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("reads back a row written by a mutation", async () => {

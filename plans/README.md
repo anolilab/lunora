@@ -1895,3 +1895,25 @@ provisioning and per-service deploy were considered and left out.
 | 455  | [Pub/Sub topics: one publish, N durable subscriptions](455-queue-topics-fanout.md)        | IN PROGRESS |
 | 456  | [Modules: catalog, call graph, architecture diagram](456-modules-catalog-architecture.md) | IN PROGRESS |
 | 457  | [Services: typed service bindings to sibling Workers](457-service-bindings.md)            | IN PROGRESS |
+
+## Cloudflare Sandbox SDK 1.0 parity (baseline `f79680910`, 2026-10-02)
+
+Sandbox SDK 1.0 moved container control into the app's own Durable Object, which
+`@lunora/container` already does. What remains: its `Files` / `S3Mount` /
+`DirectoryBackup` helpers, plus streaming and PTY exec (which enable browser terminals).
+
+| Plan | Title                                                                         | Status                         |
+| ---- | ----------------------------------------------------------------------------- | ------------------------------ |
+| 458  | [Container sandbox parity with Sandbox SDK 1.0](458-container-sandbox-1-0.md) | DONE (`mount` unverified live) |
+
+## Cloudflare changelog, 2026-10-01 / 02 (baseline `f79680910`, 2026-10-02)
+
+Shipped directly, without a plan: the `compatibility_date` 2026-10-01 default (Durable Object
+pending-I/O keep-alive) and its validator warning, `ctx.ai.websearch` + `webSearchTool` (Web Search
+API), and jurisdiction-aware KV / R2 checks for `.jurisdiction()` schemas (KV jurisdictions GA).
+
+| Plan | Title                                                                                 | Status                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 459  | [Cloudflare AI Search (GA) as a pass-through `ctx.aiSearch`](459-ai-search-ga.md)     | IN PROGRESS (A–D shipped on `feat/ai-search-binding`; only the live smoke on a real account remains)                                                                                                                                                                                                                                                                                              |
+| 460  | [Cloudflare Artifacts: an action-only `ctx.artifacts`](460-cloudflare-artifacts.md)   | IN PROGRESS (A, B, C shipped; D blocked: namespace GET schema undocumented; live probes need a paid account)                                                                                                                                                                                                                                                                                      |
+| 461  | [MCP OAuth: close the MCP 2026-07-28 authorization gaps](461-mcp-oauth-2026-07-28.md) | DONE on `feat/mcp-oauth-2026-07-28` (A: real-better-auth e2e test, docs fixed; B: worker serves the discovery documents after the app's routes, D1 + DO; C: `cimd` + `@lunora/auth/cimd/workers` + doctor check; D: `stepUp: { scope, challenge }` step-up for write and agent tools; E: metadata scenario passes through the worker locally, CI job deferred until an example app wires `mcp()`) |

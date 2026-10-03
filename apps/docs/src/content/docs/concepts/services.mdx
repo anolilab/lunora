@@ -41,6 +41,13 @@ export default {
 - `entrypoint` (optional) makes it an RPC service, typed from that class.
   Codegen imports the service's entry module for those types, so the service's
   sources join the app's type check: a type error there fails the app's.
+- `rpc: false` (with `entrypoint`) binds that named entrypoint but calls it with
+  plain `fetch`: `ctx.services.<key>` is a fetcher and codegen imports none of
+  the service's sources. Use it for internal routes that must be reachable only
+  through the binding. Cloudflare cannot tell a binding call from an internet
+  request on the default `fetch` handler, so such routes live on a separate
+  `WorkerEntrypoint` class, which a Hono app or another fetch client can still
+  serve.
 - Write the map inline with string literals: codegen reads it without running
   the file.
 
@@ -65,16 +72,11 @@ export const summarise = action.input({ url: v.string() }).action(async ({ ctx, 
     // RPC service: methods and return types come from the `Gateway` class
     return ctx.services.llmGateway.complete(`Summarise: ${text}`);
 });
-        const { text } = (await response.json()) as { text: string };
-
-        // RPC service: methods and return types come from the `Gateway` class
-        return ctx.services.llmGateway.complete(`Summarise: ${text}`);
-    },
-});
 ```
 
 An existing generated client keeps working: pass `fetch: ctx.services.documentParser.fetch`
-where it took a base URL. The hostname does not route anywhere: the binding
+where it took a base URL. `fetch` is bound on an RPC service too, so this works
+for either kind. The hostname does not route anywhere: the binding
 delivers the request to the service as given.
 
 Queries and mutations have no `ctx.services`. A call to another Worker cannot be
@@ -87,7 +89,7 @@ an action or send a queue message. From an HTTP action, call an action with
 | Step                | What happens                                                                                                                                                                                       |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wrangler.jsonc`    | A `services[]` entry per service (`SERVICE_<KEY>` → the Worker name, plus `entrypoint`), top level and in each `env.<name>` block (with the service's env Worker name, by default `<name>-<env>`). |
-| `lunora dev`        | The services run in the same `wrangler dev` session (one `--config` each), so bindings resolve locally.                                                                                            |
+| `lunora dev`        | The services run in the same `wrangler dev` session (one `--config` each), so bindings resolve locally. A service's `build.command` runs in the service's own folder.                              |
 | `vite dev`          | Each service is an `auxiliaryWorkers` entry of `@cloudflare/vite-plugin`.                                                                                                                          |
 | `lunora deploy`     | Each service deploys first (`wrangler deploy --config <dir>/wrangler.jsonc`, with `--env` and `--dry-run` passed through), then the app. `--skip-services` deploys only the app.                   |
 | `lunora doctor`     | `service-workers-dev` warns about a service still public on `workers.dev` with no route.                                                                                                           |
@@ -98,10 +100,33 @@ Services run only in dev sessions: `vite build` does not build them, since
 flavor gets them too: reconcile writes the bindings into `wrangler.dev.jsonc`,
 and the `wrangler dev` sidecar runs each service beside the app.
 
+A service in the dev session has no HTTP port of its own: only the app does. Its
+bindings are part of the session too, so one that has no local mode (`ai`)
+makes `wrangler dev` open a remote proxy session, which needs Cloudflare
+credentials. In CI or another shell without them, run `lunora dev --local`: the
+session then starts without the proxy, and a call to that binding fails instead.
+
 Lunora records the `services[]` entries it wrote in `package.json`
 (`lunora.services`), so it updates and removes only its own. An entry you wrote
 yourself is never touched, even one using a declared binding name; Lunora warns
 and leaves it.
+
+## Test an action that calls one
+
+`lunoraTest` takes a fake per service. The fakes reach actions only, as at
+runtime, and a service with no fake throws on use:
+
+```ts
+import { lunoraTest } from "@lunora/testing";
+import { vi } from "vitest";
+
+const t = lunoraTest(schema, {
+    services: {
+        documentParser: { fetch: vi.fn(async () => Response.json({ text: "…" })) },
+        llmGateway: { complete: vi.fn().mockResolvedValue("summary") },
+    },
+});
+```
 
 ## Make the service private
 
@@ -120,6 +145,11 @@ You can then delete the internal auth (HMAC signing secrets) and the `*_URL`
 variables the app used to reach it. A service that must also be public, such as a
 gateway with its own route, keeps that route and its own auth for it. The binding
 is the internal path only.
+
+In dev, such a service is reachable only through the binding (see above). If the
+browser or another client also calls it, start it on its own as well
+(`wrangler dev` in its folder). That is a second copy with its own local state
+(D1, KV, Durable Objects), so apply its migrations to both.
 
 ## Platforms
 
