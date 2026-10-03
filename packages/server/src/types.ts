@@ -2460,9 +2460,10 @@ interface MutationCtx {
      * Compose a submutation in-process, reusing this mutation's `db` writer.
      * Executes the referenced mutation's handler directly — no fresh DO RPC —
      * so its writes apply through the same shard invocation as the enclosing
-     * mutation. Note: writes are not wrapped in a SQL transaction, so a partial
-     * failure does not roll back earlier writes (the same as a top-level
-     * mutation). Mirrors Convex's `ctx.runMutation`.
+     * mutation. The submutation joins the enclosing mutation's transaction
+     * (SQLite in a Durable Object has no savepoints, so it rides the open span):
+     * its writes commit or roll back together with the caller's, and a throw that
+     * escapes the outer handler rolls back both. Mirrors Convex's `ctx.runMutation`.
      */
     readonly runMutation: RunMutation;
 

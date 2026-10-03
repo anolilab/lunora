@@ -64,24 +64,26 @@ first deploy and diffable in review. A call site is drawn from the exported
 function it sits in. A call inside a non-exported helper in the same file is
 drawn from every exported function that calls the helper, directly or through
 other helpers. A write in `const openInvoice = (ctx) => ctx.db.insert(…)` is
-therefore a `write` edge of each mutation that calls `openInvoice(ctx)`.
+therefore a `write` edge of each mutation that calls `openInvoice(ctx)`. A helper
+handed on as a value (`run(openInvoice)`, `{ openInvoice }`) counts as called; a
+type-only mention (`typeof openInvoice`) does not.
 
 A queue or workflow `handler:` imported from another file
 (`defineWorkflow({ handler: onboard })`, with `onboard` exported from
 `lunora/onboarding/flow.ts`) is followed too, so its calls are drawn from the
-queue or workflow node.
+queue or workflow node — from every one of them when several share the handler.
 
 The graph does not guess. These are listed under "call sites could not be drawn"
 instead:
 
 - an edge whose target is held in a variable;
-- a call inside a helper that no exported function in its file calls;
+- a call inside a helper that no exported function in its file calls, or at
+  module scope;
 - a write through an untyped id (a plain `string` rather than `Id<"table">`).
 
 An exported function that is not a registered function (a plain
-`export const openInvoice = …` helper) has no node of its own, so a call made
-outside a registered function's file shows up as
-`"openInvoice" is not a registered function` there.
+`export const openInvoice = …` helper) has no node of its own, so its call sites
+are listed as `"openInvoice" is not a registered function`.
 
 ## Table ownership
 
@@ -94,9 +96,10 @@ writes to an owned table. Every kind of write counts:
   `Id<"table">` type (each table of an `Id<"a"> | Id<"b">` union);
 - batch writes and `ctx.db.<table>.*` facade writes.
 
-Writes inside same-file helpers count toward the exported functions that call
-them, so moving a write into a helper does not hide it. A write in a helper no
-exported function calls is still reported, named by the helper.
+A write inside a same-file helper is reported once, named by the helper and
+listing the exported functions that call it, so moving a write into a helper
+does not hide it. A write in a helper no exported function calls is still
+reported.
 
 To fix it, move the write into the owning module. Two shapes work.
 
@@ -136,10 +139,10 @@ await ctx.runMutation(internal.billing_invoices.open, { userId });
 
 `ctx.runMutation` composes the submutation in-process. It runs the handler
 directly, with no fresh Durable Object RPC, and reuses the calling mutation's
-`db` writer, so the submutation's writes apply in the same invocation. The
-writes are not wrapped in a SQL transaction, so a failure part-way does not roll
-back earlier writes; the same holds for a top-level mutation. The call becomes
-a drawn `call` edge to the owner's function.
+`db` writer. Every mutation runs in a transaction that rolls back on a throw,
+and a submutation joins its caller's: the two commit or roll back together, the
+same as with the owner-module helper. The call becomes a drawn `call` edge to
+the owner's function.
 
 A table can have one owner, and it must exist in `lunora/schema.ts`; codegen
 rejects either mistake. A module that declares no `tables` opts out of the lint.
