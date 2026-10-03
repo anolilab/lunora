@@ -152,16 +152,34 @@ export interface RegisteredMutator<
     readonly kind: "mutation";
 }
 
-/** Declare a custom mutator. See the module docs for runtime semantics. */
+/**
+ * Declare a custom mutator. See the module docs for runtime semantics.
+ *
+ * The raw `server` impl is never exposed. The returned `server` is the same
+ * validating, owner-scoping entry point as `handler`, so `createPost.server(ctx,
+ * { userId: other })` cannot skip `applyOwnerScope`; and the raw impl runs with
+ * the returned mutator as `this`, so `this.server(…)` inside a method-shorthand
+ * impl re-enters through that same entry point.
+ */
 export const defineMutator = <Args extends ValidatorMap = ValidatorMap, ServerContext = MutationContext, ClientTx = unknown, R = unknown>(
     definition: MutatorDefinition<Args, ServerContext, ClientTx, R>,
 ): RegisteredMutator<Args, ServerContext, ClientTx, R> => {
+    // Filled in below; the raw impl's `this` is the returned mutator, never `definition`.
+    const self: { mutator?: RegisteredMutator<Args, ServerContext, ClientTx, R> } = {};
     const handler = async (context: ServerContext, rawArgs: Record<string, unknown>): Promise<R> => {
         const parsed = validateArgs(definition.args ?? ({} as Args), rawArgs);
         const args = definition.owner === undefined ? parsed : applyOwnerScope<Args>(definition.owner, context, parsed);
 
-        return definition.server(context, args);
+        return Reflect.apply(definition.server, self.mutator, [context, args]);
     };
 
-    return { __lunoraMutator: true, ...definition, handler, kind: "mutation" };
+    self.mutator = {
+        __lunoraMutator: true,
+        ...definition,
+        handler,
+        kind: "mutation",
+        server: async (context, args) => handler(context, args),
+    };
+
+    return self.mutator;
 };
