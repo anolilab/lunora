@@ -1,3 +1,18 @@
+## @lunora/do [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.192...@lunora/do@1.0.0-alpha.193) (2026-10-03)
+
+### Features
+
+* **observability:** set error status on failed host spans ([#953](https://github.com/anolilab/lunora/issues/953)) ([112ef1e](https://github.com/anolilab/lunora/commit/112ef1e8b2758dc6043a7470fa99a4e63a58bbd4)), closes [#939](https://github.com/anolilab/lunora/issues/939)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.120
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.74
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.111
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.96
+* **@lunora/platform:** upgraded to 1.0.0-alpha.55
+
 ## @lunora/do [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.191...@lunora/do@1.0.0-alpha.192) (2026-10-03)
 
 ### Features
