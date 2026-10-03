@@ -174,7 +174,9 @@ One handler speaks one protocol:
 
 - `"tus"` (the default): resumable. The client can pause, resume, and continue
   after a dropped connection from the last acknowledged byte.
-- `"chunked-rest"`: also resumable, as plain REST chunks.
+- `"chunked-rest"`: plain REST chunks, one at a time and in order, over
+  `createR2BindingUploadStorage` only. The bundled client sends four chunks in
+  parallel, so with it this protocol works only for a single chunk. Prefer TUS.
 - `"multipart"`: one `multipart/form-data` request per file. Not resumable.
 
 #### Mount the handler
@@ -184,9 +186,12 @@ it, `PATCH` sends a chunk, `HEAD` asks where to resume, and on TUS `DELETE`
 cancels one in progress. It allows the request only when it returns exactly
 `true`; anything else, or a throw, answers `403`. On TUS and chunked REST a
 request that declares a size over `maxFileSize` is answered `413` before the gate
-runs. A finished upload cannot be deleted through the route at all: TUS refuses
-to terminate one, and the chunked-REST and multipart routes answer `DELETE` with
-`405`. Removing a stored file is `ctx.storage.delete` in your own code.
+runs. The route is write-only: `GET`, and any other method the protocol does not
+upload with, answers `405` before the gate runs, so the upload route never serves
+a stored file. A finished upload cannot be deleted through the route at all: TUS
+refuses to terminate one, and the chunked-REST and multipart routes answer
+`DELETE` with `405`. Removing a stored file is `ctx.storage.delete` in your own
+code.
 
 The gate has two jobs. On `POST` it decides who may start an upload. On every
 other method it must check that the upload in the URL belongs to the caller,
@@ -334,7 +339,8 @@ route's `ctx.auth` resolves it the same way it does for any other HTTP action.
 Never put a token in the upload URL: TUS clients store and reuse upload URLs to
 resume, and a URL ends up in logs and `Referer` headers.
 
-Serving the result is a separate route. Register the upload routes on their own
+Serving the result is a separate route; the upload route answers `GET` with
+`405`. Register the upload routes on their own
 prefix, so a `GET` route that streams stored objects with
 `serveStorageObject(ctx, key, request, authorize)`, or that checks a signed URL,
 cannot shadow them. Each route keeps its own gate: the upload `authorize` decides
@@ -355,11 +361,13 @@ the binding of that same bucket.
   free. Over `createR2UploadStorage` each chunk becomes one part, so set
   `chunkSize` to the same 5 MiB or more on every chunk (TUS defaults to 1 MiB).
 - **Unsupported TUS extensions.** The binding provider does not offer
-  `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`, and
-  chunked REST has to send its chunks in order, as the bundled clients do: a
-  chunk at any other offset is a `409` and is not stored.
-- **Chunked REST** needs `@visulima/storage` 2.0.24 or later, which fixed
-  visulima/visulima#884 (every chunk `PATCH` answered `400`).
+  `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`.
+- **Chunked REST** runs over `createR2BindingUploadStorage` only, one chunk at a
+  time and in order: a chunk at any other offset, or one sent while another is
+  streaming, is a `409` and is not stored. The bundled client sends four chunks
+  in parallel, so it can upload only as a single chunk (`chunkSize` at least the
+  file size). `createR2UploadStorage` does not check chunk offsets and can
+  corrupt a chunked-REST upload. Use TUS for resumable uploads;
   [@lunora/storage](/docs/packages/storage#chunked-rest) has the details.
 - **`maxFileSize`** defaults to 100 MiB, has no unlimited setting, and must be a
   finite, non-negative number. Uploads over it get a `413`.

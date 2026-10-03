@@ -294,10 +294,25 @@ each protocol needs its own route.
 | `maxFileSizeFor` | `({ contentType, metadata, declaredSize, method, request, … }) => number \| undefined`. A per-upload cap below `maxFileSize`, from what the create request declares (TUS `Upload-Metadata`, chunked-REST `X-File-Metadata`). See below. |
 | `public`         | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                              |
 
-A finished upload cannot be deleted through the handler. On TUS, `DELETE` only
-cancels an upload in progress. The chunked-REST and multipart handlers would
-delete any stored file by id, so `DELETE` on them answers `405` before the gate
-runs.
+An upload route is **write-only**. It answers only the methods its protocol
+needs to upload, and anything else gets a `405` before `authorize` runs:
+
+| Protocol       | Allowed                                      |
+| -------------- | -------------------------------------------- |
+| `tus`          | `POST`, `PATCH`, `HEAD`, `DELETE`, `OPTIONS` |
+| `chunked-rest` | `POST`, `PUT`, `PATCH`, `HEAD`, `OPTIONS`    |
+| `multipart`    | `POST`, `OPTIONS`                            |
+
+In particular `GET` is refused on every protocol, including `/:id/metadata` and
+the collection path. `@visulima/storage` serves stored files over `GET` (the
+bytes, byte ranges, the file record), and behind the upload gate that would let
+anyone allowed to upload, or anyone at all on a `public` route, read any file by
+id. Serve files with `ctx.storage.download()` or a
+[signed URL](#signed-urls), which have their own read-side check.
+
+A finished upload cannot be deleted through the handler either. On TUS, `DELETE`
+only cancels an upload in progress. The chunked-REST and multipart handlers would
+delete any stored file by id, so they do not take `DELETE` at all.
 
 How `maxFileSize` is enforced depends on the protocol. For TUS and chunked REST
 the handler reads the largest size the request declares across `Upload-Length`
@@ -381,40 +396,66 @@ builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
 multipart upload, and R2 rejects parts under 5 MiB except the last (and parts
 of unequal size), so a TUS client must send equal chunks of at least 5 MiB. The
 binding provider above has neither restriction. The constructor throws on a missing
-credential: build it on first use rather than at module scope.
+credential: build it on first use rather than at module scope. Use it with TUS
+only: it appends each chunked-REST chunk as the next part without checking its
+`X-Chunk-Offset`, so a chunk sent out of order, or sent twice, silently corrupts
+the file.
 
 ### Chunked REST
 
-`protocol: "chunked-rest"` works as of `@visulima/storage` 2.0.24. Earlier
-versions never marked a chunked-REST create as chunked, so every chunk `PATCH`
-answered `400` ("File is not a chunked upload"):
-[visulima/visulima#884](https://github.com/visulima/visulima/issues/884).
+**For resumable uploads, use TUS** (the default protocol, and `useTusUpload` on
+the client). Chunked REST works at the protocol level over one provider, with
+one chunk at a time, and the bundled client can only use it for a single chunk.
 
 A client creates the upload with a `POST` carrying `X-Chunked-Upload: true` and
 `X-Total-Size`, then sends each chunk as a `PATCH` with `X-Chunk-Offset` and
-`Content-Length`. A chunk answers `202` with `X-Upload-Offset` until the last
-one, which answers `200` with `X-Upload-Complete: true`. `HEAD` reports the same
-two headers, so a client resumes from `X-Upload-Offset`.
+`Content-Length`. A chunk answers `202` with `X-Upload-Offset` until the one
+that completes the file, which answers `200` with `X-Upload-Complete: true` and
+the file record. `HEAD` reports `X-Upload-Offset`, `X-Upload-Complete` and
+`X-Received-Chunks`, so a client resumes from `X-Upload-Offset`.
 
-Over `createR2BindingUploadStorage` the chunks have to arrive **in order**. The
-provider streams bytes into equal 5 MiB R2 parts as they arrive, so it cannot
-hold a chunk for a gap that is still open. A chunk at any offset other than the
-upload's current one, ahead of it or overlapping bytes already stored, is a
-`409` (`FileConflict`) and nothing of it is stored. A refused chunk never counts
-towards completion, so the upload is not reported complete until every byte is
-stored. Re-read the offset with `HEAD` and continue from there. The bundled
-chunked-REST clients send in order.
+It is supported over `createR2BindingUploadStorage` only, and there the chunks
+have to arrive **one at a time, in order**. The provider streams bytes into equal
+5 MiB R2 parts as they arrive, so it cannot hold a chunk for a gap that is still
+open:
 
-That last guarantee is the provider's own. Upstream, the chunked-REST handler
-counts a chunk as received before the provider stores it, so a refused chunk
-would still count
-([visulima/visulima#892](https://github.com/visulima/visulima/issues/892)). The
-provider works around it by answering the received-chunk list from the offset it
-has stored, and the workaround can go once #892 is fixed upstream.
+- A chunk at any offset other than the upload's current one, ahead of it or
+  overlapping bytes already stored, is a `409` (`FileConflict`) and nothing of
+  it is stored. So is a second chunk while one is still streaming.
+- A refused chunk never counts towards completion: the upload is reported
+  complete only once every byte is stored.
+- When a chunk is cut off mid-request, the bytes that arrived are kept. Re-read
+  the offset with `HEAD` and continue from there.
+- `X-Received-Chunks` always reports the one run the provider has stored,
+  `[{ "offset": 0, "length": <stored bytes> }]`.
 
-`MemoryStorage` from `@visulima/storage` cannot be trusted with out-of-order
-chunked REST: its `write` ignores the chunk's offset, so it answers `202` and
-the stored file loses bytes
-([visulima/visulima#893](https://github.com/visulima/visulima/issues/893)). Test
-out-of-order behavior against the provider you deploy, not against
-`MemoryStorage`.
+`createR2UploadStorage` (R2's S3 API) does not check chunk offsets at all, so do
+not use chunked REST with it (see above).
+
+The bundled client (`useChunkedRestUpload`, `createChunkedRestAdapter`, and
+`useUpload` when it picks chunked REST) sends **four chunks in parallel**. Over
+`createR2BindingUploadStorage` all but one of them get a `409`, which the
+client does not retry, so the upload fails. It works only when `chunkSize` is at
+least the file size, which makes the upload a single `PATCH`. That chunk has to
+fit Cloudflare's request body limit, and `@visulima/storage` caps a chunk at
+100 MiB.
+
+### Upgrading
+
+This release moves `@visulima/storage` to 2.0.25. What changes for an upload
+route:
+
+- **`GET` is refused** (`405`) on every protocol, before `authorize` runs, as
+  described above. Nothing that uploads needs it. Code that read files back
+  through the upload route, or that listed it with `@visulima/storage-client`'s
+  `useGetFileList` / `createGetFileList`, has to read through
+  `ctx.storage.download()` or a signed URL instead.
+- **A `PUT` that creates a file** (chunked REST) needs an id of letters, digits,
+  `_` and `-`, at most 255 characters, after its extension is stripped:
+  `PUT /upload/report-v2.pdf` creates `report-v2`, `PUT /upload/report.v2.pdf`
+  is a `400`. Updating a file that exists is unchanged.
+- **`Location`** on a chunked-REST `PUT` or `PATCH` is now
+  `<collection>/<id>.<ext>`. It used to repeat the id
+  (`<collection>/<id>/<id>.<ext>`).
+- **Chunked REST works** (it answered `400` to every chunk before), within the
+  limits above.

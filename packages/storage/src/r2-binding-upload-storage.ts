@@ -550,11 +550,15 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
  * miniflare as in production.
  *
  * Speaks TUS (without the `checksum`, `concatenation` and
- * `creation-defer-length` extensions), chunked REST with chunks sent in order,
- * and multipart forms. Chunked REST works as of `@visulima/storage` 2.0.24
- * (visulima/visulima#884). A chunked-REST chunk at any offset other than the
- * upload's current one is a `409` and stores nothing, and it never counts
- * towards completion (see `R2UploadStateStore`'s chunk list).
+ * `creation-defer-length` extensions), chunked REST, and multipart forms.
+ *
+ * Chunked-REST chunks have to arrive one at a time and in order. A chunk at any
+ * offset other than the upload's current one, or one sent while another is
+ * still streaming, is a `409` and stores nothing, and it never counts towards
+ * completion (see the chunk list in `r2-upload-state-store.ts`). The bundled
+ * `@visulima/storage-client` chunked-REST client sends four chunks in parallel,
+ * so over this provider it can upload only as one chunk; use TUS for
+ * resumable uploads.
  */
 const createR2BindingUploadStorage = (bucket: R2UploadBucket, options: R2BindingUploadStorageOptions = {}): UploadStorage =>
     new R2BindingUploadStorage(bucket, options);
