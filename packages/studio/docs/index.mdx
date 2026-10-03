@@ -191,7 +191,8 @@ Operational streams and per-shard signal from a running deployment.
 - **Metrics**: _Per-shard health and aggregate metrics_ (request/error counts,
   uptime, DB size, reactive-cache hit rate).
 - **Analytics**: _Usage and latency from Analytics Engine_ (request volume,
-  p50/p95, and hot shards).
+  p50/p95, and hot shards). Needs the `analyticsSqlQuery` prop: see
+  [Studio usage panels](/docs/packages/bindings#studio-usage-panels).
 - **Health**: _At-a-glance connection, error, and shard signals._
 - **Deployment health**: _Live liveness, readiness, and per-binding health_ from
   the deployment's `/_lunora/health` endpoint.

@@ -1,7 +1,6 @@
-import type { AnalyticsSqlResult } from "@lunora/bindings/analytics";
-import type { AnalyticsSqlParams, AnalyticsSqlQueryResult } from "@lunora/bindings/analytics-sql";
+import type { AnalyticsSqlQueryResult, FunctionUsagePanel } from "@lunora/bindings/analytics-sql";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Card } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -12,115 +11,52 @@ import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 
 interface AnalyticsPanelProps {
     /**
-     * Dataset name to query (the `analytics_engine_datasets[].dataset`, default
-     * `ANALYTICS` — the value the config layer reconciles).
+     * Resolve one usage panel. The panel sends only its key; the host's runner
+     * calls an action that builds the statement server-side with
+     * `functionUsageQuery(panel)` from `@lunora/bindings/analytics-sql` and runs it
+     * through `ctx.analyticsSql`. That action reads account analytics, so it must
+     * be admin-gated, and it must take the panel key, never SQL: an action that
+     * ran caller-supplied SQL could read every dataset in the account. Studio passes
+     * its analyticsSqlQuery prop through here; with none, the panel renders an empty
+     * state and makes no network call.
      */
-    readonly dataset?: string;
-
-    /**
-     * Run one **Analytics SQL** statement through the worker's Analytics SQL
-     * binding — typically a host runner that calls an action doing
-     * `ctx.analyticsSql.query(sql, params)`. Preferred over `runQuery` when both
-     * are given: the binding needs no API token anywhere. The panel then speaks
-     * the Analytics SQL dialect (`FROM events.analyticsEngine."<dataset>"`, with
-     * the required lower `timestamp` bound passed as `$since`, the last 24 hours).
-     * Thread it in as `StudioProps.analyticsSqlQuery`.
-     */
-    readonly runAnalyticsSql?: (sql: string, params?: AnalyticsSqlParams) => Promise<AnalyticsSqlQueryResult>;
-
-    /**
-     * Run one Analytics Engine SQL statement and resolve its result. The panel has
-     * no default: the AE SQL API authenticates with an **account-scoped Cloudflare
-     * API token**, and a browser bundle is the last place that may hold one. The
-     * host supplies a runner that proxies the statement through its own worker
-     * (thread it in as `StudioProps.analyticsQuery`); with none, the panel renders
-     * an empty state and makes no network call.
-     */
-    readonly runQuery?: (sql: string) => Promise<AnalyticsSqlResult>;
+    readonly runQuery?: (panel: FunctionUsagePanel) => Promise<AnalyticsSqlQueryResult>;
 }
 
-/** The default reconciled dataset/binding name (see `reconcile-bindings.ts`). */
-const DEFAULT_DATASET = "ANALYTICS";
-
-/** The Analytics SQL dialect requires a lower `timestamp` bound; the panels read the last 24 hours. */
-const ANALYTICS_SQL_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-/** `events.analyticsEngine."<dataset>"`, the dataset as a double-quoted identifier (embedded quotes doubled). */
-const analyticsEngineTable = (dataset: string): string => `events.analyticsEngine."${dataset.replaceAll('"', '""')}"`;
-
 /**
- * The binding returns rows without column metadata, so the table's columns are
- * the first row's keys, in the order the SELECT list produced them.
+ * The usage panels, in display order, and their titles. Exhaustive over
+ * {@link FunctionUsagePanel}, so a panel the bindings add without a title here
+ * is a type error.
  */
-const toPanelResult = (result: AnalyticsSqlQueryResult): AnalyticsSqlResult => {
-    const [first] = result.rows;
+const PANEL_TITLES = {
+    volume: "Request volume per function",
+    latency: "Latency p50 / p95 per function",
+    hotShards: "Hot shards",
+} as const satisfies Record<FunctionUsagePanel, MessageId>;
 
-    return {
-        columns:
-            first === undefined
-                ? []
-                : Object.keys(first).map((name) => {
-                      return { name, type: "" };
-                  }),
-        rowCount: result.rowCount,
-        rows: result.rows,
-    };
-};
-
-/**
- * One named usage panel: a title and the SQL that backs it. The columns are
- * `@lunora/bindings/analytics`'s `track()` layout — `blob1` is the event name, `blob2`
- * the function path, `double1` the handler duration — so these read against the
- * data points `ctx.analytics.track("function_call", …)` emits.
- */
-interface PanelQuery {
-    /** The same panel in the Analytics SQL dialect, given the quoted `events.analyticsEngine` table; its `COUNT` is sample-weighted by the SQL API. */
-    readonly analyticsSql: (table: string) => string;
-    readonly key: string;
-    /** The panel in the Workers Analytics Engine SQL API dialect, for `runQuery`. */
-    readonly sql: (dataset: string) => string;
-    readonly title: MessageId;
-}
-
-const PANEL_QUERIES: ReadonlyArray<PanelQuery> = [
-    {
-        analyticsSql: (table) =>
-            `SELECT blob2 AS fn, COUNT(*) AS calls FROM ${table} WHERE timestamp >= $since AND blob1 = 'function_call' GROUP BY fn ORDER BY calls DESC LIMIT 25`,
-        key: "volume",
-        sql: (dataset) => `SELECT blob2 AS fn, count() AS calls FROM ${dataset} WHERE blob1 = 'function_call' GROUP BY fn ORDER BY calls DESC LIMIT 25`,
-        title: "Request volume per function",
-    },
-    {
-        analyticsSql: (table) =>
-            `SELECT blob2 AS fn, quantileWeighted(0.50, double1, sampleInterval) AS p50, quantileWeighted(0.95, double1, sampleInterval) AS p95 FROM ${table} WHERE timestamp >= $since AND blob1 = 'function_call' GROUP BY fn ORDER BY p95 DESC LIMIT 25`,
-        key: "latency",
-        sql: (dataset) =>
-            `SELECT blob2 AS fn, quantileWeighted(0.50)(double1, _sample_interval) AS p50, quantileWeighted(0.95)(double1, _sample_interval) AS p95 FROM ${dataset} WHERE blob1 = 'function_call' GROUP BY fn ORDER BY p95 DESC LIMIT 25`,
-        title: "Latency p50 / p95 per function",
-    },
-    {
-        analyticsSql: (table) =>
-            `SELECT blob3 AS shard, COUNT(*) AS calls FROM ${table} WHERE timestamp >= $since AND blob1 = 'function_call' GROUP BY shard ORDER BY calls DESC LIMIT 25`,
-        key: "hotShards",
-        sql: (dataset) => `SELECT blob3 AS shard, count() AS calls FROM ${dataset} WHERE blob1 = 'function_call' GROUP BY shard ORDER BY calls DESC LIMIT 25`,
-        title: "Hot shards",
-    },
-];
+const PANELS = Object.keys(PANEL_TITLES) as FunctionUsagePanel[];
 
 /** Lifecycle of a single panel query. */
 interface PanelState {
     readonly error: null | string;
     readonly loading: boolean;
-    readonly result: AnalyticsSqlResult | null;
+    readonly rows: ReadonlyArray<Record<string, unknown>> | null;
 }
 
 /** Stable initial/loading state used before a panel's query has resolved. */
-const INITIAL_PANEL_STATE: PanelState = { error: null, loading: true, result: null };
+const INITIAL_PANEL_STATE: PanelState = { error: null, loading: true, rows: null };
+
+/**
+ * The result's columns: the first row's keys, in the order the SELECT list
+ * produced them — the binding returns rows without column metadata.
+ */
+const columnsOf = (rows: ReadonlyArray<Record<string, unknown>>): string[] => Object.keys(rows[0] ?? {});
 
 /** Render one panel's result table (or its loading / error / empty branch). */
 const PanelResult = ({ state, title }: { readonly state: PanelState; readonly title: MessageId }): ReactElement => {
     const t = useT();
-    const { error, loading, result } = state;
+    const { error, loading, rows } = state;
+    const columns = rows === null ? [] : columnsOf(rows);
 
     return (
         <Card className="gap-0 py-0" data-testid={`analytics-panel-${title}`}>
@@ -140,28 +76,28 @@ const PanelResult = ({ state, title }: { readonly state: PanelState; readonly ti
                 </p>
             )}
 
-            {!loading && error === null && result !== null && result.rows.length === 0 && (
+            {!loading && error === null && rows !== null && rows.length === 0 && (
                 <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="analytics-empty-rows">
                     {t("No data points yet.")}
                 </p>
             )}
 
-            {!loading && error === null && result !== null && result.rows.length > 0 && (
+            {!loading && error === null && rows !== null && rows.length > 0 && (
                 <Table>
                     <TableHeader>
                         <TableRow>
-                            {result.columns.map((column) => (
-                                <TableHead key={column.name}>{column.name}</TableHead>
+                            {columns.map((column) => (
+                                <TableHead key={column}>{column}</TableHead>
                             ))}
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {result.rows.map((row, rowIndex) => (
+                        {rows.map((row, rowIndex) => (
                             // eslint-disable-next-line react-x/no-array-index-key -- AE rows have no stable id; the row's position is the only key.
                             <TableRow key={rowIndex}>
-                                {result.columns.map((column) => (
-                                    <TableCell className="font-mono text-xs" key={column.name}>
-                                        {formatCell(row[column.name])}
+                                {columns.map((column) => (
+                                    <TableCell className="font-mono text-xs" key={column}>
+                                        {formatCell(row[column])}
                                     </TableCell>
                                 ))}
                             </TableRow>
@@ -174,77 +110,59 @@ const PanelResult = ({ state, title }: { readonly state: PanelState; readonly ti
 };
 
 /**
- * Read-only **Analytics Engine usage panel**. Queries the AE SQL API for the top
- * usage panels — request volume per function, p50/p95 latency, hot shards —
- * against the data points `ctx.analytics.track("function_call", …)` emits.
+ * Read-only **Analytics Engine usage panel**: request volume per function,
+ * p50/p95 latency, hot shards — over the data points
+ * `ctx.analytics.track("function_call", …)` emits.
  *
- * The SQL API authenticates with an account-scoped Cloudflare API token, which
- * must never reach a browser bundle — so this panel builds no SQL client of its
- * own. The host injects a `runQuery` that proxies the statement through its
- * worker; with none the panel renders an empty state and makes **no** network
- * call. The analytics panel is optional and degrades gracefully, it never
- * hard-fails when AE is unwired.
+ * The panel builds no SQL and holds no client: it asks the host's `runQuery`
+ * for each panel by key, and the host answers through an admin-gated action on
+ * `ctx.analyticsSql`. With no runner the panel renders an empty state and makes
+ * **no** network call — it never hard-fails when analytics is unwired.
  */
-export const AnalyticsPanel = ({ dataset = DEFAULT_DATASET, runAnalyticsSql, runQuery }: AnalyticsPanelProps = {}): ReactElement => {
+export const AnalyticsPanel = ({ runQuery }: AnalyticsPanelProps = {}): ReactElement => {
     const t = useT();
 
-    const [states, setStates] = useState<Record<string, PanelState>>({});
-
-    // The binding-backed runner wins over the token one; `null` when the host
-    // wired neither — the panel then renders the not-wired empty state and
-    // never fetches.
-    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: `load` depends on this, so a fresh one re-runs the load every render
-    const run = useMemo((): ((panel: PanelQuery) => Promise<AnalyticsSqlResult>) | null => {
-        if (runAnalyticsSql !== undefined) {
-            return async (panel) => {
-                const since = new Date(Date.now() - ANALYTICS_SQL_WINDOW_MS).toISOString();
-
-                return toPanelResult(await runAnalyticsSql(panel.analyticsSql(analyticsEngineTable(dataset)), { since }));
-            };
-        }
-
-        return runQuery === undefined ? null : async (panel) => runQuery(panel.sql(dataset));
-    }, [dataset, runAnalyticsSql, runQuery]);
+    const [states, setStates] = useState<Partial<Record<FunctionUsagePanel, PanelState>>>({});
 
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: an effect depends on this, so a fresh one re-runs the load every render
     const load = useCallback(
         async (token: { cancelled: boolean }): Promise<void> => {
-            if (run === null) {
+            if (runQuery === undefined) {
                 return;
             }
 
-            for (const panel of PANEL_QUERIES) {
+            for (const panel of PANELS) {
                 if (token.cancelled) {
                     return;
                 }
 
                 setStates((current) => {
-                    return { ...current, [panel.key]: { error: null, loading: true, result: null } };
+                    return { ...current, [panel]: INITIAL_PANEL_STATE };
                 });
 
                 try {
                     /* eslint-disable no-await-in-loop -- panels run sequentially to stay under the SQL API's per-token rate limit. */
                     // react-doctor-disable-next-line react-doctor/async-await-in-loop -- sequential on purpose: each read is a separate worker round-trip and firing them together would burst the very analytics endpoint being measured
-                    const result = await run(panel);
+                    const { rows } = await runQuery(panel);
                     /* eslint-enable no-await-in-loop */
 
                     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the loop-top guard is stale.
                     if (!token.cancelled) {
                         setStates((current) => {
-                            return { ...current, [panel.key]: { error: null, loading: false, result } };
+                            return { ...current, [panel]: { error: null, loading: false, rows } };
                         });
                     }
                 } catch (error_) {
                     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the loop-top guard is stale.
                     if (!token.cancelled) {
                         setStates((current) => {
-                            return { ...current, [panel.key]: { error: errorMessage(error_), loading: false, result: null } };
+                            return { ...current, [panel]: { error: errorMessage(error_), loading: false, rows: null } };
                         });
                     }
                 }
             }
         },
-        [run],
+        [runQuery],
     );
 
     useEffect(() => {
@@ -257,11 +175,11 @@ export const AnalyticsPanel = ({ dataset = DEFAULT_DATASET, runAnalyticsSql, run
         };
     }, [load]);
 
-    if (run === null) {
+    if (runQuery === undefined) {
         return (
             <EmptyState
                 description={t(
-                    "Analytics Engine reads run through your worker, never from the browser. Pass studio.analyticsSqlQuery (an action calling ctx.analyticsSql, backed by the Analytics SQL binding) or studio.analyticsQuery (a runner holding an API token server-side) to enable these panels.",
+                    "Analytics usage panels read through your worker, never from the browser. Pass studio.analyticsSqlQuery, a runner that calls an admin-only action running functionUsageQuery(panel) through ctx.analyticsSql, to enable these panels.",
                 )}
                 icon={
                     <svg
@@ -284,8 +202,8 @@ export const AnalyticsPanel = ({ dataset = DEFAULT_DATASET, runAnalyticsSql, run
 
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-analytics-panel">
-            {PANEL_QUERIES.map((panel) => (
-                <PanelResult key={panel.key} state={states[panel.key] ?? INITIAL_PANEL_STATE} title={panel.title} />
+            {PANELS.map((panel) => (
+                <PanelResult key={panel} state={states[panel] ?? INITIAL_PANEL_STATE} title={PANEL_TITLES[panel]} />
             ))}
         </div>
     );
