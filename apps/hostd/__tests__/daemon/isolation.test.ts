@@ -14,11 +14,19 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { lookupAccount } from "../../src/daemon/accounts";
-import { dropCapabilitiesPrefix, hasCapability, launchCommand, launchIdentity, parseProcessStatus } from "../../src/daemon/capabilities";
+import {
+    CHDIR_COMMAND,
+    DIRECT_LAUNCH,
+    dropCapabilitiesPrefix,
+    hasCapability,
+    launchCommand,
+    launchIdentity,
+    parseProcessStatus,
+} from "../../src/daemon/capabilities";
 import { CgroupManager, cgroupPathOf, delegatedServiceOf, fleetMemoryMax } from "../../src/daemon/cgroups";
 import { parseHostdConfig, permissionsOf } from "../../src/daemon/config";
 import { EDGE_DIRECTORIES } from "../../src/daemon/edge";
-import { ensureFleetDirectory, shareWithFleet } from "../../src/daemon/fleet-directories";
+import { ensureFleetDirectory, removeFleetDirectory, shareWithFleet } from "../../src/daemon/fleet-directories";
 import { allowlisted, FLEET_ENVIRONMENT_ALLOWLIST, fleetEnvironment } from "../../src/daemon/fleet-environment";
 import type { IsolationChecks, IsolationSystem } from "../../src/daemon/isolation";
 import { decideIsolation, helloIsolation, setUpIsolation } from "../../src/daemon/isolation";
@@ -335,6 +343,38 @@ describe("accounts and capabilities", () => {
             { gid: 993, uid: 996 },
             { args: ["run"], command: "caddy" },
         ]);
+    });
+
+    it("lets a child started as another user enter its working directory itself, after the switch", () => {
+        expect.assertions(3);
+
+        const launch = { gid: 993, prefix: dropCapabilitiesPrefix("/usr/bin/setpriv"), uid: 996 };
+
+        // Node enters `cwd` before the uid change, as the daemon — which may not enter a fleet's 0700 directory.
+        expect(launchCommand(launch, "/opt/lunora-hostd/current/celld", ["node"], "/var/lib/lunora-hostd/fleets/my-app")).toStrictEqual({
+            args: [
+                "--inh-caps=-all",
+                "--ambient-caps=-all",
+                "--no-new-privs",
+                "--",
+                CHDIR_COMMAND,
+                "--chdir=/var/lib/lunora-hostd/fleets/my-app",
+                "--",
+                "/opt/lunora-hostd/current/celld",
+                "node",
+            ],
+            command: "/usr/bin/setpriv",
+        });
+        expect(launchCommand({ gid: 993, prefix: [], uid: 996 }, "find", ["-delete"], "/srv")).toStrictEqual({
+            args: ["--chdir=/srv", "--", "find", "-delete"],
+            command: CHDIR_COMMAND,
+        });
+        // As the daemon's own user, Node may enter it.
+        expect(launchCommand({ prefix: dropCapabilitiesPrefix("/usr/bin/setpriv") }, "caddy", ["run"], "/srv")).toStrictEqual({
+            args: ["--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "--", "caddy", "run"],
+            command: "/usr/bin/setpriv",
+            cwd: "/srv",
+        });
     });
 });
 
@@ -778,5 +818,22 @@ describe("the fleet's files", () => {
 
         expect(directory).toBe(join(root, "fleets", "my-app"));
         expect(permissionsOf(statSync(directory).mode)).toBe(0o700);
+    });
+
+    it("removes a fleet's directory by emptying it as the fleet user, then rmdir-ing it, and tolerates one that is gone", async () => {
+        expect.assertions(2);
+
+        const account = { gid: process.getgid?.() ?? 1000, uid: process.getuid?.() ?? 1000, user: "lunora-fleet" };
+        const directory = ensureFleetDirectory(root, "my-app", account);
+
+        mkdirSync(join(directory, "data", "nested"), { recursive: true });
+        writeFileSync(join(directory, "data", "nested", "db.sqlite"), "");
+        await removeFleetDirectory(root, "my-app", DIRECT_LAUNCH, account);
+
+        expect(existsSync(directory)).toBe(false);
+
+        await removeFleetDirectory(root, "my-app", DIRECT_LAUNCH, account);
+
+        expect(readdirSync(join(root, "fleets"))).toStrictEqual([]);
     });
 });

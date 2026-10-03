@@ -8,7 +8,7 @@
  * group read-only; a fleet's working directory (its `HOME` and `TMPDIR`) is the
  * fleet user's own, 0700.
  */
-import { chmodSync, chownSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import type { Account } from "./accounts";
@@ -71,22 +71,32 @@ const ensureFleetDirectory = (dataDirectory: string, alias: string, account: Acc
 
 /**
  * Delete a fleet's working directory. A fleet user's directory is emptied as
- * that user (the daemon may not read it), then removed by the daemon, which
- * owns `fleets/`.
- * @throws {Error} when the fleet user's `find` fails.
+ * that user — the daemon may neither list nor enter it (0700, and the unit
+ * grants no `CAP_DAC_*`) — and the empty directory is then removed by the
+ * daemon, which owns `fleets/`: `rmdir` needs only `fleets/`, where a
+ * recursive removal would have to read the directory and fail with `EACCES`.
+ * @throws {Error} when the fleet user's `find` fails, or the directory is not empty after it.
  */
 const removeFleetDirectory = async (dataDirectory: string, alias: string, launch: ChildLaunch, account: Account | undefined): Promise<void> => {
     const directory = join(dataDirectory, "fleets", alias);
 
-    if (account !== undefined && existsSync(directory)) {
-        const result = await runChild(launch, "find", [directory, "-mindepth", "1", "-delete"], { env: { PATH: CHILD_PATH }, timeoutMs: REMOVE_TIMEOUT_MS });
+    if (account === undefined) {
+        rmSync(directory, { force: true, recursive: true });
 
-        if (result.code !== 0 || result.timedOut) {
-            throw new Error(describeFailure("find", result));
-        }
+        return;
     }
 
-    rmSync(directory, { force: true, recursive: true });
+    if (!existsSync(directory)) {
+        return;
+    }
+
+    const result = await runChild(launch, "find", [directory, "-mindepth", "1", "-delete"], { env: { PATH: CHILD_PATH }, timeoutMs: REMOVE_TIMEOUT_MS });
+
+    if (result.code !== 0 || result.timedOut) {
+        throw new Error(describeFailure("find", result));
+    }
+
+    rmdirSync(directory);
 };
 
 export { ensureFleetDirectory, prepareDataDirectory, removeFleetDirectory, shareWithFleet };

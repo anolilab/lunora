@@ -156,12 +156,12 @@ class Supervisor {
         const { config, logger } = this.options;
         const { account, cgroups, fleet } = this.isolation;
         const directory = ensureFleetDirectory(config.dataDir, launch.alias, account);
-        const command = launchCommand(fleet, binaryPaths(config).celld, celldNodeArgs(config, launch));
+        const command = launchCommand(fleet, binaryPaths(config).celld, celldNodeArgs(config, launch), directory);
 
         const process = new SupervisedProcess({
             args: command.args,
             command: command.command,
-            cwd: directory,
+            ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
             env: fleetEnvironment({
                 credentials: this.options.credentials(),
                 directory,
@@ -273,12 +273,12 @@ class Supervisor {
         mkdirSync(state, { mode: 0o700, recursive: true });
         mkdirSync(log, { mode: 0o750, recursive: true });
 
-        const command = launchCommand(this.isolation.caddy, binaryPaths(config).caddy, ["run", "--config", configPath]);
+        const command = launchCommand(this.isolation.caddy, binaryPaths(config).caddy, ["run", "--config", configPath], state);
 
         this.caddy ??= new SupervisedProcess({
             args: command.args,
             command: command.command,
-            cwd: state,
+            ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
             // Certificates and Caddy's own state stay in its own directory.
             env: { HOME: state, PATH: CHILD_PATH, XDG_CONFIG_HOME: join(state, "config"), XDG_DATA_HOME: join(state, "data") },
             ...launchIdentity(this.isolation.caddy),

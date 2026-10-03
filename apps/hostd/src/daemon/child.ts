@@ -49,9 +49,9 @@ interface ChildResult {
  */
 const runChild = async (launch: ChildLaunch, command: string, args: ReadonlyArray<string>, options: RunChildOptions): Promise<ChildResult> =>
     new Promise((resolve, reject) => {
-        const launched = launchCommand(launch, command, args);
+        const launched = launchCommand(launch, command, args, options.cwd);
         const child = spawn(launched.command, launched.args, {
-            ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+            ...(launched.cwd === undefined ? {} : { cwd: launched.cwd }),
             env: { ...options.env },
             stdio: ["pipe", "pipe", "pipe"],
             ...launchIdentity(launch),

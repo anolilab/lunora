@@ -99,11 +99,37 @@ const dropCapabilitiesPrefix = (setpriv: string, keep: ReadonlyArray<CapabilityN
     return [setpriv, `--inh-caps=${sets}`, `--ambient-caps=${sets}`, "--no-new-privs", "--"];
 };
 
-/** The command and arguments that run `command args` under `launch`. */
-const launchCommand = (launch: ChildLaunch, command: string, args: ReadonlyArray<string>): { args: string[]; command: string } => {
-    const [head, ...rest] = launch.prefix;
+/**
+ * Enters a child's working directory once the child runs as its own user
+ * (coreutils `env --chdir`, 8.28 and later: Debian 12, Ubuntu 22.04).
+ */
+const CHDIR_COMMAND = "/usr/bin/env";
 
-    return head === undefined ? { args: [...args], command } : { args: [...rest, command, ...args], command: head };
+/** What `spawn` is handed for a child: the program, its arguments, and the directory Node enters before executing it. */
+interface LaunchedCommand {
+    args: string[];
+    command: string;
+    /** Entered by the spawning process itself, before the uid change; absent when the child enters its own directory. */
+    cwd?: string;
+}
+
+/**
+ * The command and arguments that run `command args` under `launch`, in `cwd`.
+ *
+ * Node (libuv) changes into a child's `cwd` in the forked process *before* it
+ * switches to the child's uid and gid — that is, as the daemon's user, which
+ * holds no `CAP_DAC_*` and so cannot enter a directory only the child's user
+ * may (a fleet's 0700 working directory, Caddy's state). `spawn` then fails
+ * with `spawn {file} EACCES`. So a child started as another user is handed no
+ * `cwd`: it enters its directory itself, through `env --chdir`, after the
+ * switch (and after `setpriv`, so as the child's own user).
+ */
+const launchCommand = (launch: ChildLaunch, command: string, args: ReadonlyArray<string>, cwd?: string): LaunchedCommand => {
+    const enteredByChild = cwd !== undefined && launch.uid !== undefined;
+    const program = enteredByChild ? [CHDIR_COMMAND, `--chdir=${cwd}`, "--", command] : [command];
+    const [head = command, ...rest] = [...launch.prefix, ...program, ...args];
+
+    return { args: rest, command: head, ...(cwd === undefined || enteredByChild ? {} : { cwd }) };
 };
 
 /** The `uid`/`gid` spawn options of `launch` (none when it runs as the daemon's user). */
@@ -111,5 +137,5 @@ const launchIdentity = (launch: ChildLaunch): { gid?: number; uid?: number } => 
     return { ...(launch.gid === undefined ? {} : { gid: launch.gid }), ...(launch.uid === undefined ? {} : { uid: launch.uid }) };
 };
 
-export type { CapabilityName, ChildLaunch, ProcessPrivileges };
-export { CAPABILITY, DIRECT_LAUNCH, dropCapabilitiesPrefix, hasCapability, launchCommand, launchIdentity, parseProcessStatus };
+export type { CapabilityName, ChildLaunch, LaunchedCommand, ProcessPrivileges };
+export { CAPABILITY, CHDIR_COMMAND, DIRECT_LAUNCH, dropCapabilitiesPrefix, hasCapability, launchCommand, launchIdentity, parseProcessStatus };

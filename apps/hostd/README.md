@@ -296,6 +296,18 @@ tenant sandbox):
   too. So every child is started through `setpriv`, which empties the
   inheritable and ambient sets and sets `no_new_privs` before executing it:
   a fleet runs with no capabilities, Caddy with `net_bind_service` alone.
+  None of them is `CAP_DAC_*`, so the daemon is held to plain file
+  permissions like any user: it may not enter a fleet's 0700 directory or
+  Caddy's `state/`. Node enters a child's `cwd` before it switches to the
+  child's uid — as the daemon — and would fail with `spawn … EACCES`; so a
+  child started as another user is handed no `cwd`, and enters its own
+  directory after the switch, through `env --chdir` (coreutils 8.28 or later):
+  `setpriv … -- /usr/bin/env --chdir=<dir> -- <binary> …`. A fleet's
+  directory is likewise emptied by `find` as `lunora-fleet`, then removed by
+  the daemon with `rmdir`, which needs only `fleets/`.
+  [`__tests__/access.test.ts`](./__tests__/access.test.ts) computes, from
+  install.sh's layout and the modes hostd sets, what each user can enter,
+  read, write and execute, and checks every child's start against it.
 - **Environment.** A fleet's environment is built from nothing and held to an
   allowlist (`PATH`, `HOME`/`TMPDIR` = its own directory, `LANG`, celld's
   `RUST_LOG` and `CELLD_DURABILITY`, `AWS_*` for the bucket): never the config
