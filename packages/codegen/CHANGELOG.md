@@ -1,3 +1,21 @@
+## @lunora/codegen [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.252...@lunora/codegen@1.0.0-alpha.253) (2026-10-03)
+
+### Features
+
+* **observability:** instrument ctx.sql with database telemetry ([#944](https://github.com/anolilab/lunora/issues/944)) ([2fd04d0](https://github.com/anolilab/lunora/commit/2fd04d07bbbb458d64e501f02cd353f79888aa3a)), closes [#private](https://github.com/anolilab/lunora/issues/private) [#private](https://github.com/anolilab/lunora/issues/private)
+
+### Bug Fixes
+
+* **server:** type multipart, list and upload on action ctx.storage ([#947](https://github.com/anolilab/lunora/issues/947)) ([36341e5](https://github.com/anolilab/lunora/commit/36341e5bd858b81f0d7299b661842d107bd831be)), closes [#940](https://github.com/anolilab/lunora/issues/940)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.184
+* **@lunora/agent:** upgraded to 1.0.0-alpha.166
+* **@lunora/do:** upgraded to 1.0.0-alpha.191
+* **@lunora/server:** upgraded to 1.0.0-alpha.173
+
 ## @lunora/codegen [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.251...@lunora/codegen@1.0.0-alpha.252) (2026-10-03)
 
 ### ⚠ BREAKING CHANGES
