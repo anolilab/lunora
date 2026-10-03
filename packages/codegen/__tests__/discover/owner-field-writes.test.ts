@@ -682,6 +682,23 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
                 "ctx.db rows filtered on args",
                 `const rows = await ctx.db.query("t").collect();\n        const mine = rows.filter((r) => r.orgId === args.orgId);\n        mine.forEach((r) => ${insert("r.userId")}); // @write`,
             ],
+            // A call whose result is its callback's return value stays server-scoped while that value is the row's.
+            [
+                "a `then` returning the row's field",
+                `const owner = await ctx.db.get(args.id).then((row) => row.ownerId);\n        await ${insert("owner")}; // @write`,
+            ],
+            [
+                "a `find` over ctx.db rows",
+                `const row = (await ctx.db.query("t").collect()).find((r) => r.orgId === args.orgId);\n        await ${insert("row.userId")}; // @write`,
+            ],
+            [
+                "a `filter` over ctx.db rows",
+                `const [row] = (await ctx.db.query("t").collect()).filter((r) => r.orgId === args.orgId);\n        await ${insert("row.userId")}; // @write`,
+            ],
+            [
+                "a `withIndex` filtered on args",
+                `const row = await ctx.db.query("t").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first();\n        await ${insert("row.userId")}; // @write`,
+            ],
         ])("does not record a write from %s", (_label, body) => {
             expect.assertions(1);
 
@@ -691,6 +708,23 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
         });
 
         it.each([
+            // A ctx-rooted receiver does not make a callback's return value server-scoped.
+            [
+                "a `then` falling back to args",
+                `const owner = await ctx.db.get(args.id).then((org) => org?.ownerId ?? args.targetUserId);\n        await ${insert("owner")}; // @write`,
+            ],
+            [
+                "a `catch` returning args",
+                `const owner = await ctx.db.get(args.id).catch(() => args.targetUserId);\n        await ${insert("owner")}; // @write`,
+            ],
+            [
+                "a `map` over ctx.db rows returning args",
+                `const ids = (await ctx.db.query("t").collect()).map(() => args.targetUserId);\n        for (const id of ids) {\n            await ${insert("id")}; // @write\n        }`,
+            ],
+            [
+                "a `reduce` over ctx.db rows returning args",
+                `const rows = await ctx.db.query("t").collect();\n        const owner = rows.reduce(() => args.targetUserId, null);\n        await ${insert("owner")}; // @write`,
+            ],
             // `ctx.db.asId` and the `ctx.run*` results echo caller-chosen input: rooted in ctx, but not server-scoped.
             ["a `ctx.db.asId` of an arg", `await ${insert('ctx.db.asId("users", args.targetUserId)')}; // @write`],
             [

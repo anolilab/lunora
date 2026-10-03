@@ -115,6 +115,84 @@ const PRISTINE_CACHE = new WeakMap<ts.Node, boolean>();
  */
 const ECHOING_CONTEXT_METHODS = new Set<string>(["asId", "runAction", "runMutation", "runQuery"]);
 
+/**
+ * Methods whose RESULT is built from their callback's return value (or a seed
+ * argument): a ctx-rooted receiver does not make that result server-scoped.
+ */
+const CALLBACK_RESULT_METHODS = new Set<string>(["catch", "flatMap", "map", "reduce", "reduceRight", "then"]);
+
+/**
+ * Methods whose result is their receiver, one of its elements, or a value
+ * derived from it without the callback's return value (an index, a boolean):
+ * array narrowing and the `ctx.db` query builder. Their callbacks
+ * (`withIndex((q) => q.eq("orgId", args.orgId))`) only select.
+ */
+const RECEIVER_RESULT_METHODS = new Set<string>([
+    "at",
+    "every",
+    "filter",
+    "finally",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "forEach",
+    "order",
+    "slice",
+    "some",
+    "sort",
+    "withIndex",
+    "withSearchIndex",
+]);
+
+/**
+ * The values an inline callback can return: an expression body, or every
+ * `return` of a block body (a bare `return;` as `undefined`). `undefined` when
+ * `node` is not an inline arrow / function expression.
+ */
+const callbackResults = (node: TsNode): (TsNode | undefined)[] | undefined => {
+    const callback = unwrapExpression(node);
+
+    if (!Node.isArrowFunction(callback) && !Node.isFunctionExpression(callback)) {
+        return undefined;
+    }
+
+    const body = callback.getBody();
+
+    if (!Node.isBlock(body)) {
+        return [body];
+    }
+
+    return body
+        .getDescendantsOfKind(SyntaxKind.ReturnStatement)
+        .filter((statement) => statement.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor)) === callback)
+        .map((statement) => statement.getExpression());
+};
+
+/**
+ * Whether `node` may name a function: an identifier bound to a function
+ * declaration or to a variable initialized with a function, or one this cannot
+ * resolve. A callback passed by reference is not read, so it fails closed.
+ */
+const isFunctionReference = (node: TsNode): boolean => {
+    const value = unwrapExpression(node);
+
+    if (!Node.isIdentifier(value)) {
+        return Node.isPropertyAccessExpression(value) || Node.isElementAccessExpression(value);
+    }
+
+    const declaration = declarationOf(value);
+    const initializer = Node.isVariableDeclaration(declaration) ? unwrapExpression(declaration.getInitializer()) : undefined;
+
+    return (
+        declaration === undefined ||
+        Node.isFunctionDeclaration(declaration) ||
+        Node.isParameterDeclaration(declaration) ||
+        Node.isArrowFunction(initializer) ||
+        Node.isFunctionExpression(initializer)
+    );
+};
+
 /** `Promise` combinators whose result is the settled values of their argument's elements. */
 const PROMISE_COMBINATORS = new Set<string>(["all", "allSettled", "any", "race"]);
 
@@ -633,19 +711,9 @@ class ImplTaint {
                 ? unwrapExpression(input.getArguments()[0])
                 : undefined;
 
-        if (!Node.isArrowFunction(callback) && !Node.isFunctionExpression(callback)) {
-            return false;
-        }
+        const results = callback === undefined ? undefined : callbackResults(callback);
 
-        const body = callback.getBody();
-        const results = Node.isBlock(body)
-            ? body
-                  .getDescendantsOfKind(SyntaxKind.ReturnStatement)
-                  .filter((statement) => statement.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor)) === callback)
-                  .map((statement) => statement.getExpression())
-            : [body];
-
-        return results.length > 0 && results.every((result) => result !== undefined && this.isRootedInContext(result, hops));
+        return results !== undefined && results.length > 0 && results.every((result) => result !== undefined && this.isRootedInContext(result, hops));
     }
 
     private isIdentifierTainted(identifier: Identifier): boolean {
@@ -742,8 +810,55 @@ class ImplTaint {
         }
 
         const callee = unwrapExpression(call.getExpression());
+        const method = Node.isPropertyAccessExpression(callee) ? callee.getName() : undefined;
 
-        return Node.isPropertyAccessExpression(callee) && ECHOING_CONTEXT_METHODS.has(callee.getName()) ? false : undefined;
+        if (method !== undefined && ECHOING_CONTEXT_METHODS.has(method)) {
+            return false;
+        }
+
+        if (method !== undefined && CALLBACK_RESULT_METHODS.has(method)) {
+            return this.isCallbackResultServerScoped(call, hops) ? undefined : false;
+        }
+
+        // A method that returns its receiver (or one of its elements) passes through;
+        // any other method handed an inline callback may return that callback's value.
+        const takesCallback = call.getArguments().some((argument) => callbackResults(argument) !== undefined);
+
+        return takesCallback && (method === undefined || !RECEIVER_RESULT_METHODS.has(method)) ? false : undefined;
+    }
+
+    /**
+     * Whether every value a callback-result call (`then`, `map`, `reduce`, …) can
+     * produce is server-scoped: each inline callback's returned value is rooted
+     * in `ctx`, rooted in one of that callback's own parameters (which carry the
+     * ctx-rooted receiver's elements), or clean; and every other argument (a
+     * `reduce` seed) is rooted in `ctx` or clean. A callback passed by reference
+     * fails closed.
+     */
+    private isCallbackResultServerScoped(call: CallExpression, hops: number): boolean {
+        const isServerScoped = (value: TsNode, callbackParameters: ReadonlyArray<ParameterDeclaration> = []): boolean => {
+            const root = chainRootOf(value);
+            const parameter = Node.isIdentifier(root) ? parameterOf(declarationOf(root)) : undefined;
+
+            if (parameter !== undefined && callbackParameters.includes(parameter)) {
+                return true;
+            }
+
+            return this.isRootedInContext(value, hops) || !this.isTaintedValue(value, false);
+        };
+
+        return call.getArguments().every((argument) => {
+            const results = callbackResults(argument);
+
+            if (results === undefined) {
+                return !isFunctionReference(argument) && isServerScoped(argument);
+            }
+
+            const callback = unwrapExpression(argument);
+            const parameters = Node.isArrowFunction(callback) || Node.isFunctionExpression(callback) ? callback.getParameters() : [];
+
+            return results.every((result) => result === undefined || isServerScoped(result, parameters));
+        });
     }
 
     /** Whether `value`'s member / call chain is rooted, by symbol, in the impl's `ctx` parameter (directly or through `const`s). */
