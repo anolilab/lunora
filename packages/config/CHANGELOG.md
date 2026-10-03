@@ -1,3 +1,26 @@
+## @lunora/config [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.296...@lunora/config@1.0.0-alpha.297) (2026-10-03)
+
+### ⚠ BREAKING CHANGES
+
+* capability inference and the codegen probe surface changed.
+
+### Features
+
+* **cli:** add lunora dev --tunnel via cloudflare quick tunnels ([#941](https://github.com/anolilab/lunora/issues/941)) ([1446ad1](https://github.com/anolilab/lunora/commit/1446ad1f290f56f54de54b055d873ae434d3bdd7))
+
+### Bug Fixes
+
+* capability inference follow-up to [#945](https://github.com/anolilab/lunora/issues/945) ([#950](https://github.com/anolilab/lunora/issues/950)) ([e6c762e](https://github.com/anolilab/lunora/commit/e6c762e67e12aa15fb1f7ae1311c420d500f0d0b))
+* follow-ups to the cloudflare limits and ray id reviews ([#942](https://github.com/anolilab/lunora/issues/942), [#943](https://github.com/anolilab/lunora/issues/943)) ([#949](https://github.com/anolilab/lunora/issues/949)) ([34a4597](https://github.com/anolilab/lunora/commit/34a4597a14128ea2e48d52d101d0fbbf9b61e932)), closes [#944](https://github.com/anolilab/lunora/issues/944) [#944](https://github.com/anolilab/lunora/issues/944)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.254
+* **@lunora/container:** upgraded to 1.0.0-alpha.69
+* **@lunora/seed:** upgraded to 1.0.0-alpha.182
+* **@lunora/studio:** upgraded to 1.0.0-alpha.256
+
 ## @lunora/config [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.295...@lunora/config@1.0.0-alpha.296) (2026-10-03)
 
 
