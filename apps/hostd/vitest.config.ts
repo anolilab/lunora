@@ -32,6 +32,8 @@ const integration = {
         // celld boots, bundles and adopts a release; a usage report waits for its minute window to close.
         // `extends: true` concatenates the root `include`, so the unit files are excluded explicitly.
         exclude: [...configDefaults.exclude, "__tests__/*.test.ts", "__tests__/daemon/**"],
+        // One box at a time: the systemd box takes the real paths, the unit and port 80.
+        fileParallelism: false,
         hookTimeout: 180_000,
         include: INTEGRATION_TESTS,
         name: "integration",

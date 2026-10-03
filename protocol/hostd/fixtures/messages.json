@@ -166,6 +166,16 @@
                 "manifestUrl": "https://api.lunora.sh/v1/boxes/upgrades/hostd_1_0_1/manifest.json"
             }
         },
+        "job-upgrade-downgrade": {
+            "type": "job",
+            "jobId": "job_48",
+            "job": {
+                "kind": "upgrade",
+                "releaseId": "hostd_1_0_0",
+                "manifestUrl": "https://api.lunora.sh/v1/hostd/releases/hostd_1_0_0/manifest",
+                "allowDowngrade": true
+            }
+        },
         "job-diagnose": {
             "type": "job",
             "jobId": "job_47",
@@ -193,6 +203,16 @@
         "routes-empty": {
             "type": "routes",
             "table": []
+        },
+        "config": {
+            "type": "config",
+            "telemetry": {
+                "endpoint": "https://api.lunora.sh",
+                "token": "production:org_8f3a|hostd-log-ingest-key-0123456789"
+            }
+        },
+        "config-empty": {
+            "type": "config"
         },
         "ping": {
             "type": "ping"
@@ -735,6 +755,14 @@
                 },
                 "code": "INVALID_MESSAGE",
                 "path": "$.perAlias[0].p50Ms"
+            },
+            {
+                "name": "config sent by a box",
+                "frame": {
+                    "type": "config"
+                },
+                "code": "UNKNOWN_TYPE",
+                "path": "$.type"
             }
         ],
         "cloud": [
@@ -770,6 +798,21 @@
                 },
                 "code": "INVALID_MESSAGE",
                 "path": "$.job.kind"
+            },
+            {
+                "name": "upgrade allowDowngrade that is not a boolean",
+                "frame": {
+                    "type": "job",
+                    "jobId": "job_1",
+                    "job": {
+                        "kind": "upgrade",
+                        "releaseId": "hostd_1_0_0",
+                        "manifestUrl": "https://api.lunora.sh/v1/hostd/releases/hostd_1_0_0/manifest",
+                        "allowDowngrade": "yes"
+                    }
+                },
+                "code": "INVALID_MESSAGE",
+                "path": "$.job.allowDowngrade"
             },
             {
                 "name": "unknown job field",
@@ -1038,6 +1081,50 @@
                 },
                 "code": "INVALID_MESSAGE",
                 "path": "$.retry"
+            },
+            {
+                "name": "config telemetry token with a space",
+                "frame": {
+                    "type": "config",
+                    "telemetry": {
+                        "endpoint": "https://api.lunora.sh",
+                        "token": "not a token"
+                    }
+                },
+                "code": "INVALID_MESSAGE",
+                "path": "$.telemetry.token"
+            },
+            {
+                "name": "config telemetry endpoint that is not an http(s) URL",
+                "frame": {
+                    "type": "config",
+                    "telemetry": {
+                        "endpoint": "ftp://api.lunora.sh",
+                        "token": "t0ken"
+                    }
+                },
+                "code": "INVALID_MESSAGE",
+                "path": "$.telemetry.endpoint"
+            },
+            {
+                "name": "config telemetry without a token",
+                "frame": {
+                    "type": "config",
+                    "telemetry": {
+                        "endpoint": "https://api.lunora.sh"
+                    }
+                },
+                "code": "INVALID_MESSAGE",
+                "path": "$.telemetry.token"
+            },
+            {
+                "name": "config with an unknown field",
+                "frame": {
+                    "type": "config",
+                    "logs": true
+                },
+                "code": "INVALID_MESSAGE",
+                "path": "$.logs"
             }
         ]
     },

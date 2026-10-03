@@ -76,7 +76,9 @@ const HOSTD_PROTOCOL_LIMITS = {
     maxReportAliases: 500,
     /** Most entries in one `routes.table`. */
     maxRoutes: 2000,
-    /** Longest URL (`releaseUrl`, `manifestUrl`, `result.url`). */
+    /** Longest `config.telemetry.token`: printable ASCII, no spaces. */
+    maxTokenLength: 512,
+    /** Longest URL (`releaseUrl`, `manifestUrl`, `result.url`, `config.telemetry.endpoint`). */
     maxUrlLength: 2048,
 } as const;
 

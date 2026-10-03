@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
-# Installs, upgrades or removes lunora-hostd on a Debian or Ubuntu server
-# (plan 458 W7). Published with every hostd-v* GitHub Release; the release
+# Installs, upgrades or removes lunora-hostd on a Debian 12+ or Ubuntu 22.04+
+# server (plan 458 W7) — the releases whose OpenSSL 3 verifies the release
+# signature. Published with every hostd-v* GitHub Release; the release
 # notes give its SHA-256.
 #
 #   curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
-#   sudo LUNORA_HOSTD_ENROL_TOKEN=lbe_... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-#       bash install.sh --control-plane https://<cloud> --bucket <name> [--endpoint <url>]
+#   sudo bash install.sh --control-plane https://<cloud> --bucket <name> [--endpoint <url>] --version <version>
 #
-# Re-running it upgrades the box in place to the latest release (or --version).
+# It asks for the enrolment token (the studio shows it) and the bucket's access
+# key, without echoing what is typed. For automation, --token-file and
+# --credentials-file name root-only files instead.
+#
+# Re-running it upgrades the box in place to the newest release on its channel
+# (stable, or pre-release for a box on one), or to --version.
 # `--uninstall` removes hostd, its users, unit and files, and never the bucket.
 #
 # Trust: this script pins the Ed25519 release keys (TRUSTED RELEASE KEYS below,
 # the same set compiled into lunora-hostd) and checks each key's fingerprint.
 # It verifies the release manifest's signature with OpenSSL before trusting any
-# hash in it (protocol/hostd/README.md §8), checks lunora-hostd against the
-# manifest's SHA-256 and size, then has that binary verify the manifest again
-# with its own strict verifier, and checks celld and Caddy against it too.
+# hash in it (protocol/hostd/README.md §8) and checks lunora-hostd against the
+# manifest's SHA-256 and size. That binary then verifies the manifest again with
+# its own strict verifier and installs the release (`install-release`), checking
+# celld and Caddy against it, exactly as an `upgrade` job does.
 #
-# The enrolment token and the bucket credentials are read from the environment
-# (or --token), handed to `lunora-hostd enrol` through its environment, never
-# its command line, and never printed.
+# Secrets — the enrolment token and the bucket credentials — never reach a
+# command line (shell history, `ps`, sudo's log): they are typed at a hidden
+# prompt, read from a file only root can read, or taken from the environment,
+# handed to `lunora-hostd enrol` through its environment alone, and never
+# printed. Nothing else this script runs inherits them.
 set -euo pipefail
 
 REPOSITORY="anolilab/lunora"
@@ -29,7 +37,9 @@ DATA_DIR="/var/lib/lunora-hostd"
 UNIT_PATH="/etc/systemd/system/lunora-hostd.service"
 HOSTD_USER="lunora-hostd"
 FLEET_USER="lunora-fleet"
+EDGE_USER="lunora-edge"
 NFT_TABLE="lunora_hostd"
+OS_RELEASE="/etc/os-release"
 # A "2 GB" server reports a little under 2048 MiB.
 MIN_MEMORY_MIB=1900
 
@@ -69,21 +79,39 @@ Install or upgrade (run it again):
   --single-trust             run fleets even when isolation is incomplete
   --skip-bucket-check        do not probe the bucket with celld first
   --force                    enrol again, as a new box
-  --token <token>            the enrolment token (or LUNORA_HOSTD_ENROL_TOKEN)
-  --version <version>        install this release instead of the latest
+  --token-file <path>        read the enrolment token from this file (root's, 0600)
+                             instead of asking for it
+  --credentials-file <path>  read AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+                             (/ AWS_SESSION_TOKEN) lines from this file (root's,
+                             0600) instead of asking for them
+  --version <version>        install this release instead of the newest
+  --prerelease               without --version: the newest pre-release too
+                             (a box on a pre-release stays on pre-releases)
+  --allow-downgrade          install it even when it is older than the installed one
 
 Remove:
   --uninstall                remove hostd, its users and files (never the bucket)
 
-Bucket credentials come from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-(/ AWS_SESSION_TOKEN) in the environment.
+Enrolling asks for the token and the bucket's access key at a hidden prompt.
+LUNORA_HOSTD_ENROL_TOKEN and AWS_* in the environment are used when set; never
+put a secret on the command line.
 USAGE
 }
 
 VERSION=""
+# Secrets, taken out of the environment at once so nothing this script runs inherits them;
+# only `lunora-hostd enrol` gets them back (enrol below).
 TOKEN="${LUNORA_HOSTD_ENROL_TOKEN:-}"
+BUCKET_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
+BUCKET_SECRET="${AWS_SECRET_ACCESS_KEY:-}"
+BUCKET_SESSION="${AWS_SESSION_TOKEN:-}"
+unset LUNORA_HOSTD_ENROL_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+TOKEN_FILE=""
+CREDENTIALS_FILE=""
 UNINSTALL=0
 FORCE=0
+ALLOW_DOWNGRADE=0
+PRERELEASE=0
 ENROL_ARGS=()
 PLATFORM=""
 RELEASE_ID=""
@@ -110,15 +138,31 @@ parse_args() {
                 ENROL_ARGS+=("$1")
                 shift
                 ;;
-            --token)
+            --token-file)
                 need_value "$@"
-                TOKEN="$2"
+                TOKEN_FILE="$2"
                 shift 2
+                ;;
+            --credentials-file)
+                need_value "$@"
+                CREDENTIALS_FILE="$2"
+                shift 2
+                ;;
+            --token)
+                die "--token would leave the token in your shell history: paste it when asked, or use --token-file"
                 ;;
             --version)
                 need_value "$@"
                 VERSION="${2#v}"
                 shift 2
+                ;;
+            --allow-downgrade)
+                ALLOW_DOWNGRADE=1
+                shift
+                ;;
+            --prerelease)
+                PRERELEASE=1
+                shift
                 ;;
             --uninstall)
                 UNINSTALL=1
@@ -152,7 +196,7 @@ uninstall() {
 
     rm -rf -- "${INSTALL_DIR}" "${DATA_DIR}" "${CONFIG_DIR}"
 
-    for user in "${HOSTD_USER}" "${FLEET_USER}"; do
+    for user in "${HOSTD_USER}" "${FLEET_USER}" "${EDGE_USER}"; do
         if id -u "${user}" > /dev/null 2>&1; then
             userdel "${user}"
         fi
@@ -163,20 +207,49 @@ uninstall() {
 
 # --- The machine -------------------------------------------------------------
 
-check_machine() {
-    local id="" id_like=""
+# Debian 12+ or Ubuntu 22.04+ (or a derivative of either): the first releases whose
+# OpenSSL (3.x) can verify an Ed25519 signature over raw bytes (pkeyutl -rawin).
+check_os_release() {
+    local id="" id_like="" version=""
 
-    if [ -r /etc/os-release ]; then
-        # shellcheck disable=SC1091 # the running system's os-release, not a file in this repository
-        id="$(. /etc/os-release && printf '%s' "${ID:-}")"
-        # shellcheck disable=SC1091
-        id_like="$(. /etc/os-release && printf '%s' "${ID_LIKE:-}")"
+    if [ -r "${OS_RELEASE}" ]; then
+        # shellcheck disable=SC1090 # the running system's os-release, not a file in this repository
+        id="$(. "${OS_RELEASE}" && printf '%s' "${ID:-}")"
+        # shellcheck disable=SC1090
+        id_like="$(. "${OS_RELEASE}" && printf '%s' "${ID_LIKE:-}")"
+        # shellcheck disable=SC1090
+        version="$(. "${OS_RELEASE}" && printf '%s' "${VERSION_ID:-}")"
     fi
 
     case " ${id} ${id_like} " in
         *" debian "* | *" ubuntu "*) ;;
-        *) die "this installer supports Debian and Ubuntu (found '${id:-unknown}')" ;;
+        *) die "this installer supports Debian 12+ and Ubuntu 22.04+ (found '${id:-unknown}')" ;;
     esac
+
+    # Derivatives (ID_LIKE) number their releases their own way: check_openssl decides for them.
+    case "${id}" in
+        # Testing and sid carry no VERSION_ID, and are newer than any stable release.
+        debian) [ -z "${version}" ] || [ "${version%%.*}" -ge 12 ] 2> /dev/null || die "this installer supports Debian 12 (bookworm) and later, not Debian ${version:-unknown}: older releases ship OpenSSL 1.1, which cannot verify the release signature" ;;
+        ubuntu) [ "${version%%.*}" -ge 22 ] 2> /dev/null || die "this installer supports Ubuntu 22.04 and later, not Ubuntu ${version:-unknown}: older releases ship OpenSSL 1.1, which cannot verify the release signature" ;;
+        *) ;;
+    esac
+}
+
+# The release signature is checked with `openssl pkeyutl -verify -rawin`, which OpenSSL
+# 1.1 lacks: it would fail as "signature does not verify". Say what is wrong instead.
+check_openssl() {
+    local version
+
+    version="$(openssl version 2> /dev/null | awk '{ print $1 " " $2 }')"
+
+    case "${version}" in
+        "OpenSSL "[3-9].* | "OpenSSL "[1-9][0-9].*) ;;
+        *) die "install.sh verifies the release signature with OpenSSL 3 or later (Debian 12+, Ubuntu 22.04+); this machine has ${version:-no openssl}" ;;
+    esac
+}
+
+check_machine() {
+    check_os_release
 
     case "$(uname -m)" in
         x86_64 | amd64) PLATFORM="linux-x64" ;;
@@ -216,16 +289,20 @@ create_users() {
         useradd --system --user-group --home-dir "${DATA_DIR}" --no-create-home --shell /usr/sbin/nologin "${HOSTD_USER}"
     fi
 
-    if ! id -u "${FLEET_USER}" > /dev/null 2>&1; then
-        useradd --system --user-group --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin "${FLEET_USER}"
-    fi
+    # Fleets, and Caddy (which parses untrusted HTTP), each as a user that cannot read the box key.
+    for user in "${FLEET_USER}" "${EDGE_USER}"; do
+        if ! id -u "${user}" > /dev/null 2>&1; then
+            useradd --system --user-group --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin "${user}"
+        fi
+    done
 }
 
 create_directories() {
     # The key and the bucket credentials: lunora-hostd's alone.
     install -d -o "${HOSTD_USER}" -g "${HOSTD_USER}" -m 0700 "${CONFIG_DIR}"
-    # The fleet group may pass through (to its working directory), never list.
-    install -d -o "${HOSTD_USER}" -g "${FLEET_USER}" -m 0710 "${DATA_DIR}"
+    # The fleet group may pass through (to its working directory), and Caddy's user (to
+    # its own directories), never list. Nothing below is open to other users.
+    install -d -o "${HOSTD_USER}" -g "${FLEET_USER}" -m 0711 "${DATA_DIR}"
     # Releases: lunora-hostd writes them (upgrade), everyone may execute them.
     install -d -o "${HOSTD_USER}" -g "${HOSTD_USER}" -m 0755 "${INSTALL_DIR}"
 }
@@ -240,22 +317,50 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# fetch <url> <out> [curl options]: HTTPS only, also across redirects (GitHub serves assets from its CDN).
 fetch() {
-    # HTTPS only, also across redirects (GitHub serves assets from its CDN).
-    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 -o "$2" "$1"
+    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 "${@:3}" -o "$2" "$1"
 }
 
-resolve_tag() {
-    if [ -n "${VERSION}" ]; then
-        [[ "${VERSION}" =~ ^[0-9][A-Za-z0-9_.+~-]{0,63}$ ]] || die "not a release version: ${VERSION}"
-        TAG="hostd-v${VERSION}"
+# Run a command as lunora-hostd, from its data directory, with only the environment exported to it.
+as_hostd() {
+    (
+        cd "${DATA_DIR}"
+        exec setpriv --reuid="${HOSTD_USER}" --regid="${HOSTD_USER}" --init-groups -- "$@"
+    )
+}
 
-        return
+# The release to install: --version, else the newest on the box's channel, as the
+# release workflow records it in latest.json on the GitHub Release hostd-latest
+# (apps/hostd/scripts/update-latest-pointer.mjs). The repository's release list
+# is no help: it holds a release per package per version, and hostd's fall off
+# its first page at once. The pointer is only a hint — the manifest it leads to
+# is verified like any other, and lunora-hostd refuses a release older than the
+# installed one.
+resolve_tag() {
+    local channel="stable" installed=""
+
+    if [ -z "${VERSION}" ]; then
+        # A box on a pre-release stays on pre-releases (it gets a newer stable one too).
+        installed="$(jq -r '.manifest.hostd.version // empty' "${INSTALL_DIR}/current/manifest.json" 2> /dev/null || true)"
+
+        if [ "${PRERELEASE}" -eq 1 ] || [[ "${installed%%+*}" == *-* ]]; then
+            channel="prerelease"
+        fi
+
+        fetch "https://github.com/${REPOSITORY}/releases/download/hostd-latest/latest.json" "${WORK}/latest.json" ||
+            die "could not read which hostd release is the newest; pass --version <version>"
+        VERSION="$(jq -r --arg channel "${channel}" '.[$channel] // empty' "${WORK}/latest.json")"
+
+        if [ -z "${VERSION}" ]; then
+            die "no ${channel} hostd release is published yet; pass --version <version>$([ "${channel}" = "prerelease" ] || printf ' or --prerelease')"
+        fi
+
+        say "the newest ${channel} release is ${VERSION}"
     fi
 
-    fetch "https://api.github.com/repos/${REPOSITORY}/releases?per_page=100" "${WORK}/releases.json"
-    TAG="$(jq -r '[.[] | select(.draft == false and .prerelease == false and (.tag_name | startswith("hostd-v")))][0].tag_name // empty' "${WORK}/releases.json")"
-    [ -n "${TAG}" ] || die "no stable hostd release is published yet; pass --version <version>"
+    [[ "${VERSION}" =~ ^[0-9][A-Za-z0-9_.+~-]{0,63}$ ]] || die "not a release version: ${VERSION}"
+    TAG="hostd-v${VERSION}"
 }
 
 # Verify manifest.json's Ed25519 signature against a pinned key (§8.2), with OpenSSL.
@@ -282,31 +387,47 @@ verify_signature() {
         die "the release manifest's signature does not verify"
 }
 
-# Download one component for this platform and check its size and SHA-256 against the manifest.
+# Download one component for this platform as published, no larger than the manifest pins.
+# lunora-hostd checks every download against the manifest before it installs anything.
 download_component() {
-    local component="$1" out="$2" entry url sha256 size
+    local component="$1" out="$2" entry url size
 
     entry="$(jq -c --arg c "${component}" --arg p "${PLATFORM}" '.manifest[$c].artifacts[] | select(.platform == $p)' "${WORK}/manifest.json")"
     [ -n "${entry}" ] || die "release ${RELEASE_ID} ships no ${component} for ${PLATFORM}"
     url="$(jq -r '.url' <<< "${entry}")"
-    sha256="$(jq -r '.sha256' <<< "${entry}")"
     size="$(jq -r '.size' <<< "${entry}")"
-    [[ "${url}" =~ ^https:// && "${sha256}" =~ ^[0-9a-f]{64}$ && "${size}" =~ ^[0-9]+$ ]] || die "the manifest's ${component} entry is malformed"
+    [[ "${url}" =~ ^https:// && "${size}" =~ ^[0-9]+$ ]] || die "the manifest's ${component} entry is malformed"
 
     say "downloading ${component} ($((size / 1048576)) MiB)"
-    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --max-filesize "${size}" -o "${out}" "${url}"
-    [ "$(stat -c %s "${out}")" -eq "${size}" ] || die "${component}: the download is not the ${size} bytes the manifest pins"
-    printf '%s  %s\n' "${sha256}" "${out}" | sha256sum --check --status || die "${component}: SHA-256 does not match the manifest"
+    fetch "${url}" "${out}" --max-filesize "${size}"
+}
+
+# The one binary this script runs from the release: lunora-hostd, checked against the
+# SHA-256 and size of the manifest it has just verified, decompressed when published so.
+bootstrap_hostd() {
+    local entry sha256 size
+
+    entry="$(jq -c --arg p "${PLATFORM}" '.manifest.hostd.artifacts[] | select(.platform == $p)' "${WORK}/manifest.json")"
+    sha256="$(jq -r '.sha256' <<< "${entry}")"
+    size="$(jq -r '.size' <<< "${entry}")"
+    [[ "${sha256}" =~ ^[0-9a-f]{64}$ ]] || die "the manifest's hostd entry is malformed"
+    [ "$(stat -c %s "${WORK}/lunora-hostd")" -eq "${size}" ] || die "lunora-hostd: the download is not the ${size} bytes the manifest pins"
+    printf '%s  %s\n' "${sha256}" "${WORK}/lunora-hostd" | sha256sum --check --status || die "lunora-hostd: SHA-256 does not match the manifest"
 
     if [ "$(jq -r '.compression // empty' <<< "${entry}")" = "gzip" ]; then
-        gzip -dc "${out}" > "${out}.bin"
+        gzip -dc "${WORK}/lunora-hostd" > "${WORK}/bootstrap"
     else
-        cp "${out}" "${out}.bin"
+        cp "${WORK}/lunora-hostd" "${WORK}/bootstrap"
     fi
+
+    chmod 0755 "${WORK}/bootstrap"
 }
 
 install_release() {
-    WORK="$(mktemp -d)"
+    # Not the temporary directory, which may be mounted noexec, and not the install
+    # directory, which lunora-hostd may write: a root-owned directory beside it.
+    WORK="$(mktemp -d "${INSTALL_DIR%/*}/.lunora-hostd-install.XXXXXX")"
+    chmod 0755 "${WORK}"
     resolve_tag
 
     local base="https://github.com/${REPOSITORY}/releases/download/${TAG}"
@@ -320,51 +441,101 @@ install_release() {
     download_component hostd "${WORK}/lunora-hostd"
     download_component celld "${WORK}/celld"
     download_component caddy "${WORK}/caddy"
+    chmod 0644 "${WORK}/lunora-hostd" "${WORK}/celld" "${WORK}/caddy" "${WORK}/manifest.json"
+    bootstrap_hostd
 
-    local target="${INSTALL_DIR}/${RELEASE_ID}"
-    local staging="${target}.partial"
+    # lunora-hostd's bytes match the manifest this script verified; now its own strict
+    # verifier checks the manifest and every download again, and installs the release
+    # exactly as an upgrade does — as lunora-hostd, which owns the install directory.
+    local downgrade=()
 
-    # Staged under the install directory, not the temporary one, which may be mounted noexec.
-    rm -rf -- "${staging}"
-    install -d -m 0755 "${staging}"
-    install -m 0755 "${WORK}/lunora-hostd.bin" "${staging}/lunora-hostd"
-    install -m 0755 "${WORK}/celld.bin" "${staging}/celld"
-    install -m 0755 "${WORK}/caddy.bin" "${staging}/caddy"
-    install -m 0644 "${WORK}/manifest.json" "${staging}/manifest.json"
-
-    # lunora-hostd's bytes match the manifest this script verified; now its own,
-    # strict verifier checks the manifest and every download again.
-    "${staging}/lunora-hostd" verify-release "${WORK}/manifest.json" --platform "${PLATFORM}" \
-        --hostd "${WORK}/lunora-hostd" --celld "${WORK}/celld" --caddy "${WORK}/caddy" > /dev/null ||
-        die "lunora-hostd refused the release"
-    "${staging}/celld" --version > /dev/null || die "celld does not run on this machine"
-    "${staging}/caddy" version > /dev/null || die "caddy does not run on this machine"
-
-    local previous=""
-
-    if [ -L "${INSTALL_DIR}/current" ]; then
-        previous="$(basename "$(readlink "${INSTALL_DIR}/current")")"
+    if [ "${ALLOW_DOWNGRADE}" -eq 1 ]; then
+        downgrade=(--allow-downgrade)
     fi
 
-    chown -R "${HOSTD_USER}:${HOSTD_USER}" "${staging}"
-    rm -rf -- "${target}"
-    mv -T "${staging}" "${target}"
-    ln -sfn "${RELEASE_ID}" "${INSTALL_DIR}/current.next"
-    chown -h "${HOSTD_USER}:${HOSTD_USER}" "${INSTALL_DIR}/current.next"
-    mv -T "${INSTALL_DIR}/current.next" "${INSTALL_DIR}/current"
-    say "installed ${RELEASE_ID} at ${target}"
+    as_hostd "${WORK}/bootstrap" install-release "${WORK}/manifest.json" --from "${WORK}" \
+        --install-dir "${INSTALL_DIR}" --platform "${PLATFORM}" "${downgrade[@]}" > /dev/null ||
+        die "lunora-hostd refused the release"
+    say "installed ${RELEASE_ID}"
+}
 
-    # Keep the release that ran before (for a rollback: point current back at it); remove older ones.
-    local release
+# --- Secrets -----------------------------------------------------------------
 
-    for release in "${INSTALL_DIR}"/*/; do
-        release="$(basename "${release}")"
+needs_enrolment() {
+    [ ! -f "${CONFIG_DIR}/config.json" ] || [ "${FORCE}" -eq 1 ]
+}
 
-        if [ ! -L "${INSTALL_DIR}/${release}" ] && [ "${release}" != "${RELEASE_ID}" ] && [ "${release}" != "${previous}" ] &&
-            [ -f "${INSTALL_DIR}/${release}/manifest.json" ]; then
-            rm -rf -- "${INSTALL_DIR:?}/${release}"
+# A file holding a secret for automation: a regular file, root's, readable by root alone.
+check_secret_file() {
+    local path="$1" what="$2"
+
+    [ -f "${path}" ] && [ ! -L "${path}" ] || die "${what} ${path} is not a regular file"
+    [ "$(stat -c %u "${path}")" = "0" ] || die "${what} ${path} must belong to root"
+
+    case "$(stat -c %a "${path}")" in
+        600 | 400) ;;
+        *) die "${what} ${path} must be readable by root alone (chmod 600 ${path})" ;;
+    esac
+}
+
+# Ask on the terminal without echoing what is typed. Only when stdin is a terminal.
+ask_secret() {
+    local prompt="$1" answer=""
+
+    [ -t 0 ] || return 1
+    printf '%s' "${prompt}" >&2
+    IFS= read -rs answer || true
+    printf '\n' >&2
+    printf '%s' "${answer}"
+}
+
+# KEY=value lines; only the AWS_* names enrol uses are read, nothing is evaluated.
+read_credentials_file() {
+    local name value
+
+    check_secret_file "${CREDENTIALS_FILE}" "the credentials file"
+
+    while IFS='=' read -r name value || [ -n "${name}" ]; do
+        case "${name}" in
+            AWS_ACCESS_KEY_ID) BUCKET_KEY_ID="${value}" ;;
+            AWS_SECRET_ACCESS_KEY) BUCKET_SECRET="${value}" ;;
+            AWS_SESSION_TOKEN) BUCKET_SESSION="${value}" ;;
+            *) ;;
+        esac
+    done < "${CREDENTIALS_FILE}"
+}
+
+# Gather what enrolling needs before anything is downloaded, so a missing token
+# fails at once rather than after the release is installed.
+read_secrets() {
+    needs_enrolment || return 0
+
+    if [ -n "${TOKEN_FILE}" ]; then
+        check_secret_file "${TOKEN_FILE}" "the token file"
+        IFS= read -r TOKEN < "${TOKEN_FILE}" || true
+    fi
+
+    if [ -z "${TOKEN}" ]; then
+        TOKEN="$(ask_secret "Enrolment token (the studio shows it; typing is not echoed): ")" || true
+    fi
+
+    TOKEN="${TOKEN//[[:space:]]/}"
+    [ -n "${TOKEN}" ] || die "no enrolment token: run install.sh in a terminal and paste it when asked, or pass --token-file <file>"
+
+    if [ -n "${CREDENTIALS_FILE}" ]; then
+        read_credentials_file
+    elif [ -z "${BUCKET_KEY_ID}" ] && [ -t 0 ]; then
+        printf '%s' "Bucket access key id (leave empty to use this machine's own credentials, e.g. an instance role): " >&2
+        IFS= read -r BUCKET_KEY_ID || true
+
+        if [ -n "${BUCKET_KEY_ID}" ]; then
+            BUCKET_SECRET="$(ask_secret "Bucket secret access key (typing is not echoed): ")" || true
         fi
-    done
+    fi
+
+    if [ -n "${BUCKET_KEY_ID}" ] && [ -z "${BUCKET_SECRET}" ]; then
+        die "a bucket access key id needs its secret access key"
+    fi
 }
 
 # --- The service -------------------------------------------------------------
@@ -408,7 +579,7 @@ Delegate=yes
 # through setpriv, which drops the inherited set; Caddy keeps net_bind_service):
 #   NET_BIND_SERVICE  Caddy on ports 80 and 443
 #   NET_ADMIN         the fleets' nftables egress table
-#   SETUID, SETGID    start fleets as lunora-fleet
+#   SETUID, SETGID    start fleets as lunora-fleet, Caddy as lunora-edge
 #   KILL              stop fleets, which run as another user
 #   CHOWN             hand fleet directories to lunora-fleet
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN
@@ -443,21 +614,28 @@ UNIT
 }
 
 enrol() {
-    if [ -f "${CONFIG_DIR}/config.json" ] && [ "${FORCE}" -eq 0 ]; then
+    if ! needs_enrolment; then
         say "this box is enrolled already: upgraded in place (pass --force with a new token to enrol it again)"
 
         return
     fi
 
-    [ -n "${TOKEN}" ] || die "no enrolment token: pass --token or set LUNORA_HOSTD_ENROL_TOKEN (the studio shows one)"
+    [ -n "${TOKEN}" ] || die "no enrolment token: run install.sh in a terminal and paste it when asked, or pass --token-file <file>"
 
-    # As lunora-hostd, so it owns what enrol writes. The token travels in the
-    # environment only, never on a command line another user can read.
+    # As lunora-hostd, so it owns what enrol writes. The secrets travel in its
+    # environment only (exported in this subshell alone), never on a command line.
     (
-        cd "${DATA_DIR}"
         export LUNORA_HOSTD_ENROL_TOKEN="${TOKEN}"
-        exec setpriv --reuid="${HOSTD_USER}" --regid="${HOSTD_USER}" --init-groups -- \
-            "${INSTALL_DIR}/current/lunora-hostd" enrol "${ENROL_ARGS[@]}"
+
+        if [ -n "${BUCKET_KEY_ID}" ]; then
+            export AWS_ACCESS_KEY_ID="${BUCKET_KEY_ID}" AWS_SECRET_ACCESS_KEY="${BUCKET_SECRET}"
+        fi
+
+        if [ -n "${BUCKET_SESSION}" ]; then
+            export AWS_SESSION_TOKEN="${BUCKET_SESSION}"
+        fi
+
+        as_hostd "${INSTALL_DIR}/current/lunora-hostd" enrol "${ENROL_ARGS[@]}"
     ) || die "enrolment failed (see above); nothing was started"
 }
 
@@ -477,7 +655,9 @@ main() {
     fi
 
     check_machine
+    read_secrets
     install_packages
+    check_openssl
     create_users
     create_directories
     install_release

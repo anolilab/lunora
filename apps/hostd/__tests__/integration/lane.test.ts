@@ -20,13 +20,18 @@ import { request } from "node:http";
 import { AwsClient } from "aws4fetch";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import type { ReportMessage } from "../../src/wire/types";
+import type { DeployJob, ReportMessage } from "../../src/wire/types";
 import { freePort } from "../daemon/helpers/box";
 import { FakeControlPlane } from "../daemon/helpers/fake-control-plane";
 import type { LaneBox } from "./lane";
 import { createLaneBox, ISOLATED, LANE_CREDENTIALS, patchConfig, required, run, SYSTEM_PATH, tool } from "./lane";
 
 const ALIAS = "lane-app";
+
+const OTHER = "lane-other";
+
+/** The ingest key the lane's control plane hands the box for its logs. */
+const LOG_TOKEN = ["lane", "log-ingest-key"].join("|");
 
 const BUCKET = "hostd-lane";
 
@@ -109,6 +114,10 @@ const pollUntil = async <T>(read: () => Promise<T>, done: (value: T) => boolean,
     return value;
 };
 
+/** A stored release, as the control plane serves it at `/v1/boxes/releases/:id`, of a Worker answering `body`. */
+const storedRelease = (worker: string): string =>
+    JSON.stringify({ bundle: Buffer.from(worker).toString("base64"), manifest: { bindings: [], compatibilityDate: "2026-04-01" } });
+
 /** Whether a TCP connect to `host:port` succeeds when made as `user` (root's own when absent). */
 const connectsAs = async (user: string | undefined, host: string, port: number): Promise<string> => {
     const script = `require("net").connect(${String(port)}, ${JSON.stringify(host)}).setTimeout(4000).on("connect", () => { console.log("connected"); process.exit(0); }).on("timeout", () => { console.log("timeout"); process.exit(0); }).on("error", (error) => { console.log(error.code); process.exit(0); })`;
@@ -128,6 +137,22 @@ describe.sequential("lunora-hostd against real celld, Caddy and a bucket", () =>
     let httpPort: number;
     let adminPort: number;
     let askPort: number;
+    /** The URL the first deploy answered with; every converge of the alias must keep it. */
+    let firstUrl: string;
+
+    /** The fleets the host runs right now, as it reports them (state.json), sorted. */
+    const running = (): string[] => {
+        const state = JSON.parse(readFileSync(`${box.dataDir}/state.json`, "utf8")) as { fleets: Record<string, { state: string }> };
+
+        return Object.entries(state.fleets)
+            .filter(([, record]) => record.state === "running")
+            .map(([alias]) => alias)
+            .toSorted((a, b) => a.localeCompare(b));
+    };
+
+    const deployJob = (alias: string, deploymentId: string): DeployJob => {
+        return { alias, crons: [], deploymentId, kind: "deploy", releaseUrl: `${plane.origin}/v1/boxes/releases/${deploymentId}`, vars: { LANE: "1" } };
+    };
 
     beforeAll(async () => {
         plane = new FakeControlPlane();
@@ -188,10 +213,7 @@ describe.sequential("lunora-hostd against real celld, Caddy and a bucket", () =>
     it("deploys a release and serves it through Caddy", async () => {
         expect.assertions(3);
 
-        plane.releases.set(
-            "dep_lane_1",
-            JSON.stringify({ bundle: Buffer.from(WORKER).toString("base64"), manifest: { bindings: [], compatibilityDate: "2026-04-01" } }),
-        );
+        plane.releases.set("dep_lane_1", storedRelease(WORKER));
         plane.pushRoutes([{ alias: ALIAS, hostname: `${ALIAS}.${plane.hostname}` }]);
 
         const { progress, result } = await plane.dispatch({
@@ -203,10 +225,9 @@ describe.sequential("lunora-hostd against real celld, Caddy and a bucket", () =>
             vars: { LANE: "1" },
         });
 
-        expect(result, `${progress.join("\n")}\n${box.logs()}`).toMatchObject({
-            ok: true,
-            url: `http://${ALIAS}.${plane.hostname}${httpPort === 80 ? "" : `:${String(httpPort)}`}`,
-        });
+        firstUrl = `http://${ALIAS}.${plane.hostname}${httpPort === 80 ? "" : `:${String(httpPort)}`}`;
+
+        expect(result, `${progress.join("\n")}\n${box.logs()}`).toMatchObject({ ok: true, url: firstUrl });
 
         const served = await pollUntil(
             async () =>
@@ -237,6 +258,100 @@ describe.sequential("lunora-hostd against real celld, Caddy and a bucket", () =>
             reported.some((entry) => entry.requests > 0),
             box.logs(),
         ).toBe(true);
+    });
+
+    /*
+     * The target-driver conformance legs (apps/cloud/__tests__/support/target-conformance.ts)
+     * through a real hostd: what `celld-vps`'s driver sends, a box must converge on.
+     * "running" is what the host reports: the fleets state.json says run.
+     */
+
+    it("converges idempotently: the same release twice leaves one fleet on it, at the same URL", async () => {
+        expect.assertions(2);
+
+        const again = await plane.dispatch(deployJob(ALIAS, "dep_lane_1"));
+
+        expect(again.result, again.progress.join("\n")).toMatchObject({ ok: true, url: firstUrl });
+        expect(running()).toStrictEqual([ALIAS]);
+    });
+
+    it("converges a new release onto the same fleet, at the same URL, and serves it", async () => {
+        expect.assertions(3);
+
+        plane.releases.set("dep_lane_2", storedRelease(WORKER.replace("hello from the hostd lane", "hello again from the hostd lane")));
+
+        const { progress, result } = await plane.dispatch(deployJob(ALIAS, "dep_lane_2"));
+
+        expect(result, progress.join("\n")).toMatchObject({ ok: true, url: firstUrl });
+        expect(running()).toStrictEqual([ALIAS]);
+
+        // The node adopts the new version at its next pointer poll.
+        const served = await pollUntil(
+            async () =>
+                viaCaddy(httpPort, `${ALIAS}.${plane.hostname}`, "/").catch(() => {
+                    return { body: "", status: 0 };
+                }),
+            (response) => response.body === "hello again from the hostd lane",
+            120_000,
+        );
+
+        expect(served.body, box.logs()).toBe("hello again from the hostd lane");
+    });
+
+    it("gives each alias its own URL", async () => {
+        expect.assertions(3);
+
+        plane.pushRoutes([
+            { alias: ALIAS, hostname: `${ALIAS}.${plane.hostname}` },
+            { alias: OTHER, hostname: `${OTHER}.${plane.hostname}` },
+        ]);
+
+        const { progress, result } = await plane.dispatch(deployJob(OTHER, "dep_lane_1"));
+
+        expect(result, progress.join("\n")).toMatchObject({ ok: true });
+        expect(result.url).not.toBe(firstUrl);
+        expect(running()).toStrictEqual([ALIAS, OTHER]);
+    });
+
+    it("destroys idempotently, and a fleet that never existed without failing", async () => {
+        expect.assertions(4);
+
+        const destroy = async (alias: string) => {
+            const { result } = await plane.dispatch({ alias, deleteData: true, kind: "destroy" });
+
+            return result;
+        };
+
+        await expect(destroy(OTHER)).resolves.toMatchObject({ ok: true });
+        await expect(destroy(OTHER)).resolves.toMatchObject({ ok: true });
+        await expect(destroy("never-deployed")).resolves.toMatchObject({ ok: true });
+        expect(running()).toStrictEqual([ALIAS]);
+    });
+
+    it("refuses a release it cannot run, and forwards the failure to the control plane as a log", async () => {
+        expect.assertions(2);
+
+        plane.pushConfig({ telemetry: { endpoint: plane.origin, token: LOG_TOKEN } });
+        plane.releases.set("dep_lane_bad", JSON.stringify({ bundle: "AA==", manifest: { bindings: [{ binding: "AI", type: "ai" }] } }));
+
+        const { result } = await plane.dispatch(deployJob(ALIAS, "dep_lane_bad"));
+
+        expect(result).toMatchObject({ error: { code: "RELEASE_INVALID" }, ok: false });
+
+        const forwarded = await pollUntil(
+            async () => plane.forwardedLogs,
+            (records) => records.some((record) => record.body.includes("RELEASE_INVALID")),
+            30_000,
+        );
+
+        expect(
+            forwarded.find((record) => record.body.includes("RELEASE_INVALID")),
+            box.logs(),
+        ).toMatchObject({
+            attributes: { box: plane.hostname.split(".")[0], source: "hostd" },
+            service: "lunora-hostd",
+            severity: "WARN",
+        });
     });
 
     // The probe suite needs root and systemd (LUNORA_HOSTD_ISOLATION=1, as the CI job runs it); a local run proves the functional path.
@@ -280,26 +395,43 @@ describe.sequential("lunora-hostd against real celld, Caddy and a bucket", () =>
         expect(internalPort).toBeGreaterThan(0);
     });
 
-    it.runIf(ISOLATED)("runs the fleet as lunora-fleet without capabilities in its own memory cgroup, and Caddy with only port binding", async () => {
-        expect.assertions(6);
+    it.runIf(ISOLATED)(
+        "runs the fleet as lunora-fleet without capabilities in its own memory cgroup, and Caddy as lunora-edge with only port binding",
+        async () => {
+            expect.assertions(8);
 
-        const fleetUid = execFileSync(tool("id"), ["-u", "lunora-fleet"], { encoding: "utf8" }).trim();
-        const [node] = execFileSync(tool("pgrep"), ["-u", fleetUid, "-f", "celld"], { encoding: "utf8" }).trim().split("\n");
-        const [caddy] = execFileSync(tool("pgrep"), ["-x", "caddy"], { encoding: "utf8" }).trim().split("\n");
-        const status = (pid: string | undefined): string => readFileSync(`/proc/${pid ?? "self"}/status`, "utf8");
-        const field = (text: string, name: string): string => new RegExp(String.raw`^${name}:\s*(\S+)`, "mu").exec(text)?.[1] ?? "";
-        const cgroup = readFileSync(`/proc/${node ?? "self"}/cgroup`, "utf8").trim();
+            const fleetUid = execFileSync(tool("id"), ["-u", "lunora-fleet"], { encoding: "utf8" }).trim();
+            const [node] = execFileSync(tool("pgrep"), ["-u", fleetUid, "-f", "celld"], { encoding: "utf8" }).trim().split("\n");
+            const [caddy] = execFileSync(tool("pgrep"), ["-x", "caddy"], { encoding: "utf8" }).trim().split("\n");
+            const status = (pid: string | undefined): string => readFileSync(`/proc/${pid ?? "self"}/status`, "utf8");
+            const field = (text: string, name: string): string => new RegExp(String.raw`^${name}:\s*(\S+)`, "mu").exec(text)?.[1] ?? "";
+            const cgroup = readFileSync(`/proc/${node ?? "self"}/cgroup`, "utf8").trim();
 
-        expect(field(status(node), "Uid")).toBe(fleetUid);
-        expect([field(status(node), "CapEff"), field(status(node), "NoNewPrivs")]).toStrictEqual(["0000000000000000", "1"]);
-        expect(cgroup).toMatch(new RegExp(String.raw`/lunora-hostd\.service/fleet-${ALIAS}$`, "u"));
-        expect(Number(readFileSync(`/sys/fs/cgroup${cgroup.slice(3)}/memory.max`, "utf8"))).toBeGreaterThan(0);
-        // CAP_NET_BIND_SERVICE is bit 10.
-        expect(field(status(caddy), "CapEff")).toBe("0000000000000400");
-        expect(existsSync("/etc/lunora-hostd/box.key") && execFileSync(tool("stat"), ["-c", "%U %a", "/etc/lunora-hostd"], { encoding: "utf8" }).trim()).toBe(
-            "lunora-hostd 700",
-        );
-    });
+            expect(field(status(node), "Uid")).toBe(fleetUid);
+            expect([field(status(node), "CapEff"), field(status(node), "NoNewPrivs")]).toStrictEqual(["0000000000000000", "1"]);
+            expect(cgroup).toMatch(new RegExp(String.raw`/lunora-hostd\.service/fleet-${ALIAS}$`, "u"));
+            expect(Number(readFileSync(`/sys/fs/cgroup${cgroup.slice(3)}/memory.max`, "utf8"))).toBeGreaterThan(0);
+            // CAP_NET_BIND_SERVICE is bit 10.
+            expect(field(status(caddy), "CapEff")).toBe("0000000000000400");
+            expect(field(status(caddy), "Uid")).toBe(execFileSync(tool("id"), ["-u", "lunora-edge"], { encoding: "utf8" }).trim());
+
+            // Caddy's user reaches none of the daemon's secrets or state.
+            const readsAsEdge = await Promise.all(
+                ["/etc/lunora-hostd/box.key", "/etc/lunora-hostd/bucket.env", `${box.dataDir}/state.json`].map(async (path) => {
+                    const attempt = await run(tool("setpriv"), ["--reuid=lunora-edge", "--regid=lunora-edge", "--clear-groups", "--", tool("cat"), path], {
+                        PATH: SYSTEM_PATH,
+                    });
+
+                    return attempt.code === 0;
+                }),
+            );
+
+            expect(readsAsEdge).toStrictEqual([false, false, false]);
+            expect(
+                existsSync("/etc/lunora-hostd/box.key") && execFileSync(tool("stat"), ["-c", "%U %a", "/etc/lunora-hostd"], { encoding: "utf8" }).trim(),
+            ).toBe("lunora-hostd 700");
+        },
+    );
 
     it("destroys the fleet and deletes exactly its prefix with deleteData", async () => {
         expect.assertions(3);
@@ -316,6 +448,31 @@ describe.sequential("lunora-hostd against real celld, Caddy and a bucket", () =>
 
         expect(result, progress.join("\n")).toMatchObject({ ok: true });
         await expect(listKeys(endpoint, `fleets/${ALIAS}/`)).resolves.toStrictEqual([]);
+    });
+
+    it("re-creates a destroyed fleet on the next converge, at the same URL", async () => {
+        expect.assertions(3);
+
+        const { progress, result } = await plane.dispatch(deployJob(ALIAS, "dep_lane_1"));
+
+        // As celld-vps's driver does after every job: the routing table again, which names the alias.
+        plane.pushRoutes([{ alias: ALIAS, hostname: `${ALIAS}.${plane.hostname}` }]);
+
+        expect(result, progress.join("\n")).toMatchObject({ ok: true, url: firstUrl });
+        expect(running()).toStrictEqual([ALIAS]);
+
+        const served = await pollUntil(
+            async () =>
+                viaCaddy(httpPort, `${ALIAS}.${plane.hostname}`, "/").catch(() => {
+                    return { body: "", status: 0 };
+                }),
+            (response) => response.status === 200,
+            90_000,
+        );
+
+        expect(served).toStrictEqual({ body: "hello from the hostd lane", status: 200 });
+
+        await plane.dispatch({ alias: ALIAS, deleteData: true, kind: "destroy" });
     });
 
     it("stops cleanly on SIGTERM", async () => {

@@ -42,6 +42,7 @@ box                                         control plane
  |<---------------------------- challenge {nonce}|
  |-- auth {signature} ------------------------->|  verify Ed25519 over §6.1
  |<------------------------------ routes {table}|  full table
+ |<------------------------- config {telemetry?}|  runtime configuration
  |<------------------------ job {jobId, job} ...|
  |-- progress {jobId, line} ... --------------->|
  |-- result {jobId, ok, ...} ------------------>|  exactly one per job
@@ -57,6 +58,9 @@ box                                         control plane
    signature gets `error {code: "AUTH_FAILED"}` and a close.
 3. After `auth`, the control plane pushes the full `routes` table, then on
    every change. Each `routes` replaces the previous table; it is never a delta.
+   It sends a `config` after `auth` too, and again whenever it changes; each
+   `config` replaces the previous one. A box that has not received one forwards
+   no logs.
 4. Each `job` carries a `jobId` unique to the box. The box streams any number of
    `progress` frames for it and ends it with exactly one `result`.
 5. `ping` may be sent at any time after `auth`; the box answers `pong`.
@@ -70,6 +74,10 @@ The current version is **1** (`HOSTD_PROTOCOL_VERSION`). A version is an
 integer that only grows; any change a peer of the previous version could
 misread bumps it.
 
+- Version 1 was still being completed before the first `lunora-hostd`
+  release: the `config` frame and `upgrade.allowDowngrade` (§5.2) joined it
+  then, and every released box of version 1 accepts both. From the first
+  release on, a change an older box would reject bumps the version.
 - The box announces the single version it speaks in `hello.protocol`.
 - The control plane speaks a set of versions. If `hello.protocol` is in the
   set, the session runs at that version. Otherwise it sends
@@ -99,6 +107,7 @@ array entry) has a missing required field, a field of the wrong type, or an
 | `report.perAlias`                       | 500 entries             |
 | `routes.table`                          | 2 000 entries           |
 | `job.crons` (deploy)                    | 64 entries, ≤ 256 chars |
+| `config.telemetry.token`                | 512 characters          |
 | URLs                                    | 2 048 characters        |
 | alias                                   | 63 characters           |
 | hostname                                | 253 characters          |
@@ -218,7 +227,7 @@ nonce is single use.
 | `deploy`   | `alias`, `deploymentId` (id), `releaseUrl` (URL), `vars` (object of var name → string), `crons` (string[]), `compatibilityDate`? (date) |
 | `destroy`  | `alias`, `deleteData` (boolean)                                                                                                         |
 | `reload`   | `alias`                                                                                                                                 |
-| `upgrade`  | `releaseId` (id), `manifestUrl` (URL)                                                                                                   |
+| `upgrade`  | `releaseId` (id), `manifestUrl` (URL), `allowDowngrade`? (boolean)                                                                      |
 | `diagnose` | none                                                                                                                                    |
 
 A job object with an unknown `kind` is rejected. `vars` merges vars and secrets
@@ -227,8 +236,39 @@ a signed request (§6.2); a box MUST refuse a `releaseUrl` or `manifestUrl`
 whose origin is not the control plane it enrolled with, since it would
 otherwise sign requests for a third party.
 
+`upgrade` is **anti-rollback** by default: a box MUST refuse
+(`UPGRADE_REFUSED`) a release whose `manifest.hostd.version` is older than the
+`lunora-hostd` it has installed, by semantic-version precedence (a pre-release
+is older than its release; build metadata is ignored; a version that is not a
+semantic version cannot be ordered and is refused too). An old release is
+still validly signed, so the signature alone cannot stop a control plane — or
+whoever holds its admin token — from rolling a box back onto a release with a
+fixed vulnerability. `allowDowngrade: true` lifts the check for that one job;
+a control plane sends it only when an operator explicitly asks for a rollback.
+A release equal to the installed one is not a downgrade; the release already
+running is a no-op.
+
 **`routes`** — `{type, table}`: the full routing table, ≤ 2 000 entries
 (§4), each `{hostname, alias}`, hostnames unique.
+
+**`config`** — `{type, telemetry?}`: the box's runtime configuration (plan 458
+W6). `telemetry` is `{endpoint, token}`: `endpoint` (URL) is an OTLP/HTTP base
+and `token` (1–512 printable ASCII characters, no spaces) the organization's
+ingest key. With it, the box forwards its own logs — hostd's warnings and
+errors, each celld node's stderr, Caddy's warnings and errors — as OTLP/JSON
+log records, `POST {endpoint}/v1/logs` with `Authorization: Bearer {token}`;
+without it, it forwards nothing. Each record carries the attributes `box` (the
+box's slug, the first label of its hostname), `source` (`hostd`, `celld` or
+`caddy`) and, for a fleet's line, `alias`; the resource's `service.name` is the
+alias for a fleet's line and `lunora-hostd` otherwise. A box holds the token in
+memory only and never logs it, buffers a bounded number of records (dropping
+the oldest), redacts known secrets before sending, and does not send the token
+to a plain-`http:` endpoint unless its control plane is plain `http:` itself
+(a development setup).
+
+```json
+{ "type": "config", "telemetry": { "endpoint": "https://api.lunora.sh", "token": "production:org_8f3a|…" } }
+```
 
 **`ping`** — `{type}`.
 
@@ -431,7 +471,8 @@ A box (and the control plane, before it offers a release):
    fetched or taken from the envelope.
 3. MUST verify `signature` over §8.2 with that key.
 4. For an `upgrade` job, MUST refuse a manifest whose `releaseId` differs from
-   the job's.
+   the job's, and one whose `hostd.version` is older than the installed
+   `lunora-hostd` unless the job sets `allowDowngrade` (§5.2).
 5. MUST check each artifact it installs against `size`, then `sha256`, before
    decompressing or executing it, and refuse any mismatch.
 

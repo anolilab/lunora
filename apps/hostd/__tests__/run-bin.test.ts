@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -73,7 +75,7 @@ describe(runBin, () => {
         expect(status.stderr).toMatch(/enrol this box first/u);
     });
 
-    it("does not echo the token when enrol is missing its bucket", async () => {
+    it("does not echo a token passed on the command line", async () => {
         expect.assertions(2);
 
         const result = await run(["enrol", "--token", "secret-token"]);
@@ -83,31 +85,41 @@ describe(runBin, () => {
     });
 });
 
-describe("lunora-hostd verify-release", () => {
+describe("lunora-hostd install-release", () => {
     let root: string;
+    let from: string;
+    let installDirectory: string;
     let trustedKeys: Record<string, string>;
     let manifestPath: string;
 
-    const artifact = (name: string, bytes: string) => {
-        writeFileSync(join(root, name), bytes);
+    /** Write `bytes` as the downloaded `name`, and the manifest entry pinning them. */
+    const artifact = (name: string, bytes: Uint8Array, compression?: "gzip") => {
+        writeFileSync(join(from, name), bytes);
 
         return {
             platform: "linux-x64" as const,
             sha256: createHash("sha256").update(bytes).digest("hex"),
-            size: Buffer.byteLength(bytes),
+            size: bytes.byteLength,
             url: `https://github.com/anolilab/lunora/releases/download/hostd-v1.0.0/${name}`,
+            ...(compression === undefined ? {} : { compression }),
         };
     };
 
+    const script = (printed: string): Buffer => Buffer.from(`#!/bin/sh\necho "${printed}"\n`);
+
     beforeEach(() => {
-        root = mkdtempSync(join(tmpdir(), "lunora-hostd-verify-"));
+        root = mkdtempSync(join(tmpdir(), "lunora-hostd-install-"));
+        from = join(root, "download");
+        installDirectory = join(root, "opt");
+        mkdirSync(from);
+        mkdirSync(installDirectory);
 
         const keys = generateKeyPairSync("ed25519");
         const manifest: HostdReleaseManifest = {
-            caddy: { artifacts: [artifact("caddy-linux-x64.gz", "caddy")], modules: ["github.com/mholt/caddy-ratelimit"], version: "v2.11.6" },
-            celld: { artifacts: [artifact("celld.gz", "celld")], version: "v0.6.0" },
+            caddy: { artifacts: [artifact("caddy", script("v2.11.6 h1:test"))], modules: ["github.com/mholt/caddy-ratelimit"], version: "v2.11.6" },
+            celld: { artifacts: [artifact("celld", gzipSync(script("celld 0.6.0")), "gzip")], version: "v0.6.0" },
             createdAt: "2026-10-02T12:00:00.000Z",
-            hostd: { artifacts: [artifact("lunora-hostd-linux-x64", "hostd")], version: "1.0.0" },
+            hostd: { artifacts: [artifact("lunora-hostd", script("1.0.0"))], version: "1.0.0" },
             releaseId: "hostd-v1_0_0",
             schema: 1,
         };
@@ -121,44 +133,82 @@ describe("lunora-hostd verify-release", () => {
         rmSync(root, { force: true, recursive: true });
     });
 
-    const files = (): string[] => [
-        "--platform",
-        "linux-x64",
-        "--hostd",
-        join(root, "lunora-hostd-linux-x64"),
-        "--celld",
-        join(root, "celld.gz"),
-        "--caddy",
-        join(root, "caddy-linux-x64.gz"),
-    ];
+    const install = async (dependencies?: BinDependencies) =>
+        run(["install-release", manifestPath, "--from", from, "--install-dir", installDirectory, "--platform", "linux-x64"], dependencies ?? { trustedKeys });
 
-    it("prints the release id of a manifest signed by a trusted key whose files match", async () => {
-        expect.assertions(1);
+    it("installs a release signed by a trusted key whose files match, and switches current to it", async () => {
+        expect.assertions(4);
 
-        await expect(run(["verify-release", manifestPath, ...files()], { trustedKeys })).resolves.toStrictEqual({
-            code: 0,
-            stderr: "",
-            stdout: "hostd-v1_0_0\n",
-        });
+        await expect(install()).resolves.toMatchObject({ code: 0, stdout: "hostd-v1_0_0\n" });
+        expect(readlinkSync(join(installDirectory, "current"))).toBe("hostd-v1_0_0");
+        // Decompressed, executable, with the verified manifest beside the binaries.
+        expect(execFileSync(join(installDirectory, "current", "celld"), { encoding: "utf8" })).toBe("celld 0.6.0\n");
+        expect(JSON.parse(readFileSync(join(installDirectory, "current", "manifest.json"), "utf8"))).toMatchObject({ manifest: { releaseId: "hostd-v1_0_0" } });
     });
 
-    it("refuses a manifest no compiled-in key signed", async () => {
+    it("does nothing for the release that already runs", async () => {
         expect.assertions(2);
 
-        const result = await run(["verify-release", manifestPath, ...files()]);
+        await install();
+
+        const again = await install();
+
+        expect(again.code).toBe(0);
+        expect(again.stderr).toMatch(/hostd-v1_0_0 is the one running; nothing to install/u);
+    });
+
+    it("refuses an older release unless --allow-downgrade is given", async () => {
+        expect.assertions(4);
+
+        await install();
+
+        const keys = generateKeyPairSync("ed25519");
+        const older = JSON.parse(readFileSync(manifestPath, "utf8")) as { manifest: HostdReleaseManifest };
+
+        trustedKeys = { [releaseKeyId(keys.publicKey)]: keys.publicKey.export({ format: "pem", type: "spki" }) };
+        writeFileSync(
+            manifestPath,
+            JSON.stringify(
+                signReleaseManifest(
+                    { ...older.manifest, hostd: { ...older.manifest.hostd, version: "1.0.0-rc.1" }, releaseId: "hostd-v1_0_0-rc_1" },
+                    keys.privateKey,
+                ),
+            ),
+        );
+
+        const refused = await install();
+
+        expect(refused.code).toBe(1);
+        expect(refused.stderr).toMatch(/lunora-hostd 1\.0\.0-rc\.1 is older than the installed 1\.0\.0/u);
+
+        const forced = await run(
+            ["install-release", manifestPath, "--from", from, "--install-dir", installDirectory, "--platform", "linux-x64", "--allow-downgrade"],
+            { trustedKeys },
+        );
+
+        expect(forced.code).toBe(0);
+        expect(readlinkSync(join(installDirectory, "current"))).toBe("hostd-v1_0_0-rc_1");
+    });
+
+    it("refuses a manifest no compiled-in key signed, and installs nothing", async () => {
+        expect.assertions(3);
+
+        const result = await install({});
 
         expect(result.code).toBe(1);
         expect(result.stderr).toMatch(/does not verify: UNKNOWN_KEY/u);
+        expect(readdirSync(installDirectory)).toStrictEqual([]);
     });
 
-    it("refuses a downloaded file the manifest does not pin", async () => {
-        expect.assertions(2);
+    it("refuses a downloaded file the manifest does not pin, and installs nothing", async () => {
+        expect.assertions(3);
 
-        writeFileSync(join(root, "celld.gz"), "cellD");
+        writeFileSync(join(from, "caddy"), script("v2.11.7 h1:test"));
 
-        const result = await run(["verify-release", manifestPath, ...files()], { trustedKeys });
+        const result = await install();
 
         expect(result.code).toBe(1);
-        expect(result.stderr).toMatch(/celld .* does not match the manifest: HASH_MISMATCH/u);
+        expect(result.stderr).toMatch(/caddy: (?:SIZE|HASH)_MISMATCH/u);
+        expect(readdirSync(installDirectory)).toStrictEqual([]);
     });
 });

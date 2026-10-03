@@ -74,7 +74,7 @@ describe("lunora-hostd enrol", () => {
     it("enrols, writes the config, the key and the credentials, and never prints the token", async () => {
         expect.assertions(10);
 
-        await expect(run(enrolArgs("--token", TOKEN))).resolves.toBe(0);
+        await expect(run(enrolArgs(), { LUNORA_HOSTD_ENROL_TOKEN: TOKEN })).resolves.toBe(0);
 
         const [request] = plane.enrolments;
 
@@ -98,11 +98,12 @@ describe("lunora-hostd enrol", () => {
         expect(`${output.stdout}${output.stderr}`).not.toContain("s3cr3t");
     });
 
-    it("takes the token from the environment", async () => {
-        expect.assertions(2);
+    it("refuses a token on the command line, without echoing it or spending it", async () => {
+        expect.assertions(3);
 
-        await expect(run(enrolArgs(), { LUNORA_HOSTD_ENROL_TOKEN: TOKEN })).resolves.toBe(0);
-        expect(plane.enrolments[0]?.["token"]).toBe(TOKEN);
+        await expect(run(enrolArgs("--token", TOKEN))).resolves.toBe(1);
+        expect(output.stderr).toMatch(/takes the token from LUNORA_HOSTD_ENROL_TOKEN, not --token/u);
+        expect([output.stderr.includes(TOKEN), plane.enrolments.length]).toStrictEqual([false, 0]);
     });
 
     it("reports a refused token without echoing it", async () => {
@@ -110,7 +111,7 @@ describe("lunora-hostd enrol", () => {
 
         const bad = `lbe_${"zz".repeat(32)}`;
 
-        await expect(run(enrolArgs("--token", bad))).resolves.toBe(1);
+        await expect(run(enrolArgs(), { LUNORA_HOSTD_ENROL_TOKEN: bad })).resolves.toBe(1);
         expect(output.stderr).toMatch(/refused the enrolment \(403\): invalid or expired enrolment token/u);
         expect(output.stderr).not.toContain(bad);
     });
@@ -118,17 +119,39 @@ describe("lunora-hostd enrol", () => {
     it("refuses to enrol an enrolled machine again without --force", async () => {
         expect.assertions(3);
 
-        await run(enrolArgs("--token", TOKEN));
+        await run(enrolArgs(), { LUNORA_HOSTD_ENROL_TOKEN: TOKEN });
 
-        await expect(run(enrolArgs("--token", TOKEN))).resolves.toBe(1);
+        await expect(run(enrolArgs(), { LUNORA_HOSTD_ENROL_TOKEN: TOKEN })).resolves.toBe(1);
         expect(output.stderr).toMatch(/enrolled already/u);
         expect(plane.enrolments).toHaveLength(1);
+    });
+
+    it("keeps the enrolled key and config when a --force re-enrolment is refused", async () => {
+        expect.assertions(5);
+
+        const configPath = join(root, "etc", "config.json");
+        const keyFile = join(root, "etc", "box.key");
+
+        await run(enrolArgs(), { LUNORA_HOSTD_ENROL_TOKEN: TOKEN });
+
+        const [key, config] = [readFileSync(keyFile, "utf8"), readFileSync(configPath, "utf8")];
+
+        await expect(run(enrolArgs("--force"), { LUNORA_HOSTD_ENROL_TOKEN: `lbe_${"zz".repeat(32)}` })).resolves.toBe(1);
+        // Still the box it was: same key, same config, no half-written key beside them.
+        expect(readFileSync(keyFile, "utf8")).toBe(key);
+        expect(readFileSync(configPath, "utf8")).toBe(config);
+        expect(existsSync(`${keyFile}.pending`)).toBe(false);
+
+        // An accepted --force replaces the key.
+        await run(enrolArgs("--force"), { LUNORA_HOSTD_ENROL_TOKEN: TOKEN });
+
+        expect(readFileSync(keyFile, "utf8")).not.toBe(key);
     });
 
     it("needs a control plane while no production default is published", async () => {
         expect.assertions(3);
 
-        await expect(run(["enrol", "--config", join(root, "etc", "config.json"), "--bucket", "b", "--token", TOKEN])).resolves.toBe(1);
+        await expect(run(["enrol", "--config", join(root, "etc", "config.json"), "--bucket", "b"], { LUNORA_HOSTD_ENROL_TOKEN: TOKEN })).resolves.toBe(1);
         expect(output.stderr).toMatch(/pass --control-plane/u);
         expect(existsSync(join(root, "etc", "config.json"))).toBe(false);
     });

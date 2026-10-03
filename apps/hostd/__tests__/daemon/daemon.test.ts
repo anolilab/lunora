@@ -14,7 +14,7 @@ import { loadState } from "../../src/daemon/state";
 import type { DeployJob } from "../../src/wire/types";
 import type { TestBox } from "./helpers/box";
 import { createTestBox, unisolatedSystem } from "./helpers/box";
-import { caddyInvocations, caddyLoads, celldInvocations, setFakeFlag } from "./helpers/fake-binaries";
+import { caddyInvocations, caddyLoads, celldInvocations, clearFakeFlag, setFakeFlag } from "./helpers/fake-binaries";
 import { FakeControlPlane } from "./helpers/fake-control-plane";
 
 const storedRelease = (): string =>
@@ -60,7 +60,7 @@ describe("the daemon", () => {
         await plane.listen();
         box = await createTestBox(plane);
         plane.releases.set("dep_1", storedRelease());
-        daemon = new Daemon({ config: box.config, isolation: unisolatedSystem(), logger: silentLogger, reportTickMs: 100 });
+        daemon = new Daemon({ config: box.config, isolation: unisolatedSystem(), logFlushMs: 50, logger: silentLogger, reportTickMs: 100 });
         running = daemon.run();
         await plane.authenticated();
     });
@@ -88,6 +88,7 @@ describe("the daemon", () => {
             isolation: {
                 problems: [
                     "fleet user: no local user lunora-fleet (install.sh creates it)",
+                    "edge user: no local user lunora-edge (install.sh creates it), so Caddy runs as the user that can read the box key",
                     "egress policy: not applied: fleets do not run as their own user",
                     expect.stringMatching(/^memory limits: not running as a systemd service/u),
                 ],
@@ -211,7 +212,7 @@ describe("the daemon", () => {
         expect(loadState(box.config.dataDir).fleets["my-app"]).toMatchObject({ deploymentId: "dep_1", publicPort: first, state: "running" });
     });
 
-    it("starts Caddy on its own config, under the data directory", async () => {
+    it("starts Caddy on its own config, with its state in a directory of its own", async () => {
         expect.assertions(3);
 
         await expect.poll(() => caddyInvocations(box.records).filter((run) => run.argv[0] === "run")).toHaveLength(1);
@@ -219,7 +220,7 @@ describe("the daemon", () => {
         const caddy = caddyInvocations(box.records).find((run) => run.argv[0] === "run");
 
         expect(caddy?.argv).toStrictEqual(["run", "--config", join(box.config.dataDir, "caddy", "caddy.json")]);
-        expect(caddy?.env["XDG_DATA_HOME"]).toBe(join(box.config.dataDir, "caddy", "data"));
+        expect(caddy?.env["XDG_DATA_HOME"]).toBe(join(box.config.dataDir, "caddy", "state", "data"));
     });
 
     it("refuses a release URL on another origin without signing anything", async () => {
@@ -240,6 +241,36 @@ describe("the daemon", () => {
 
         expect(result.error?.code).toBe("CELLD_FAILED");
         expect(result.error?.message).toMatch(/bucket refused the upload/u);
+    });
+
+    it("forwards its own warnings and its fleets' stderr as OTLP logs, once the control plane names an endpoint", async () => {
+        expect.assertions(5);
+
+        const token = "production:org_1|box-log-ingest-key";
+
+        plane.pushConfig({ telemetry: { endpoint: plane.origin, token } });
+        setFakeFlag(box.records, "fail-deploy");
+        await plane.dispatch(deployJob(plane));
+        clearFakeFlag(box.records, "fail-deploy");
+        await plane.dispatch(deployJob(plane));
+
+        await expect
+            .poll(() => plane.forwardedLogs.map((record) => record.body), { timeout: 5000 })
+            .toStrictEqual(
+                expect.arrayContaining([expect.stringMatching(/^job job_1: CELLD_FAILED: /u), expect.stringMatching(/WARN celld::node: fake node listening/u)]),
+            );
+
+        const forwarded = plane.forwardedLogs;
+
+        expect(plane.logExports.every((post) => post.authorization === `Bearer ${token}`)).toBe(true);
+        expect(forwarded.find((record) => record.body.includes("fake node listening"))).toMatchObject({
+            attributes: { alias: "my-app", box: plane.hostname.split(".")[0], source: "celld" },
+            service: "my-app",
+            severity: "WARN",
+        });
+        // A fleet's stdout (its app's own output) and hostd's info lines stay on the box.
+        expect(forwarded.filter((record) => record.body === "app console output" || record.severity === "INFO")).toStrictEqual([]);
+        expect(JSON.stringify(plane.logExports)).not.toContain("test-secret");
     });
 
     it("refuses a release with a binding celld cannot run", async () => {

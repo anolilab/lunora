@@ -14,6 +14,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import type { CelldReleaseAssetsConfig, CelldReleaseManifest } from "@lunora/config/celld";
 import { CELLD_RELEASE_ASSETS_DIRECTORY, CELLD_RELEASE_MAIN, celldConfigFromRelease, CelldReleaseConfigError } from "@lunora/config/celld";
 
+import { isRecord } from "../values";
 import type { DeployJob } from "../wire/types";
 import { JobError } from "./job-error";
 import type { SignedFetch } from "./signed-fetch";
@@ -37,8 +38,6 @@ interface StoredRelease {
 }
 
 const BASE64_PATTERN = /^[\d+/A-Za-z]*={0,2}$/u;
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 const invalid = (message: string): JobError => new JobError("RELEASE_INVALID", `the release ${message}`);
 

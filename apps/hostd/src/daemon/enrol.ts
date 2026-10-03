@@ -6,11 +6,13 @@
  * before the single-use token is spent), generate the box's Ed25519 key,
  * `POST /v1/boxes/enrol` with the token, the public key, the box's public
  * addresses and its binaries' versions, then write the configuration and the
- * bucket credentials (mode 0600). The token is sent once and never printed;
+ * bucket credentials (mode 0600). The new key is written beside the current
+ * one and takes its place only once the control plane accepted it, so a
+ * refused `--force` leaves an enrolled box exactly as it was. The token is sent once and never printed;
  * the bucket credentials are read from the environment, never from the
  * command line, and never leave the box.
  */
-import { existsSync } from "node:fs";
+import { existsSync, renameSync, rmSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -19,7 +21,7 @@ import type { HostdConfig } from "./config";
 import { ConfigError, CREDENTIAL_NAMES, DEFAULT_DATA_DIR, DEFAULT_PORTS, parseHostdConfig, saveBucketCredentials, saveHostdConfig } from "./config";
 import { generateIdentity } from "./identity";
 import type { Logger } from "./log";
-import { installedVersions } from "./upgrade";
+import { installedVersions } from "./release-install";
 
 /** The production control plane `enrol` uses without `--control-plane` — none is published yet (plan 458 D16). */
 const DEFAULT_CONTROL_PLANE: string | undefined = undefined;
@@ -203,15 +205,26 @@ const enrol = async (input: EnrolInput, dependencies: EnrolDependencies): Promis
         throw new ConfigError("found no public IPv4 or IPv6 address on this machine; pass --ipv4 or --ipv6 with the address its hostnames should point at");
     }
 
-    const identity = generateIdentity(draft.keyFile);
-    const versions = await installedVersions(draft);
-    const enrolled = await requestEnrolment(
-        draft.controlPlane,
-        { ...addresses, publicKey: identity.publicKey, singleTrust: input.singleTrust, token: input.token, versions },
-        dependencies.fetch ?? globalThis.fetch,
-    );
+    // The new key waits beside the current one until the control plane accepts it:
+    // a refused `--force` must leave the box enrolled as it was, not keyless.
+    const pendingKeyFile = `${draft.keyFile}.pending`;
+    const identity = generateIdentity(pendingKeyFile);
+    let enrolled: EnrolResponse;
+
+    try {
+        enrolled = await requestEnrolment(
+            draft.controlPlane,
+            { ...addresses, publicKey: identity.publicKey, singleTrust: input.singleTrust, token: input.token, versions: await installedVersions(draft) },
+            dependencies.fetch ?? globalThis.fetch,
+        );
+    } catch (error) {
+        rmSync(pendingKeyFile, { force: true });
+        throw error;
+    }
+
     const config = parseHostdConfig({ ...draft, boxId: enrolled.boxId, hostname: enrolled.hostname });
 
+    renameSync(pendingKeyFile, config.keyFile);
     saveBucketCredentials(config.credentialsFile, credentials);
     saveHostdConfig(input.configPath, config);
     dependencies.logger.info(`enrolled as box ${config.boxId} (${config.hostname})`);

@@ -18,6 +18,7 @@ import type {
     ChallengeMessage,
     CloudErrorMessage,
     CloudMessage,
+    ConfigMessage,
     DeployJob,
     DestroyJob,
     DiagnoseJob,
@@ -36,6 +37,7 @@ import type {
     ResultMessage,
     RouteEntry,
     RoutesMessage,
+    TelemetryConfig,
     UpgradeJob,
 } from "./types";
 
@@ -547,9 +549,14 @@ const readReloadJob = (value: unknown, path: string): ReloadJob => {
 };
 
 const readUpgradeJob = (value: unknown, path: string): UpgradeJob => {
-    const record = readObject(value, path, ["kind", "releaseId", "manifestUrl"]);
+    const record = readObject(value, path, ["kind", "releaseId", "manifestUrl"], ["allowDowngrade"]);
 
-    return { kind: "upgrade", manifestUrl: readUrl(record.manifestUrl, `${path}.manifestUrl`), releaseId: readId(record.releaseId, `${path}.releaseId`) };
+    return {
+        ...(record.allowDowngrade === undefined ? {} : { allowDowngrade: readBoolean(record.allowDowngrade, `${path}.allowDowngrade`) }),
+        kind: "upgrade",
+        manifestUrl: readUrl(record.manifestUrl, `${path}.manifestUrl`),
+        releaseId: readId(record.releaseId, `${path}.releaseId`),
+    };
 };
 
 const readDiagnoseJob = (value: unknown, path: string): DiagnoseJob => {
@@ -608,6 +615,26 @@ const readRoutes = (value: unknown, path: string): RoutesMessage => {
     return { table, type: "routes" };
 };
 
+/** A bearer token: printable ASCII without spaces (`!`–`~`), 1–512 characters. */
+const TOKEN_PATTERN = /^[\u0021-\u007E]+$/u;
+
+const readTelemetry = (value: unknown, path: string): TelemetryConfig => {
+    const record = readObject(value, path, ["endpoint", "token"]);
+    const token = readString(record.token, `${path}.token`);
+
+    if (token.length > HOSTD_PROTOCOL_LIMITS.maxTokenLength || !TOKEN_PATTERN.test(token)) {
+        fail(`${path}.token`, `must be 1-${String(HOSTD_PROTOCOL_LIMITS.maxTokenLength)} printable ASCII characters without spaces`);
+    }
+
+    return { endpoint: readUrl(record.endpoint, `${path}.endpoint`), token };
+};
+
+const readConfig = (value: unknown, path: string): ConfigMessage => {
+    const record = readObject(value, path, ["type"], ["telemetry"]);
+
+    return { ...(record.telemetry === undefined ? {} : { telemetry: readTelemetry(record.telemetry, `${path}.telemetry`) }), type: "config" };
+};
+
 const readPing = (value: unknown, path: string): PingMessage => {
     readObject(value, path, ["type"]);
 
@@ -640,6 +667,7 @@ const CLOUD_MESSAGE_READERS: ReadonlyMap<string, (value: unknown, path: string) 
     (value: unknown, path: string) => CloudMessage
 >([
     ["challenge", readChallenge],
+    ["config", readConfig],
     ["error", readCloudError],
     ["job", readJobMessage],
     ["ping", readPing],

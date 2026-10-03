@@ -26,6 +26,7 @@ describe(parseHostdConfig, () => {
             allowRoot: false,
             caddy: { adminAddress: "127.0.0.1:2019", askAddress: "127.0.0.1:2020", httpPort: 80, httpsPort: 443, tls: true },
             dataDir: "/var/lib/lunora-hostd",
+            edgeUser: "lunora-edge",
             fleetUser: "lunora-fleet",
             installDir: "/opt/lunora-hostd",
             ports: { first: 20_000, last: 20_999 },

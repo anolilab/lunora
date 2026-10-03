@@ -46,8 +46,8 @@ interface SupervisedOptions {
     logger: Logger;
     /** A label for log lines: `celld my-app`, `caddy`. */
     name: string;
-    /** Each line the child prints, as it prints it. */
-    onLine?: (line: string) => void;
+    /** Each line the child prints, as it prints it, with the stream it came on. */
+    onLine?: (line: string, stream: "stderr" | "stdout") => void;
     /** Called with each child's pid as soon as it is spawned (W8 moves a fleet's node into its cgroup). */
     onSpawn?: (pid: number) => void;
     spawn?: SpawnFunction;
@@ -137,14 +137,14 @@ class SupervisedProcess {
         });
     }
 
-    private remember(line: string): void {
+    private remember(line: string, stream: "stderr" | "stdout"): void {
         this.output.push(line);
 
         if (this.output.length > OUTPUT_LINES_KEPT) {
             this.output.shift();
         }
 
-        this.options.onLine?.(line);
+        this.options.onLine?.(line, stream);
     }
 
     private spawnChild(): void {
@@ -164,16 +164,18 @@ class SupervisedProcess {
             this.options.onSpawn?.(child.pid);
         }
 
-        for (const stream of [child.stdout, child.stderr]) {
+        for (const name of ["stdout", "stderr"] as const) {
+            const stream = child[name];
+
             if (stream) {
                 createInterface({ input: stream }).on("line", (line) => {
-                    this.remember(line);
+                    this.remember(line, name);
                 });
             }
         }
 
         child.once("error", (error) => {
-            this.remember(`spawn failed: ${error.message}`);
+            this.remember(`spawn failed: ${error.message}`, "stderr");
         });
 
         child.once("exit", (code, signal) => {

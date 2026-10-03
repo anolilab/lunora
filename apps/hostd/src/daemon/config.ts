@@ -12,6 +12,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 
+import { isRecord, optional } from "../values";
 import { isProtocolId } from "../wire/validate";
 
 /** Where the configuration lives unless `--config` or `LUNORA_HOSTD_CONFIG` says otherwise. */
@@ -31,6 +32,9 @@ const RELEASE_BINARY_NAMES = { caddy: "caddy", celld: "celld", hostd: "lunora-ho
 
 /** The user every fleet runs as (plan 458 W8); `install.sh` creates it, with no shell and no home. */
 const DEFAULT_FLEET_USER = "lunora-fleet";
+
+/** The user Caddy runs as (plan 458 W8): not the daemon's, which can read the box key; `install.sh` creates it. */
+const DEFAULT_EDGE_USER = "lunora-edge";
 
 /** The ports fleets are given from by default: two per fleet (public and internal), all on loopback. */
 const DEFAULT_PORTS = { first: 20_000, last: 20_999 } as const;
@@ -77,6 +81,8 @@ interface HostdConfig {
     /** The environment file holding the bucket credentials, mode 0600. */
     credentialsFile: string;
     dataDir: string;
+    /** The user Caddy runs as (W8): it parses untrusted HTTP, so never the user that holds the box key. */
+    edgeUser: string;
     /** Each fleet's cgroup `memory.max`, in MiB. Absent: the box's memory less a reserve for hostd, Caddy and the system. */
     fleetMemoryMaxMb?: number;
     /** The user fleets run as (W8). */
@@ -110,8 +116,6 @@ const permissionsOf = (mode: number): number => mode % 0o1000;
 
 /** Whether a file with `mode` grants its group or others anything (any of the low six permission bits). */
 const isOpenToOthers = (mode: number): boolean => permissionsOf(mode) % 0o100 !== 0;
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 const readField = <T>(record: Record<string, unknown>, key: string, check: (value: unknown) => value is T, what: string, path: string): T => {
     const value = record[key];
@@ -158,8 +162,6 @@ const isOrigin = (value: unknown): value is string => {
 };
 
 const isOptionalString = (value: unknown): value is string | undefined => value === undefined || isString(value);
-
-const optional = <T>(key: string, value: T | undefined): Record<string, T> => (value === undefined ? {} : { [key]: value });
 
 /** `record[key]` checked, or `fallback` when it is absent. */
 const readOr = <T>(record: Record<string, unknown>, key: string, fallback: T, check: (value: unknown) => value is T, what: string, path: string): T =>
@@ -213,6 +215,7 @@ const parseHostdConfig = (raw: unknown): HostdConfig => {
         controlPlane: readField(raw, "controlPlane", isOrigin, "an http(s) origin with no path", "$"),
         credentialsFile: readField(raw, "credentialsFile", isAbsolutePath, "an absolute path", "$"),
         dataDir: dataDirectory,
+        edgeUser: readOr(raw, "edgeUser", DEFAULT_EDGE_USER, isUserName, "a user name", "$"),
         ...optional("fleetMemoryMaxMb", readField(raw, "fleetMemoryMaxMb", isOptionalMemoryMb, "a whole number of MiB, at least 64", "$")),
         fleetUser: readOr(raw, "fleetUser", DEFAULT_FLEET_USER, isUserName, "a user name", "$"),
         hostname: readField(raw, "hostname", isString, "the box's hostname", "$"),
@@ -340,6 +343,7 @@ export {
     CURRENT_RELEASE_LINK,
     DEFAULT_CONFIG_PATH,
     DEFAULT_DATA_DIR,
+    DEFAULT_EDGE_USER,
     DEFAULT_FLEET_USER,
     DEFAULT_INSTALL_DIR,
     DEFAULT_PORTS,

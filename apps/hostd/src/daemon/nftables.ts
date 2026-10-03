@@ -23,11 +23,12 @@
  * one `nft -f` transaction) and left in place when hostd stops: no fleet runs
  * without hostd, and a stale table only ever blocks.
  */
-import { spawn } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { existsSync } from "node:fs";
 import { isIPv4, isIPv6 } from "node:net";
 
+import { DIRECT_LAUNCH } from "./capabilities";
+import { describeFailure, runChild } from "./child";
 import type { BucketConfig } from "./config";
 import { CHILD_PATH } from "./fleet-environment";
 import type { Logger } from "./log";
@@ -138,43 +139,21 @@ const nftBucketUpdate = (bucket: BucketAddresses): string => {
 };
 
 /** Run `nft` with `args`, feeding it `script` on stdin. Rejects with what nft printed when it fails. */
-const runNft = async (args: ReadonlyArray<string>, script = ""): Promise<string> =>
-    new Promise((resolve, reject) => {
-        const nft = NFT_CANDIDATES.find((path) => existsSync(path));
+const runNft = async (args: ReadonlyArray<string>, script = ""): Promise<string> => {
+    const nft = NFT_CANDIDATES.find((path) => existsSync(path));
 
-        if (nft === undefined) {
-            reject(new Error(`nft is not installed (looked in ${NFT_CANDIDATES.join(", ")})`));
+    if (nft === undefined) {
+        throw new Error(`nft is not installed (looked in ${NFT_CANDIDATES.join(", ")})`);
+    }
 
-            return;
-        }
+    const result = await runChild(DIRECT_LAUNCH, nft, args, { env: { PATH: CHILD_PATH }, stdin: script, timeoutMs: 10_000 });
 
-        const child = spawn(nft, args, { env: { PATH: CHILD_PATH }, stdio: ["pipe", "pipe", "pipe"] });
-        let output = "";
-        const timer = setTimeout(() => {
-            child.kill("SIGKILL");
-        }, 10_000);
+    if (result.code !== 0 || result.timedOut) {
+        throw new Error(describeFailure(`nft ${args.join(" ")}`, result, 500));
+    }
 
-        child.stdout.on("data", (chunk: Buffer) => {
-            output += chunk.toString();
-        });
-        child.stderr.on("data", (chunk: Buffer) => {
-            output += chunk.toString();
-        });
-        child.once("error", (error) => {
-            clearTimeout(timer);
-            reject(new Error(`could not run nft: ${error.message}`));
-        });
-        child.once("exit", (code) => {
-            clearTimeout(timer);
-
-            if (code === 0) {
-                resolve(output);
-            } else {
-                reject(new Error(`nft ${args.join(" ")} exited ${String(code)}: ${output.trim().slice(0, 500)}`));
-            }
-        });
-        child.stdin.end(script);
-    });
+    return result.stdout;
+};
 
 /** What the firewall needs from the system; the real one runs `nft` and resolves with the system resolver. */
 interface FirewallSystem {

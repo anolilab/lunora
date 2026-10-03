@@ -164,7 +164,7 @@ describe("golden fixtures", () => {
             [decodeCloudMessage, fixtures.cloud],
         ] as const) {
             for (const [name, message] of Object.entries(messages)) {
-                for (const key of Object.keys(message).filter((field) => !["error", "isolation", "type", "url"].includes(field))) {
+                for (const key of Object.keys(message).filter((field) => !["error", "isolation", "telemetry", "type", "url"].includes(field))) {
                     const rest = Object.fromEntries(Object.entries(message).filter(([field]) => field !== key));
 
                     expect(decode(JSON.stringify(rest)).ok, `${name} without ${key}`).toBe(false);
@@ -177,7 +177,9 @@ describe("golden fixtures", () => {
         expect(new Set(Object.values(fixtures.box).map((message) => message.type))).toStrictEqual(
             new Set(["auth", "hello", "pong", "progress", "report", "result"]),
         );
-        expect(new Set(Object.values(fixtures.cloud).map((message) => message.type))).toStrictEqual(new Set(["challenge", "error", "job", "ping", "routes"]));
+        expect(new Set(Object.values(fixtures.cloud).map((message) => message.type))).toStrictEqual(
+            new Set(["challenge", "config", "error", "job", "ping", "routes"]),
+        );
         expect(
             new Set(
                 Object.values(fixtures.cloud)
@@ -295,6 +297,15 @@ describe("size caps", () => {
         });
 
         expect(decodeBoxMessage(JSON.stringify({ ...hello, fleets }))).toMatchObject(rejected("INVALID_MESSAGE", "$.fleets"));
+    });
+
+    it("caps config.telemetry.token", () => {
+        const config = (token: string) => JSON.stringify({ telemetry: { endpoint: "https://api.lunora.sh", token }, type: "config" });
+
+        expect(decodeCloudMessage(config("t".repeat(HOSTD_PROTOCOL_LIMITS.maxTokenLength))).ok).toBe(true);
+        expect(decodeCloudMessage(config("t".repeat(HOSTD_PROTOCOL_LIMITS.maxTokenLength + 1)))).toMatchObject(
+            rejected("INVALID_MESSAGE", "$.telemetry.token"),
+        );
     });
 });
 

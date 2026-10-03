@@ -368,11 +368,15 @@
     # behind LUNORA_HOSTD_TESTS=1): the daemon, built as the single executable a box
     # runs, against the pinned celld release, a Caddy built from the pinned source
     # exactly as hostd-release.yml builds it, moto, and an in-process fake control
-    # plane — enrol, session, deploy, HTTP through Caddy, a usage report, destroy with
-    # deleteData. With LUNORA_HOSTD_ISOLATION=1 it runs as root (sudo): install.sh's
-    # own functions create the users, directories and unit, hostd runs under the real
+    # plane — enrol, session, deploy, HTTP through Caddy, a usage report, the target-
+    # driver conformance legs through the real daemon, log forwarding, destroy with
+    # deleteData — and the W7 gate: a live box upgraded from release N to N+1 (test
+    # builds trusting a key the test generates) with an alias serving before and
+    # after. With LUNORA_HOSTD_ISOLATION=1 it runs as root (sudo): install.sh's own
+    # functions create the users, directories and unit, hostd runs under the real
     # systemd unit on port 80, and the W8 probe suite asserts the isolation (fleet uid
-    # without capabilities in its own memory cgroup, the nftables egress table blocking
+    # without capabilities in its own memory cgroup, Caddy as lunora-edge with port
+    # binding alone and no reach to the box key, the nftables egress table blocking
     # the celld operator API, Caddy's admin API, hostd's ask endpoint and the metadata
     # address, the bucket still reachable). A missing binary fails the lane; it never
     # skips. Keep CELLD_* in step with test-celld and release-pins.json, and Go/xcaddy
@@ -382,7 +386,7 @@
         "if": "needs.files-changed.outputs.hostd == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-24.04"
-        "timeout-minutes": 30
+        "timeout-minutes": 40
         "env":
             "CELLD_VERSION": "v0.6.0"
             "CELLD_SHA256": "8f1e18072c234ab75459d4da104c13cebc9b29a3e4a4772086bf985829bea8aa"

@@ -3,8 +3,8 @@
  * WebSocket to `GET /v1/boxes/connect?box={id}` on the enrolled control plane.
  *
  * The box sends `hello`, answers the server's `challenge` with `auth` (an
- * Ed25519 signature over the nonce), then takes `routes` and `job` frames and
- * answers `ping`. Every inbound frame is strictly decoded; one that does not
+ * Ed25519 signature over the nonce), then takes `routes`, `config` and `job`
+ * frames and answers `ping`. Every inbound frame is strictly decoded; one that does not
  * decode ends the connection, which is then retried. A lost connection is
  * retried with jittered exponential backoff from one second to a minute, reset
  * once a session authenticates. The control plane's refusals steer it:
@@ -17,7 +17,7 @@
  */
 import { decodeCloudMessage, encodeMessage } from "../wire/codec";
 import { challengeSigningPayload } from "../wire/signing";
-import type { BoxMessage, HelloMessage, JobMessage, RouteEntry } from "../wire/types";
+import type { BoxMessage, ConfigMessage, HelloMessage, JobMessage, RouteEntry } from "../wire/types";
 import type { BoxIdentity } from "./identity";
 import type { Logger } from "./log";
 
@@ -64,6 +64,8 @@ interface SessionOptions {
     hello: () => HelloMessage;
     identity: BoxIdentity;
     logger: Logger;
+    /** The control plane's runtime configuration for the box (log forwarding), on every `config`. */
+    onConfig?: (message: ConfigMessage) => void;
     onJob: (message: JobMessage) => void;
     /** Called once a connection authenticates (e.g. to drain queued reports). */
     onReady?: () => void;
@@ -311,6 +313,10 @@ class Session {
         this.markAuthenticated();
 
         switch (message.type) {
+            case "config": {
+                this.options.onConfig?.(message);
+                break;
+            }
             case "job": {
                 this.options.onJob(message);
                 break;
@@ -319,8 +325,15 @@ class Session {
                 socket.send(encodeMessage({ type: "pong" }));
                 break;
             }
-            default: {
+            case "routes": {
                 this.options.onRoutes(message.table);
+                break;
+            }
+            default: {
+                // Exhaustive: a new frame type fails to compile here until it is handled.
+                const unhandled: never = message;
+
+                this.options.logger.warn(`the control plane sent a ${(unhandled as { type: string }).type} frame this box does not handle`);
             }
         }
     }

@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { binaryPaths, DEFAULT_CONFIG_PATH, DEFAULT_DATA_DIR, DEFAULT_FLEET_USER, DEFAULT_INSTALL_DIR } from "../src/daemon/config";
+import { binaryPaths, DEFAULT_CONFIG_PATH, DEFAULT_DATA_DIR, DEFAULT_EDGE_USER, DEFAULT_FLEET_USER, DEFAULT_INSTALL_DIR } from "../src/daemon/config";
 import { NFT_TABLE } from "../src/daemon/nftables";
 import { CADDY_STOP_BUDGET_MS, CELLD_STOP_BUDGET_MS } from "../src/daemon/supervisor";
 import { HOSTD_TRUSTED_RELEASE_KEYS } from "../src/release";
@@ -48,7 +48,7 @@ describe("install.sh", () => {
     });
 
     it("lays the box out where the daemon looks", () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const assignment = (name: string): string | undefined => new RegExp(`^${name}="([^"]+)"$`, "mu").exec(script)?.[1];
 
@@ -56,6 +56,7 @@ describe("install.sh", () => {
         expect(assignment("DATA_DIR")).toBe(DEFAULT_DATA_DIR);
         expect(`${assignment("CONFIG_DIR") ?? ""}/config.json`).toBe(DEFAULT_CONFIG_PATH);
         expect(assignment("FLEET_USER")).toBe(DEFAULT_FLEET_USER);
+        expect(assignment("EDGE_USER")).toBe(DEFAULT_EDGE_USER);
         expect(assignment("NFT_TABLE")).toBe(NFT_TABLE);
     });
 });

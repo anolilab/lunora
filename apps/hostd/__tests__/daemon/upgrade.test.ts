@@ -7,7 +7,8 @@
 import { execFileSync } from "node:child_process";
 import type { KeyObject } from "node:crypto";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, readFileSync, readlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
@@ -15,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { binaryPaths } from "../../src/daemon/config";
 import { silentLogger } from "../../src/daemon/log";
+import { pruneReleases } from "../../src/daemon/release-install";
 import { Daemon } from "../../src/daemon/run";
 import type { HostdReleaseEnvelope, HostdReleaseManifest } from "../../src/release";
 import { HOSTD_TRUSTED_RELEASE_KEYS } from "../../src/release";
@@ -229,6 +231,33 @@ describe("the upgrade job", () => {
         expect(versionOf(binaryPaths(box.config).celld, ["--version"])).toBe("celld 0.6.0");
     });
 
+    it("refuses an older lunora-hostd unless the job allows a downgrade", async () => {
+        expect.assertions(4);
+
+        const older = await buildRelease(box, "hostd-v0_0_0-rc_1", "0.0.0-rc.1");
+
+        published = older.files;
+        publish(signReleaseManifest(older.manifest, privateKey), "hostd-v0_0_0-rc_1");
+
+        const refused = await upgrade("hostd-v0_0_0-rc_1");
+
+        expect(refused.result.error).toMatchObject({
+            code: "UPGRADE_REFUSED",
+            message: expect.stringMatching(/0\.0\.0-rc\.1 is older than the installed 0\.0\.0/u),
+        });
+        expect(readlinkSync(join(box.config.installDir, "current"))).toBe(INITIAL_RELEASE);
+
+        const allowed = await plane.dispatch({
+            allowDowngrade: true,
+            kind: "upgrade",
+            manifestUrl: `${plane.origin}/v1/hostd/releases/hostd-v0_0_0-rc_1/manifest`,
+            releaseId: "hostd-v0_0_0-rc_1",
+        });
+
+        expect(allowed.result).toMatchObject({ ok: true });
+        expect(readlinkSync(join(box.config.installDir, "current"))).toBe("hostd-v0_0_0-rc_1");
+    });
+
     it("refuses a manifest for another release than the job names", async () => {
         expect.assertions(1);
 
@@ -260,6 +289,72 @@ describe("the upgrade job", () => {
         expect(["hostd-v9_9_9", "hostd-v9_9_9.partial"].map((name) => existsSync(join(box.config.installDir, name)))).toStrictEqual([false, false]);
     });
 
+    /** Publish `bytes` for `component` in place of what the release built, pinned as the manifest then says. */
+    const replaceArtifact = async (component: "caddy" | "celld" | "hostd", bytes: Uint8Array, compression?: "gzip"): Promise<void> => {
+        const url = release.manifest[component].artifacts[0]?.url ?? "";
+        const pinned = { sha256: await sha256(bytes), size: bytes.byteLength, url, ...(compression === undefined ? {} : { compression }) };
+
+        release.files.set(url, bytes);
+        release.manifest = {
+            ...release.manifest,
+            [component]: {
+                ...release.manifest[component],
+                artifacts: release.manifest[component].artifacts.map((artifact) => {
+                    return { platform: artifact.platform, ...pinned };
+                }),
+            },
+        };
+    };
+
+    const assertNothingInstalled = (): void => {
+        expect(readlinkSync(join(box.config.installDir, "current"))).toBe(INITIAL_RELEASE);
+        expect(["hostd-v9_9_9", "hostd-v9_9_9.partial"].map((name) => existsSync(join(box.config.installDir, name)))).toStrictEqual([false, false]);
+    };
+
+    it("refuses a download longer than the size the manifest pins, without reading past it", async () => {
+        expect.assertions(3);
+
+        const url = "https://artifacts.test/hostd-v9_9_9/caddy.gz";
+
+        publish(signReleaseManifest(release.manifest, privateKey));
+        release.files.set(url, Buffer.concat([release.files.get(url) as Uint8Array, Buffer.alloc(4096)]));
+
+        const { result } = await upgrade();
+
+        expect(result.error).toMatchObject({ code: "ARTIFACT_INVALID", message: expect.stringMatching(/larger than the \d+ bytes the manifest pins/u) });
+
+        assertNothingInstalled();
+    });
+
+    it("refuses an artifact pinned as gzip that does not decompress", async () => {
+        expect.assertions(3);
+
+        await replaceArtifact("celld", Buffer.from("#!/bin/sh\necho celld 0.7.0\n"), "gzip");
+        publish(signReleaseManifest(release.manifest, privateKey));
+
+        const { result } = await upgrade();
+
+        expect(result.error).toMatchObject({
+            code: "ARTIFACT_INVALID",
+            message: expect.stringMatching(/celld: the manifest says gzip, but it does not decompress/u),
+        });
+
+        assertNothingInstalled();
+    });
+
+    it("refuses a binary that does not run here (its version command fails)", async () => {
+        expect.assertions(3);
+
+        await replaceArtifact("caddy", Buffer.from("#!/bin/sh\necho 'exec format error' >&2\nexit 126\n"));
+        publish(signReleaseManifest(release.manifest, privateKey));
+
+        const { result } = await upgrade();
+
+        expect(result.error).toMatchObject({ code: "ARTIFACT_INVALID", message: expect.stringMatching(/caddy from \S+ does not run on this machine/u) });
+
+        assertNothingInstalled();
+    });
+
     it("trusts only the compiled-in keys by default, which verify nothing yet", async () => {
         expect.assertions(3);
 
@@ -281,5 +376,42 @@ describe("the upgrade job", () => {
         await expect(upgrade()).resolves.toMatchObject({ result: { error: { code: "UPGRADE_REFUSED", message: expect.stringMatching(/PLACEHOLDER_KEY/u) } } });
 
         expect(Object.keys(HOSTD_TRUSTED_RELEASE_KEYS)).toStrictEqual(["ed25519-placeholder"]);
+    });
+});
+
+describe(pruneReleases, () => {
+    it("removes only other release directories (those holding a manifest), never anything else in the install directory", () => {
+        expect.assertions(1);
+
+        const root = mkdtempSync(join(tmpdir(), "lunora-hostd-prune-"));
+
+        try {
+            for (const release of ["hostd-v1", "hostd-v2", "hostd-v3"]) {
+                mkdirSync(join(root, release));
+                writeFileSync(join(root, release, "manifest.json"), "{}\n");
+            }
+
+            // Not releases: no manifest, a name no release id has, a plain file, the link.
+            mkdirSync(join(root, "hostd-v0"));
+            mkdirSync(join(root, "hostd-v4.partial"));
+            writeFileSync(join(root, "hostd-v4.partial", "manifest.json"), "{}\n");
+            mkdirSync(join(root, "backups"));
+            writeFileSync(join(root, "notes.txt"), "keep\n");
+            symlinkSync("hostd-v3", join(root, "current"));
+
+            pruneReleases(root, new Set(["hostd-v2", "hostd-v3"]));
+
+            expect(readdirSync(root).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+                "backups",
+                "current",
+                "hostd-v0",
+                "hostd-v2",
+                "hostd-v3",
+                "hostd-v4.partial",
+                "notes.txt",
+            ]);
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
     });
 });

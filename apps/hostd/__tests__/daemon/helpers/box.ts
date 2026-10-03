@@ -56,6 +56,7 @@ const INITIAL_RELEASE = "hostd-v0_0_0";
  */
 const unisolatedSystem = (): IsolationSystem => {
     return {
+        daemon: { gid: process.getgid?.() ?? 1000, uid: process.getuid?.() ?? 1000 },
         pid: process.pid,
         probe: async () => {
             throw new Error("tests do not start processes as another user");
