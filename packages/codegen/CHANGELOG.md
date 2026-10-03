@@ -1,3 +1,31 @@
+## @lunora/codegen [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.253...@lunora/codegen@1.0.0-alpha.254) (2026-10-03)
+
+### ⚠ BREAKING CHANGES
+
+* capability inference and the codegen probe surface changed.
+
+### Bug Fixes
+
+* capability inference follow-up to [#945](https://github.com/anolilab/lunora/issues/945) ([#950](https://github.com/anolilab/lunora/issues/950)) ([e6c762e](https://github.com/anolilab/lunora/commit/e6c762e67e12aa15fb1f7ae1311c420d500f0d0b))
+
+### Tests
+
+* **codegen:** realign the analytics-sql golden with the storage stub ([#952](https://github.com/anolilab/lunora/issues/952)) ([4b7895d](https://github.com/anolilab/lunora/commit/4b7895dff460be4b2ecf13011c71de13f77e20a7)), closes [#947](https://github.com/anolilab/lunora/issues/947) [#946](https://github.com/anolilab/lunora/issues/946)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.185
+* **@lunora/agent:** upgraded to 1.0.0-alpha.167
+* **@lunora/container:** upgraded to 1.0.0-alpha.69
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+* **@lunora/queue:** upgraded to 1.0.0-alpha.90
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.108
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.95
+* **@lunora/do:** upgraded to 1.0.0-alpha.192
+* **@lunora/server:** upgraded to 1.0.0-alpha.174
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.110
+
 ## @lunora/codegen [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.252...@lunora/codegen@1.0.0-alpha.253) (2026-10-03)
 
 ### Features
