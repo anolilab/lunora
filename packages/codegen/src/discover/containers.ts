@@ -25,7 +25,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { ContainerImageIR, ContainerIR, DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } from "../ir";
-import { findObjectProperty, propertyKeyName, stringPropertyFor, symbolConstInitializer } from "./ast";
+import { findObjectProperty, isWriteTarget, outermostValueWrapper, propertyKeyName, stringPropertyFor, symbolConstInitializer } from "./ast";
 
 /** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
 const CONTAINERS_FILENAME = "containers.ts";
@@ -131,38 +131,31 @@ const unwrapTypeOnly = (expression: Expression): Expression => {
  * a runtime value its initializer does not show, so reading the initializer
  * would put a different number in wrangler.jsonc than the one the app runs.
  */
-const isWrittenThrough = (symbol: TsSymbol, sourceFile: SourceFile): boolean => {
-    const rootOf = (target: Node): Node | undefined => {
-        let current: Node = target;
-
-        while (Node.isPropertyAccessExpression(current) || Node.isElementAccessExpression(current) || Node.isParenthesizedExpression(current)) {
-            current = current.getExpression();
+const isWrittenThrough = (symbol: TsSymbol, sourceFile: SourceFile): boolean =>
+    sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => {
+        if (identifier.getSymbol() !== symbol) {
+            return false;
         }
 
-        return current === target ? undefined : current;
-    };
-    const namesBinding = (node: Node | undefined): boolean => node !== undefined && Node.isIdentifier(node) && node.getSymbol() === symbol;
+        let value = outermostValueWrapper(identifier);
+        let parent = value.getParent();
 
-    return sourceFile.getDescendants().some((node) => {
-        if (Node.isBinaryExpression(node)) {
-            const operator = node.getOperatorToken().getKind();
-
-            return operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment && namesBinding(rootOf(node.getLeft()));
+        if (Node.isCallExpression(parent) && parent.getExpression().getText() === "Object.assign") {
+            return parent.getArguments()[0] === value;
         }
 
-        if (Node.isPrefixUnaryExpression(node) || Node.isPostfixUnaryExpression(node)) {
-            const operator = node.getOperatorToken();
+        // Climb the member chain rooted at the binding (`base.a.b`); a write to any link writes through it.
+        while ((Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent)) && parent.getExpression() === value) {
+            if (isWriteTarget(parent)) {
+                return true;
+            }
 
-            return (operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken) && namesBinding(rootOf(node.getOperand()));
+            value = outermostValueWrapper(parent);
+            parent = value.getParent();
         }
 
-        if (Node.isDeleteExpression(node)) {
-            return namesBinding(rootOf(node.getExpression()));
-        }
-
-        return Node.isCallExpression(node) && node.getExpression().getText() === "Object.assign" && namesBinding(node.getArguments()[0]);
+        return false;
     });
-};
 
 /** How many `const a = b; const b = c; …` hops {@link resolveBinding} follows before giving up. */
 const MAX_ALIAS_HOPS = 16;
