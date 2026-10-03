@@ -195,6 +195,36 @@ export const create = ${kind}({
         expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toBeUndefined();
     });
 
+    // Outside a mutator impl too, a ctx method echoing what it is passed is not server-scoped.
+    const echoing = [
+        ["`ctx.db.normalizeId`", 'ctx.db.normalizeId("users", VALUE)'],
+        ["`ctx.storage.getUrl`", "ctx.storage.getUrl(VALUE)"],
+        ["`ctx.storage.getSignedUrl`", "await ctx.storage.getSignedUrl(VALUE)"],
+        ["`ctx.storage.getPresignedUrl`", "await ctx.storage.getPresignedUrl(VALUE)"],
+        ["`ctx.storage.generateUploadUrl`", "await ctx.storage.generateUploadUrl(VALUE)"],
+        ["`ctx.storage.store`", '(await ctx.storage.store(VALUE, "body")).key'],
+        ["`ctx.storage.upload`", '(await ctx.storage.upload(VALUE, "body")).key'],
+        ["`ctx.storage.createMultipartUpload`", "(await ctx.storage.createMultipartUpload(VALUE)).key"],
+        ["`ctx.storage.resumeMultipartUpload`", 'ctx.storage.resumeMultipartUpload(VALUE, "upload").key'],
+        ["`ctx.fetch`", "await (await ctx.fetch(VALUE)).text()"],
+    ];
+
+    it.each(echoing)("reports an identity column written from %s fed args", (_label, call) => {
+        expect.assertions(1);
+
+        const source = procedure(`const value = ${call.replace("VALUE", "args.userId")};\n    await ctx.db.insert("posts", { userId: value }); // @write`);
+
+        expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toMatchObject({ field: "userId", method: "insert" });
+    });
+
+    it.each(echoing)("does not record an identity column written from %s fed server state", (_label, call) => {
+        expect.assertions(1);
+
+        const source = procedure(`const value = ${call.replace("VALUE", "ctx.auth.userId")};\n    await ctx.db.insert("posts", { userId: value }); // @write`);
+
+        expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toBeUndefined();
+    });
+
     // A bare-factory handler's `args` is its second parameter, under any name.
     it.each([
         ["renamed", "c, a", "a.userId"],

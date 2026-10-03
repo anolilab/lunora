@@ -359,4 +359,35 @@ describe("discoverOwnerFieldWrites: ctx rows changed after they are read", () =>
 
         expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
     });
+
+    // These ctx methods echo or derive from what they are passed: fed args they
+    // carry caller data, fed server state they stay server-scoped.
+    const echoing = [
+        ["`ctx.db.normalizeId`", 'ctx.db.normalizeId("users", VALUE)'],
+        ["`ctx.storage.getUrl`", "ctx.storage.getUrl(VALUE)"],
+        ["`ctx.storage.getSignedUrl`", "await ctx.storage.getSignedUrl(VALUE)"],
+        ["`ctx.storage.getPresignedUrl`", "await ctx.storage.getPresignedUrl(VALUE)"],
+        ["`ctx.storage.generateUploadUrl`", "await ctx.storage.generateUploadUrl(VALUE)"],
+        ["`ctx.storage.store`", '(await ctx.storage.store(VALUE, "body")).key'],
+        ["`ctx.storage.upload`", '(await ctx.storage.upload(VALUE, "body")).key'],
+        ["`ctx.storage.createMultipartUpload`", "(await ctx.storage.createMultipartUpload(VALUE)).key"],
+        ["`ctx.storage.resumeMultipartUpload`", 'ctx.storage.resumeMultipartUpload(VALUE, "upload").key'],
+        ["`ctx.fetch`", "await (await ctx.fetch(VALUE)).text()"],
+    ];
+
+    it.each(echoing)("reports a write from %s fed args", (_label, call) => {
+        expect.assertions(2);
+
+        const source = ownerMutator(`        const value = ${call.replace("VALUE", "args.targetUserId")};\n        await ${insert("value")}; // @write`);
+
+        expectReported(rowAt(discover(source), markerLine(source, "write")));
+    });
+
+    it.each(echoing)("does not record a write from %s fed server state", (_label, call) => {
+        expect.assertions(1);
+
+        const source = ownerMutator(`        const value = ${call.replace("VALUE", "ctx.auth.userId")};\n        await ${insert("value")}; // @write`);
+
+        expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
+    });
 });

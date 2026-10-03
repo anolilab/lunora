@@ -356,12 +356,36 @@ const denotesContextDatabase = (node: TsNode | undefined): boolean => {
 };
 
 /**
- * `ctx` methods whose result echoes caller-chosen input: `ctx.db.asId(table, args.x)`
- * returns that very id, and a `ctx.run*` result can hand its args straight
- * back. A chain through one of these is not server-scoped; its taint is that
- * of its arguments.
+ * `ctx` methods whose result echoes or derives from caller-chosen input rather
+ * than server state. A chain through one of these is not server-scoped; its
+ * taint is that of its arguments.
+ *
+ * - `ctx.db.asId(table, id)` / `ctx.db.normalizeId(table, id)`: the id passed
+ * in, coerced (normalizing proves the string is a well-formed id, not whose).
+ * - `ctx.run*`: another function's result, which can hand its args straight back.
+ * - `ctx.storage.getUrl` / `getSignedUrl` / `getPresignedUrl` /
+ * `generateUploadUrl`: a URL built from the key passed in.
+ * - `ctx.storage.store` / `upload` / `createMultipartUpload` /
+ * `resumeMultipartUpload`: a handle or result carrying the key (and upload id)
+ * passed in.
+ * - `ctx.fetch`: whatever the URL passed in answers with.
  */
-const ECHOING_CONTEXT_METHODS: ReadonlySet<string> = new Set(["asId", "runAction", "runMutation", "runQuery"]);
+const ECHOING_CONTEXT_METHODS: ReadonlySet<string> = new Set([
+    "asId",
+    "createMultipartUpload",
+    "fetch",
+    "generateUploadUrl",
+    "getPresignedUrl",
+    "getSignedUrl",
+    "getUrl",
+    "normalizeId",
+    "resumeMultipartUpload",
+    "runAction",
+    "runMutation",
+    "runQuery",
+    "store",
+    "upload",
+]);
 
 /**
  * Methods whose RESULT is built from their callback's return value (or a seed
