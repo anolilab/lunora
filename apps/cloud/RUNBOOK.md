@@ -48,10 +48,25 @@ CI=true CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… \
 ```
 
 Keep the store's URL (`https://alchemy-state-store.<subdomain>.workers.dev`) and
-its bearer token (in the account's Secrets Store): a cell that converges into
-customers' own accounts (`cloudflare-workers`) needs both as Worker secrets
-(`LUNORA_STATE_STORE_URL`, `LUNORA_STATE_STORE_TOKEN`, step 4), so that state
-stays here and never lands in a customer's account.
+its bearer token: a cell that converges into customers' own accounts
+(`cloudflare-workers`) needs both as Worker secrets (`LUNORA_STATE_STORE_URL`,
+`LUNORA_STATE_STORE_TOKEN`, step 4), so that state stays here and never lands in
+a customer's account.
+
+The token lives in the account's Secrets Store, whose values the API never
+returns. Bootstrap caches both values on the machine that ran it, in
+`~/.alchemy/credentials/default/cloudflare-state-store.json`
+(`{ "url", "authToken", "accountId" }`) — read them from there, set the two
+secrets, then delete the file:
+
+```bash
+jq -r .url ~/.alchemy/credentials/default/cloudflare-state-store.json   # LUNORA_STATE_STORE_URL
+jq -r .authToken ~/.alchemy/credentials/default/cloudflare-state-store.json | \
+  npx wrangler secret put LUNORA_STATE_STORE_TOKEN --env staging
+```
+
+**Check:** `curl -H "Authorization: Bearer <token>" <url>/state/stacks` answers a
+JSON array (`["CloudflareStateStore", …]`).
 
 ## 2. API tokens (Cloudflare dashboard — cannot be scripted from here)
 

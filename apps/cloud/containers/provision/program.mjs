@@ -302,7 +302,10 @@ const body = () => {
  */
 const stateStore = () =>
     plan.target.kind === "account"
-        ? Layer.effect(
+        ? // `State`'s service IS an Effect that yields the store (alchemy/State/State.ts:
+          // `Context.Service<State, Effect<StateService>>`), the shape Cloudflare's own
+          // `state()` provides: hand it the store-building Effect, not the built store.
+          Layer.succeed(
               State,
               makeHttpStateStore({
                   authToken: /** @type {string} */ (process.env.LUNORA_STATE_STORE_TOKEN),
