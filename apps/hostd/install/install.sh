@@ -118,7 +118,9 @@ RELEASE_ID=""
 TAG=""
 
 need_value() {
-    [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
+    if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+        die "$1 needs a value"
+    fi
 }
 
 parse_args() {
@@ -469,7 +471,9 @@ needs_enrolment() {
 check_secret_file() {
     local path="$1" what="$2"
 
-    [ -f "${path}" ] && [ ! -L "${path}" ] || die "${what} ${path} is not a regular file"
+    if [ ! -f "${path}" ] || [ -L "${path}" ]; then
+        die "${what} ${path} is not a regular file"
+    fi
     [ "$(stat -c %u "${path}")" = "0" ] || die "${what} ${path} must belong to root"
 
     case "$(stat -c %a "${path}")" in
