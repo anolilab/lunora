@@ -215,15 +215,16 @@ catalogs:
     # bring-your-own (declared as optional peers on @lunora/ai) so an app stays
     # Workers-AI-only unless it opts into another provider.
     #
-    # EXACT-pinned (no caret): v7 shipped inside the 1440-minute maturity window,
-    # so each version is allow-listed by exact name@version in
-    # `minimumReleaseAgeExclude` below. A caret would let pnpm drift to a newer
-    # patch that is NOT excluded and would then be gated. To bump: update the
-    # version here AND its matching exclude entry together.
-    ai: 7.0.93
+    # EXACT-pinned (no caret), and bumped together: `ai` and the `@ai-sdk/*`
+    # providers each pin exact `@ai-sdk/provider` / `provider-utils` versions, so
+    # moving one alone installs a second copy of both. `workers-ai-provider` only
+    # peers on them. A version still inside the 1440-minute maturity window needs
+    # an exact name@version entry in `minimumReleaseAgeExclude`, dropped once it
+    # ages out.
+    ai: 7.0.127
     workers-ai-provider: 4.0.0
-    "@ai-sdk/anthropic": 4.0.49
-    "@ai-sdk/openai": 4.0.60
+    "@ai-sdk/anthropic": 4.0.71
+    "@ai-sdk/openai": 4.0.83
   build:
     "@babel/core": ^8.0.1
     "@babel/preset-react": ^8.0.1
@@ -630,7 +631,7 @@ catalogs:
   # adapters (React/Vue/Solid/Svelte) with progress, pause/resume and per-part
   # retry. Both follow the repo's exact-pinned `@visulima/*` convention.
   storage:
-    "@visulima/storage": 2.0.8
+    "@visulima/storage": 2.0.22
     "@visulima/storage-client": 1.0.3
     # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional
     # peer pulled in by the `aws-light` provider that backs `createR2UploadStorage`.
@@ -984,8 +985,6 @@ allowBuilds:
 #   - 'better-auth@1.6.13 || 1.6.14'
 # When bumping a dependency, UPDATE its existing line — do not append a new one.
 minimumReleaseAgeExclude:
-  - '@ai-sdk/gateway@3.0.128'
-  - '@ai-sdk/provider-utils@4.0.28'
   - '@better-fetch/fetch@1.2.2'
   - '@cloudflare/flagship@0.4.2'
   - '@cloudflare/vite-plugin@1.40.1'

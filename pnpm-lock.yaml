@@ -7,14 +7,14 @@ settings:
 catalogs:
   ai:
     '@ai-sdk/anthropic':
-      specifier: 4.0.49
-      version: 4.0.49
+      specifier: 4.0.71
+      version: 4.0.71
     '@ai-sdk/openai':
-      specifier: 4.0.60
-      version: 4.0.60
+      specifier: 4.0.83
+      version: 4.0.83
     ai:
-      specifier: 7.0.93
-      version: 7.0.93
+      specifier: 7.0.127
+      version: 7.0.127
     workers-ai-provider:
       specifier: 4.0.0
       version: 4.0.0
@@ -569,8 +569,8 @@ catalogs:
       version: 0.1.9
   storage:
     '@visulima/storage':
-      specifier: 2.0.8
-      version: 2.0.8
+      specifier: 2.0.22
+      version: 2.0.22
     '@visulima/storage-client':
       specifier: 1.0.3
       version: 1.0.3
@@ -1145,7 +1145,7 @@ importers:
         version: 4.1.0
       '@visulima/vis':
         specifier: catalog:prod
-        version: 4.0.2(@grpc/grpc-js@1.14.4)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(marked@15.0.12)(mysql2@3.24.3(@types/node@26.4.1))(pg@8.23.0)(shiki@4.4.3)
+        version: 4.0.2(@grpc/grpc-js@1.14.4)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(marked@15.0.12)(mysql2@3.24.3(@types/node@26.4.1))(pg@8.23.0)(shiki@4.4.3)
       conventional-changelog-conventionalcommits:
         specifier: catalog:dev
         version: 9.3.1
@@ -2441,7 +2441,7 @@ importers:
         version: 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.5.4)
       ai:
         specifier: catalog:ai
-        version: 7.0.93(zod@4.5.4)
+        version: 7.0.127(zod@4.5.4)
       yaml:
         specifier: catalog:content
         version: 2.9.0
@@ -2475,19 +2475,19 @@ importers:
     dependencies:
       '@ai-sdk/anthropic':
         specifier: catalog:ai
-        version: 4.0.49(zod@4.5.4)
+        version: 4.0.71(zod@4.5.4)
       '@ai-sdk/openai':
         specifier: catalog:ai
-        version: 4.0.60(zod@4.5.4)
+        version: 4.0.83(zod@4.5.4)
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
       ai:
         specifier: catalog:ai
-        version: 7.0.93(zod@4.5.4)
+        version: 7.0.127(zod@4.5.4)
       workers-ai-provider:
         specifier: catalog:ai
-        version: 4.0.0(@ai-sdk/anthropic@4.0.49(zod@4.5.4))(@ai-sdk/openai@4.0.60(zod@4.5.4))(@ai-sdk/provider@4.0.10)(ai@7.0.93(zod@4.5.4))
+        version: 4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.5.4))(@ai-sdk/openai@4.0.83(zod@4.5.4))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.5.4))
     devDependencies:
       '@lunora/search-core':
         specifier: workspace:*
@@ -2929,7 +2929,7 @@ importers:
         version: 3.1.1(@bomb.sh/tab@0.0.22(cac@7.0.0)(citty@0.2.2)(commander@15.0.0))(@visulima/find-cache-dir@3.0.1)(@visulima/pail@5.0.0(@opentelemetry/api@1.9.1)(express@5.2.1(supports-color@10.2.2))(hono@4.13.7))(github-slugger@2.0.0)
       '@visulima/error':
         specifier: catalog:prod
-        version: 6.1.0(ai@7.0.93(zod@4.5.4))
+        version: 6.1.0(ai@7.0.127(zod@4.5.4))
       '@visulima/fs':
         specifier: catalog:cli
         version: 6.0.7(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.8.0)
@@ -2944,10 +2944,10 @@ importers:
         version: 1.0.1
       '@visulima/tui':
         specifier: catalog:cli
-        version: 4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
+        version: 4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
       '@visulima/tui-kit':
         specifier: catalog:cli
-        version: 1.0.10(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.2.8)(shiki@4.4.3)
+        version: 1.0.10(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.2.8)(shiki@4.4.3)
       adm-zip:
         specifier: '>=0.6.0'
         version: 0.6.0
@@ -4888,7 +4888,7 @@ importers:
         version: link:../platform
       '@visulima/storage':
         specifier: catalog:storage
-        version: 2.0.8(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.2.3)(magicast@0.5.4)(oxc-parser@0.147.0)(rolldown@1.2.7)(unplugin@3.3.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.26))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.93(zod@4.5.4))(aws4fetch@1.0.20)(hono@4.13.7)(sharp@0.35.4(@types/node@26.4.1))(supports-color@10.2.2)
+        version: 2.0.22(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.2.3)(magicast@0.5.4)(oxc-parser@0.147.0)(rolldown@1.2.7)(unplugin@3.3.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.26))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.5.4))(aws4fetch@1.0.20)(hono@4.13.7)(sharp@0.35.4(@types/node@26.4.1))(supports-color@10.2.2)
       aws4fetch:
         specifier: catalog:storage
         version: 1.0.20
@@ -5229,7 +5229,7 @@ importers:
         version: link:../studio
       '@visulima/vite-overlay':
         specifier: catalog:vite
-        version: 2.0.20(ai@7.0.93(zod@4.5.4))(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
+        version: 2.0.20(ai@7.0.127(zod@4.5.4))(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -5570,32 +5570,32 @@ packages:
   '@adraffy/ens-normalize@1.11.1':
     resolution: {integrity: sha512-nhCBV3quEgesuf7c7KYfperqSS14T8bYuvJ8PcLJp6znkZpFc0AuW4qBtr8eKVyPPe/8RSr7sglCWPU5eaxwKQ==}
 
-  '@ai-sdk/anthropic@4.0.49':
-    resolution: {integrity: sha512-fzy2sLrs3vNsliIgx65fuovsa6a7OTXd6DllKUgLuVmPyqLnvoZCv9NlKgq+krzDzSxLb9d0zTaJJpsjBVLNyA==}
+  '@ai-sdk/anthropic@4.0.71':
+    resolution: {integrity: sha512-wiv3jhUH0RrvGzSolJMZfZ2cI9As45LhwYmcAoWvNivXjC7wzJ4W/Udq9/u7EGnGsT8lpmFKEKBrMXVeUO97Dg==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/gateway@4.0.75':
-    resolution: {integrity: sha512-HOnhw3oXtBnboBF7kAKipjToCN6+5w6EuukiUKiULcxBitS+vbHRRv9IUBcq+Z1wkXcJjfywKrt5r++I6OYyXg==}
+  '@ai-sdk/gateway@4.0.103':
+    resolution: {integrity: sha512-nnGTUHzPRQ14jhv9CL4OQrzcRBIFTBMIPKGIi9Z9u/4GtwSRxa/nxUX6np2Iwp5phOzO0a0njj/j9Jolf5AEaA==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/openai@4.0.60':
-    resolution: {integrity: sha512-Wx8bRN/zD+jDujT7HDbU1tC66h0a5kNEMG1DDrILfUgil56IJ9JMeBrzGqDw56IspmcXFG6uRpRnuK8AEQeKgg==}
+  '@ai-sdk/openai@4.0.83':
+    resolution: {integrity: sha512-NgqZVWoya7hfmtLkWyIjX9THbyYMLfxFqpShdAmvMnkoT+R9AZbdULGan8+4BiBWIZ1aHiAsc90l3SL8QU/0+Q==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/provider-utils@5.0.36':
-    resolution: {integrity: sha512-MFXBn6XDyf37PNQAge/HTatPJE8Vmg/g/w4WPtjSV53jq8FKAzoaN5+43hsdQa9bqgN+/13jxug9ChvsG+godQ==}
+  '@ai-sdk/provider-utils@5.0.53':
+    resolution: {integrity: sha512-VVe6UDd0y0/B4TfauuKKzcppqvhTmSluwwUVT4WG2/8h7gFbyFm7PM4UGM+ZXe3/RI6bv+Vl1cw/7aiBoQqdxg==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/provider@4.0.10':
-    resolution: {integrity: sha512-fX2ENAc7iDpZ+Wp4+Rk06Usn/Ys7dI9uAkGv0jlF6XVrW13NkRWx5Ou+U6lIM2E1fTLkCs16GGrUAaVvroag7A==}
+  '@ai-sdk/provider@4.0.21':
+    resolution: {integrity: sha512-UpbC9C1oht8dhfKPbVXSLRZS3DI8uk8n5v2uMjBPNIYGsC2kL045ywq7D8Hh9KgnH9rP5W/GxQdYtWScRouqlA==}
     engines: {node: '>=22'}
 
   '@ampproject/remapping@2.3.0':
@@ -14667,8 +14667,8 @@ packages:
       svelte: '>=3.0.0'
       vue: '>=3.5.34'
 
-  '@visulima/storage@2.0.8':
-    resolution: {integrity: sha512-5jntxMlpLcjnSJfgtZugPxkpEZNIIYI26WZUIHx40GUsqKs5uRIoud4q7EUbt/aXaGtj9mFjoi9Jyb0mcTA7/g==}
+  '@visulima/storage@2.0.22':
+    resolution: {integrity: sha512-i96wdTU9rF9IDLWCUZ1IqBH+PBz3xLy5ioLPw/Qs1h1QJw9rKae49LzUbvbJZi3tiZH+lC1SFrLuRBf1R5waiQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@anthropic-ai/claude-agent-sdk': '>=0.2.0'
@@ -15880,8 +15880,8 @@ packages:
     resolution: {integrity: sha512-gOsf2YwSlleG6IjRYG2A7k0HmBMEo6qVNk9Bp/EaLgAJT5ngH6PXbqa4ItvnEwCm/velL5jAnQgsHsWnjhGmvw==}
     engines: {node: '>=18'}
 
-  ai@7.0.93:
-    resolution: {integrity: sha512-CJss6zb9mlltk/mCr8qom20NBnqEQxVawkqwtT62tCwsxilZpXfHNRMRwcS3XRpzdP1kEluVuDBUayYWEEd95g==}
+  ai@7.0.127:
+    resolution: {integrity: sha512-JNsNPk4ZvRGEJuqdVo2lYFkm7uAuf3p/RwKFWn1Wh/+IK3U1RyFWw2GXoFnhzqNfxEuj7XJB4WpIUhl1sHToWg==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -25476,36 +25476,36 @@ snapshots:
 
   '@adraffy/ens-normalize@1.11.1': {}
 
-  '@ai-sdk/anthropic@4.0.49(zod@4.5.4)':
+  '@ai-sdk/anthropic@4.0.71(zod@4.5.4)':
     dependencies:
-      '@ai-sdk/provider': 4.0.10
-      '@ai-sdk/provider-utils': 5.0.36(zod@4.5.4)
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.5.4)
       zod: 4.5.4
 
-  '@ai-sdk/gateway@4.0.75(zod@4.4.3)':
+  '@ai-sdk/gateway@4.0.103(zod@4.4.3)':
     dependencies:
-      '@ai-sdk/provider': 4.0.10
-      '@ai-sdk/provider-utils': 5.0.36(zod@4.4.3)
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
       '@vercel/oidc': 3.2.0
       zod: 4.4.3
     optional: true
 
-  '@ai-sdk/gateway@4.0.75(zod@4.5.4)':
+  '@ai-sdk/gateway@4.0.103(zod@4.5.4)':
     dependencies:
-      '@ai-sdk/provider': 4.0.10
-      '@ai-sdk/provider-utils': 5.0.36(zod@4.5.4)
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.5.4)
       '@vercel/oidc': 3.2.0
       zod: 4.5.4
 
-  '@ai-sdk/openai@4.0.60(zod@4.5.4)':
+  '@ai-sdk/openai@4.0.83(zod@4.5.4)':
     dependencies:
-      '@ai-sdk/provider': 4.0.10
-      '@ai-sdk/provider-utils': 5.0.36(zod@4.5.4)
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.5.4)
       zod: 4.5.4
 
-  '@ai-sdk/provider-utils@5.0.36(zod@4.4.3)':
+  '@ai-sdk/provider-utils@5.0.53(zod@4.4.3)':
     dependencies:
-      '@ai-sdk/provider': 4.0.10
+      '@ai-sdk/provider': 4.0.21
       '@standard-schema/spec': 1.1.0
       '@workflow/serde': 4.1.0
       eventsource-parser: 3.1.0
@@ -25513,16 +25513,16 @@ snapshots:
       zod: 4.4.3
     optional: true
 
-  '@ai-sdk/provider-utils@5.0.36(zod@4.5.4)':
+  '@ai-sdk/provider-utils@5.0.53(zod@4.5.4)':
     dependencies:
-      '@ai-sdk/provider': 4.0.10
+      '@ai-sdk/provider': 4.0.21
       '@standard-schema/spec': 1.1.0
       '@workflow/serde': 4.1.0
       eventsource-parser: 3.1.0
       undici: 7.29.1
       zod: 4.5.4
 
-  '@ai-sdk/provider@4.0.10':
+  '@ai-sdk/provider@4.0.21':
     dependencies:
       json-schema: 0.4.0
 
@@ -35693,13 +35693,13 @@ snapshots:
       - moment-timezone
       - rrule
 
-  '@visulima/error@6.1.0(ai@7.0.93(zod@4.4.3))':
+  '@visulima/error@6.1.0(ai@7.0.127(zod@4.4.3))':
     optionalDependencies:
-      ai: 7.0.93(zod@4.4.3)
+      ai: 7.0.127(zod@4.4.3)
 
-  '@visulima/error@6.1.0(ai@7.0.93(zod@4.5.4))':
+  '@visulima/error@6.1.0(ai@7.0.127(zod@4.5.4))':
     optionalDependencies:
-      ai: 7.0.93(zod@4.5.4)
+      ai: 7.0.127(zod@4.5.4)
 
   '@visulima/find-ai-runner@1.0.2': {}
 
@@ -36755,7 +36755,7 @@ snapshots:
       svelte: 5.57.0(@typescript-eslint/types@8.69.0)
       vue: 3.5.42(typescript@6.0.3)
 
-  '@visulima/storage@2.0.8(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.2.3)(magicast@0.5.4)(oxc-parser@0.147.0)(rolldown@1.2.7)(unplugin@3.3.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.26))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.93(zod@4.5.4))(aws4fetch@1.0.20)(hono@4.13.7)(sharp@0.35.4(@types/node@26.4.1))(supports-color@10.2.2)':
+  '@visulima/storage@2.0.22(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.2.3)(magicast@0.5.4)(oxc-parser@0.147.0)(rolldown@1.2.7)(unplugin@3.3.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.26))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.5.4))(aws4fetch@1.0.20)(hono@4.13.7)(sharp@0.35.4(@types/node@26.4.1))(supports-color@10.2.2)':
     dependencies:
       '@remix-run/multipart-parser': 0.16.3
       '@sindresorhus/fnv1a': 3.1.0
@@ -36772,7 +36772,7 @@ snapshots:
       '@netlify/blobs': 11.0.3(supports-color@10.2.2)
       '@nuxt/kit': 4.5.2(magic-string@1.2.3)(magicast@0.5.4)(oxc-parser@0.147.0)(rolldown@1.2.7)(unplugin@3.3.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.26))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.26)(uglify-js@3.19.3)))
       '@opentelemetry/api': 1.9.1
-      ai: 7.0.93(zod@4.5.4)
+      ai: 7.0.127(zod@4.5.4)
       aws4fetch: 1.0.20
       hono: 4.13.7
       sharp: 0.35.4(@types/node@26.4.1)
@@ -36894,12 +36894,12 @@ snapshots:
   '@visulima/tui-binding-win32-x64-msvc@4.0.8':
     optional: true
 
-  '@visulima/tui-kit@1.0.10(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.2.8)(shiki@4.4.3)':
+  '@visulima/tui-kit@1.0.10(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.2.8)(shiki@4.4.3)':
     dependencies:
       '@visulima/ansi': 4.2.0
       '@visulima/colorize': 2.1.1
       '@visulima/spinner': 1.0.1
-      '@visulima/tui': 4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
+      '@visulima/tui': 4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
       react: 19.2.8
       type-fest: 5.8.0
     optionalDependencies:
@@ -36911,12 +36911,12 @@ snapshots:
       marked: 15.0.12
       shiki: 4.4.3
 
-  '@visulima/tui-kit@1.0.11(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.2.8)(shiki@4.4.3)':
+  '@visulima/tui-kit@1.0.11(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.2.8)(shiki@4.4.3)':
     dependencies:
       '@visulima/ansi': 4.2.0
       '@visulima/colorize': 2.1.1
       '@visulima/spinner': 1.0.1
-      '@visulima/tui': 4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
+      '@visulima/tui': 4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
       react: 19.2.8
       type-fest: 5.8.0
     optionalDependencies:
@@ -36928,11 +36928,11 @@ snapshots:
       marked: 15.0.12
       shiki: 4.4.3
 
-  '@visulima/tui@4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)':
+  '@visulima/tui@4.0.7(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.5.4))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)':
     dependencies:
       '@visulima/ansi': 4.2.0
       '@visulima/colorize': 2.1.1
-      '@visulima/error': 6.1.0(ai@7.0.93(zod@4.5.4))
+      '@visulima/error': 6.1.0(ai@7.0.127(zod@4.5.4))
       '@visulima/string': 3.1.0
       react: 19.2.8
       react-reconciler: 0.33.0(react@19.2.8)
@@ -36953,11 +36953,11 @@ snapshots:
     transitivePeerDependencies:
       - ai
 
-  '@visulima/tui@4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)':
+  '@visulima/tui@4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)':
     dependencies:
       '@visulima/ansi': 4.2.0
       '@visulima/colorize': 2.1.1
-      '@visulima/error': 6.1.0(ai@7.0.93(zod@4.4.3))
+      '@visulima/error': 6.1.0(ai@7.0.127(zod@4.4.3))
       '@visulima/string': 3.1.0
       react: 19.2.8
       react-reconciler: 0.33.0(react@19.2.8)
@@ -37002,15 +37002,15 @@ snapshots:
   '@visulima/vis-binding-win32-x64-msvc@4.0.2':
     optional: true
 
-  '@visulima/vis@4.0.2(@grpc/grpc-js@1.14.4)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(marked@15.0.12)(mysql2@3.24.3(@types/node@26.4.1))(pg@8.23.0)(shiki@4.4.3)':
+  '@visulima/vis@4.0.2(@grpc/grpc-js@1.14.4)(@grpc/proto-loader@0.8.1)(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(fb-watchman@2.0.2)(marked@15.0.12)(mysql2@3.24.3(@types/node@26.4.1))(pg@8.23.0)(shiki@4.4.3)':
     dependencies:
-      '@visulima/error': 6.1.0(ai@7.0.93(zod@4.4.3))
+      '@visulima/error': 6.1.0(ai@7.0.127(zod@4.4.3))
       '@visulima/secret-scanner': 2.0.1(@grpc/grpc-js@1.14.4)(mysql2@3.24.3(@types/node@26.4.1))(pg@8.23.0)
       '@visulima/source-map': 3.0.1
       '@visulima/tabular': 4.1.0
       '@visulima/task-runner': 1.0.6(@grpc/grpc-js@1.14.4)(@grpc/proto-loader@0.8.1)
-      '@visulima/tui': 4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
-      '@visulima/tui-kit': 1.0.11(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.93(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.2.8)(shiki@4.4.3)
+      '@visulima/tui': 4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3)
+      '@visulima/tui-kit': 1.0.11(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.8(@shikijs/langs@4.4.3)(@shikijs/themes@4.4.3)(ai@7.0.127(zod@4.4.3))(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.4.3))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.2.8)(shiki@4.4.3)
       module-replacements: 3.1.0
       module-replacements-codemods: 2.0.2
       react: 19.2.8
@@ -37044,11 +37044,11 @@ snapshots:
       - react-devtools-core
       - shiki
 
-  '@visulima/vite-overlay@2.0.20(ai@7.0.93(zod@4.5.4))(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))':
+  '@visulima/vite-overlay@2.0.20(ai@7.0.127(zod@4.5.4))(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))':
     dependencies:
       '@shikijs/cli': 4.4.3
       '@shikijs/langs': 4.4.3
-      '@visulima/error': 6.1.0(ai@7.0.93(zod@4.5.4))
+      '@visulima/error': 6.1.0(ai@7.0.127(zod@4.5.4))
       csstype: 3.2.3
       fastest-levenshtein: 1.0.16
       shiki: 4.4.3
@@ -37807,19 +37807,19 @@ snapshots:
       clean-stack: 5.3.0
       indent-string: 5.0.0
 
-  ai@7.0.93(zod@4.4.3):
+  ai@7.0.127(zod@4.4.3):
     dependencies:
-      '@ai-sdk/gateway': 4.0.75(zod@4.4.3)
-      '@ai-sdk/provider': 4.0.10
-      '@ai-sdk/provider-utils': 5.0.36(zod@4.4.3)
+      '@ai-sdk/gateway': 4.0.103(zod@4.4.3)
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.4.3)
       zod: 4.4.3
     optional: true
 
-  ai@7.0.93(zod@4.5.4):
+  ai@7.0.127(zod@4.5.4):
     dependencies:
-      '@ai-sdk/gateway': 4.0.75(zod@4.5.4)
-      '@ai-sdk/provider': 4.0.10
-      '@ai-sdk/provider-utils': 5.0.36(zod@4.5.4)
+      '@ai-sdk/gateway': 4.0.103(zod@4.5.4)
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.5.4)
       zod: 4.5.4
 
   ajv-errors@3.0.0(ajv@8.20.0):
@@ -49083,13 +49083,13 @@ snapshots:
 
   workerpool@10.0.3: {}
 
-  workers-ai-provider@4.0.0(@ai-sdk/anthropic@4.0.49(zod@4.5.4))(@ai-sdk/openai@4.0.60(zod@4.5.4))(@ai-sdk/provider@4.0.10)(ai@7.0.93(zod@4.5.4)):
+  workers-ai-provider@4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.5.4))(@ai-sdk/openai@4.0.83(zod@4.5.4))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.5.4)):
     dependencies:
-      '@ai-sdk/provider': 4.0.10
-      ai: 7.0.93(zod@4.5.4)
+      '@ai-sdk/provider': 4.0.21
+      ai: 7.0.127(zod@4.5.4)
     optionalDependencies:
-      '@ai-sdk/anthropic': 4.0.49(zod@4.5.4)
-      '@ai-sdk/openai': 4.0.60(zod@4.5.4)
+      '@ai-sdk/anthropic': 4.0.71(zod@4.5.4)
+      '@ai-sdk/openai': 4.0.83(zod@4.5.4)
 
   wrangler@4.146.0(@cloudflare/workers-types@5.20261002.1(patch_hash=1419fc3d05b400dce1c72e7174035969fa7bdb38ba4f9e236eccaeae1a7c358b))(@types/node@26.4.1):
     dependencies:
