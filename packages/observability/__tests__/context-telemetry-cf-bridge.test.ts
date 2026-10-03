@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SpanHandle, TracerDeps } from "../src/context-telemetry";
 import { createTracer } from "../src/context-telemetry";
 import type { HostSpanLike, HostTracingLike } from "../src/host-span";
-import { setHostSpanAttributes } from "../src/host-span";
+import { setHostSpanAttributes, setHostSpanErrorStatus } from "../src/host-span";
 
 /**
  * Unit coverage for the opt-in Cloudflare custom-spans bridge in
@@ -299,6 +299,105 @@ describe("createTracer cloudflare custom-spans bridge", () => {
         expect(bags).toHaveLength(1);
         expect(bags[0]).toMatchObject({ "error.message": "kaboom", "lunora.function_path": "messages:list", "lunora.ok": false });
         expect(exceptions).toStrictEqual([{ message: "kaboom", name: "TypeError" }]);
+    });
+});
+
+describe("createTracer cloudflare span status", () => {
+    type Status = Parameters<NonNullable<HostSpanLike["setStatus"]>>[0];
+
+    /** A fake CF span that also records every `setStatus` call. */
+    const makeStatusSpan = (isTraced = true): HostSpanLike & { readonly statuses: Status[] } => {
+        const statuses: Status[] = [];
+
+        return {
+            isTraced,
+            setAttribute: () => undefined,
+            setStatus: (status) => {
+                statuses.push(status);
+            },
+            statuses,
+        };
+    };
+
+    it("sets error status with the redacted message on a failed span", async () => {
+        expect.assertions(2);
+
+        const span = makeStatusSpan();
+        const { trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(
+            trace("span", () => {
+                throw new Error("User 12345 not found");
+            }),
+        ).rejects.toThrow("User 12345 not found");
+
+        // The redacted message — the host exports this span, so it must not
+        // carry the raw one (`standardRules` masks a bare 5-digit run as `<DL>`).
+        expect(span.statuses).toStrictEqual([{ code: "error", message: "User <DL> not found" }]);
+    });
+
+    it("never sets a status on a successful span (OTel leaves it unset)", async () => {
+        expect.assertions(2);
+
+        const span = makeStatusSpan();
+        const { trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(trace("span", () => "ok")).resolves.toBe("ok");
+        expect(span.statuses).toHaveLength(0);
+    });
+
+    it("never sets a status on an untraced span", async () => {
+        expect.assertions(2);
+
+        const span = makeStatusSpan(false);
+        const { recorded, trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(
+            trace("span", () => {
+                throw new Error("kaboom");
+            }),
+        ).rejects.toThrow("kaboom");
+
+        expect({ recorded: recorded.length, statuses: span.statuses }).toStrictEqual({ recorded: 1, statuses: [] });
+    });
+
+    it("still mirrors a failure onto a span without setStatus (older runtime)", async () => {
+        expect.assertions(3);
+
+        const span = makeFakeSpan();
+        const { recorded, trace } = setup({ fuseHostSpans: true, resolveHostTracing: async () => makeFakeTracing(span) });
+
+        await expect(
+            trace("span", () => {
+                throw new Error("kaboom");
+            }),
+        ).rejects.toThrow("kaboom");
+
+        expect(recorded[0]).toMatchObject({ ok: false });
+        expect(new Map(span.writes).get("error.message")).toBe("kaboom");
+    });
+});
+
+describe(setHostSpanErrorStatus, () => {
+    it("sets error status on a traced span", () => {
+        expect.assertions(1);
+
+        const setStatus = vi.fn<NonNullable<HostSpanLike["setStatus"]>>();
+
+        setHostSpanErrorStatus({ isTraced: true, setAttribute: () => undefined, setStatus }, "internal error");
+
+        expect(setStatus).toHaveBeenCalledExactlyOnceWith({ code: "error", message: "internal error" });
+    });
+
+    it("skips an untraced span and a span without setStatus", () => {
+        expect.assertions(1);
+
+        const setStatus = vi.fn<NonNullable<HostSpanLike["setStatus"]>>();
+
+        setHostSpanErrorStatus({ isTraced: false, setAttribute: () => undefined, setStatus }, "x");
+        setHostSpanErrorStatus({ isTraced: true, setAttribute: () => undefined }, "x");
+
+        expect(setStatus).not.toHaveBeenCalled();
     });
 });
 

@@ -63,6 +63,7 @@ import {
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
     setHostSpanAttributes,
+    setHostSpanErrorStatus,
     SpanBuffer,
     upsertIssueState,
 } from "@lunora/observability";
@@ -569,6 +570,36 @@ const resolveHostTracing = async (): Promise<HostTracingLike | undefined> => {
     }
 
     return cloudflareTracing;
+};
+
+/**
+ * Mirror a finished dispatch's root span onto the host's invocation span, for
+ * a sink with `fuseCloudflareTraces`. Every `ctx.trace` custom span has ended by
+ * the time this runs, so `getActiveSpan()` is the invocation's root span — the
+ * host-side twin of this dispatch. Reads the probe verdict synchronously: it
+ * settled at construction. Throws propagate to the caller's best-effort guard.
+ */
+const mirrorDispatchOntoHostRootSpan = (rootSpan: SpanEvent, failure: { thrown: unknown } | undefined): void => {
+    const hostSpan = cloudflareTracing?.getActiveSpan?.();
+
+    if (hostSpan === undefined) {
+        return;
+    }
+
+    // The (already redacted) wide-event attributes.
+    if (rootSpan.attributes !== undefined) {
+        setHostSpanAttributes(hostSpan, rootSpan.attributes);
+    }
+
+    // A failed RPC dispatch never throws out of the DO — it is answered with an
+    // error Response (`errorToResponse`), so the host sees a served request, not
+    // an exception. Mark the root span failed ourselves, but only for a server
+    // fault (status >= 500): a 4xx (validation, auth, not-found, conflict) is an
+    // expected client outcome, which OTel's server-span convention leaves
+    // `unset`. The message is the root span's already-redacted one.
+    if (failure !== undefined && rootSpan.error !== undefined && toErrorBody(failure.thrown).status >= 500) {
+        setHostSpanErrorStatus(hostSpan, rootSpan.error.message);
+    }
 };
 
 /**
@@ -7899,16 +7930,10 @@ abstract class ShardDO {
 
             this.spans.push(rootSpan);
 
-            // Fused: land the (already redacted) wide-event attributes on the
-            // host's own invocation span too. Every `ctx.trace` custom span has
-            // ended by now, so `getActiveSpan()` is the invocation's root span —
-            // the host-side twin of this dispatch. The probe settled at construction.
-            if (wide?.sink?.fuseCloudflareTraces === true && rootSpan.attributes !== undefined) {
-                const hostSpan = cloudflareTracing?.getActiveSpan?.();
-
-                if (hostSpan !== undefined) {
-                    setHostSpanAttributes(hostSpan, rootSpan.attributes);
-                }
+            // Fused: land the (already redacted) wide-event attributes, and a
+            // server fault's error status, on the host's own invocation span too.
+            if (wide?.sink?.fuseCloudflareTraces === true) {
+                mirrorDispatchOntoHostRootSpan(rootSpan, failure);
             }
         } catch {
             // Best-effort — span capture must never fail a served request.

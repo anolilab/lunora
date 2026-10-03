@@ -43,6 +43,14 @@ interface HostSpanLike {
     setAttribute: (key: string, value: boolean | number | string | undefined) => unknown;
     /** Attach several attributes in one call (CF 2026-09-25). Optional, like `recordException`. */
     setAttributes?: (attributes: Record<string, boolean | number | string>) => unknown;
+
+    /**
+     * Set the span's OTel status (workers-types 5.20260929). Optional and
+     * feature-detected, like `recordException`: older runtimes lack it. The
+     * bridge only ever sets `"error"` — OTel instrumentation leaves a successful
+     * span `"unset"` rather than marking it `"ok"`.
+     */
+    setStatus?: (status: { code: "error" | "ok" | "unset"; message?: string }) => unknown;
 }
 
 /**
@@ -100,6 +108,23 @@ const setHostSpanAttributes = (span: HostSpanLike, attributes: Record<string, Lo
 };
 
 /**
+ * Mark a host span as failed, best-effort: OTel status `"error"` with the given
+ * message, so Cloudflare's trace UI (and any OTel backend fed from it) shows the
+ * span as failed rather than only carrying an `exception` event. Skipped for an
+ * untraced span and on a runtime without `setStatus`.
+ *
+ * `message` must already be redacted — the host exports this span too, so it
+ * keeps the same `captureRaw` posture as Lunora's own span pipeline.
+ */
+const setHostSpanErrorStatus = (span: HostSpanLike, message: string): void => {
+    if (!span.isTraced || typeof span.setStatus !== "function") {
+        return;
+    }
+
+    span.setStatus({ code: "error", message });
+};
+
+/**
  * Mirror a finished span's name-independent key attributes onto its Cloudflare
  * custom span, best-effort. Pure and side-effect-only, so the wrapping in
  * `createTracer` stays readable and this is directly unit-testable with a
@@ -151,7 +176,13 @@ const applyHostSpanAttributes = (
     if (meta.error !== undefined && typeof span.recordException === "function") {
         span.recordException({ message: meta.error.message, name: meta.error.type });
     }
+
+    // Status, not just the event: an `exception` event alone does not make a
+    // backend render the span as failed. Success stays `"unset"` (OTel posture).
+    if (meta.error !== undefined) {
+        setHostSpanErrorStatus(span, meta.error.message);
+    }
 };
 
 export type { HostSpanLike, HostTracingLike, HostTracingResolver };
-export { applyHostSpanAttributes, setHostSpanAttributes };
+export { applyHostSpanAttributes, setHostSpanAttributes, setHostSpanErrorStatus };

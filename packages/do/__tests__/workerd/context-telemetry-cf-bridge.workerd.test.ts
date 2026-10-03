@@ -21,7 +21,7 @@
  * Those assertions are called out inline.
  */
 import type { HostTracingLike, TracerDeps } from "@lunora/observability";
-import { createTracer, setHostSpanAttributes } from "@lunora/observability";
+import { createTracer, setHostSpanAttributes, setHostSpanErrorStatus } from "@lunora/observability";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
@@ -110,6 +110,49 @@ describe("createTracer cloudflare custom-spans bridge (workerd)", () => {
         expect(["function", "undefined"]).toContain(outcome.hasGetActiveSpan);
         // The body's own error surfaces untouched, with a native recordException
         // (when present) on the host span in between.
+        expect(outcome.failure).toBe("kaboom");
+    });
+
+    it("sets error status on the real host spans without throwing, where the runtime has setStatus", async () => {
+        expect.assertions(3);
+
+        const stub = newShardStub("cf-bridge-status");
+
+        const outcome = await runInDurableObject(stub, async () => {
+            const tracing = await realResolveCloudflareTracing();
+            let customSetStatus = "undefined";
+
+            // A custom span: the shape `ctx.trace` hands `applyHostSpanAttributes`.
+            tracing?.enterSpan("probe.status", (hostSpan) => {
+                customSetStatus = typeof hostSpan.setStatus;
+                setHostSpanErrorStatus(hostSpan, "internal error");
+            });
+
+            // The invocation root span: the shape the shard's dispatch mirror marks.
+            const activeSpan = tracing?.getActiveSpan?.();
+
+            if (activeSpan !== undefined) {
+                setHostSpanErrorStatus(activeSpan, "internal error");
+            }
+
+            // And end to end: a failing bridged `ctx.trace` still re-throws the
+            // body's own error with the status write in between.
+            const { trace } = setup({ fuseHostSpans: true, resolveHostTracing: realResolveCloudflareTracing });
+            const failure = await trace("fails", () => {
+                throw new TypeError("kaboom");
+            }).catch((error: unknown) => error);
+
+            return {
+                activeSetStatus: typeof activeSpan?.setStatus,
+                customSetStatus,
+                failure: failure instanceof Error ? failure.message : String(failure),
+            };
+        });
+
+        // Feature-detected: a runtime predating `setStatus` reports `undefined`,
+        // and the helper no-ops. Either way nothing threw.
+        expect(["function", "undefined"]).toContain(outcome.customSetStatus);
+        expect(["function", "undefined"]).toContain(outcome.activeSetStatus);
         expect(outcome.failure).toBe("kaboom");
     });
 

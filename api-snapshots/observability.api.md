@@ -324,6 +324,10 @@ interface HostSpanLike {
     }) => unknown;
     setAttribute: (key: string, value: boolean | number | string | undefined) => unknown;
     setAttributes?: (attributes: Record<string, boolean | number | string>) => unknown;
+    setStatus?: (status: {
+        code: "error" | "ok" | "unset";
+        message?: string;
+    }) => unknown;
 }
 ```
 
@@ -1221,6 +1225,12 @@ const resolveTraceAnchor: (traceparent: string | undefined, rayHeader?: null | s
 
 ```ts
 const setHostSpanAttributes: (span: HostSpanLike, attributes: Record<string, LogFields[string]>) => void;
+```
+
+### `setHostSpanErrorStatus` (const)
+
+```ts
+const setHostSpanErrorStatus: (span: HostSpanLike, message: string) => void;
 ```
 
 ### `upsertIssueState` (const)
