@@ -4,6 +4,7 @@ import declaredOutputWins from "../../declared-output";
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "../../ir";
 import sanitizeNamespace from "../../paths";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
+import { exportNamesByLocalOf, isAddressableExportName } from "../attribution";
 import { collectErasures, reportErasures } from "../erased-returns";
 import type { LifecycleMoment } from "./classify-procedure-call";
 import { classifyProcedureCall } from "./classify-procedure-call";
@@ -129,27 +130,31 @@ const defaultExportFunctions = (source: SourceFile, relativePath: string): Funct
     return found;
 };
 
-/** Lift every Lunora registration in one source file into {@link FunctionIR} entries. */
+/**
+ * Lift every Lunora registration in one source file into {@link FunctionIR}
+ * entries, each under every name the module exports its binding under
+ * ({@link exportNamesByLocalOf}): `export const x = …` as `x`,
+ * `const run = query(…); export { run as start }` as `start`,
+ * `export { run as default }` / `export default run` as `default`. Those are the
+ * names the emitted `api.ts` and dispatch table read off the module namespace.
+ * A name that is not an identifier (`export { run as "kebab-name" }`) cannot be
+ * emitted that way and is left to `procedure_not_registered`.
+ */
 const discoverFileFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
-    const found: FunctionIR[] = [];
+    const exportNames = exportNamesByLocalOf(source);
+    const found = source
+        .getVariableStatements()
+        .flatMap((statement) => statement.getDeclarations())
+        .flatMap((declaration) => exportCallsOfDeclaration(declaration, (localName) => exportNames.has(localName)))
+        .flatMap(([localName, call]) =>
+            (exportNames.get(localName) ?? [])
+                .filter((name) => isAddressableExportName(name))
+                .flatMap((name) => functionIrFromCall(call, name, relativePath) ?? []),
+        );
+    const named = new Set(found.map((entry) => entry.exportName));
 
-    for (const statement of source.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
-
-        for (const declaration of statement.getDeclarations()) {
-            for (const [exportName, call] of exportCallsOfDeclaration(declaration)) {
-                const entry = functionIrFromCall(call, exportName, relativePath);
-
-                if (entry) {
-                    found.push(entry);
-                }
-            }
-        }
-    }
-
-    found.push(...defaultExportFunctions(source, relativePath));
+    // `export default <expression>` that is not a local binding.
+    found.push(...defaultExportFunctions(source, relativePath).filter((entry) => !named.has(entry.exportName)));
 
     return found;
 };

@@ -3,7 +3,9 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { isArgumentDerived } from "../argument-taint";
 import type { SoftDeleteReadIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, readTargetOf } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
+import { readTargetOf } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -51,7 +53,7 @@ const softDeleteReadsInDeclaration = (declaration: TsNode, relativePath: string)
         }
 
         rows.push({
-            exportName: declaration.getName(),
+            exportName: exportedNameOf(declaration) ?? declaration.getName(),
             file: relativePath,
             fromArgs,
             hardcodedTrue,
@@ -80,14 +82,8 @@ const discoverSoftDeleteReads = (project: Project, lunoraDirectory: string): Sof
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
-
-            for (const declaration of statement.getDeclarations()) {
-                rows.push(...softDeleteReadsInDeclaration(declaration, relativePath));
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            rows.push(...softDeleteReadsInDeclaration(declaration, relativePath));
         }
     }
 

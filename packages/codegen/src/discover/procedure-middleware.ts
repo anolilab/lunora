@@ -3,8 +3,11 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
-import { findObjectProperty, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { calleeName } from "./callee";
+import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -278,18 +281,17 @@ const isFanOutCall = (call: CallExpression): boolean => {
     let node: TsNode = callee.getExpression();
 
     while (Node.isCallExpression(node) || Node.isElementAccessExpression(node) || Node.isPropertyAccessExpression(node)) {
-        if (Node.isPropertyAccessExpression(node) && FANOUT_SURFACES.has(node.getName())) {
-            const receiver = node.getExpression();
-
-            if (Node.isIdentifier(receiver) && receiver.getText() === "ctx") {
-                return true;
-            }
+        if (Node.isPropertyAccessExpression(node) && FANOUT_SURFACES.has(node.getName()) && isContextIdentifier(node.getExpression())) {
+            return true;
         }
 
         node = node.getExpression();
     }
 
-    return false;
+    // A destructured or aliased surface (`const { topics } = ctx; topics.publish(…)`).
+    const surface = contextSurfacePathOf(node);
+
+    return surface?.length === 1 && FANOUT_SURFACES.has(surface[0] ?? "");
 };
 
 /** True when `call` is a `ctx.db.insertManyUnsafe(...)` / `db.insertManyUnsafe(...)` — the validator/trigger-bypassing bulk insert. */
@@ -360,15 +362,7 @@ const OUTBOUND_MEMBERS: ReadonlySet<string> = new Set(["ai", "browser", "fetch",
 
 /** True when any `ctx.<member>` in `declaration` is one of `members`. */
 const referencesContextMember = (declaration: TsNode, members: ReadonlySet<string>): boolean =>
-    declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
-        if (!members.has(access.getName())) {
-            return false;
-        }
-
-        const receiver = access.getExpression();
-
-        return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
-    });
+    [...members].some((member) => contextSurfaceNodesIn(declaration, member).length > 0);
 
 /** Syntax kinds that bound "the same function" for the enclosing-`try` walk below — climbing stops here. */
 const FUNCTION_BOUNDARY_KINDS: ReadonlySet<SyntaxKind> = new Set([
@@ -532,17 +526,7 @@ const outboundErrorHandlingFacts = (declaration: TsNode): { handlesErrors: boole
     let reachesOutbound = false;
     let allGuarded = true;
 
-    for (const access of declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
-        if (!OUTBOUND_MEMBERS.has(access.getName())) {
-            continue;
-        }
-
-        const receiver = access.getExpression();
-
-        if (!Node.isIdentifier(receiver) || receiver.getText() !== "ctx") {
-            continue;
-        }
-
+    for (const access of [...OUTBOUND_MEMBERS].flatMap((member) => contextSurfaceNodesIn(declaration, member))) {
         const call = outboundCallSite(access);
 
         if (!call) {
@@ -821,7 +805,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         ...exemptionOf(declaration),
         ...protections,
         analyzableBody: behaviourRoot !== undefined,
-        exportName: declaration.getName(),
+        exportName: exportedNameOf(declaration) ?? declaration.getName(),
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,
@@ -833,17 +817,11 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
 const middlewareInSourceFile = (sourceFile: SourceFile, relativePath: string): ProcedureMiddlewareIR[] => {
     const found: ProcedureMiddlewareIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const ir = middlewareIrFromDeclaration(declaration, relativePath);
 
-        for (const declaration of statement.getDeclarations()) {
-            const ir = middlewareIrFromDeclaration(declaration, relativePath);
-
-            if (ir) {
-                found.push(ir);
-            }
+        if (ir) {
+            found.push(ir);
         }
     }
 

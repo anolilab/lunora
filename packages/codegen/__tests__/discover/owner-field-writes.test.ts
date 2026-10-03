@@ -1,56 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { fromServerSchema, runAdvisor } from "@lunora/advisor";
 import { defineSchema } from "@lunora/server";
-import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverMutators } from "../../src/discover/mutators";
-import discoverOwnerFieldWrites from "../../src/discover/owner-field-writes";
 import { markerLine } from "../call-site-fixture";
-
-type Row = ReturnType<typeof discoverOwnerFieldWrites>[number];
-
-let workdir: string;
-
-/** Discover the owner-field writes of ONE fixture file, together with the mutators it declares. */
-const discover = (source: string, file = "mutators.ts"): Row[] => {
-    const lunoraDirectory = join(workdir, "lunora");
-    const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-
-    writeFileSync(join(lunoraDirectory, file), source, "utf8");
-
-    return discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
-};
-
-/** An exported owner-scoped mutator whose `server` impl takes `parameters` and runs `body`. */
-const ownerMutator = (body: string, parameters = "ctx, args"): string =>
-    `export const createPost = defineMutator({
-    owner: "userId",
-    server: async (${parameters}) => {
-${body}
-    },
-});`;
-
-const rowAt = (found: ReadonlyArray<Row>, line: number): Row | undefined => found.find((row) => row.line === line);
-
-/** Recorded AND not owner-scoped, i.e. the lint reports it at full severity. */
-const expectReported = (row: Row | undefined): void => {
-    expect(row).toBeDefined();
-    expect(row).not.toHaveProperty("ownerScoped");
-};
+import { createOwnerFieldFixture, expectReported, insert, ownerMutator, rowAt } from "./owner-field-writes-fixture";
 
 describe("discoverOwnerFieldWrites", () => {
-    beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "lunora-owner-"));
-        mkdirSync(join(workdir, "lunora"), { recursive: true });
-    });
+    const { discover, setUp, tearDown } = createOwnerFieldFixture();
 
-    afterEach(() => {
-        rmSync(workdir, { force: true, recursive: true });
-    });
+    beforeEach(setUp);
+    afterEach(tearDown);
 
     // `defineMutator({ owner: "userId" })` makes `args.userId` the server-verified
     // identity before the `server` impl runs: `applyOwnerScope` rejects a call with
@@ -304,8 +263,6 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
 
             expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
         });
-
-        const insert = (value: string): string => `ctx.db.insert("posts", { userId: ${value} })`;
 
         // Each body's `// @write` line must be recorded and reported.
         it.each([
@@ -622,156 +579,6 @@ export const createPost = defineMutator({ owner: "userId", server: impl });`,
             expect.assertions(2);
 
             expectReported(discover(ownerMutator(`let { userId } = args; await ctx.db.insert("posts", { userId });`))[0]);
-        });
-
-        // These only read, serialize or copy `args`, so the verified owner stays verified.
-        it.each([
-            ["`console.log`", `console.log("createPost", args);`],
-            ["`JSON.stringify`", `const raw = JSON.stringify(args);`],
-            ["a `ctx.*` call", `await ctx.scheduler.runAfter(0, "notify", args);`],
-            ["a spread into a new object", `await ctx.db.insert("audit", { payload: { ...args } });`],
-            ["an untagged template", `const key = \`\${args}\`;`],
-            ["`Object.keys`", `const keys = Object.keys(args);`],
-            ["a copy via `Object.assign({}, args)`", `const copy = Object.assign({}, args);`],
-        ])("keeps the owner write owner-scoped next to %s", (_label, statement) => {
-            expect.assertions(1);
-
-            const source = ownerMutator(`        ${statement}
-        await ${insert("args.userId")}; // @write`);
-
-            expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ ownerScoped: true });
-        });
-
-        // Known noisy-but-safe: a validator could rewrite what it is handed.
-        it.each([
-            ["an unknown validator", `assertValid(args);`],
-            ["`Reflect.set`", `Reflect.set(args, "userId", args.targetUserId);`],
-            ["a tagged template", `tag\`\${args}\`;`],
-            // The read-only allowlist matches the platform globals by symbol, not by spelling.
-            ["a local `JSON` that rewrites it", `const JSON = { stringify: (a) => { a.userId = a.targetUserId; } };\n        JSON.stringify(args);`],
-            ["a local `structuredClone`", `const structuredClone = (a) => { a.userId = a.targetUserId; return a; };\n        structuredClone(args);`],
-            // An echoing `ctx` call may hand `args` back; keeping its result aliases it.
-            ["an aliasing `ctx.db.asId` result", `const alias = ctx.db.asId("users", args);\n        alias.userId = args.targetUserId;`],
-        ])("reports the owner write after %s", (_label, statement) => {
-            expect.assertions(2);
-
-            const source = ownerMutator(`        ${statement}
-        await ${insert("args.userId")}; // @write`);
-
-            expectReported(rowAt(discover(source), markerLine(source, "write")));
-        });
-
-        // A value ROOTED in the impl's `ctx` is server-scoped, even when `args`
-        // feeds the query; a helper's result is not.
-        it.each([
-            ["a destructured `ctx.db.get` row", `const { ownerId } = await ctx.db.get(args.postId);\n        await ${insert("ownerId")}; // @write`],
-            ["a member of a `ctx.db.get` row", `const post = await ctx.db.get(args.postId);\n        await ${insert("post.ownerId")}; // @write`],
-            [
-                "rows from a `let` bound to `ctx.db`",
-                `let rows = await ctx.db.query("m").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect();\n        await Promise.all(rows.map((r) => ${insert("r.userId")})); // @write`,
-            ],
-            [
-                "rows from `Promise.all` over `ctx.db.get`",
-                `const rows = await Promise.all(args.ids.map((id) => ctx.db.get(id)));\n        for (const r of rows) {\n            await ${insert("r.ownerId")}; // @write\n        }`,
-            ],
-            [
-                "`Object.values` of a row",
-                `const row = await ctx.db.get(args.id);\n        for (const member of Object.values(row.members)) {\n            await ${insert("member")}; // @write\n        }`,
-            ],
-            [
-                "ctx.db rows filtered on args",
-                `const rows = await ctx.db.query("t").collect();\n        const mine = rows.filter((r) => r.orgId === args.orgId);\n        mine.forEach((r) => ${insert("r.userId")}); // @write`,
-            ],
-            // A call whose result is its callback's return value stays server-scoped while that value is the row's.
-            [
-                "a `then` returning the row's field",
-                `const owner = await ctx.db.get(args.id).then((row) => row.ownerId);\n        await ${insert("owner")}; // @write`,
-            ],
-            [
-                "a `find` over ctx.db rows",
-                `const row = (await ctx.db.query("t").collect()).find((r) => r.orgId === args.orgId);\n        await ${insert("row.userId")}; // @write`,
-            ],
-            [
-                "a `filter` over ctx.db rows",
-                `const [row] = (await ctx.db.query("t").collect()).filter((r) => r.orgId === args.orgId);\n        await ${insert("row.userId")}; // @write`,
-            ],
-            [
-                "a `withIndex` filtered on args",
-                `const row = await ctx.db.query("t").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).first();\n        await ${insert("row.userId")}; // @write`,
-            ],
-        ])("does not record a write from %s", (_label, body) => {
-            expect.assertions(1);
-
-            const source = ownerMutator(`        ${body}`);
-
-            expect(rowAt(discover(source), markerLine(source, "write"))).toBeUndefined();
-        });
-
-        it.each([
-            // A ctx-rooted receiver does not make a callback's return value server-scoped.
-            [
-                "a `then` falling back to args",
-                `const owner = await ctx.db.get(args.id).then((org) => org?.ownerId ?? args.targetUserId);\n        await ${insert("owner")}; // @write`,
-            ],
-            [
-                "a `catch` returning args",
-                `const owner = await ctx.db.get(args.id).catch(() => args.targetUserId);\n        await ${insert("owner")}; // @write`,
-            ],
-            [
-                "a `map` over ctx.db rows returning args",
-                `const ids = (await ctx.db.query("t").collect()).map(() => args.targetUserId);\n        for (const id of ids) {\n            await ${insert("id")}; // @write\n        }`,
-            ],
-            [
-                "a `reduce` over ctx.db rows returning args",
-                `const rows = await ctx.db.query("t").collect();\n        const owner = rows.reduce(() => args.targetUserId, null);\n        await ${insert("owner")}; // @write`,
-            ],
-            // `ctx.db.asId` and the `ctx.run*` results echo caller-chosen input: rooted in ctx, but not server-scoped.
-            ["a `ctx.db.asId` of an arg", `await ${insert('ctx.db.asId("users", args.targetUserId)')}; // @write`],
-            [
-                "a const chain from `ctx.db.asId`",
-                `const a = ctx.db.asId("users", args.targetUserId);\n        const b = a;\n        const c = b;\n        await ${insert("c")}; // @write`,
-            ],
-            [
-                "a `ctx.runQuery` result",
-                `const r = await ctx.runQuery("users:get", { id: args.targetUserId });\n        await ${insert("r.userId")}; // @write`,
-            ],
-            ["a `ctx.runMutation` result", `const r = await ctx.runMutation("users:make", args);\n        await ${insert("r.userId")}; // @write`],
-            [
-                "a helper's result",
-                `const members = await getMembers(ctx, args.orgId);\n        for (const m of members) {\n            await ${insert("m.userId")}; // @write\n        }`,
-            ],
-            ["a `??` fallback from ctx to args", `await ${insert("ctx.auth.userId ?? args.targetUserId")}; // @write`],
-            [
-                "a `let` reassigned in a `try`",
-                `let id = ctx.auth.userId;\n        try {\n            id = args.targetUserId;\n        } catch {}\n        await ${insert("id")}; // @write`,
-            ],
-            [
-                "an object member written from args",
-                `const o = { userId: ctx.auth.userId };\n        o.userId = args.targetUserId;\n        await ${insert("o.userId")}; // @write`,
-            ],
-            [
-                "a list pushed from args",
-                `const list = [];\n        list.push(args.targetUserId);\n        for (const x of list) {\n            await ${insert("x")}; // @write\n        }`,
-            ],
-            ["a map set from args", `const m = new Map();\n        m.set("u", args.targetUserId);\n        await ${insert('m.get("u")')}; // @write`],
-            [
-                "an object assigned from args",
-                `const o = { userId: ctx.auth.userId };\n        Object.assign(o, { userId: args.targetUserId });\n        await ${insert("o.userId")}; // @write`,
-            ],
-            [
-                "a nested function declaration's return",
-                `function pick() {\n            return args.targetUserId;\n        }\n        await ${insert("pick()")}; // @write`,
-            ],
-            [
-                "a generator closing over args",
-                `function* gen() {\n            yield args.targetUserId;\n        }\n        for (const x of gen()) {\n            await ${insert("x")}; // @write\n        }`,
-            ],
-        ])("reports a write from %s", (_label, body) => {
-            expect.assertions(2);
-
-            const source = ownerMutator(`        ${body}`);
-
-            expectReported(rowAt(discover(source), markerLine(source, "write")));
         });
 
         it("raises the laundered write as an ERROR through the advisor lint", () => {

@@ -544,113 +544,6 @@ const optionsObjectLiteral = (node: Node | undefined): ObjectLiteralExpression |
     return initializer !== undefined && Node.isObjectLiteralExpression(initializer) ? initializer : undefined;
 };
 
-/** True when `receiver` is the database accessor: `ctx.db` (property named `db`) or a bare `db`. */
-const isDatabaseAccessor = (receiver: Node): boolean =>
-    (Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db");
-
-/**
- * List reads whose options object the `ctx.db` read feeders inspect. Only
- * `findMany` / `findFirst` / `findFirstOrThrow` / `findUnique` take an options
- * object — the by-id `get` is id-only and the fluent `query(...)` reader carries
- * no options object, so both are excluded.
- *
- * A read method missing from this set is INVISIBLE to every feeder that reads
- * through `readTargetOf` — the soft-delete and relation-load analyses — so adding
- * one to the facade means adding it here in the same change.
- */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "findUnique"]);
-
-/**
- * The `(table, options)` a `ctx.db` list read addresses, or `undefined` when the
- * call isn't one. Matched by receiver **shape** (not import origin), fail-closed,
- * in both surface forms Lunora exposes. Facade form
- * `ctx.db.<table>.findMany(options?)` — the form real app code writes — puts the
- * table in the receiver's property name and the options object at argument 0.
- * Table-arg form `ctx.db.findMany("table", options?)` puts the table in the
- * string-literal argument 0 and the options object at argument 1. `table` is `""`
- * when the table-arg form's first argument isn't a string literal (a dynamic
- * table — not lintable).
- */
-const readTargetOf = (call: CallExpression): { options: Node | undefined; table: string } | undefined => {
-    const callee = call.getExpression();
-
-    if (!Node.isPropertyAccessExpression(callee) || !READ_METHODS.has(callee.getName())) {
-        return undefined;
-    }
-
-    const receiver = callee.getExpression();
-
-    // Table-arg form: the receiver is `ctx.db` (property named `db`) or a bare `db`.
-    if (isDatabaseAccessor(receiver)) {
-        const first = call.getArguments()[0];
-
-        return { options: call.getArguments()[1], table: first && Node.isStringLiteral(first) ? first.getLiteralText() : "" };
-    }
-
-    // Facade form: the receiver is `ctx.db.<table>` (or `db.<table>`) — its inner
-    // expression is the `db` accessor and its own name is the table.
-    if (Node.isPropertyAccessExpression(receiver)) {
-        const inner = receiver.getExpression();
-        const onDatabase = isDatabaseAccessor(inner);
-
-        if (onDatabase) {
-            return { options: call.getArguments()[0], table: receiver.getName() };
-        }
-    }
-
-    return undefined;
-};
-
-/** True when `call` is a `ctx.db.<method>(...)` or bare `db.<method>(...)` call against `methodSet`. */
-const isDatabaseCall = (call: CallExpression, methodSet: ReadonlySet<string>): boolean => {
-    const callee = call.getExpression();
-
-    if (!Node.isPropertyAccessExpression(callee) || !methodSet.has(callee.getName())) {
-        return false;
-    }
-
-    return isDatabaseAccessor(callee.getExpression());
-};
-
-/** String-literal first argument of a `ctx.db.<method>("table", ...)` call, or `""` when the argument is not a string literal (dynamic table — not lintable). */
-const tableArgumentOf = (call: CallExpression): string => {
-    const argument = call.getArguments()[0];
-
-    return argument && Node.isStringLiteral(argument) ? argument.getLiteralText() : "";
-};
-
-/**
- * Discover the set of tables read and written inside the lexical scope of the
- * exported procedure binding (including helper closures in the body), against
- * the caller's read/write method sets.
- */
-const tablesAccessedIn = (
-    declaration: Node,
-    readMethods: ReadonlySet<string>,
-    writeMethods: ReadonlySet<string>,
-): { tablesRead: string[]; tablesWritten: string[] } => {
-    const tablesRead = new Set<string>();
-    const tablesWritten = new Set<string>();
-
-    for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        if (isDatabaseCall(call, readMethods)) {
-            const table = tableArgumentOf(call);
-
-            if (table !== "") {
-                tablesRead.add(table);
-            }
-        } else if (isDatabaseCall(call, writeMethods)) {
-            const table = tableArgumentOf(call);
-
-            if (table !== "") {
-                tablesWritten.add(table);
-            }
-        }
-    }
-
-    return { tablesRead: [...tablesRead], tablesWritten: [...tablesWritten] };
-};
-
 /**
  * Strip the type-level and grouping wrappers an expression may be dressed in —
  * `(x)`, `x as T`, `x satisfies T`, `x!` — down to the expression itself.
@@ -673,6 +566,64 @@ const unwrapExpression = (node: Node | undefined): Node | undefined => {
     }
 
     return current;
+};
+
+/** Where {@link walkChain} stopped: at the chain's root, or at a call `settle` decided. */
+type ChainEnd = { root: Node | undefined; verdict?: never } | { root?: never; verdict: boolean };
+
+/**
+ * Walk `value`'s member / call chain to its leftmost operand: through property
+ * and element access, the callee side of calls, `await`, parentheses and
+ * casts (`(await ctx.db.get(id)).owner` → `ctx`). `settle` is asked at each
+ * call on the way and may end the walk with a verdict.
+ */
+const walkChain = (value: Node | undefined, settle?: (call: CallExpression) => boolean | undefined): ChainEnd => {
+    let current: Node | undefined = unwrapExpression(value);
+
+    while (
+        Node.isAwaitExpression(current) ||
+        Node.isPropertyAccessExpression(current) ||
+        Node.isElementAccessExpression(current) ||
+        Node.isCallExpression(current)
+    ) {
+        const verdict = Node.isCallExpression(current) ? settle?.(current) : undefined;
+
+        if (verdict !== undefined) {
+            return { verdict };
+        }
+
+        current = unwrapExpression(current.getExpression());
+    }
+
+    return { root: current };
+};
+
+/** The leftmost operand of `value`'s member / call chain (see {@link walkChain}). */
+const chainRootOf = (value: Node | undefined): Node | undefined => walkChain(value).root;
+
+/** Whether `node` is `other`: the same compiler node. */
+const isSameNode = (node: Node | undefined, other: Node): boolean => node?.compilerNode === other.compilerNode;
+
+/** The member a `<x>.k` / `<x>["k"]` access reads, and the expression it reads it off; `undefined` for anything else. */
+const memberAccessOf = (node: Node | undefined): { member: string; object: Node } | undefined => {
+    if (Node.isPropertyAccessExpression(node)) {
+        return { member: node.getName(), object: node.getExpression() };
+    }
+
+    const key = Node.isElementAccessExpression(node) ? node.getArgumentExpression() : undefined;
+
+    return Node.isElementAccessExpression(node) && Node.isStringLiteral(key) ? { member: key.getLiteralValue(), object: node.getExpression() } : undefined;
+};
+
+/**
+ * The function whose return value `node` is — `return node`, or an arrow's
+ * expression body — or `undefined` when it is not returned.
+ */
+const returningFunctionOf = (node: Node): Node | undefined => {
+    const parent = node.getParent();
+    const isReturned = Node.isReturnStatement(parent) || (Node.isArrowFunction(parent) && parent.getBody() === node);
+
+    return isReturned ? node.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor)) : undefined;
 };
 
 /**
@@ -773,9 +724,6 @@ const objectLiteralFromCallbackBody = (body: Node): ObjectLiteralExpression | un
     return Node.isBlock(body) ? objectLiteralFromReturnBlock(body) : undefined;
 };
 
-/** True when `node` is the literal `ctx` identifier — the anchor a `ctx.flags.*` read starts from. */
-const isContextIdentifier = (node: Node): boolean => Node.isIdentifier(node) && node.getText() === "ctx";
-
 /**
  * Build the deploy-config string reader for one registry noun (`agent` /
  * `container` / `queue` / `workflow`): read a property's string-literal value,
@@ -823,6 +771,7 @@ const functionReferenceSegments = (node: Node | undefined): string[] | undefined
 
 export {
     bindingKeyName,
+    chainRootOf,
     collectCallRows,
     collectNodeRows,
     collectSecurityCallRows,
@@ -831,28 +780,27 @@ export {
     functionReferenceSegments,
     handlerOf,
     isConstDeclaration,
-    isContextIdentifier,
-    isDatabaseAccessor,
+    isSameNode,
     isWriteTarget,
     limitNameOf,
     listLunoraSourceFiles,
     listSecurityScanFiles,
     lunoraRelativePath,
+    memberAccessOf,
     objectLiteralFromCallbackBody,
     optionsObjectLiteral,
     outermostValueWrapper,
     propertyInitializer,
     propertyKeyName,
     propertyNameText,
-    readTargetOf,
+    returningFunctionOf,
     RUN_METHODS,
     stringPropertyFor,
     stringPropertyOf,
     symbolConstInitializer,
-    tableArgumentOf,
-    tablesAccessedIn,
     TS_EXTENSION_RE,
     unwrapExpression,
     unwrapToCallExpression,
+    walkChain,
 };
-export type { RowsOf, ScannedSourceFile };
+export type { ChainEnd, RowsOf, ScannedSourceFile };

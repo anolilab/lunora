@@ -103,13 +103,13 @@ const resolveDeclarationToCall = (declaration: Node, depth: number): CallExpress
  * destructured element). Pairs whose call isn't a Lunora registration are
  * filtered out downstream by `discoverFromCall`.
  */
-const exportCallsOfDeclaration = (declaration: VariableDeclaration): [string, CallExpression][] => {
+const exportCallsOfDeclaration = (declaration: VariableDeclaration, isExported: (localName: string) => boolean = () => true): [string, CallExpression][] => {
     const nameNode = declaration.getNameNode();
 
     if (Node.isObjectBindingPattern(nameNode)) {
         const pairs: [string, CallExpression][] = [];
 
-        for (const element of nameNode.getElements()) {
+        for (const element of nameNode.getElements().filter((candidate) => isExported(candidate.getName()))) {
             const call = resolveExpressionToCall(element.getNameNode());
 
             if (call) {
@@ -118,6 +118,10 @@ const exportCallsOfDeclaration = (declaration: VariableDeclaration): [string, Ca
         }
 
         return pairs;
+    }
+
+    if (!isExported(declaration.getName())) {
+        return [];
     }
 
     const initializer = declaration.getInitializer();

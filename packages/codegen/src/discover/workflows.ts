@@ -10,6 +10,7 @@ import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { HandlerSiteIR, WorkflowIR, WorkflowStepIR } from "../ir";
 import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { addressableExportNameOf } from "./attribution";
 import { resolveHandlerReference } from "./handler-reference";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
@@ -326,10 +327,6 @@ const workflowsFromSource = (source: SourceFile, lunoraDirectory: string): Workf
     const workflows: WorkflowIR[] = [];
 
     for (const declaration of source.getVariableDeclarations()) {
-        if (!declaration.isExported()) {
-            continue;
-        }
-
         const call = unwrapToCallExpression(declaration.getInitializer());
 
         if (!call) {
@@ -344,11 +341,22 @@ const workflowsFromSource = (source: SourceFile, lunoraDirectory: string): Workf
 
         const nameNode = declaration.getNameNode();
 
+        // Only the `export` keyword can export a destructuring; an unexported one is a local.
         if (!Node.isIdentifier(nameNode)) {
+            if (declaration.getVariableStatement()?.hasExportKeyword() !== true) {
+                continue;
+            }
+
             throw diagnosticAt(nameNode, "defineWorkflow exports must be plain named exports (no destructuring)");
         }
 
-        workflows.push(workflowFromCall(call, nameNode.getText(), lunoraDirectory));
+        const exportName = addressableExportNameOf(declaration, "binding");
+
+        if (exportName === undefined) {
+            continue;
+        }
+
+        workflows.push(workflowFromCall(call, exportName, lunoraDirectory));
     }
 
     return workflows;

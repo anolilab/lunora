@@ -2,7 +2,9 @@ import type { Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { RelationLoadIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, propertyKeyName, readTargetOf } from "./ast";
+import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, propertyKeyName } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
+import { readTargetOf } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** The relation accessor names declared by a `with: { … }` object literal (`{ author: true }`, `{ author }`, `{ author() {} }`) — the keys matched against the schema's relation names. Spreads/computed keys yield nothing. */
@@ -64,7 +66,7 @@ const relationLoadsInDeclaration = (declaration: TsNode, relativePath: string): 
         }
 
         rows.push({
-            exportName: declaration.getName(),
+            exportName: exportedNameOf(declaration) ?? declaration.getName(),
             file: relativePath,
             line: call.getStartLineNumber(),
             parentTable: target.table,
@@ -95,14 +97,8 @@ const discoverRelationLoads = (project: Project, lunoraDirectory: string): Relat
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
-
-            for (const declaration of statement.getDeclarations()) {
-                rows.push(...relationLoadsInDeclaration(declaration, relativePath));
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            rows.push(...relationLoadsInDeclaration(declaration, relativePath));
         }
     }
 

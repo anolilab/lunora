@@ -2,8 +2,11 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { NormalizeIdAuthorizationIR } from "../ir";
-import { isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { chainRootOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { chainUsesWrappedCall } from "./builder-chain";
+import { contextSurfaceNodesIn, contextSurfacePathOf } from "./context-root";
+import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 import type { InspectableHandler } from "./functions/handler";
 import { procedureHandler } from "./functions/handler";
@@ -157,28 +160,6 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
 };
 
 /**
- * The leftmost identifier of a dotted / indexed / awaited expression — `ctx` in
- * `ctx.auth.userId`, `viewer` in `viewer.teamId`, `undefined` for a literal or a
- * more complex head.
- */
-const rootIdentifierName = (node: TsNode): string | undefined => {
-    let current: TsNode = node;
-
-    while (
-        Node.isPropertyAccessExpression(current) ||
-        Node.isElementAccessExpression(current) ||
-        Node.isNonNullExpression(current) ||
-        Node.isParenthesizedExpression(current) ||
-        Node.isAsExpression(current) ||
-        Node.isAwaitExpression(current)
-    ) {
-        current = current.getExpression();
-    }
-
-    return Node.isIdentifier(current) ? current.getText() : undefined;
-};
-
-/**
  * True when the handler passes `ctx` (or any `ctx.`-rooted value) into a function
  * call — `getViewer(ctx)`, `requireUser(ctx)`, `authorize(ctx, id)`. Delegating the
  * whole context to a helper is a strong tell that identity/authorization is resolved
@@ -186,7 +167,9 @@ const rootIdentifierName = (node: TsNode): string | undefined => {
  * method call does NOT match: there `ctx` is the receiver, not an argument.
  */
 const delegatesContextToHelper = (handler: InspectableHandler): boolean =>
-    handler.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => call.getArguments().some((argument) => rootIdentifierName(argument) === "ctx"));
+    handler
+        .getDescendantsOfKind(SyntaxKind.CallExpression)
+        .some((call) => call.getArguments().some((argument) => contextSurfacePathOf(chainRootOf(argument)) !== undefined));
 
 /**
  * True when the handler contains an equality comparison with a property-access
@@ -227,12 +210,9 @@ const handlerMentionsOwnership = (handler: InspectableHandler): boolean => {
         }
     }
 
-    for (const access of handler.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
-        const root = access.getExpression();
-
-        if (Node.isIdentifier(root) && root.getText() === "ctx" && IDENTITY_ACCESSORS.has(access.getName())) {
-            return true;
-        }
+    // `ctx.auth` read through any spelling of the ctx (renamed, destructured `{ auth }`).
+    if ([...IDENTITY_ACCESSORS].some((accessor) => contextSurfaceNodesIn(handler, accessor).length > 0)) {
+        return true;
     }
 
     return delegatesContextToHelper(handler) || comparesRowProperty(handler);
@@ -290,7 +270,7 @@ const normalizeIdAuthorizationsInDeclaration = (declaration: TsNode, relativePat
 
         seen.add(name);
         rows.push({
-            exportName: declaration.getName(),
+            exportName: exportedNameOf(declaration) ?? declaration.getName(),
             file: relativePath,
             line: call.getStartLineNumber(),
             mentionsOwnership,
@@ -324,14 +304,8 @@ const discoverNormalizeIdAuthorization = (project: Project, lunoraDirectory: str
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
-
-            for (const declaration of statement.getDeclarations()) {
-                rows.push(...normalizeIdAuthorizationsInDeclaration(declaration, relativePath));
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            rows.push(...normalizeIdAuthorizationsInDeclaration(declaration, relativePath));
         }
     }
 

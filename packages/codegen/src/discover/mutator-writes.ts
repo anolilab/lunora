@@ -5,7 +5,9 @@ import type { CallExpression, Project, SourceFile, VariableDeclaration } from "t
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { MutatorWriteIR } from "../ir";
-import { findObjectProperty, isDatabaseAccessor } from "./ast";
+import { findObjectProperty } from "./ast";
+import { exportedNameOf } from "./attribution";
+import { isDatabaseAccessor } from "./database-calls";
 import { isDefineMutatorCallee, MUTATORS_FILENAME } from "./mutators";
 
 /**
@@ -81,7 +83,8 @@ const writesFromDeclaration = (declaration: VariableDeclaration): MutatorWriteIR
     }
 
     const nameNode = declaration.getNameNode();
-    const exportName = Node.isIdentifier(nameNode) ? nameNode.getText() : "";
+    // The name callers use: `export { createPost as makePost }` is `makePost`.
+    const exportName = Node.isIdentifier(nameNode) ? (exportedNameOf(declaration) ?? nameNode.getText()) : "";
 
     return serverImpl
         .getDescendantsOfKind(SyntaxKind.CallExpression)

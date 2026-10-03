@@ -2,7 +2,9 @@ import type { Finding } from "@lunora/advisor";
 import type { Project, SourceFile, Type, VariableDeclaration } from "ts-morph";
 import { Node } from "ts-morph";
 
+import { isBindingName } from "../reserved-words";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedVariableDeclarationsOf, exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 
 /**
  * Every type a `lunora/` registration terminates in, mapped to the call that
@@ -184,9 +186,50 @@ const wrongFile = (file: string): MissedRegistration => {
     };
 };
 
-const SEPARATE_EXPORT_STATEMENT: MissedRegistration = {
-    cause: "the binding is exported by a separate `export { … }` statement, and codegen reads the `export` keyword on the declaration itself",
-    remediation: "Move the keyword onto the declaration and drop the separate export statement.",
+/**
+ * `export { run as "kebab-name" }`: a string-literal export name that is not an
+ * identifier. The generated `api.ts` and dispatch table read every registration
+ * off the module namespace as `<module>.<name>`, which cannot spell it, so
+ * discovery does not register it.
+ */
+const STRING_EXPORT_NAME: MissedRegistration = {
+    cause: "it is exported only under a string name that is not an identifier, which the generated `api.ts` and dispatch table cannot address as `<module>.<name>`",
+    remediation: "Export it under an identifier name as well (or instead).",
+};
+
+/**
+ * The kinds whose name the generated code imports or declares as a binding,
+ * or derives a class / binding / deployed name from — so `default` or a
+ * reserved word cannot be their name.
+ */
+const BINDING_NAMED_KINDS = new Set<string>([
+    "AgentDefinition",
+    "ContainerDefinition",
+    "QueueDefinition",
+    "RegisteredShape",
+    "SubscriptionDefinition",
+    "WorkflowDefinition",
+]);
+
+/** `export default worker` (or only `export { worker as delete }`) for a kind whose name becomes a class or binding. */
+const BINDING_EXPORT_NAME: MissedRegistration = {
+    cause: "it is exported only as `default` or under a reserved word, and this kind's name becomes an import binding and a generated class / binding name, where that is a syntax error",
+    remediation: "Export it under a plain identifier: `export const <name> = …` (an extra `export default <name>` is fine).",
+};
+
+/** Why an exported binding that IS a registration by type was not registered, read off how it is exported. */
+const missedCauseOf = (declaration: VariableDeclaration, names: ReadonlyArray<string>, registration: Registration): MissedRegistration => {
+    if (!names.some((name) => isAddressableExportName(name))) {
+        return STRING_EXPORT_NAME;
+    }
+
+    const hasKeyword = declaration.getVariableStatement()?.hasExportKeyword() === true;
+
+    if (BINDING_NAMED_KINDS.has(registration.typeName) && !hasKeyword && !names.some((name) => isBindingName(name))) {
+        return BINDING_EXPORT_NAME;
+    }
+
+    return INDIRECT_INITIALIZER;
 };
 
 const findingFor = (relativePath: string, exportName: string, registration: Registration, line: number, indirection: MissedRegistration): Finding => {
@@ -203,7 +246,7 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
         cacheKey: `procedure_not_registered:${relativePath}:${exportName}`,
         categories: ["SCHEMA"],
         description:
-            "Codegen registers an export only when the declaration carries `export` and its initializer is literally the registering call. Written any other way it exists at runtime but never reaches the generated output — `_generated/api.ts` for a procedure, the lifecycle manifest for a hook or reactor — so a caller cannot address it and a hook never fires.",
+            "Codegen registers an export only when its initializer is literally the registering call and the module exports it under an identifier name — by the `export` keyword, a local `export { … }`, or `export default`. Written any other way it exists at runtime but never reaches the generated output — `_generated/api.ts` for a procedure, the lifecycle manifest for a hook or reactor — so a caller cannot address it and a hook never fires.",
         detail: `\`${exportName}\` in \`${relativePath}\` (line ${line.toString()}) has type \`${typeName}\` but was not registered — ${missed.cause}.`,
         facing: "INTERNAL",
         level: "WARN",
@@ -232,19 +275,15 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
 const namedExportFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => {
     const findings: Finding[] = [];
 
-    for (const statement of source.getVariableStatements().filter((entry) => entry.isExported())) {
-        for (const declaration of statement.getDeclarations()) {
-            const exportName = declaration.getName();
+    for (const declaration of exportedVariableDeclarationsOf(source)) {
+        const names = Node.isIdentifier(declaration.getNameNode()) ? exportNamesOfDeclaration(declaration) : [declaration.getName()];
+        // Registered under ANY of its names, it is reachable: a registration kind keeps one name on purpose.
+        const isReachable = names.some((name) => isRegistered(registrations, relativePath, name));
+        const registration = isReachable || !mayHideRegistration(declaration) ? undefined : registrationOf(declaration);
+        const [shown = declaration.getName()] = names;
 
-            if (isRegistered(registrations, relativePath, exportName) || !mayHideRegistration(declaration)) {
-                continue;
-            }
-
-            const registration = registrationOf(declaration);
-
-            if (registration !== undefined) {
-                findings.push(findingFor(relativePath, exportName, registration, declaration.getStartLineNumber(), INDIRECT_INITIALIZER));
-            }
+        if (registration !== undefined) {
+            findings.push(findingFor(relativePath, shown, registration, declaration.getStartLineNumber(), missedCauseOf(declaration, names, registration)));
         }
     }
 
@@ -264,7 +303,8 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registr
 
     const findings: Finding[] = [];
 
-    for (const assignment of source.getExportAssignments().filter((entry) => !entry.isExportEquals())) {
+    // `export default run` names a local binding, which `namedExportFindings` covers.
+    for (const assignment of source.getExportAssignments().filter((entry) => !entry.isExportEquals() && !Node.isIdentifier(entry.getExpression()))) {
         const registration = registrationOf(assignment.getExpression());
 
         if (registration !== undefined) {
@@ -275,52 +315,9 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registr
     return findings;
 };
 
-/**
- * `const handler = query.…; export { handler };` — the export-declaration form.
- *
- * Discovery walks variable statements and asks each whether it `isExported()`,
- * which is false here: the `export` is a separate statement. So the procedure is
- * dropped from `api.ts` exactly like a factory-produced one, and the binding it
- * is dropped from looks like a perfectly ordinary builder chain — which is what
- * makes this shape worse than the ones above rather than merely another of them.
- *
- * The exported name is what a caller addresses, so `export { a as b }` is
- * checked and reported as `b`. Re-exports (`export { x } from "./other"`) are
- * skipped: the declaration lives in another file, and naming this one would send
- * the reader to the wrong place.
- */
-const exportDeclarationFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => {
-    const findings: Finding[] = [];
-
-    for (const declaration of source.getExportDeclarations().filter((entry) => entry.getModuleSpecifier() === undefined)) {
-        for (const specifier of declaration.getNamedExports()) {
-            const exportName = specifier.getAliasNode()?.getText() ?? specifier.getName();
-
-            if (isRegistered(registrations, relativePath, exportName)) {
-                continue;
-            }
-
-            const local = specifier.getLocalTargetDeclarations().find((entry): entry is VariableDeclaration => Node.isVariableDeclaration(entry));
-
-            if (local === undefined || !mayHideRegistration(local)) {
-                continue;
-            }
-
-            const registration = registrationOf(local);
-
-            if (registration !== undefined) {
-                findings.push(findingFor(relativePath, exportName, registration, specifier.getStartLineNumber(), SEPARATE_EXPORT_STATEMENT));
-            }
-        }
-    }
-
-    return findings;
-};
-
 const fileFindings = (source: SourceFile, relativePath: string, registrations: Registrations): Finding[] => [
     ...namedExportFindings(source, relativePath, registrations),
     ...defaultExportFindings(source, relativePath, registrations),
-    ...exportDeclarationFindings(source, relativePath, registrations),
 ];
 
 /**
@@ -346,16 +343,18 @@ const fileFindings = (source: SourceFile, relativePath: string, registrations: R
 const registeredDeclarations = (source: SourceFile, relativePath: string, registrations: Registrations): Witness[] =>
     source
         .getVariableStatements()
-        .filter((entry) => entry.isExported())
         .flatMap((entry) => entry.getDeclarations())
-        .filter((declaration) => isRegistered(registrations, relativePath, declaration.getName()))
+        .filter((declaration) => Node.isIdentifier(declaration.getNameNode()))
+        .filter((declaration) => exportNamesOfDeclaration(declaration).some((name) => isRegistered(registrations, relativePath, name)))
         .filter((declaration) => {
             const initializer = declaration.getInitializer();
 
             return initializer !== undefined && Node.isCallExpression(initializer) && Node.isPropertyAccessExpression(initializer.getExpression());
         })
         .map((declaration) => {
-            return { declaration, exportName: declaration.getName(), relativePath };
+            const exportName = exportNamesOfDeclaration(declaration).find((name) => isRegistered(registrations, relativePath, name)) ?? declaration.getName();
+
+            return { declaration, exportName, relativePath };
         });
 
 /**

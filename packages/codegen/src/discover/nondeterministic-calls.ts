@@ -3,6 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import type { NondeterministicCallIR } from "../ir";
 import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /**
@@ -150,7 +151,7 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
 
     const handler = handlerOf(initializer, classified.receiver);
 
-    return handler ? { exportName: declaration.getName(), handler, kind: classified.kind } : undefined;
+    return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler, kind: classified.kind } : undefined;
 };
 
 /** Non-deterministic call IRs lexically inside one resolved procedure handler. */
@@ -182,17 +183,11 @@ const callsInHandler = (procedure: ResolvedProcedure, file: string): Nondetermin
 const callsInSourceFile = (sourceFile: SourceFile, relativePath: string): NondeterministicCallIR[] => {
     const found: NondeterministicCallIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const procedure = exportedProcedureHandler(declaration);
 
-        for (const declaration of statement.getDeclarations()) {
-            const procedure = exportedProcedureHandler(declaration);
-
-            if (procedure) {
-                found.push(...callsInHandler(procedure, relativePath));
-            }
+        if (procedure) {
+            found.push(...callsInHandler(procedure, relativePath));
         }
     }
 

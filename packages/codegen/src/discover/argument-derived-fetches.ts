@@ -1,25 +1,17 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node } from "ts-morph";
 
 import { isArgumentDerived } from "../argument-taint";
 import type { ArgumentDerivedFetchIR } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { isContextSurface } from "./context-root";
 
 /**
  * True when `node` is a `ctx.fetch` member access — the action-only outbound-request
  * escape hatch. Matched by shape (`ctx.fetch`), the same `import`-agnostic, fail-closed
  * convention the other feeders use, so a re-export or alias still resolves.
  */
-const isContextFetchCallee = (node: TsNode): boolean => {
-    if (!Node.isPropertyAccessExpression(node) || node.getName() !== "fetch") {
-        return false;
-    }
-
-    const receiver = node.getExpression();
-
-    return Node.isIdentifier(receiver) && receiver.getText() === "ctx";
-};
+const isContextFetchCallee = (node: TsNode): boolean => isContextSurface(node, ["fetch"]);
 
 /** The IR row for a `ctx.fetch(url, …)` call whose URL argument is arg-derived, or `undefined`. */
 const fetchInCall = (call: CallExpression, relativePath: string): ArgumentDerivedFetchIR | undefined => {

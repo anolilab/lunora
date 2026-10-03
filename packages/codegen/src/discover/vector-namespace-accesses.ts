@@ -5,6 +5,7 @@ import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { VectorNamespaceAccessIR } from "../ir";
 import { collectCallRows, propertyInitializer } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { isContextSurface } from "./context-root";
 
 /**
  * The `ctx.vectors` methods whose second argument may carry a `namespace`
@@ -33,7 +34,7 @@ const vectorsNamespaceMethod = (node: TsNode): string | undefined => {
         return undefined;
     }
 
-    return node.getExpression().getText() === "ctx.vectors" ? method : undefined;
+    return isContextSurface(node.getExpression(), ["vectors"]) ? method : undefined;
 };
 
 /** The IR row for a `ctx.vectors.<method>(indexName, input)` call whose `input.namespace` is arg-derived and unscoped, or `undefined`. */

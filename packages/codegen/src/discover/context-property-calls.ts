@@ -1,8 +1,10 @@
 import type { Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { ContextPropertyCallIR } from "../ir";
 import { handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
+import { contextSurfaceNodesIn } from "./context-root";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
 
 /** One resolved query/mutation handler with its attribution. */
@@ -34,7 +36,7 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
 
     const handler = handlerOf(initializer, classified.receiver);
 
-    return handler ? { exportName: declaration.getName(), handler, kind: classified.kind } : undefined;
+    return handler ? { exportName: exportedNameOf(declaration) ?? declaration.getName(), handler, kind: classified.kind } : undefined;
 };
 
 /**
@@ -43,17 +45,7 @@ const exportedProcedureHandler = (declaration: VariableDeclaration): ResolvedPro
  * `ctx.sql` suffixed with the method name; a bare `ctx.sql` (called, passed or
  * aliased) yields `ctx.sql`.
  */
-const calleeOf = (access: TsNode, property: string): string | undefined => {
-    if (!Node.isPropertyAccessExpression(access) || access.getName() !== property) {
-        return undefined;
-    }
-
-    const receiver = access.getExpression();
-
-    if (!Node.isIdentifier(receiver) || receiver.getText() !== "ctx") {
-        return undefined;
-    }
-
+const calleeOf = (access: TsNode, property: string): string => {
     const parent = access.getParent();
 
     // `ctx.<property>.<method>` — the `ctx.<property>` node is the receiver of an
@@ -69,12 +61,9 @@ const calleeOf = (access: TsNode, property: string): string | undefined => {
 const accessesInHandler = (procedure: ResolvedProcedure, file: string, property: string): ContextPropertyCallIR[] => {
     const found: ContextPropertyCallIR[] = [];
 
-    for (const access of procedure.handler.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
-        const callee = calleeOf(access, property);
-
-        if (callee !== undefined) {
-            found.push({ callee, exportName: procedure.exportName, file, kind: procedure.kind, line: access.getStartLineNumber() });
-        }
+    // Renamed (`c.sql`) and destructured (`const { sql } = ctx`) surfaces resolve by symbol.
+    for (const access of contextSurfaceNodesIn(procedure.handler, property)) {
+        found.push({ callee: calleeOf(access, property), exportName: procedure.exportName, file, kind: procedure.kind, line: access.getStartLineNumber() });
     }
 
     return found;
@@ -84,17 +73,11 @@ const accessesInHandler = (procedure: ResolvedProcedure, file: string, property:
 const accessesInSourceFile = (sourceFile: SourceFile, relativePath: string, property: string): ContextPropertyCallIR[] => {
     const found: ContextPropertyCallIR[] = [];
 
-    for (const statement of sourceFile.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+    for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+        const procedure = exportedProcedureHandler(declaration);
 
-        for (const declaration of statement.getDeclarations()) {
-            const procedure = exportedProcedureHandler(declaration);
-
-            if (procedure) {
-                found.push(...accessesInHandler(procedure, relativePath, property));
-            }
+        if (procedure) {
+            found.push(...accessesInHandler(procedure, relativePath, property));
         }
     }
 

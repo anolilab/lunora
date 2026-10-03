@@ -2,6 +2,8 @@ import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { bindingKeyName } from "./discover/ast";
+import { declarationOf, isReassignedBinding } from "./discover/attribution";
+import { isHandlerArgsParameter, referencesContext } from "./discover/context-root";
 
 /**
  * The parameter binding element that declares `name`, searched from the
@@ -72,6 +74,33 @@ const destructuringRootName = (element: BindingElement): string | undefined => {
     }
 };
 
+/** Whether `identifier` resolves, by symbol, to a positional handler's `args` parameter or to a binding destructured from it. */
+const isPositionalArgsReference = (identifier: Identifier): boolean => {
+    // Cheap pre-filter before any symbol lookup: some enclosing positional handler binds this spelling as its `args`.
+    const name = identifier.getText();
+    const isCandidate = identifier.getAncestors().some((ancestor) => {
+        const parameter = Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor) ? ancestor.getParameters()[1] : undefined;
+        const nameNode = parameter?.getNameNode();
+
+        return (
+            parameter !== undefined &&
+            (Node.isIdentifier(nameNode)
+                ? nameNode.getText() === name
+                : parameter.getDescendantsOfKind(SyntaxKind.BindingElement).some((element) => element.getName() === name)) &&
+            isHandlerArgsParameter(parameter)
+        );
+    });
+
+    if (!isCandidate) {
+        return false;
+    }
+
+    const declaration = declarationOf(identifier);
+    const parameter = Node.isParameterDeclaration(declaration) ? declaration : declaration?.getFirstAncestorByKind(SyntaxKind.Parameter);
+
+    return parameter !== undefined && (Node.isParameterDeclaration(declaration) || Node.isBindingElement(declaration)) && isHandlerArgsParameter(parameter);
+};
+
 /**
  * True when `identifier` is a *value* reference to the binding named `name` —
  * the taint-root check shared by every Wave 3 feeder, whether the root is the
@@ -106,7 +135,12 @@ const isValueReference = (identifier: Identifier, name: string): boolean => {
 
     const element = parameterBindingFor(identifier);
 
-    return element !== undefined && destructuringRootName(element) === name;
+    if (element !== undefined && destructuringRootName(element) === name) {
+        return true;
+    }
+
+    // A positional handler's `args` under any name: `handler: (c, a) => … a.userId`, `(c, { userId })`.
+    return name === "args" && isPositionalArgsReference(identifier);
 };
 
 /** True when `node` is, or textually contains, a value reference to the binding named `name`. */
@@ -117,9 +151,6 @@ const referencesBinding = (node: TsNode, name: string): boolean => {
 
     return node.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => isValueReference(identifier, name));
 };
-
-/** True when `node` is, or textually contains, a value reference to the `ctx` binding. */
-const textuallyReferencesContext = (node: TsNode): boolean => referencesBinding(node, "ctx");
 
 /**
  * The leftmost identifier of a member/element-access (and non-null) chain
@@ -136,6 +167,20 @@ const memberAccessRootIdentifier = (node: TsNode): Identifier | undefined => {
     }
 
     return Node.isIdentifier(current) ? current : undefined;
+};
+
+/**
+ * The initializer of the variable `node` names, resolved by symbol, when that
+ * binding cannot have been repointed since (a `const`, or a `let` never
+ * reassigned) — the hop a SUPPRESSOR may follow. `singleHopInitializer` is the
+ * looser, spelling-based hop the taint side uses.
+ */
+const trustedInitializerOf = (node: TsNode): TsNode | undefined => {
+    const declaration = Node.isIdentifier(node) ? declarationOf(node) : undefined;
+
+    return Node.isVariableDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) && !isReassignedBinding(declaration)
+        ? declaration.getInitializer()
+        : undefined;
 };
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
@@ -252,25 +297,25 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
  * introduces one.
  */
 export const isScopedByContext = (node: TsNode): boolean => {
-    if (textuallyReferencesContext(node)) {
+    if (referencesContext(node)) {
         return true;
     }
 
-    const initializer = singleHopInitializer(node);
+    const initializer = trustedInitializerOf(node);
 
-    if (initializer !== undefined && textuallyReferencesContext(initializer)) {
+    if (initializer !== undefined && referencesContext(initializer)) {
         return true;
     }
 
     // Follow each value-identifier composed into the (expanded) key one hop to its
-    // own `const` initializer — `${userId}/…` reaches ctx via `const userId = ctx.*`.
+    // own initializer — `${userId}/…` reaches ctx via `const userId = ctx.*`.
     const composed = initializer ?? node;
     const identifiers = Node.isIdentifier(composed) ? [composed] : composed.getDescendantsOfKind(SyntaxKind.Identifier);
 
     return identifiers.some((identifier) => {
-        const boundInitializer = singleHopInitializer(identifier);
+        const boundInitializer = trustedInitializerOf(identifier);
 
-        return boundInitializer !== undefined && textuallyReferencesContext(boundInitializer);
+        return boundInitializer !== undefined && referencesContext(boundInitializer);
     });
 };
 

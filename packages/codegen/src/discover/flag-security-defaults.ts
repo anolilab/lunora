@@ -2,8 +2,9 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { FlagSecurityDefaultIR } from "../ir";
-import { collectCallRows, isContextIdentifier } from "./ast";
+import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { isContextSurface } from "./context-root";
 
 /**
  * Whether `callee` is a `ctx.flags.boolean` property access — the boolean flag
@@ -18,9 +19,7 @@ const isFlagBooleanRead = (callee: TsNode): boolean => {
         return false;
     }
 
-    const receiver = callee.getExpression();
-
-    return Node.isPropertyAccessExpression(receiver) && receiver.getName() === "flags" && isContextIdentifier(receiver.getExpression());
+    return isContextSurface(callee.getExpression(), ["flags"]);
 };
 
 /** The value of a `true`/`false` literal node, or `undefined` when it isn't a boolean literal (a variable, a call result, absent). */

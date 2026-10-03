@@ -2,7 +2,9 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { RlsProcedureIR } from "../../ir";
-import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, tablesAccessedIn } from "../ast";
+import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "../ast";
+import { exportedNameOf, exportedVariableDeclarationsOf } from "../attribution";
+import { tablesAccessedIn } from "../database-calls";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { rlsCallsInChain } from "./internal/chain";
 
@@ -119,7 +121,7 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
     const { tablesRead, tablesWritten } = tablesAccessedIn(declaration, READ_METHODS, WRITE_METHODS);
 
     return {
-        exportName: declaration.getName(),
+        exportName: exportedNameOf(declaration) ?? declaration.getName(),
         file: relativePath,
         rlsTables: chain.rlsTables,
         tablesRead,
@@ -136,17 +138,11 @@ const discoverRlsProcedures = (project: Project, lunoraDirectory: string): RlsPr
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const statement of sourceFile.getVariableStatements()) {
-            if (!statement.isExported()) {
-                continue;
-            }
+        for (const declaration of exportedVariableDeclarationsOf(sourceFile)) {
+            const ir = procedureIrFromDeclaration(declaration, relativePath);
 
-            for (const declaration of statement.getDeclarations()) {
-                const ir = procedureIrFromDeclaration(declaration, relativePath);
-
-                if (ir) {
-                    procedures.push(ir);
-                }
+            if (ir) {
+                procedures.push(ir);
             }
         }
     }
