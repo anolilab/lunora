@@ -85,14 +85,15 @@ the nftables table, `/opt/lunora-hostd`, `/var/lib/lunora-hostd`,
 data stays under `fleets/<alias>/`, and `celld` can run it directly. Revoke the
 box in the studio as well.
 
-### What the studio's install command must say
+### What the studio's install command says
 
 The studio's enrol dialog (`installCommandFor` in
-`apps/cloud/src/boxes/enrolment.ts`, on the `apps/cloud` branch) must show the
-command **without the token**, and the token separately, to paste when asked:
+`apps/cloud/src/boxes/enrolment.ts`) shows the command **without the token**,
+and the token separately, to paste when asked:
 
 ```sh
 curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
+sha256sum install.sh   # compare with the release notes
 sudo bash install.sh --control-plane <origin> --bucket <bucket> --version <version>
 ```
 
@@ -141,7 +142,10 @@ The `upgrade` job does steps 2–4 inside the running daemon with the keys
 compiled into it, downloading each artifact itself and refusing a downgrade
 unless the job carries `allowDowngrade: true` (protocol §5.2), then exits for systemd to
 restart into the new release (or restarts the fleets in place when
-`lunora-hostd` itself did not change).
+`lunora-hostd` itself did not change). The control plane sets `allowDowngrade`
+only on a rollback an operator asks for — `POST /v1/hostd/rollout` with
+`allowDowngrade: true` (admin token, an audit-log entry per box), carried on by
+the hourly resume sweep and the reconnect replay; a normal rollout never sets it.
 
 ## The daemon
 
@@ -227,20 +231,25 @@ token, an `AWS_*=` assignment, an enrolment token or a private key), and the
 key is never sent to a plain-`http:` endpoint from a box enrolled with an
 `https:` control plane.
 
-**What the `apps/cloud` branch must send** (cross-branch; this branch does not
-touch `apps/cloud`): right after `auth` — after the `routes` push — and again
-whenever the value changes, `BoxSessionDO` sends
+**What the control plane sends** (`BoxSessionDO`,
+`apps/cloud/src/boxes/session-do.ts`): right after `auth` — after the `routes`
+push — and again whenever the value changes (it resolves it again every five
+minutes, so an ingest key that was revoked and replaced reaches the box),
+`BoxSessionDO` sends
 
 ```json
 { "type": "config", "telemetry": { "endpoint": "<LUNORA_OTLP_ENDPOINT>", "token": "<the box's organization's ingest key>" } }
 ```
 
-with the same endpoint a tenant gets as `LUNORA_OTLP_ENDPOINT`, and the token
-`resolveTelemetryConfig` (`src/telemetry/ingest-key.ts`) resolves for the box's
-organization — an `ingest`-capability key, which `POST /v1/logs` accepts and
-which cannot deploy. An organization without an ingest key yet gets one minted
-the same way (`recordIngestKey`); a cell without telemetry configured sends
-`{"type":"config"}`, and the box forwards nothing. `/v1/logs` files records by
+with the same endpoint a tenant gets as `LUNORA_OTLP_ENDPOINT`, and the box's
+organization's ingest key — the key `resolveTelemetryConfig`
+(`apps/cloud/src/telemetry/ingest-key.ts`) injects into its tenants, read here
+by its store-backed twin `resolveBoxTelemetryConfig`: an `ingest`-capability
+key, which `POST /v1/logs` accepts and which cannot deploy. An organization without an ingest key yet
+gets one minted the same way the deploy path mints it; a cell without
+telemetry configured sends `{"type":"config"}`, and the box forwards nothing.
+The session never logs the key and keeps it out of socket attachments; it
+stores only a digest of the last frame it sent. `/v1/logs` files records by
 `service.name`: a fleet's lines arrive under its alias, hostd's and Caddy's
 under `lunora-hostd`, each with `box`, `source` and (for a fleet) `alias`
 attributes for the studio's Logs panel to filter on.

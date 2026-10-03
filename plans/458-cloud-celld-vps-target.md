@@ -455,8 +455,8 @@ the daemon started was skipped). Decisions made while building:
 - **Root:** `run` refuses uid 0 unless the config sets `allowRoot`; the
   supervisor takes a uid/gid per child for W8's `lunora-fleet`.
 
-Still open: the conformance run through a real `hostd`, and hostd's own log
-forwarding (W6). The `test:hostd` lane, `install.sh` and the unit (W7) and W8
+Still open: the conformance run through a real `hostd`. hostd's own log
+forwarding (W6), the `test:hostd` lane, `install.sh` and the unit (W7) and W8
 landed since — see their sections.
 
 **Landed (2026-10-03, `aba5561f7`):** the `test:hostd` lane — vitest project
@@ -605,12 +605,21 @@ cloud → box frame, `config {telemetry?: {endpoint, token}}`, sent after `auth`
 and on every change (protocol §5.2; joined version 1 before any box shipped).
 The lane asserts a refused release reaching the fake control plane as a log.
 
-Still open — **`apps/cloud` branch:** `BoxSessionDO` must send the `config`
-frame after `auth` (after `routes`) and on change, with `LUNORA_OTLP_ENDPOINT`
-and the box organization's ingest key from `resolveTelemetryConfig` (minting
-one with `recordIngestKey` when the org has none; `{"type":"config"}` when the
-cell has no telemetry) — the exact frame is in `apps/hostd/README.md` ("What
-the `apps/cloud` branch must send"). Then the studio Logs panel gate (W6).
+**Landed (2026-10-03, control-plane half, `f9b480044`, `work/cloud-vps-gaps`):**
+`BoxSessionDO` sends the `config` frame right after the `routes` push of every
+authenticated (re)connect, with `LUNORA_OTLP_ENDPOINT` and the box
+organization's ingest key, or `{"type":"config"}` when the cell has no
+telemetry. The session has no deploy key to call `recordIngestKey` with, so
+`resolveBoxTelemetryConfig` (`src/telemetry/ingest-key.ts`) reads the active
+key over the store and mints one exactly as the deploy path does when the org
+has none (the row shape and the active-key rule are shared,
+`src/telemetry/ingest-key-row.ts`). Ingest keys cannot be rolled — one is
+revoked and replaced — so the liveness alarm resolves the config again every
+five minutes and sends it only when it changed (a SHA-256 of the last frame is
+stored, never the frame). The key is never logged and never in a socket
+attachment. Node and workerd tests (a key minted in real D1).
+
+Still open: the studio Logs panel gate (W6), which needs a running cell.
 
 ### W7 — Install, upgrades and supply chain (M)
 
@@ -748,9 +757,7 @@ installing it (enrol runs as `lunora-hostd`), since that directory is
   hidden prompt (§11, thermos round 2 L4). **Cross-branch dependency:** that
   prompt (`read -rs` for the token and the bucket key, plus `--token-file` /
   `--credentials-file`; `--token` on the command line refused) lands with
-  `fix/hostd-round2`; the install.sh on this branch still reads only
-  `LUNORA_HOSTD_ENROL_TOKEN` / `--token`, so the studio's command needs that
-  branch merged first. `--control-plane` is required until a production origin
+  `fix/hostd-round2` — resolved: `work/cloud-vps-gaps` carries both. `--control-plane` is required until a production origin
   is compiled in.
 - **`esbuild` on the box — not needed (2026-10-03).** Raised while validating W8
   and then disproved: releases deploy with `no_bundle: true` (W3), and celld
@@ -792,12 +799,16 @@ installing it (enrol runs as `lunora-hostd`), since that directory is
 - **OpenSSL 3.** `install.sh` refuses Debian < 12 and Ubuntu < 22.04 by name
   and checks `openssl version`, instead of failing as a bad signature.
 
-Cross-branch — **`apps/cloud`:** the studio's install command becomes
+Cross-branch — **`apps/cloud`:** done. The studio's install command is
 `sudo bash install.sh --control-plane <origin> --bucket <bucket> --version <v>`
-plus "paste the token when prompted", the token shown in a copy field of its
-own and never in the command (`apps/hostd/README.md`, "What the studio's
-install command must say"); a rollback rollout sets `allowDowngrade: true`
-on its `upgrade` jobs. Still open: a pinned release key.
+with the token in a copy field of its own (`f33c98d27`; its install.sh is on
+the same branch since `work/cloud-vps-gaps` merged `fix/hostd-round2`). A
+rollback is explicit (`6793d9adb`): `POST /v1/hostd/rollout` takes
+`allowDowngrade: true` (admin token; a non-boolean is a 400), stored beside
+the intent as `boxes.allowDowngrade` so the hourly resume sweep and the
+reconnect replay carry it on, audited as `box.rollback` in each box's
+organization; its `upgrade` jobs carry `allowDowngrade: true`, a normal
+rollout's never do. Still open: a pinned release key (🌐 ops).
 
 ### W8 — Hardening on the box (M)
 
@@ -1188,3 +1199,36 @@ v.id("cloudflareAccounts")` union), its table implied by
   schema-boots test gets a cold-import timeout — `b3c41e586`; the schema
   baseline is re-blessed (it predated the whole branch and blocked
   `lunora verify`) — `89beb4579`.
+
+## 12. Cross-branch close-out (`work/cloud-vps-gaps`, 2026-10-03)
+
+`fix/hostd-round2` and `docs/byo-server` merged onto one branch with the
+`apps/cloud` halves they were waiting for, each with tests:
+
+- **The `config` frame** (W6) — `f9b480044`; see W6.
+- **Explicit rollbacks with `allowDowngrade`** (W7) — `6793d9adb`; see W7.
+- **hostd's alias rule pinned** — `15772e863`: hostd's protocol stays
+  dependency-free and runs in workerd, so `apps/hostd/src/wire/validate.ts`
+  keeps its own `isAlias`; `apps/cloud/__tests__/alias-rules.test.ts` holds it
+  to `@lunora/config/celld`'s `isReleaseAlias` over a corpus, a fixed-seed
+  random sweep and the 63-character cap.
+- **The capability tables generate again** (W10) — `8a94bade1`: the `celld-vps`
+  row became `@lunora/config`'s `CELLD_RELEASE_BINDINGS` behind a spread and an
+  `Object.fromEntries(Object.keys(…).map(…))`, which the restricted evaluator
+  refused, so `--check` failed. It now follows imports from listed modules
+  (`MODULE_SOURCES`) and knows exactly those calls; anything else still throws.
+  The working check then caught real drift (Billing Read was missing from the
+  BYO-Cloudflare permissions table). The docs build passes.
+
+**Still open after this branch:**
+
+- **Release key** (🌐 ops): generate the Ed25519 release key, commit its
+  public half to `trusted-release-keys.ts` and `install.sh`, set the
+  `hostd-release` environment secret (W7). Until then every release is refused.
+- **A running cell** (G1, 🌐 ops): PR #85 merged, staging/production
+  `wrangler.jsonc` ids, the GitHub App credentials.
+- **Box DNS** (W5, 🌐 ops): the box zone and the token's Zone → DNS:Edit scope.
+- **Gates not yet run:** the conformance run through a real `hostd` (W4);
+  HTTPS against Pebble (W5); the studio Traffic and Logs panels for a
+  `celld-vps` project in `test:hostd` (W6).
+- **Not built:** immutable cache headers for hashed asset paths (W5, §6).
