@@ -7,11 +7,13 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { CUSTOM_INSTANCE_MIN_MEMORY_MIB_PER_VCPU, CUSTOM_INSTANCE_TYPE_LIMITS } from "./instance-limits";
 import type {
     ContainerConfig,
     ContainerDefinition,
     ContainerImageSource,
     ContainerNamedImageSource,
+    CustomContainerInstanceType,
     DefaultScheduledContainerConfig,
     DurableObjectScheduledContainerConfig,
     NormalizedContainerImage,
@@ -402,6 +404,37 @@ const assertValidNamedImage = (name: string, source: ContainerNamedImageSource):
 };
 
 /**
+ * Check a `durable_object` container's custom runtime size against Cloudflare's
+ * bounds ({@link CUSTOM_INSTANCE_TYPE_LIMITS}). It is handed to
+ * `ctx.container.start({ instance })` as-is, so all three fields are required —
+ * there is no wrangler default to fill a gap — and an out-of-range value would
+ * otherwise surface only when an instance first fails to start.
+ */
+const assertValidRuntimeInstanceSize = (instanceType: CustomContainerInstanceType): void => {
+    for (const [field, { max, min }] of Object.entries(CUSTOM_INSTANCE_TYPE_LIMITS) as ReadonlyArray<
+        [keyof CustomContainerInstanceType, { max: number; min: number }]
+    >) {
+        const value: unknown = instanceType[field];
+
+        if (typeof value !== "number" || Number.isNaN(value) || value < min || value > max) {
+            const remedy = field === "vcpu" ? ' — below 1 vCPU use a named runtime size such as "lite" or "standard-1"' : "";
+
+            throw new TypeError(
+                `defineContainer: a custom \`instanceType\` under schedulingPolicy "durable_object" needs ${field} in ${String(min)}–${String(max)} (got ${String(value)})${remedy}`,
+            );
+        }
+    }
+
+    const { memoryMib, vcpu } = instanceType as Required<CustomContainerInstanceType>;
+
+    if (memoryMib < vcpu * CUSTOM_INSTANCE_MIN_MEMORY_MIB_PER_VCPU) {
+        throw new TypeError(
+            `defineContainer: a custom \`instanceType\` needs ≥ ${String(CUSTOM_INSTANCE_MIN_MEMORY_MIB_PER_VCPU)} MiB memory per vCPU (got ${String(memoryMib)} MiB for ${String(vcpu)} vCPU)`,
+        );
+    }
+};
+
+/**
  * Validate a `durable_object` container's named images, default image and
  * default instance size. Cloudflare only accepts digest-pinned references in
  * its own registry for a named image, so anything else is caught here rather
@@ -440,11 +473,8 @@ const assertValidDurableObjectScheduling = (config: DurableObjectScheduledContai
         );
     }
 
-    if (
-        typeof instanceType === "object" &&
-        [instanceType.vcpu, instanceType.memoryMib, instanceType.diskMb].some((value) => typeof value !== "number" || value <= 0)
-    ) {
-        throw new TypeError('defineContainer: a custom `instanceType` under schedulingPolicy "durable_object" needs positive vcpu, memoryMib and diskMb');
+    if (typeof instanceType === "object") {
+        assertValidRuntimeInstanceSize(instanceType);
     }
 };
 

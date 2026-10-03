@@ -15,6 +15,7 @@ import {
     requiredSecrets,
     resolveDeployDriver,
     resolveProjectTarget,
+    resolveSchemaDirectory,
     upsertDevVariableLine,
     writeDevVariablesFileAtomically,
 } from "@lunora/config";
@@ -467,7 +468,7 @@ const resolveMintableKeys = async (context: EnvContext): Promise<string[]> => {
     let packages: ReadonlyArray<string> = [];
 
     try {
-        packages = packageNamesFromBindings(await inferLunoraBindings({ projectRoot: context.cwd }));
+        packages = packageNamesFromBindings(await inferLunoraBindings({ projectRoot: context.cwd, schemaDir: resolveSchemaDirectory(context.cwd) }));
     } catch {
         // Scan failure → fall back to the core secret + whatever is already local.
     }

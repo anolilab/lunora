@@ -170,6 +170,58 @@ describe("createNodeR2Bucket", () => {
         await expect(bucket.delete("gone")).resolves.toBeUndefined();
     });
 
+    it("deletes several keys in one call", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("a/1", "one");
+        await bucket.put("a/2", "two");
+        await bucket.put("b", "kept");
+        await bucket.delete(["a/1", "a/2", "missing"]);
+
+        const listed = await bucket.list();
+
+        expect(listed.objects.map((object) => object.key)).toStrictEqual(["b"]);
+    });
+
+    it("honors onlyIf etag preconditions on put, answering null when they fail", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        // `etagDoesNotMatch: "*"` is create-only.
+        const created = await bucket.put("state", "v1", { onlyIf: { etagDoesNotMatch: "*" } });
+
+        expect(created?.etag).toBe(sha256Hex("v1"));
+        await expect(bucket.put("state", "again", { onlyIf: { etagDoesNotMatch: "*" } })).resolves.toBeNull();
+
+        // `etagMatches` is a compare-and-swap.
+        await expect(bucket.put("state", "lost", { onlyIf: { etagMatches: "stale" } })).resolves.toBeNull();
+
+        const swapped = await bucket.put("state", "v2", { onlyIf: { etagMatches: sha256Hex("v1") } });
+
+        expect(swapped?.etag).toBe(sha256Hex("v2"));
+        await expect(bucket.put("absent", "x", { onlyIf: { etagMatches: "*" } })).resolves.toBeNull();
+
+        const object = await bucket.get("state");
+
+        await expect(object?.text()).resolves.toBe("v2");
+    });
+
+    it("lets only one of two racing compare-and-swaps on a key win", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+        const base = await bucket.put("state", "v1");
+        const results = await Promise.all([
+            bucket.put("state", "left", { onlyIf: { etagMatches: base.etag } }),
+            bucket.put("state", "right", { onlyIf: { etagMatches: base.etag } }),
+        ]);
+
+        expect(results.filter((result) => result !== null)).toHaveLength(1);
+    });
+
     it("seeks past startAfter, and lets a cursor override it", async () => {
         expect.hasAssertions();
 

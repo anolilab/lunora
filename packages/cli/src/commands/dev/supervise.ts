@@ -4,16 +4,18 @@
  * teardown.
  */
 import type { ChildProcess } from "node:child_process";
-import { spawn as nodeSpawn } from "node:child_process";
+import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 
 import type { ContainerLogStreamHandle } from "@lunora/config";
 import { discoverContainerInfo, formatLunoraEvent, streamContainerLogs } from "@lunora/config";
 
 import type { CodegenWatcherHandle } from "../../util/codegen-watch";
+import forEachLine from "../../util/line-stream";
 import type { Logger } from "../../util/logger";
 import { spawnShellCompat } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
-import type { WorkerProcess, WorkerSpawner } from "./types";
+import type { DevTunnelHandle } from "./tunnel";
+import type { LongLivedSpawner, WorkerProcess, WorkerSpawner } from "./types";
 
 /** Grace period after the first SIGINT before we force-kill the worker. */
 const SIGINT_GRACE_MS = 5000;
@@ -49,60 +51,67 @@ const emitChildLine = (line: string, tag: string, kind: "stderr" | "stdout", log
 };
 
 /**
- * Pipe a child's stdout/stderr through the logger, tagged by name, recognising
- * and reformatting Lunora structured log events along the way. Output is
- * line-buffered per stream so a structured event split across two `data` chunks
- * is still parsed as one line; the trailing partial is flushed on stream end.
+ * Signal a long-lived child. `SIGKILL` on Windows — which has no signals, so
+ * Node's `kill` only terminates the one process it spawned — goes through
+ * `taskkill /T /F`, felling the child and everything it started (a `cmd.exe`
+ * wrapper's real program included). `platform` and `spawnSyncImpl` are test
+ * seams, defaulting to the real ones.
  */
-const pipeChildOutput = (child: ChildProcess, tag: string, logger: Logger): void => {
-    const pumpStream = (stream: NodeJS.ReadableStream | null, kind: "stderr" | "stdout"): void => {
-        if (!stream) {
+const signalChild = (
+    child: Pick<ChildProcess, "kill" | "pid">,
+    signal: NodeJS.Signals,
+    platform: NodeJS.Platform = process.platform,
+    spawnSyncImpl: (command: string, args: ReadonlyArray<string>, options: { stdio: "ignore" }) => unknown = spawnSync,
+): void => {
+    try {
+        if (signal === "SIGKILL" && platform === "win32" && child.pid !== undefined) {
+            spawnSyncImpl("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+
             return;
         }
 
-        let buffer = "";
-
-        stream.on("data", (chunk: Buffer) => {
-            buffer += chunk.toString("utf8");
-
-            const lines = buffer.split("\n");
-
-            // Keep the last element as the (possibly incomplete) pending line.
-            buffer = lines.pop() ?? "";
-
-            for (const line of lines) {
-                emitChildLine(line.trimEnd(), tag, kind, logger);
-            }
-        });
-
-        stream.on("end", () => {
-            emitChildLine(buffer.trimEnd(), tag, kind, logger);
-            buffer = "";
-        });
-    };
-
-    pumpStream(child.stdout, "stdout");
-    pumpStream(child.stderr, "stderr");
+        child.kill(signal);
+    } catch {
+        /* already gone */
+    }
 };
 
-/** Real worker spawner: runs the descriptor as a child and pipes its output through the logger. */
-const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
-    // Windows can't spawn the package-manager .cmd shims without a shell — see
-    // spawnShellCompat. POSIX passes through untouched.
-    const exec = spawnShellCompat(descriptor.command, descriptor.args);
+/**
+ * Spawn a long-lived child (a dev server, `cloudflared`) and hand every line of
+ * its stdout/stderr to `onLine` as it arrives. Unlike the one-shot `Spawner`,
+ * the caller gets the child's lifetime: `exited` resolves with its exit code
+ * (1 when it failed to start or was killed by a signal) and `kill` stops it.
+ *
+ * `direct` marks a real executable rather than a package-manager shim: it is
+ * spawned without a shell on every platform. On Windows `spawnShellCompat`
+ * wraps everything else in `cmd.exe`, and killing that wrapper leaves the real
+ * program running — so a `direct` child's `kill` reaches the program itself.
+ */
+const spawnLongLivedChild: LongLivedSpawner = (descriptor, onLine, onError) => {
+    const exec =
+        descriptor.direct === true
+            ? { args: [...descriptor.args], command: descriptor.command, shell: false }
+            : // Windows can't spawn the package-manager .cmd shims without a shell — see
+              // spawnShellCompat. POSIX passes through untouched.
+              spawnShellCompat(descriptor.command, descriptor.args);
     const child = nodeSpawn(exec.command, exec.args, {
         cwd: descriptor.cwd ?? process.cwd(),
         env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
         shell: exec.shell,
-        stdio: ["inherit", "pipe", "pipe"],
+        stdio: [descriptor.direct === true ? "ignore" : "inherit", "pipe", "pipe"],
     });
 
-    pipeChildOutput(child, descriptor.tag, logger);
+    forEachLine(child.stdout, (line) => {
+        onLine(line, "stdout");
+    });
+    forEachLine(child.stderr, (line) => {
+        onLine(line, "stderr");
+    });
 
     return {
         exited: new Promise<number>((resolve) => {
             child.on("error", (error) => {
-                logger.error(`[${descriptor.tag}] failed to start: ${error.message}`);
+                onError?.(error);
                 resolve(1);
             });
             child.on("exit", (code, signal) => {
@@ -115,14 +124,26 @@ const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
             });
         }),
         kill: (signal) => {
-            try {
-                child.kill(signal);
-            } catch {
-                /* already gone */
-            }
+            signalChild(child, signal);
         },
     };
 };
+
+/**
+ * Real worker spawner: runs the descriptor as a child and pipes its output
+ * through the logger, tagged by name, reformatting Lunora structured log events
+ * along the way.
+ */
+const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) =>
+    spawnLongLivedChild(
+        descriptor,
+        (line, kind) => {
+            emitChildLine(line.trimEnd(), descriptor.tag, kind, logger);
+        },
+        (error) => {
+            logger.error(`[${descriptor.tag}] failed to start: ${error.message}`);
+        },
+    );
 
 interface Teardown {
     codegen?: CodegenWatcherHandle;
@@ -135,6 +156,8 @@ interface Teardown {
     /** Disposer for the materialized service dev configs (idempotent, never throws). */
     serviceConfigCleanup?: () => void;
     studio?: StudioServerHandle;
+    /** The `--tunnel` cloudflared child, stopped before anything it forwards to. */
+    tunnel?: DevTunnelHandle;
 }
 
 /**
@@ -184,6 +207,9 @@ const teardown = async (handles: Teardown): Promise<void> => {
     // through it. `AbortController.abort()` on an already-aborted controller is a
     // no-op.
     handles.readyProbe?.abort();
+
+    // First, so the public URL stops answering before the servers behind it go.
+    await handles.tunnel?.close();
 
     // Awaited: `close()` stops the watch loop immediately but resolves only once
     // a regeneration already in flight is done, and that run may have spawned
@@ -320,4 +346,4 @@ const superviseWorkers = async (worker: WorkerProcess, sidecar: WorkerProcess | 
 };
 
 export type { Teardown };
-export { defaultWorkerSpawner, emitChildLine, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt };
+export { defaultWorkerSpawner, emitChildLine, signalChild, spawnLongLivedChild, startContainerLogStreaming, superviseWorkers, teardown, waitForInterrupt };

@@ -80,7 +80,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "The durable agent loop is Lunora's: each defineAgent compiles onto a Cloudflare Workflow declared in wrangler `exports` and reached through `ctx.exports` (a voice-enabled agent additionally gets a VoiceSessionDO), and the loop drives Workers AI. Cloudflare supplies the workflow engine, the Durable Object and the inference; the agent is built on them, not consumed as a product",
         },
-        objectStorage: { level: "native", note: "R2" },
+        objectStorage: {
+            level: "native",
+            note: "R2. Resumable end-user uploads (`@lunora/storage/upload`) run over the binding: TUS / chunked-REST chunks are coalesced into equal 5 MiB multipart parts, and the upload's offset, parts and buffered tail live in conditional-put state objects in the same bucket, so a request can land on any isolate. Identical under miniflare; no S3 credentials",
+        },
         objectStorageBackups: {
             level: "emulated",
             note: "`lunora backup create|list|restore --bucket` writes NDJSON snapshots + a manifest sidecar per snapshot through the admin storage routes (checksum-verified upload, admin-gated object read), and `backupCron`/`backupStore` runs the same layout unattended on a Cron Trigger. Both are bounded by what a single request body / a Worker isolate can hold, not by R2. `emulated` because every part of that is Lunora's — R2 supplies a bucket, and Cloudflare has no backup product being consumed here; the snapshot format, the manifest, the checksum gate and the retention report are all ours",

@@ -428,8 +428,22 @@ describe(resolveContainerEnvVars, () => {
 
             expect(() => defineContainer({ instanceType: "basic" as never, schedulingPolicy: "durable_object" })).toThrow(/not a runtime size/u);
             expect(() => defineContainer({ instanceType: { vcpu: 1 } as never, schedulingPolicy: "durable_object" })).toThrow(
-                /positive vcpu, memoryMib and diskMb/u,
+                /needs diskMb in 1–20000 \(got undefined\)/u,
             );
+        });
+
+        it("holds a custom runtime size to Cloudflare's custom instance bounds", () => {
+            expect.assertions(4);
+
+            const size = (instanceType: { diskMb: number; memoryMib: number; vcpu: number }) => () =>
+                defineContainer({ instanceType, schedulingPolicy: "durable_object" });
+
+            // Below the 1-vCPU floor of a custom size: a named runtime size covers that range.
+            expect(size({ diskMb: 2000, memoryMib: 4096, vcpu: 0.5 })).toThrow(/needs vcpu in 1–4 \(got 0\.5\) — below 1 vCPU use a named runtime size/u);
+            expect(size({ diskMb: 2000, memoryMib: 16_384, vcpu: 4 })).toThrow(/needs memoryMib in 1–12288 \(got 16384\)/u);
+            // 3 GiB per vCPU: 2 vCPU needs at least 6144 MiB.
+            expect(size({ diskMb: 2000, memoryMib: 4096, vcpu: 2 })).toThrow(/≥ 3072 MiB memory per vCPU \(got 4096 MiB for 2 vCPU\)/u);
+            expect(size({ diskMb: 20_000, memoryMib: 12_288, vcpu: 4 })).not.toThrow();
         });
 
         it("rejects default-policy fields, and images without the policy", () => {

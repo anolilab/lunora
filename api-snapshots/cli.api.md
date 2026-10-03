@@ -211,6 +211,7 @@ interface DevCommandOptions {
     startWorker?: WorkerSpawner;
     studio?: boolean;
     target?: string;
+    tunnel?: DevTunnelRequest;
     waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
@@ -1009,6 +1010,16 @@ interface DevRemotePlan {
 }
 ```
 
+### `DevTunnelRequest` (interface)
+
+```ts
+interface DevTunnelRequest {
+    allowMail: ReadonlyArray<string>;
+    spawner?: Spawner;
+    startChild?: LongLivedSpawner;
+}
+```
+
 ### `DockerProbe` (type)
 
 ```ts
@@ -1178,6 +1189,24 @@ interface ListRemoteSecretsResult {
     names: ReadonlyArray<string>;
     ok: boolean;
 }
+```
+
+### `LongLivedDescriptor` (interface)
+
+```ts
+interface LongLivedDescriptor {
+    args: ReadonlyArray<string>;
+    command: string;
+    cwd?: string;
+    direct?: boolean;
+    env?: Readonly<Record<string, string>>;
+}
+```
+
+### `LongLivedSpawner` (type)
+
+```ts
+type LongLivedSpawner = (descriptor: LongLivedDescriptor, onLine: (line: string, kind: "stderr" | "stdout") => void, onError?: (error: Error) => void) => WorkerProcess;
 ```
 
 ### `OfferDeps` (interface)

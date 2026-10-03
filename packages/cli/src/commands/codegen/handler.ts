@@ -1,6 +1,6 @@
 import type { Finding } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { applyLintIgnores, detectLintTools, inferLunoraBindings } from "@lunora/config";
+import { applyLintIgnores, detectLintTools, inferLunoraBindings, resolveSchemaDirectory } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectExportGaps, collectWranglerSecretVariables } from "@lunora/config/cloudflare";
 
@@ -184,7 +184,7 @@ const warnAboutExportGaps = async (projectRoot: string, logger: Logger): Promise
     let gaps: ReadonlyArray<ExportGap>;
 
     try {
-        gaps = collectExportGaps(await inferLunoraBindings({ projectRoot }));
+        gaps = collectExportGaps(await inferLunoraBindings({ projectRoot, schemaDir: resolveSchemaDirectory(projectRoot) }));
     } catch (error: unknown) {
         // Best-effort: inference failures are owned by the commands that gate on
         // them, so this does not fail the run. It is still SAID, though —

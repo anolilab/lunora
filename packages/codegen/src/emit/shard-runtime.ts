@@ -603,8 +603,6 @@ const emitPaymentFragments = (
         return { build: "", configField: "", contextField: "", imports: [], stub: "" };
     }
 
-    const missing = `throw new Error("ctx.payments: no payment configured. Pass \\\`payment\\\` to createShardDO().");`;
-
     return {
         imports: [
             `import type { LunoraDatabaseLike as LunoraPaymentDbLike, LunoraPayment, PaymentsFromContextOptions } from "@lunora/payment";`,
@@ -622,7 +620,7 @@ const emitPaymentFragments = (
         contextField: `\n                payments,`,
         stub: renderThrowingStub(
             "paymentStub: LunoraPayment",
-            missing,
+            "ctx.payments: no payment configured. Pass `payment` to createShardDO().",
             ["attach", "cancelSubscription", "check", "createCheckout", "createPortalSession", "handleWebhook", "listBalances", "listSubscriptions", "track"],
             {
                 cast: " as unknown as LunoraPayment",

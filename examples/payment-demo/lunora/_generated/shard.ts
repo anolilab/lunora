@@ -141,31 +141,31 @@ const storageStub = {
 
 const paymentStub: LunoraPayment = {
     attach: () => {
-        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
     cancelSubscription: () => {
-        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
     check: () => {
-        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
     createCheckout: () => {
-        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
     createPortalSession: () => {
-        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
     handleWebhook: () => {
-        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
     listBalances: () => {
-        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
     listSubscriptions: () => {
-        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
     track: () => {
-        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+        throw new Error("ctx.payments: no payment configured. Pass `payment` to createShardDO().");
     },
 } as unknown as LunoraPayment;
 

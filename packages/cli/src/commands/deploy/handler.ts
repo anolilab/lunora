@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import type { CodegenResult } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/config";
-import { discoverContainerInfo, inferLunoraBindings, planToolchainInvocation, resolveDeployDriver } from "@lunora/config";
+import { discoverContainerInfo, inferLunoraBindings, planToolchainInvocation, resolveDeployDriver, resolveSchemaDirectory } from "@lunora/config";
 import { describePreservedCrons, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, reconcileWranglerCrons } from "@lunora/config/cloudflare";
 import { Spinner } from "@visulima/spinner";
 
@@ -152,7 +152,7 @@ const provisionBindings = async (
         // through this function, so this is the one guard.
         resolveDeployDriver(target);
 
-        const inferred = await inferLunoraBindings({ projectRoot: cwd });
+        const inferred = await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
         const reconciled = reconcileWranglerBindings(cwd, inferred, environment);
 
         const writtenTo = reconciled.wranglerPath ?? "wrangler.jsonc";

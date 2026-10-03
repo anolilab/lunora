@@ -1011,7 +1011,7 @@ export const mySubs = action({ args: { reference: v.string() }, handler: async (
             expect(result.generated.shard).toContain('import { paymentsFromContext } from "@lunora/payment"');
             expect(result.generated.shard).toContain("payments,");
             expect(result.generated.shard).toContain("paymentStub");
-            expect(result.generated.server).toContain("readonly payments: LunoraPayment;");
+            expect(result.generated.server).toContain('readonly payments: import("@lunora/payment").LunoraPayment;');
         });
 
         it("wires ctx.kv end-to-end (every ctx) when a query reads ctx.kv", () => {
@@ -4544,9 +4544,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect.assertions(4);
 
             const withPayments = emitServer({ capabilities: new Set(["payments"]) });
+            const field = 'readonly payments: import("@lunora/payment").LunoraPayment;';
 
-            expect(withPayments).toContain('import type { LunoraPayment } from "@lunora/payment";');
-            expect(withPayments).toContain("readonly payments: LunoraPayment;");
+            // The `payments` row's `tier: "action"`: the field rides ActionCtx only.
+            expect(withPayments.split(field)).toHaveLength(2);
+            expect(withPayments.slice(withPayments.indexOf("export interface ActionCtx"))).toContain(field);
 
             const withoutPayments = emitServer({});
 

@@ -2567,12 +2567,34 @@ export const schema = defineSchema({
                     head_sampling_rate: 1,
                     issues: { enabled: true },
                     logs: { destinations: ["logs-destination"], enabled: true, head_sampling_rate: 0.6, invocation_logs: true, persist: false },
+                    redact_query_string: true,
                     traces: { destinations: ["tracing-destination"], enabled: true, head_sampling_rate: 0.05, persist: false },
                 }),
             );
 
             expect(report.errors.join(" ")).not.toContain("observability");
             expect(report.warnings.join(" ")).not.toContain("observability");
+        });
+
+        it("accepts redact_query_string as a documented boolean and rejects a non-boolean", () => {
+            expect.assertions(3);
+
+            const accepted = validateWranglerConfig(withObservability({ enabled: true, redact_query_string: true }));
+
+            expect(accepted.errors.join(" ")).not.toContain("observability");
+            // Regression: a valid wrangler key must not draw the "typo" warning.
+            expect(accepted.warnings.join(" ")).not.toContain("redact_query_string");
+            expect(validateWranglerConfig(withObservability({ redact_query_string: "yes" })).errors.join(" ")).toContain(
+                "observability.redact_query_string must be a boolean",
+            );
+        });
+
+        it("warns on a key that only exists on Object.prototype", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(withObservability({ constructor: true }));
+
+            expect(report.warnings.join(" ")).toContain("observability.constructor is not a documented wrangler key");
         });
 
         it("warns on a typo'd key at every level", () => {
@@ -2727,7 +2749,7 @@ export const schema = defineSchema({
                 }),
             );
 
-            expect(outOfBounds.errors.join(" ")).toContain("vcpu must be a positive number");
+            expect(outOfBounds.errors.join(" ")).toContain("vcpu must be a number in 1–4 (got 8)");
         });
 
         it("rejects custom instance types below 1 vCPU or under 3 GiB memory per vCPU, and allows 20 GB disk at any memory", () => {
@@ -2741,7 +2763,7 @@ export const schema = defineSchema({
                 }),
             );
 
-            expect(belowMinVcpu.errors.join(" ")).toContain("needs ≥ 1 vCPU (got 0.5)");
+            expect(belowMinVcpu.errors.join(" ")).toContain('vcpu must be a number in 1–4 (got 0.5) — use the named "lite" or "basic" instance type');
 
             const tooLittleMemory = validateWranglerConfig(
                 baseConfig({
@@ -2777,7 +2799,7 @@ export const schema = defineSchema({
                 }),
             );
 
-            expect(tooMuchDisk.errors.join(" ")).toContain("disk_mb must be a positive number ≤ 20000");
+            expect(tooMuchDisk.errors.join(" ")).toContain("disk_mb must be a number in 1–20000 (got 20001)");
 
             const valid = validateWranglerConfig(
                 baseConfig({

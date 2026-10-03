@@ -12,7 +12,7 @@ import { MemoryStorage } from "@visulima/storage/provider/memory";
 import { createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { UploadAuthzContext } from "../src/upload-handler";
+import type { UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
 import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
 
 const ENDPOINT = "https://test.local/upload";
@@ -475,5 +475,176 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 
             expect(response.status).toBe(413);
         });
+    });
+});
+
+describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
+    const MiB = 1024 * 1024;
+
+    const capped = (maxFileSizeFor: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>, maxFileSize = 100 * MiB) =>
+        createUploadHandler({ maxFileSize, maxFileSizeFor, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
+
+    const byType = (context: UploadSizeContext): number | undefined => {
+        if (context.contentType.startsWith("image/")) {
+            return 1 * MiB;
+        }
+
+        return context.contentType.startsWith("video/") ? 50 * MiB : undefined;
+    };
+
+    const create = async (handler: UploadHandler, headers: Record<string, string>): Promise<Response> =>
+        handler.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", ...headers }, method: "POST" }));
+
+    it("caps an upload by the type its TUS metadata declares", async () => {
+        expect.hasAssertions();
+
+        const handler = capped(byType);
+
+        const image = (size: number) => create(handler, { "Upload-Length": String(size), "Upload-Metadata": `filetype ${B64("image/png")}` });
+
+        await expect(image(2 * MiB)).resolves.toHaveProperty("status", 413);
+        await expect(image(MiB)).resolves.toHaveProperty("status", 201);
+        await expect(create(handler, { "Upload-Length": String(20 * MiB), "Upload-Metadata": `filetype ${B64("video/mp4")}` })).resolves.toHaveProperty(
+            "status",
+            201,
+        );
+    });
+
+    it("hands the decoded metadata and declared size to the callback", async () => {
+        expect.hasAssertions();
+
+        const seen: UploadSizeContext[] = [];
+        const handler = capped((context) => {
+            seen.push(context);
+
+            return undefined;
+        });
+
+        await create(handler, { "Upload-Length": "42", "Upload-Metadata": `filename ${B64("résumé.pdf")},filetype ${B64("application/pdf")},flag` });
+
+        expect(seen[0]?.metadata).toStrictEqual({ filename: "résumé.pdf", filetype: "application/pdf", flag: "" });
+        expect(seen[0]?.contentType).toBe("application/pdf");
+        expect(seen[0]?.declaredSize).toBe(42);
+        expect(seen[0]?.method).toBe("POST");
+    });
+
+    it("never raises the cap past maxFileSize", async () => {
+        expect.hasAssertions();
+
+        const handler = capped(() => 10 * MiB, MiB);
+
+        await expect(create(handler, { "Upload-Length": String(2 * MiB) })).resolves.toHaveProperty("status", 413);
+    });
+
+    it("refuses a create that declares no size once a cap applies", async () => {
+        expect.hasAssertions();
+
+        const handler = capped(() => MiB);
+
+        await expect(create(handler, { "Upload-Defer-Length": "1" })).resolves.toHaveProperty("status", 413);
+    });
+
+    it("fails closed when the callback throws or answers something that is not a size", async () => {
+        expect.hasAssertions();
+
+        const throwing = capped(() => {
+            throw new Error("lookup failed");
+        });
+        const nonsense = capped(() => Number.NaN);
+
+        await expect(create(throwing, { "Upload-Length": "10" })).resolves.toHaveProperty("status", 403);
+        await expect(create(nonsense, { "Upload-Length": "10" })).resolves.toHaveProperty("status", 403);
+    });
+
+    it("runs only on creates, after the authorize gate", async () => {
+        expect.hasAssertions();
+
+        const maxFileSizeFor = vi.fn<(context: UploadSizeContext) => number | undefined>(() => undefined);
+        const handler = createUploadHandler({
+            authorize: ({ request }) => request.headers.get("x-user") === "member",
+            maxFileSizeFor,
+            storage: new MemoryStorage({ path: "/upload" }),
+        });
+
+        await expect(create(handler, { "Upload-Length": "10" })).resolves.toHaveProperty("status", 403);
+        expect(maxFileSizeFor).not.toHaveBeenCalled();
+
+        const created = await create(handler, { "Upload-Length": "10", "x-user": "member" });
+        const location = new URL(created.headers.get("location") ?? "", ENDPOINT).href;
+
+        await handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0", "x-user": "member" }, method: "HEAD" }));
+
+        expect(maxFileSizeFor).toHaveBeenCalledTimes(1);
+    });
+
+    it("caps a chunked-REST create by its Content-Type, the type that gets stored, not its metadata", async () => {
+        expect.hasAssertions();
+
+        const seen: UploadSizeContext[] = [];
+        const handler = createUploadHandler({
+            maxFileSizeFor: (context) => {
+                seen.push(context);
+
+                return byType(context);
+            },
+            protocol: "chunked-rest",
+            silent: true,
+            storage: new MemoryStorage({ path: "/upload" }),
+        });
+
+        const response = await handler.fetch(
+            new Request(ENDPOINT, {
+                headers: {
+                    "content-type": "image/jpeg",
+                    "x-chunked-upload": "true",
+                    "x-file-metadata": JSON.stringify({ filetype: "video/mp4", size: 3 }),
+                    "x-total-size": String(2 * MiB),
+                },
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(413);
+        expect(seen[0]?.contentType).toBe("image/jpeg");
+        expect(seen[0]?.metadata).toStrictEqual({ filetype: "video/mp4", size: "3" });
+    });
+
+    it("resolves a TUS type the way the stored file does: mimeType, then type, then filetype (regression)", async () => {
+        expect.hasAssertions();
+
+        const handler = capped(byType);
+
+        // A small `filetype` beside an image `mimeType` used to pick the lenient video cap.
+        await expect(
+            create(handler, {
+                "Upload-Length": "1000000000",
+                "Upload-Metadata": `filename ${B64("a.png")},filetype ${B64("video/mp4")},mimeType ${B64("image/png")}`,
+            }),
+        ).resolves.toHaveProperty("status", 413);
+    });
+
+    it("decodes url-safe base64 metadata as the TUS handler does", async () => {
+        expect.hasAssertions();
+
+        const seen: UploadSizeContext[] = [];
+        const handler = capped((context) => {
+            seen.push(context);
+
+            return undefined;
+        });
+        const urlSafe = Buffer.from("?>?>").toString("base64url");
+
+        await create(handler, { "Upload-Length": "1", "Upload-Metadata": `filename ${urlSafe}` });
+
+        expect(seen[0]?.metadata).toStrictEqual({ filename: "?>?>" });
+    });
+
+    it.each(["-1", "1.5", "abc", "1e3", ""])("reads a declared size of %j as too large, never as small (regression)", async (length) => {
+        expect.hasAssertions();
+
+        const maxFileSizeFor = vi.fn<(context: UploadSizeContext) => number | undefined>(() => 10);
+        const handler = capped(maxFileSizeFor);
+
+        await expect(create(handler, { "Upload-Length": length })).resolves.toHaveProperty("status", 413);
     });
 });

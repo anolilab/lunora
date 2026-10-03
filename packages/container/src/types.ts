@@ -15,7 +15,10 @@ type NamedContainerInstanceType = "basic" | "lite" | "standard-1" | "standard-2"
  * A custom instance type, available to every Containers account. Cloudflare's
  * documented bounds: 1–4 vCPU, up to 12 GiB memory, up to 20 GB disk at any
  * memory size, and ≥ 3 GiB memory per vCPU. For less than 1 vCPU use the named
- * `lite` or `basic` types. The config-layer validator enforces these ranges.
+ * `lite` or `basic` types. The bounds live in `CUSTOM_INSTANCE_TYPE_LIMITS`
+ * (`./instance-limits`), which both `defineContainer` (a `durable_object`
+ * container's runtime size) and `@lunora/config`'s wrangler validator
+ * (`containers[].instance_type`) enforce.
  */
 interface CustomContainerInstanceType {
     /** Disk in MB, up to 20000 (20 GB) at any memory size. Cloudflare's default is 2000 (2 GB). */

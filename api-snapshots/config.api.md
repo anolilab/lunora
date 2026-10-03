@@ -468,6 +468,7 @@ interface DevServerState {
     readyAt?: string;
     startedAt?: string;
     studioUrl?: string;
+    tunnelUrl?: string;
     url: string;
 }
 ```
@@ -704,14 +705,14 @@ interface InferredBindings {
     usesKv: boolean;
     usesMail: boolean;
     usesNotify: boolean;
-    usesPayment: boolean;
+    usesPayments: boolean;
     usesPipelines: boolean;
     usesR2sql: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
     usesWorkerLoader: boolean;
+    usesX402: boolean;
     usesX402Charge: boolean;
-    usesX402Pay: boolean;
     workflows: InferredWorkflow[];
 }
 ```
@@ -1609,6 +1610,12 @@ const resolveDeployDriver: (target?: string) => DeployDriver;
 const resolveProjectTarget: (projectRoot: string, explicit?: string) => string;
 ```
 
+### `resolveSchemaDirectory` (const)
+
+```ts
+const resolveSchemaDirectory: (projectRoot: string) => string;
+```
+
 ### `resolveServerModule` (const)
 
 ```ts
@@ -1926,6 +1933,15 @@ interface BindingRequirement {
 const CLOUDFLARE_DRIVER: DeployDriver;
 ```
 
+### `DEFAULT_OBSERVABILITY` (const)
+
+```ts
+const DEFAULT_OBSERVABILITY: Readonly<{
+    enabled: true;
+    head_sampling_rate: 1;
+}>;
+```
+
 ### `ExportGap` (interface)
 
 ```ts
@@ -2056,6 +2072,15 @@ interface MaterializeResult {
     enabled: boolean;
     reason?: string;
     remoteBindings: RemoteBindingPlan[];
+}
+```
+
+### `ObservabilitySignalSampling` (interface)
+
+```ts
+interface ObservabilitySignalSampling {
+    enabled: boolean;
+    headSamplingRate: number;
 }
 ```
 
@@ -2567,6 +2592,7 @@ interface WranglerObservability {
         enabled?: boolean;
     };
     logs?: WranglerObservabilityLogs;
+    redact_query_string?: boolean;
     traces?: WranglerObservabilityTraces;
 }
 ```
@@ -2752,6 +2778,15 @@ const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<
 
 ```ts
 const reconcileWranglerExtras: (projectRoot: string, cronTriggers: ReadonlyArray<string>, logger: ReconcileLogger) => void;
+```
+
+### `resolveObservabilitySampling` (const)
+
+```ts
+const resolveObservabilitySampling: (block: WranglerObservability | undefined) => {
+    logs: ObservabilitySignalSampling;
+    traces: ObservabilitySignalSampling;
+};
 ```
 
 ### `resolveRemoteEnabled` (const)

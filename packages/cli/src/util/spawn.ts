@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 import { LunoraError } from "@lunora/errors";
 
@@ -138,8 +139,9 @@ export const defaultSpawner: Spawner = (descriptor) =>
         const wantCapture = descriptor.captureStdout === true;
         const wantSilentCapture = descriptor.captureStdoutSilently === true;
         // When the caller pipes input we need a writable stdin handle — "inherit"
-        // gives us the parent's stdin which we can't write to. stderr always stays
-        // inherited so errors land where the user can see them. stdout is normally
+        // gives us the parent's stdin which we can't write to. stderr is inherited
+        // so errors land where the user can see them, unless `captureStderr` pipes
+        // it (still teed to the parent below). stdout is normally
         // inherited; in `--format json` mode it is mapped to the parent's stderr fd
         // (2) so the child's human output never pollutes the JSON on stdout; and in
         // either capture mode it is piped so we can buffer it (and, for
@@ -159,12 +161,16 @@ export const defaultSpawner: Spawner = (descriptor) =>
             stdio: [hasInput ? "pipe" : "inherit", stdout, descriptor.captureStderr === true ? "pipe" : "inherit"],
         });
 
+        // Decoders, not `chunk.toString()`: a multi-byte character split across
+        // two chunks would otherwise decode as two replacement characters.
+        const stdoutDecoder = new StringDecoder("utf8");
+        const stderrDecoder = new StringDecoder("utf8");
         let captured = "";
         let capturedError = "";
 
         if (descriptor.captureStderr === true && child.stderr) {
             child.stderr.on("data", (chunk: Buffer) => {
-                capturedError += chunk.toString("utf8");
+                capturedError += stderrDecoder.write(chunk);
                 // Tee to the parent so the user still sees the tool's own output.
                 process.stderr.write(chunk);
             });
@@ -172,7 +178,7 @@ export const defaultSpawner: Spawner = (descriptor) =>
 
         if ((wantCapture || wantSilentCapture) && child.stdout) {
             child.stdout.on("data", (chunk: Buffer) => {
-                captured += chunk.toString("utf8");
+                captured += stdoutDecoder.write(chunk);
 
                 if (wantCapture) {
                     // Tee to the parent so the user still sees live deploy progress.
@@ -210,8 +216,8 @@ export const defaultSpawner: Spawner = (descriptor) =>
             // OOM-killed `tsc` must not read as a clean type-check.
             resolve({
                 code: code ?? (signal ? 1 : 0),
-                stderr: descriptor.captureStderr === true ? capturedError : undefined,
-                stdout: wantCapture || wantSilentCapture ? captured : undefined,
+                stderr: descriptor.captureStderr === true ? capturedError + stderrDecoder.end() : undefined,
+                stdout: wantCapture || wantSilentCapture ? captured + stdoutDecoder.end() : undefined,
             });
         });
 

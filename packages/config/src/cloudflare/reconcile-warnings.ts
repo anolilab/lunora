@@ -98,7 +98,7 @@ const collectX402Warnings = (inferred: InferredBindings): string[] => {
             "@lunora/x402/charge is used; set the recipient wallet address as a [vars] entry (the var name is your choice) and pass it to the charge config — the x402 facilitator settles USDC to that address.",
         ],
         [
-            inferred.usesX402Pay,
+            inferred.usesX402,
             "@lunora/x402/pay is used (ActionCtx-only, spends real funds); add a secrets_store_secrets[] binding holding the agent wallet key (binding name == signer.secretName) and pair the pay rail with a spend policy — ctx.secrets reads a Secrets Store binding, not .dev.vars.",
         ],
     ];
@@ -323,7 +323,7 @@ const collectWarnings = (inferred: InferredBindings, projectRoot: string, parsed
         warnings.push("containers are declared but observability is explicitly disabled in wrangler.jsonc — container logs will not be captured.");
     }
 
-    if (inferred.usesPayment && !hasConfiguredPaymentProvider(projectRoot)) {
+    if (inferred.usesPayments && !hasConfiguredPaymentProvider(projectRoot)) {
         // Payment state rides the app's existing ShardDO via ctx.db, so there is
         // no wrangler binding to provision — only the provider secrets, which
         // live in .dev.vars (not wrangler.jsonc) and the scaffolder can't

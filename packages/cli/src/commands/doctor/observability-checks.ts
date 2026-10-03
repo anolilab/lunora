@@ -11,31 +11,22 @@
  * $0.25/GB ingested.
  */
 import type { WranglerConfig, WranglerObservability } from "@lunora/config/cloudflare";
+import { resolveObservabilitySampling } from "@lunora/config/cloudflare";
 
 import type { Finding } from "./handler";
 
 /**
- * The signals in one `observability` block that sample every request.
- *
- * Logs are on unless the block turns them off; an absent block is what
- * `lunora dev` reconciles to `{ enabled: true, head_sampling_rate: 1 }`, and an
- * absent rate is wrangler's own default of 1. Traces are opt-in
- * (`traces.enabled: true`), and an unset traces rate also means 1.
+ * The signals in one `observability` block that sample every request, read
+ * through the config layer's sampling resolver — the same defaults (an absent
+ * block is the reconciled default, an unset rate is wrangler's 1) that
+ * `lunora dev` writes, so the advisory cannot drift from them.
  */
 const fullSamplingSignals = (observability: WranglerObservability | undefined): string[] => {
-    const signals: string[] = [];
-    const logsEnabled = observability?.logs?.enabled ?? observability?.enabled ?? true;
-    const logsRate = observability?.logs?.head_sampling_rate ?? observability?.head_sampling_rate ?? 1;
+    const { logs, traces } = resolveObservabilitySampling(observability);
 
-    if (logsEnabled && logsRate >= 1) {
-        signals.push("logs");
-    }
-
-    if (observability?.traces?.enabled === true && (observability.traces.head_sampling_rate ?? 1) >= 1) {
-        signals.push("traces");
-    }
-
-    return signals;
+    return Object.entries({ logs, traces })
+        .filter(([, signal]) => signal.enabled && signal.headSamplingRate >= 1)
+        .map(([name]) => name);
 };
 
 /**

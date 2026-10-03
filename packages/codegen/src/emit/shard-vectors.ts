@@ -13,7 +13,7 @@ const emitVectorFragments = (
     shardedIndexNames: ReadonlyArray<string>,
 ): { vectorsBuild: string; vectorsStub: string; vectorSyncMethod: string } => {
     const hasShardedVectors = shardedIndexNames.length > 0;
-    const vectorsMissing = `throw new Error("ctx.vectors: no vectors configured. Pass \`vectors\` to createShardDO().");`;
+    const vectorsMissing = "ctx.vectors: no vectors configured. Pass `vectors` to createShardDO().";
     const vectorsStub = hasVectorIndexes
         ? renderThrowingStub("vectorsStub: VectorSearchLike", vectorsMissing, ["deleteByIds", "getByIds", "query", "upsert", "upsertNow"])
         : "";
