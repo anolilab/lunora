@@ -41,8 +41,11 @@
  * same way. A writer that finds its token gone (its lease expired and another
  * request took over) stops with a `409` instead of writing on.
  */
+import { Readable } from "node:stream";
+
+import type { R2ObjectBodyLike } from "@lunora/platform";
 import type { BaseStorageOptions, FileInit, FilePart, FileQuery } from "@visulima/storage";
-import { AbstractBaseStorage, ERRORS, File, isUploadError, throwErrorCode, UploadError } from "@visulima/storage";
+import { AbstractBaseStorage, ERRORS, File, throwErrorCode, UploadError } from "@visulima/storage";
 
 import { readBody } from "./byte-queue";
 import { R2UploadPartWriter } from "./r2-upload-part-writer";
@@ -84,9 +87,11 @@ const conflict = (message: string): never => throwErrorCode(ERRORS.FILE_CONFLICT
 
 const isLeaseLive = (lock: UploadLock | undefined): lock is UploadLock => lock !== undefined && lock.expiresAt > Date.now();
 
-/** An error that must end the request rather than be committed as an interruption: a lost lease, or a body past the declared length. */
-const isFatal = (error: unknown): boolean =>
-    isUploadError(error) && (error.UploadErrorCode === ERRORS.FILE_CONFLICT || error.UploadErrorCode === ERRORS.REQUEST_ENTITY_TOO_LARGE);
+/**
+ * The largest finished upload `get()` reads into memory. Above it `get()` is a
+ * `413`: a Worker isolate has 128 MB, and uploads may be far larger.
+ */
+const MAX_BUFFERED_GET_BYTES: number = 32 * 1024 * 1024;
 
 /**
  * Resumable-upload storage over a Worker's R2 binding. Build it with
@@ -193,13 +198,24 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
         });
     }
 
+    /**
+     * A finished upload's bytes, buffered: refused (`413`) above
+     * {@link MAX_BUFFERED_GET_BYTES}, before any byte is read. None of the
+     * upload handlers reach this; it is here for code that holds the provider.
+     * Stream with {@link R2BindingUploadStorage.getStream}, or serve large
+     * files with `ctx.storage.download()` or a signed URL.
+     */
     public async get({ id }: FileQuery): Promise<FileReturn> {
         return this.instrumentOperation("get", async () => {
-            const file = await this.checkIfExpired(await this.getMeta(id));
-            const object = file.status === "completed" ? await this.bucket.get(file.name) : undefined;
+            const { file, object } = await this.completedObject(id);
 
-            if (object === undefined || object === null) {
-                return throwErrorCode(ERRORS.FILE_NOT_FOUND);
+            if (object.size > MAX_BUFFERED_GET_BYTES) {
+                await object.body?.cancel();
+
+                return throwErrorCode(
+                    ERRORS.REQUEST_ENTITY_TOO_LARGE,
+                    `get() buffers the whole file and refuses one over ${String(MAX_BUFFERED_GET_BYTES)} bytes; use getStream(), ctx.storage.download() or a signed URL`,
+                );
             }
 
             const content = Buffer.from(await object.arrayBuffer());
@@ -215,6 +231,21 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
                 name: file.name,
                 originalName: file.originalName,
                 size: content.byteLength,
+            };
+        });
+    }
+
+    /** A finished upload's bytes as a stream straight from R2: nothing is buffered, whatever the size. */
+    public override async getStream({ id }: FileQuery): Promise<{ headers?: Record<string, string>; size?: number; stream: Readable }> {
+        return this.instrumentOperation("getStream", async () => {
+            const { file, object } = await this.completedObject(id);
+            // Read through the body's own reader, so nothing is buffered.
+            const stream = Readable.from(readBody(object.body));
+
+            return {
+                headers: { "Content-Length": String(object.size), "Content-Type": file.contentType, ETag: object.etag },
+                size: object.size,
+                stream,
             };
         });
     }
@@ -307,6 +338,18 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
     /** Not supported: this provider stores uploads. Move stored objects with `ctx.storage`. */
     public move(): Promise<File> {
         return this.unsupported("move");
+    }
+
+    /** A finished upload's record and its stored object; `404` for anything else. */
+    private async completedObject(id: string): Promise<{ file: File; object: R2ObjectBodyLike }> {
+        const file = await this.checkIfExpired(await this.getMeta(id));
+        const object = file.status === "completed" ? await this.bucket.get(file.name) : undefined;
+
+        if (object === undefined || object === null) {
+            return throwErrorCode(ERRORS.FILE_NOT_FOUND);
+        }
+
+        return { file, object };
     }
 
     private unsupported(operation: string): Promise<never> {
@@ -403,12 +446,31 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
      * it ended cleanly. A lost lease or a body past the declared length throws.
      */
     private async pump(writer: R2UploadPartWriter, body: unknown, limit: number, id: string, token: string): Promise<Error | undefined> {
+        const chunks = readBody(body);
         let received = 0;
         let renewedAt = Date.now();
 
         try {
-            for await (const chunk of readBody(body)) {
-                received += chunk.byteLength;
+            for (;;) {
+                let next: IteratorResult<Uint8Array>;
+
+                // Only a failure READING the body is the client going away. A
+                // failure storing it (an R2 call, the lease) is thrown on, so
+                // write() releases the lease and the state stays at the last
+                // part it recorded, rather than half a part being kept as a
+                // segment.
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- a body is read one chunk at a time
+                    next = await chunks.next();
+                } catch (error) {
+                    return error instanceof Error ? error : new Error(String(error));
+                }
+
+                if (next.done === true) {
+                    return undefined;
+                }
+
+                received += next.value.byteLength;
 
                 if (received > limit) {
                     return throwErrorCode(ERRORS.REQUEST_ENTITY_TOO_LARGE, "The chunk runs past the declared upload length");
@@ -416,19 +478,16 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
                 if (Date.now() - renewedAt >= LEASE_MS / 3) {
                     renewedAt = Date.now();
+                    // eslint-disable-next-line no-await-in-loop -- the lease is renewed between chunks
                     await this.renewLease(id, token);
                 }
 
-                await writer.push(chunk);
+                // eslint-disable-next-line no-await-in-loop -- chunks are stored in order
+                await writer.push(next.value);
             }
-
-            return undefined;
-        } catch (error) {
-            if (isFatal(error)) {
-                throw error;
-            }
-
-            return error instanceof Error ? error : new Error(String(error));
+        } finally {
+            // Releases the body's reader when storing failed mid-stream.
+            await chunks.return(undefined).catch(() => undefined);
         }
     }
 

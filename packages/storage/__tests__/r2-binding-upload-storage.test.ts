@@ -625,4 +625,96 @@ describe(createR2BindingUploadStorage, () => {
         expect(second.id).toBe("same-upload-id");
         expect(stateKeys(bucket)).toStrictEqual([`${STATE_PREFIX}same-upload-id.json`]);
     });
+
+    it("keeps a failed part upload from being stored as an oversized segment; the next PATCH resumes at the last part", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        let uploads = 0;
+        // The second part upload fails, as an R2 call can.
+        const flaky: R2UploadBucket = {
+            ...bucket,
+            resumeMultipartUpload: (key, uploadId) => {
+                const upload = bucket.resumeMultipartUpload(key, uploadId);
+
+                return {
+                    ...upload,
+                    abort: upload.abort,
+                    complete: upload.complete,
+                    key: upload.key,
+                    uploadId: upload.uploadId,
+                    uploadPart: async (partNumber, value) => {
+                        uploads += 1;
+
+                        if (uploads === 2) {
+                            throw new Error("R2 is unavailable");
+                        }
+
+                        return upload.uploadPart(partNumber, value);
+                    },
+                };
+            },
+        };
+        const driver = tus(handlerOver(flaky));
+        const bytes = pattern(2 * R2_PART_SIZE + 100);
+        const location = await driver.create(bytes.byteLength);
+        const failed = await driver.patch(location, 0, bytes);
+
+        expect(failed.status).toBeGreaterThanOrEqual(500);
+
+        // The state stopped at the part it recorded, unlocked, with nothing waiting.
+        const state = readState(bucket, location);
+
+        expect(state.file.bytesWritten).toBe(R2_PART_SIZE);
+        expect(state.upload.lock).toBeUndefined();
+        expect(state.upload.segments).toStrictEqual([]);
+
+        for (const key of stateKeys(bucket)) {
+            expect(bucket.objects.get(key)?.bytes.byteLength ?? 0).toBeLessThan(R2_PART_SIZE);
+        }
+
+        await expect(offsetOf(driver.head(location))).resolves.toBe(String(R2_PART_SIZE));
+
+        await sendChunks(driver, location, bytes, 2 * R2_PART_SIZE, R2_PART_SIZE);
+
+        expect(sameBytes(storedObject(bucket, location)?.bytes, bytes)).toBe(true);
+        expect(bucket.partSizes).toStrictEqual([[R2_PART_SIZE, R2_PART_SIZE, 100]]);
+    });
+
+    it("buffers a small finished file in get(), streams any size from getStream(), and refuses a large get() (413)", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const storage = createR2BindingUploadStorage(bucket);
+        const small = await storage.create({ id: "small-file", metadata: { name: "s.bin" }, size: 4 });
+
+        await storage.write({ body: new Blob([pattern(4)]).stream() as never, contentLength: 4, id: small.id, start: 0 });
+
+        const read = await storage.get({ id: small.id });
+
+        expect(sameBytes(read.content, pattern(4))).toBe(true);
+
+        // A finished upload of 33 MiB: stored directly, its state marked complete.
+        const size = 33 * 1024 * 1024;
+        const large = await storage.create({ id: "large-file", metadata: { name: "l.bin" }, size });
+        const stateKey = `${STATE_PREFIX}${large.id}.json`;
+        const state = JSON.parse(new TextDecoder().decode(bucket.objects.get(stateKey)?.bytes)) as { file: Record<string, unknown> };
+
+        state.file.bytesWritten = size;
+        state.file.status = "completed";
+        await bucket.put(stateKey, JSON.stringify(state));
+        await bucket.put(large.name, new Uint8Array(size).fill(9));
+
+        await expect(storage.get({ id: large.id })).rejects.toMatchObject({ UploadErrorCode: "RequestEntityTooLarge" });
+
+        const { size: streamedSize, stream } = await storage.getStream({ id: large.id });
+        let received = 0;
+
+        for await (const chunk of stream) {
+            received += (chunk as Uint8Array).byteLength;
+        }
+
+        expect(streamedSize).toBe(size);
+        expect(received).toBe(size);
+    });
 });
