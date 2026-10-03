@@ -59,7 +59,11 @@ export interface TenantHandle {
 
 /** A custom domain as the domain hooks see it. */
 export interface CustomDomain {
-    /** The certificate the target issued for it earlier, when it issues any (`domains.customHostnameId`). */
+    /**
+     * The certificate this same issuer issued for it earlier (`domains.customHostnameId`),
+     * passed only when the row's recorded issuer is this target and scope — a
+     * certificate another issuer holds is never this one's to re-read or reuse.
+     */
     customHostnameId?: string;
     hostname: string;
 }
@@ -70,36 +74,58 @@ export interface DomainCertificate {
     customHostnameId?: string;
     /** Why the certificate is not issued yet, as the issuer says it. */
     error?: string;
+
+    /**
+     * Which of the target's issuers holds it ({@link CertificateIssuer.scope};
+     * `cloudflare-wfp`: the SaaS zone id). Set with `customHostnameId`, and
+     * recorded on the domain row with the issuing target, so the certificate is
+     * refreshed and released by that issuer — whatever the project's target is
+     * by then.
+     */
+    scope?: string;
     /** The issuer's certificate status (`initializing`, `pending_validation`, …, `active`), or `unconfigured`. */
     sslStatus: string;
 }
 
-/** Custom-domain hooks (`src/domains/verify.ts`, `POST /v1/domains/verify`, `POST /v1/domains/remove`). */
+/**
+ * Custom-domain hooks of one placement (`POST /v1/domains`, `/verify`,
+ * `/remove`). Releasing a certificate is NOT here: it goes through the issuer
+ * recorded on the domain row ({@link TargetFleet.certificates}), since the
+ * project may have moved to another target since it was issued.
+ */
 export interface DomainOps {
     /**
-     * Run after a domain's row is deleted, best-effort. `celld-vps` pushes the
-     * box's routing table, which is built from the remaining rows, so a removed
-     * domain stops being served at once rather than at the next push. A failure
-     * is logged, never surfaced: the row is already gone.
+     * Run after any domain of this placement's project was added, verified or
+     * removed, best-effort: a failure is logged, never surfaced. `celld-vps`
+     * pushes the box's routing table, which is built from the domain rows, so a
+     * verified domain is served — and a removed one dropped — at once rather
+     * than at the next push. Absent where serving reads the rows directly.
      */
-    afterRemoved?: () => Promise<void>;
+    domainsChanged?: () => Promise<void>;
 
     /**
-     * Release what {@link onVerified} set up for a domain being removed.
-     * `cloudflare-wfp` deletes its custom hostname (and certificate); absent
-     * where a domain holds nothing outside the control plane.
+     * Request the certificate of a hostname of this placement's project that
+     * just verified, or re-read the one this target issued it earlier
+     * (`domain.customHostnameId`). `undefined` where the target issues none —
+     * a box terminates its own TLS.
      */
-    onRemoved?: (domain: CustomDomain) => Promise<void>;
-
-    /**
-     * Run once a hostname of this placement's project verifies. `celld-vps`
-     * pushes the box's routing table, since a box serves a custom domain only
-     * once its table names it; `cloudflare-wfp` requests the hostname's
-     * certificate and answers it. Absent where serving needs nothing more.
-     */
-    onVerified?: (domain: CustomDomain) => Promise<DomainCertificate | undefined>;
+    issue: (domain: CustomDomain) => Promise<DomainCertificate | undefined>;
     /** The CNAME targets a custom hostname must point at to count as routed here (`verifyDomain`'s `platformTargets`). */
     platformTargets: () => string[];
+}
+
+/**
+ * A target's certificate issuer, fleet-wide: what refreshes and releases a
+ * certificate it issued, from the domain row alone — the project may have
+ * moved to another target, or be gone.
+ */
+export interface CertificateIssuer {
+    /** Re-read a certificate for the hourly sweep: its status, or `null` once it is gone. */
+    refresh: (customHostnameId: string) => Promise<DomainCertificate | null>;
+    /** Delete a certificate (and what routes its hostname here). Done when it is already gone. */
+    release: (customHostnameId: string) => Promise<void>;
+    /** Which issuer this is ({@link DomainCertificate.scope}): it only ever acts on certificates recorded with this scope. */
+    scope: string;
 }
 
 /** A target's converge surface for one placement. */
@@ -125,12 +151,20 @@ export interface TargetDriver {
 /** A target's fleet-wide surface: what the control plane does to any of its tenants, wherever they are placed. */
 export interface TargetFleet {
     /**
+     * The issuer of the custom-domain certificates this target issues
+     * (`DomainOps.issue`). Absent on a target that issues none, or a deployment
+     * not configured to.
+     */
+    certificates?: CertificateIssuer;
+
+    /**
      * The in-network path to a tenant for the control plane's own fan-out, on a
      * target whose descriptor says `fanout: "dispatcher"` — `undefined` when
      * this control-plane deployment has none bound, in which case nothing is
      * fanned out (the cron tick is skipped, a queue batch is retried).
      */
     dispatch?: (tenant: Pick<TenantHandle, "adminToken" | "resourceRef">) => TenantSend;
+
     readonly id: TargetId;
 
     /**
@@ -138,13 +172,6 @@ export interface TargetFleet {
      * backups and restores. From `tenantSender` (`src/backup/tenant-transport.ts`).
      */
     reach: (tenant: TenantHandle) => TenantSend;
-
-    /**
-     * Re-read a custom domain certificate this target issued (`onVerified`), for
-     * the hourly certificate sweep: its status, or `null` once it is gone.
-     * Absent on a target that issues none, or a deployment not configured to.
-     */
-    refreshCertificate?: (customHostnameId: string) => Promise<DomainCertificate | null>;
 
     /**
      * The metering readback of a `metering: "readback"` target, when this

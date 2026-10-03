@@ -91,6 +91,10 @@ export const resolveTargetDriver = (placement: Placement, environment: TargetEnv
  */
 export const targetFleet = (target: TargetId, environment: TargetEnvironment): TargetFleet => entryOf(target).fleet(environment);
 
+/** `target`'s fleet-wide surface, or `undefined` when it has no driver here — for a lookup that must not throw. */
+export const registeredFleet = (target: TargetId, environment: TargetEnvironment): TargetFleet | undefined =>
+    TARGET_DRIVERS[target] === undefined ? undefined : targetFleet(target, environment);
+
 /** Whether `target` has a driver here that can converge and tear down — the teardown sweep leaves the rest pending. */
 export const targetCanConverge = (target: TargetId, environment: TargetEnvironment): boolean => TARGET_DRIVERS[target]?.canConverge(environment) ?? false;
 

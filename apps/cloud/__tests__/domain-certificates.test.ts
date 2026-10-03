@@ -8,8 +8,11 @@ import { createHttpCloudflareApi } from "../src/cloudflare/api";
 import { handleDomainRemoveRoute, handleDomainVerifyRoute } from "../src/deploy/routes/domains";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import { MAX_CERTIFICATES_PER_TICK, runCertificateSweep } from "../src/domains/certificate-sweep";
+import type { RecordedCertificate } from "../src/domains/issuers";
+import { localIssuer, requireIssuer } from "../src/domains/issuers";
 import { issueCertificate, refreshCertificate, removeCertificate } from "../src/targets/cloudflare-wfp/certificates";
 import { createCloudflareWfpDriver, createCloudflareWfpFleet, UNCONFIGURED_CERTIFICATE } from "../src/targets/cloudflare-wfp/driver";
+import type { CertificateIssuer } from "../src/targets/driver";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 import readJson from "./_helpers/read-json";
 import { memoryStore } from "./support/memory-store";
@@ -17,12 +20,16 @@ import { memoryStore } from "./support/memory-store";
 /**
  * Custom-domain certificates on `cloudflare-wfp` (GAPS.md B1): a verified
  * domain gets a Cloudflare-for-SaaS custom hostname (and with it a DV
- * certificate) through the driver's `domains.onVerified`; the hourly sweep
- * follows it to `active`; removing the domain deletes it first. Every
- * Cloudflare call here is faked.
+ * certificate) through the driver's `domains.issue`, recorded with its issuer;
+ * the hourly sweep follows it to `active` through that issuer; removing the
+ * domain deletes it first, through that issuer too. Every Cloudflare call here
+ * is faked.
  */
 
 const ZONE = "saas-zone";
+
+/** What a stubbed `fetch` is called with. */
+type FetchInput = Request | string | URL;
 
 /** A SaaS zone in memory, behind the REST port's custom-hostname methods. */
 const memoryZone = (seed: CustomHostname[] = []) => {
@@ -60,7 +67,11 @@ describe("issuing a certificate", () => {
     it("creates a custom hostname for a domain verified for the first time", async () => {
         const { hostnames, zone } = memoryZone();
 
-        await expect(issueCertificate(zone, { hostname: "app.example.com" })).resolves.toStrictEqual({ customHostnameId: "ch_1", sslStatus: "initializing" });
+        await expect(issueCertificate(zone, { hostname: "app.example.com" })).resolves.toStrictEqual({
+            customHostnameId: "ch_1",
+            scope: ZONE,
+            sslStatus: "initializing",
+        });
         expect(hostnames.size).toBe(1);
     });
 
@@ -69,6 +80,7 @@ describe("issuing a certificate", () => {
 
         await expect(issueCertificate(zone, { customHostnameId: "ch_old", hostname: "app.example.com" })).resolves.toStrictEqual({
             customHostnameId: "ch_old",
+            scope: ZONE,
             sslStatus: "active",
         });
         // The row lost its id (a failed record), but the zone still has the hostname.
@@ -113,28 +125,51 @@ describe("the cloudflare-wfp driver's domain hooks", () => {
             ...(saasZone === undefined ? {} : { saasZone }),
         });
 
-    it("requests the certificate of a verified domain, and deletes it when the domain goes", async () => {
+    it("issues the certificate of a verified domain in its zone, and its fleet releases it there", async () => {
         const { hostnames, zone } = memoryZone();
-        const { domains } = driverWith(zone);
 
-        await expect(domains.onVerified?.({ hostname: "app.example.com" })).resolves.toStrictEqual({ customHostnameId: "ch_1", sslStatus: "initializing" });
+        await expect(driverWith(zone).domains.issue({ hostname: "app.example.com" })).resolves.toStrictEqual({
+            customHostnameId: "ch_1",
+            scope: ZONE,
+            sslStatus: "initializing",
+        });
 
-        await domains.onRemoved?.({ customHostnameId: "ch_1", hostname: "app.example.com" });
+        await createCloudflareWfpFleet({ cell: "default", saasZone: zone }).certificates?.release("ch_1");
 
         expect(hostnames.size).toBe(0);
     });
 
     it("says no certificate could be requested on a control plane without a SaaS zone", async () => {
-        await expect(driverWith().domains.onVerified?.({ hostname: "app.example.com" })).resolves.toStrictEqual(UNCONFIGURED_CERTIFICATE);
+        await expect(driverWith().domains.issue({ hostname: "app.example.com" })).resolves.toStrictEqual(UNCONFIGURED_CERTIFICATE);
     });
 
-    it("lets the fleet refresh certificates only when it has a SaaS zone", async () => {
+    it("gives the fleet a certificate issuer, scoped to its zone, only when it has a SaaS zone", async () => {
         const { zone } = memoryZone([hostnameRow({ sslStatus: "active" })]);
+        const issuer = createCloudflareWfpFleet({ cell: "default", saasZone: zone }).certificates;
 
-        expect(createCloudflareWfpFleet({ cell: "default" }).refreshCertificate).toBeUndefined();
-        await expect(createCloudflareWfpFleet({ cell: "default", saasZone: zone }).refreshCertificate?.("ch_old")).resolves.toMatchObject({
-            sslStatus: "active",
-        });
+        expect(createCloudflareWfpFleet({ cell: "default" }).certificates).toBeUndefined();
+        expect(issuer?.scope).toBe(ZONE);
+        await expect(issuer?.refresh("ch_old")).resolves.toMatchObject({ sslStatus: "active" });
+    });
+});
+
+describe(localIssuer, () => {
+    const { zone } = memoryZone();
+    const wfp = createCloudflareWfpFleet({ cell: "default", saasZone: zone });
+    const fleetOf = (target: string) => (target === "cloudflare-wfp" ? wfp : undefined);
+
+    it("finds the issuer recorded with a certificate, in its own scope only", () => {
+        expect(localIssuer({ certificateIssuer: "cloudflare-wfp", certificateScope: ZONE }, fleetOf)).toBe(wfp.certificates);
+        // Another cell's zone is that cell's control plane's to follow.
+        expect(localIssuer({ certificateIssuer: "cloudflare-wfp", certificateScope: "other-zone" }, fleetOf)).toBeUndefined();
+        expect(localIssuer({ certificateIssuer: "celld-vps", certificateScope: ZONE }, fleetOf)).toBeUndefined();
+        expect(localIssuer({ certificateIssuer: null, certificateScope: null }, fleetOf)).toBeUndefined();
+    });
+
+    it("refuses, naming the issuer, a certificate this control plane cannot release", () => {
+        expect(() => requireIssuer({ certificateIssuer: "cloudflare-wfp", certificateScope: "other-zone" }, fleetOf)).toThrow(
+            "its certificate was issued by cloudflare-wfp (other-zone), which this control plane cannot reach",
+        );
     });
 });
 
@@ -190,23 +225,47 @@ describe("domains.recordCertificate / removalTarget / remove", () => {
         };
     };
 
-    it("records a certificate, keeping its id and clearing an earlier error", async () => {
+    it("records a certificate with its issuer, keeping its id and clearing an earlier error", async () => {
         const { ctx, ops } = makeCtx(world({ certificateError: "old" }));
 
-        await recordCertificate.handler(ctx, { customHostnameId: "ch_1", id: "dom_1" as never, organizationId: "org_1" as never, sslStatus: "initializing" });
+        await recordCertificate.handler(ctx, {
+            customHostnameId: "ch_1",
+            id: "dom_1" as never,
+            issuer: "cloudflare-wfp",
+            organizationId: "org_1" as never,
+            scope: ZONE,
+            sslStatus: "initializing",
+        });
 
         expect(ops).toContainEqual({
             id: "dom_1",
             kind: "patch",
-            patch: { certificateError: null, certificateStatus: "initializing", customHostnameId: "ch_1", updatedAt: ctx.now },
+            patch: {
+                certificateError: null,
+                certificateIssuer: "cloudflare-wfp",
+                certificateScope: ZONE,
+                certificateStatus: "initializing",
+                customHostnameId: "ch_1",
+                updatedAt: ctx.now,
+            },
         });
     });
 
-    it("answers what removal must release, to an owner only", async () => {
-        const { ctx } = makeCtx(world({ customHostnameId: "ch_1" }));
+    it("refuses an issued certificate without its issuer: it could never be released", async () => {
+        const { ctx } = makeCtx(world());
+
+        await expect(
+            recordCertificate.handler(ctx, { customHostnameId: "ch_1", id: "dom_1" as never, organizationId: "org_1" as never, sslStatus: "initializing" }),
+        ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("answers what removal must release, with its issuer, to an owner only", async () => {
+        const { ctx } = makeCtx(world({ certificateIssuer: "cloudflare-wfp", certificateScope: ZONE, customHostnameId: "ch_1" }));
         const member = makeCtx({ ...world(), members: [{ ...owner("org_1"), role: "member" }] }).ctx;
 
         await expect(removalTarget.handler(ctx, { id: "dom_1" as never, organizationId: "org_1" as never })).resolves.toStrictEqual({
+            certificateIssuer: "cloudflare-wfp",
+            certificateScope: ZONE,
             customHostnameId: "ch_1",
             hostname: "app.example.com",
             projectId: "proj_1",
@@ -264,7 +323,7 @@ describe("the domain routes", () => {
             ]),
         );
 
-        vi.stubGlobal("fetch", (input: Request | string | URL, init?: RequestInit) => {
+        vi.stubGlobal("fetch", (input: FetchInput, init?: RequestInit) => {
             const url = input instanceof Request ? input.url : input.toString();
 
             if (url.startsWith("https://cloudflare-dns.com/")) {
@@ -291,19 +350,29 @@ describe("the domain routes", () => {
 
         await expect(readJson(response)).resolves.toMatchObject({ certificate: { customHostnameId: "ch_9", sslStatus: "initializing" }, verified: true });
         expect(mutations.map(({ reference }) => reference)).toStrictEqual([internal.domains.markVerified, internal.domains.recordCertificate]);
-        expect(mutations[1]?.args).toStrictEqual({ customHostnameId: "ch_9", id: "dom_1", organizationId: "org_1", sslStatus: "initializing" });
+        expect(mutations[1]?.args).toStrictEqual({
+            customHostnameId: "ch_9",
+            id: "dom_1",
+            issuer: "cloudflare-wfp",
+            organizationId: "org_1",
+            scope: ZONE,
+            sslStatus: "initializing",
+        });
     });
 
     it("deletes the domain's custom hostname before the domain, and keeps the domain when that fails", async () => {
         const removal = new Map<unknown, unknown>([
-            [internal.domains.removalTarget, { customHostnameId: "ch_1", hostname: "app.example.com", projectId: "proj_1" }],
+            [
+                internal.domains.removalTarget,
+                { certificateIssuer: "cloudflare-wfp", certificateScope: ZONE, customHostnameId: "ch_1", hostname: "app.example.com", projectId: "proj_1" },
+            ],
             [internal.projects.placement, placement],
         ]);
         const request = (): Request =>
             new Request("https://cloud.test/v1/domains/remove", { body: JSON.stringify({ id: "dom_1", organizationId: "org_1" }), method: "POST" });
         const deletes: string[] = [];
 
-        vi.stubGlobal("fetch", (input: Request | string | URL, init?: RequestInit) => {
+        vi.stubGlobal("fetch", (input: FetchInput, init?: RequestInit) => {
             deletes.push(`${init?.method ?? "GET"} ${input instanceof Request ? input.url : input.toString()}`);
 
             return Promise.resolve(Response.json({ result: { id: "ch_1" }, success: true }));
@@ -322,6 +391,65 @@ describe("the domain routes", () => {
 
         expect(failed.status).toBe(502);
         await expect(readJson(failed)).resolves.toMatchObject({ error: expect.stringContaining("upstream down") as unknown });
+        expect(kept.mutations).toStrictEqual([]);
+    });
+
+    it("releases the certificate through the issuer that issued it, after the project moved to a box", async () => {
+        // The project is on celld-vps now; its domain still holds the certificate cloudflare-wfp issued.
+        const moved = contextAnswering(
+            new Map<unknown, unknown>([
+                [
+                    internal.domains.removalTarget,
+                    { certificateIssuer: "cloudflare-wfp", certificateScope: ZONE, customHostnameId: "ch_1", hostname: "app.example.com", projectId: "proj_1" },
+                ],
+                [internal.projects.placement, { cellName: "default", host: { id: "box_1", slug: "bslug000001" }, target: "celld-vps" }],
+            ]),
+        );
+        const calls: string[] = [];
+
+        vi.stubGlobal("fetch", (input: FetchInput, init?: RequestInit) => {
+            calls.push(`${init?.method ?? "GET"} ${input instanceof Request ? input.url : input.toString()}`);
+
+            return Promise.resolve(Response.json({ result: { id: "ch_1" }, success: true }));
+        });
+
+        const response = await handleDomainRemoveRoute(
+            new Request("https://cloud.test/v1/domains/remove", { body: JSON.stringify({ id: "dom_1", organizationId: "org_1" }), method: "POST" }),
+            environment(moved.context),
+        );
+
+        expect(response.status).toBe(200);
+        expect(calls).toStrictEqual([`DELETE https://api.cloudflare.com/client/v4/zones/${ZONE}/custom_hostnames/ch_1`]);
+        expect(moved.mutations.map(({ reference }) => reference)).toStrictEqual([internal.domains.remove]);
+    });
+
+    it("keeps a domain whose certificate's issuer this control plane cannot reach", async () => {
+        const kept = contextAnswering(
+            new Map<unknown, unknown>([
+                [
+                    internal.domains.removalTarget,
+                    {
+                        certificateIssuer: "cloudflare-wfp",
+                        certificateScope: "another-cells-zone",
+                        customHostnameId: "ch_1",
+                        hostname: "app.example.com",
+                        projectId: "proj_1",
+                    },
+                ],
+                [internal.projects.placement, placement],
+            ]),
+        );
+        const calls = vi.fn<typeof fetch>();
+
+        vi.stubGlobal("fetch", calls);
+
+        const response = await handleDomainRemoveRoute(
+            new Request("https://cloud.test/v1/domains/remove", { body: JSON.stringify({ id: "dom_1", organizationId: "org_1" }), method: "POST" }),
+            environment(kept.context),
+        );
+
+        expect(response.status).toBe(502);
+        expect(calls).not.toHaveBeenCalled();
         expect(kept.mutations).toStrictEqual([]);
     });
 
@@ -346,40 +474,95 @@ describe("the domain routes", () => {
     });
 });
 
+/** A certificate recorded as issued by this cell's zone. */
+const ISSUED_HERE = { certificateIssuer: "cloudflare-wfp", certificateScope: ZONE };
+
+/** An `issuerOf` port holding exactly this cell's zone, whose issuer is `overrides`. */
+const issuerIn =
+    (overrides: Partial<CertificateIssuer>) =>
+    (recorded: RecordedCertificate): CertificateIssuer | undefined =>
+        recorded.certificateIssuer === "cloudflare-wfp" && recorded.certificateScope === ZONE
+            ? { refresh: () => Promise.resolve(null), release: () => Promise.resolve(), scope: ZONE, ...overrides }
+            : undefined;
+
 describe(runCertificateSweep, () => {
     it("follows verified domains' certificates until they are active, and forgets one that vanished", async () => {
         const store = memoryStore({
             domains: [
-                { _id: "dom_pending", customHostnameId: "ch_1", hostname: "a.example.com", updatedAt: 1, verifiedAt: 1 },
-                { _id: "dom_gone", certificateStatus: "pending_validation", customHostnameId: "ch_2", hostname: "b.example.com", updatedAt: 2, verifiedAt: 1 },
-                { _id: "dom_active", certificateStatus: "active", customHostnameId: "ch_3", hostname: "c.example.com", updatedAt: 3, verifiedAt: 1 },
-                { _id: "dom_unverified", customHostnameId: "ch_4", hostname: "d.example.com", updatedAt: 4 },
+                { _id: "dom_pending", ...ISSUED_HERE, customHostnameId: "ch_1", hostname: "a.example.com", updatedAt: 1, verifiedAt: 1 },
+                {
+                    _id: "dom_gone",
+                    ...ISSUED_HERE,
+                    certificateStatus: "pending_validation",
+                    customHostnameId: "ch_2",
+                    hostname: "b.example.com",
+                    updatedAt: 2,
+                    verifiedAt: 1,
+                },
+                {
+                    _id: "dom_active",
+                    ...ISSUED_HERE,
+                    certificateStatus: "active",
+                    customHostnameId: "ch_3",
+                    hostname: "c.example.com",
+                    updatedAt: 3,
+                    verifiedAt: 1,
+                },
+                { _id: "dom_unverified", ...ISSUED_HERE, customHostnameId: "ch_4", hostname: "d.example.com", updatedAt: 4 },
+                // Another cell's zone: its own control plane follows it.
+                {
+                    _id: "dom_elsewhere",
+                    certificateIssuer: "cloudflare-wfp",
+                    certificateScope: "other-zone",
+                    customHostnameId: "ch_5",
+                    hostname: "e.example.com",
+                    updatedAt: 0,
+                    verifiedAt: 1,
+                },
             ],
         });
         const refreshed: string[] = [];
         const result = await runCertificateSweep({
             database: store,
-            now: 100,
-            refresh: (id) => {
-                refreshed.push(id);
+            issuerOf: issuerIn({
+                refresh: (id) => {
+                    refreshed.push(id);
 
-                return Promise.resolve(id === "ch_1" ? { customHostnameId: "ch_1", sslStatus: "active" } : null);
-            },
+                    return Promise.resolve(id === "ch_1" ? { customHostnameId: "ch_1", sslStatus: "active" } : null);
+                },
+            }),
+            now: 100,
         });
 
         expect(result).toStrictEqual({ checked: 2, failed: 0, issued: 1 });
         expect(refreshed).toStrictEqual(["ch_1", "ch_2"]);
         expect(store.tables["domains"]?.find((row) => row["_id"] === "dom_pending")).toMatchObject({ certificateError: null, certificateStatus: "active" });
-        expect(store.tables["domains"]?.find((row) => row["_id"] === "dom_gone")).toMatchObject({ certificateStatus: "missing", customHostnameId: null });
+        expect(store.tables["domains"]?.find((row) => row["_id"] === "dom_gone")).toMatchObject({
+            certificateIssuer: null,
+            certificateStatus: "missing",
+            customHostnameId: null,
+        });
     });
 
     it("reads a bounded batch a tick, and survives a failed read", async () => {
         const store = memoryStore({
             domains: Array.from({ length: MAX_CERTIFICATES_PER_TICK + 10 }, (_, index) => {
-                return { _id: `dom_${String(index)}`, customHostnameId: `ch_${String(index)}`, hostname: "x.example.com", updatedAt: index, verifiedAt: 1 };
+                return {
+                    _id: `dom_${String(index)}`,
+                    ...ISSUED_HERE,
+                    customHostnameId: `ch_${String(index)}`,
+                    hostname: "x.example.com",
+                    updatedAt: index,
+                    verifiedAt: 1,
+                };
             }),
         });
-        const result = await runCertificateSweep({ database: store, log: () => undefined, now: 100, refresh: () => Promise.reject(new Error("rate limited")) });
+        const result = await runCertificateSweep({
+            database: store,
+            issuerOf: issuerIn({ refresh: () => Promise.reject(new Error("rate limited")) }),
+            log: () => undefined,
+            now: 100,
+        });
 
         expect(result).toStrictEqual({ checked: MAX_CERTIFICATES_PER_TICK, failed: MAX_CERTIFICATES_PER_TICK, issued: 0 });
     });

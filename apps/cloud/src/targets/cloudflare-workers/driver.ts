@@ -97,7 +97,7 @@ export const createCloudflareWorkersDriver = (ports: CloudflareWorkersPorts): Ta
         },
         // A hostname CNAMEd at the account's workers.dev subdomain. Serving it needs a
         // Custom Domain on the customer's zone, which is not wired yet (TARGETS limitations).
-        domains: { platformTargets: () => [`${account.workersSubdomain}.workers.dev`] },
+        domains: { issue: () => Promise.resolve(undefined), platformTargets: () => [`${account.workersSubdomain}.workers.dev`] },
         id: "cloudflare-workers",
     };
 };

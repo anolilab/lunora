@@ -230,6 +230,8 @@ export interface Doc_domains {
     _id: Id<"domains">;
     _creationTime: number;
     certificateError?: string;
+    certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
+    certificateScope?: string;
     certificateStatus?: string;
     customHostnameId?: string;
     createdAt: number;
@@ -1058,6 +1060,8 @@ export interface Insert_domains {
     _id?: Id<"domains">;
     _creationTime?: number;
     certificateError?: string;
+    certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
+    certificateScope?: string;
     certificateStatus?: string;
     customHostnameId?: string;
     createdAt: number;

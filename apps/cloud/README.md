@@ -188,9 +188,12 @@ inside each mutation (deploy key or membership).
 The control plane's coupling to the deploy substrate is two interfaces in
 `src/targets/driver.ts` (MULTIPLATFORM.md §5.1). A `TargetDriver` converges one
 placement — `deploy`, `destroy`, and the custom-domain hooks (`platformTargets`,
-`onVerified`) — and is built per placement (`resolveTargetDriver`). A
+`issue`, `domainsChanged`) — and is built per placement (`resolveTargetDriver`). A
 `TargetFleet` reaches any tenant of a target — admin `reach`, the in-network
-`dispatch` the cron and queue fan-out use, and the request-count readback
+`dispatch` the cron and queue fan-out use, the issuer of its custom-domain
+certificates (`certificates`, which refreshes and releases a certificate through
+the target and zone recorded with it, whatever the project's target is now),
+and the request-count readback
 (`usage`, split into scopes — one metering source each, with its own
 `usageCheckpoints` row). What a target is — placed in a cell, on a box or in
 a connected account, who fires its crons, how it is metered, which bindings it

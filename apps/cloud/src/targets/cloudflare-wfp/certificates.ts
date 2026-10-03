@@ -29,11 +29,11 @@ export interface SaasZone {
 /** Longest certificate error kept on a domain row. */
 export const MAX_CERTIFICATE_ERROR = 256;
 
-/** The custom hostname's state as the domain row records it. */
-export const certificateOf = (hostname: CustomHostname): DomainCertificate => {
+/** The custom hostname's state as the domain row records it, scoped to the zone that holds it. */
+export const certificateOf = (zone: SaasZone, hostname: CustomHostname): DomainCertificate => {
     const error = hostname.errors.join("; ").slice(0, MAX_CERTIFICATE_ERROR);
 
-    return { customHostnameId: hostname.id, sslStatus: hostname.sslStatus, ...(error === "" ? {} : { error }) };
+    return { customHostnameId: hostname.id, scope: zone.zoneId, sslStatus: hostname.sslStatus, ...(error === "" ? {} : { error }) };
 };
 
 /**
@@ -45,14 +45,14 @@ export const issueCertificate = async (zone: SaasZone, domain: { customHostnameI
     const known = domain.customHostnameId === undefined ? null : await zone.api.getCustomHostname({ id: domain.customHostnameId, zoneId: zone.zoneId });
     const existing = known ?? (await zone.api.findCustomHostname({ hostname: domain.hostname, zoneId: zone.zoneId }));
 
-    return certificateOf(existing ?? (await zone.api.createCustomHostname({ hostname: domain.hostname, zoneId: zone.zoneId })));
+    return certificateOf(zone, existing ?? (await zone.api.createCustomHostname({ hostname: domain.hostname, zoneId: zone.zoneId })));
 };
 
 /** Re-read a certificate's status for the sweep; `null` once its custom hostname is gone. */
 export const refreshCertificate = async (zone: SaasZone, customHostnameId: string): Promise<DomainCertificate | null> => {
     const hostname = await zone.api.getCustomHostname({ id: customHostnameId, zoneId: zone.zoneId });
 
-    return hostname === null ? null : certificateOf(hostname);
+    return hostname === null ? null : certificateOf(zone, hostname);
 };
 
 /** Delete a domain's custom hostname, and with it its certificate. Done when it is already gone. */

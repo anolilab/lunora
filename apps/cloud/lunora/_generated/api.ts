@@ -68,8 +68,8 @@ export interface ApiTypes {
     };
     domains: {
         add: FunctionReference<"mutation", { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }, { id: Id<"domains">; txtName: string; txtToken: string; }>;
-        get: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, null | { _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
+        get: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, null | { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
         routeForHostname: FunctionReference<"query", { hostname: unknown }, { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };
     github_installations: {
@@ -220,9 +220,9 @@ export interface InternalApiTypes {
         rollback: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
     };
     domains: {
-        markVerified: FunctionReference<"mutation", { customHostnameId?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }, void>;
-        recordCertificate: FunctionReference<"mutation", { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; sslStatus: unknown }, void>;
-        removalTarget: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, { customHostnameId?: string; hostname: string; projectId: Id<"projects">; }>;
+        markVerified: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }, void>;
+        recordCertificate: FunctionReference<"mutation", { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; issuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; organizationId: Id<"organizations">; scope?: unknown; sslStatus: unknown }, void>;
+        removalTarget: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, { certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: string; customHostnameId?: string; hostname: string; projectId: Id<"projects"> }>;
         remove: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations"> }, void>;
     };
     fanout: {

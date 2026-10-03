@@ -27,6 +27,7 @@ import { createReleaseStore } from "../deploy/release-store";
 import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
 import { runCertificateSweep } from "../domains/certificate-sweep";
+import { localIssuer } from "../domains/issuers";
 import type { CronTarget, CronTick } from "../fanout/cron";
 import { fanOutCron } from "../fanout/cron";
 import type { LiveDeploymentRow } from "../fanout/live";
@@ -37,7 +38,7 @@ import type { ControlPlaneDatabase } from "../store";
 import { boxDnsFromEnv } from "../targets/celld-vps/dns";
 import type { TargetFleet } from "../targets/driver";
 import { storeRowReader } from "../targets/placement";
-import { registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
+import { registeredFleet, registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
 import { runAlertDrain } from "../telemetry/alert-drain";
 import type { AlertDelivery } from "../telemetry/alerts";
 import { runAlertSweep } from "../telemetry/sweep";
@@ -397,24 +398,23 @@ const sweepOutdatedBoxes = async (env: ControlPlaneEnv): Promise<void> => {
 
 /**
  * Follow custom-domain certificates until they are issued (GAPS.md B1,
- * `src/domains/certificate-sweep.ts`), through the fleet that issues them —
- * `cloudflare-wfp`'s, when this cell has a SaaS zone. No-ops otherwise.
+ * `src/domains/certificate-sweep.ts`), each through the issuer recorded with
+ * it — `cloudflare-wfp`'s SaaS zone, when this cell has one. No-ops without
+ * the database.
  */
 const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
-    const refresh = registeredFleets(env).find((fleet) => fleet.refreshCertificate !== undefined)?.refreshCertificate;
-
-    if (!env.DB || refresh === undefined) {
+    if (!env.DB) {
         return;
     }
 
     const result = await runCertificateSweep({
         database: controlPlaneDatabase(env.DB as D1DatabaseLike),
+        issuerOf: (recorded) => localIssuer(recorded, (target) => registeredFleet(target, env)),
         log: (line) => {
             // eslint-disable-next-line no-console -- a failed certificate read is only visible here, in Workers Logs
             console.warn(line);
         },
         now: Date.now(),
-        refresh,
     });
 
     // eslint-disable-next-line no-console -- counts only; the one record of what a tick did

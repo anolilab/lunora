@@ -97,16 +97,13 @@ export const createCelldVpsDriver = (ports: CelldVpsPorts): TargetDriver => {
             await run("destroy", { alias, deleteData: true, kind: "destroy" }, DESTROY_TIMEOUT_MS, options);
         },
         domains: {
-            // Rebuilt from the remaining domain rows, so the removed one drops out.
-            afterRemoved: async (): Promise<void> => {
+            // A box serves a custom domain once its routing table — rebuilt from the
+            // domain rows — names it, and stops once it no longer does (plan 458 W5).
+            domainsChanged: async (): Promise<void> => {
                 await session().pushRoutes();
             },
-            // A box serves a custom domain once its routing table names it (plan 458 W5).
-            onVerified: async (): Promise<undefined> => {
-                await session()
-                    .pushRoutes()
-                    .catch(() => false);
-            },
+            // Its Caddy terminates TLS itself: there is no certificate for the control plane to record.
+            issue: () => Promise.resolve(undefined),
             // A custom domain CNAMEs to the box itself; its Caddy terminates TLS (plan 458 W5).
             platformTargets: () => [`${box.slug}.${ports.boxDomain}`],
         },

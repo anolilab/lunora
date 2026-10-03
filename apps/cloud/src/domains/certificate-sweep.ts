@@ -1,18 +1,21 @@
 /**
  * The hourly custom-domain certificate sweep (GAPS.md B1): a certificate is
- * requested when its domain verifies (the target driver's `domains.onVerified`),
+ * requested when its domain verifies (the target driver's `domains.issue`),
  * and then takes minutes to hours to validate, issue and deploy. Until it is
- * `active`, this re-reads each one through the fleet that issued it
- * (`TargetFleet.refreshCertificate`) and records what the issuer says, so the
- * studio's domains tab shows where it stands without anyone pressing Verify
- * again.
+ * `active`, this re-reads each one through the issuer recorded with it
+ * (`certificateIssuer` / `certificateScope`, `src/domains/issuers.ts`) and
+ * records what the issuer says, so the studio's domains tab shows where it
+ * stands without anyone pressing Verify again.
  *
- * Target-neutral: it only follows `customHostnameId`s a driver already wrote.
- * Bounded — {@link MAX_CERTIFICATES_PER_TICK} reads a tick, oldest checked
- * first — and a failed read leaves the row as it was for the next tick.
+ * Target-neutral: it only follows `customHostnameId`s a driver already wrote,
+ * each through its own issuer — a certificate whose issuer this control plane
+ * does not hold (another cell's zone) is left to the one that does. Bounded —
+ * {@link MAX_CERTIFICATES_PER_TICK} reads a tick, oldest checked first — and a
+ * failed read leaves the row as it was for the next tick.
  */
 import type { ControlPlaneStore } from "../d1-store";
-import type { DomainCertificate } from "../targets/driver";
+import type { CertificateIssuer } from "../targets/driver";
+import type { RecordedCertificate } from "./issuers";
 
 /** Certificates re-read per tick, so a backlog cannot turn one tick into thousands of API calls. */
 export const MAX_CERTIFICATES_PER_TICK = 50;
@@ -20,7 +23,7 @@ export const MAX_CERTIFICATES_PER_TICK = 50;
 /** The certificate status that ends the sweep's interest in a domain. */
 const ISSUED = "active";
 
-interface DomainRow {
+interface DomainRow extends RecordedCertificate {
     _id: string;
     certificateStatus?: null | string;
     customHostnameId?: null | string;
@@ -30,10 +33,10 @@ interface DomainRow {
 
 export interface CertificateSweepPorts {
     database: ControlPlaneStore;
+    /** The issuer holding a recorded certificate here (`localIssuer`), or `undefined` when this control plane holds none for it. */
+    issuerOf: (recorded: RecordedCertificate) => CertificateIssuer | undefined;
     log?: (line: string) => void;
     now: number;
-    /** The issuing fleet's `refreshCertificate`; `null` once the certificate is gone. */
-    refresh: (customHostnameId: string) => Promise<DomainCertificate | null>;
 }
 
 /** What a tick did. */
@@ -48,21 +51,28 @@ export const runCertificateSweep = async (ports: CertificateSweepPorts): Promise
     const { page } = await ports.database.findMany("domains", {});
     const due = (page as DomainRow[])
         .filter((row) => row.verifiedAt != null && row.customHostnameId != null && row.certificateStatus !== ISSUED)
-        .toSorted((a, b) => a.updatedAt - b.updatedAt)
+        .flatMap((row) => {
+            const issuer = ports.issuerOf(row);
+
+            return issuer === undefined ? [] : [{ issuer, row }];
+        })
+        .toSorted((a, b) => a.row.updatedAt - b.row.updatedAt)
         .slice(0, MAX_CERTIFICATES_PER_TICK);
     const result: CertificateSweepResult = { checked: 0, failed: 0, issued: 0 };
 
-    for (const row of due) {
+    for (const { issuer, row } of due) {
         result.checked += 1;
 
         try {
             // eslint-disable-next-line no-await-in-loop -- bounded batch; one API read at a time keeps the cell's API budget flat
-            const certificate = await ports.refresh(row.customHostnameId as string);
+            const certificate = await issuer.refresh(row.customHostnameId as string);
             // A vanished custom hostname is forgotten, so the sweep stops reading it; verifying again requests a new one.
             const patch =
                 certificate === null
                     ? {
                           certificateError: "the certificate's custom hostname no longer exists; verify the domain again to request a new one",
+                          certificateIssuer: null,
+                          certificateScope: null,
                           certificateStatus: "missing",
                           customHostnameId: null,
                       }

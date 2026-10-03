@@ -512,6 +512,14 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
+installCompiledValidatorMap(lunora_domains_10.markVerified.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["verified"] !== "boolean") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"], "verified": source["verified"] };
+});
 installCompiledValidatorMap(lunora_domains_10.removalTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -994,11 +1002,11 @@ export interface Caller {
     };
     domains: {
         add: (args: { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
-        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; certificateError?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
-        markVerified: (args: { customHostnameId?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
-        recordCertificate: (args: { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; organizationId: Id<"organizations">; sslStatus: unknown }) => Promise<void>;
-        removalTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ customHostnameId?: string; hostname: string; projectId: Id<"projects">; }>;
+        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
+        markVerified: (args: { id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
+        recordCertificate: (args: { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; issuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; organizationId: Id<"organizations">; scope?: unknown; sslStatus: unknown }) => Promise<void>;
+        removalTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: string; customHostnameId?: string; hostname: string; projectId: Id<"projects"> }>;
         remove: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<void>;
         routeForHostname: (args: { hostname: unknown }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };

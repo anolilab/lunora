@@ -245,6 +245,8 @@ export const domains = sqliteTable("domains", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     certificateError: text("certificateError"),
+    certificateIssuer: text("certificateIssuer", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">(),
+    certificateScope: text("certificateScope"),
     certificateStatus: text("certificateStatus"),
     customHostnameId: text("customHostnameId"),
     createdAt: real("createdAt").notNull(),

@@ -530,13 +530,15 @@ deploy. PR events keep creating TTL'd previews, now built server-side too.
   with the same cached lookup pattern as the plan resolver.
 
 **Shipped (`feat/cloud-followups`):** certificate issuance on `cloudflare-wfp`
-through the target seam, not a target branch. The driver's `domains.onVerified`
-creates (or finds) the Cloudflare-for-SaaS custom hostname on
-`LUNORA_SAAS_ZONE_ID` for a domain that just verified, and the verify route
-records `customHostnameId` / `certificateStatus` / `certificateError`; the hourly
-certificate sweep re-reads each certificate until it is `active`;
-`POST /v1/domains/remove` has `domains.onRemoved` delete the custom hostname
-before the row goes (`domains.remove` is internal). The Domains tab shows the
+through the target seam, not a target branch. The driver's `domains.issue`
+creates the Cloudflare-for-SaaS custom hostname on `LUNORA_SAAS_ZONE_ID` for a
+domain that just verified, and the verify route records `customHostnameId` /
+`certificateStatus` / `certificateError` with the issuer that holds it
+(`certificateIssuer` / `certificateScope`: the target and its zone); the hourly
+certificate sweep re-reads each certificate through that issuer until it is
+`active`; `POST /v1/domains/remove` releases the custom hostname through that
+issuer — whatever the project's target is by then — before the row goes
+(`domains.remove` is internal). The Domains tab shows the
 certificate state. Tested against a fake REST port and a stubbed fetch only.
 
 **Still 🌐:** SSL for SaaS enabled on the zone with a fallback origin the

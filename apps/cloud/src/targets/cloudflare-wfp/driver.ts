@@ -83,13 +83,8 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
             );
         },
         domains: {
-            onRemoved: async (domain) => {
-                if (ports.saasZone !== undefined && domain.customHostnameId !== undefined) {
-                    await removeCertificate(ports.saasZone, domain.customHostnameId);
-                }
-            },
             // A verified hostname gets its certificate — and its route into the SaaS zone — here, never before.
-            onVerified: async (domain) => (ports.saasZone === undefined ? { ...UNCONFIGURED_CERTIFICATE } : issueCertificate(ports.saasZone, domain)),
+            issue: async (domain) => (ports.saasZone === undefined ? { ...UNCONFIGURED_CERTIFICATE } : issueCertificate(ports.saasZone, domain)),
             platformTargets: () => [ports.appDomain],
         },
         id: "cloudflare-wfp",
@@ -101,7 +96,7 @@ export interface CloudflareWfpFleetPorts {
     cell: string;
     /** The bound dispatch namespace (`DISPATCHER`); absent → no in-network fan-out, and backups go over the public URL. */
     dispatcher?: DispatchNamespaceLike;
-    /** The SaaS zone this cell issues custom-domain certificates in; absent → nothing to refresh. */
+    /** The SaaS zone this cell issues custom-domain certificates in; absent → nothing to refresh or release. */
     saasZone?: SaasZone;
     /** The Analytics-Engine request-count reader; absent without account credentials. */
     usage?: AnalyticsUsageReader;
@@ -117,7 +112,15 @@ export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): Target
         // The dispatch namespace when bound — the call never leaves Cloudflare —
         // else the deployment's public URL (local dev, where namespaces are not emulated).
         reach: (tenant) => (dispatch ? dispatch(tenant) : tenantSender(tenant)),
-        ...(saasZone === undefined ? {} : { refreshCertificate: (customHostnameId: string) => refreshCertificate(saasZone, customHostnameId) }),
+        ...(saasZone === undefined
+            ? {}
+            : {
+                  certificates: {
+                      refresh: async (customHostnameId: string) => refreshCertificate(saasZone, customHostnameId),
+                      release: async (customHostnameId: string) => removeCertificate(saasZone, customHostnameId),
+                      scope: saasZone.zoneId,
+                  },
+              }),
         ...(usage
             ? {
                   usage: {

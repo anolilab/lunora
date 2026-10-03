@@ -1,11 +1,13 @@
 import { LunoraError } from "@lunora/server";
 
 import { randomSecret } from "../src/deploy/keys";
+import type { TargetId } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
+import { deployTarget } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -13,15 +15,17 @@ import { boundedString, LIMITS } from "./validators";
  * token), verified by the edge (`POST /v1/domains/verify` does the DNS lookups
  * via `src/domains/verify.ts`, then calls {@link markVerified}), and routed by
  * the dispatcher through {@link routeForHostname}. Its certificate is requested
- * by the project's target driver once it verified (`domains.onVerified`;
- * Cloudflare for SaaS on `cloudflare-wfp`) and recorded by
+ * by the project's target driver once it verified (`DomainOps.issue`;
+ * Cloudflare for SaaS on `cloudflare-wfp`) and recorded with its issuer by
  * {@link recordCertificate}; removing a domain (`POST /v1/domains/remove`)
- * releases it first.
+ * releases it first, through that issuer.
  */
 
 interface DomainRow {
     _id: Id<"domains">;
     certificateError?: null | string;
+    certificateIssuer?: null | TargetId;
+    certificateScope?: null | string;
     certificateStatus?: null | string;
     createdAt: number;
     customHostnameId?: null | string;
@@ -128,24 +132,32 @@ export const list = query
 
 /**
  * What removing a domain must release first (owner/admin, under the caller's
- * session): its hostname, project and the certificate its target issued. SYSTEM
+ * session): its hostname, project and the certificate an issuer holds for it,
+ * with that issuer. SYSTEM
  * only — `POST /v1/domains/remove` asks before it deletes the certificate, so a
  * caller who may not remove the domain cannot delete its certificate either.
  */
 export const removalTarget = internalQuery
     .input({ id: v.id("domains"), organizationId: v.id("organizations") })
-    .query(async ({ ctx: context, args: { id, organizationId } }): Promise<{ customHostnameId?: string; hostname: string; projectId: Id<"projects"> }> => {
-        await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "domain");
+    .query(
+        async ({
+            ctx: context,
+            args: { id, organizationId },
+        }): Promise<{ certificateIssuer?: TargetId; certificateScope?: string; customHostnameId?: string; hostname: string; projectId: Id<"projects"> }> => {
+            await assertMember(context, organizationId, ["owner", "admin"]);
+            await assertRowInOrg(context, id, organizationId, "domain");
 
-        const domain = (await context.db.get(id)) as DomainRow;
+            const domain = (await context.db.get(id)) as DomainRow;
 
-        return {
-            ...(domain.customHostnameId == null ? {} : { customHostnameId: domain.customHostnameId }),
-            hostname: domain.hostname,
-            projectId: domain.projectId, // secret-scanner:allow -- domain field name
-        };
-    });
+            return {
+                ...(domain.certificateIssuer == null ? {} : { certificateIssuer: domain.certificateIssuer }),
+                ...(domain.certificateScope == null ? {} : { certificateScope: domain.certificateScope }),
+                ...(domain.customHostnameId == null ? {} : { customHostnameId: domain.customHostnameId }),
+                hostname: domain.hostname,
+                projectId: domain.projectId, // secret-scanner:allow -- domain field name
+            };
+        },
+    );
 
 /**
  * Remove a domain (owner/admin). Internal: only `POST /v1/domains/remove` calls
@@ -174,8 +186,8 @@ export const remove = internalMutation
 
 /**
  * Record a verification outcome. SYSTEM only — dispatched by the edge verify
- * route, which performs the DNS lookups whose result this stores. Also stores the
- * Cloudflare custom-hostname id once the 🌐 provisioning path creates it.
+ * route, which performs the DNS lookups whose result this stores. A certificate
+ * is recorded by {@link recordCertificate}, with its issuer, never here.
  *
  * **`internalMutation`, and that is the whole security property.** This was a
  * public mutation taking `verified` as a caller-supplied boolean, so the DNS
@@ -193,16 +205,14 @@ export const remove = internalMutation
  */
 export const markVerified = internalMutation
     .input({
-        customHostnameId: v.optional(boundedString(LIMITS.id)),
         id: v.id("domains"),
         organizationId: v.id("organizations"),
         verified: v.boolean(),
     })
-    .mutation(async ({ ctx: context, args: { customHostnameId, id, organizationId, verified } }): Promise<void> => {
+    .mutation(async ({ ctx: context, args: { id, organizationId, verified } }): Promise<void> => {
         await assertRowInOrg(context, id, organizationId, "domain");
 
         await context.db.patch(id, {
-            ...(customHostnameId === undefined ? {} : { customHostnameId }),
             updatedAt: context.now,
             // `null`, not `undefined`: the store refuses an explicitly-undefined patch
             // outright, so a FAILED re-verification threw instead of clearing the stamp.
@@ -212,24 +222,34 @@ export const markVerified = internalMutation
 
 /**
  * Record a domain's certificate as its target reported it (SYSTEM — the verify
- * route, after the driver's `onVerified`). `customHostnameId` is kept once known;
- * a missing `error` clears an earlier one.
+ * route, after the driver's `issue`). An issued certificate is recorded with
+ * the target that issued it and its issuer scope, which every later refresh
+ * and release goes through; it is kept once known. A missing `error` clears an
+ * earlier one.
  */
 export const recordCertificate = internalMutation
     .input({
         customHostnameId: v.optional(boundedString(LIMITS.id)),
         error: v.optional(boundedString(LIMITS.token)),
         id: v.id("domains"),
+        issuer: v.optional(deployTarget),
         organizationId: v.id("organizations"),
+        scope: v.optional(boundedString(LIMITS.id)),
         sslStatus: boundedString(LIMITS.name),
     })
-    .mutation(async ({ ctx: context, args: { customHostnameId, error, id, organizationId, sslStatus } }): Promise<void> => {
+    .mutation(async ({ ctx: context, args: { customHostnameId, error, id, issuer, organizationId, scope, sslStatus } }): Promise<void> => {
         await assertRowInOrg(context, id, organizationId, "domain");
+
+        if (customHostnameId !== undefined && (issuer === undefined || scope === undefined)) {
+            throw new LunoraError("BAD_REQUEST", "an issued certificate is recorded with its issuer and scope");
+        }
 
         await context.db.patch(id, {
             certificateError: error ?? null,
             certificateStatus: sslStatus,
-            ...(customHostnameId === undefined ? {} : { customHostnameId }),
+            ...(customHostnameId === undefined || issuer === undefined || scope === undefined
+                ? {}
+                : { certificateIssuer: issuer, certificateScope: scope, customHostnameId }),
             updatedAt: context.now,
         });
     });

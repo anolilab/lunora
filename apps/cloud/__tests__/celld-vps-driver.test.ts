@@ -107,21 +107,21 @@ describe("the celld-vps driver", () => {
         expect(jobs).toStrictEqual([{ alias: "web", deleteData: true, kind: "destroy" }]);
     });
 
-    it("points custom domains at the box, and pushes the box its routes once one verifies", async () => {
+    it("points custom domains at the box, issues no certificate, and pushes the box its routes whenever its domains change", async () => {
         const { pushes, session } = recordingSession();
         const driver = driverWith(session);
 
         expect(driver.domains.platformTargets()).toStrictEqual(["bslug000001.boxes.test"]);
 
         // A box terminates its own TLS (Caddy), so there is no certificate for the control plane to record.
-        await expect(driver.domains.onVerified?.({ hostname: "www.example.com" })).resolves.toBeUndefined();
+        await expect(driver.domains.issue({ hostname: "www.example.com" })).resolves.toBeUndefined();
+
+        expect(pushes()).toBe(0);
+
+        // The table is built from the domain rows: a verified one is served, a removed one dropped.
+        await driver.domains.domainsChanged?.();
 
         expect(pushes()).toBe(1);
-
-        // Once a domain's row is gone, the table is pushed again so the box stops serving it.
-        await driver.domains.afterRemoved?.();
-
-        expect(pushes()).toBe(2);
     });
 
     it("reaches every tenant on its public hostname, with no in-network path or readback", () => {

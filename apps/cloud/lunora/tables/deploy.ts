@@ -252,12 +252,18 @@ export const deployTables = {
     domains: defineTable({
         // Why the certificate is not issued, as the issuer last said it.
         certificateError: v.optional(v.string()),
+        // The target that issued `customHostnameId`, and which of its issuers
+        // (`cloudflare-wfp`: the SaaS zone id). Every refresh and release of the
+        // certificate goes through that issuer, whatever the project's target is
+        // by then (`src/domains/issuers.ts`).
+        certificateIssuer: v.optional(deployTarget),
+        certificateScope: v.optional(v.string()),
         // The certificate's status as last read (`cloudflare-wfp`: the custom
         // hostname's `ssl.status` — `pending_validation`, …, `active` — or
         // `unconfigured` when this control plane has no SaaS zone). Refreshed by
         // the hourly certificate sweep until `active`.
         certificateStatus: v.optional(v.string()),
-        // Cloudflare-for-SaaS custom-hostname id, once the driver's `onVerified`
+        // Cloudflare-for-SaaS custom-hostname id, once the driver's `issue`
         // requested it (`src/targets/cloudflare-wfp/certificates.ts`).
         customHostnameId: v.optional(v.string()),
         createdAt: v.number(),

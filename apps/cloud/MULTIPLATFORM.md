@@ -421,7 +421,7 @@ interface below is the current one):
     export interface TargetDriver {
         deploy: (spec: TenantDeploymentSpec, options?: ConvergeOptions) => Promise<ConvergeResult>; // { url }
         destroy: (alias: string, options?: ConvergeOptions) => Promise<void>;
-        domains: DomainOps; // { platformTargets(), onVerified?() }
+        domains: DomainOps; // { platformTargets(), issue(), domainsChanged?() }
         readonly id: TargetId;
     }
 
@@ -514,15 +514,14 @@ Deviations from the §5.1 sketch, and why:
   `usageCheckpoints` (keyed by target and scope). `cloudflare-wfp`'s one scope
   is its cell. (The old `cells.usageReadAtMs` column is gone; a scope with no
   row starts from the rollback's bootstrap window.)
-- **Added members** the sketch did not have: `reach`, `dispatch` and
-  `domains.onVerified` — each replaced a Cloudflare assumption a sweep or route
+- **Added members** the sketch did not have: `reach`, `dispatch`,
+  `domains.issue` / `domainsChanged` and the fleet's `certificates` issuer — each replaced a Cloudflare assumption a sweep or route
   had inlined — and the per-target `TARGETS` descriptor.
 - **`src/cloudflare/api.ts` did not move.** What is left in it is the control
   plane's own D1 export (its host, not a target — now behind
   `src/backup/control-plane-export.ts`) and the custom-hostname methods, which
-  the `cloudflare-wfp` driver's `domains.onVerified` / `onRemoved` and fleet
-  `refreshCertificate` now call for custom-domain certificates (GAPS.md B1,
-  `feat/cloud-followups`). `billable-usage.ts` is the
+  the `cloudflare-wfp` driver's `domains.issue` and fleet `certificates`
+  (refresh, release) now call for custom-domain certificates (GAPS.md B1). `billable-usage.ts` is the
   BYO cost overview. All three are named exceptions in the boundary.
 - **Not added from §5.2:** `cells.credentialsRef` and
   `deployments.convergeState` have no consumer until Phases 2–3;

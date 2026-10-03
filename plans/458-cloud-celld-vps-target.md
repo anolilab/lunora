@@ -1015,7 +1015,8 @@ Landed on top of the BYO-Cloudflare branch (`010f04761`), each with node tests:
 - **Perf bench** (§8) — `adbfcdf4e`: `apps/cloud/__bench__/box-session.bench.ts`
   in CodSpeed's `vis run test:bench`.
 - **Custom-domain certificates on `cloudflare-wfp`** — `a904654eb`: the
-  driver's `domains.onVerified` / `onRemoved` create and delete
+  driver's `domains.onVerified` / `onRemoved` (since §11: `issue`, and a
+  release through the issuer recorded on the row) create and delete
   Cloudflare-for-SaaS custom hostnames on `LUNORA_SAAS_ZONE_ID`; an hourly sweep
   follows them to `active` (GAPS.md B1; zone setup is 🌐, RUNBOOK step 6a).
 - **Pre-rename dev databases** — `bf8515923`: the seed refuses a database

@@ -41,7 +41,7 @@ export const createMemoryTarget = (): MemoryTarget => {
         destroy: async (alias) => {
             tenants.delete(alias);
         },
-        domains: { platformTargets: () => [MEMORY_APP_DOMAIN] },
+        domains: { issue: () => Promise.resolve(undefined), platformTargets: () => [MEMORY_APP_DOMAIN] },
         id: "cloudflare-wfp",
     };
 
