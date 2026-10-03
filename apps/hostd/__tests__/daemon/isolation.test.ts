@@ -6,7 +6,7 @@
  * table, switching uids and moving processes between cgroups for real is the
  * `test:hostd` lane's job (`__tests__/integration/`).
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { BlockList } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +23,7 @@ import type { IsolationChecks, IsolationSystem } from "../../src/daemon/isolatio
 import { decideIsolation, helloIsolation, setUpIsolation } from "../../src/daemon/isolation";
 import { silentLogger } from "../../src/daemon/log";
 import type { FirewallSystem } from "../../src/daemon/nftables";
-import { BLOCKED_IPV4, BLOCKED_IPV6, bucketEndpointOf, EgressFirewall, nftBucketUpdate, nftRuleset } from "../../src/daemon/nftables";
+import { applyNftScript, BLOCKED_IPV4, BLOCKED_IPV6, bucketEndpointOf, EgressFirewall, nftBucketUpdate, nftRuleset } from "../../src/daemon/nftables";
 
 const MIB = 1024 * 1024;
 
@@ -169,7 +169,13 @@ describe(EgressFirewall, () => {
 
         const addresses = { ipv4: ["192.0.2.2", "192.0.2.1"], ipv6: [] };
         const system = fakeFirewall(addresses);
-        const firewall = new EgressFirewall({ bucket: { endpoint: "https://store.example:9000", name: "b" }, fleetUid: 990, logger: silentLogger, system });
+        const firewall = new EgressFirewall({
+            bucket: { endpoint: "https://store.example:9000", name: "b" },
+            fleetUid: 990,
+            logger: silentLogger,
+            system,
+            workDirectory: tmpdir(),
+        });
 
         await firewall.install();
         await firewall.refresh();
@@ -193,9 +199,58 @@ describe(EgressFirewall, () => {
             fleetUid: 990,
             logger: silentLogger,
             system: fakeFirewall({ ipv4: [], ipv6: [] }, false),
+            workDirectory: tmpdir(),
         });
 
         await expect(firewall.install()).rejects.toThrow(/not loaded/u);
+    });
+});
+
+describe(applyNftScript, () => {
+    let root: string;
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), "lunora-hostd-nft-"));
+    });
+
+    afterEach(() => {
+        rmSync(root, { force: true, recursive: true });
+    });
+
+    it("hands nft the script as a private file, never on stdin, and deletes it afterwards", async () => {
+        expect.assertions(5);
+
+        const seen: { args: ReadonlyArray<string>; directoryMode: number; fileMode: number; text: string }[] = [];
+
+        await applyNftScript("table inet lunora_hostd\n", root, async (args) => {
+            const file = args[1] ?? "";
+
+            seen.push({
+                args,
+                directoryMode: permissionsOf(statSync(join(file, "..")).mode),
+                fileMode: permissionsOf(statSync(file).mode),
+                text: readFileSync(file, "utf8"),
+            });
+
+            return "";
+        });
+
+        expect(seen[0]?.args[0]).toBe("-f");
+        expect(seen[0]?.args[1]?.startsWith(join(root, ".nft-"))).toBe(true);
+        expect(seen[0]?.text).toBe("table inet lunora_hostd\n");
+        expect([seen[0]?.fileMode, seen[0]?.directoryMode]).toStrictEqual([0o600, 0o700]);
+        expect(readdirSync(root)).toStrictEqual([]);
+    });
+
+    it("deletes the file when nft refuses it, and rejects with nft's error", async () => {
+        expect.assertions(2);
+
+        await expect(
+            applyNftScript("bogus\n", root, async () => {
+                throw new Error("nft -f exited 1: syntax error");
+            }),
+        ).rejects.toThrow(/syntax error/u);
+        expect(readdirSync(root)).toStrictEqual([]);
     });
 });
 

@@ -300,7 +300,10 @@ tenant sandbox):
   and IPv6 loopback, unspecified, v4-mapped, ULA and link-local. That keeps a
   fleet from every celld operator API (each node's internal listener is on
   loopback, siblings' included), hostd's on-demand-TLS `ask` endpoint and
-  Caddy's admin API.
+  Caddy's admin API. hostd hands `nft` each script as a file (0600, in a fresh
+  0700 directory under the data directory, deleted afterwards), never on
+  stdin: Node gives a child a socket for stdin, and nft 1.0.9 (Ubuntu 24.04)
+  refuses `nft -f -` from one with "Not a regular file".
 - **Memory.** With `Delegate=yes`, hostd moves itself into `hostd/` under its
   service cgroup, enables the memory controller, and puts each fleet's node in
   `fleet-<alias>/` with `memory.max` (the box's memory less 512 MiB, at least

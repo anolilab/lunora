@@ -22,10 +22,19 @@
  * The table is replaced atomically (`table`; `delete table`; the new table, in
  * one `nft -f` transaction) and left in place when hostd stops: no fleet runs
  * without hostd, and a stale table only ever blocks.
+ *
+ * nft reads each script from a file, never from stdin: Node hands a child its
+ * stdin as a socket, and nft 1.0.9 (Ubuntu 24.04's; the only release with the
+ * check, 1.1.0 exempts stdin) refuses `-f -` unless stdin is a regular file, a
+ * FIFO or a character device ("Not a regular file: "/dev/stdin""). The file
+ * lives in a fresh 0700 directory under the data directory — written by
+ * `lunora-hostd` alone, and among the unit's `ReadWritePaths` — and is deleted
+ * once nft has read it.
  */
 import { lookup } from "node:dns/promises";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { isIPv4, isIPv6 } from "node:net";
+import { join } from "node:path";
 
 import { DIRECT_LAUNCH } from "./capabilities";
 import { describeFailure, runChild } from "./child";
@@ -138,21 +147,39 @@ const nftBucketUpdate = (bucket: BucketAddresses): string => {
     ].join("\n");
 };
 
-/** Run `nft` with `args`, feeding it `script` on stdin. Rejects with what nft printed when it fails. */
-const runNft = async (args: ReadonlyArray<string>, script = ""): Promise<string> => {
+/** Run `nft` with `args`. Rejects with what nft printed when it fails. */
+const runNft = async (args: ReadonlyArray<string>): Promise<string> => {
     const nft = NFT_CANDIDATES.find((path) => existsSync(path));
 
     if (nft === undefined) {
         throw new Error(`nft is not installed (looked in ${NFT_CANDIDATES.join(", ")})`);
     }
 
-    const result = await runChild(DIRECT_LAUNCH, nft, args, { env: { PATH: CHILD_PATH }, stdin: script, timeoutMs: 10_000 });
+    const result = await runChild(DIRECT_LAUNCH, nft, args, { env: { PATH: CHILD_PATH }, timeoutMs: 10_000 });
 
     if (result.code !== 0 || result.timedOut) {
         throw new Error(describeFailure(`nft ${args.join(" ")}`, result, 500));
     }
 
     return result.stdout;
+};
+
+/**
+ * Apply `script` with `nft -f`, from a file: written, 0600, into a fresh 0700
+ * directory under `workDirectory` (one only the daemon writes), and removed
+ * again whether nft took it or not.
+ */
+const applyNftScript = async (script: string, workDirectory: string, run: (args: ReadonlyArray<string>) => Promise<string> = runNft): Promise<void> => {
+    const directory = mkdtempSync(join(workDirectory, ".nft-"));
+
+    try {
+        const file = join(directory, "ruleset.nft");
+
+        writeFileSync(file, script, { flag: "wx", mode: 0o600 });
+        await run(["-f", file]);
+    } finally {
+        rmSync(directory, { force: true, recursive: true });
+    }
 };
 
 /** What the firewall needs from the system; the real one runs `nft` and resolves with the system resolver. */
@@ -164,31 +191,32 @@ interface FirewallSystem {
     resolve: (host: string) => Promise<{ ipv4: string[]; ipv6: string[] }>;
 }
 
-const REAL_FIREWALL_SYSTEM: FirewallSystem = {
-    apply: async (script) => {
-        await runNft(["-f", "-"], script);
-    },
-    present: async () =>
-        runNft(["list", "table", "inet", NFT_TABLE]).then(
-            () => true,
-            () => false,
-        ),
-    resolve: async (host) => {
-        if (isIPv4(host)) {
-            return { ipv4: [host], ipv6: [] };
-        }
+/** The real firewall system, writing nft's scripts under `workDirectory` (the data directory). */
+const realFirewallSystem = (workDirectory: string): FirewallSystem => {
+    return {
+        apply: async (script) => applyNftScript(script, workDirectory),
+        present: async () =>
+            runNft(["list", "table", "inet", NFT_TABLE]).then(
+                () => true,
+                () => false,
+            ),
+        resolve: async (host) => {
+            if (isIPv4(host)) {
+                return { ipv4: [host], ipv6: [] };
+            }
 
-        if (isIPv6(host)) {
-            return { ipv4: [], ipv6: [host] };
-        }
+            if (isIPv6(host)) {
+                return { ipv4: [], ipv6: [host] };
+            }
 
-        const addresses = await lookup(host, { all: true });
+            const addresses = await lookup(host, { all: true });
 
-        return {
-            ipv4: addresses.filter((entry) => entry.family === 4).map((entry) => entry.address),
-            ipv6: addresses.filter((entry) => entry.family === 6).map((entry) => entry.address),
-        };
-    },
+            return {
+                ipv4: addresses.filter((entry) => entry.family === 4).map((entry) => entry.address),
+                ipv6: addresses.filter((entry) => entry.family === 6).map((entry) => entry.address),
+            };
+        },
+    };
 };
 
 interface EgressFirewallOptions {
@@ -197,6 +225,8 @@ interface EgressFirewallOptions {
     logger: Logger;
     refreshMs?: number;
     system?: FirewallSystem;
+    /** Where the real system writes nft's scripts: the data directory. */
+    workDirectory: string;
 }
 
 const sameAddresses = (a: BucketAddresses, b: BucketAddresses): boolean =>
@@ -214,7 +244,7 @@ class EgressFirewall {
 
     public constructor(options: EgressFirewallOptions) {
         this.options = options;
-        this.system = options.system ?? REAL_FIREWALL_SYSTEM;
+        this.system = options.system ?? realFirewallSystem(options.workDirectory);
     }
 
     /**
@@ -279,4 +309,16 @@ class EgressFirewall {
 }
 
 export type { BucketAddresses, EgressFirewallOptions, FirewallSystem };
-export { BLOCKED_IPV4, BLOCKED_IPV6, BUCKET_REFRESH_MS, bucketEndpointOf, EgressFirewall, NFT_TABLE, nftBucketUpdate, nftRuleset, runNft };
+export {
+    applyNftScript,
+    BLOCKED_IPV4,
+    BLOCKED_IPV6,
+    BUCKET_REFRESH_MS,
+    bucketEndpointOf,
+    EgressFirewall,
+    NFT_TABLE,
+    nftBucketUpdate,
+    nftRuleset,
+    realFirewallSystem,
+    runNft,
+};

@@ -320,6 +320,7 @@ const setUpEgress = async (
         fleetUid: account.uid,
         logger,
         ...(system.firewall === undefined ? {} : { system: system.firewall }),
+        workDirectory: config.dataDir,
     });
 
     try {
