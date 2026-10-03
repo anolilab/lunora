@@ -6,10 +6,10 @@
 import type { Node as TsNode, ParameterDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { bindingKeyName, handlerOf, isConstDeclaration, outermostValueWrapper, unwrapExpression } from "./ast";
-import { declarationOf } from "./attribution";
-import { classifyProcedureCall } from "./functions/classify-procedure-call";
-import { mutatorServerImplOf } from "./mutators";
+import { bindingKeyName, handlerOf, isConstDeclaration, outermostValueWrapper, unwrapExpression } from "../ast";
+import { declarationOf } from "../attribution";
+import { classifyProcedureCall } from "../functions/classify-procedure-call";
+import { mutatorServerImplOf } from "../mutators";
 
 /** How many `const` hops (`const c = ctx; const d = c.db`) a binding is followed through. */
 const MAX_CONTEXT_HOPS = 8;
