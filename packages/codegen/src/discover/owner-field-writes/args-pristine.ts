@@ -2,11 +2,11 @@
  * Whether a mutator `server` impl's `args` parameter is still exactly the
  * object `applyOwnerScope` verified.
  */
-import type { CallExpression, Identifier, ParameterDeclaration, ts, VariableDeclaration } from "ts-morph";
+import type { CallExpression, Identifier, ParameterDeclaration, SourceFile, ts, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isWriteTarget } from "../ast";
-import { declarationOf } from "../attribution";
+import { declarationOf, exportedNameOf } from "../attribution";
 import type { MutatorServerImpl } from "../mutators";
 import { mutatorServerImplOf } from "../mutators";
 import { isReadOnlyUse } from "./read-only-use";
@@ -19,6 +19,8 @@ import { isReadOnlyUse } from "./read-only-use";
 interface MutatorImplScope {
     context: ParameterDeclaration | undefined;
     impl: MutatorServerImpl;
+    /** The name the mutator is exported (and its `owner` declared) under. */
+    mutatorName: string;
     parameter: ParameterDeclaration | undefined;
     pristine: boolean;
 }
@@ -124,28 +126,48 @@ const isPristineArgsParameter = (
     return pristine;
 };
 
+/** Per-file map from each top-level mutator's `server` impl to the mutator declaring it. */
+const IMPLS_BY_FILE = new WeakMap<ts.SourceFile, ReadonlyMap<ts.Node, VariableDeclaration>>();
+
+/** The `server` impls of the file's top-level mutators (see {@link mutatorServerImplOf}), mapped to their mutator. */
+const mutatorImplsOf = (sourceFile: SourceFile): ReadonlyMap<ts.Node, VariableDeclaration> => {
+    let impls = IMPLS_BY_FILE.get(sourceFile.compilerNode);
+
+    if (impls === undefined) {
+        impls = new Map(
+            sourceFile.getVariableDeclarations().flatMap((declaration) => {
+                const impl = mutatorServerImplOf(declaration);
+
+                return impl === undefined ? [] : [[impl.compilerNode, declaration] as const];
+            }),
+        );
+        IMPLS_BY_FILE.set(sourceFile.compilerNode, impls);
+    }
+
+    return impls;
+};
+
 /**
- * The {@link MutatorImplScope} of `call`, resolved DOWN from the top-level
- * declaration `call` sits in to that declaration's own `server` impl (see
- * {@link mutatorServerImplOf}); `undefined` when the call is not inside it.
- * Never matched by name on an ancestor: a nested `const save = defineMutator(…)`
- * inside the exported `save` resolves to the export's impl, in which the nested
- * mutator's `args` is just a nested function's parameter.
+ * The {@link MutatorImplScope} of `call`: the `server` impl of a top-level
+ * mutator that `call` sits in — inline (`server: (ctx, args) => …`) or
+ * declared on its own (`server: impl`) — or `undefined`. Resolved DOWN from
+ * each top-level mutator to its own impl, never matched by name on an
+ * ancestor: a nested `const save = defineMutator(…)` inside the exported
+ * `save` resolves to the export's impl, in which the nested mutator's `args` is
+ * just a nested function's parameter.
  */
 const mutatorImplScopeOf = (call: CallExpression): MutatorImplScope | undefined => {
-    const statement = call.getAncestors().at(-2);
-    const declaration = Node.isVariableStatement(statement)
-        ? statement.getDeclarations().find((candidate) => candidate.getPos() <= call.getPos() && call.getEnd() <= candidate.getEnd())
-        : undefined;
-    const impl = declaration === undefined ? undefined : mutatorServerImplOf(declaration);
+    const impls = mutatorImplsOf(call.getSourceFile());
+    const impl = call.getAncestors().find((ancestor) => impls.has(ancestor.compilerNode)) as MutatorServerImpl | undefined;
+    const declaration = impl === undefined ? undefined : impls.get(impl.compilerNode);
 
-    if (declaration === undefined || impl === undefined || call.getPos() < impl.getPos() || impl.getEnd() < call.getEnd()) {
+    if (impl === undefined || declaration === undefined) {
         return undefined;
     }
 
     const [context, candidate] = impl.getParameters();
     const parameter = candidate === undefined || candidate.isRestParameter() ? undefined : candidate;
-    const scope = { context, impl, parameter };
+    const scope = { context, impl, mutatorName: exportedNameOf(declaration) ?? declaration.getName(), parameter };
 
     return { ...scope, pristine: parameter !== undefined && isPristineArgsParameter(scope, parameter, declaration) };
 };

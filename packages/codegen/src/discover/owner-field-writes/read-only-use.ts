@@ -7,14 +7,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { isConstDeclaration, isWriteTarget, outermostValueWrapper, unwrapExpression } from "../ast";
 import { declarationOf, isTypePosition } from "../attribution";
-
-/**
- * `ctx` methods whose result echoes caller-chosen input: `ctx.db.asId(table, args.x)`
- * returns that very id, and a `ctx.run*` result can hand its args straight
- * back. A chain through one of these is not server-scoped; its taint is that
- * of its arguments.
- */
-const ECHOING_CONTEXT_METHODS = new Set<string>(["asId", "runAction", "runMutation", "runQuery"]);
+import { ECHOING_CONTEXT_METHODS } from "../context-root";
 
 /**
  * The leftmost operand of `value`'s member / call chain: walked through
@@ -318,6 +311,11 @@ const isOperandRead = (node: TsNode): boolean => {
         return true;
     }
 
+    // `for (const key in args)` only enumerates its keys.
+    if (Node.isForInStatement(parent)) {
+        return parent.getExpression() === value;
+    }
+
     if (Node.isPrefixUnaryExpression(parent)) {
         return parent.getOperatorToken() === SyntaxKind.ExclamationToken;
     }
@@ -424,7 +422,6 @@ const isSameNode = (node: TsNode | undefined, other: TsNode): boolean => node?.c
 
 export {
     chainRootOf,
-    ECHOING_CONTEXT_METHODS,
     isCopiedOnly,
     isDestructuringRead,
     isImplContextReference,

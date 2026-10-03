@@ -2,7 +2,8 @@ import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { bindingKeyName } from "./discover/ast";
-import { referencesContext } from "./discover/context-root";
+import { declarationOf } from "./discover/attribution";
+import { isHandlerArgsParameter, referencesContext } from "./discover/context-root";
 
 /**
  * The parameter binding element that declares `name`, searched from the
@@ -73,6 +74,33 @@ const destructuringRootName = (element: BindingElement): string | undefined => {
     }
 };
 
+/** Whether `identifier` resolves, by symbol, to a positional handler's `args` parameter or to a binding destructured from it. */
+const isPositionalArgsReference = (identifier: Identifier): boolean => {
+    // Cheap pre-filter before any symbol lookup: some enclosing positional handler binds this spelling as its `args`.
+    const name = identifier.getText();
+    const isCandidate = identifier.getAncestors().some((ancestor) => {
+        const parameter = Node.isFunctionLikeDeclaration(ancestor) || Node.isArrowFunction(ancestor) ? ancestor.getParameters()[1] : undefined;
+        const nameNode = parameter?.getNameNode();
+
+        return (
+            parameter !== undefined &&
+            (Node.isIdentifier(nameNode)
+                ? nameNode.getText() === name
+                : parameter.getDescendantsOfKind(SyntaxKind.BindingElement).some((element) => element.getName() === name)) &&
+            isHandlerArgsParameter(parameter)
+        );
+    });
+
+    if (!isCandidate) {
+        return false;
+    }
+
+    const declaration = declarationOf(identifier);
+    const parameter = Node.isParameterDeclaration(declaration) ? declaration : declaration?.getFirstAncestorByKind(SyntaxKind.Parameter);
+
+    return parameter !== undefined && (Node.isParameterDeclaration(declaration) || Node.isBindingElement(declaration)) && isHandlerArgsParameter(parameter);
+};
+
 /**
  * True when `identifier` is a *value* reference to the binding named `name` —
  * the taint-root check shared by every Wave 3 feeder, whether the root is the
@@ -107,7 +135,12 @@ const isValueReference = (identifier: Identifier, name: string): boolean => {
 
     const element = parameterBindingFor(identifier);
 
-    return element !== undefined && destructuringRootName(element) === name;
+    if (element !== undefined && destructuringRootName(element) === name) {
+        return true;
+    }
+
+    // A positional handler's `args` under any name: `handler: (c, a) => … a.userId`, `(c, { userId })`.
+    return name === "args" && isPositionalArgsReference(identifier);
 };
 
 /** True when `node` is, or textually contains, a value reference to the binding named `name`. */

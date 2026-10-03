@@ -4,18 +4,11 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { isConstDeclaration, isWriteTarget, outermostValueWrapper, unwrapExpression } from "../ast";
 import { declarationOf } from "../attribution";
+import { CALLBACK_RESULT_METHODS, ECHOING_CONTEXT_METHODS } from "../context-root";
 import type { MutatorImplScope } from "./args-pristine";
 import type { ObjectBinding } from "./object-flow";
-import {
-    aliasBindingsOf,
-    bindingIdentifiersOf,
-    CALLBACK_RESULT_METHODS,
-    isMethodCall,
-    isPrimitiveType,
-    objectContinuation,
-    RECEIVER_ITERATING_METHODS,
-} from "./object-flow";
-import { chainRootOf, ECHOING_CONTEXT_METHODS, isImplContextReference, isReadOnlyCallArgument, receivingParameter, visibleFunctionOf } from "./read-only-use";
+import { aliasBindingsOf, bindingIdentifiersOf, isMethodCall, isPrimitiveType, objectContinuation, RECEIVER_ITERATING_METHODS } from "./object-flow";
+import { chainRootOf, isImplContextReference, isReadOnlyCallArgument, receivingParameter, visibleFunctionOf } from "./read-only-use";
 
 /**
  * Methods whose result is their receiver, one of its elements, or a value

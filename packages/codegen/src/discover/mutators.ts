@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type {
     ArrowFunction,
     CallExpression,
+    FunctionDeclaration,
     FunctionExpression,
     Identifier,
     MethodDeclaration,
@@ -11,6 +12,7 @@ import type {
     ObjectLiteralExpression,
     Project,
     SourceFile,
+    ts,
     VariableDeclaration,
 } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -19,8 +21,8 @@ import { diagnosticAt } from "../diagnostics";
 import type { MutatorIR, ValidatorIR } from "../ir";
 import { isServerSurfaceModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
-import { findObjectProperty, unwrapExpression } from "./ast";
-import { exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
+import { findObjectProperty, isConstDeclaration, unwrapExpression } from "./ast";
+import { declarationOf, exportedNameOf, exportNamesOfDeclaration, isAddressableExportName } from "./attribution";
 import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /** The only file custom mutators may be declared in — mirrors `lunora/queues.ts`. */
@@ -119,17 +121,73 @@ const mutatorLiteral = (call: CallExpression): ObjectLiteralExpression | undefin
 };
 
 /** The function forms a mutator's authoritative `server` impl is statically readable in. */
-type MutatorServerImpl = ArrowFunction | FunctionExpression | MethodDeclaration;
+type MutatorServerImpl = ArrowFunction | FunctionDeclaration | FunctionExpression | MethodDeclaration;
+
+/** Per-declaration {@link isReferencedOnce} verdicts, keyed on the compiler node so a re-parse recomputes. */
+const REFERENCED_ONCE_CACHE = new WeakMap<ts.Node, boolean>();
+
+/**
+ * Whether the top-level binding `declaration` creates is referenced exactly
+ * once in its file — by the `server:` member that hands it to `defineMutator`.
+ * Any other reference (a second mutator, a direct call, a recursive call) or
+ * an export could run the impl with an `args` `applyOwnerScope` never verified.
+ */
+const isReferencedOnce = (declaration: FunctionDeclaration | VariableDeclaration): boolean => {
+    let verdict = REFERENCED_ONCE_CACHE.get(declaration.compilerNode);
+
+    if (verdict === undefined) {
+        const nameNode = declaration.getNameNode();
+        const name = nameNode?.getText();
+        const references = declaration
+            .getSourceFile()
+            .getDescendantsOfKind(SyntaxKind.Identifier)
+            .filter(
+                (identifier) =>
+                    identifier !== nameNode && identifier.getText() === name && declarationOf(identifier)?.compilerNode === declaration.compilerNode,
+            );
+
+        // An exported impl can be imported and called by any other module.
+        verdict = references.length === 1 && exportedNameOf(declaration) === undefined;
+        REFERENCED_ONCE_CACHE.set(declaration.compilerNode, verdict);
+    }
+
+    return verdict;
+};
+
+/**
+ * The impl a `server: impl` / `{ server }` reference names: a top-level
+ * `function` declaration or `const` arrow / function expression of the same
+ * file, referenced nowhere but there ({@link isReferencedOnce}).
+ */
+const referencedServerImplOf = (reference: TsNode | undefined): MutatorServerImpl | undefined => {
+    const declaration = Node.isIdentifier(reference) ? declarationOf(reference) : undefined;
+    const isTopLevel = Node.isSourceFile(declaration?.getParent()) || Node.isSourceFile(declaration?.getParent()?.getParent()?.getParent());
+
+    if (declaration === undefined || declaration.getSourceFile() !== reference?.getSourceFile() || !isTopLevel) {
+        return undefined;
+    }
+
+    if (Node.isFunctionDeclaration(declaration)) {
+        return declaration.hasBody() && isReferencedOnce(declaration) ? declaration : undefined;
+    }
+
+    const initializer = isConstDeclaration(declaration) ? unwrapExpression(declaration.getInitializer()) : undefined;
+    const isFunction = Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer);
+
+    return isFunction && Node.isVariableDeclaration(declaration) && isReferencedOnce(declaration) ? initializer : undefined;
+};
 
 /**
  * The `server` impl of the mutator `declaration` binds
  * (`const x = defineMutator({ server })`), resolved DOWN from that declaration
  * so it is always this declaration's own impl, never a same-named nested one.
- * Reads `server: (ctx, args) => …`, `server: function (ctx, args) {…}` and
- * the method shorthand `server(ctx, args) {…}`, seen through `(…)`, `as` and
- * `satisfies`. `undefined` for anything else — a reference to a function
- * declared elsewhere, or a higher-order `server: wrap(fn)` whose wrapper could
- * hand `fn` different arguments — so callers fail closed.
+ * Reads `server: (ctx, args) => …`, `server: function (ctx, args) {…}`, the
+ * method shorthand `server(ctx, args) {…}`, and `server: impl` / `{ server }`
+ * naming a same-file function used nowhere else ({@link referencedServerImplOf};
+ * the runtime wraps `.server` itself, so the mutator is the only way in), seen
+ * through `(…)`, `as` and `satisfies`. `undefined` for anything else — an
+ * import, an impl also called elsewhere, or a higher-order `server: wrap(fn)`
+ * whose wrapper could hand `fn` different arguments — so callers fail closed.
  */
 const mutatorServerImplOf = (declaration: VariableDeclaration): MutatorServerImpl | undefined => {
     const call = declaration.getInitializer();
@@ -144,9 +202,13 @@ const mutatorServerImplOf = (declaration: VariableDeclaration): MutatorServerImp
         return property;
     }
 
+    if (Node.isShorthandPropertyAssignment(property)) {
+        return referencedServerImplOf(property.getNameNode());
+    }
+
     const impl = Node.isPropertyAssignment(property) ? unwrapExpression(property.getInitializer()) : undefined;
 
-    return Node.isArrowFunction(impl) || Node.isFunctionExpression(impl) ? impl : undefined;
+    return Node.isArrowFunction(impl) || Node.isFunctionExpression(impl) ? impl : referencedServerImplOf(impl);
 };
 
 /**

@@ -94,14 +94,50 @@ describe("discoverOwnerFieldWrites: the ctx.db receiver", () => {
             expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ field: "userId", ownerScoped: true });
         });
 
-        it("discovers a write in a separately declared `server: impl` whose ctx is renamed", () => {
-            expect.assertions(2);
+        // A `server: impl` declared on its own is the impl when nothing else can call it:
+        // the runtime wraps `.server`, so the mutator is the only way in.
+        it.each([
+            [
+                "a `const` arrow",
+                `const impl = async (c, args) => {\n    await c.db.insert("posts", { userId: args.userId }); // @write\n};\nexport const createPost = defineMutator({ owner: "userId", server: impl });`,
+            ],
+            [
+                "a `function` declaration",
+                `async function impl(ctx, args) {\n    await ctx.db.insert("posts", { userId: args.userId }); // @write\n}\nexport const createPost = defineMutator({ owner: "userId", server: impl });`,
+            ],
+            [
+                "a shorthand `{ server }`",
+                `const server = async (ctx, args) => {\n    await ctx.db.insert("posts", { userId: args.userId }); // @write\n};\nexport const createPost = defineMutator({ owner: "userId", server });`,
+            ],
+        ])("keeps the verified owner of a separately declared impl (%s) owner-scoped", (_label, source) => {
+            expect.assertions(1);
 
-            // The impl is not resolved for owner-scoping (it could be called elsewhere), so the write is reported.
-            const source = `const impl = async (c, args) => {
-    await c.db.insert("posts", { userId: args.userId }); // @write
-};
-export const createPost = defineMutator({ owner: "userId", server: impl });`;
+            expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ field: "userId", ownerScoped: true });
+        });
+
+        it.each([
+            [
+                "a caller-chosen owner",
+                `const impl = async (c, args) => {\n    await c.db.insert("posts", { userId: args.targetUserId }); // @write\n};\nexport const createPost = defineMutator({ owner: "userId", server: impl });`,
+            ],
+            [
+                "an impl also called directly",
+                `const impl = async (ctx, args) => {\n    await ctx.db.insert("posts", { userId: args.userId }); // @write\n};\nexport const createPost = defineMutator({ owner: "userId", server: impl });\nexport const other = mutation({ handler: (ctx, args) => impl(ctx, args) });`,
+            ],
+            [
+                "an impl shared by two mutators",
+                `const impl = async (ctx, args) => {\n    await ctx.db.insert("posts", { userId: args.userId }); // @write\n};\nexport const createPost = defineMutator({ owner: "userId", server: impl });\nexport const createDraft = defineMutator({ owner: "userId", server: impl });`,
+            ],
+            [
+                "an impl that calls itself",
+                `async function impl(ctx, args) {\n    await ctx.db.insert("posts", { userId: args.userId }); // @write\n    if (!args.nested) await impl(ctx, { nested: true, userId: args.targetUserId });\n}\nexport const createPost = defineMutator({ owner: "userId", server: impl });`,
+            ],
+            [
+                "an exported impl",
+                `export const impl = async (ctx, args) => {\n    await ctx.db.insert("posts", { userId: args.userId }); // @write\n};\nexport const createPost = defineMutator({ owner: "userId", server: impl });`,
+            ],
+        ])("reports the owner write of a separately declared impl with %s", (_label, source) => {
+            expect.assertions(2);
 
             expectReported(rowAt(discover(source), markerLine(source, "write")));
         });
@@ -122,5 +158,60 @@ export const create = ${kind}({
                 expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toMatchObject({ field: "userId", method: "insert" });
             },
         );
+    });
+
+    // Outside a mutator impl a value is server-scoped only when ROOTED in the ctx:
+    // `x ?? args.userId` is an IDOR whatever `x` is, spelled `ctx` or not.
+    const procedure = (body: string): string =>
+        `import { mutation } from "@lunora/server";\nexport const create = mutation.input({}).mutation(async ({ ctx, args }) => {\n    ${body}\n});`;
+
+    it.each([
+        [
+            "a destructured `auth` falling back to args",
+            `const { auth } = ctx;\n    await ctx.db.insert("posts", { userId: auth.userId ?? args.userId }); // @write`,
+        ],
+        ["a spelled `ctx.auth` falling back to args", `await ctx.db.insert("posts", { userId: ctx.auth.userId ?? args.userId }); // @write`],
+        ["a ctx read echoing args", `await ctx.db.insert("posts", { userId: ctx.db.asId("users", args.userId) }); // @write`],
+    ])("reports an identity column written from %s", (_label, body) => {
+        expect.assertions(1);
+
+        const source = procedure(body);
+
+        expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toMatchObject({ field: "userId", method: "insert" });
+    });
+
+    it.each([
+        ["a destructured `auth`", `const { auth } = ctx;\n    await ctx.db.insert("posts", { userId: auth.userId }); // @write`],
+        ["a row read by an args id", `await ctx.db.insert("posts", { userId: (await ctx.db.get(args.id)).ownerId }); // @write`],
+        [
+            "a const bound to such a row's owner",
+            `const owner = (await ctx.db.get(args.id)).ownerId;\n    await ctx.db.insert("posts", { userId: owner }); // @write`,
+        ],
+    ])("does not record an identity column rooted in ctx through %s", (_label, body) => {
+        expect.assertions(1);
+
+        const source = procedure(body);
+
+        expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toBeUndefined();
+    });
+
+    // A bare-factory handler's `args` is its second parameter, under any name.
+    it.each([
+        ["renamed", "c, a", "a.userId"],
+        ["destructured", "c, { userId }", "userId"],
+    ])("reports an identity column written from a %s positional `args`", (_label, parameters, value) => {
+        expect.assertions(1);
+
+        const source = `import { mutation } from "@lunora/server";\nexport const create = mutation({\n    handler: async (${parameters}) => {\n        await c.db.insert("posts", { userId: ${value} }); // @write\n    },\n});`;
+
+        expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toMatchObject({ field: "userId", method: "insert" });
+    });
+
+    it("does not treat a helper's second parameter as `args`", () => {
+        expect.assertions(1);
+
+        const source = `const save = (c, a) => c.db.insert("posts", { userId: a.userId }); // @write\nexport const create = mutation({ handler: async (ctx, args) => save(ctx, { userId: ctx.auth.userId }) });`;
+
+        expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toBeUndefined();
     });
 });

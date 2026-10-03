@@ -1,11 +1,11 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, ParameterDeclaration, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { isArgumentDerived, isScopedByContext } from "../../argument-taint";
+import { isArgumentDerived } from "../../argument-taint";
 import type { CallSiteScope, FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../../ir";
 import { bindingKeyName, collectCallRows, isConstDeclaration, propertyKeyName, unwrapExpression } from "../ast";
 import { callSiteScopeOf, declarationOf, withCallerVisibility } from "../attribution";
-import { mayDenoteContextDatabase } from "../context-root";
+import { isContextRooted, mayDenoteContextDatabase } from "../context-root";
 import type { MutatorImplScope } from "./args-pristine";
 import { mutatorImplScopeOf } from "./args-pristine";
 import implTaintOf from "./impl-taint";
@@ -172,12 +172,13 @@ const identityWritesInObjectLiteral = (
         }
 
         // Correct: `userId: ctx.auth.userId`; offending: `userId: args.userId`.
-        // Outside a mutator impl, a value that references `ctx` is server-scoped
-        // even when it also embeds `args` — the shared taint convention. Inside
-        // one, taint is resolved by symbol and only a value ROOTED in the impl's
-        // `ctx` is server-scoped (see `ImplTaint`): `ctx.auth.userId ?? args.x`
-        // is not.
-        const isTainted = taint === undefined ? isArgumentDerived(value) && !isScopedByContext(value) : taint.isTaintedValue(value, true);
+        // Only a value ROOTED in the handler's ctx is server-scoped — merely
+        // referencing ctx is not, the rule every other feeder keeps: an identity
+        // column `ctx.auth.userId ?? args.userId` is an IDOR whatever its left
+        // side is. Outside a mutator impl the root is resolved by
+        // `isContextRooted`; inside one, by the impl's own taint model
+        // (`ImplTaint`).
+        const isTainted = taint === undefined ? isArgumentDerived(value) && !isContextRooted(value) : taint.isTaintedValue(value, true);
 
         if (isTainted) {
             // Recorded either way — the lint decides what to do with it. Dropping it
@@ -228,9 +229,9 @@ const ownerFieldWritesInCall = (call: CallExpression, relativePath: string, owne
     }
 
     const scope = callSiteScopeOf(call);
-    const isExport = scope.kind === "export";
-    const write = { call, method, ownerField: isExport ? ownerFieldOf(scope.name) : undefined, relativePath, scope };
-    const implScope = isExport ? mutatorImplScopeOf(call) : undefined;
+    // The owner a write may be scoped by is its mutator's: the impl it runs in, inline or declared apart.
+    const implScope = mutatorImplScopeOf(call);
+    const write = { call, method, ownerField: implScope === undefined ? undefined : ownerFieldOf(implScope.mutatorName), relativePath, scope };
 
     return objectLiterals.flatMap((objectLiteral) => identityWritesInObjectLiteral(objectLiteral, write, implScope));
 };

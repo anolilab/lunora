@@ -127,6 +127,21 @@ const isHandlerContextParameter = (parameter: ParameterDeclaration): boolean => 
     );
 };
 
+/**
+ * Whether `parameter` is a handler's POSITIONAL `args`: the second parameter of
+ * a {@link positionalHandlersOf} function (`handler: (c, a) => …`), under any
+ * name, destructured or not.
+ */
+const isHandlerArgsParameter = (parameter: ParameterDeclaration): boolean => {
+    const handler = parameter.getParent();
+
+    return (
+        (Node.isArrowFunction(handler) || Node.isFunctionExpression(handler) || Node.isFunctionDeclaration(handler) || Node.isMethodDeclaration(handler)) &&
+        handler.getParameters()[1] === parameter &&
+        positionalHandlersOf(parameter).has(handler.compilerNode)
+    );
+};
+
 /** Per-binding {@link isRebound} verdicts, keyed on the compiler node. */
 const REBOUND_CACHE = new WeakMap<ts.Node, boolean>();
 
@@ -391,6 +406,64 @@ const isDatabaseAccessor = (receiver: TsNode): boolean =>
     (Node.isIdentifier(receiver) && receiver.getText() === "db") ||
     mayDenoteContextDatabase(receiver);
 
+/**
+ * `ctx` methods whose result echoes caller-chosen input: `ctx.db.asId(table, args.x)`
+ * returns that very id, and a `ctx.run*` result can hand its args straight
+ * back. A chain through one of these is not server-scoped; its taint is that
+ * of its arguments.
+ */
+const ECHOING_CONTEXT_METHODS: ReadonlySet<string> = new Set(["asId", "runAction", "runMutation", "runQuery"]);
+
+/**
+ * Methods whose RESULT is built from their callback's return value (or a seed
+ * argument): a ctx-rooted receiver does not make that result server-scoped.
+ */
+const CALLBACK_RESULT_METHODS: ReadonlySet<string> = new Set(["catch", "flatMap", "map", "reduce", "reduceRight", "then"]);
+
+/**
+ * Whether `value` is a server-side value ROOTED in the handler's ctx, under
+ * the trust policy: its member / call chain — through property and element
+ * access, the callee side of calls, `await`, parentheses and casts — ends at a
+ * binding that denotes the ctx or a surface of it, or at a `const` whose
+ * initializer is itself rooted. A call that echoes caller input (`ctx.db.asId`,
+ * `ctx.run*`) or builds its result from a callback (`then`, `map`, …) is not
+ * rooted, and neither is any operator: `ctx.auth.userId ?? args.userId` is an
+ * IDOR whatever its left side is.
+ */
+const isContextRooted = (value: TsNode, hops = MAX_CONTEXT_HOPS): boolean => {
+    let current = unwrapExpression(value);
+
+    while (
+        Node.isAwaitExpression(current) ||
+        Node.isPropertyAccessExpression(current) ||
+        Node.isElementAccessExpression(current) ||
+        Node.isCallExpression(current)
+    ) {
+        const callee = Node.isCallExpression(current) ? unwrapExpression(current.getExpression()) : undefined;
+        const method = Node.isPropertyAccessExpression(callee) ? callee.getName() : undefined;
+
+        if (method !== undefined && (ECHOING_CONTEXT_METHODS.has(method) || CALLBACK_RESULT_METHODS.has(method))) {
+            return false;
+        }
+
+        current = unwrapExpression(current.getExpression());
+    }
+
+    if (!Node.isIdentifier(current)) {
+        return false;
+    }
+
+    if (contextPathOf(current, "trust") !== undefined) {
+        return true;
+    }
+
+    const declaration = declarationOf(current);
+    const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
+    const initializer = isConstDeclaration(variable) && hops > 0 ? variable.getInitializer() : undefined;
+
+    return initializer !== undefined && isContextRooted(initializer, hops - 1);
+};
+
 /** Whether `identifier` names a value, not a property: the `k` of `x.k` and of `{ k: v }` names a property. */
 const isValueIdentifier = (identifier: Identifier): boolean => {
     const parent = identifier.getParent();
@@ -518,13 +591,17 @@ const tablesAccessedIn = (
 };
 
 export {
+    CALLBACK_RESULT_METHODS,
     contextPathOf,
     contextSurfaceNodesIn,
     contextSurfaceText,
+    ECHOING_CONTEXT_METHODS,
     isContextIdentifier,
+    isContextRooted,
     isContextSurface,
     isDatabaseAccessor,
     isDatabaseCall,
+    isHandlerArgsParameter,
     isHandlerContextParameter,
     matchesContextReceiver,
     mayDenoteContextDatabase,

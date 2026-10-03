@@ -21,6 +21,8 @@ describe("discoverOwnerFieldWrites: calls handed the verified args", () => {
         // Freezing cannot rewrite a member, so `args` may sit in any position.
         ["`Object.freeze(args)`", `Object.freeze(args);`],
         ["`Object.isFrozen(args)`", `if (!Object.isFrozen(args)) throw new Error("mutable");`],
+        // Enumerating the keys reads them; it cannot rewrite a member.
+        ["a `for…in` over `args`", `for (const key in args) console.log(key);`],
     ])("keeps the owner write owner-scoped next to %s", (_label, statement) => {
         expect.assertions(1);
 

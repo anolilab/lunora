@@ -7,17 +7,11 @@ import type { BindingElement, Node as TsNode, ParameterDeclaration, Type, Variab
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isConstDeclaration, outermostValueWrapper, unwrapExpression } from "../ast";
+import { CALLBACK_RESULT_METHODS } from "../context-root";
 import { isLibraryGlobal, isSameNode } from "./read-only-use";
 
 /** A binding whose object a later statement may change: a variable, a parameter, or one element of a destructuring. */
 type ObjectBinding = BindingElement | ParameterDeclaration | VariableDeclaration;
-
-/**
- * Methods whose RESULT is built from their callback's return value (or a seed
- * argument): a ctx-rooted receiver does not make that result server-scoped, and
- * a callback returning (part of) an object hands it to that result.
- */
-const CALLBACK_RESULT_METHODS = new Set<string>(["catch", "flatMap", "map", "reduce", "reduceRight", "then"]);
 
 /** Array methods whose result holds the receiver's own elements (`rows.find(…)`, `rows[0]` by another name). */
 const ELEMENT_RESULT_METHODS = new Set<string>(["at", "concat", "filter", "find", "findLast", "flat", "reverse", "slice", "sort", "toReversed", "toSorted"]);
@@ -231,14 +225,5 @@ const objectContinuation = (node: TsNode): TsNode | undefined => {
     );
 };
 
-export {
-    aliasBindingsOf,
-    bindingIdentifiersOf,
-    CALLBACK_RESULT_METHODS,
-    ELEMENT_RESULT_METHODS,
-    isMethodCall,
-    isPrimitiveType,
-    objectContinuation,
-    RECEIVER_ITERATING_METHODS,
-};
+export { aliasBindingsOf, bindingIdentifiersOf, ELEMENT_RESULT_METHODS, isMethodCall, isPrimitiveType, objectContinuation, RECEIVER_ITERATING_METHODS };
 export type { ObjectBinding };
