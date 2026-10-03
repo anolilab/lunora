@@ -327,10 +327,10 @@ describe("lunora codegen", () => {
             expect(output).not.toBe("");
         });
 
-        it("warns about a cloudflare.config.ts once per process, not on every run", async () => {
+        it("warns about a cloudflare.config.ts once per process tree, not on every run", async () => {
             expect.assertions(3);
 
-            Reflect.deleteProperty(process.env, CLOUDFLARE_CLI_CONFIG_WARNING_ENV);
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
 
             seedWorkflow(
                 'import { createShardDO } from "../lunora/_generated/shard.js";\nexport const ShardDO = createShardDO();\nexport * from "../lunora/_generated/workflows.js";\n',
@@ -345,7 +345,7 @@ describe("lunora codegen", () => {
                 expect(first).toContain("https://github.com/anolilab/lunora/issues/964");
                 expect(second).not.toContain("cloudflare.config.ts");
             } finally {
-                Reflect.deleteProperty(process.env, CLOUDFLARE_CLI_CONFIG_WARNING_ENV);
+                vi.unstubAllEnvs();
             }
         });
 

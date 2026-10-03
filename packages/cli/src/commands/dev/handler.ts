@@ -25,7 +25,7 @@ import {
     resolveSchemaDirectory,
     updateDevServerState,
 } from "@lunora/config";
-import { resolveRemoteEnabled, warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
+import { resolveRemoteEnabled } from "@lunora/config/cloudflare";
 
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
@@ -42,7 +42,7 @@ import { createTuiConfirm } from "../../util/tui-prompts";
 import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
-import { codegenRequested, detectDevFlavor, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
+import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
 import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
 import type { Teardown } from "./supervise";
@@ -509,11 +509,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         logger.info(startBanner(plan));
 
-        // Before anything is spawned: the claim rides the env into the Vite /
-        // wrangler children, so the plugin inside them stays quiet (#964).
-        warnCloudflareCliConfigOnce(cwd, (message) => {
-            logger.warn(message);
-        });
+        // Before anything is spawned — see the helper.
+        printCloudflareCliConfigWarning(logger, cwd);
 
         if (plan.ipv4LoopbackForced) {
             logger.info(

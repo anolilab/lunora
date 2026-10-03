@@ -4,10 +4,8 @@ import { join } from "node:path";
 import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries, resolveSchemaDirectory } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import {
-    CLOUDFLARE_CLI_CONFIG_ADVICE,
     collectExportGaps,
-    describeCloudflareCliConfig,
-    findCloudflareCliConfig,
+    detectCloudflareCliConfig,
     findWranglerFile,
     readWranglerJsonc,
     UNEXPORTED_CLASS_MARKER,
@@ -255,25 +253,27 @@ const checkStaleProjectConfig = (cwd: string, findings: Finding[]): void => {
 };
 
 /**
- * A Cloudflare CLI config (`cloudflare.config.{ts,mts,js,mjs}`) beside
- * `wrangler.jsonc` → WARN.
+ * A Cloudflare CLI config (`cloudflare.config.{ts,mts,js,mjs}`) in the project
+ * root → WARN.
  *
- * Lunora reconciles `wrangler.jsonc` and never touches the `cf` config, so `cf
- * dev` / `cf build` / `cf deploy` would ship without whatever Lunora adds after
- * `cf migrate` wrote it. WARN rather than FAIL: `lunora deploy` goes through
- * wrangler, which ignores the file, and `cf` resource commands are fine — the
- * risk is a separate `cf` lifecycle command. Reported on every run, unlike the
- * once-per-process warning codegen and deploy print: listing what it found is
- * doctor's job. See https://github.com/anolilab/lunora/issues/964.
+ * Lunora reconciles the wrangler config and never touches the `cf` config, so
+ * `cf dev` / `cf build` / `cf deploy` would ship without whatever Lunora adds
+ * after `cf migrate` wrote it. WARN rather than FAIL: nothing `lunora deploy`
+ * runs reads the file, and `cf` resource commands are fine — the risk is a
+ * separate `cf` lifecycle command. Reported on every run, ignoring the
+ * once-per-process-tree guard the other surfaces share: listing what it found is
+ * doctor's job. The message names the wrangler file actually present, or "the
+ * project root" when there is none, so it never contradicts `wrangler-missing`.
+ * See https://github.com/anolilab/lunora/issues/964.
  */
 const checkCloudflareCliConfig = (cwd: string, findings: Finding[]): void => {
-    const configPath = findCloudflareCliConfig(cwd);
+    const detected = detectCloudflareCliConfig(cwd);
 
-    if (configPath === undefined) {
+    if (detected === undefined) {
         return;
     }
 
-    findings.push({ code: "cf-config-present", fix: CLOUDFLARE_CLI_CONFIG_ADVICE, level: "warn", message: describeCloudflareCliConfig(configPath) });
+    findings.push({ code: "cf-config-present", fix: detected.fix, level: "warn", message: detected.message });
 };
 
 /**

@@ -371,7 +371,7 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `ai-binding-missing`             | warn  | `ctx.ai` is used with no `ai` binding and no `LUNORA_AI_PROXY_URL`.                      |
 | `ai-gateway-default`             | info  | No `LUNORA_AI_GATEWAY_ID` or proxy; slugs route through the `default` AI Gateway.        |
 | `ai-gateway-token-unused`        | warn  | `LUNORA_AI_GATEWAY_TOKEN` is set, but `ctx.ai`'s binding path cannot send it.            |
-| `cf-config-present`              | warn  | A Cloudflare CLI `cloudflare.config.*` sits beside `wrangler.jsonc`.                     |
+| `cf-config-present`              | warn  | A Cloudflare CLI `cloudflare.config.*` is in the project root (Lunora never updates it). |
 | `cimd-fetch-not-strictly-public` | warn  | `@lunora/auth/cimd/workers` is imported without the `global_fetch_strictly_public` flag. |
 | `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                                   |
 | `cpu-limit-missing`              | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                                    |
@@ -623,10 +623,11 @@ Cloudflare's beta `cf` CLI yet ([#964](https://github.com/anolilab/lunora/issues
 don't run `cf dev`, `cf build` or `cf deploy` on one: they read
 `cloudflare.config.ts`, which Lunora never updates, so the bindings, Durable
 Object classes and migrations Lunora adds would be silently missing. When a
-`cloudflare.config.{ts,mts,js,mjs}` sits beside `wrangler.jsonc`, `lunora deploy`,
-codegen and the dev server warn once, and `lunora doctor` reports
-`cf-config-present`. The deploy itself still goes through Wrangler, which
-ignores the file.
+`cloudflare.config.{ts,mts,js,mjs}` sits in the project root, `lunora deploy`,
+`lunora codegen`, `lunora dev` (including `--background`) and the Vite and
+Rspack plugins (on dev and build alike) warn once per process tree, and
+`lunora doctor` reports `cf-config-present` on every run. The warning never
+blocks: nothing `lunora deploy` runs reads the file.
 
 #### `--health-check`
 

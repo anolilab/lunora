@@ -8,6 +8,7 @@ import type { Plugin } from "vite";
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import bindingsProvisionPlugin from "./bindings-provision-plugin";
 import { celldDevPlugin, celldDevSupport, withoutDevWhen } from "./celld-dev-plugin";
+import cloudflareCliConfigPlugin from "./cloudflare-cli-config-plugin";
 import codegenPlugin from "./codegen-plugin";
 import containerLogsPlugin from "./container-logs-plugin";
 import devStatePlugin from "./dev-state-plugin";
@@ -165,6 +166,9 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         // `lunora dev --background|stop|status|logs` manage Vite projects too.
         devStatePlugin(resolved),
         agentRulesHintPlugin(resolved),
+        // Unconditional, and on build as well as serve: a `cloudflare.config.ts`
+        // beside the wrangler config goes stale whatever the checks are set to.
+        cloudflareCliConfigPlugin(resolved),
         // Catches the two silent dev-proxy misconfigurations (missing `ws: true`,
         // origin-rewriting `changeOrigin`) that leave live queries permanently
         // unconnected while HTTP RPC still answers.

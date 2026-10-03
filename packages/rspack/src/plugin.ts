@@ -78,8 +78,19 @@ const consoleLogger: CodegenLogger = {
 };
 
 /**
- * Prepare `.dev.vars` and nudge for the agent rules — the watch-mode-only
- * courtesies `lunora dev` and `@lunora/vite` both perform at startup.
+ * Warn once per process tree about a Cloudflare CLI config beside the wrangler
+ * config (#964). Called from the once-per-session slots only — the dev
+ * preparation below, and the first pass of a one-shot build — never per rebuild.
+ */
+const warnCloudflareCliConfig = (options: ResolvedLunoraRspackOptions): void => {
+    warnCloudflareCliConfigOnce(options.projectRoot, (message) => {
+        consoleLogger.warn(lunoraLine(message));
+    });
+};
+
+/**
+ * Prepare `.dev.vars`, nudge for the agent rules and warn about a `cf` config — the
+ * watch-mode startup courtesies `lunora dev` and `@lunora/vite` both perform.
  *
  * `.dev.vars` is gitignored, so a fresh clone has none and the Worker that
  * `wrangler dev` boots alongside this build throws on its first required secret.
@@ -103,6 +114,8 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
     if (!detectAgentRules(options.projectRoot).installed && claimAgentRulesHint()) {
         consoleLogger.warn(`\n${lunoraLine(AGENT_RULES_HINT)}\n`);
     }
+
+    warnCloudflareCliConfig(options);
 };
 
 /**
@@ -250,6 +263,26 @@ class LunoraRspackPlugin {
     }
 
     /**
+     * The once-per-session startup work, run by the first pass only. A watch
+     * session gets the dev courtesies ({@link prepareDevSession}, which includes
+     * the `cf` config warning); a one-shot build skips those but still gets the
+     * warning, since a build is where someone reaches for `cf deploy` next.
+     */
+    async #startSession(watching: boolean): Promise<void> {
+        if (this.#started) {
+            return;
+        }
+
+        if (watching) {
+            await prepareDevSession(this.#options);
+
+            return;
+        }
+
+        warnCloudflareCliConfig(this.#options);
+    }
+
+    /**
      * One startup-or-rebuild pass. `watching` decides only whether a blocking
      * schema advisory is reported as a build error.
      */
@@ -306,9 +339,7 @@ class LunoraRspackPlugin {
             // read-only directory would otherwise reject the hook and end the watch
             // session — the one thing this plugin promises never to do. Leaving
             // `#started` unset on failure lets the next rebuild retry it.
-            if (!this.#started && watching) {
-                await prepareDevSession(this.#options);
-            }
+            await this.#startSession(watching);
 
             this.#started = true;
 
@@ -398,11 +429,6 @@ class LunoraRspackPlugin {
         if (this.#options.validateWrangler) {
             assertWranglerSatisfiesSchema(this.#options, consoleLogger.warn, "Update your wrangler.jsonc and rebuild.");
         }
-
-        // Every pass asks; only the first in the process tree prints (#964).
-        warnCloudflareCliConfigOnce(this.#options.projectRoot, (message) => {
-            consoleLogger.warn(lunoraLine(message));
-        });
 
         const blockingMessage = runCodegenPass(this.#options, consoleLogger, this.#project.get());
         const hook = await runPostCodegenHook({ cwd: this.#options.projectRoot, logger: consoleLogger });

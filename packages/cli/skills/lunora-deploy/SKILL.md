@@ -172,7 +172,9 @@ secret put` for every prod secret.
    ([#964](https://github.com/anolilab/lunora/issues/964)). `cf` resource
    commands (zones, DNS, KV, …) are fine, but never `cf dev` / `cf build` /
    `cf deploy`: they read `cloudflare.config.ts`, which Lunora never updates.
-   `lunora doctor` reports one as `cf-config-present`; deploy/codegen/dev warn.
+   `lunora doctor` reports one as `cf-config-present` on every run; deploy,
+   codegen, `lunora dev` and the Vite/Rspack plugins (dev and build) warn once
+   per process tree.
 
 ## Checklist
 

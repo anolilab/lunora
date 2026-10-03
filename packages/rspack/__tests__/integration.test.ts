@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import type { Compiler, Stats } from "@rspack/core";
 import { rspack } from "@rspack/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +64,10 @@ const runOnce = async (compiler: Compiler): Promise<Stats> =>
             });
         });
     });
+
+/** The `console.warn` lines about a Cloudflare CLI config, from a spy. */
+const cfWarnings = (warn: { mock: { calls: unknown[][] } }): string[] =>
+    warn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes("cloudflare.config.ts"));
 
 /** The compilation's error messages, as plain strings. */
 const errorsOf = (stats: Stats): string[] => stats.toJson({ all: false, errors: true }).errors?.map((entry) => entry.message ?? "") ?? [];
@@ -150,6 +155,28 @@ describe("rspack build (real compiler)", () => {
     afterEach(() => {
         for (const root of roots.splice(0)) {
             rmSync(root, { force: true, recursive: true });
+        }
+    });
+
+    it("warns about a cloudflare.config.ts on a one-shot build", async () => {
+        expect.assertions(2);
+
+        vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+
+        const root = fixture();
+
+        writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            await runOnce(productionCompiler(root));
+
+            expect(cfWarnings(warn)).toHaveLength(1);
+            expect(cfWarnings(warn)[0]).toContain("https://github.com/anolilab/lunora/issues/964");
+        } finally {
+            warn.mockRestore();
+            vi.unstubAllEnvs();
         }
     });
 
@@ -293,6 +320,38 @@ describe("rspack watch (real compiler)", () => {
         // not retrigger the dev watchers". Before the source-fingerprint gate this
         // measured 73 builds in 25 seconds, each spawning a subprocess.
         expect(builds.length).toBeLessThanOrEqual(3);
+    }, 60_000);
+
+    it("warns about a cloudflare.config.ts once per session, not on every pass", async () => {
+        expect.assertions(2);
+
+        vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+
+        const root = fixture();
+
+        writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const { builds } = await watchRun(
+                root,
+                () => {
+                    // Release the process-tree guard, so only the plugin calling it
+                    // from its once-per-session slot (not every pass) keeps the
+                    // rebuild's pass quiet.
+                    vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+                    writeFileSync(join(root, "lunora", "schema.ts"), `${SCHEMA}\n// touched\n`, "utf8");
+                },
+                { expectedBuilds: 2, settleMs: 2000 },
+            );
+
+            expect(builds.length).toBeGreaterThanOrEqual(2);
+            expect(cfWarnings(warn)).toHaveLength(1);
+        } finally {
+            warn.mockRestore();
+            vi.unstubAllEnvs();
+        }
     }, 60_000);
 
     it("scaffolds .dev.vars, which only runs when watchMode is actually true", async () => {

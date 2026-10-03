@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 
 import { lunoraLine } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { assertWranglerSatisfiesSchema, findWranglerFile, readWranglerJsonc, warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
+import { assertWranglerSatisfiesSchema, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
 import type { ResolvedLunoraPluginOptions } from "./types";
@@ -84,13 +84,6 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
                 },
                 "Update your wrangler.jsonc and restart the dev server.",
             );
-
-            // Once per process tree, not per restart: `lunora dev` claims it
-            // before spawning this server, and a config reload re-runs this hook.
-            warnCloudflareCliConfigOnce(options.projectRoot, (message) => {
-                // eslint-disable-next-line no-console
-                console.warn(lunoraLine(message));
-            });
 
             const wranglerPath = findWranglerFile(options.projectRoot);
 

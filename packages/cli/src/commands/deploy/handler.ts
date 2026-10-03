@@ -743,8 +743,9 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // deployed worker with stale/missing secrets silently (Supabase #45242).
     warnDevVariablesNotPushed(cwd, options.logger, driver);
 
-    // Non-blocking too: this deploy goes through wrangler, which ignores a
-    // `cloudflare.config.ts`, so it is correct as it stands. The risk is a
+    // Non-blocking too: nothing this deploy runs reads a `cloudflare.config.ts`
+    // (the target's own toolchain — wrangler, or celld — deploys from the
+    // reconciled wrangler config), so it is correct as it stands. The risk is a
     // separate `cf deploy` shipping from a config Lunora never updates (#964).
     warnCloudflareCliConfigOnce(cwd, (message) => {
         options.logger.warn(message);

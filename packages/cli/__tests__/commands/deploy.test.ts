@@ -399,11 +399,11 @@ describe("lunora deploy", () => {
 
         describe("cloudflare cli config", () => {
             beforeEach(() => {
-                Reflect.deleteProperty(process.env, CLOUDFLARE_CLI_CONFIG_WARNING_ENV);
+                vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
             });
 
             afterEach(() => {
-                Reflect.deleteProperty(process.env, CLOUDFLARE_CLI_CONFIG_WARNING_ENV);
+                vi.unstubAllEnvs();
             });
 
             it("warns about a cloudflare.config.ts before spawning wrangler, and still deploys", async () => {

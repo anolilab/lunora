@@ -293,10 +293,12 @@ Cloudflare's `cf` CLI is in beta, and Lunora doesn't support it yet
   that file, so the bindings, Durable Object classes and migrations it adds
   later would be silently missing from those deploys.
 
-When a `cloudflare.config.{ts,mts,js,mjs}` sits beside `wrangler.jsonc`,
-`lunora deploy`, `lunora codegen` and the dev server print this warning once per
-process, and `lunora doctor` reports it as `cf-config-present`. The warning never
-blocks: `lunora deploy` itself goes through Wrangler, which ignores the file.
+When a `cloudflare.config.{ts,mts,js,mjs}` sits in the project root, Lunora warns
+once per process tree — from `lunora deploy`, `lunora codegen`, `lunora dev`
+(including `--background`), and the Vite and Rspack plugins on both dev and
+build. A rebuild, a dev-server restart or a child process `lunora dev` spawned
+stays quiet. `lunora doctor` reports it on every run as `cf-config-present`.
+The warning never blocks: nothing `lunora deploy` runs reads the file.
 
 ## Worker size
 

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DoctorData } from "../../src/commands/doctor/handler";
@@ -888,14 +889,33 @@ describe("runDoctor", () => {
             expect(result.code).toBe(0);
         });
 
-        it("reports every run, even after a once-per-process warning was already printed", async () => {
+        it("reports every run, even after a once-per-process-tree warning was already claimed", async () => {
             expect.assertions(2);
 
-            seed(workdir, CLEAN_WRANGLER);
-            writeFileSync(join(workdir, "cloudflare.config.mjs"), "export default {};\n", "utf8");
+            // What `lunora dev` / codegen / deploy leave behind once they warned.
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "1");
 
-            expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))?.message).toContain("cloudflare.config.mjs");
-            expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeDefined();
+            try {
+                seed(workdir, CLEAN_WRANGLER);
+                writeFileSync(join(workdir, "cloudflare.config.mjs"), "export default {};\n", "utf8");
+
+                expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))?.message).toContain("cloudflare.config.mjs");
+                expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeDefined();
+            } finally {
+                vi.unstubAllEnvs();
+            }
+        });
+
+        it("does not contradict wrangler-missing when there is no wrangler config", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(result.findings.some((finding) => finding.code === "wrangler-missing")).toBe(true);
+            expect(cfFinding(result)?.message).toContain("cloudflare.config.ts found in the project root.");
+            expect(cfFinding(result)?.message).not.toContain("next to");
         });
 
         it("says nothing for a project without one", async () => {

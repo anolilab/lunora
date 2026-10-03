@@ -1797,23 +1797,6 @@ interface BindingRequirement {
 }
 ```
 
-### `CLOUDFLARE_CLI_CONFIG_ADVICE` (const)
-
-```ts
-const CLOUDFLARE_CLI_CONFIG_ADVICE: string;
-```
-
-### `CLOUDFLARE_CLI_CONFIG_FILES` (const)
-
-```ts
-const CLOUDFLARE_CLI_CONFIG_FILES: readonly [
-    "cloudflare.config.ts",
-    "cloudflare.config.mts",
-    "cloudflare.config.js",
-    "cloudflare.config.mjs"
-];
-```
-
 ### `CLOUDFLARE_CLI_CONFIG_WARNING_ENV` (const)
 
 ```ts
@@ -1830,6 +1813,15 @@ const CLOUDFLARE_DRIVER: DeployDriver;
 
 ```ts
 const CLOUDFLARE_TOOLCHAIN_VERSIONS: Readonly<Record<"@cloudflare/vite-plugin" | "@cloudflare/workers-types" | "wrangler", string>>;
+```
+
+### `CloudflareCliConfigFinding` (interface)
+
+```ts
+interface CloudflareCliConfigFinding {
+    fix: string;
+    message: string;
+}
 ```
 
 ### `DEFAULT_OBSERVABILITY` (const)
@@ -2553,22 +2545,16 @@ const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 const collectWranglerSecretVariables: (projectRoot: string) => WranglerVariableIR[];
 ```
 
-### `describeCloudflareCliConfig` (const)
-
-```ts
-const describeCloudflareCliConfig: (configPath: string) => string;
-```
-
 ### `describePreservedCrons` (const)
 
 ```ts
 const describePreservedCrons: (preserved: ReadonlyArray<string>) => string | undefined;
 ```
 
-### `findCloudflareCliConfig` (const)
+### `detectCloudflareCliConfig` (const)
 
 ```ts
-const findCloudflareCliConfig: (projectRoot: string) => string | undefined;
+const detectCloudflareCliConfig: (projectRoot: string) => CloudflareCliConfigFinding | undefined;
 ```
 
 ### `findWranglerFile` (const)
