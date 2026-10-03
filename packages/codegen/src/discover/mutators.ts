@@ -1,14 +1,25 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import type {
+    ArrowFunction,
+    CallExpression,
+    FunctionExpression,
+    Identifier,
+    MethodDeclaration,
+    Node as TsNode,
+    ObjectLiteralExpression,
+    Project,
+    SourceFile,
+    VariableDeclaration,
+} from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { MutatorIR, ValidatorIR } from "../ir";
 import { isServerSurfaceModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
-import { findObjectProperty } from "./ast";
+import { findObjectProperty, unwrapExpression } from "./ast";
 import unwrapHandlerReturn from "./functions/unwrap-handler-return";
 
 /** The only file custom mutators may be declared in — mirrors `lunora/queues.ts`. */
@@ -104,6 +115,37 @@ const mutatorLiteral = (call: CallExpression): ObjectLiteralExpression | undefin
     const first = call.getArguments()[0];
 
     return first && Node.isObjectLiteralExpression(first) ? first : undefined;
+};
+
+/** The function forms a mutator's authoritative `server` impl is statically readable in. */
+type MutatorServerImpl = ArrowFunction | FunctionExpression | MethodDeclaration;
+
+/**
+ * The `server` impl of the mutator `declaration` binds
+ * (`const x = defineMutator({ server })`), resolved DOWN from that declaration
+ * so it is always this declaration's own impl, never a same-named nested one.
+ * Reads `server: (ctx, args) => …`, `server: function (ctx, args) {…}` and
+ * the method shorthand `server(ctx, args) {…}`, seen through `(…)`, `as` and
+ * `satisfies`. `undefined` for anything else — a reference to a function
+ * declared elsewhere, or a higher-order `server: wrap(fn)` whose wrapper could
+ * hand `fn` different arguments — so callers fail closed.
+ */
+const mutatorServerImplOf = (declaration: VariableDeclaration): MutatorServerImpl | undefined => {
+    const call = declaration.getInitializer();
+
+    if (!Node.isCallExpression(call) || !isDefineMutatorCallee(call.getExpression())) {
+        return undefined;
+    }
+
+    const property = findObjectProperty(mutatorLiteral(call), "server");
+
+    if (Node.isMethodDeclaration(property)) {
+        return property;
+    }
+
+    const impl = Node.isPropertyAssignment(property) ? unwrapExpression(property.getInitializer()) : undefined;
+
+    return Node.isArrowFunction(impl) || Node.isFunctionExpression(impl) ? impl : undefined;
 };
 
 /**
@@ -231,4 +273,5 @@ const discoverMutators = (project: Project, lunoraDirectory: string): MutatorIR[
     return mutators;
 };
 
-export { discoverMutators, isDefineMutatorCallee, MUTATORS_FILENAME };
+export { discoverMutators, isDefineMutatorCallee, mutatorLiteral, MUTATORS_FILENAME, mutatorServerImplOf };
+export type { MutatorServerImpl };

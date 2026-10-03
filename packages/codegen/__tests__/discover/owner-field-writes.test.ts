@@ -11,22 +11,41 @@ import { discoverMutators } from "../../src/discover/mutators";
 import discoverOwnerFieldWrites from "../../src/discover/owner-field-writes";
 import { markerLine } from "../call-site-fixture";
 
+type Row = ReturnType<typeof discoverOwnerFieldWrites>[number];
+
 let workdir: string;
-let project: Project;
 
-const write = (name: string, source: string): string => {
-    const path = join(workdir, "lunora", name);
+/** Discover the owner-field writes of ONE fixture file, together with the mutators it declares. */
+const discover = (source: string, file = "mutators.ts"): Row[] => {
+    const lunoraDirectory = join(workdir, "lunora");
+    const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
 
-    writeFileSync(path, source, "utf8");
+    writeFileSync(join(lunoraDirectory, file), source, "utf8");
 
-    return path;
+    return discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+};
+
+/** An exported owner-scoped mutator whose `server` impl takes `parameters` and runs `body`. */
+const ownerMutator = (body: string, parameters = "ctx, args"): string =>
+    `export const createPost = defineMutator({
+    owner: "userId",
+    server: async (${parameters}) => {
+${body}
+    },
+});`;
+
+const rowAt = (found: ReadonlyArray<Row>, line: number): Row | undefined => found.find((row) => row.line === line);
+
+/** Recorded AND not owner-scoped, i.e. the lint reports it at full severity. */
+const expectReported = (row: Row | undefined): void => {
+    expect(row).toBeDefined();
+    expect(row).not.toHaveProperty("ownerScoped");
 };
 
 describe("discoverOwnerFieldWrites", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-owner-"));
         mkdirSync(join(workdir, "lunora"), { recursive: true });
-        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
     afterEach(() => {
@@ -41,13 +60,7 @@ describe("discoverOwnerFieldWrites", () => {
     it("marks a mutator writing the very column its `owner` declares as owner-scoped", () => {
         expect.assertions(2);
 
-        write(
-            "mutators.ts",
-            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); } });`,
-        );
-
-        const lunoraDirectory = join(workdir, "lunora");
-        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+        const found = discover(ownerMutator(`await ctx.db.insert("posts", { userId: args.userId });`));
 
         // Recorded, not dropped — the lint declines to report it. Discovery
         // describes the code; judging it is the lint's job.
@@ -61,100 +74,55 @@ describe("discoverOwnerFieldWrites", () => {
     it("never marks a write inside a helper owner-scoped, even when the mutator forwards another arg", () => {
         expect.assertions(1);
 
-        write(
-            "mutators.ts",
-            `async function persist(ctx, args) { await ctx.db.insert("posts", { userId: args.userId }); }
-export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await persist(ctx, { userId: args.targetUserId }); } });`,
-        );
+        const found = discover(`async function persist(ctx, args) { await ctx.db.insert("posts", { userId: args.userId }); }
+export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await persist(ctx, { userId: args.targetUserId }); } });`);
 
-        const lunoraDirectory = join(workdir, "lunora");
-
-        expect(discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory))).toStrictEqual([
+        expect(found).toStrictEqual([
             { field: "userId", file: "mutators", line: 1, method: "insert", scope: { callers: ["createPost"], kind: "helper", name: "persist" } },
         ]);
     });
 
     it("still reports a helper's write when every caller forwards its own verified owner arg", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        write(
-            "mutators.ts",
-            `async function persist(ctx, args) { await ctx.db.insert("posts", { userId: args.userId }); }
-export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await persist(ctx, { userId: args.userId }); } });`,
-        );
-
-        const lunoraDirectory = join(workdir, "lunora");
-        const [found] = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+        const found = discover(`async function persist(ctx, args) { await ctx.db.insert("posts", { userId: args.userId }); }
+export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await persist(ctx, { userId: args.userId }); } });`);
 
         // Conservative: proving the helper's `args.userId` is the verified one needs data flow.
-        expect(found?.ownerScoped).toBeUndefined();
+        expectReported(found[0]);
     });
 
     // `applyOwnerScope` overwrites exactly `args[owner]` with the verified
     // identity, so ONLY that argument is laundered. Matching on the column name
     // alone would suppress a genuine act-as-any-user IDOR.
     it("does not mark a write of the owner COLUMN sourced from a different arg", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
-        write(
-            "mutators.ts",
-            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.targetUserId }); } });`,
-        );
-
-        const lunoraDirectory = join(workdir, "lunora");
-        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
+        const found = discover(ownerMutator(`await ctx.db.insert("posts", { userId: args.targetUserId });`));
 
         expect(found).toHaveLength(1);
-        expect(found[0]?.ownerScoped).toBeUndefined();
+
+        expectReported(found[0]);
     });
 
-    // The shared taint hop takes the nearest preceding same-named declaration
-    // regardless of `const`/`let` and never looks at assignments. Over-resolving
-    // makes the taint predicate report MORE, which is safe; here the same hop is
-    // what SILENCES a finding, so a reassignable alias must not qualify.
+    // A reassignable alias must not qualify: the hop is what SILENCES a finding.
     it("does not mark a `let` alias that is reassigned to a different arg", () => {
         expect.assertions(2);
 
-        write(
-            "mutators.ts",
-            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { let userId = args.userId; userId = args.targetUserId; await ctx.db.insert("posts", { userId }); } });`,
-        );
-
-        const lunoraDirectory = join(workdir, "lunora");
-        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
-
-        expect(found).toHaveLength(1);
-        expect(found[0]?.ownerScoped).toBeUndefined();
+        expectReported(discover(ownerMutator(`let userId = args.userId; userId = args.targetUserId; await ctx.db.insert("posts", { userId });`))[0]);
     });
 
     it("does not mark a `let` alias even when it is never reassigned", () => {
-        // Cheap to be strict: `const` is the only shape the docs show, and a
-        // mutable binding cannot be proven safe without real symbol resolution.
-        expect.assertions(1);
+        // Cheap to be strict: `const` is the only shape the docs show.
+        expect.assertions(2);
 
-        write(
-            "mutators.ts",
-            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { let userId = args.userId; await ctx.db.insert("posts", { userId }); } });`,
-        );
-
-        const lunoraDirectory = join(workdir, "lunora");
-        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
-
-        expect(found[0]?.ownerScoped).toBeUndefined();
+        expectReported(discover(ownerMutator(`let userId = args.userId; await ctx.db.insert("posts", { userId });`))[0]);
     });
 
     it("marks the owner column reached through one local const hop", () => {
         expect.assertions(1);
 
-        write(
-            "mutators.ts",
-            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { const userId = args.userId; await ctx.db.insert("posts", { userId }); } });`,
-        );
-
-        const lunoraDirectory = join(workdir, "lunora");
-        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
-
-        expect(found[0]).toMatchObject({ ownerScoped: true });
+        expect(discover(ownerMutator(`const userId = args.userId; await ctx.db.insert("posts", { userId });`))[0]).toMatchObject({ ownerScoped: true });
     });
 
     it("still flags a DIFFERENT identity column in an owner-scoped mutator", () => {
@@ -162,40 +130,30 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
         // from `args` in the same impl is still caller-controlled.
         expect.assertions(2);
 
-        write(
-            "mutators.ts",
-            `export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => { await ctx.db.insert("posts", { tenantId: args.tenantId, userId: args.userId }); } });`,
-        );
+        const found = discover(ownerMutator(`await ctx.db.insert("posts", { tenantId: args.tenantId, userId: args.userId });`));
 
-        const lunoraDirectory = join(workdir, "lunora");
-        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
-        const tenant = found.find((entry) => entry.field === "tenantId");
-
-        expect(tenant).toBeDefined();
-        expect(tenant?.ownerScoped).toBeUndefined();
+        expectReported(found.find((entry) => entry.field === "tenantId"));
     });
 
     it("still flags an owner-column write in a mutator that declares no `owner`", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
-        write(
-            "mutators.ts",
+        const found = discover(
             `export const createPost = defineMutator({ server: async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); } });`,
         );
 
-        const lunoraDirectory = join(workdir, "lunora");
-        const found = discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
-
         expect(found).toHaveLength(1);
-        expect(found[0]?.ownerScoped).toBeUndefined();
+
+        expectReported(found[0]);
     });
 
     it("flags an insert whose doc sets userId from args", () => {
         expect.assertions(2);
 
-        write("create.ts", `export const create = mutation(async ({ ctx, args }) => { await ctx.db.insert("posts", { userId: args.userId }); });`);
-
-        const found = discoverOwnerFieldWrites(project, join(workdir, "lunora"));
+        const found = discover(
+            `export const create = mutation(async ({ ctx, args }) => { await ctx.db.insert("posts", { userId: args.userId }); });`,
+            "create.ts",
+        );
 
         expect(found).toHaveLength(1);
         expect(found[0]).toMatchObject({ scope: { kind: "export", name: "create" }, field: "userId", file: "create", line: 1, method: "insert" });
@@ -204,9 +162,10 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
     it("flags a patch whose partial sets ownerId from args", () => {
         expect.assertions(2);
 
-        write("rename.ts", `export const rename = mutation(async ({ ctx, args }) => { await ctx.db.patch(args.id, { ownerId: args.ownerId }); });`);
-
-        const found = discoverOwnerFieldWrites(project, join(workdir, "lunora"));
+        const found = discover(
+            `export const rename = mutation(async ({ ctx, args }) => { await ctx.db.patch(args.id, { ownerId: args.ownerId }); });`,
+            "rename.ts",
+        );
 
         expect(found).toHaveLength(1);
         expect(found[0]).toMatchObject({ field: "ownerId", method: "patch" });
@@ -215,114 +174,107 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
     it("flags a shorthand identity property bound to an args value through one local hop", () => {
         expect.assertions(2);
 
-        write("hop.ts", `export const create = mutation(async ({ ctx, args }) => { const userId = args.userId; await ctx.db.insert("posts", { userId }); });`);
-
-        const found = discoverOwnerFieldWrites(project, join(workdir, "lunora"));
+        const found = discover(
+            `export const create = mutation(async ({ ctx, args }) => { const userId = args.userId; await ctx.db.insert("posts", { userId }); });`,
+            "hop.ts",
+        );
 
         expect(found).toHaveLength(1);
         expect(found[0]).toMatchObject({ field: "userId", method: "insert" });
     });
 
+    // A procedure handler's args are recognized by the `args` KEY, so renaming the
+    // local binding does not hide the write.
+    it("flags a procedure handler that renames its `args` binding", () => {
+        expect.assertions(2);
+
+        const found = discover(
+            `export const create = mutation(async ({ ctx, args: input }) => { await ctx.db.insert("posts", { userId: input.userId }); });`,
+            "renamed.ts",
+        );
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ field: "userId", scope: { kind: "export", name: "create" } });
+    });
+
     it("flags one offending element of an insertManyUnsafe array", () => {
         expect.assertions(2);
 
-        write(
-            "import.ts",
+        const found = discover(
             `export const importRows = mutation(async ({ ctx, args }) => { await ctx.db.insertManyUnsafe("posts", [{ userId: args.userId }, { title: args.title }]); });`,
+            "import.ts",
         );
-
-        const found = discoverOwnerFieldWrites(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
         expect(found[0]).toMatchObject({ field: "userId", method: "insertManyUnsafe" });
     });
 
-    it("ignores an ownership column stamped from ctx", () => {
+    it.each([
+        ["an ownership column stamped from ctx", `{ userId: ctx.auth.userId }`],
+        ["a non-identity column written from args", `{ title: args.title }`],
+        ["an ownership column set to a fixed literal", `{ userId: "system" }`],
+    ])("ignores %s", (_label, document) => {
         expect.assertions(1);
 
-        write("safe.ts", `export const create = mutation(async ({ ctx, args }) => { await ctx.db.insert("posts", { userId: ctx.auth.userId }); });`);
-
-        expect(discoverOwnerFieldWrites(project, join(workdir, "lunora"))).toHaveLength(0);
+        expect(discover(`export const create = mutation(async ({ ctx, args }) => { await ctx.db.insert("posts", ${document}); });`, "safe.ts")).toHaveLength(0);
     });
 
-    it("ignores a non-identity column written from args", () => {
-        expect.assertions(1);
-
-        write("title.ts", `export const create = mutation(async ({ ctx, args }) => { await ctx.db.insert("posts", { title: args.title }); });`);
-
-        expect(discoverOwnerFieldWrites(project, join(workdir, "lunora"))).toHaveLength(0);
-    });
-
-    it("ignores an ownership column set to a fixed literal", () => {
-        expect.assertions(1);
-
-        write("literal.ts", `export const create = mutation(async ({ ctx, args }) => { await ctx.db.insert("posts", { userId: "system" }); });`);
-
-        expect(discoverOwnerFieldWrites(project, join(workdir, "lunora"))).toHaveLength(0);
-    });
-
-    // #957: `isArgsProperty` compared the TEXT `args`, so a closure inside the
-    // impl declaring its own `args` laundered any value into an "owner-scoped"
-    // write. `applyOwnerScope` verified the impl's parameter, not the closure's.
+    // #957: the owner-scope check compared the TEXT `args`, so a closure inside
+    // the impl declaring its own `args` laundered any value into an
+    // "owner-scoped" write. `applyOwnerScope` verified the impl's parameter, not
+    // the closure's.
     describe("resolves the verified `args` by symbol, not by spelling", () => {
-        const discover = (source: string): ReturnType<typeof discoverOwnerFieldWrites> => {
-            write("mutators.ts", source);
-
-            // A fresh project per fixture: a reused one keeps serving the first parse of `mutators.ts`.
-            const fresh = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-            const lunoraDirectory = join(workdir, "lunora");
-
-            return discoverOwnerFieldWrites(fresh, lunoraDirectory, [], discoverMutators(fresh, lunoraDirectory));
-        };
-        type Row = ReturnType<typeof discoverOwnerFieldWrites>[number];
-
-        const rowAt = (found: ReadonlyArray<Row>, line: number): Row | undefined => found.find((row) => row.line === line);
-        // Recorded AND not owner-scoped, i.e. the lint reports it at full severity.
-        const expectReported = (row: Row | undefined): void => {
-            expect(row).toBeDefined();
-            expect(row).not.toHaveProperty("ownerScoped");
-        };
-
         it("reports a write laundered through a nested closure's own `args` parameter", () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
-            const source = `export const createPost = defineMutator({
-    owner: "userId",
-    server: async (ctx, args) => {
-        const persist = async (args: { userId: string }) => ctx.db.insert("posts", { userId: args.userId }); // @nested
-        await persist({ userId: args.targetUserId });
-    },
-});`;
+            const source = ownerMutator(`        const persist = async (args: { userId: string }) => ctx.db.insert("posts", { userId: args.userId }); // @write
+        await persist({ userId: args.targetUserId });`);
             const found = discover(source);
 
             expect(found).toHaveLength(1);
-            expect(found[0]).toMatchObject({ field: "userId", line: markerLine(source, "nested"), scope: { kind: "export", name: "createPost" } });
-            expect(found[0]?.ownerScoped).toBeUndefined();
+            expect(found[0]).toMatchObject({ field: "userId", line: markerLine(source, "write"), scope: { kind: "export", name: "createPost" } });
+
+            expectReported(found[0]);
+        });
+
+        // A nested function can be called with anything, so its parameters are
+        // taint sources however they are spelled, and never owner-scoped.
+        it.each([
+            [
+                "a renamed nested parameter",
+                ownerMutator(`        const persist = async (data) => ctx.db.insert("posts", { userId: data.userId }); // @write
+        await persist({ userId: args.targetUserId });`),
+            ],
+            [
+                "a nested parameter shadowing a destructured owner binding",
+                ownerMutator(
+                    `        const persist = async (userId) => ctx.db.insert("posts", { userId }); // @write
+        await persist(targetUserId);`,
+                    "ctx, { userId, targetUserId }",
+                ),
+            ],
+        ])("reports a write laundered through %s", (_label, source) => {
+            expect.assertions(2);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
         });
 
         it("marks a nested closure that closes over the impl's own `args` as owner-scoped", () => {
-            expect.assertions(2);
+            expect.assertions(1);
 
-            const source = `export const createPost = defineMutator({
-    owner: "userId",
-    server: async (ctx, args) => {
-        const persist = async () => ctx.db.insert("posts", { userId: args.userId }); // @closure
-        await persist();
-    },
-});`;
-            const found = discover(source);
+            const source = ownerMutator(`        const persist = async () => ctx.db.insert("posts", { userId: args.userId }); // @write
+        await persist();`);
 
-            expect(found).toHaveLength(1);
-            expect(found[0]).toMatchObject({ line: markerLine(source, "closure"), ownerScoped: true });
+            expect(rowAt(discover(source), markerLine(source, "write"))).toMatchObject({ ownerScoped: true });
         });
 
-        it("keeps a direct `args.userId` write in the impl owner-scoped", () => {
+        it("keeps a direct `args.userId` write in a method-shorthand impl owner-scoped", () => {
             expect.assertions(1);
 
             const source = `export const createPost = defineMutator({
     owner: "userId",
     async server(ctx, args) {
-        await ctx.db.insert("posts", { userId: args.userId }); // @direct
+        await ctx.db.insert("posts", { userId: args.userId }); // @write
     },
 });`;
 
@@ -330,7 +282,7 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
                 {
                     field: "userId",
                     file: "mutators",
-                    line: markerLine(source, "direct"),
+                    line: markerLine(source, "write"),
                     method: "insert",
                     ownerScoped: true,
                     scope: { kind: "export", name: "createPost" },
@@ -338,103 +290,172 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
             ]);
         });
 
-        it("reports writes from a `for` / `catch` / block binding that shadows `args`", () => {
-            expect.assertions(7);
+        it.each([`args["userId"]`, `args?.userId`, `(args as { userId: string }).userId`])("marks `%s` owner-scoped", (read) => {
+            expect.assertions(1);
+
+            expect(discover(ownerMutator(`await ctx.db.insert("posts", { userId: ${read} });`))[0]).toMatchObject({ ownerScoped: true });
+        });
+
+        it.each([
+            ["for", `for (const args of [{ userId: "victim" }]) {\n            await ctx.db.insert("posts", { userId: args.userId }); // @write\n        }`],
+            [
+                "catch",
+                `try {\n            await run();\n        } catch (args) {\n            await ctx.db.insert("posts", { userId: args.userId }); // @write\n        }`,
+            ],
+            [
+                "block",
+                `{\n            const args = { userId: "victim" };\n            await ctx.db.insert("posts", { userId: args.userId }); // @write\n        }`,
+            ],
+        ])("reports a write from a `%s` binding that shadows `args`", (_label, body) => {
+            expect.assertions(2);
+
+            const source = ownerMutator(`        ${body}`);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        // Any use of the impl's `args` other than a plain member read may change
+        // it where this cannot see, so the whole impl stops being owner-scoped.
+        it.each([
+            ["a rebound `args`", `args = { userId: args.targetUserId };`],
+            ["an overwritten owner member", `args.userId = args.targetUserId;`],
+            ["a write through an alias", `const alias = args; alias.userId = args.targetUserId;`],
+            ["`Object.assign`", `Object.assign(args, { userId: args.targetUserId });`],
+            ["a write through `as`", `(args as { userId: string }).userId = args.targetUserId;`],
+            ["a write through parentheses", `(args).userId = args.targetUserId;`],
+            ["a write through `!`", `args!.userId = args.targetUserId;`],
+            ["a call it is passed to", `fix(args);`],
+            ["a `var` redeclaration", `var args = { userId: args.targetUserId };`],
+            ["`arguments`", `void arguments;`],
+            ["a spread of it", `const copy = { ...args };`],
+        ])("reports the owner write after %s", (_label, statement) => {
+            expect.assertions(2);
+
+            const source = ownerMutator(`        ${statement}
+        await ctx.db.insert("posts", { userId: args.userId }); // @write`);
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
+
+        it("reports a read of `args` through `arguments`", () => {
+            expect.assertions(2);
 
             const source = `export const createPost = defineMutator({
     owner: "userId",
-    server: async (ctx, args) => {
-        for (const args of [{ userId: "victim" }]) {
-            await ctx.db.insert("posts", { userId: args.userId }); // @for
-        }
-        try {
-            await ctx.db.insert("posts", { userId: args.userId }); // @own
-        } catch (args) {
-            await ctx.db.insert("posts", { userId: args.userId }); // @catch
-        }
-        {
-            const args = { userId: "victim" };
-            await ctx.db.insert("posts", { userId: args.userId }); // @block
-        }
+    server: async function (ctx, args) {
+        await ctx.db.insert("posts", { userId: arguments[1].userId }); // @write
     },
 });`;
-            const found = discover(source);
 
-            expectReported(rowAt(found, markerLine(source, "for")));
-            expectReported(rowAt(found, markerLine(source, "catch")));
-            expectReported(rowAt(found, markerLine(source, "block")));
-
-            expect(rowAt(found, markerLine(source, "own"))).toMatchObject({ ownerScoped: true });
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
         });
 
-        it("reports a write after the impl rebinds `args` or overwrites its owner member", () => {
-            expect.assertions(4);
+        it("reports a write through an alias of `args`", () => {
+            expect.assertions(2);
 
-            const rebound = discover(`export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => {
-    args = { userId: args.targetUserId };
-    await ctx.db.insert("posts", { userId: args.userId });
-} });`);
+            const source = ownerMutator(`        const alias = args;
+        await ctx.db.insert("posts", { userId: alias.userId }); // @write`);
 
-            expectReported(rebound[0]);
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
+        });
 
-            const overwritten = discover(`export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => {
-    args.userId = args.targetUserId;
-    await ctx.db.insert("posts", { userId: args.userId });
-} });`);
+        it.each([
+            ["parenthesized", `(async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); })`],
+            ["`as`-cast", `(async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); }) as never`],
+            ["`satisfies`-checked", `(async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); }) satisfies unknown`],
+        ])("resolves the write of a %s `server` impl", (_label, server) => {
+            expect.assertions(1);
 
-            expectReported(overwritten[0]);
+            expect(discover(`export const createPost = defineMutator({ owner: "userId", server: ${server} });`)[0]).toMatchObject({ ownerScoped: true });
+        });
+
+        // A higher-order wrapper could hand the impl different arguments than the
+        // verified ones, so this stays fail-closed (alpha owner-scoped it).
+        it("reports the write of a `server` impl passed through a wrapper", () => {
+            expect.assertions(2);
+
+            const found = discover(
+                `export const createPost = defineMutator({ owner: "userId", server: wrap(async (ctx, args) => { await ctx.db.insert("posts", { userId: args.userId }); }) });`,
+            );
+
+            expectReported(found[0]);
+        });
+
+        // Resolved DOWN from the export's own top-level declaration: a nested,
+        // same-named mutator's `args` is a nested function's parameter, never the
+        // outer export's verified args.
+        it("reports a write in a nested same-named mutator's `server` impl", () => {
+            expect.assertions(2);
+
+            const source = `export const save = defineMutator({
+    owner: "userId",
+    server: async (ctx, args) => {
+        const save = defineMutator({
+            owner: "userId",
+            server: async (ctx, args) => {
+                await ctx.db.insert("posts", { userId: args.userId }); // @write
+            },
+        });
+        await save.handler(ctx, { userId: args.targetUserId });
+    },
+});`;
+
+            expectReported(rowAt(discover(source), markerLine(source, "write")));
         });
 
         // `applyOwnerScope` stamps the parsed args object BEFORE `server(context,
-        // args)` is called, so a destructuring parameter reads the verified value.
-        it("marks the owner binding of a destructured impl parameter as owner-scoped", () => {
-            expect.assertions(3);
+        // args)` is called, so destructuring that parameter reads the verified value.
+        it.each([`{ userId }`, `{ userId = "other" }`, `{ userId: uid }`])("marks the owner binding of a `%s` impl parameter owner-scoped", (parameter) => {
+            expect.assertions(1);
 
-            const source = `export const createPost = defineMutator({
-    owner: "userId",
-    server: async (ctx, { userId, targetUserId: target }) => {
-        await ctx.db.insert("posts", { userId }); // @owner
-        await ctx.db.insert("posts", { userId: target }); // @other
-    },
-});`;
-            const found = discover(source);
+            const value = parameter.includes("uid") ? "userId: uid" : "userId";
 
-            expect(rowAt(found, markerLine(source, "owner"))).toMatchObject({ ownerScoped: true });
-
-            // The spelling-based taint never saw positionally destructured args; a
-            // sibling field is caller-controlled and must be recorded and reported.
-            expectReported(rowAt(found, markerLine(source, "other")));
+            expect(discover(ownerMutator(`await ctx.db.insert("posts", { ${value} });`, `ctx, ${parameter}`))[0]).toMatchObject({ ownerScoped: true });
         });
 
-        it("marks a `const` destructure of the verified `args`, but not a rebound destructured parameter", () => {
-            expect.assertions(3);
+        // The spelling-based taint never saw positionally destructured or renamed
+        // args; a sibling field is caller-controlled and must be recorded.
+        it.each([
+            ["a destructured sibling field", `ctx, { targetUserId: target }`, `{ userId: target }`],
+            ["a renamed parameter's sibling field", `ctx, input`, `{ userId: input.targetUserId }`],
+        ])("reports %s", (_label, parameters, document) => {
+            expect.assertions(2);
 
-            const destructured = discover(`export const createPost = defineMutator({ owner: "userId", server: async (ctx, args) => {
-    const { userId } = args;
-    await ctx.db.insert("posts", { userId });
-} });`);
+            expectReported(discover(ownerMutator(`await ctx.db.insert("posts", ${document});`, parameters))[0]);
+        });
 
-            expect(destructured[0]).toMatchObject({ ownerScoped: true });
+        it("marks a renamed impl parameter's owner field owner-scoped", () => {
+            expect.assertions(1);
 
-            const rebound = discover(`export const createPost = defineMutator({ owner: "userId", server: async (ctx, { userId, targetUserId }) => {
-    userId = targetUserId;
-    await ctx.db.insert("posts", { userId });
-} });`);
+            expect(discover(ownerMutator(`await ctx.db.insert("posts", { userId: input.userId });`, "ctx, input"))[0]).toMatchObject({ ownerScoped: true });
+        });
 
-            expectReported(rebound[0]);
+        it("reports a destructured owner binding the impl reassigns", () => {
+            expect.assertions(2);
+
+            expectReported(discover(ownerMutator(`userId = targetUserId; await ctx.db.insert("posts", { userId });`, "ctx, { userId, targetUserId }"))[0]);
+        });
+
+        it("marks a `const` destructure of the verified `args` owner-scoped", () => {
+            expect.assertions(1);
+
+            expect(discover(ownerMutator(`const { userId } = args; await ctx.db.insert("posts", { userId });`))[0]).toMatchObject({ ownerScoped: true });
+        });
+
+        // Fail-closed: a `let` binding can be repointed, and proving it is not
+        // needs data flow this does not do.
+        it("reports a `let` destructure of the verified `args`", () => {
+            expect.assertions(2);
+
+            expectReported(discover(ownerMutator(`let { userId } = args; await ctx.db.insert("posts", { userId });`))[0]);
         });
 
         it("raises the laundered write as an ERROR through the advisor lint", () => {
             expect.assertions(2);
 
-            const source = `export const createPost = defineMutator({
-    owner: "userId",
-    server: async (ctx, args) => {
-        const persist = async (args: { userId: string }) => ctx.db.insert("posts", { userId: args.userId }); // @nested
+            const source = ownerMutator(`        const persist = async (args: { userId: string }) => ctx.db.insert("posts", { userId: args.userId }); // @nested
         await persist({ userId: args.targetUserId });
-        await ctx.db.insert("posts", { userId: args.userId }); // @own
-    },
-});`;
+        await ctx.db.insert("posts", { userId: args.userId }); // @own`);
             const findings = runAdvisor({ ownerFieldWrites: discover(source), schema: fromServerSchema(defineSchema({})) }, { source: "static" }).filter(
                 (finding) => finding.name === "owner_field_from_args_not_auth",
             );

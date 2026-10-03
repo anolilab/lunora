@@ -570,6 +570,29 @@ describe("emit (containers)", () => {
         expect(() => discoverContainers(newProject(), workdir)).toThrow(/`base` is a const object that is written to elsewhere/u);
     });
 
+    it.each([
+        `base["maxInstances"] = 10;`,
+        `base.maxInstances++;`,
+        `delete base.maxInstances;`,
+        `Object.assign(base, { maxInstances: 10 });`,
+        `(base as { maxInstances: number }).maxInstances = 10;`,
+        `[base.maxInstances] = [10];`,
+    ])("refuses a const settings object written through `%s`", (write) => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@lunora/container";
+
+            const base = { image: "./containers/worker", maxInstances: 2 };
+
+            ${write}
+
+            export const worker = defineContainer({ ...base });
+        `);
+
+        expect(() => discoverContainers(newProject(), workdir)).toThrow(/`base` is a const object that is written to elsewhere/u);
+    });
+
     it("refuses self-referential spreads with a diagnostic instead of overflowing the stack", () => {
         expect.assertions(1);
 
