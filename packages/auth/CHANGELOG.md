@@ -1,3 +1,16 @@
+## @lunora/auth [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.183...@lunora/auth@1.0.0-alpha.184) (2026-10-03)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.294
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.172
+* **@lunora/server:** upgraded to 1.0.0-alpha.171
+
 ## @lunora/auth [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.182...@lunora/auth@1.0.0-alpha.183) (2026-10-02)
 
 
