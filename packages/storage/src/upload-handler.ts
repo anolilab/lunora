@@ -21,6 +21,10 @@
  * a size over `maxFileSize` is refused (413) before it reaches the gate. A
  * finished upload cannot be deleted through the handler: TUS refuses to
  * terminate one, and the other protocols refuse `DELETE` outright (405).
+ *
+ * The route is write-only. `GET`, and any method the protocol does not need to
+ * upload, is refused (405) before the gate runs, so the route never serves a
+ * stored file. Downloads go through `ctx.storage.download()` or a signed URL.
  */
 import { LunoraError } from "@lunora/errors";
 import { File } from "@visulima/storage";
@@ -211,19 +215,37 @@ const tooLargeResponse = (protocol: UploadProtocol): Response =>
     });
 
 /**
- * `DELETE` on the chunked-REST and multipart handlers removes any stored file by
- * id (chunked REST also in batches, via `?ids=`), and neither honors
- * `disableTerminationForFinishedUploads` — only TUS does. Refused for them here,
- * so the upload route can only add files; deleting one stays `ctx.storage.delete`.
+ * The methods an upload route answers, per protocol: the ones that create an
+ * upload, send its bytes, read its offset back to resume (`HEAD`), and CORS
+ * preflight (`OPTIONS`). Everything else is refused (405) before `authorize`
+ * runs, so the route stays write-only.
+ *
+ * `GET` serves stored files on every protocol as of `@visulima/storage` 2.0.24
+ * (streamed downloads, `Range`, `/:id/metadata`, and the file list when
+ * `allowList` is on), and TUS served them before that. Behind the WRITE gate
+ * that would let anyone allowed to upload, or anyone at all on a `public`
+ * route, read any file by id. Reads go through `ctx.storage.download()` and
+ * signed URLs, which have their own read-side gate.
+ *
+ * `DELETE` on the chunked-REST and multipart handlers removes any stored file
+ * by id (chunked REST also in batches, via `?ids=`), and neither honors
+ * `disableTerminationForFinishedUploads`. TUS keeps it to abort an upload in
+ * progress, and refuses to terminate a finished one.
  */
-const methodNotAllowedResponse = (protocol: UploadProtocol): Response => {
+const ALLOWED_METHODS: Readonly<Record<UploadProtocol, ReadonlySet<string>>> = {
+    "chunked-rest": new Set(["HEAD", "OPTIONS", "PATCH", "POST", "PUT"]),
+    multipart: new Set(["OPTIONS", "POST"]),
+    tus: new Set(["DELETE", "HEAD", "OPTIONS", "PATCH", "POST"]),
+};
+
+const methodNotAllowedResponse = (protocol: UploadProtocol, method: string): Response => {
     const response = errorResponse(protocol, 405, {
         code: "METHOD_NOT_ALLOWED",
-        message: "DELETE is not allowed on this upload route",
+        message: `${method} is not allowed on this upload route: it is write-only. Serve stored files with ctx.storage.download() or a signed URL`,
         name: "MethodNotAllowedError",
     });
 
-    response.headers.set("Allow", protocol === "multipart" ? "GET, OPTIONS, POST" : "GET, HEAD, OPTIONS, PATCH, POST, PUT");
+    response.headers.set("Allow", [...ALLOWED_METHODS[protocol]].join(", "));
 
     return response;
 };
@@ -408,6 +430,17 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: maxFileSize must be a finite, non-negative number (received ${String(maxFileSize)})`);
     }
 
+    // The S3-API provider appends each chunked-REST chunk as the next multipart
+    // part without checking its `X-Chunk-Offset`, so a chunk that arrives out of
+    // order (the bundled client sends four in parallel) or twice is silently
+    // stored in the wrong place.
+    if (protocol === "chunked-rest" && options.storage instanceof AwsLightStorage) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            '@lunora/storage: chunked REST is not supported over createR2UploadStorage (R2\'s S3 API), which stores chunks in arrival order and can corrupt the file. Use protocol "tus", or createR2BindingUploadStorage',
+        );
+    }
+
     const handlerOptions: UploadHandlerOptions = {
         // A finished upload is a stored file; removing it is the app's call
         // (`ctx.storage.delete`), not a `DELETE` any caller the upload gate
@@ -431,8 +464,12 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
     }
 
     const fetch = async (request: Request): Promise<Response> => {
-        if (protocol !== "tus" && request.method === "DELETE") {
-            return methodNotAllowedResponse(protocol);
+        // `Request` upper-cases the standard methods but keeps `patch` as sent,
+        // and the handlers dispatch on the exact string, so compare upper-cased.
+        const method = request.method.toUpperCase();
+
+        if (!ALLOWED_METHODS[protocol].has(method)) {
+            return methodNotAllowedResponse(protocol, method);
         }
 
         const declaredSize = declaredUploadSize(request, protocol);
