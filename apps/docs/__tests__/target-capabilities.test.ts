@@ -9,6 +9,7 @@ import {
     CONTRACT_PATH,
     markerEnd,
     markerStart,
+    MODULE_SOURCES,
     PAGES,
     readContract,
     targetCapabilitiesTable,
@@ -136,6 +137,49 @@ describe("reading the contract", () => {
         expect.assertions(1);
 
         const source = contractSource.replace(/export const BINDING_SUPPORT = \{/u, "export const BINDING_SUPPORT = build() ?? {");
+
+        expect(() => readContract(source)).toThrow("cannot evaluate");
+    });
+
+    it("takes the celld-vps row from @lunora/config's CELLD_RELEASE_BINDINGS, through its re-export", () => {
+        expect.assertions(4);
+
+        const row = contract.bindingSupport["celld-vps"];
+
+        expect(row).toMatchObject({ ai: "unsupported", d1: "provisioned", durable_object: "bound", kv: "provisioned" });
+
+        // The row follows the config package's source, not a copy of it.
+        const edited = readContract(contractSource, (filePath) => {
+            const text = readFileSync(filePath, "utf8");
+
+            return filePath.endsWith("release-config.ts") ? text.replace('kv: "provisioned",', 'kv: "bound",') : text;
+        });
+
+        expect(edited.bindingSupport["celld-vps"].kv).toBe("bound");
+        expect(edited.bindingSupport["celld-vps"].d1).toBe("provisioned");
+        expect(Object.keys(MODULE_SOURCES)).toStrictEqual(["@lunora/config/celld"]);
+    });
+
+    it("refuses a value imported from a module it does not read", () => {
+        expect.assertions(1);
+
+        const source = contractSource.replace(/(import \{ CELLD_RELEASE_BINDINGS[^}]*\} from )"@lunora\/config\/celld"/u, '$1"@lunora/elsewhere"');
+
+        expect(() => readContract(source)).toThrow('imports a value from "@lunora/elsewhere"');
+    });
+
+    it("refuses a name the imported module does not export", () => {
+        expect.assertions(1);
+
+        const source = contractSource.replace("import { CELLD_RELEASE_BINDINGS,", "import { NOT_EXPORTED_BY_CONFIG as CELLD_RELEASE_BINDINGS,");
+
+        expect(() => readContract(source)).toThrow("does not export a constant `NOT_EXPORTED_BY_CONFIG`");
+    });
+
+    it("refuses a call it does not know", () => {
+        expect.assertions(1);
+
+        const source = contractSource.replace(/Object\.keys(?=\(CELLD_VPS_REFUSALS\))/u, "Object.entries");
 
         expect(() => readContract(source)).toThrow("cannot evaluate");
     });
