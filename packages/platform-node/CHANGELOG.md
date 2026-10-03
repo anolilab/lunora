@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.116...@lunora/platform-node@1.0.0-alpha.117) (2026-10-03)
+
+### Features
+
+* **storage:** resumable uploads over the r2 binding ([#948](https://github.com/anolilab/lunora/issues/948)) ([8189220](https://github.com/anolilab/lunora/commit/8189220610b21af0827acf9575c6ccd60c611e00)), closes [#937](https://github.com/anolilab/lunora/issues/937)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.161
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+* **@lunora/queue:** upgraded to 1.0.0-alpha.90
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.162
+* **@lunora/do:** upgraded to 1.0.0-alpha.192
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.73
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.175
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.110
+* **@lunora/storage:** upgraded to 1.0.0-alpha.104
+
 ## @lunora/platform-node [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.115...@lunora/platform-node@1.0.0-alpha.116) (2026-10-03)
 
 ### ⚠ BREAKING CHANGES
