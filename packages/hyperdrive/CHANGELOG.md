@@ -1,3 +1,9 @@
+## @lunora/hyperdrive [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.157...@lunora/hyperdrive@1.0.0-alpha.158) (2026-10-03)
+
+### Features
+
+* **observability:** instrument ctx.sql with database telemetry ([#944](https://github.com/anolilab/lunora/issues/944)) ([2fd04d0](https://github.com/anolilab/lunora/commit/2fd04d07bbbb458d64e501f02cd353f79888aa3a)), closes [#private](https://github.com/anolilab/lunora/issues/private) [#private](https://github.com/anolilab/lunora/issues/private)
+
 ## @lunora/hyperdrive [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.156...@lunora/hyperdrive@1.0.0-alpha.157) (2026-10-03)
 
 
