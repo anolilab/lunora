@@ -4,7 +4,9 @@
  *
  * `POST /v1/boxes/enrol` trades a token for a box id and keeps the key.
  * `GET /v1/boxes/connect?box=` is the WebSocket: `hello`, `challenge`, `auth`
- * (verified against the enrolled key), `routes`, then jobs on demand.
+ * (verified against the enrolled key), `routes`, then jobs on demand, and a
+ * `ping` every 30 s as the session DO sends one — without it the box presumes
+ * a quiet socket dead after 120 s and reconnects, and a job sent meanwhile is lost.
  * `GET /v1/boxes/releases/:id` and `GET /v1/hostd/releases/:id/manifest` are
  * box-signed and verified as the control plane does (timestamp window,
  * single-use nonce, signature). `/s3/{bucket}` is a minimal S3
@@ -24,6 +26,9 @@ import { challengeSigningPayload, HOSTD_REQUEST_HEADERS, requestSigningPayload }
 import type { BoxMessage, CloudMessage, ConfigMessage, HelloMessage, HostdJob, ResultMessage, RouteEntry } from "../../../src/wire/types";
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+
+/** How often an authenticated socket is pinged, as the control plane does. */
+const PING_INTERVAL_MS = 30_000;
 
 type OtlpAttribute = { key: string; value: { stringValue: string } };
 
@@ -327,6 +332,15 @@ class FakeControlPlane {
 
                 ready = true;
                 this.socket = ws;
+
+                const pinger = setInterval(() => {
+                    ws.send(encodeMessage({ type: "ping" }));
+                }, PING_INTERVAL_MS);
+
+                pinger.unref();
+                ws.once("close", () => {
+                    clearInterval(pinger);
+                });
                 this.authentications += 1;
                 ws.send(encodeMessage({ table: this.routes, type: "routes" }));
 
