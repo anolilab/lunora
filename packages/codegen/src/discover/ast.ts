@@ -8,6 +8,7 @@ import type {
     CallExpression,
     Expression,
     Identifier,
+    KindToNodeMappings,
     ObjectLiteralElementLike,
     ObjectLiteralExpression,
     Project,
@@ -228,25 +229,35 @@ const listSecurityScanFiles = (lunoraDirectory: string): ScannedSourceFile[] => 
     return files;
 };
 
+/** What a row mapper yields for one node: nothing, one row, or several (a write naming two tables). */
+type RowsOf<Row extends object> = ReadonlyArray<Row> | Row | undefined;
+
+/** Narrows {@link RowsOf} to its several-rows case. */
+const isRowList = <Row extends object>(rows: RowsOf<Row>): rows is ReadonlyArray<Row> => Array.isArray(rows);
+
 /**
  * Resolve each file into the shared `Project` (reusing an already-added
- * `SourceFile`) and map every `CallExpression` descendant through `rowOf` with
- * the file's display path — rows kept in encounter order.
- *
- * The file set is the caller's choice: {@link collectCallRows} passes the
- * function file set, {@link collectSecurityCallRows} the wider security one.
+ * `SourceFile`) and map every descendant of `kind` through `rowOf` with the
+ * file's display path — rows kept in encounter order.
  */
-const collectRowsFrom = <Row>(project: Project, files: ScannedSourceFile[], rowOf: (call: CallExpression, relativePath: string) => Row | undefined): Row[] => {
+const collectNodeRowsFrom = <Row extends object, Kind extends SyntaxKind>(
+    project: Project,
+    files: ReadonlyArray<ScannedSourceFile>,
+    kind: Kind,
+    rowOf: (node: KindToNodeMappings[Kind], relativePath: string) => RowsOf<Row>,
+): Row[] => {
     const rows: Row[] = [];
 
     for (const { displayPath, filePath } of files) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            const row = rowOf(call, displayPath);
+        for (const node of sourceFile.getDescendantsOfKind(kind)) {
+            const produced = rowOf(node, displayPath);
 
-            if (row !== undefined) {
-                rows.push(row);
+            if (isRowList(produced)) {
+                rows.push(...produced);
+            } else if (produced !== undefined) {
+                rows.push(produced);
             }
         }
     }
@@ -254,57 +265,41 @@ const collectRowsFrom = <Row>(project: Project, files: ScannedSourceFile[], rowO
     return rows;
 };
 
+/** The lunora source files ({@link listLunoraSourceFiles}) with their lunora-relative display paths. */
+const lunoraScanFiles = (lunoraDirectory: string): ScannedSourceFile[] =>
+    listLunoraSourceFiles(lunoraDirectory).map((filePath) => {
+        return { displayPath: lunoraRelativePath(lunoraDirectory, filePath), filePath };
+    });
+
 /**
- * Shared driver for the per-call-site feeders: walk every lunora source file
- * (via {@link listLunoraSourceFiles}) and map every `CallExpression` descendant
- * through `rowOf` with the file's lunora-relative path.
+ * Shared driver for the per-site feeders: walk every lunora source file (via
+ * {@link listLunoraSourceFiles}) and map every descendant of `kind` through
+ * `rowOf` with the file's lunora-relative path.
  */
-const collectCallRows = <Row>(project: Project, lunoraDirectory: string, rowOf: (call: CallExpression, relativePath: string) => Row | undefined): Row[] =>
-    collectRowsFrom(
-        project,
-        listLunoraSourceFiles(lunoraDirectory).map((filePath) => {
-            return { displayPath: lunoraRelativePath(lunoraDirectory, filePath), filePath };
-        }),
-        rowOf,
-    );
+const collectNodeRows = <Row extends object, Kind extends SyntaxKind>(
+    project: Project,
+    lunoraDirectory: string,
+    kind: Kind,
+    rowOf: (node: KindToNodeMappings[Kind], relativePath: string) => RowsOf<Row>,
+): Row[] => collectNodeRowsFrom(project, lunoraScanFiles(lunoraDirectory), kind, rowOf);
+
+/** The {@link collectNodeRows} walk over every `CallExpression` — what most feeders scan. */
+const collectCallRows = <Row extends object>(
+    project: Project,
+    lunoraDirectory: string,
+    rowOf: (call: CallExpression, relativePath: string) => RowsOf<Row>,
+): Row[] => collectNodeRows(project, lunoraDirectory, SyntaxKind.CallExpression, rowOf);
 
 /**
  * The {@link collectCallRows} driver over the *security* file set — `lunora/`
  * plus the worker entry (see {@link listSecurityScanFiles}) — for a feeder
  * whose call sites are conventionally built in the entry, not under `lunora/`.
  */
-const collectSecurityCallRows = <Row>(
+const collectSecurityCallRows = <Row extends object>(
     project: Project,
     lunoraDirectory: string,
-    rowOf: (call: CallExpression, relativePath: string) => Row | undefined,
-): Row[] => collectRowsFrom(project, listSecurityScanFiles(lunoraDirectory), rowOf);
-
-/**
- * Export binding name of the exported, top-level function that lexically contains
- * the call (e.g. `export const send = mutation({ … })` → `"send"`, and
- * `export default mutation({ … })` → `"default"`), or `""` when the call isn't
- * inside an exported declaration. Walks out past any local
- * `const x = …` declarations to the exported one.
- *
- * Shared by the call-attribution discoverers (`discover/inserts`,
- * `discover/authapi-calls`, `discover/workflow-calls`). The
- * `discover/sql-interpolation` variant has divergent semantics (no export-keyword
- * check, `"<module>"` fallback) and is intentionally NOT this helper.
- */
-const enclosingExportName = (node: Node): string => {
-    for (const ancestor of node.getAncestors()) {
-        if (Node.isVariableDeclaration(ancestor) && ancestor.getVariableStatement()?.hasExportKeyword() === true) {
-            return ancestor.getName();
-        }
-
-        // `export default query(...)` registers as `<namespace>:default`.
-        if (Node.isExportAssignment(ancestor) && !ancestor.isExportEquals()) {
-            return "default";
-        }
-    }
-
-    return "";
-};
+    rowOf: (call: CallExpression, relativePath: string) => RowsOf<Row>,
+): Row[] => collectNodeRowsFrom(project, listSecurityScanFiles(lunoraDirectory), SyntaxKind.CallExpression, rowOf);
 
 /**
  * The runtime key a property-name node spells, with the quotes a string-literal
@@ -752,9 +747,9 @@ const functionReferenceSegments = (node: Node | undefined): string[] | undefined
 export {
     bindingKeyName,
     collectCallRows,
+    collectNodeRows,
     collectSecurityCallRows,
     defaultExportExpression,
-    enclosingExportName,
     findObjectProperty,
     functionReferenceSegments,
     handlerOf,
@@ -780,4 +775,4 @@ export {
     unwrapExpression,
     unwrapToCallExpression,
 };
-export type { ScannedSourceFile };
+export type { RowsOf, ScannedSourceFile };

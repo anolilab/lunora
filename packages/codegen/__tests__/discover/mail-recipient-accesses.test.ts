@@ -37,7 +37,7 @@ describe("discoverMailRecipientAccesses", () => {
         const found = discoverMailRecipientAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "notify", file: "send", line: 1, method: "send" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "notify" }, file: "send", line: 1, method: "send" });
     });
 
     it("flags a ctx.email.queue with an args-derived cc alongside a fixed to", () => {
@@ -48,7 +48,7 @@ describe("discoverMailRecipientAccesses", () => {
         const found = discoverMailRecipientAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "relay", method: "queue" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "relay" }, method: "queue" });
     });
 
     it("flags an args value reached through one local const hop", () => {
@@ -85,7 +85,7 @@ describe("discoverMailRecipientAccesses", () => {
             `export const notify = mutation(async ({ ctx, args }) => { const messageId = await ctx.mail.send({ to: args.email }); return messageId; });`,
         );
 
-        expect(discoverMailRecipientAccesses(project, join(workdir, "lunora"))[0]).toMatchObject({ exportName: "notify" });
+        expect(discoverMailRecipientAccesses(project, join(workdir, "lunora"))[0]).toMatchObject({ scope: { kind: "export", name: "notify" } });
     });
 
     it("ignores a recipient scoped by a server-trusted ctx value", () => {

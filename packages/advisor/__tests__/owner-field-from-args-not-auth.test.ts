@@ -17,7 +17,15 @@ describe("owner_field_from_args_not_auth", () => {
         expect.assertions(1);
 
         const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
-            { exportName: "createPost", field: "userId", file: "mutators", line: 4, method: "insert", ownerScoped: true, visibility: "public" },
+            {
+                scope: { kind: "export", name: "createPost" },
+                field: "userId",
+                file: "mutators",
+                line: 4,
+                method: "insert",
+                ownerScoped: true,
+                visibility: "public",
+            },
         ];
 
         expect(ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() })).toHaveLength(0);
@@ -27,7 +35,7 @@ describe("owner_field_from_args_not_auth", () => {
         expect.assertions(2);
 
         const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
-            { exportName: "createPost", field: "userId", file: "mutators", line: 4, method: "insert", visibility: "public" },
+            { scope: { kind: "export", name: "createPost" }, field: "userId", file: "mutators", line: 4, method: "insert", visibility: "public" },
         ];
         const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
 
@@ -39,8 +47,8 @@ describe("owner_field_from_args_not_auth", () => {
         expect.assertions(4);
 
         const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
-            { exportName: "createPost", field: "userId", file: "posts", line: 4, method: "insert" },
-            { exportName: "movePost", field: "tenantId", file: "posts", line: 9, method: "patch" },
+            { scope: { kind: "export", name: "createPost" }, field: "userId", file: "posts", line: 4, method: "insert" },
+            { scope: { kind: "export", name: "movePost" }, field: "tenantId", file: "posts", line: 9, method: "patch" },
         ];
         const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
 
@@ -65,8 +73,8 @@ describe("owner_field_from_args_not_auth", () => {
         // the correct shape. At ERROR the rule had zero signal; under #35 it
         // would have blocked the build on nine correct functions.
         const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
-            { exportName: "saveMemory", field: "userId", file: "memory", line: 12, method: "insert", visibility: "internal" },
-            { exportName: "createPin", field: "userId", file: "pins", line: 20, method: "insert", visibility: "public" },
+            { scope: { kind: "export", name: "saveMemory" }, field: "userId", file: "memory", line: 12, method: "insert", visibility: "internal" },
+            { scope: { kind: "export", name: "createPin" }, field: "userId", file: "pins", line: 20, method: "insert", visibility: "public" },
         ];
         const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
 
@@ -87,7 +95,9 @@ describe("owner_field_from_args_not_auth", () => {
         // A write outside any recognised procedure gets no visibility. Defaulting
         // to the safe reading (report it) matters more than the false-positive
         // rate here — the alternative silently drops a real IDOR.
-        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [{ exportName: "helper", field: "userId", file: "lib", line: 3, method: "insert" }];
+        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
+            { scope: { kind: "export", name: "helper" }, field: "userId", file: "lib", line: 3, method: "insert" },
+        ];
 
         expect(ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() })[0]).toMatchObject({ level: "ERROR" });
     });

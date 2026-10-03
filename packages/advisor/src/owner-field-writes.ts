@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `ctx.db` write (`insert` / `replace` / `patch` / `insertManyUnsafe`) that
  * sets an ownership / identity column — `userId`, `ownerId`, `tenantId`, and the
@@ -11,8 +13,6 @@
  * finds nothing there. Structurally identical to `OwnerFieldWriteIR`.
  */
 export interface AdvisorOwnerFieldWrite {
-    /** The exported binding name of the procedure performing the write. */
-    exportName: string;
     /** The identity column being written from `args` (e.g. `userId`). */
     field: string;
     /** Source file relative to the lunora dir, no extension. */
@@ -39,6 +39,9 @@ export interface AdvisorOwnerFieldWrite {
      * is a real IDOR and stays reportable.
      */
     ownerScoped?: true;
+
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 
     /**
      * Visibility of the enclosing procedure. `internal` procedures are not

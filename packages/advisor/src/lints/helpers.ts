@@ -1,6 +1,15 @@
+import type { AdvisorCallSiteScope, CallSiteMetadata } from "../call-site-scope";
+import { callSiteMetadata, helperRole } from "../call-site-scope";
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { AdvisorQueryRead } from "../queries";
 import type { AdvisorSchema, AdvisorTable } from "../schema";
+
+/** A feeder row that names a call site: its scope and where it sits. */
+interface CallSiteRow {
+    file: string;
+    line: number;
+    scope: AdvisorCallSiteScope;
+}
 
 /**
  * Personally-identifiable-information column names. Kept deliberately tight to
@@ -198,6 +207,33 @@ export const isPublicWrite = (procedure: Pick<AdvisorProcedureProtection, "kind"
  */
 export const queryReadLocation = (read: Pick<AdvisorQueryRead, "file" | "line">): string =>
     read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
+
+/**
+ * Where a finding's detail places a call site: `` `send` (messages:12) `` for an
+ * export, `` `openInvoice` (accounts/signup:9; a helper called by `a`, `b`) ``
+ * for a helper — so every lint names the exported functions a helper's site runs
+ * for — and `module scope (boot:2)` at module scope.
+ */
+export const callSiteWhere = (row: CallSiteRow): string => {
+    const at = `${row.file}:${row.line.toString()}`;
+
+    switch (row.scope.kind) {
+        case "export": {
+            return `\`${row.scope.name}\` (${at})`;
+        }
+        case "helper": {
+            return `\`${row.scope.name}\` (${at}; ${helperRole(row.scope)})`;
+        }
+        default: {
+            return `module scope (${at})`;
+        }
+    }
+};
+
+/** A call-site finding's location metadata: its {@link callSiteMetadata} plus `file` and `line`. */
+export const callSiteFields = (row: CallSiteRow): CallSiteMetadata & { file: string; line: number } => {
+    return { ...callSiteMetadata(row.scope), file: row.file, line: row.line };
+};
 
 /**
  * Table name -> declared storage tier, for the query lints that word a finding

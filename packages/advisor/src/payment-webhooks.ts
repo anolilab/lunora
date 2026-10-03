@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /* eslint-disable no-secrets/no-secrets -- the doc comment quotes the lint's rule id `payment_webhook_wide_tolerance`, not a credential */
 
 /**
@@ -15,12 +17,12 @@
 export interface AdvisorPaymentWebhook {
     /** The adapter factory invoked. */
     callee: "createAutumnAdapter" | "createDodoPaymentsAdapter" | "createPolarAdapter" | "createStripeAdapter";
-    /** The exported binding name of the enclosing declaration (`<module>` at file scope). */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** 1-based line of the construction, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
     /** Statically-known `webhookToleranceSeconds` literal, when present and a plain numeric literal. */
     toleranceSeconds?: number;
 }

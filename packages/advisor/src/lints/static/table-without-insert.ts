@@ -1,3 +1,4 @@
+import { isReachableSite } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
 
@@ -35,7 +36,9 @@ const tableWithoutInsert: Lint = {
             return [];
         }
 
-        const insertedTables = new Set(context.inserts.filter((write) => write.table !== "").map((write) => write.table));
+        // An insert in dead code — a helper no export calls, or module scope — is
+        // not an insert path, so it does not silence the lint.
+        const insertedTables = new Set(context.inserts.filter((write) => write.table !== "" && isReachableSite(write.scope)).map((write) => write.table));
 
         // Skip tables that already insert, and those explicitly acknowledged
         // as written outside Lunora via `.externallyManaged()`.

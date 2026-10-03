@@ -1,9 +1,9 @@
 import type { ArrowFunction, CallExpression, FunctionExpression, Identifier, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { PrivilegedDispatchIR } from "../ir";
 import { findObjectProperty, functionReferenceSegments, listLunoraSourceFiles, lunoraRelativePath, RUN_METHODS } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * The privileged-dispatch handler factories, mapped to the index of their config
@@ -268,7 +268,7 @@ const dispatchesInHandler = (handler: HandlerFunction, kind: "queue" | "workflow
         found.push({
             dispatchKind: kind,
             file: relativePath,
-            handlerExport: enclosingExportName(call),
+            scope: callSiteScopeOf(call),
             line: call.getStartLineNumber(),
             targetExport: target.exportName,
             targetFile: target.file,

@@ -1,3 +1,4 @@
+import { readCallSiteCallers } from "../call-site-scope";
 import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { Finding } from "../types";
 import { coverageFromScore, gradeFromScore, procedureWeight, projectWeight, scoreGlobal, scoreProcedure, weightFor, worstLevel } from "./score";
@@ -71,11 +72,14 @@ const attributeFindings = (
 
     for (const finding of findings) {
         const file = readString(finding.metadata, "file");
-        const exportName = readString(finding.metadata, "exportName");
-        const owner = file !== undefined && exportName !== undefined ? checksById.get(procedureId(file, exportName)) : undefined;
-        const bucket = owner ?? projectChecks;
+        // A finding in a shared helper names the exports calling it; each is credited.
+        const callers = readCallSiteCallers(finding.metadata);
+        const owners = file === undefined ? [] : callers.flatMap((exportName) => checksById.get(procedureId(file, exportName)) ?? []);
+        const buckets = owners.length === 0 ? [projectChecks] : owners;
 
-        bucket.set(finding.name, foldCheck(bucket.get(finding.name), finding.level, finding.name, weightFor(finding.level)));
+        for (const bucket of buckets) {
+            bucket.set(finding.name, foldCheck(bucket.get(finding.name), finding.level, finding.name, weightFor(finding.level)));
+        }
     }
 
     return {

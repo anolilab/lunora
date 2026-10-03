@@ -1,5 +1,7 @@
+import { callSiteDescription } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { callSiteFields } from "../helpers";
 
 const containerStartEnableInternetOverride: Lint = {
     categories: ["SECURITY"],
@@ -22,8 +24,8 @@ const containerStartEnableInternetOverride: Lint = {
             .map((override) =>
                 emit(containerStartEnableInternetOverride, {
                     cacheKey: `container_start_enable_internet_override:${override.file}:${override.line.toString()}`,
-                    detail: `\`${override.exportName}\` calls \`.start({ enableInternet: true })\`, overriding the container's static egress posture.`,
-                    metadata: { exportName: override.exportName, file: override.file, line: override.line },
+                    detail: `${callSiteDescription(override.scope)} calls \`.start({ enableInternet: true })\`, overriding the container's static egress posture.`,
+                    metadata: { ...callSiteFields(override) },
                 }),
             );
     },

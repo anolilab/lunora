@@ -37,7 +37,7 @@ describe("discoverFailOpenGuards", () => {
         const found = discoverFailOpenGuards(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ callee: "rateLimit", exportName: "signIn", failOpen: true, limitName: "signin" });
+        expect(found[0]).toMatchObject({ callee: "rateLimit", scope: { kind: "export", name: "signIn" }, failOpen: true, limitName: "signin" });
     });
 
     it("records a dbRateLimit guard's failOpen from the third argument", () => {
@@ -50,7 +50,7 @@ describe("discoverFailOpenGuards", () => {
 
         const [row] = discoverFailOpenGuards(project, join(workdir, "lunora"));
 
-        expect(row).toMatchObject({ callee: "dbRateLimit", exportName: "send", failOpen: true, limitName: "send" });
+        expect(row).toMatchObject({ callee: "dbRateLimit", scope: { kind: "export", name: "send" }, failOpen: true, limitName: "send" });
     });
 
     it("records a verifyTurnstileMiddleware guard's failOpen from the first argument, with an empty limitName", () => {
@@ -60,7 +60,7 @@ describe("discoverFailOpenGuards", () => {
 
         const [row] = discoverFailOpenGuards(project, join(workdir, "lunora"));
 
-        expect(row).toMatchObject({ callee: "verifyTurnstileMiddleware", exportName: "register", failOpen: true, limitName: "" });
+        expect(row).toMatchObject({ callee: "verifyTurnstileMiddleware", scope: { kind: "export", name: "register" }, failOpen: true, limitName: "" });
     });
 
     it("records failOpen:true from options hoisted into a module-scope const", () => {
@@ -76,7 +76,7 @@ describe("discoverFailOpenGuards", () => {
 
         const [row] = discoverFailOpenGuards(project, join(workdir, "lunora"));
 
-        expect(row).toMatchObject({ callee: "rateLimit", exportName: "signIn", failOpen: true, limitName: "signin" });
+        expect(row).toMatchObject({ callee: "rateLimit", scope: { kind: "export", name: "signIn" }, failOpen: true, limitName: "signin" });
     });
 
     it("records failOpen:false for hoisted options that do not set it", () => {

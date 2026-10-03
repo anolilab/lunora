@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { MailRecipientAccessIR } from "../ir";
 import { collectCallRows, propertyKeyName } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /** The mailer methods whose first argument is an options object carrying recipient fields. */
 const MAIL_METHODS = new Set(["queue", "send"]);
@@ -79,7 +80,7 @@ const mailAccessInCall = (call: CallExpression, relativePath: string): MailRecip
         return undefined;
     }
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber(), method };
+    return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber(), method };
 };
 
 /**

@@ -8,8 +8,9 @@ import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, P
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
-import type { WorkflowIR, WorkflowStepIR } from "../ir";
+import type { HandlerSiteIR, WorkflowIR, WorkflowStepIR } from "../ir";
 import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { resolveHandlerReference } from "./handler-reference";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
 const WORKFLOWS_FILENAME = "workflows.ts";
@@ -176,18 +177,12 @@ const isStepCall = (call: CallExpression): boolean => {
  * Lift the durable step labels from a workflow's `handler` body — the first
  * string-literal argument of each native step call. Steps named by a non-literal
  * (a variable, template with substitutions) are omitted: they can't be compared
- * for duplication statically. A shorthand/external handler (no inline body) yields
- * `[]`. Order follows source order so the lint's "first wins" is deterministic.
+ * for duplication statically. A handler passed by reference (`handler: onboard`,
+ * local or imported) is followed to its declaration by the caller; one that
+ * cannot be resolved yields `[]`. Order follows source order so the lint's
+ * "first wins" is deterministic.
  */
-const stepsFromHandler = (argument: ObjectLiteralExpression): WorkflowStepIR[] => {
-    const handlerProperty = findObjectProperty(argument, "handler");
-
-    if (!handlerProperty) {
-        return [];
-    }
-
-    const body = Node.isPropertyAssignment(handlerProperty) ? handlerProperty.getInitializer() : handlerProperty;
-
+const stepsFromHandler = (body: Node | undefined): WorkflowStepIR[] => {
     if (!body) {
         return [];
     }
@@ -268,8 +263,31 @@ const resolveWorkflowConfig = (argument: Node | undefined): ObjectLiteralExpress
     return undefined;
 };
 
+/** A workflow's handler as discovery reads it: the function, and — for one passed by reference — where it is declared. */
+interface WorkflowHandler {
+    body: Node | undefined;
+    file?: string;
+    site?: HandlerSiteIR;
+}
+
+/**
+ * The `handler` property's function: the inline one, or — for a reference — the
+ * function it resolves to (see `resolveHandlerReference`).
+ */
+const handlerOfWorkflow = (argument: ObjectLiteralExpression, lunoraDirectory: string): WorkflowHandler => {
+    const property = findObjectProperty(argument, "handler");
+    const resolved = resolveHandlerReference(property, lunoraDirectory);
+
+    if (resolved !== undefined) {
+        return resolved;
+    }
+
+    // An inline `handler: async (ctx) => …` or `async handler(ctx) { … }` method.
+    return { body: property !== undefined && Node.isPropertyAssignment(property) ? property.getInitializer() : property };
+};
+
 /** Lift one exported `defineWorkflow({...})` declaration into {@link WorkflowIR}. */
-const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR => {
+const workflowFromCall = (call: CallExpression, exportName: string, lunoraDirectory: string): WorkflowIR => {
     const argument = resolveWorkflowConfig(call.getArguments()[0]);
 
     if (!argument) {
@@ -280,11 +298,14 @@ const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR 
         );
     }
 
+    const handler = handlerOfWorkflow(argument, lunoraDirectory);
     const ir: WorkflowIR = {
         className: workflowClassName(exportName),
         exportName,
         name: workflowDefaultName(exportName),
-        steps: stepsFromHandler(argument),
+        steps: stepsFromHandler(handler.body),
+        ...(handler.file === undefined ? {} : { handlerFile: handler.file }),
+        ...(handler.site === undefined ? {} : { handlerSite: handler.site }),
     };
 
     const nameProperty = findObjectProperty(argument, "name");
@@ -301,7 +322,7 @@ const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR 
  * `defineWorkflow({...})` initializer may be wrapped in `as`/`satisfies`/parens
  * — {@link unwrapToCallExpression} sees through those to the inner call.
  */
-const workflowsFromSource = (source: SourceFile): WorkflowIR[] => {
+const workflowsFromSource = (source: SourceFile, lunoraDirectory: string): WorkflowIR[] => {
     const workflows: WorkflowIR[] = [];
 
     for (const declaration of source.getVariableDeclarations()) {
@@ -327,7 +348,7 @@ const workflowsFromSource = (source: SourceFile): WorkflowIR[] => {
             throw diagnosticAt(nameNode, "defineWorkflow exports must be plain named exports (no destructuring)");
         }
 
-        workflows.push(workflowFromCall(call, nameNode.getText()));
+        workflows.push(workflowFromCall(call, nameNode.getText(), lunoraDirectory));
     }
 
     return workflows;
@@ -387,7 +408,7 @@ const discoverWorkflows = (project: Project, lunoraDirectory: string): WorkflowI
     }
 
     const source = project.getSourceFile(workflowsPath) ?? project.addSourceFileAtPath(workflowsPath);
-    const workflows = workflowsFromSource(source);
+    const workflows = workflowsFromSource(source, lunoraDirectory);
 
     workflows.sort((a, b) => a.exportName.localeCompare(b.exportName));
     assertUniqueNames(workflows);

@@ -112,6 +112,19 @@ describe("scoreAdvisor attribution", () => {
         expect(map.project.checks).toStrictEqual([]);
     });
 
+    it("credits a finding in a shared helper to every export that calls it", () => {
+        expect.assertions(2);
+
+        const map = scoreAdvisor(
+            [procedure({ exportName: "a", file: "f" }), procedure({ exportName: "b", file: "f" }), procedure({ exportName: "c", file: "f" })],
+            [finding("cross_module_table_write", "WARN", { callers: ["a", "b"], file: "f", helper: "openInvoice" })],
+            { generatedAt: STAMP },
+        );
+
+        expect(map.procedures.filter((entry) => entry.checks.length > 0).map((entry) => entry.id)).toStrictEqual(["f#a", "f#b"]);
+        expect(map.project.checks).toStrictEqual([]);
+    });
+
     it("routes a finding naming no procedure to the project bucket", () => {
         expect.assertions(1);
 

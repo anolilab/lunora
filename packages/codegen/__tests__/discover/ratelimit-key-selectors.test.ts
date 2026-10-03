@@ -41,7 +41,7 @@ describe("discoverRatelimitKeySelectors", () => {
         const found = discoverRatelimitKeySelectors(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ callee: "rateLimit", exportName: "send", file: "send", limitName: "send", line: 1 });
+        expect(found[0]).toMatchObject({ callee: "rateLimit", scope: { kind: "export", name: "send" }, file: "send", limitName: "send", line: 1 });
     });
 
     it("flags a key selector whose context parameter is named something other than `ctx`", () => {

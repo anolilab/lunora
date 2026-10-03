@@ -1,8 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { SqlInterpolationIR } from "../ir";
 import { collectCallRows } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /** The `SqlClient` methods that splice their first (`text`) argument verbatim into the query. */
 const SQL_TEXT_METHODS = new Set(["query", "unsafe"]);
@@ -40,13 +41,6 @@ const isContextSqlTextCallee = (node: TsNode): boolean => {
  */
 const isStringBuildingText = (expression: TsNode): boolean => Node.isBinaryExpression(expression) || Node.isTemplateExpression(expression);
 
-/** The export name of the nearest exported `const x = …` ancestor, or `"<module>"` when at file scope. */
-const enclosingExportName = (node: TsNode): string => {
-    const declaration = node.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
-
-    return declaration?.getName() ?? "<module>";
-};
-
 /** The IR row for a `ctx.sql.query(text, …)` / `.unsafe(text, …)` call whose `text` is string-built, or `undefined`. */
 const interpolationInCall = (call: CallExpression, relativePath: string): SqlInterpolationIR | undefined => {
     if (!isContextSqlTextCallee(call.getExpression())) {
@@ -59,7 +53,7 @@ const interpolationInCall = (call: CallExpression, relativePath: string): SqlInt
         return undefined;
     }
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: text.getStartLineNumber() };
+    return { file: relativePath, line: text.getStartLineNumber(), scope: callSiteScopeOf(call) };
 };
 
 /**

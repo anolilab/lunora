@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived } from "../argument-taint";
+import { isArgumentDerived } from "../argument-taint";
 import type { ArgumentDerivedFetchIR } from "../ir";
 import { collectCallRows } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * True when `node` is a `ctx.fetch` member access — the action-only outbound-request
@@ -32,7 +33,7 @@ const fetchInCall = (call: CallExpression, relativePath: string): ArgumentDerive
         return undefined;
     }
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber() };
+    return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber() };
 };
 
 /**

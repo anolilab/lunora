@@ -37,7 +37,7 @@ describe("discoverArgumentDerivedFetches", () => {
         const found = discoverArgumentDerivedFetches(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "proxy", file: "proxy", line: 1 });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "proxy" }, file: "proxy", line: 1 });
     });
 
     it("flags a URL built from a template embedding args", () => {

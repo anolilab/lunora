@@ -1,3 +1,4 @@
+import { isReachableSite } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
 
@@ -35,7 +36,8 @@ const workflowUnused: Lint = {
             return [];
         }
 
-        const calls = context.workflowCalls;
+        // A call in dead code — a helper no export calls, or module scope — starts nothing.
+        const calls = context.workflowCalls.filter((call) => isReachableSite(call.scope));
 
         // A dynamic `get(<expr>)` could target any workflow — can't prove any are
         // unused, so stay silent rather than emit false positives.

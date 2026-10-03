@@ -1,9 +1,9 @@
 import type { CallExpression, Identifier, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { HttpActionGuardIR } from "../ir";
 import { bindingKeyName, collectCallRows } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import type { InspectableHandler } from "./functions/handler";
 import { inlineHandler } from "./functions/handler";
 
@@ -356,7 +356,7 @@ const guardRowFromCall = (call: CallExpression, relativePath: string): HttpActio
         return sideEffect === undefined
             ? undefined
             : {
-                  exportName: enclosingExportName(call),
+                  scope: callSiteScopeOf(call),
                   file: relativePath,
                   kind: "httpAction",
                   line: call.getStartLineNumber(),
@@ -384,7 +384,7 @@ const guardRowFromCall = (call: CallExpression, relativePath: string): HttpActio
     return sideEffect === undefined
         ? undefined
         : {
-              exportName: enclosingExportName(call),
+              scope: callSiteScopeOf(call),
               file: relativePath,
               kind: "httpRoute",
               line: call.getStartLineNumber(),

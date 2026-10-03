@@ -1,11 +1,11 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One `ctx.authApi.<method>(...)` call discovered in a function body — the input
  * the `auth_api_call_without_headers` lint consumes. Produced by the codegen
  * feeder; runtime callers don't supply it, so the lint finds nothing there.
  */
 export interface AdvisorAuthApiCall {
-    /** The exported function performing the call (e.g. `createOrg`). */
-    exportName: string;
     /** Source file the call appears in (relative to the lunora dir, no extension). */
     file: string;
     /** True when the call's argument object includes a `headers` property. */
@@ -14,4 +14,6 @@ export interface AdvisorAuthApiCall {
     line: number;
     /** The better-auth method invoked (e.g. `banUser`); empty when not statically known. */
     method: string;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 }

@@ -1,4 +1,5 @@
 import { moduleOf } from "../../../../../shared/architecture-manifest";
+import { callSiteDescription, callSiteLabel, callSiteMetadata } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
 
@@ -19,6 +20,12 @@ import type { Lint } from "../../types";
  * by-id writes (`patch`/`replace`/`delete`, the table read off the id's type),
  * batch writes and facade writes all count; a write whose table is unreadable
  * (an untyped id) is skipped.
+ *
+ * A write inside a same-file helper is reported once, named by the helper and
+ * listing the exports calling it, so moving the write into a helper does not hide
+ * it — and one in a helper no export calls is still flagged. The fix that does satisfy the lint is putting the write in the
+ * owner's files: an exported owner-module helper taking the caller's `ctx`, or a
+ * registered owner mutation called through `ctx.runMutation`.
  */
 const crossModuleTableWrite: Lint = {
     categories: ["SCHEMA"],
@@ -28,7 +35,7 @@ const crossModuleTableWrite: Lint = {
     level: "WARN",
     name: "cross_module_table_write",
     remediation:
-        "Move the write behind a function in the owning module and call that instead (`ctx.runMutation(internal.<owner>.<fn>, …)`), or move the table's ownership to the module that writes it. For a component's table, call the function the component exports for that write.",
+        "Move the write into the owning module and call it from there: an exported helper in the owner's files that takes the caller's `ctx` (`openInvoice(ctx, …)`) keeps the write in the caller's invocation, and a registered owner mutation runs through `ctx.runMutation(internal.<owner>.<fn>, …)`. Or move the table's ownership to the module that writes it. For a component's table, call the function the component exports for that write.",
     run: (context) => {
         const modules = context.modules ?? [];
         const owners = new Map(modules.flatMap((entry) => entry.tables.map((table) => [table, entry] as const)));
@@ -39,14 +46,13 @@ const crossModuleTableWrite: Lint = {
             return [];
         }
 
-        // One finding per function and table, however many writes it makes.
+        // One finding per function (or helper) and table, however many writes it makes.
         const seen = new Set<string>();
 
         return writes.flatMap((write) => {
             const owner = owners.get(write.table);
             const writer = moduleOf(modules, write.file);
-
-            const cacheKey = `cross_module_table_write:${write.file}:${write.exportName}:${write.table}`;
+            const cacheKey = `cross_module_table_write:${write.file}:${callSiteLabel(write.scope)}:${write.table}`;
 
             if (owner === undefined || owner.name === writer || seen.has(cacheKey)) {
                 return [];
@@ -59,9 +65,9 @@ const crossModuleTableWrite: Lint = {
             return [
                 emit(crossModuleTableWrite, {
                     cacheKey,
-                    detail: `\`${write.exportName}\` (${write.file}) writes to \`${write.table}\`, which ${ownedBy} owns, from ${writer === undefined ? "outside every module" : `module \`${writer}\``}.`,
+                    detail: `${callSiteDescription(write.scope)} (${write.file}) writes to \`${write.table}\`, which ${ownedBy} owns, from ${writer === undefined ? "outside every module" : `module \`${writer}\``}.`,
                     metadata: {
-                        exportName: write.exportName,
+                        ...callSiteMetadata(write.scope),
                         file: write.file,
                         owner: owner.name,
                         table: write.table,

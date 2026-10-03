@@ -1,8 +1,9 @@
 import type { CallExpression, Project } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { AuthApiCallIR } from "../ir";
-import { enclosingExportName, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { collectCallRows, propertyKeyName } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * True for a `ctx.authApi.<method>(...)` (or bare `authApi.<method>(...)`)
@@ -74,41 +75,23 @@ const hasHeadersProp = (call: CallExpression): boolean => {
 
 /**
  * Discover `ctx.authApi.<method>(...)` (and bare `authApi.<method>(...)`) calls
- * under the lunora source directory and attribute each to the exported function
- * (and file) performing it. Calls outside an exported declaration are dropped.
+ * under the lunora source directory, each with its `CallSiteScope`.
  */
-const discoverAuthApiCalls = (project: Project, lunoraDirectory: string): AuthApiCallIR[] => {
-    const calls: AuthApiCallIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
-
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            if (!isAuthApiCall(call)) {
-                continue;
-            }
-
-            const exportName = enclosingExportName(call);
-
-            if (exportName === "") {
-                continue;
-            }
-
-            const callee = call.getExpression();
-            const method = Node.isPropertyAccessExpression(callee) ? callee.getName() : "";
-
-            calls.push({
-                exportName,
-                file: relativePath,
-                hasHeaders: hasHeadersProp(call),
-                line: call.getStartLineNumber(),
-                method,
-            });
+const discoverAuthApiCalls = (project: Project, lunoraDirectory: string): AuthApiCallIR[] =>
+    collectCallRows(project, lunoraDirectory, (call, file): AuthApiCallIR | undefined => {
+        if (!isAuthApiCall(call)) {
+            return undefined;
         }
-    }
 
-    return calls;
-};
+        const callee = call.getExpression();
+
+        return {
+            file,
+            hasHeaders: hasHeadersProp(call),
+            line: call.getStartLineNumber(),
+            method: Node.isPropertyAccessExpression(callee) ? callee.getName() : "",
+            scope: callSiteScopeOf(call),
+        };
+    });
 
 export default discoverAuthApiCalls;

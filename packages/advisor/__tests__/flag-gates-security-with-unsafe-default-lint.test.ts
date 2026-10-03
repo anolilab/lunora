@@ -11,7 +11,7 @@ const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: 
 const row = (key: string, defaultValue: boolean, line: number): AdvisorFlagSecurityDefault => {
     return {
         defaultValue,
-        exportName: "handler",
+        scope: { kind: "export", name: "handler" },
         file: "flags",
         key,
         line,

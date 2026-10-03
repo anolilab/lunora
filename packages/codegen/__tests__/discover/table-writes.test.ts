@@ -6,6 +6,7 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import discoverTableWrites from "../../src/discover/table-writes";
+import { markerLine, scopeName } from "../call-site-fixture";
 
 let workdir: string;
 
@@ -36,7 +37,24 @@ export const write = mutation({
     },
 });
 
-const helper = async (ctx: { db: Db }, id: Id<"todos">) => ctx.db.patch(id, {});
+const helper = async (ctx: { db: Db }, id: Id<"todos">) => ctx.db.patch(id, {}); // @orphan
+
+export const cleanup = async (
+    ctx: { db: Db },
+    either: Id<"notes"> | Id<"todos">,
+    maybe: Id<"notes"> | undefined,
+    nullable: Id<"notes"> | null,
+    inner: Id<"notes" | "todos">,
+    loose: Id<"notes"> | string,
+    wide: Id<string>,
+) => {
+    await ctx.db.delete(either); // @either
+    await ctx.db.delete(maybe); // @maybe
+    await ctx.db.delete(nullable); // @nullable
+    await ctx.db.delete(inner); // @inner
+    await ctx.db.delete(loose); // @loose
+    await ctx.db.delete(wide); // @wide
+};
 `;
 
 describe("discoverTableWrites", () => {
@@ -54,9 +72,11 @@ describe("discoverTableWrites", () => {
         expect.assertions(1);
 
         const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
-        const writes = discoverTableWrites(project, join(workdir, "lunora")).map((write) => `${write.method}:${write.table}`);
+        const writes = discoverTableWrites(project, join(workdir, "lunora"))
+            .filter((write) => scopeName(write.scope) === "write")
+            .map((write) => `${write.method}:${write.table}`);
 
-        // Reads are not writes, an untyped id yields "", and the helper is skipped like discoverInserts does.
+        // Reads are not writes, and an untyped id yields "".
         expect(writes).toStrictEqual([
             "patch:todos",
             "replace:todos",
@@ -67,5 +87,43 @@ describe("discoverTableWrites", () => {
             "upsert:todos",
             "delete:",
         ]);
+    });
+
+    it("keeps a write in a helper no export calls, scoped to the helper with no callers", () => {
+        expect.assertions(1);
+
+        const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
+        const orphans = discoverTableWrites(project, join(workdir, "lunora")).filter((write) => write.scope.kind === "helper");
+
+        expect(orphans).toStrictEqual([
+            { file: "todos", line: markerLine(SOURCE, "orphan"), method: "patch", scope: { callers: [], kind: "helper", name: "helper" }, table: "todos" },
+        ]);
+    });
+
+    it("records one write per table of a union id, drops nullish members, and keeps an unreadable union unresolved", () => {
+        expect.assertions(1);
+
+        const project = new Project({ compilerOptions: { strict: true }, skipAddingFilesFromTsConfig: true });
+        const tablesAt = new Map<number, string[]>();
+
+        for (const write of discoverTableWrites(project, join(workdir, "lunora")).filter((entry) => scopeName(entry.scope) === "cleanup")) {
+            tablesAt.set(
+                write.line,
+                [...(tablesAt.get(write.line) ?? []), write.table].toSorted((a, b) => a.localeCompare(b)),
+            );
+        }
+
+        expect(
+            Object.fromEntries(["either", "maybe", "nullable", "inner", "loose", "wide"].map((marker) => [marker, tablesAt.get(markerLine(SOURCE, marker))])),
+        ).toStrictEqual({
+            either: ["notes", "todos"],
+            inner: ["notes", "todos"],
+            // `Id<"notes"> | string`: the plain `string` member has no table to read.
+            loose: [""],
+            maybe: ["notes"],
+            nullable: ["notes"],
+            // `Id<string>`: no literal table.
+            wide: [""],
+        });
     });
 });

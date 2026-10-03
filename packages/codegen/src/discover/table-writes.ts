@@ -1,8 +1,9 @@
 import type { CallExpression, Node as TsNode, Project, Type } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { TableWriteIR } from "../ir";
-import { enclosingExportName, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { collectCallRows, isDatabaseAccessor } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /** `ctx.db.<method>(id, …)` writes whose first argument is an `Id<"table">`. */
 const BY_ID = new Set(["delete", "hardDelete", "patch", "replace", "restore"]);
@@ -25,35 +26,71 @@ const FACADE_WRITES = new Set([
     "upsertMany",
 ]);
 
-/** The table an `Id<"table">` type brands (`string & { readonly __table: "table" }`), or `""` when it is not one. */
-const tableOfIdType = (type: Type, at: TsNode): string => {
-    const brand = type.getProperty("__table")?.getTypeAtLocation(at);
-    const value = brand?.getLiteralValue();
+/**
+ * The tables an `Id<"table">` type brands (`string & { readonly __table: "table" }`),
+ * or `[]` when it is not one. Nullish members are dropped first (`Id<"a"> |
+ * undefined`), and a union of ids (`Id<"a"> | Id<"b">`) yields every member's
+ * table — its `__table` is the union `"a" | "b"`.
+ */
+const tablesOfIdType = (type: Type, at: TsNode): string[] => {
+    const brand = type.getNonNullableType().getProperty("__table")?.getTypeAtLocation(at);
 
-    return typeof value === "string" ? value : "";
+    if (brand === undefined) {
+        return [];
+    }
+
+    const members = brand.isUnion() ? brand.getUnionTypes() : [brand];
+    const tables = members.map((member) => member.getLiteralValue()).filter((value): value is string => typeof value === "string");
+
+    // A member that is not a string literal (`Id<string>`) makes the set unreadable.
+    return tables.length === members.length ? tables : [];
 };
 
-/** The table a by-id argument addresses: the id itself, an array of ids, or an array of `{ id }` (`patchMany`). */
-const tableOfIdArgument = (argument: TsNode, method: string): string => {
+/** The tables a by-id argument addresses: the id itself, an array of ids, or an array of `{ id }` (`patchMany`). */
+const tablesOfIdArgument = (argument: TsNode, method: string): string[] => {
     const type = argument.getType();
 
     if (method === "deleteMany" || method === "patchMany") {
         const element = type.getArrayElementType();
 
         if (element === undefined) {
-            return "";
+            return [];
         }
 
         const idType = method === "patchMany" ? element.getProperty("id")?.getTypeAtLocation(argument) : element;
 
-        return idType === undefined ? "" : tableOfIdType(idType, argument);
+        return idType === undefined ? [] : tablesOfIdType(idType, argument);
     }
 
-    return tableOfIdType(type, argument);
+    return tablesOfIdType(type, argument);
 };
 
-/** The `{ method, table }` one call writes, or `undefined` when it is not a table write. */
-const writeOf = (call: CallExpression): { method: string; table: string } | undefined => {
+/** The {@link TableWriteIR.table} an unreadable target (an untyped id, a non-literal name) is recorded under. */
+const UNREADABLE_TABLE = "";
+
+/** One table write: the method, and the tables it targets — `[UNREADABLE_TABLE]` when they cannot be read. */
+interface Write {
+    method: string;
+    tables: ReadonlyArray<string>;
+}
+
+/** The tables a `ctx.db.<method>(first, …)` write names, or `undefined` when `method` is not a write. */
+const databaseWrite = (method: string, first: TsNode | undefined): Write | undefined => {
+    if (BY_NAME.has(method)) {
+        return { method, tables: [first !== undefined && Node.isStringLiteral(first) ? first.getLiteralText() : UNREADABLE_TABLE] };
+    }
+
+    if (BY_ID.has(method) || method === "deleteMany" || method === "patchMany") {
+        const tables = first === undefined ? [] : tablesOfIdArgument(first, method);
+
+        return { method, tables: tables.length === 0 ? [UNREADABLE_TABLE] : tables };
+    }
+
+    return undefined;
+};
+
+/** The {@link Write} one call makes, or `undefined` when it is not a table write. */
+const writeOf = (call: CallExpression): Write | undefined => {
     const callee = call.getExpression();
 
     if (!Node.isPropertyAccessExpression(callee)) {
@@ -62,23 +99,14 @@ const writeOf = (call: CallExpression): { method: string; table: string } | unde
 
     const method = callee.getName();
     const receiver = callee.getExpression();
-    const [first] = call.getArguments();
 
     if (isDatabaseAccessor(receiver)) {
-        if (BY_NAME.has(method)) {
-            return { method, table: first !== undefined && Node.isStringLiteral(first) ? first.getLiteralText() : "" };
-        }
-
-        if (BY_ID.has(method) || method === "deleteMany" || method === "patchMany") {
-            return { method, table: first === undefined ? "" : tableOfIdArgument(first, method) };
-        }
-
-        return undefined;
+        return databaseWrite(method, call.getArguments()[0]);
     }
 
     // `ctx.db.<table>.<method>(…)` — the facade puts the table in the receiver.
     if (FACADE_WRITES.has(method) && Node.isPropertyAccessExpression(receiver) && isDatabaseAccessor(receiver.getExpression())) {
-        return { method, table: receiver.getName() };
+        return { method, tables: [receiver.getName()] };
     }
 
     return undefined;
@@ -87,29 +115,25 @@ const writeOf = (call: CallExpression): { method: string; table: string } | unde
 /**
  * Discover every table write besides a plain `ctx.db.insert("table", …)` (that is
  * `discoverInserts`): by-id writes (`patch`/`replace`/`delete`/…), batch writes,
- * and the `ctx.db.<table>.*` facade. A by-id write reads its table off the id's
- * `Id<"table">` type through the type checker, so `table` is `""` when the id
- * is untyped (a plain `string`). Calls outside an exported declaration are
- * skipped, as `discoverInserts` does.
+ * and the `ctx.db.<table>.*` facade, each with its `CallSiteScope`. A by-id
+ * write reads its table off the id's `Id<"table">` type through the type checker:
+ * a union id (`Id<"a"> | Id<"b">`) gives one record per table, and an untyped id
+ * (a plain `string`) one record with `table: ""`.
  */
-const discoverTableWrites = (project: Project, lunoraDirectory: string): TableWriteIR[] => {
-    const writes: TableWriteIR[] = [];
+const discoverTableWrites = (project: Project, lunoraDirectory: string): TableWriteIR[] =>
+    collectCallRows(project, lunoraDirectory, (call, file): TableWriteIR[] | undefined => {
+        const write = writeOf(call);
 
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const file = lunoraRelativePath(lunoraDirectory, filePath);
-
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            const write = writeOf(call);
-            const exportName = write === undefined ? "" : enclosingExportName(call);
-
-            if (write !== undefined && exportName !== "") {
-                writes.push({ exportName, file, line: call.getStartLineNumber(), method: write.method, table: write.table });
-            }
+        if (write === undefined) {
+            return undefined;
         }
-    }
 
-    return writes;
-};
+        const scope = callSiteScopeOf(call);
+        const line = call.getStartLineNumber();
+
+        return write.tables.map((table) => {
+            return { file, line, method: write.method, scope, table };
+        });
+    });
 
 export default discoverTableWrites;

@@ -31,9 +31,9 @@ interface AdvisorAdminRoute {
 
 ```ts
 interface AdvisorAiRawRun {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -41,10 +41,10 @@ interface AdvisorAiRawRun {
 
 ```ts
 interface AdvisorAiToolSideEffect {
-    exportName: string;
     file: string;
     line: number;
     method: "generateText" | "streamText";
+    scope: AdvisorCallSiteScope;
     sideEffect: string;
     userInputDerived: boolean;
 }
@@ -54,9 +54,9 @@ interface AdvisorAiToolSideEffect {
 
 ```ts
 interface AdvisorArgumentDerivedFetch {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -76,11 +76,11 @@ interface AdvisorArgumentValidator {
 
 ```ts
 interface AdvisorAuthApiCall {
-    exportName: string;
     file: string;
     hasHeaders: boolean;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -91,11 +91,11 @@ interface AdvisorAuthConfig {
     analyzable: boolean;
     disableCsrfCheck: boolean;
     emailPasswordEnabled: boolean;
-    exportName: string;
     file: string;
     line: number;
     requireEmailVerification: boolean;
     scimOnNonTransactionalAdapter: boolean;
+    scope: AdvisorCallSiteScope;
     secureCookiesDisabled: boolean;
     sessionFreshAgeZero: boolean;
     trustedOriginsWildcard: boolean;
@@ -106,11 +106,27 @@ interface AdvisorAuthConfig {
 
 ```ts
 interface AdvisorBrowserUrlAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
+```
+
+### `AdvisorCallSiteScope` (type)
+
+```ts
+type AdvisorCallSiteScope = {
+    callers: ReadonlyArray<string>;
+    kind: "helper";
+    name: string;
+    untracked?: true;
+} | {
+    kind: "export";
+    name: string;
+} | {
+    kind: "module";
+};
 ```
 
 ### `AdvisorConfigCall` (interface)
@@ -146,10 +162,10 @@ interface AdvisorContainer {
 
 ```ts
 interface AdvisorContainerKeyAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -158,10 +174,10 @@ interface AdvisorContainerKeyAccess {
 ```ts
 interface AdvisorContainerOverride {
     detail: string;
-    exportName: string;
     file: string;
     kind: "egress_relaxation" | "enable_internet";
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -183,11 +199,11 @@ interface AdvisorExportSink {
 ```ts
 interface AdvisorFailOpenGuard {
     callee: string;
-    exportName: string;
     failOpen: boolean;
     file: string;
     limitName: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -207,10 +223,10 @@ interface AdvisorFlagRead {
 ```ts
 interface AdvisorFlagSecurityDefault {
     defaultValue: boolean;
-    exportName: string;
     file: string;
     key: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -228,12 +244,12 @@ interface AdvisorGeoIndexUsage {
 
 ```ts
 interface AdvisorHttpActionGuard {
-    exportName: string;
     file: string;
     kind: "httpAction" | "httpRoute";
     line: number;
     method?: string;
     readsAuth: boolean;
+    scope: AdvisorCallSiteScope;
     sideEffect: string;
 }
 ```
@@ -242,10 +258,10 @@ interface AdvisorHttpActionGuard {
 
 ```ts
 interface AdvisorHttpHeaderWrite {
-    exportName: string;
     file: string;
     headerName: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     via: "headers-append" | "headers-ctor" | "headers-set" | "response-init";
 }
 ```
@@ -267,10 +283,10 @@ interface AdvisorHyperdriveCall {
 ```ts
 interface AdvisorIdentityClaimRead {
     declared: boolean;
-    exportName: string;
     file: string;
     key: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -278,9 +294,9 @@ interface AdvisorIdentityClaimRead {
 
 ```ts
 interface AdvisorImageDeliveryUrlAccess {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -309,9 +325,9 @@ interface AdvisorIndexHit {
 
 ```ts
 interface AdvisorInsertWrite {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     table: string;
 }
 ```
@@ -320,10 +336,10 @@ interface AdvisorInsertWrite {
 
 ```ts
 interface AdvisorKvKeyAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
     visibility?: "internal" | "public";
 }
 ```
@@ -332,10 +348,10 @@ interface AdvisorKvKeyAccess {
 
 ```ts
 interface AdvisorMailRecipientAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -468,12 +484,12 @@ interface AdvisorNotifyConfig {
 
 ```ts
 interface AdvisorOwnerFieldWrite {
-    exportName: string;
     field: string;
     file: string;
     line: number;
     method: string;
     ownerScoped?: true;
+    scope: AdvisorCallSiteScope;
     visibility?: "internal" | "public";
 }
 ```
@@ -483,9 +499,9 @@ interface AdvisorOwnerFieldWrite {
 ```ts
 interface AdvisorPaymentWebhook {
     callee: "createAutumnAdapter" | "createDodoPaymentsAdapter" | "createPolarAdapter" | "createStripeAdapter";
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     toleranceSeconds?: number;
 }
 ```
@@ -496,8 +512,8 @@ interface AdvisorPaymentWebhook {
 interface AdvisorPrivilegedDispatch {
     dispatchKind: "queue" | "workflow";
     file: string;
-    handlerExport: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     targetExport: string;
     targetFile: string;
 }
@@ -537,12 +553,12 @@ interface AdvisorProcedureProtection {
 
 ```ts
 interface AdvisorQueryRead {
-    exportName?: string;
     file: string;
     filtersPrimaryKey?: boolean;
     hasFilter: boolean;
     hasIndex: boolean;
     line: number;
+    scope: AdvisorCallSiteScope;
     table: string;
     terminal?: string;
 }
@@ -585,10 +601,10 @@ interface AdvisorR2sqlCall {
 ```ts
 interface AdvisorRatelimitKeySelector {
     callee: string;
-    exportName: string;
     file: string;
     limitName: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -704,9 +720,9 @@ interface AdvisorSoftDeleteRead {
 
 ```ts
 interface AdvisorSqlInterpolation {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -725,10 +741,10 @@ interface AdvisorStaleMigrationImport {
 
 ```ts
 interface AdvisorStorageKeyAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
     visibility?: "internal" | "public";
 }
 ```
@@ -739,11 +755,11 @@ interface AdvisorStorageKeyAccess {
 interface AdvisorStorageUpload {
     analyzable: boolean;
     expiresInSeconds?: number;
-    exportName: string;
     file: string;
     line: number;
     method: "generateUploadUrl" | "getPresignedUrl" | "getSignedUrl" | "store" | "upload";
     presentKeys: string[];
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -792,10 +808,10 @@ interface AdvisorTableWrite extends AdvisorInsertWrite {
 
 ```ts
 interface AdvisorVectorNamespaceAccess {
-    exportName: string;
     file: string;
     line: number;
     method: string;
+    scope: AdvisorCallSiteScope;
 }
 ```
 
@@ -804,6 +820,7 @@ interface AdvisorVectorNamespaceAccess {
 ```ts
 interface AdvisorWorkflow {
     exportName: string;
+    handlerFile?: string;
     steps?: ReadonlyArray<AdvisorWorkflowStep>;
 }
 ```
@@ -812,9 +829,9 @@ interface AdvisorWorkflow {
 
 ```ts
 interface AdvisorWorkflowCall {
-    exportName: string;
     file: string;
     line: number;
+    scope: AdvisorCallSiteScope;
     workflow: string;
 }
 ```
@@ -879,6 +896,18 @@ type BaselineComparison = {
     scoreDelta: number;
     worsened: string[];
 };
+```
+
+### `CallSiteMetadata` (type)
+
+```ts
+type CallSiteMetadata = {
+    callers: ReadonlyArray<string>;
+    helper: string;
+    untracked?: true;
+} | {
+    exportName: string;
+} | Record<never, never>;
 ```
 
 ### `Category` (type)
@@ -1239,6 +1268,30 @@ const browserUserUrlWithoutAllowlist: Lint;
 const byCodepoint: (a: string, b: string) => number;
 ```
 
+### `callSiteCallers` (const)
+
+```ts
+const callSiteCallers: (scope: AdvisorCallSiteScope) => ReadonlyArray<string>;
+```
+
+### `callSiteDescription` (const)
+
+```ts
+const callSiteDescription: (scope: AdvisorCallSiteScope) => string;
+```
+
+### `callSiteLabel` (const)
+
+```ts
+const callSiteLabel: (scope: AdvisorCallSiteScope) => string;
+```
+
+### `callSiteMetadata` (const)
+
+```ts
+const callSiteMetadata: (scope: AdvisorCallSiteScope) => CallSiteMetadata;
+```
+
 ### `circularFk` (const)
 
 ```ts
@@ -1413,6 +1466,14 @@ const gradeFromScore: (score: number) => Grade;
 const hardcodedSecret: Lint;
 ```
 
+### `helperRole` (const)
+
+```ts
+const helperRole: (scope: Extract<AdvisorCallSiteScope, {
+    kind: "helper";
+}>) => string;
+```
+
 ### `hotShard` (const)
 
 ```ts
@@ -1465,6 +1526,12 @@ const indexUtilization: Lint;
 
 ```ts
 const insertManyUnsafeUserData: Lint;
+```
+
+### `isReachableSite` (const)
+
+```ts
+const isReachableSite: (scope: AdvisorCallSiteScope) => boolean;
 ```
 
 ### `kvUnscopedUserKeyIdor` (const)
@@ -1645,6 +1712,12 @@ const ratelimitKeySpoofableOrGlobal: Lint;
 
 ```ts
 const ratelimitMiddlewareFailOpen: Lint;
+```
+
+### `readCallSiteCallers` (const)
+
+```ts
+const readCallSiteCallers: (metadata: Readonly<Record<string, unknown>>) => string[];
 ```
 
 ### `relationReferencesUnknownField` (const)

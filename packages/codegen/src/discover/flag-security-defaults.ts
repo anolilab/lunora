@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { FlagSecurityDefaultIR } from "../ir";
 import { collectCallRows, isContextIdentifier } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * Whether `callee` is a `ctx.flags.boolean` property access — the boolean flag
@@ -60,7 +60,7 @@ const flagSecurityDefaultInCall = (call: CallExpression, relativePath: string): 
         return undefined;
     }
 
-    return { defaultValue, exportName: enclosingExportName(call), file: relativePath, key, line: call.getStartLineNumber() };
+    return { defaultValue, scope: callSiteScopeOf(call), file: relativePath, key, line: call.getStartLineNumber() };
 };
 
 /**

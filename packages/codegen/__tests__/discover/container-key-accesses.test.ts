@@ -37,7 +37,7 @@ describe("discoverContainerKeyAccesses", () => {
         const found = discoverContainerKeyAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "start", file: "start", line: 1, method: "get" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "start" }, file: "start", line: 1, method: "get" });
     });
 
     it("flags a destructured `args` instance key — the form the docs example uses", () => {

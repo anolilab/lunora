@@ -9,8 +9,8 @@ import imagesUrlSourceFromUserInput from "../src/lints/static/images-url-source-
 const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: v.string() }) }));
 
 const accesses: AdvisorImageDeliveryUrlAccess[] = [
-    { exportName: "avatarUrl", file: "images", line: 4 },
-    { exportName: "bannerUrl", file: "images", line: 9 },
+    { scope: { kind: "export", name: "avatarUrl" }, file: "images", line: 4 },
+    { scope: { kind: "export", name: "bannerUrl" }, file: "images", line: 9 },
 ];
 
 describe("images_url_source_from_user_input", () => {

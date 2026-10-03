@@ -37,7 +37,7 @@ describe("discoverVectorNamespaceAccesses", () => {
         const found = discoverVectorNamespaceAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "search", file: "search", line: 1, method: "query" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "search" }, file: "search", line: 1, method: "query" });
     });
 
     it("flags an upsert with an args-derived namespace", () => {
@@ -51,7 +51,7 @@ describe("discoverVectorNamespaceAccesses", () => {
         const found = discoverVectorNamespaceAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "indexDoc", method: "upsert" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "indexDoc" }, method: "upsert" });
     });
 
     it("flags an upsertNow with an args-derived namespace", () => {
@@ -65,7 +65,7 @@ describe("discoverVectorNamespaceAccesses", () => {
         const found = discoverVectorNamespaceAccesses(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ exportName: "indexNow", method: "upsertNow" });
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "indexNow" }, method: "upsertNow" });
     });
 
     it("flags an args namespace reached through one local const hop", () => {

@@ -9,8 +9,8 @@ import httpActionResponseHeaderInjection from "../src/lints/static/http-action-r
 const schema = () => fromServerSchema(defineSchema({ users: defineTable({ name: v.string() }) }));
 
 const rows: AdvisorHttpHeaderWrite[] = [
-    { exportName: "echo", file: "echo", headerName: "x-host", line: 3, via: "response-init" },
-    { exportName: "go", file: "redirect", headerName: "location", line: 4, via: "headers-set" },
+    { scope: { kind: "export", name: "echo" }, file: "echo", headerName: "x-host", line: 3, via: "response-init" },
+    { scope: { kind: "export", name: "go" }, file: "redirect", headerName: "location", line: 4, via: "headers-set" },
 ];
 
 describe("http_action_response_header_injection", () => {
@@ -33,7 +33,7 @@ describe("http_action_response_header_injection", () => {
         expect.assertions(1);
 
         const findings = httpActionResponseHeaderInjection.run({
-            httpHeaderWrites: [{ exportName: "dyn", file: "dyn", headerName: "", line: 2, via: "headers-append" }],
+            httpHeaderWrites: [{ scope: { kind: "export", name: "dyn" }, file: "dyn", headerName: "", line: 2, via: "headers-append" }],
             schema: schema(),
         });
 

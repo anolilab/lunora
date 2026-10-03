@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One rate-limit / Turnstile middleware call — the `ratelimit_middleware_fail_open`
  * lint input. `rateLimit`/`dbRateLimit` (`@lunora/ratelimit`) and
@@ -12,8 +14,6 @@
 export interface AdvisorFailOpenGuard {
     /** The middleware factory at the call site: `rateLimit` / `dbRateLimit` / `verifyTurnstileMiddleware`. */
     callee: string;
-    /** The exported binding name of the procedure the guard is attached to, or `"<module>"` at file scope. */
-    exportName: string;
     /** `true` only when the options literal set `failOpen: true` as a boolean literal; a non-literal or absent option is treated as fail-closed. */
     failOpen: boolean;
     /** Source file relative to the lunora dir, no extension. */
@@ -22,4 +22,6 @@ export interface AdvisorFailOpenGuard {
     limitName: string;
     /** 1-based line of the middleware call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
 }

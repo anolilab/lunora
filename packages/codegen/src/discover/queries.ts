@@ -1,8 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
 import type { QueryReadIR } from "../ir";
-import { enclosingExportName, isDatabaseAccessor, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { collectCallRows, isDatabaseAccessor } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * Chain methods that narrow a read so it is not a full scan.
@@ -136,42 +137,33 @@ const tableOf = (queryCall: CallExpression): string => {
 
 /**
  * Discover every `ctx.db.query("table")…` read under the lunora source directory
- * and reduce each to a {@link QueryReadIR}.
+ * and reduce each to a {@link QueryReadIR}, one per read site with its
+ * `CallSiteScope`.
  *
  * Reads without a `.filter()` are kept too. They are never
  * `filter_without_index` candidates (that lint gates on `hasFilter`), but an
  * unfiltered, unindexed `.collect()` is the read `unbounded_collect` exists for
  * — and dropping it here is precisely why nothing could see it.
  */
-const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR[] => {
-    const reads: QueryReadIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
-
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            if (!isDatabaseQueryCall(call)) {
-                continue;
-            }
-
-            const methods = chainMethods(call);
-            const hasFilter = methods.includes("filter");
-
-            reads.push({
-                exportName: enclosingExportName(call),
-                file: relativePath,
-                filtersPrimaryKey: hasFilter && filtersPrimaryKeyOf(call),
-                hasFilter,
-                hasIndex: methods.some((method) => INDEX_METHODS.has(method)),
-                line: call.getStartLineNumber(),
-                table: tableOf(call),
-                terminal: methods.findLast((method) => TERMINAL_METHODS.has(method)),
-            });
+const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR[] =>
+    collectCallRows(project, lunoraDirectory, (call, file): QueryReadIR | undefined => {
+        if (!isDatabaseQueryCall(call)) {
+            return undefined;
         }
-    }
 
-    return reads;
-};
+        const methods = chainMethods(call);
+        const hasFilter = methods.includes("filter");
+
+        return {
+            file,
+            filtersPrimaryKey: hasFilter && filtersPrimaryKeyOf(call),
+            hasFilter,
+            hasIndex: methods.some((method) => INDEX_METHODS.has(method)),
+            line: call.getStartLineNumber(),
+            scope: callSiteScopeOf(call),
+            table: tableOf(call),
+            terminal: methods.findLast((method) => TERMINAL_METHODS.has(method)),
+        };
+    });
 
 export default discoverQueries;

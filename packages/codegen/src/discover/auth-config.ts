@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "../argument-taint";
 import type { AuthConfigIR } from "../ir";
 import { collectSecurityCallRows, propertyInitializer } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 
 /** Whether `node` is the literal `true` keyword. */
@@ -46,7 +46,7 @@ const hasWildcardOrigin = (node: TsNode | undefined): boolean => {
  * confirmed to be a statically-readable, spread-free object literal — see
  * {@link authConfigInCall}.
  */
-const readAuthConfig = (config: ObjectLiteralExpression): Omit<AuthConfigIR, "exportName" | "file" | "line"> => {
+const readAuthConfig = (config: ObjectLiteralExpression): Omit<AuthConfigIR, "file" | "line" | "scope"> => {
     const advanced = propertyInitializer(config, "advanced");
     const emailAndPassword = propertyInitializer(config, "emailAndPassword");
     const session = propertyInitializer(config, "session");
@@ -70,7 +70,7 @@ const readAuthConfig = (config: ObjectLiteralExpression): Omit<AuthConfigIR, "ex
  * literal at all. An opaque config could set (or clear) any of these keys
  * elsewhere, so every lint must skip it rather than guess.
  */
-const unanalyzableAuthConfig = (): Omit<AuthConfigIR, "exportName" | "file" | "line"> => {
+const unanalyzableAuthConfig = (): Omit<AuthConfigIR, "file" | "line" | "scope"> => {
     return {
         analyzable: false,
         disableCsrfCheck: false,
@@ -95,7 +95,7 @@ const authConfigInCall = (call: CallExpression, relativePath: string): AuthConfi
 
     const facts = argument !== undefined && Node.isObjectLiteralExpression(argument) && !hasSpread ? readAuthConfig(argument) : unanalyzableAuthConfig();
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber(), ...facts };
+    return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber(), ...facts };
 };
 
 /**

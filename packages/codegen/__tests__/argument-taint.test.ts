@@ -3,7 +3,6 @@ import { Project, SyntaxKind } from "ts-morph";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-    enclosingExportName,
     isArgumentDerived,
     isRequestInputDerived,
     isScopedByContext,
@@ -12,6 +11,7 @@ import {
     referencesRequestInput,
     singleHopInitializer,
 } from "../src/argument-taint";
+import { callSiteScopeOf } from "../src/discover/attribution";
 import { calleeName } from "../src/discover/callee";
 
 let project: Project;
@@ -204,15 +204,15 @@ describe("argument-taint", () => {
         });
     });
 
-    describe("enclosingExportName", () => {
+    describe("callSiteScopeOf", () => {
         it("attributes a sink to the exported declaration, walking past local bindings", () => {
             expect.assertions(2);
 
-            expect(enclosingExportName(sinkArgument(`const result = SINK(args.key);`))).toBe("handler");
+            expect(callSiteScopeOf(sinkArgument(`const result = SINK(args.key);`))).toStrictEqual({ kind: "export", name: "handler" });
 
             const inline = project.createSourceFile("inline.ts", `router.route("/x", async () => { SINK(1); });\n`, { overwrite: true });
 
-            expect(enclosingExportName(findSink(inline))).toBe("<module>");
+            expect(callSiteScopeOf(findSink(inline))).toStrictEqual({ kind: "module" });
         });
     });
 });

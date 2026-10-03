@@ -1,9 +1,10 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { VectorNamespaceAccessIR } from "../ir";
 import { collectCallRows, propertyInitializer } from "./ast";
+import { callSiteScopeOf } from "./attribution";
 
 /**
  * The `ctx.vectors` methods whose second argument may carry a `namespace`
@@ -58,7 +59,7 @@ const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string)
         return undefined;
     }
 
-    return { exportName: enclosingExportName(call), file: relativePath, line: call.getStartLineNumber(), method };
+    return { scope: callSiteScopeOf(call), file: relativePath, line: call.getStartLineNumber(), method };
 };
 
 /**

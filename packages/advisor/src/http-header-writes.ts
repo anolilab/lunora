@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One response-header write, inside an `httpAction` handler, whose value is derived
  * from raw request input (`request.headers`, `request.url`/query, `await
@@ -12,14 +14,14 @@
  * to `HttpHeaderWriteIR`.
  */
 export interface AdvisorHttpHeaderWrite {
-    /** The exported binding name of the enclosing handler, or `"<module>"` when mounted inline. */
-    exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
     /** The header name being written (`"location"`), or `""` when the key is not a string literal. */
     headerName: string;
     /** 1-based line of the request-tainted header value. */
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
     /** How the header was written. */
     via: "headers-append" | "headers-ctor" | "headers-set" | "response-init";
 }

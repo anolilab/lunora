@@ -13,8 +13,8 @@ describe("mail_recipient_from_request_input", () => {
         expect.assertions(4);
 
         const mailRecipientAccesses: AdvisorMailRecipientAccess[] = [
-            { exportName: "notify", file: "notifications", line: 4, method: "send" },
-            { exportName: "relay", file: "notifications", line: 9, method: "queue" },
+            { scope: { kind: "export", name: "notify" }, file: "notifications", line: 4, method: "send" },
+            { scope: { kind: "export", name: "relay" }, file: "notifications", line: 9, method: "queue" },
         ];
         const findings = mailRecipientFromRequestInput.run({ mailRecipientAccesses, schema: schema() });
 

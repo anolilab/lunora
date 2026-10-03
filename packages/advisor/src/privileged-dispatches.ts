@@ -1,3 +1,5 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One payload-derived privileged dispatch — a `ctx.run`/`context.run` back into a
  * Lunora function from inside a `defineQueue` push handler or a `defineWorkflow`
@@ -15,10 +17,10 @@ export interface AdvisorPrivilegedDispatch {
     dispatchKind: "queue" | "workflow";
     /** Source file relative to the lunora dir, no extension. */
     file: string;
-    /** The exported handler binding performing the dispatch. */
-    handlerExport: string;
     /** 1-based line of the dispatch call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
     /** Export name of the dispatched target (`send` in `api.messages.send`). */
     targetExport: string;
     /** File path of the dispatched target relative to the lunora dir (`messages` in `api.messages.send`). */

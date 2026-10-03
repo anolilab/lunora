@@ -26,6 +26,7 @@ const read = (over: Partial<AdvisorQueryRead> = {}): AdvisorQueryRead => {
         hasFilter: true,
         hasIndex: false,
         line: 10,
+        scope: { kind: "export", name: "list" },
         table: "messages",
         ...over,
     };
