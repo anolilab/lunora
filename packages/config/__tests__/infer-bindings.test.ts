@@ -1263,7 +1263,9 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.usesAnalyticsSql).toBe(true);
         // The read surface does not imply the write-only Analytics Engine dataset.
         expect(result.usesAnalytics).toBe(false);
-        expect(result.signals.some((signal) => signal.startsWith("analytics (@lunora/bindings/analytics-sql is imported or ctx.analyticsSql is read)"))).toBe(true);
+        expect(result.signals.some((signal) => signal.startsWith("analytics (@lunora/bindings/analytics-sql is imported or ctx.analyticsSql is read)"))).toBe(
+            true,
+        );
     });
 
     it("adds the analytics binding end to end when a handler reads ctx.analyticsSql", async () => {
