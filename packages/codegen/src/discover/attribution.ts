@@ -14,6 +14,7 @@ import type { FunctionDeclaration, Identifier, Node as TsNode, SourceFile, Symbo
 import { Node, SyntaxKind, ts } from "ts-morph";
 
 import type { CallSiteScope, FunctionIR } from "../ir";
+import { localExportAliases } from "./ast";
 
 type TopLevelDeclaration = FunctionDeclaration | VariableDeclaration;
 
@@ -64,18 +65,14 @@ const keywordExportName = (declaration: TopLevelDeclaration): string | undefined
 };
 
 /** `[localName, exportedName]` for every local `export { a as b }` specifier and `export default a` of the file. */
-const exportStatementNames = (sourceFile: SourceFile): (readonly [string, string])[] =>
-    sourceFile.getStatements().flatMap((statement): (readonly [string, string])[] => {
-        if (Node.isExportDeclaration(statement) && !statement.hasModuleSpecifier() && !statement.isTypeOnly()) {
-            return statement
-                .getNamedExports()
-                .map((specifier) => [specifier.getNameNode().getText(), specifier.getAliasNode()?.getText() ?? specifier.getName()] as const);
-        }
-
-        const expression = Node.isExportAssignment(statement) && !statement.isExportEquals() ? statement.getExpression() : undefined;
+const exportStatementNames = (sourceFile: SourceFile): (readonly [string, string])[] => [
+    ...[...localExportAliases(sourceFile)].flatMap(([local, exported]) => exported.map((name) => [local, name] as const)),
+    ...sourceFile.getExportAssignments().flatMap((assignment): (readonly [string, string])[] => {
+        const expression = assignment.isExportEquals() ? undefined : assignment.getExpression();
 
         return expression !== undefined && Node.isIdentifier(expression) ? [[expression.getText(), "default"] as const] : [];
-    });
+    }),
+];
 
 /**
  * Exported top-level declaration → its exported name, read syntactically (no

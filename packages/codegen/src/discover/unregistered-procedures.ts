@@ -189,6 +189,26 @@ const SEPARATE_EXPORT_STATEMENT: MissedRegistration = {
     remediation: "Move the keyword onto the declaration and drop the separate export statement.",
 };
 
+/**
+ * The kinds procedure and mutator discovery register through a separate local
+ * `export { a as b }` too, under the exported name. One of these still missing
+ * behind such a specifier was dropped for its initializer, not its export.
+ */
+const SEPARATE_EXPORT_REGISTERED = new Set<string>([
+    "RegisteredAction",
+    "RegisteredLifecycleHook",
+    "RegisteredMutation",
+    "RegisteredMutator",
+    "RegisteredQuery",
+    "RegisteredReactor",
+    "RegisteredStream",
+    "RegisteredWhisperAuthorizer",
+]);
+
+/** Why a binding behind a separate local `export { … }` is still unregistered. */
+const separateExportCause = (registration: Registration): MissedRegistration =>
+    SEPARATE_EXPORT_REGISTERED.has(registration.typeName) ? INDIRECT_INITIALIZER : SEPARATE_EXPORT_STATEMENT;
+
 const findingFor = (relativePath: string, exportName: string, registration: Registration, line: number, indirection: MissedRegistration): Finding => {
     const { call, file, note, typeName } = registration;
     // The wrong module beats every other cause: nothing about how the value was
@@ -203,7 +223,7 @@ const findingFor = (relativePath: string, exportName: string, registration: Regi
         cacheKey: `procedure_not_registered:${relativePath}:${exportName}`,
         categories: ["SCHEMA"],
         description:
-            "Codegen registers an export only when the declaration carries `export` and its initializer is literally the registering call. Written any other way it exists at runtime but never reaches the generated output — `_generated/api.ts` for a procedure, the lifecycle manifest for a hook or reactor — so a caller cannot address it and a hook never fires.",
+            "Codegen registers an export only when its initializer is literally the registering call and it is exported by its declaration's own `export` keyword (procedures and mutators: or by a local `export { … }`). Written any other way it exists at runtime but never reaches the generated output — `_generated/api.ts` for a procedure, the lifecycle manifest for a hook or reactor — so a caller cannot address it and a hook never fires.",
         detail: `\`${exportName}\` in \`${relativePath}\` (line ${line.toString()}) has type \`${typeName}\` but was not registered — ${missed.cause}.`,
         facing: "INTERNAL",
         level: "WARN",
@@ -276,13 +296,15 @@ const defaultExportFindings = (source: SourceFile, relativePath: string, registr
 };
 
 /**
- * `const handler = query.…; export { handler };` — the export-declaration form.
+ * `const handler = defineShape(…); export { handler };` — the export-declaration form.
  *
- * Discovery walks variable statements and asks each whether it `isExported()`,
- * which is false here: the `export` is a separate statement. So the procedure is
- * dropped from `api.ts` exactly like a factory-produced one, and the binding it
- * is dropped from looks like a perfectly ordinary builder chain — which is what
- * makes this shape worse than the ones above rather than merely another of them.
+ * Procedures and mutators are registered through such a specifier, under the
+ * exported name (`discoverFunctions`, `discoverMutators`); one still missing
+ * here was dropped for its initializer, and is reported as such. The other
+ * kinds' discoverers key a binding by its LOCAL name, so a renamed one is
+ * missing under the name callers use while looking like a perfectly ordinary
+ * registration — which is what makes this shape worse than the ones above
+ * rather than merely another of them.
  *
  * The exported name is what a caller addresses, so `export { a as b }` is
  * checked and reported as `b`. Re-exports (`export { x } from "./other"`) are
@@ -309,7 +331,7 @@ const exportDeclarationFindings = (source: SourceFile, relativePath: string, reg
             const registration = registrationOf(local);
 
             if (registration !== undefined) {
-                findings.push(findingFor(relativePath, exportName, registration, specifier.getStartLineNumber(), SEPARATE_EXPORT_STATEMENT));
+                findings.push(findingFor(relativePath, exportName, registration, specifier.getStartLineNumber(), separateExportCause(registration)));
             }
         }
     }

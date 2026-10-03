@@ -3,7 +3,7 @@ import type { CallExpression, Project, SourceFile } from "ts-morph";
 import declaredOutputWins from "../../declared-output";
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "../../ir";
 import sanitizeNamespace from "../../paths";
-import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
+import { listLunoraSourceFiles, localExportAliases, lunoraRelativePath } from "../ast";
 import { collectErasures, reportErasures } from "../erased-returns";
 import type { LifecycleMoment } from "./classify-procedure-call";
 import { classifyProcedureCall } from "./classify-procedure-call";
@@ -129,27 +129,37 @@ const defaultExportFunctions = (source: SourceFile, relativePath: string): Funct
     return found;
 };
 
-/** Lift every Lunora registration in one source file into {@link FunctionIR} entries. */
+/**
+ * Lift every Lunora registration in one source file into {@link FunctionIR}
+ * entries, each under the name a caller addresses it by: `export const x = …`
+ * as `x`, and a top-level binding exported by a separate local specifier
+ * (`const run = query(…); export { run as start }`) as `start` — the name
+ * the module actually exports, which is what the emitted `api.ts` and dispatch
+ * table read off the module namespace. A binding exported under several names
+ * is registered under each.
+ */
 const discoverFileFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
-    const found: FunctionIR[] = [];
+    const aliases = localExportAliases(source);
+    const found = source
+        .getVariableStatements()
+        .filter((statement) => statement.hasExportKeyword() || aliases.size > 0)
+        .flatMap((statement) => statement.getDeclarations())
+        .flatMap((declaration) =>
+            exportCallsOfDeclaration(declaration).map(([localName, call]) => {
+                return { call, declaration, localName };
+            }),
+        )
+        .flatMap(({ call, declaration, localName }) => {
+            const ownName = declaration.getVariableStatement()?.hasExportKeyword() === true ? [localName] : [];
 
-    for (const statement of source.getVariableStatements()) {
-        if (!statement.isExported()) {
-            continue;
-        }
+            return [...new Set([...ownName, ...(aliases.get(localName) ?? [])])].flatMap(
+                (exportName) => functionIrFromCall(call, exportName, relativePath) ?? [],
+            );
+        });
+    const named = new Set(found.map((entry) => entry.exportName));
 
-        for (const declaration of statement.getDeclarations()) {
-            for (const [exportName, call] of exportCallsOfDeclaration(declaration)) {
-                const entry = functionIrFromCall(call, exportName, relativePath);
-
-                if (entry) {
-                    found.push(entry);
-                }
-            }
-        }
-    }
-
-    found.push(...defaultExportFunctions(source, relativePath));
+    // `export default run` and `export { run as default }` name the same export.
+    found.push(...defaultExportFunctions(source, relativePath).filter((entry) => !named.has(entry.exportName)));
 
     return found;
 };
