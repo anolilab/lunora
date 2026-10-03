@@ -1,3 +1,16 @@
+## @lunora/codegen [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.257...@lunora/codegen@1.0.0-alpha.258) (2026-10-03)
+
+### Bug Fixes
+
+* **codegen:** owner-scope only the mutator's own args parameter ([#958](https://github.com/anolilab/lunora/issues/958)) ([cf4003a](https://github.com/anolilab/lunora/commit/cf4003a8df06ba4556e8f26688823f97dae3611f)), closes [#957](https://github.com/anolilab/lunora/issues/957)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.188
+* **@lunora/agent:** upgraded to 1.0.0-alpha.171
+* **@lunora/server:** upgraded to 1.0.0-alpha.177
+
 ## @lunora/codegen [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.256...@lunora/codegen@1.0.0-alpha.257) (2026-10-03)
 
 ### Bug Fixes
