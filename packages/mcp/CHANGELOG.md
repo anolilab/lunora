@@ -1,3 +1,16 @@
+## @lunora/mcp [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.204...@lunora/mcp@1.0.0-alpha.205) (2026-10-03)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.170
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.107
+* **@lunora/auth:** upgraded to 1.0.0-alpha.184
+
 ## @lunora/mcp [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.203...@lunora/mcp@1.0.0-alpha.204) (2026-10-02)
 
 
