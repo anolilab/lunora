@@ -110,6 +110,7 @@ export type { RemotePreference } from "./project-config";
 export { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow } from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";
+export { default as resolveSchemaDirectory } from "./resolve-schema-directory";
 export type {
     AugmentPlan,
     DevSecretsFillPlan,

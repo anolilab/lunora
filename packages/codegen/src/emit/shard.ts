@@ -408,9 +408,9 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         ? `\n    sourceClient?: (env: Record<string, unknown>, binding: string) => { query: <Row = Record<string, unknown>>(text: string, params?: readonly unknown[]) => Promise<Row[]> } | undefined;`
         : "";
 
-    const globalDatabaseMissing = `throw new Error("ctx.db.<globalTable>: no global backend configured. Pass \`d1\` or \`hyperdriveGlobal\` to createShardDO().");`;
-    const schedulerMissing = `throw new Error("ctx.scheduler: no scheduler configured. Pass \`scheduler\` to createShardDO().");`;
-    const storageMissing = `throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");`;
+    const globalDatabaseMissing = "ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().";
+    const schedulerMissing = "ctx.scheduler: no scheduler configured. Pass `scheduler` to createShardDO().";
+    const storageMissing = "ctx.storage: no storage configured. Pass `storage` to createShardDO().";
     const globalDatabaseStub = hasGlobalTables
         ? renderThrowingStub(
               "globalDbStub: DatabaseWriterLike",
@@ -693,8 +693,9 @@ ${schema.tables
     // The relocated notify build — emitted after `log`/`metrics` are in scope.
     const notifyBuild = notifyFragments.build;
 
-    // The ActionCtx-ONLY helpers (`tier: "action"` capabilities, then services): external, non-deterministic I/O the typed
-    // `ActionCtx` exposes but `QueryCtx`/`MutationCtx` do not. We enforce that at
+    // The ActionCtx-ONLY helpers (`tier: "action"` capabilities, then services):
+    // external, non-deterministic I/O the typed `ActionCtx` exposes but
+    // `QueryCtx`/`MutationCtx` do not. We enforce that at
     // the VALUE level too — the binds run AND the props are attached only when the
     // executing function is an `action`, so a query/mutation handler never even
     // has `ctx.sql` on the object (its type already forbids it; this makes the

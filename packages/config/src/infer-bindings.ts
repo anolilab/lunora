@@ -23,8 +23,16 @@ import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@lunora/codegen";
-import { CAPABILITY_PROBES, readServiceBindings, sourceCapabilitySignals } from "@lunora/codegen";
-import { init as initLexer, parse as lexModule } from "es-module-lexer";
+import {
+    capabilitiesUsedBy,
+    CAPABILITY_PROBES,
+    foldCapabilitySignals,
+    mayReadCapabilityContext,
+    readServiceBindings,
+    sourceCapabilitySignals,
+} from "@lunora/codegen";
+// `worker-entry.ts` lexes the entry's exports; the lexer's wasm must be initialised first.
+import { init as initLexer } from "es-module-lexer";
 import { Project } from "ts-morph";
 
 import type { AgentIR } from "./agent-info";
@@ -32,9 +40,9 @@ import { discoverAgentInfo } from "./agent-info";
 import artifactsBindingHint from "./artifacts-hint";
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
+import { escapeRegExp } from "./dev-variables-format";
 import { discoverFlagsInfo } from "./flags-info";
-import type { SandboxToolName } from "./infer-sandbox-tools";
-import { SANDBOX_TOOLS, sandboxToolImports } from "./infer-sandbox-tools";
+import isWithinDirectory from "./is-within-directory";
 import join from "./path";
 import type { QueueIR } from "./queue-info";
 import { discoverQueueInfo } from "./queue-info";
@@ -77,110 +85,103 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 //   analyticsSql → analytics                → self-describing (binding name only; wrangler >= 4.145.0)
 
 /**
- * Config's flag for each of codegen's capabilities it reports. The detection
- * facets of these rows — the package whose value import, and the `ctx.<property>`
- * whose read, marks the capability used — are NOT restated here: they are read
- * off codegen's own table ({@link CAPABILITY_PROBES}), so a handler that makes
- * codegen wire `ctx.kv` always makes config add or hint the KV binding too.
+ * Codegen's capabilities config reports, each as the flag `uses<Key>`. What marks
+ * one used is not restated here: config folds the same per-file signals codegen
+ * reads ({@link sourceCapabilitySignals}) and asks codegen's one matcher
+ * ({@link capabilitiesUsedBy}), so a handler that makes codegen wire `ctx.kv`
+ * always makes config add or hint the KV binding too. The package
+ * {@link packageNamesFromBindings} reports, and the wording of each hint, are read
+ * off the row's probe ({@link CAPABILITY_PROBES}).
  */
-const CODEGEN_CAPABILITY_FLAGS = {
-    ai: "usesAi",
-    aiSearch: "usesAiSearch",
-    analytics: "usesAnalytics",
-    analyticsSql: "usesAnalyticsSql",
-    artifacts: "usesArtifacts",
-    browser: "usesBrowser",
-    hyperdrive: "usesHyperdrive",
-    images: "usesImages",
-    kv: "usesKv",
-    mail: "usesMail",
+const CODEGEN_CAPABILITIES = [
+    "ai",
+    "aiSearch",
+    "analytics",
+    "analyticsSql",
+    "artifacts",
+    "browser",
+    "hyperdrive",
+    "images",
+    "kv",
+    "mail",
     // No Cloudflare binding of its own — like `@lunora/mail`, this exists so the
     // package's declared secrets (the VAPID trio + the two FCM keys) reach
     // `.dev.vars.example` and the missing-secret pre-flight.
-    notify: "usesNotify",
-    payments: "usesPayment",
-    pipelines: "usesPipelines",
+    "notify",
+    "payments",
+    "pipelines",
     // Its three `R2_SQL_*` secrets are the whole config need (no binding).
-    r2sql: "usesR2sql",
-    scheduler: "usesScheduler",
-    storage: "usesStorage",
-    x402: "usesX402Pay",
-} as const satisfies Partial<Record<CapabilityKey, `uses${string}`>>;
+    "r2sql",
+    "scheduler",
+    "storage",
+    "x402",
+] as const satisfies ReadonlyArray<CapabilityKey>;
+
+type CodegenCapability = (typeof CODEGEN_CAPABILITIES)[number];
+
+/** The flag a codegen capability is reported under: `kv` → `usesKv`. */
+const flagOf = <K extends CodegenCapability>(key: K): `uses${Capitalize<K>}` =>
+    // The one cast: TypeScript cannot follow `toUpperCase` into `Capitalize<K>`.
+    `uses${key.charAt(0).toUpperCase()}${key.slice(1)}` as `uses${Capitalize<K>}`;
 
 /**
  * The config-only flags: packages codegen wires no `ctx.*` helper for, so they
- * have no row in its table. A static value import or a dynamic `import()` of the
- * package is the signal.
+ * have no row in its table — the package's import is the whole signal.
  */
-const CONFIG_ONLY_SOURCES = {
-    usesAuth: "@lunora/auth",
+const CONFIG_ONLY_SOURCES = [
+    // Usually imported statically, but a lazy `import("@lunora/auth")` where the
+    // auth instance is first built needs the same hint — see FLAG_PACKAGES.
+    ["usesAuth", "@lunora/auth"],
     // The Workers CIMD transport (plan 461). No binding and no signal: it needs a
     // compatibility flag, which `lunora doctor` checks against the wrangler config
-    // this inference never reads. It is commonly loaded lazily where the auth
-    // instance is built, hence the dynamic-import arm.
-    usesCimdWorkers: "@lunora/auth/cimd/workers",
+    // this inference never reads.
+    ["usesCimdWorkers", "@lunora/auth/cimd/workers"],
     // The x402 charge rail is an opt-in add-on subpath (not part of the `lunorash`
     // umbrella). It implies no `.dev.vars` secret: the charge recipient is a
-    // user-named `[vars]` entry — hint-only.
-    usesX402Charge: "@lunora/x402/charge",
-} as const;
+    // user-named `[vars]` entry — hint-only. Often loaded lazily on the paid route
+    // alone, which still needs the hint — see FLAG_PACKAGES.
+    ["usesX402Charge", "@lunora/x402/charge"],
+] as const;
 
 /** The import-driven capability flag names. */
-type CapabilityFlag = keyof typeof CONFIG_ONLY_SOURCES | (typeof CODEGEN_CAPABILITY_FLAGS)[keyof typeof CODEGEN_CAPABILITY_FLAGS];
-
-/** How one flag is detected in a source file. */
-interface CapabilitySource {
-    /** The `ctx.<property>` read that marks it used (codegen rows that wire a ctx helper). */
-    contextProperty?: string;
-    /** A config-only row: a dynamic `import()` of `source` counts too. */
-    dynamicImport: boolean;
-    /** The package whose value import marks it used — also the name {@link packageNamesFromBindings} reports. */
-    source: string;
-}
-
-/** Look a codegen capability up in its table; a key config maps but codegen dropped is a build-time bug, so fail loudly. */
-const codegenProbe = (key: CapabilityKey): (typeof CAPABILITY_PROBES)[number] => {
-    const probe = CAPABILITY_PROBES.find((candidate) => candidate.key === key);
-
-    if (probe === undefined) {
-        throw new Error(`@lunora/config: codegen has no "${key}" capability`);
-    }
-
-    return probe;
-};
+type CapabilityFlag = (typeof CONFIG_ONLY_SOURCES)[number][0] | `uses${Capitalize<CodegenCapability>}`;
 
 /**
- * Every import-driven capability flag → how it is detected: the codegen rows
- * derived from {@link CAPABILITY_PROBES}, then the {@link CONFIG_ONLY_SOURCES}.
- * Everything else that enumerates capabilities — the {@link Capabilities} type,
- * {@link NO_CAPABILITIES}, {@link mergeCapabilities}, and the final
- * {@link InferredBindings} return — is derived from this table.
+ * Every flag → the package it reports, sorted by flag so
+ * {@link packageNamesFromBindings} lists packages in a stable order.
+ *
+ * Every row counts a dynamic `import("…")` of its package as well as a static
+ * one — deliberately, for all of them: a lazily loaded package needs its binding
+ * or secret just the same. Codegen ignores dynamic imports (it wires a helper off
+ * a static one), so config detects a superset of codegen here — harmless for a
+ * binding or a secret, where the opposite would build green and throw at runtime.
  */
-const CAPABILITY_SOURCES = Object.fromEntries([
-    ...Object.entries(CODEGEN_CAPABILITY_FLAGS).map(([key, flag]) => {
-        const { contextProperty, moduleSpecifier } = codegenProbe(key as CapabilityKey);
+const FLAG_PACKAGES: ReadonlyArray<readonly [CapabilityFlag, string]> = [
+    ...CODEGEN_CAPABILITIES.map((key) => [flagOf(key), CAPABILITY_PROBES[key].moduleSpecifier] as const),
+    ...CONFIG_ONLY_SOURCES,
+].toSorted(([left], [right]) => left.localeCompare(right));
 
-        return [flag, { contextProperty, dynamicImport: false, source: moduleSpecifier }] as const;
-    }),
-    ...Object.entries(CONFIG_ONLY_SOURCES).map(([flag, source]) => [flag, { dynamicImport: true, source }] as const),
-]) as Readonly<Record<CapabilityFlag, CapabilitySource>>;
-
-/** Every flag, sorted so {@link packageNamesFromBindings} reports packages in a stable order. */
-const CAPABILITY_FLAGS = (Object.keys(CAPABILITY_SOURCES) as CapabilityFlag[]).toSorted((left, right) => left.localeCompare(right));
-
-/** The packages whose static import makes a file worth parsing. */
-const CAPABILITY_PACKAGES: ReadonlySet<string> = new Set(CAPABILITY_FLAGS.map((flag) => CAPABILITY_SOURCES[flag].source));
+/** The packages whose sandbox tools (`browserTool`, `jsCodeTool`) provision `BROWSER` / `LOADER` when imported under `lunora/`. */
+const SANDBOX_PACKAGES = ["@lunora/agent", "@lunora/agent/sandbox"] as const;
 
 /**
- * Cheap pre-check for a `ctx.<property>` read: every form codegen recognises
- * (an access, a destructure, a renamed context) names the `ctx` property
- * somewhere, and names the helper too.
+ * The parse prefilter: a file naming no capability package in quotes — the form
+ * every static import, re-export and literal dynamic `import()` takes — and
+ * reading no `ctx` helper ({@link mayReadCapabilityContext}) is never handed to
+ * the TypeScript parser. Plain text, so it also holds for a file a module lexer
+ * rejects (JSX, a mid-edit syntax error), which used to be parsed unconditionally.
  */
-const CONTEXT_PATTERN = /\bctx\b/u;
-const CONTEXT_PROPERTY_PATTERN = new RegExp(
-    String.raw`\b(?:${CAPABILITY_FLAGS.flatMap((flag) => CAPABILITY_SOURCES[flag].contextProperty ?? []).join("|")})\b`,
+const CAPABILITY_PACKAGE_PATTERN = new RegExp(
+    String.raw`["'\x60](?:${[...FLAG_PACKAGES.map(([, source]) => source), ...SANDBOX_PACKAGES].map((source) => escapeRegExp(source)).join("|")})["'\x60]`,
     "u",
 );
+
+/** The hint clause naming what marks a codegen capability used, read off its probe — `@lunora/bindings/kv is imported or ctx.kv is read`. */
+const usageOf = (key: CodegenCapability): string => {
+    const { contextProperty, moduleSpecifier } = CAPABILITY_PROBES[key];
+
+    return contextProperty === undefined ? `${moduleSpecifier} is imported` : `${moduleSpecifier} is imported or ctx.${contextProperty} is read`;
+};
 
 /**
  * The provider secret pairs `@lunora/payment` reads at runtime. The package is
@@ -268,11 +269,11 @@ interface InferredBindings {
     signals: string[];
     /** `@lunora/ai` is imported, `ctx.ai` read, or `env.AI` used → needs the `ai` Workers AI binding. */
     usesAi: boolean;
-    /** `ctx.aiSearch` is used → self-describing `ai_search_namespaces` binding (`AI_SEARCH` on namespace `default`; auto-writeable). */
+    /** `@lunora/bindings/ai-search` is value-imported or `ctx.aiSearch` read → self-describing `ai_search_namespaces` binding (`AI_SEARCH` on namespace `default`; auto-writeable). */
     usesAiSearch: boolean;
     /** `@lunora/bindings/analytics` is imported or `ctx.analytics` read → self-describing `analytics_engine_datasets` binding (auto-writeable). */
     usesAnalytics: boolean;
-    /** `ctx.analyticsSql` is used → self-describing `analytics` binding (`{ binding: ANALYTICS_SQL }`; auto-writeable, wrangler >= 4.145.0). */
+    /** `@lunora/bindings/analytics-sql` is value-imported or `ctx.analyticsSql` read → self-describing `analytics` binding (`{ binding: ANALYTICS_SQL }`; auto-writeable, wrangler >= 4.145.0). */
     usesAnalyticsSql: boolean;
 
     /**
@@ -296,95 +297,38 @@ interface InferredBindings {
     usesImages: boolean;
     /** `@lunora/bindings/kv` is imported or `ctx.kv` read (namespace binding name + id are user-defined; hint-only). */
     usesKv: boolean;
-    /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). */
+    /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). No `ctx.mail` helper exists, so only the import counts. */
     usesMail: boolean;
-    /** `@lunora/notify` is imported (Web Push needs VAPID/FCM secrets in `.dev.vars`; no binding). */
+    /** `@lunora/notify` is imported or `ctx.notify` read (Web Push needs VAPID/FCM secrets in `.dev.vars`; no binding). */
     usesNotify: boolean;
-    /** `@lunora/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
-    usesPayment: boolean;
-    /** `ctx.pipelines` is used (binding needs an un-mintable remote pipeline name; hint-only). */
+    /** `@lunora/payment` is imported or `ctx.payments` read (provider secrets must be set in `.dev.vars`; no binding). */
+    usesPayments: boolean;
+    /** `@lunora/bindings/pipelines` is value-imported or `ctx.pipelines` read (binding needs an un-mintable remote pipeline name; hint-only). */
     usesPipelines: boolean;
-    /** `ctx.r2sql` is used (needs the `R2_SQL_*` secrets in `.dev.vars`; no binding). */
+    /** `@lunora/bindings/r2sql` is value-imported or `ctx.r2sql` read (needs the `R2_SQL_*` secrets in `.dev.vars`; no binding). */
     usesR2sql: boolean;
-    /** `@lunora/scheduler` is imported. */
+    /** `@lunora/scheduler` is imported or `ctx.scheduler` read. */
     usesScheduler: boolean;
-    /** `@lunora/storage` is imported (R2 bucket binding name is user-defined). */
+    /** `@lunora/storage` is imported or `ctx.storage` read under `lunora/` (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
     /** `jsCodeTool` is imported from `@lunora/agent` in `lunora/` → self-describing `worker_loaders` binding (`LOADER`). */
     usesWorkerLoader: boolean;
+    /** `@lunora/x402/pay` is imported or `ctx.x402` read — the agent-wallet pay rail signs from a Secrets Store binding paired with a spend policy (ActionCtx-only; hint-only). */
+    usesX402: boolean;
     /** `@lunora/x402/charge` is imported — the charge rail settles USDC to a recipient address (a public `[vars]` entry, user-named; hint-only). */
     usesX402Charge: boolean;
-    /** `@lunora/x402/pay` is imported — the agent-wallet pay rail signs from a Secrets Store binding paired with a spend policy (ActionCtx-only; hint-only). */
-    usesX402Pay: boolean;
     /** Workflows declared in `lunora/workflows.ts` (exported or not — see {@link InferredWorkflow.exported}). */
     workflows: InferredWorkflow[];
 }
 
 /**
- * Which capabilities a unit of source imports. Pure value, no mutation. The
- * import-driven flags are {@link CAPABILITY_SOURCES}'s keys; `needsD1` is the
- * one capability not driven by an import (it comes from `env.DB` / a `.global()`
- * schema), so it is added explicitly.
+ * Which capabilities the scanned project uses. A plain value built once from the
+ * folded signals: the import-driven flags are {@link FLAG_PACKAGES}'s; `needsD1`
+ * (an `env.DB` read) and `usesWorkerLoader` (a sandbox `jsCodeTool` import) are
+ * the two not driven by a package import, so they are added explicitly. A `Pick`
+ * of {@link InferredBindings}, so a flag the result does not declare fails to compile.
  */
-type Capabilities = Record<CapabilityFlag | "needsD1" | "usesWorkerLoader", boolean>;
-
-/** Every capability key, including the non-import-driven `needsD1`. */
-const ALL_CAPABILITY_KEYS: ReadonlyArray<keyof Capabilities> = [...CAPABILITY_FLAGS, "needsD1", "usesWorkerLoader"];
-
-/** Build a fresh all-`false` capability set keyed by {@link ALL_CAPABILITY_KEYS}. */
-const emptyCapabilities = (): Capabilities => {
-    const base = {} as Capabilities;
-
-    for (const key of ALL_CAPABILITY_KEYS) {
-        base[key] = false;
-    }
-
-    return base;
-};
-
-const NO_CAPABILITIES: Capabilities = Object.freeze(emptyCapabilities());
-
-const mergeCapabilities = (a: Capabilities, b: Capabilities): Capabilities => {
-    const merged = {} as Capabilities;
-
-    for (const key of ALL_CAPABILITY_KEYS) {
-        merged[key] = a[key] || b[key];
-    }
-
-    return merged;
-};
-
-/** A dynamic `import("…")` with a literal specifier — the regex fallback for a file `es-module-lexer` rejects. */
-const DYNAMIC_IMPORT_PATTERN = /\bimport\s*\(\s*["']([^"'\n]+)["']\s*\)/gu;
-
-/** What `es-module-lexer` sees of a file's imports: the static specifiers (the parse prefilter) and the dynamic ones. */
-interface LexedImports {
-    dynamicImports: ReadonlySet<string>;
-    staticImports: ReadonlySet<string>;
-}
-
-/** Lex a file's imports, or `undefined` when `es-module-lexer` cannot parse it (a mid-edit file, TS-only syntax). */
-const lexImports = (code: string): LexedImports | undefined => {
-    let imports: ReturnType<typeof lexModule>[0];
-
-    try {
-        [imports] = lexModule(code);
-    } catch {
-        return undefined;
-    }
-
-    const dynamicImports = new Set<string>();
-    const staticImports = new Set<string>();
-
-    for (const entry of imports) {
-        if (entry.n !== undefined) {
-            // `d` is -1 for a static import, > -1 for a dynamic `import()`.
-            (entry.d === -1 ? staticImports : dynamicImports).add(entry.n);
-        }
-    }
-
-    return { dynamicImports, staticImports };
-};
+type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesWorkerLoader">;
 
 /** Creates the in-memory project a scan parses its files into — one per {@link inferLunoraBindings} run, built on first use. */
 type ScanProject = () => Project;
@@ -399,36 +343,16 @@ const createScanProject = (): ScanProject => {
     };
 };
 
-const NO_SIGNALS: SourceCapabilitySignals = { contextReads: new Set(), valueImports: new Set() };
-
 /**
- * The value imports and `ctx.<property>` reads of one file, read by
- * `@lunora/codegen`'s own per-file probe ({@link sourceCapabilitySignals}) over a parsed AST — so a
- * type-only import, or a `ctx.kv` inside a comment or a string, implies nothing
- * here exactly as it implies nothing to codegen, while a destructured
- * `const { r2sql } = ctx` or a renamed context does. The lexer is only the cheap
- * prefilter: a file importing none of the capability packages and naming no
- * helper off `ctx` is never parsed. A file the lexer rejects is parsed anyway
- * (the TypeScript parser recovers from a mid-edit error). `fileName` picks the
- * parser's script kind (`.tsx` / `.jsx` vs `.ts` / `.js`); `readsContext` says
- * whether the file's `ctx` reads count (see {@link scanCapabilities}).
+ * The signals of one file, read by `@lunora/codegen`'s own per-file probe
+ * ({@link sourceCapabilitySignals}) over a parsed AST — so a type-only import, or
+ * a `ctx.kv` inside a comment or a string, implies nothing here exactly as it
+ * implies nothing to codegen, while a re-export, a destructured `const { r2sql } =
+ * ctx` or a renamed context does. `fileName` picks the parser's script kind
+ * (`.tsx` / `.jsx` vs `.ts` / `.js`); the TypeScript parser recovers from a
+ * mid-edit syntax error.
  */
-const readSourceSignals = (
-    code: string,
-    fileName: string,
-    lexed: LexedImports | undefined,
-    readsContext: boolean,
-    scanProject: ScanProject,
-): SourceCapabilitySignals => {
-    const worthParsing =
-        lexed === undefined ||
-        [...lexed.staticImports].some((specifier) => CAPABILITY_PACKAGES.has(specifier)) ||
-        (readsContext && CONTEXT_PATTERN.test(code) && CONTEXT_PROPERTY_PATTERN.test(code));
-
-    if (!worthParsing) {
-        return NO_SIGNALS;
-    }
-
+const parseSourceSignals = (code: string, fileName: string, scanProject: ScanProject): SourceCapabilitySignals => {
     const project = scanProject();
     const sourceFile = project.createSourceFile(`/scan/${fileName.slice(fileName.lastIndexOf("/") + 1)}`, code, { overwrite: true });
     const signals = sourceCapabilitySignals(sourceFile);
@@ -436,32 +360,6 @@ const readSourceSignals = (
     project.removeSourceFile(sourceFile);
 
     return signals;
-};
-
-/** Detect, for a single source file (`fileName` only picks the parser), which Lunora capabilities it pulls in. */
-const capabilitiesFromSource = (code: string, fileName: string, readsContext: boolean, scanProject: ScanProject): Capabilities => {
-    const lexed = lexImports(code);
-    const { contextReads, valueImports } = readSourceSignals(code, fileName, lexed, readsContext, scanProject);
-    const dynamicImports = lexed?.dynamicImports ?? new Set([...code.matchAll(DYNAMIC_IMPORT_PATTERN)].map((match) => match[1] as string));
-    // NOTE: `usesBrowser`'s sandbox-`browserTool` half is intentionally NOT
-    // folded in here — see `scanSandboxToolUsage` below. Unlike every
-    // other probe, it must be scoped to EXACTLY the `lunora/` file set
-    // `discover/sandbox.ts` scans (never `src/`), so it runs as a separate,
-    // lunora-only pass in `inferLunoraBindings` instead.
-    const capabilities: Capabilities = { ...NO_CAPABILITIES, needsD1: ENV_DB_PATTERN.test(code) };
-
-    for (const flag of CAPABILITY_FLAGS) {
-        const { contextProperty, dynamicImport, source } = CAPABILITY_SOURCES[flag];
-
-        capabilities[flag] =
-            valueImports.has(source) ||
-            (readsContext && contextProperty !== undefined && contextReads.has(contextProperty)) ||
-            (dynamicImport && dynamicImports.has(source));
-    }
-
-    capabilities.usesAi ||= ENV_AI_PATTERN.test(code);
-
-    return capabilities;
 };
 
 /** Recursively collect scannable source files under `directory`. */
@@ -520,16 +418,25 @@ const schemaFacts = (projectRoot: string, schemaDirectory: string): SchemaFacts 
 };
 
 /**
- * Union the capabilities imported across every scanned source file. A
- * `ctx.<property>` read counts only under `lunoraDirectory`: that is the file set
- * codegen probes, so it is the only place a read gets the helper wired — and a
- * hand-written Durable Object in `src/` reading its own `ctx.storage` (the
- * `DurableObjectState`) must not hint an R2 bucket.
+ * Scan every source file under `scanDirectories` and decide the capabilities.
+ *
+ * Each file worth parsing (see {@link CAPABILITY_PACKAGE_PATTERN}) contributes
+ * its signals, and the signals are folded ONCE, per file set, before a single
+ * call to codegen's matcher. Two of them count only under `lunoraDirectory`, the
+ * file set codegen probes: `ctx.<property>` reads — that is the only place a read
+ * gets the helper wired, and a hand-written Durable Object in `src/` reading its
+ * own `ctx.storage` (the `DurableObjectState`) must not hint an R2 bucket — and
+ * sandbox-tool imports, since `discoverSandboxUsage` only reads `lunora/`, so a
+ * `src/`-only `browserTool` never registers the dispatcher and a `src/`-only
+ * `jsCodeTool` never reaches the `workerLoaders` gate.
  */
 const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<string>, lunoraDirectory: string): Capabilities => {
     const scanProject = createScanProject();
-    const lunoraPrefix = `${join(projectRoot, lunoraDirectory)}/`;
-    let merged = NO_CAPABILITIES;
+    const lunoraRoot = join(projectRoot, lunoraDirectory);
+    const lunoraFiles: SourceCapabilitySignals[] = [];
+    const otherFiles: SourceCapabilitySignals[] = [];
+    let usesEnvAi = false;
+    let usesEnvDatabase = false;
 
     for (const relativeDirectory of scanDirectories) {
         const absolute = join(projectRoot, relativeDirectory);
@@ -543,43 +450,38 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
         collectSourceFiles(absolute, files);
 
         for (const file of files) {
-            merged = mergeCapabilities(merged, capabilitiesFromSource(readFileSync(file, "utf8"), file, file.startsWith(lunoraPrefix), scanProject));
+            const code = readFileSync(file, "utf8");
+            const inLunora = isWithinDirectory(file, lunoraRoot);
+
+            usesEnvAi ||= ENV_AI_PATTERN.test(code);
+            usesEnvDatabase ||= ENV_DB_PATTERN.test(code);
+
+            if (CAPABILITY_PACKAGE_PATTERN.test(code) || (inLunora && mayReadCapabilityContext(code))) {
+                (inLunora ? lunoraFiles : otherFiles).push(parseSourceSignals(code, file, scanProject));
+            }
         }
     }
 
-    return merged;
-};
+    const lunora = foldCapabilitySignals(lunoraFiles);
+    const everywhere = foldCapabilitySignals([lunora, ...otherFiles]);
+    // Config counts a dynamic `import()` like a static one (see FLAG_PACKAGES).
+    const imports = new Set([...everywhere.valueImports, ...everywhere.dynamicImports]);
+    const used = capabilitiesUsedBy({ contextReads: lunora.contextReads, valueImports: imports });
+    // The one widening `Object.fromEntries` forces: its keys are exactly the `CapabilityFlag`s.
+    const flags = Object.fromEntries([
+        ...CODEGEN_CAPABILITIES.map((key) => [flagOf(key), used.has(key)] as const),
+        ...CONFIG_ONLY_SOURCES.map(([flag, source]) => [flag, imports.has(source)] as const),
+    ]) as Record<CapabilityFlag, boolean>;
 
-/**
- * Scan ONLY the `lunora/` tree (never `src/`) for value imports of the sandbox
- * tools — mirrors `discover/sandbox.ts`'s `listLunoraSourceFiles` file set
- * exactly. Kept as a separate pass from {@link scanCapabilities} (which also
- * walks `src/`) so config never auto-writes a binding codegen will never wire:
- * a `src/`-only `browserTool` import never registers the `sandbox:invoke`
- * dispatcher, and a `src/`-only `jsCodeTool` never reaches the
- * `workerLoaders` gate, since `discoverSandboxUsage` only reads `lunora/`.
- */
-const scanSandboxToolUsage = (projectRoot: string, lunoraDirectory: string): Record<SandboxToolName, boolean> => {
-    const absolute = join(projectRoot, lunoraDirectory);
-    const found = Object.fromEntries(SANDBOX_TOOLS.map((tool) => [tool, false])) as Record<SandboxToolName, boolean>;
-
-    if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
-        return found;
-    }
-
-    const files: string[] = [];
-
-    collectSourceFiles(absolute, files);
-
-    for (const file of files) {
-        const imported = sandboxToolImports(readFileSync(file, "utf8"));
-
-        for (const tool of SANDBOX_TOOLS) {
-            found[tool] ||= imported[tool];
-        }
-    }
-
-    return found;
+    return {
+        ...flags,
+        needsD1: usesEnvDatabase,
+        usesAi: used.has("ai") || usesEnvAi,
+        // A sandbox `browserTool` provisions BROWSER even without a direct
+        // `@lunora/browser` import: the browser op runs on the dispatcher's ctx.
+        usesBrowser: used.has("browser") || lunora.sandboxTools.usesSandboxBrowser,
+        usesWorkerLoader: lunora.sandboxTools.usesSandboxLoader,
+    };
 };
 
 /** Provenance lines for declared DO containers / workflows / agents. */
@@ -612,46 +514,43 @@ const describeDeclaredExports = (
  */
 const describeCapabilitySignals = (capabilities: Capabilities, exported: ReadonlySet<string>, schema: SchemaFacts): string[] => {
     const rules: ReadonlyArray<[boolean, string]> = [
-        [capabilities.usesAi, "AI (@lunora/ai imported, ctx.ai read or env.AI used)"],
+        [capabilities.usesAi, `AI (${usageOf("ai")}, or env.AI is used)`],
         [
             capabilities.usesAuth && !exported.has("SessionDO"),
             "hint: @lunora/auth is imported; its tables are D1-backed by default. For DO-backed auth (what @better-auth/scim needs), pass `namespace` to .auth() and export the generated auth DO class",
         ],
-        [capabilities.usesScheduler && !exported.has("SchedulerDO"), "hint: @lunora/scheduler is imported but no SchedulerDO is exported by the worker entry"],
-        [capabilities.usesStorage, "hint: @lunora/storage is imported; add an r2_buckets binding (bucket binding names are user-defined)"],
-        [capabilities.usesMail, "hint: @lunora/mail is imported; set RESEND_API_KEY in .dev.vars (obtain at https://resend.com/api-keys)"],
-        [capabilities.usesPayment, `hint: @lunora/payment is imported; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`],
+        [capabilities.usesScheduler && !exported.has("SchedulerDO"), `hint: ${usageOf("scheduler")}, but no SchedulerDO is exported by the worker entry`],
+        [capabilities.usesStorage, `hint: ${usageOf("storage")}; add an r2_buckets binding (bucket binding names are user-defined)`],
+        [capabilities.usesMail, `hint: ${usageOf("mail")}; set RESEND_API_KEY in .dev.vars (obtain at https://resend.com/api-keys)`],
+        [capabilities.usesPayments, `hint: ${usageOf("payments")}; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`],
         // Self-describing bindings: the binding name is the whole config (no remote
         // id to mint), so reconcile auto-writes them like the DO/D1 bindings.
-        [capabilities.usesBrowser, "browser (@lunora/browser imported or ctx.browser read) — self-describing { binding: BROWSER }"],
-        [capabilities.usesImages, "images (@lunora/bindings/images imported or ctx.images read) — self-describing { binding: IMAGES }"],
-        [
-            capabilities.usesAnalytics,
-            "analytics_engine_datasets (@lunora/bindings/analytics imported or ctx.analytics read) — self-describing { binding: ANALYTICS, dataset }",
-        ],
+        [capabilities.usesBrowser, `browser (${usageOf("browser")}, or a sandbox browserTool imported in lunora/) — self-describing { binding: BROWSER }`],
+        [capabilities.usesImages, `images (${usageOf("images")}) — self-describing { binding: IMAGES }`],
+        [capabilities.usesAnalytics, `analytics_engine_datasets (${usageOf("analytics")}) — self-describing { binding: ANALYTICS, dataset }`],
         [capabilities.usesWorkerLoader, "worker_loaders (jsCodeTool imported in lunora/) — self-describing { binding: LOADER }"],
         [
             capabilities.usesAiSearch,
-            'ai_search_namespaces (ctx.aiSearch used) — self-describing { binding: AI_SEARCH, namespace: "default" }; remote-only, so `lunora dev` reaches the deployed AI Search service',
+            `ai_search_namespaces (${usageOf("aiSearch")}) — self-describing { binding: AI_SEARCH, namespace: "default" }; remote-only, so \`lunora dev\` reaches the deployed AI Search service`,
         ],
         [
             capabilities.usesAnalyticsSql,
-            "analytics (ctx.analyticsSql used) — self-describing { binding: ANALYTICS_SQL }; needs wrangler >= 4.145.0, and is remote-only, so `lunora dev` queries the account's live analytics",
+            `analytics (${usageOf("analyticsSql")}) — self-describing { binding: ANALYTICS_SQL }; needs wrangler >= 4.145.0, and is remote-only, so \`lunora dev\` queries the account's live analytics`,
         ],
         // Hint bindings: each needs a remote resource Lunora can't fabricate (a KV
         // namespace id, a Hyperdrive id, a Pipelines pipeline name), so they surface
         // as hints — never an auto-write — exactly like R2's user-defined bucket name.
         [
             capabilities.usesKv,
-            "hint: @lunora/bindings/kv is imported or ctx.kv is read; add a kv_namespaces binding ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned",
+            `hint: ${usageOf("kv")}; add a kv_namespaces binding ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned`,
         ],
         [
             capabilities.usesHyperdrive,
-            "hint: @lunora/hyperdrive is imported or ctx.sql is read; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned",
+            `hint: ${usageOf("hyperdrive")}; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned`,
         ],
         [
             capabilities.usesPipelines,
-            "hint: ctx.pipelines is used; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, stream }) — the pipeline resource can't be auto-provisioned",
+            `hint: ${usageOf("pipelines")}; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, stream }) — the pipeline resource can't be auto-provisioned`,
         ],
         [capabilities.usesArtifacts, `hint: ${artifactsBindingHint(schema.jurisdiction)}`],
         [
@@ -659,8 +558,8 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
             "hint: @lunora/x402/charge is imported; set the recipient wallet address as a [vars] entry (the var name is yours to choose) and pass it to the charge config — the x402 facilitator settles USDC to that address",
         ],
         [
-            capabilities.usesX402Pay,
-            "hint: @lunora/x402/pay is imported (ActionCtx-only, spends real funds); add a secrets_store_secrets[] binding for the agent wallet key (name it to match signer.secretName) and pair the pay rail with a spend policy — ctx.secrets reads a Secrets Store binding, not .dev.vars, so the key can't be auto-provisioned",
+            capabilities.usesX402,
+            `hint: ${usageOf("x402")} (ActionCtx-only, spends real funds); add a secrets_store_secrets[] binding for the agent wallet key (name it to match signer.secretName) and pair the pay rail with a spend policy — ctx.secrets reads a Secrets Store binding, not .dev.vars, so the key can't be auto-provisioned`,
         ],
     ];
 
@@ -700,20 +599,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const schemaDirectory = options.schemaDir ?? "lunora";
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
-    const scannedCapabilities = scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
-    // A sandbox `browserTool` import provisions BROWSER even without a direct
-    // `@lunora/browser` import (the browser op runs on the dispatcher's ctx) —
-    // but ONLY when the import lives in `lunora/`, the exact file set
-    // `discover/sandbox.ts` scans; a `src/`-only import never registers the
-    // sandbox dispatcher, so it must not provision the binding either. Folded
-    // into `capabilities` here (not `scanCapabilities`) so both the returned
-    // `usesBrowser` flag AND the provenance signal line agree.
-    const sandboxTools = scanSandboxToolUsage(options.projectRoot, schemaDirectory);
-    const capabilities: Capabilities = {
-        ...scannedCapabilities,
-        usesBrowser: scannedCapabilities.usesBrowser || sandboxTools.browserTool,
-        usesWorkerLoader: sandboxTools.jsCodeTool,
-    };
+    const capabilities = scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
 
@@ -754,15 +640,6 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const { flags } = discoverFlagsInfo(options.projectRoot, schemaDirectory);
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
-    // The import-driven `uses*` flags are projected straight off the scanned
-    // capabilities (keyed by CAPABILITY_SOURCES); `needsD1` is overridden with
-    // the schema-augmented value computed above rather than the raw import flag.
-    const capabilityFlags = {} as Pick<InferredBindings, CapabilityFlag>;
-
-    for (const flag of CAPABILITY_FLAGS) {
-        capabilityFlags[flag] = capabilities[flag];
-    }
-
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
 
     if (flagshipBinding !== undefined) {
@@ -783,6 +660,9 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     signals.push(...resolved.services.map((service) => `${service.binding} → ${service.worker} (lunora.config services.${service.name})`));
 
     return {
+        // The scanned flags first: `needsD1` below replaces the raw `env.DB` flag
+        // with the schema-augmented value computed above.
+        ...capabilities,
         agents,
         containers,
         durableObjects,
@@ -793,9 +673,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         services,
         signals,
         usesFlags: flags !== undefined,
-        usesWorkerLoader: capabilities.usesWorkerLoader,
         workflows,
-        ...capabilityFlags,
     };
 };
 
@@ -805,20 +683,10 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
  *
  * This is the canonical bridge between binding inference and the package-aware
  * `.dev.vars.example` scaffolding in `scaffold-dev-variables.ts`. The result is
- * a stable, predictable slice of {@link CAPABILITY_SOURCES} source values,
- * filtered to the flags that are `true` in `bindings` — in flag-name order.
+ * a stable, predictable slice of {@link FLAG_PACKAGES}' packages, filtered to
+ * the flags that are `true` in `bindings` — in flag-name order.
  */
-const packageNamesFromBindings = (bindings: InferredBindings): string[] => {
-    const names: string[] = [];
-
-    for (const flag of CAPABILITY_FLAGS) {
-        if (bindings[flag]) {
-            names.push(CAPABILITY_SOURCES[flag].source);
-        }
-    }
-
-    return names;
-};
+const packageNamesFromBindings = (bindings: InferredBindings): string[] => FLAG_PACKAGES.filter(([flag]) => bindings[flag]).map(([, source]) => source);
 
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
 export { inferLunoraBindings, packageNamesFromBindings };

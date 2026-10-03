@@ -705,14 +705,14 @@ interface InferredBindings {
     usesKv: boolean;
     usesMail: boolean;
     usesNotify: boolean;
-    usesPayment: boolean;
+    usesPayments: boolean;
     usesPipelines: boolean;
     usesR2sql: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
     usesWorkerLoader: boolean;
+    usesX402: boolean;
     usesX402Charge: boolean;
-    usesX402Pay: boolean;
     workflows: InferredWorkflow[];
 }
 ```
@@ -1608,6 +1608,12 @@ const resolveDeployDriver: (target?: string) => DeployDriver;
 
 ```ts
 const resolveProjectTarget: (projectRoot: string, explicit?: string) => string;
+```
+
+### `resolveSchemaDirectory` (const)
+
+```ts
+const resolveSchemaDirectory: (projectRoot: string) => string;
 ```
 
 ### `resolveServerModule` (const)

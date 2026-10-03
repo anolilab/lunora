@@ -45,11 +45,7 @@ interface AuthApiCallIR {
 ### `CAPABILITY_PROBES` (const)
 
 ```ts
-const CAPABILITY_PROBES: ReadonlyArray<{
-    readonly contextProperty: string | undefined;
-    readonly key: CapabilityKey;
-    readonly moduleSpecifier: string;
-}>;
+const CAPABILITY_PROBES: Readonly<Record<CapabilityKey, CapabilityProbe>>;
 ```
 
 ### `CONTAINERS_FILENAME` (const)
@@ -62,6 +58,15 @@ const CONTAINERS_FILENAME = "containers.ts";
 
 ```ts
 type CapabilityKey = (typeof CAPABILITY_ROWS)[number]["key"];
+```
+
+### `CapabilityProbe` (interface)
+
+```ts
+interface CapabilityProbe {
+    readonly contextProperty: string | undefined;
+    readonly moduleSpecifier: string;
+}
 ```
 
 ### `CodegenDiagnosticError` (class)
@@ -954,6 +959,8 @@ interface ShapeIR {
 ```ts
 interface SourceCapabilitySignals {
     contextReads: ReadonlySet<string>;
+    dynamicImports: ReadonlySet<string>;
+    sandboxTools: Readonly<SandboxUsage>;
     valueImports: ReadonlySet<string>;
 }
 ```
@@ -1124,6 +1131,12 @@ const buildOpenRpcDocument: (input: OpenRpcEmitInput) => Record<string, unknown>
 
 ```ts
 const buildSchemaSnapshot: (schema: SchemaIR, migrationIds: ReadonlyArray<string>) => SchemaSnapshot;
+```
+
+### `capabilitiesUsedBy` (const)
+
+```ts
+const capabilitiesUsedBy: (signals: Pick<SourceCapabilitySignals, "contextReads" | "valueImports">) => ReadonlySet<CapabilityKey>;
 ```
 
 ### `createCodegenProject` (const)
@@ -1466,6 +1479,12 @@ const findTsconfig: (startPath: string) => string | undefined;
 const fingerprintSchemaSources: (schemaDirectory: string) => string;
 ```
 
+### `foldCapabilitySignals` (const)
+
+```ts
+const foldCapabilitySignals: (signals: Iterable<SourceCapabilitySignals>) => SourceCapabilitySignals;
+```
+
 ### `formatAdvisories` (const)
 
 ```ts
@@ -1512,6 +1531,12 @@ const listLunoraSourceFiles: (directory: string) => string[];
 
 ```ts
 const loadProjectConfig: (projectRoot: string) => Promise<LoadedProjectConfig>;
+```
+
+### `mayReadCapabilityContext` (const)
+
+```ts
+const mayReadCapabilityContext: (code: string) => boolean;
 ```
 
 ### `parseSchemaSnapshot` (const)
@@ -2020,6 +2045,8 @@ const CAPABILITY_ROWS: readonly [
         readonly key: "payments";
         readonly moduleSpecifier: "@lunora/payment";
         readonly requiredPackage: "@lunora/payment";
+        readonly serverCtxField: "\n    readonly payments: import(\"@lunora/payment\").LunoraPayment;";
+        readonly tier: "action";
     },
     {
         readonly appMethod: {

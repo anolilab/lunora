@@ -2,10 +2,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { CapabilityProbe } from "@lunora/codegen";
 import { CAPABILITY_PROBES, discoverSandboxUsage } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Not part of codegen's public API: only this drift guard needs the whole-project probe.
 import { discoverFeatureUsage } from "../../codegen/src/discover/feature-usage";
@@ -592,7 +593,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         const result = await inferLunoraBindings({ projectRoot: root });
 
-        expect(result.usesPayment).toBe(true);
+        expect(result.usesPayments).toBe(true);
         // Payment rides the existing ShardDO via ctx.db — no extra DO binding.
         expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
         expect(result.signals.some((signal) => signal.includes("@lunora/payment"))).toBe(true);
@@ -607,7 +608,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         const result = await inferLunoraBindings({ projectRoot: root });
 
-        expect(result.usesPayment).toBe(false);
+        expect(result.usesPayments).toBe(false);
     });
 
     // Cloudflare-coverage capability arms (plans 027/028/031/032/035/036).
@@ -623,7 +624,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         ["@lunora/bindings/images", "usesImages", /images \(@lunora\/bindings\/images/u],
         ["@lunora/bindings/analytics", "usesAnalytics", /analytics_engine_datasets/u],
         ["@lunora/x402/charge", "usesX402Charge", /hint: @lunora\/x402\/charge/u],
-        ["@lunora/x402/pay", "usesX402Pay", /hint: @lunora\/x402\/pay/u],
+        ["@lunora/x402/pay", "usesX402", /hint: @lunora\/x402\/pay/u],
     ] as const)("infers %s usage and emits the expected signal", async (source, flag, signalRe) => {
         expect.assertions(2);
 
@@ -986,15 +987,17 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             kv: "usesKv",
             mail: "usesMail",
             notify: "usesNotify",
-            payments: "usesPayment",
+            payments: "usesPayments",
             pipelines: "usesPipelines",
             r2sql: "usesR2sql",
             scheduler: "usesScheduler",
             storage: "usesStorage",
-            x402: "usesX402Pay",
+            x402: "usesX402",
         };
         /** Codegen rows with no binding or secret for config to infer: their wiring is a declaration file or a ctx facade over existing state. */
         const CODEGEN_ONLY = new Set(["access", "container", "flags", "vectors", "workflows"]);
+        const PROBES: ReadonlyArray<readonly [string, CapabilityProbe]> = Object.entries(CAPABILITY_PROBES);
+        const MAPPED = PROBES.filter(([key]) => FLAG_FOR[key] !== undefined);
 
         /** Feed the SAME `lunora/` source through codegen's probe and config's inference, and read both verdicts for every mapped row. */
         const verdicts = async (source: string): Promise<{ codegen: Record<string, boolean>; config: Record<string, boolean> }> => {
@@ -1003,45 +1006,44 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             write("lunora/handler.ts", source);
 
             const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-            const usage = discoverFeatureUsage(project, join(root, "lunora"));
+            const usage: Readonly<Record<string, boolean>> = discoverFeatureUsage(project, join(root, "lunora"));
             const inferred = await inferLunoraBindings({ projectRoot: root });
-            const mapped = CAPABILITY_PROBES.filter((probe) => FLAG_FOR[probe.key] !== undefined);
 
             return {
-                codegen: Object.fromEntries(mapped.map((probe) => [probe.key, usage[probe.key]])),
-                config: Object.fromEntries(mapped.map((probe) => [probe.key, inferred[FLAG_FOR[probe.key] as keyof InferredBindings] === true])),
+                codegen: Object.fromEntries(MAPPED.map(([key]) => [key, usage[key] === true])),
+                config: Object.fromEntries(MAPPED.map(([key]) => [key, inferred[FLAG_FOR[key] as keyof InferredBindings] === true])),
             };
         };
 
         it("maps every codegen capability row to a config flag or a deliberate omission", () => {
             expect.assertions(1);
 
-            expect(
-                CAPABILITY_PROBES.filter((probe) => FLAG_FOR[probe.key] === undefined && !CODEGEN_ONLY.has(probe.key)).map((probe) => probe.key),
-            ).toStrictEqual([]);
+            expect(PROBES.filter(([key]) => FLAG_FOR[key] === undefined && !CODEGEN_ONLY.has(key)).map(([key]) => key)).toStrictEqual([]);
         });
 
-        it.each(CAPABILITY_PROBES.filter((probe) => FLAG_FOR[probe.key] !== undefined).map((probe) => [probe.key, probe] as const))(
-            "agree on %s: a value import, a ctx read, and a type-only import",
-            async (key, { contextProperty, moduleSpecifier }) => {
-                expect.assertions(3);
+        it.each(MAPPED)("agree on %s: a value import, a re-export, a ctx read, and a type-only import", async (key, { contextProperty, moduleSpecifier }) => {
+            expect.assertions(5);
 
-                const valueImport = await verdicts(`import * as capability from "${moduleSpecifier}";\nexport const used = capability;`);
+            const valueImport = await verdicts(`import * as capability from "${moduleSpecifier}";\nexport const used = capability;`);
 
-                expect(valueImport.config).toStrictEqual(valueImport.codegen);
+            expect(valueImport.config).toStrictEqual(valueImport.codegen);
 
-                const contextRead = await verdicts(
-                    contextProperty === undefined ? "export const none = 1;" : `export const handler = async ({ ctx }) => ctx.${contextProperty};`,
-                );
+            const reExport = await verdicts(`export * from "${moduleSpecifier}";`);
 
-                expect(contextRead.config).toStrictEqual(contextRead.codegen);
+            expect(reExport.config).toStrictEqual(reExport.codegen);
+            expect(reExport.config[key]).toBe(true);
 
-                const typeOnly = await verdicts(`import type { Thing } from "${moduleSpecifier}";\nexport type T = Thing;`);
+            const contextRead = await verdicts(
+                contextProperty === undefined ? "export const none = 1;" : `export const handler = async ({ ctx }) => ctx.${contextProperty};`,
+            );
 
-                // The type-only import compiles away: neither side marks `key` used.
-                expect([typeOnly.codegen[key], typeOnly.config[key]]).toStrictEqual([false, false]);
-            },
-        );
+            expect(contextRead.config).toStrictEqual(contextRead.codegen);
+
+            const typeOnly = await verdicts(`import type { Thing } from "${moduleSpecifier}";\nexport type T = Thing;`);
+
+            // The type-only import compiles away: neither side marks `key` used.
+            expect([typeOnly.codegen[key], typeOnly.config[key]]).toStrictEqual([false, false]);
+        });
 
         it("agree: comment and string mentions imply nothing", async () => {
             expect.assertions(1);
@@ -1061,6 +1063,63 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             expect(result.config).toStrictEqual(result.codegen);
             expect([result.config.pipelines, result.config.kv, result.config.aiSearch]).toStrictEqual([true, true, true]);
         });
+    });
+
+    // Config detects a superset of codegen: a lazily loaded package needs its
+    // binding or secret even though codegen wires no helper off a dynamic import.
+    it("counts a dynamic import() of a codegen-backed package", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/shots.ts", `export const shot = async () => (await import("@lunora/browser")).createBrowser;`);
+        write("src/mailer.ts", `export const send = async () => (await import("@lunora/mail")).sendMail();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesBrowser).toBe(true);
+        expect(result.usesMail).toBe(true);
+        // `@lunora/mail` is what carries `RESEND_API_KEY` into `.dev.vars.example`.
+        expect(packageNamesFromBindings(result)).toContain("@lunora/mail");
+    });
+
+    it("counts a value re-export of a capability package", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("src/lib/mail.ts", `export { sendMail } from "@lunora/mail";`);
+        write("lunora/kv.ts", `export * from "@lunora/bindings/kv";`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesMail).toBe(true);
+        expect(result.usesKv).toBe(true);
+    });
+
+    it("never parses a file that names no capability package and reads no ctx helper (JSX included)", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // JSX is what `es-module-lexer` rejects: a lex failure used to send every
+        // such file to the TypeScript parser.
+        write("src/App.tsx", `import { useState } from "react";\nexport const App = () => <div onClick={() => useState(0)}>ctx</div>;`);
+        write("lunora/view.tsx", `export const View = ({ ctx }) => <span>{ctx.db}</span>;`);
+        write("lunora/upload.tsx", `export const Upload = ({ ctx }) => <span>{String(ctx.kv)}</span>;`);
+
+        const parse = vi.spyOn(Project.prototype, "createSourceFile");
+
+        try {
+            const result = await inferLunoraBindings({ projectRoot: root });
+            const parsed = parse.mock.calls.map(([fileName]) => fileName);
+
+            // Only the file that may read a ctx helper reaches the parser.
+            expect(parsed.filter((fileName) => fileName.startsWith("/scan/"))).toStrictEqual(["/scan/upload.tsx"]);
+            expect(result.usesKv).toBe(true);
+        } finally {
+            parse.mockRestore();
+        }
     });
 
     it("infers artifacts from a ctx.artifacts read as a hint, never naming a jurisdiction for an unpinned schema", async () => {
@@ -1152,7 +1211,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         // `packageNamesFromBindings` is the ONLY producer feeding `requiredSecrets`,
-        // and it can only emit a CAPABILITY_SOURCES source — so with no notify entry
+        // and it can only emit a FLAG_PACKAGES package — so with no notify entry
         // the five secrets declared in `package-secrets-registry.ts` reached nothing:
         // not `.dev.vars.example`, not the missing-secret pre-flight. Web Push then
         // failed silently on the deployed worker.
@@ -1187,7 +1246,9 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.usesAiSearch).toBe(true);
-        expect(result.signals.some((signal) => signal.startsWith("ai_search_namespaces (ctx.aiSearch used)"))).toBe(true);
+        expect(
+            result.signals.some((signal) => signal.startsWith("ai_search_namespaces (@lunora/bindings/ai-search is imported or ctx.aiSearch is read)")),
+        ).toBe(true);
     });
 
     it("infers Analytics SQL from a ctx.analyticsSql access", async () => {
@@ -1202,7 +1263,9 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.usesAnalyticsSql).toBe(true);
         // The read surface does not imply the write-only Analytics Engine dataset.
         expect(result.usesAnalytics).toBe(false);
-        expect(result.signals.some((signal) => signal.startsWith("analytics (ctx.analyticsSql used)"))).toBe(true);
+        expect(result.signals.some((signal) => signal.startsWith("analytics (@lunora/bindings/analytics-sql is imported or ctx.analyticsSql is read)"))).toBe(
+            true,
+        );
     });
 
     it("adds the analytics binding end to end when a handler reads ctx.analyticsSql", async () => {

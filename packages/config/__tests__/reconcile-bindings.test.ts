@@ -36,14 +36,14 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesKv: false,
         usesMail: false,
         usesNotify: false,
-        usesPayment: false,
+        usesPayments: false,
         usesPipelines: false,
         usesR2sql: false,
         usesScheduler: false,
         usesStorage: false,
         usesWorkerLoader: false,
         usesX402Charge: false,
-        usesX402Pay: false,
+        usesX402: false,
         workflows: [],
         ...overrides,
     };
@@ -532,7 +532,7 @@ describe("reconcileWranglerBindings", () => {
     it("warns to set the provider secrets when @lunora/payment is used, without adding any binding", () => {
         expect.assertions(3);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesPayment: true }));
+        const result = reconcileWranglerBindings(root, baseInferred({ usesPayments: true }));
 
         expect(result.warnings.join(" ")).toMatch(/STRIPE_SECRET_KEY.*POLAR_ACCESS_TOKEN/u);
         // Payment rides the existing ShardDO via ctx.db — no new binding written.
@@ -549,7 +549,7 @@ describe("reconcileWranglerBindings", () => {
 
         writeFileSync(join(root, ".dev.vars"), devVars);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesPayment: true }));
+        const result = reconcileWranglerBindings(root, baseInferred({ usesPayments: true }));
 
         expect(result.warnings.join(" ")).not.toMatch(/@lunora\/payment is used/u);
         expect(result.changed).toBe(false);
@@ -561,7 +561,7 @@ describe("reconcileWranglerBindings", () => {
         // A scaffolded-but-unfilled pair is not configured.
         writeFileSync(join(root, ".dev.vars"), "CREEM_API_KEY=\nCREEM_WEBHOOK_SECRET=\n");
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesPayment: true }));
+        const result = reconcileWranglerBindings(root, baseInferred({ usesPayments: true }));
 
         expect(result.warnings.join(" ")).toMatch(/@lunora\/payment is used/u);
     });
@@ -579,7 +579,7 @@ describe("reconcileWranglerBindings", () => {
     it("reminds to add a Secrets Store binding + spend policy when @lunora/x402/pay is used, without writing a binding", () => {
         expect.assertions(3);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesX402Pay: true }));
+        const result = reconcileWranglerBindings(root, baseInferred({ usesX402: true }));
 
         expect(result.warnings.join(" ")).toMatch(/x402\/pay.*secrets_store_secrets\[\].*spend policy/u);
         // ctx.secrets is a Secrets Store binding (created out-of-band), not a

@@ -22,6 +22,7 @@ import {
     packageNamesFromBindings,
     readLiveDevServerState,
     readProjectRemotePreference,
+    resolveSchemaDirectory,
     updateDevServerState,
 } from "@lunora/config";
 import { resolveRemoteEnabled } from "@lunora/config/cloudflare";
@@ -120,7 +121,7 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
     // Phase 1 — seed .dev.vars.example with any package-required secrets that
     // are not already listed there. Best-effort: a scan failure is non-fatal.
     try {
-        const bindings = await inferLunoraBindings({ projectRoot: cwd });
+        const bindings = await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
         const packageNames = packageNamesFromBindings(bindings);
         const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, packageNames);
 

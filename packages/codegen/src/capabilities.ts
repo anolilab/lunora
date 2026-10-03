@@ -11,7 +11,8 @@
  * is one row here (plus its platform-matrix rating in `platform-target.ts`).
  *
  * Each descriptor carries optional **facets**, one per consumer:
- * - `moduleSpecifier` / `contextProperty` drive the usage probe (every row has them).
+ * - `moduleSpecifier` / `contextProperty` drive the usage probe: every row names
+ * its package; every row but `mail` (no `ctx.mail` helper) names its ctx property.
  * - `tier` is the determinism tier the `ctx.<contextProperty>` helper rides —
  * stated once here and read by both the type surface and the runtime wiring.
  * - `serverCtxField` is the exact `ctx.*` type fragment spliced into the emitted
@@ -29,8 +30,8 @@
  *
  * Out of scope: surfaces gated on a DECLARATION rather than on usage (`ctx.flags`,
  * `ctx.notify`/`ctx.push`, `ctx.env`, `ctx.vectors` and the per-declaration
- * `containers`/`workflows`/`queues`/`services`/`agents` emitters), and `ctx.payments`
- * (see its row).
+ * `containers`/`workflows`/`queues`/`services`/`agents` emitters), and the
+ * ShardDO build of `ctx.payments` (see its row).
  */
 
 /** Determinism tier a capability's `ctx.*` field rides. `"every"` = query+mutation+action; `"action"` = ActionCtx only (external, non-deterministic I/O). */
@@ -137,15 +138,16 @@ interface CapabilityBase {
 
 /**
  * One package-backed capability and the per-consumer facets describing how it is
- * wired. A row that puts a helper on `ctx` (`serverCtxField` and/or
- * `shardBinding`) must state the `tier` it rides and its `contextProperty`;
- * every other row carries none of the three.
+ * wired. A row that puts a helper on `ctx` states the `tier` it rides, its
+ * `contextProperty` and its `serverCtxField`, and optionally a `shardBinding`
+ * (omitted where the ShardDO build is hand-wired, `payments`); every other row
+ * carries none of them.
  */
 type CapabilityDescriptor = (
     | {
           contextProperty: string;
-          /** The exact fragment spliced into the emitted ctx interface(s) (leading `\n`, `readonly …`). Omitted where the type field is bespoke (`ai`). */
-          serverCtxField?: string;
+          /** The exact fragment spliced into the emitted ctx interface(s) (leading `\n`, `readonly …`). */
+          serverCtxField: string;
           /** How the generated ShardDO builds the helper — a uniform {@link ShardBindingFacet}, or `"bespoke"` for its own emitter. */
           shardBinding?: ShardBindingFacet | "bespoke";
           /** Which ctx interfaces the helper rides — read by `emit/server.ts` (type surface) and `emit/shard.ts` (runtime attach). */
@@ -408,16 +410,19 @@ const CAPABILITY_ROWS = [
     // fields are hand-wired in `emit/` off the `lunora/notify.ts` signal, so no
     // ctx facets here — declaring them would emit the fields twice.
     { contextProperty: "notify", key: "notify", moduleSpecifier: "@lunora/notify" },
-    // `ctx.payments` — deliberately NOT a ctx-facet row: its facade's store rides
-    // the request's `ctx.db`, so its build must run AFTER `db` is constructed,
-    // which no `shardBinding` slot does (every one is built before the ctx
-    // literal). `emit/` hand-wires its field and build off this row's usage.
+    // `ctx.payments` — ActionCtx ONLY: payment ops are external provider calls.
+    // The type field rides the table, but there is no `shardBinding`: the facade's
+    // store rides the request's `ctx.db`, so its build must run AFTER `db` is
+    // constructed, which no `shardBinding` slot does (every one is built before the
+    // ctx literal). `emitPaymentFragments` hand-wires the build off this row's usage.
     {
         appMethod: { configKey: "payment", doc: "Wire the payment options backing `ctx.payments`.", method: "payment" },
         contextProperty: "payments",
         key: "payments",
         moduleSpecifier: "@lunora/payment",
         requiredPackage: "@lunora/payment",
+        serverCtxField: `\n    readonly payments: import("@lunora/payment").LunoraPayment;`,
+        tier: "action",
     },
     // `ctx.x402` — the x402 agent-wallet pay rail. ActionCtx ONLY: it signs and
     // settles real USDC over the network per request. Its ShardDO build is bespoke
@@ -532,16 +537,23 @@ const APP_METHOD_CAPABILITIES: ReadonlyArray<{ appMethod: AppMethodFacet; key: A
     "appMethod" in capability ? [{ appMethod: capability.appMethod, key: capability.key }] : [],
 );
 
+/** The usage-probe facets of one row: the package whose value import, and the `ctx.<property>` whose read, marks it used. */
+interface CapabilityProbe {
+    /** `undefined` for a capability with no ctx helper (`mail`). */
+    readonly contextProperty: string | undefined;
+    readonly moduleSpecifier: string;
+}
+
 /**
- * The usage-probe facets of every row, read-only — the view a consumer outside
- * codegen keys its own capability detection off (`@lunora/config`'s binding
- * inference), so the two cannot disagree on which import or `ctx.<property>`
- * read marks a capability used.
+ * The usage-probe facets of every row, keyed by capability — the view a consumer
+ * outside codegen reads (`@lunora/config` names a package and words a hint off
+ * it), so a lookup needs no existence check. Which signals mark a capability used
+ * is decided by `capabilitiesUsedBy` alone, never re-derived from these.
  */
-const CAPABILITY_PROBES: ReadonlyArray<{ readonly contextProperty: string | undefined; readonly key: CapabilityKey; readonly moduleSpecifier: string }> =
-    CAPABILITIES.map(({ contextProperty, key, moduleSpecifier }) => {
-        return { contextProperty, key, moduleSpecifier };
-    });
+// The one widening `Object.fromEntries` forces: its keys provably come from `CAPABILITIES`.
+const CAPABILITY_PROBES: Readonly<Record<CapabilityKey, CapabilityProbe>> = Object.fromEntries(
+    CAPABILITIES.map(({ contextProperty, key, moduleSpecifier }) => [key, { contextProperty, moduleSpecifier }] as const),
+) as Readonly<Record<CapabilityKey, CapabilityProbe>>;
 
 /**
  * The capabilities a usage record marks as used, as the set the emitters take
@@ -551,4 +563,14 @@ const usedCapabilities = (usage: Readonly<Record<CapabilityKey, boolean>>): Read
     new Set(CAPABILITIES.filter((capability) => usage[capability.key]).map((capability) => capability.key));
 
 export { APP_METHOD_CAPABILITIES, CAPABILITIES, CAPABILITY_PROBES, usedCapabilities };
-export type { AppMethodFacet, AppMethodKey, BespokeShardKey, CapabilityDescriptor, CapabilityKey, CapabilityTier, ShardBindingFacet, ShardEnvBinding };
+export type {
+    AppMethodFacet,
+    AppMethodKey,
+    BespokeShardKey,
+    CapabilityDescriptor,
+    CapabilityKey,
+    CapabilityProbe,
+    CapabilityTier,
+    ShardBindingFacet,
+    ShardEnvBinding,
+};
