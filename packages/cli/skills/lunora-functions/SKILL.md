@@ -298,8 +298,10 @@ export default defineModule({ description: "Invoices and payments", tables: ["in
 - Write `description` and `tables` inline; codegen reads them without running
   the file. Modules do not nest.
 - `cross_module_table_write` warns when a function outside the owning module
-  writes an owned table (insert, `patch`/`replace`/`delete`, batch or facade).
-  Route the write through a function in the owning module instead.
+  writes an owned table (insert, `patch`/`replace`/`delete`, batch or facade),
+  including through a same-file helper. Move the write into the owning module:
+  an exported helper there taking the caller's `ctx` (`openInvoice(ctx, …)`), or
+  a registered owner mutation via `ctx.runMutation(internal.<owner>.<fn>, …)`.
 - Installed components (`.extend(...)` schema extensions) count as modules that
   own their prefixed tables: write them through the component's functions, not
   `ctx.db` directly.

@@ -60,22 +60,86 @@ page, a queue or topic the Queues page. The canvas exports to PNG, SVG or JSON. 
 the manifest at the admin-gated `GET /_lunora/admin/architecture`.
 
 The graph is static, read from source by codegen, so it is complete before the
-first deploy and diffable in review. It does not guess: an edge whose target is
-held in a variable, or a call inside a non-exported helper, is listed under
-"call sites could not be drawn" instead, as is a write through an untyped id
-(a plain `string` rather than `Id<"table">`).
+first deploy and diffable in review. A call site is drawn from the exported
+function it sits in. A call inside a non-exported helper in the same file is
+drawn from every exported function that calls the helper, directly or through
+other helpers. A write in `const openInvoice = (ctx) => ctx.db.insert(…)` is
+therefore a `write` edge of each mutation that calls `openInvoice(ctx)`.
+
+A queue or workflow `handler:` imported from another file
+(`defineWorkflow({ handler: onboard })`, with `onboard` exported from
+`lunora/onboarding/flow.ts`) is followed too, so its calls are drawn from the
+queue or workflow node.
+
+The graph does not guess. These are listed under "call sites could not be drawn"
+instead:
+
+- an edge whose target is held in a variable;
+- a call inside a helper that no exported function in its file calls;
+- a write through an untyped id (a plain `string` rather than `Id<"table">`).
+
+An exported function that is not a registered function (a plain
+`export const openInvoice = …` helper) has no node of its own, so a call made
+outside a registered function's file shows up as
+`"openInvoice" is not a registered function` there.
 
 ## Table ownership
 
-`tables` declares which tables a module owns. A function in another module, or
-outside every module, that inserts into an owned table is reported by the
-`cross_module_table_write` advisor lint. Route the write through a function in
-the owning module instead:
+`tables` declares which tables a module owns. The `cross_module_table_write`
+advisor lint reports a function in another module, or outside every module, that
+writes to an owned table. Every kind of write counts:
+
+- `ctx.db.insert`;
+- by-id `patch` / `replace` / `delete`, with the table read off the id's
+  `Id<"table">` type (each table of an `Id<"a"> | Id<"b">` union);
+- batch writes and `ctx.db.<table>.*` facade writes.
+
+Writes inside same-file helpers count toward the exported functions that call
+them, so moving a write into a helper does not hide it. A write in a helper no
+exported function calls is still reported, named by the helper.
+
+To fix it, move the write into the owning module. Two shapes work.
+
+**An owner-module helper** keeps the write in the caller's invocation. Export a
+plain function from the billing folder that takes the caller's `ctx`, and call
+it with that `ctx`:
+
+```ts
+// lunora/billing/invoices.ts — owned by the billing module
+import type { MutationCtx } from "../_generated/server";
+
+export const openInvoice = async (ctx: MutationCtx, userId: string) => ctx.db.insert("invoices", { amount: 0, userId });
+```
+
+```ts
+// lunora/accounts/signup.ts — not the billing module
+import { mutation, v } from "../_generated/server";
+import { openInvoice } from "../billing/invoices";
+
+export const signup = mutation.input({ userId: v.string() }).mutation(async ({ args, ctx }) => {
+    await openInvoice(ctx, args.userId);
+});
+```
+
+The write now lives in the owner's file, so the lint is satisfied. The table's
+shape and invariants stay inside the billing module. Because `openInvoice` is
+not a registered function, the Architecture view lists its write under "call
+sites could not be drawn" as `"openInvoice" is not a registered function`.
+
+**A registered owner mutation** runs through `ctx.runMutation`, which is
+available inside a mutation:
 
 ```ts
 // lunora/accounts/signup.ts — not the billing module
 await ctx.runMutation(internal.billing_invoices.open, { userId });
 ```
+
+`ctx.runMutation` composes the submutation in-process. It runs the handler
+directly, with no fresh Durable Object RPC, and reuses the calling mutation's
+`db` writer, so the submutation's writes apply in the same invocation. The
+writes are not wrapped in a SQL transaction, so a failure part-way does not roll
+back earlier writes; the same holds for a top-level mutation. The call becomes
+a drawn `call` edge to the owner's function.
 
 A table can have one owner, and it must exist in `lunora/schema.ts`; codegen
 rejects either mistake. A module that declares no `tables` opts out of the lint.
@@ -93,7 +157,7 @@ installed as a [registry item](/docs/concepts/registry-items) also owns the
 folder, since its code lives in `node_modules`. So:
 
 - the Architecture view gives it its own lane, marked as a component;
-- `cross_module_table_write` warns when your code inserts straight into a
+- `cross_module_table_write` warns when your code writes straight to a
   component's table instead of calling the function the component exports.
 
 The lint applies whether or not you declare any modules yourself; the
