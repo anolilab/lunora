@@ -21,6 +21,7 @@ const inferred = (services: ServiceBindingIR[] | undefined): InferredBindings =>
         usesAi: false,
         usesAiSearch: false,
         usesAnalytics: false,
+        usesAnalyticsSql: false,
         usesArtifacts: false,
         usesAuth: false,
         usesBrowser: false,

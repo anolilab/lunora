@@ -693,6 +693,7 @@ interface InferredBindings {
     usesAi: boolean;
     usesAiSearch: boolean;
     usesAnalytics: boolean;
+    usesAnalyticsSql: boolean;
     usesArtifacts: boolean;
     usesAuth: boolean;
     usesBrowser: boolean;
@@ -1915,7 +1916,7 @@ interface BindingRequirement {
     resource?: string;
     resourceId?: string;
     sqlite?: boolean;
-    type: "ai" | "ai_search" | "ai_search_namespace" | "analytics_engine" | "artifacts" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "media" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "service" | "stream" | "vectorize" | "vpc_network" | "vpc_service" | "workflow";
+    type: "ai" | "ai_search" | "ai_search_namespace" | "analytics_engine" | "analytics_sql" | "artifacts" | "assets" | "browser" | "container" | "d1" | "durable_object" | "hyperdrive" | "images" | "kv" | "media" | "pipeline" | "queue_consumer" | "queue_producer" | "r2" | "service" | "stream" | "vectorize" | "vpc_network" | "vpc_service" | "workflow";
 }
 ```
 
@@ -1957,6 +1958,9 @@ interface ManifestConfigShape extends WranglerConfigShape {
         binding?: string;
         namespace?: string;
     }>;
+    analytics?: {
+        binding?: string;
+    };
     analytics_engine_datasets?: ReadonlyArray<{
         binding?: string;
         dataset?: string;
@@ -2070,6 +2074,10 @@ const REMOTE_ELIGIBLE_KEYS: {
     readonly ai_search_namespaces: {
         readonly label: "AI Search namespace";
         readonly shape: "array";
+    };
+    readonly analytics: {
+        readonly label: "Analytics SQL";
+        readonly shape: "object";
     };
     readonly d1_databases: {
         readonly label: "D1";
@@ -2198,6 +2206,7 @@ interface RemoteWranglerShape {
     ai?: BindingEntry | null;
     ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
     ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
+    analytics?: BindingEntry | null;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: {
@@ -2280,6 +2289,10 @@ interface WranglerConfig {
         namespace?: string;
         remote?: boolean;
     } | null | undefined>;
+    analytics?: {
+        binding?: unknown;
+        remote?: boolean;
+    } | null;
     analytics_engine_datasets?: ReadonlyArray<{
         binding?: string;
         dataset?: string;

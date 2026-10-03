@@ -157,12 +157,24 @@ const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"
 
 interface StudioProps {
     /**
-     * Run one Analytics Engine SQL statement for the Analytics tab. There is no
-     * default: the AE SQL API authenticates with an account-scoped Cloudflare API
-     * token, and inlining one into this browser bundle would leak it to anyone who
-     * views source. Supply a runner that proxies the statement through your own
-     * worker (which holds the token server-side). Without it the Analytics tab
-     * renders an empty state and issues no request.
+     * Resolve one Analytics tab panel by its key (`"volume"`, `"latency"`,
+     * `"hotShards"`). Supply a runner that calls an action in your app which
+     * builds the statement server-side and runs it through `ctx.analyticsSql`:
+     *
+     * ```ts
+     * // lunora/studio-analytics.ts
+     * export const usagePanel = action.input({ panel: v.string() }).action(async ({ args, ctx }) => {
+     *     assertAdmin(ctx); // your own admin check: this reads account analytics
+     *     if (!isFunctionUsagePanel(args.panel)) throw new LunoraError("BAD_REQUEST", "unknown panel");
+     *     const { params, query } = functionUsageQuery(args.panel);
+     *     return ctx.analyticsSql.query(query, params);
+     * });
+     * ```
+     *
+     * The action MUST be admin-gated and MUST take the panel key, never SQL: an
+     * action running caller-supplied SQL could read every dataset in the account.
+     * Without a runner the Analytics tab renders an empty state and issues no
+     * request.
      *
      * Pass a STABLE reference — a module-level function, or one held in a
      * `useCallback`/ref. It is read while building the tab router, so a fresh
@@ -170,7 +182,7 @@ interface StudioProps {
      * tree, losing in-progress query state. The same holds for `scheduledLoad`,
      * `scheduledCancel` and `scheduledCron`.
      */
-    readonly analyticsQuery?: AnalyticsPanelProps["runQuery"];
+    readonly analyticsSqlQuery?: AnalyticsPanelProps["runQuery"];
 
     /**
      * URL path prefix the studio is mounted under, passed to the router as its
@@ -1040,7 +1052,7 @@ const NotFoundRedirect = (): null => {
  * rebuilt only when those change.
  */
 const buildRouter = ({
-    analyticsQuery,
+    analyticsSqlQuery,
     basePath,
     dataEditable = false,
     functions,
@@ -1057,7 +1069,7 @@ const buildRouter = ({
 
     const panels: Record<StudioTab, ReactElement> = {
         agents: <AgentsPanel initialShardKey={initialShardKey} />,
-        analytics: <AnalyticsPanel runQuery={analyticsQuery} />,
+        analytics: <AnalyticsPanel runQuery={analyticsSqlQuery} />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         architecture: <ArchitecturePanel />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
@@ -1170,7 +1182,7 @@ const buildRouter = ({
  * so navigation state survives unrelated re-renders.
  */
 const StudioShell = ({
-    analyticsQuery,
+    analyticsSqlQuery,
     basePath,
     chrome,
     dataEditable,
@@ -1188,7 +1200,7 @@ const StudioShell = ({
     // individual props, not the unstable `props` identity), so navigation state
     // survives unrelated re-renders.
     const router = buildRouter({
-        analyticsQuery,
+        analyticsSqlQuery,
         basePath,
         dataEditable,
         functions,

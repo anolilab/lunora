@@ -280,6 +280,7 @@ interface PlatformCapabilities {
         ai?: Capability;
         aiSearch?: Capability;
         analytics?: Capability;
+        analyticsSql?: Capability;
         artifacts?: Capability;
         authJurisdictionMove?: Capability;
         browser?: Capability;

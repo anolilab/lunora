@@ -48,6 +48,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "AI Search is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so codegen omits `ctx.aiSearch`. A REST-backed emulation (account id + API token over fetch) was considered and not built: the REST and binding APIs differ, and nobody on this target has asked for it",
         },
         analytics: { level: "unsupported", note: "Analytics Engine is not a celld binding type" },
+        analyticsSql: {
+            level: "unsupported",
+            note: "Analytics SQL is not a celld binding type, so codegen omits `ctx.analyticsSql`. Not rated emulated on the strength of `createAnalyticsSqlRest`: that transport queries Cloudflare's hosted analytics with an API token, so it reads data a celld fleet never wrote, and an app can import it directly without the ctx surface",
+        },
         artifacts: { level: "unsupported", note: "Artifacts is not a celld binding type" },
         authJurisdictionMove: {
             level: "unsupported",

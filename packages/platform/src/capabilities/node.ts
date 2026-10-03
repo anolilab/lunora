@@ -170,6 +170,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec, spawn or terminal to run a command in either",
         },
         analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
+        analyticsSql: {
+            level: "unsupported",
+            note: "No Analytics SQL-equivalent binding implemented, so codegen omits `ctx.analyticsSql`. Not rated emulated on the strength of `createAnalyticsSqlRest`: that transport queries Cloudflare's hosted analytics with an API token, so it reads data a Node host never wrote, and an app can import it directly without the ctx surface",
+        },
         artifacts: {
             level: "unsupported",
             note: "No Artifacts-equivalent binding implemented: a host would need a Git server with repo-scoped tokens, which no host contract carries",

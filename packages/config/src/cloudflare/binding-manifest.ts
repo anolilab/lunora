@@ -67,6 +67,7 @@ interface BindingRequirement {
         | "ai_search"
         | "ai_search_namespace"
         | "analytics_engine"
+        | "analytics_sql"
         | "artifacts"
         | "assets"
         | "browser"
@@ -151,6 +152,8 @@ interface ManifestConfigShape extends WranglerConfigShape {
     ai?: { binding?: string };
     ai_search?: ReadonlyArray<{ binding?: string; instance_name?: string }>;
     ai_search_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string }>;
+    /** The Analytics SQL binding — a parameterless `{ binding }`, distinct from `analytics_engine_datasets`. */
+    analytics?: { binding?: string };
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
     artifacts?: ReadonlyArray<{ binding?: string; namespace?: string }>;
     /** Static assets carry a real `binding` the Worker reads (`env.ASSETS`). */
@@ -222,14 +225,15 @@ const ARRAY_SECTIONS: ReadonlyArray<{
 ];
 
 /** Parameterless `{ binding }` sections — the platform capabilities with nothing to provision. */
-const SINGLETON_SECTIONS: ReadonlyArray<{ field: "ai" | "assets" | "browser" | "images" | "media" | "stream"; type: BindingRequirement["type"] }> = [
+const SINGLETON_SECTIONS = [
     { field: "ai", type: "ai" },
+    { field: "analytics", type: "analytics_sql" },
     { field: "assets", type: "assets" },
     { field: "browser", type: "browser" },
     { field: "images", type: "images" },
     { field: "media", type: "media" },
     { field: "stream", type: "stream" },
-];
+] as const satisfies ReadonlyArray<{ field: keyof ManifestConfigShape; type: BindingRequirement["type"] }>;
 
 /** The binding sections this module understands, derived from the tables above so the three can never disagree. */
 const KNOWN_BINDING_FIELDS = new Set<string>([

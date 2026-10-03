@@ -94,6 +94,21 @@ describe("buildBindingManifest", () => {
         expect(manifest.unknown).toStrictEqual([]);
     });
 
+    it("models the Analytics SQL binding apart from Analytics Engine datasets", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            analytics: { binding: "ANALYTICS_SQL" },
+            analytics_engine_datasets: [{ binding: "ANALYTICS", dataset: "ANALYTICS" }],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "ANALYTICS", resource: "ANALYTICS", type: "analytics_engine" },
+            { binding: "ANALYTICS_SQL", type: "analytics_sql" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
     it("models both AI Search sections instead of reporting them as unknown", () => {
         expect.assertions(2);
 

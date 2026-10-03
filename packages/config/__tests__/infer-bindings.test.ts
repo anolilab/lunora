@@ -1,13 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CAPABILITY_PROBES, discoverSandboxUsage } from "@lunora/codegen";
+import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // Not part of codegen's public API: only this drift guard needs the whole-project probe.
 import { discoverFeatureUsage } from "../../codegen/src/discover/feature-usage";
+import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { InferredBindings } from "../src/infer-bindings";
 import { inferLunoraBindings, packageNamesFromBindings } from "../src/infer-bindings";
 
@@ -976,6 +978,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             ai: "usesAi",
             aiSearch: "usesAiSearch",
             analytics: "usesAnalytics",
+            analyticsSql: "usesAnalyticsSql",
             artifacts: "usesArtifacts",
             browser: "usesBrowser",
             hyperdrive: "usesHyperdrive",
@@ -1185,6 +1188,52 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(result.usesAiSearch).toBe(true);
         expect(result.signals.some((signal) => signal.startsWith("ai_search_namespaces (ctx.aiSearch used)"))).toBe(true);
+    });
+
+    it("infers Analytics SQL from a ctx.analyticsSql access", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/usage.ts", `export const handler = (ctx) => ctx.analyticsSql.query("SELECT 1");`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAnalyticsSql).toBe(true);
+        // The read surface does not imply the write-only Analytics Engine dataset.
+        expect(result.usesAnalytics).toBe(false);
+        expect(result.signals.some((signal) => signal.startsWith("analytics (ctx.analyticsSql used)"))).toBe(true);
+    });
+
+    it("adds the analytics binding end to end when a handler reads ctx.analyticsSql", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/usage.ts", `export const handler = async ({ ctx }) => ctx.analyticsSql.query("SELECT 1");`);
+
+        const result = reconcileWranglerBindings(root, await inferLunoraBindings({ projectRoot: root }));
+
+        expect(result.added).toContain("ANALYTICS_SQL (Analytics SQL)");
+        expect((parseJsonc(readFileSync(join(root, "wrangler.jsonc"), "utf8")) as { analytics?: unknown }).analytics).toStrictEqual({
+            binding: "ANALYTICS_SQL",
+        });
+    });
+
+    it("does not infer Analytics SQL from a type-only import or from the Analytics Engine write subpath", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/types.ts",
+            `import type { AnalyticsSql } from "@lunora/bindings/analytics-sql";\nimport { createAnalytics } from "@lunora/bindings/analytics";\nexport const label = (sql: AnalyticsSql) => [sql, createAnalytics];`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAnalyticsSql).toBe(false);
+        expect(result.usesAnalytics).toBe(true);
     });
 
     it("does not infer AI Search from a type-only import or an unrelated `aiSearch` name", async () => {
