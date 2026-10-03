@@ -2,6 +2,7 @@
   "migrationIds": [],
   "tables": {
     "alertRuleState": {
+      "commitOrdered": false,
       "fields": {
         "createdAt": {
           "kind": "number",
@@ -62,10 +63,12 @@
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "alertRules": {
+      "commitOrdered": false,
       "fields": {
         "baselineWindows": {
           "kind": "number",
@@ -274,10 +277,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "alerts": {
+      "commitOrdered": false,
       "fields": {
         "body": {
           "kind": "string",
@@ -472,10 +477,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "aliasOwnership": {
+      "commitOrdered": false,
       "fields": {
         "alias": {
           "kind": "string",
@@ -518,10 +525,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "auditLog": {
+      "commitOrdered": false,
       "fields": {
         "action": {
           "kind": "string",
@@ -563,10 +572,329 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
+    },
+    "boxEnrolments": {
+      "commitOrdered": false,
+      "fields": {
+        "boxId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "boxes"
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "createdBy": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "expiresAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "hashedToken": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "usedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_hash": {
+          "fields": [
+            "hashedToken"
+          ],
+          "unique": true
+        },
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "global:d1"
+    },
+    "boxes": {
+      "commitOrdered": false,
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "desiredReleaseId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "dnsError": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "enrolledAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "fleets": {
+          "kind": "array",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "of": {
+            "kind": "object",
+            "nullable": false,
+            "optional": false,
+            "unique": false,
+            "fields": {
+              "alias": {
+                "kind": "string",
+                "nullable": false,
+                "optional": false,
+                "unique": false
+              },
+              "deploymentId": {
+                "kind": "string",
+                "nullable": false,
+                "optional": true,
+                "unique": false
+              },
+              "state": {
+                "kind": "union",
+                "nullable": false,
+                "optional": false,
+                "unique": false,
+                "members": [
+                  {
+                    "kind": "literal",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "literal": "\"failed\""
+                  },
+                  {
+                    "kind": "literal",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "literal": "\"running\""
+                  },
+                  {
+                    "kind": "literal",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "literal": "\"starting\""
+                  },
+                  {
+                    "kind": "literal",
+                    "nullable": false,
+                    "optional": false,
+                    "unique": false,
+                    "literal": "\"stopped\""
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "ipv4": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "ipv6": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "lastSeenAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "name": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "publicKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "resources": {
+          "kind": "object",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "fields": {
+            "diskFreeMb": {
+              "kind": "number",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "memMb": {
+              "kind": "number",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            }
+          }
+        },
+        "revokedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "singleTrust": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "slug": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"offline\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"online\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"pending\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"revoked\""
+            }
+          ]
+        },
+        "versions": {
+          "kind": "object",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "fields": {
+            "caddy": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "celld": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "hostd": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            }
+          }
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        },
+        "by_slug": {
+          "fields": [
+            "slug"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "global:d1"
     },
     "buildLogs": {
+      "commitOrdered": false,
       "fields": {
         "buildId": {
           "kind": "id",
@@ -631,10 +959,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "builds": {
+      "commitOrdered": false,
       "fields": {
         "branch": {
           "kind": "string",
@@ -684,6 +1014,12 @@
           "optional": true,
           "unique": false
         },
+        "fromFork": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
         "organizationId": {
           "kind": "id",
           "nullable": false,
@@ -709,6 +1045,31 @@
           "optional": false,
           "unique": false,
           "ref": "projects"
+        },
+        "pullRequest": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "reusesBuildId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "builds"
+        },
+        "rootDirectory": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "skipReason": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
         },
         "status": {
           "kind": "union",
@@ -742,6 +1103,13 @@
               "nullable": false,
               "optional": false,
               "unique": false,
+              "literal": "\"skipped\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
               "literal": "\"successful\""
             }
           ]
@@ -751,6 +1119,28 @@
           "nullable": false,
           "optional": true,
           "unique": false
+        },
+        "trigger": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"pull_request\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"push\""
+            }
+          ]
         },
         "updatedAt": {
           "kind": "number",
@@ -774,16 +1164,36 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "cells": {
+      "commitOrdered": false,
       "fields": {
         "cloudflareAccountId": {
           "kind": "string",
           "nullable": false,
           "optional": false,
           "unique": false
+        },
+        "config": {
+          "kind": "record",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "key": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          },
+          "of": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
         },
         "createdAt": {
           "kind": "number",
@@ -838,11 +1248,34 @@
             }
           ]
         },
-        "usageReadAtMs": {
-          "kind": "number",
+        "target": {
+          "kind": "union",
           "nullable": false,
           "optional": true,
-          "unique": false
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"celld-vps\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-wfp\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-workers\""
+            }
+          ]
         }
       },
       "indexes": {
@@ -853,18 +1286,101 @@
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
-    "cloudflareBilling": {
+    "certificateReleases": {
+      "commitOrdered": false,
       "fields": {
-        "ciphertext": {
+        "attempts": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "certificateIssuer": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"celld-vps\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-wfp\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-workers\""
+            }
+          ]
+        },
+        "certificateScope": {
           "kind": "string",
           "nullable": false,
           "optional": false,
           "unique": false
         },
-        "cloudflareAccountId": {
+        "customHostnameId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "hostname": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "lastError": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "queuedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {},
+      "memory": false,
+      "relations": {},
+      "shardMode": "global:d1"
+    },
+    "cloudflareAccounts": {
+      "commitOrdered": false,
+      "fields": {
+        "accountId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "cellId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "cells"
+        },
+        "ciphertext": {
           "kind": "string",
           "nullable": false,
           "optional": false,
@@ -876,7 +1392,25 @@
           "optional": false,
           "unique": false
         },
+        "createdBy": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "displayName": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
         "iv": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "label": {
           "kind": "string",
           "nullable": false,
           "optional": false,
@@ -889,25 +1423,70 @@
           "unique": false,
           "ref": "organizations"
         },
+        "permissions": {
+          "kind": "array",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "of": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
+        },
+        "tokenExpiresAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
         "updatedAt": {
           "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "verifiedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "workersSubdomain": {
+          "kind": "string",
           "nullable": false,
           "optional": false,
           "unique": false
         }
       },
       "indexes": {
+        "by_cell": {
+          "fields": [
+            "cellId"
+          ],
+          "unique": false
+        },
         "by_org": {
           "fields": [
             "organizationId"
           ],
+          "unique": false
+        },
+        "by_org_account": {
+          "fields": [
+            "organizationId",
+            "accountId"
+          ],
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "customers": {
+      "commitOrdered": false,
       "fields": {
         "createdAt": {
           "kind": "number",
@@ -955,10 +1534,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "dashboards": {
+      "commitOrdered": false,
       "fields": {
         "createdAt": {
           "kind": "number",
@@ -1105,10 +1686,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "deployKeys": {
+      "commitOrdered": false,
       "fields": {
         "capability": {
           "kind": "union",
@@ -1157,6 +1740,12 @@
               "unique": false
             }
           }
+        },
+        "expiresAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
         },
         "hashedKey": {
           "kind": "string",
@@ -1240,10 +1829,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "deployments": {
+      "commitOrdered": false,
       "fields": {
         "adminToken": {
           "kind": "string",
@@ -1397,6 +1988,28 @@
           "unique": false,
           "ref": "organizations"
         },
+        "placementRef": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "id",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "ref": "boxes"
+            },
+            {
+              "kind": "id",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "ref": "cloudflareAccounts"
+            }
+          ]
+        },
         "projectId": {
           "kind": "id",
           "nullable": false,
@@ -1412,6 +2025,12 @@
         },
         "queuedAt": {
           "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "resourceRef": {
+          "kind": "string",
           "nullable": false,
           "optional": true,
           "unique": false
@@ -1498,6 +2117,35 @@
           "optional": true,
           "unique": false
         },
+        "target": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"celld-vps\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-wfp\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-workers\""
+            }
+          ]
+        },
         "teardownAt": {
           "kind": "number",
           "nullable": false,
@@ -1530,12 +2178,6 @@
         }
       },
       "indexes": {
-        "by_alias": {
-          "fields": [
-            "alias"
-          ],
-          "unique": false
-        },
         "by_kind": {
           "fields": [
             "kind"
@@ -1546,6 +2188,12 @@
           "fields": [
             "organizationId",
             "createdAt"
+          ],
+          "unique": false
+        },
+        "by_placement": {
+          "fields": [
+            "placementRef"
           ],
           "unique": false
         },
@@ -1568,11 +2216,60 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "domains": {
+      "commitOrdered": false,
       "fields": {
+        "certificateError": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "certificateIssuer": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"celld-vps\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-wfp\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-workers\""
+            }
+          ]
+        },
+        "certificateScope": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "certificateStatus": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
         "createdAt": {
           "kind": "number",
           "nullable": false,
@@ -1650,10 +2347,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "events": {
+      "commitOrdered": false,
       "fields": {
         "processedAt": {
           "kind": "number",
@@ -1689,10 +2388,46 @@
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
+    },
+    "githubDeliveries": {
+      "commitOrdered": false,
+      "fields": {
+        "deliveryId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "receivedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_delivery": {
+          "fields": [
+            "deliveryId"
+          ],
+          "unique": true
+        },
+        "by_received": {
+          "fields": [
+            "receivedAt"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "global:d1"
     },
     "githubInstallations": {
+      "commitOrdered": false,
       "fields": {
         "accountLogin": {
           "kind": "string",
@@ -1740,10 +2475,100 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
+    },
+    "hostdReleases": {
+      "commitOrdered": false,
+      "fields": {
+        "channel": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"canary\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"stable\""
+            }
+          ]
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "envelope": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "keyId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "releaseId": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "versions": {
+          "kind": "object",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "fields": {
+            "caddy": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "celld": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            },
+            "hostd": {
+              "kind": "string",
+              "nullable": false,
+              "optional": false,
+              "unique": false
+            }
+          }
+        }
+      },
+      "indexes": {
+        "by_release": {
+          "fields": [
+            "releaseId"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "global:d1"
     },
     "incidents": {
+      "commitOrdered": false,
       "fields": {
         "closedAt": {
           "kind": "number",
@@ -1981,10 +2806,12 @@
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "invitations": {
+      "commitOrdered": false,
       "fields": {
         "createdAt": {
           "kind": "number",
@@ -2103,10 +2930,12 @@
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "issues": {
+      "commitOrdered": false,
       "fields": {
         "count": {
           "kind": "number",
@@ -2221,10 +3050,12 @@
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "members": {
+      "commitOrdered": false,
       "fields": {
         "createdAt": {
           "kind": "number",
@@ -2297,10 +3128,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "metricPoints": {
+      "commitOrdered": false,
       "fields": {
         "at": {
           "kind": "number",
@@ -2376,10 +3209,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "observations": {
+      "commitOrdered": false,
       "fields": {
         "attributes": {
           "kind": "record",
@@ -2630,10 +3465,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "organizations": {
+      "commitOrdered": false,
       "fields": {
         "cellId": {
           "kind": "id",
@@ -2734,10 +3571,12 @@
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "overageDebits": {
+      "commitOrdered": false,
       "fields": {
         "debitedCredits": {
           "kind": "number",
@@ -2774,10 +3613,12 @@
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "paymentSessions": {
+      "commitOrdered": false,
       "fields": {
         "amountMinor": {
           "kind": "number",
@@ -2855,11 +3696,19 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "platformUsage": {
+      "commitOrdered": false,
       "fields": {
+        "billable": {
+          "kind": "boolean",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
         "createdAt": {
           "kind": "number",
           "nullable": false,
@@ -3139,10 +3988,38 @@
           "optional": false,
           "unique": false
         },
+        "placementRef": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "id",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "ref": "boxes"
+            },
+            {
+              "kind": "id",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "ref": "cloudflareAccounts"
+            }
+          ]
+        },
         "quantity": {
           "kind": "number",
           "nullable": false,
           "optional": false,
+          "unique": false
+        },
+        "windowStart": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
           "unique": false
         }
       },
@@ -3152,12 +4029,21 @@
             "organizationId"
           ],
           "unique": false
+        },
+        "by_placement_window": {
+          "fields": [
+            "placementRef",
+            "windowStart"
+          ],
+          "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "projects": {
+      "commitOrdered": false,
       "fields": {
         "activeDeploymentId": {
           "kind": "string",
@@ -3202,6 +4088,28 @@
           "unique": false,
           "ref": "organizations"
         },
+        "placementRef": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "id",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "ref": "boxes"
+            },
+            {
+              "kind": "id",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "ref": "cloudflareAccounts"
+            }
+          ]
+        },
         "previewPasswordHash": {
           "kind": "string",
           "nullable": false,
@@ -3214,38 +4122,64 @@
           "optional": true,
           "unique": false
         },
-        "rollout": {
-          "kind": "object",
+        "productionAlias": {
+          "kind": "string",
           "nullable": false,
           "optional": true,
-          "unique": false,
-          "fields": {
-            "deploymentId": {
-              "kind": "id",
-              "nullable": false,
-              "optional": false,
-              "unique": false,
-              "ref": "deployments"
-            },
-            "percent": {
-              "kind": "number",
-              "nullable": false,
-              "optional": false,
-              "unique": false
-            },
-            "scriptName": {
-              "kind": "string",
-              "nullable": false,
-              "optional": false,
-              "unique": false
-            }
-          }
+          "unique": false
+        },
+        "rootDirectory": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
         },
         "slug": {
           "kind": "string",
           "nullable": false,
           "optional": false,
           "unique": false
+        },
+        "target": {
+          "kind": "union",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"celld-vps\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-wfp\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-workers\""
+            }
+          ]
+        },
+        "watchPaths": {
+          "kind": "array",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "of": {
+            "kind": "string",
+            "nullable": false,
+            "optional": false,
+            "unique": false
+          }
         }
       },
       "indexes": {
@@ -3261,12 +4195,20 @@
             "slug"
           ],
           "unique": true
+        },
+        "by_placement": {
+          "fields": [
+            "placementRef"
+          ],
+          "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "rateLimits": {
+      "commitOrdered": false,
       "fields": {
         "key": {
           "kind": "string",
@@ -3301,10 +4243,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
       "shardMode": "root"
     },
     "secrets": {
+      "commitOrdered": false,
       "fields": {
         "ciphertext": {
           "kind": "string",
@@ -3397,10 +4341,12 @@
           "unique": true
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "subscriptions": {
+      "commitOrdered": false,
       "fields": {
         "cancelAtPeriodEnd": {
           "kind": "boolean",
@@ -3484,10 +4430,196 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
+    },
+    "tenantBackups": {
+      "commitOrdered": false,
+      "fields": {
+        "alias": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "bytes": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "completedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "deploymentId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "deployments"
+        },
+        "error": {
+          "kind": "string",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "key": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "operation": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"backup\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"restore\""
+            }
+          ]
+        },
+        "organizationId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "organizations"
+        },
+        "projectId": {
+          "kind": "id",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "ref": "projects"
+        },
+        "restoreConflicts": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "restoreInserted": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "restoreRowErrors": {
+          "kind": "number",
+          "nullable": false,
+          "optional": true,
+          "unique": false
+        },
+        "restoredFrom": {
+          "kind": "id",
+          "nullable": false,
+          "optional": true,
+          "unique": false,
+          "ref": "tenantBackups"
+        },
+        "status": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"failed\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"running\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"succeeded\""
+            }
+          ]
+        },
+        "trigger": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"manual\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"pre-restore\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"scheduled\""
+            }
+          ]
+        }
+      },
+      "indexes": {
+        "by_org": {
+          "fields": [
+            "organizationId"
+          ],
+          "unique": false
+        },
+        "by_project": {
+          "fields": [
+            "projectId"
+          ],
+          "unique": false
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "global:d1"
     },
     "tenantLogs": {
+      "commitOrdered": false,
       "fields": {
         "createdAt": {
           "kind": "number",
@@ -3636,10 +4768,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "uptimeChecks": {
+      "commitOrdered": false,
       "fields": {
         "createdAt": {
           "kind": "number",
@@ -3695,10 +4829,12 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     },
     "uptimeState": {
+      "commitOrdered": false,
       "fields": {
         "consecutiveFailures": {
           "kind": "number",
@@ -3759,10 +4895,76 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
+    },
+    "usageCheckpoints": {
+      "commitOrdered": false,
+      "fields": {
+        "readAtMs": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "scopeKey": {
+          "kind": "string",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        },
+        "target": {
+          "kind": "union",
+          "nullable": false,
+          "optional": false,
+          "unique": false,
+          "members": [
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"celld-vps\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-wfp\""
+            },
+            {
+              "kind": "literal",
+              "nullable": false,
+              "optional": false,
+              "unique": false,
+              "literal": "\"cloudflare-workers\""
+            }
+          ]
+        },
+        "updatedAt": {
+          "kind": "number",
+          "nullable": false,
+          "optional": false,
+          "unique": false
+        }
+      },
+      "indexes": {
+        "by_target_scope": {
+          "fields": [
+            "target",
+            "scopeKey"
+          ],
+          "unique": true
+        }
+      },
+      "memory": false,
+      "relations": {},
+      "shardMode": "global:d1"
     },
     "usageEvents": {
+      "commitOrdered": false,
       "fields": {
         "createdAt": {
           "kind": "number",
@@ -3823,8 +5025,9 @@
           "unique": false
         }
       },
+      "memory": false,
       "relations": {},
-      "shardMode": "global"
+      "shardMode": "global:d1"
     }
   },
   "version": 1
