@@ -365,6 +365,9 @@ the binding of that same bucket.
   `creation-defer-length`, `concatenation` (parallel uploads) or `checksum`. A
   client that sends `Upload-Checksum` anyway has the chunk buffered and verified
   by the handler, up to 64 MiB per chunk.
+- **Method overrides.** A request carrying `X-HTTP-Method-Override` (or
+  `X-HTTP-Method`, `X-Method-Override`) gets a `405`, so no request can pass the
+  write gate as one method and run as another.
 - **Chunked REST** runs over `createR2BindingUploadStorage` only, one chunk at a
   time and in order: a chunk at any other offset, or one sent while another is
   streaming, is a `409` and is not stored. The bundled client sends four chunks

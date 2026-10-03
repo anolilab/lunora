@@ -319,6 +319,14 @@ A finished upload cannot be deleted through the handler either. On TUS, `DELETE`
 only cancels an upload in progress. The chunked-REST and multipart handlers would
 delete any stored file by id, so they do not take `DELETE` at all.
 
+A request carrying a method-override header (`X-HTTP-Method-Override`,
+`X-HTTP-Method` or `X-Method-Override`) is refused with the same `405`, before
+`authorize` runs. `@visulima/storage`'s TUS handler honors
+`X-HTTP-Method-Override` and would swap the method after the check above, so a
+`POST` overridden to `GET` would pass the write gate and be served as a read.
+The handler is also built with `allowMethodOverride: false`. Send each request
+with its real method; the bundled client does.
+
 On TUS every successful `PATCH` answers `204` with no body, the one that
 completes the upload included; read the new offset from `Upload-Offset`.
 
@@ -487,6 +495,8 @@ to 1.0.6. What changes for an upload route:
   (`<collection>/<id>/<id>.<ext>`).
 - **Chunked REST works** (it answered `400` to every chunk before), within the
   limits above.
+- **Method-override headers are refused** (`405`) on every protocol, before
+  `authorize` runs.
 - **TUS follows tus 1.0 more strictly.** The `PATCH` that completes an upload
   answers `204` with no body (it was `200` with the file record), so the
   client's progress now reaches 100%. A `PATCH` at the wrong offset is a `409`,

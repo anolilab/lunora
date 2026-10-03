@@ -24,7 +24,9 @@
  *
  * The route is write-only. `GET`, and any method the protocol does not need to
  * upload, is refused (405) before the gate runs, so the route never serves a
- * stored file. Downloads go through `ctx.storage.download()` or a signed URL.
+ * stored file. So is any request carrying a method-override header, which
+ * would change the method after that check. Downloads go through
+ * `ctx.storage.download()` or a signed URL.
  */
 import { LunoraError } from "@lunora/errors";
 import { File } from "@visulima/storage";
@@ -238,17 +240,28 @@ const ALLOWED_METHODS: Readonly<Record<UploadProtocol, ReadonlySet<string>>> = {
     tus: new Set(["DELETE", "HEAD", "OPTIONS", "PATCH", "POST"]),
 };
 
-const methodNotAllowedResponse = (protocol: UploadProtocol, method: string): Response => {
-    const response = errorResponse(protocol, 405, {
-        code: "METHOD_NOT_ALLOWED",
-        message: `${method} is not allowed on this upload route: it is write-only. Serve stored files with ctx.storage.download() or a signed URL`,
-        name: "MethodNotAllowedError",
-    });
+const methodNotAllowedResponse = (protocol: UploadProtocol, message: string): Response => {
+    const response = errorResponse(protocol, 405, { code: "METHOD_NOT_ALLOWED", message, name: "MethodNotAllowedError" });
 
     response.headers.set("Allow", [...ALLOWED_METHODS[protocol]].join(", "));
 
     return response;
 };
+
+/**
+ * Headers that ask a server to treat the request as another method.
+ *
+ * `@visulima/storage`'s TUS handler honors `X-HTTP-Method-Override` as of
+ * 2.0.26, as the TUS protocol asks. It swaps the method inside the handler,
+ * after {@link ALLOWED_METHODS} was checked against `request.method`, so a
+ * `POST` carrying `X-HTTP-Method-Override: GET` would pass that check and the
+ * `authorize` gate as a write, then be served as a read. The handlers are
+ * built with `allowMethodOverride: false`; refusing the headers here as well
+ * keeps the route write-only should a protocol handler start honoring one of
+ * them. Upstream honors only the first name today, and the bundled client
+ * sends none of them.
+ */
+const METHOD_OVERRIDE_HEADERS = ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"] as const;
 
 /**
  * Best-effort declared upload size read off the request, checked against
@@ -442,6 +455,10 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
     }
 
     const handlerOptions: UploadHandlerOptions = {
+        // Read only by the TUS handler. The method allow-list and `authorize`
+        // run on `request.method`, so no handler may swap in another method
+        // after them (see METHOD_OVERRIDE_HEADERS).
+        allowMethodOverride: false,
         // A finished upload is a stored file; removing it is the app's call
         // (`ctx.storage.delete`), not a `DELETE` any caller the upload gate
         // admits can send to the upload route.
@@ -471,7 +488,16 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         const { method } = request;
 
         if (!ALLOWED_METHODS[protocol].has(method)) {
-            return methodNotAllowedResponse(protocol, method);
+            return methodNotAllowedResponse(
+                protocol,
+                `${method} is not allowed on this upload route: it is write-only. Serve stored files with ctx.storage.download() or a signed URL`,
+            );
+        }
+
+        const override = METHOD_OVERRIDE_HEADERS.find((header) => request.headers.has(header));
+
+        if (override !== undefined) {
+            return methodNotAllowedResponse(protocol, `${override} is not allowed on this upload route: send the request with the method itself`);
         }
 
         const declaredSize = declaredUploadSize(request, protocol);

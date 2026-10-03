@@ -299,27 +299,42 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
                 expect(authorize).not.toHaveBeenCalled();
             });
 
-            it.each(["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"])(
-                "ignores a %s: GET header: no bytes or metadata are served",
+            // `@visulima/storage` 2.0.26's TUS handler honors
+            // `X-HTTP-Method-Override` by default and swaps the method after
+            // this route's method check, so a `POST` overridden to `GET` would
+            // be served as a read past the write gate.
+            it.each(["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override", "x-http-method-override"])(
+                "refuses a request carrying %s (405) before the gate, and reads nothing",
                 async (header) => {
                     expect.hasAssertions();
 
                     const storage = new MemoryStorage({ path: "/upload" });
                     const id = await storeFile(storage);
-                    const route = createUploadHandler({ protocol, silent: true, storage });
+                    const getMeta = vi.spyOn(storage, "getMeta");
+                    const authorize = vi.fn<() => boolean>(() => true);
+                    const route = createUploadHandler({ authorize, protocol, storage });
 
-                    for (const method of ["POST", "PATCH", "HEAD"]) {
-                        for (const path of [`${ENDPOINT}/${id}`, `${ENDPOINT}/${id}/metadata`]) {
-                            // eslint-disable-next-line no-await-in-loop -- one request at a time
-                            const response = await route.fetch(new Request(path, { headers: { [header]: "GET", "Tus-Resumable": "1.0.0" }, method }));
-                            // eslint-disable-next-line no-await-in-loop -- one request at a time
-                            const body = await response.text();
+                    for (const method of ["POST", "PATCH", "HEAD", "OPTIONS"]) {
+                        for (const value of ["GET", method]) {
+                            for (const path of [`${ENDPOINT}/${id}`, `${ENDPOINT}/${id}/metadata`]) {
+                                // eslint-disable-next-line no-await-in-loop -- one request at a time
+                                const response = await route.fetch(new Request(path, { headers: { [header]: value, "Tus-Resumable": "1.0.0" }, method }));
 
-                            expect(body).not.toContain("secret bytes");
-                            expect(body).not.toContain("secret.txt");
-                            expect(response.headers.get("content-disposition")).toBeNull();
+                                expect(response.status).toBe(405);
+                                // Read in-process, so a HEAD's refusal has its body too.
+                                // eslint-disable-next-line no-await-in-loop -- one request at a time
+                                await expect(response.json()).resolves.toMatchObject({
+                                    error: {
+                                        code: "METHOD_NOT_ALLOWED",
+                                        message: expect.stringMatching(/^(X-[\w-]+|PATCH|HEAD) is not allowed on this upload route/),
+                                    },
+                                });
+                            }
                         }
                     }
+
+                    expect(authorize).not.toHaveBeenCalled();
+                    expect(getMeta).not.toHaveBeenCalled();
                 },
             );
         });
