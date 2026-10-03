@@ -5,9 +5,13 @@
  *
  * `@lunora/runtime` reads it off {@link CF_RAY_HEADER} at the Worker entry, ONCE
  * per request, and forwards it to the shard Durable Object under
- * {@link RAY_ID_HEADER}, alongside `traceparent`; `@lunora/do` reads it back there
- * so shard-side logs and spans carry it too. Both sides parse through
- * {@link parseRayId}, so they agree on what a Ray ID is.
+ * {@link RAY_ID_HEADER}, alongside `traceparent`, on the HTTP RPC dispatches (the
+ * single call, replica read, batch and server-initiated paths); `@lunora/do` reads
+ * it back there so those shard-side logs and spans carry it too. It is NOT carried
+ * over a WebSocket: the upgrade strips every `x-lunora-*` header, so work dispatched
+ * on a socket frame (a subscription's evaluations, stream queries, `onConnect`)
+ * has no Ray ID. Both sides parse through {@link parseRayId}, so they agree on
+ * what a Ray ID is.
  *
  * The Ray ID is **informational only**: it is a cross-navigation key into
  * Cloudflare's own tooling, never an authorization or routing input. It is
