@@ -43,6 +43,14 @@ interface HostSpanLike {
     setAttribute: (key: string, value: boolean | number | string | undefined) => unknown;
     /** Attach several attributes in one call (CF 2026-09-25). Optional, like `recordException`. */
     setAttributes?: (attributes: Record<string, boolean | number | string>) => unknown;
+
+    /**
+     * Set the span's OTel status (workers-types 5.20260929). Optional and
+     * feature-detected, like `recordException`: older runtimes lack it. The
+     * bridge only ever sets `"error"` — OTel instrumentation leaves a successful
+     * span `"unset"` rather than marking it `"ok"`.
+     */
+    setStatus?: (status: { code: "error" | "ok" | "unset"; message?: string }) => unknown;
 }
 
 /**
@@ -100,6 +108,29 @@ const setHostSpanAttributes = (span: HostSpanLike, attributes: Record<string, Lo
 };
 
 /**
+ * Mark a host span as failed: OTel status `"error"` with the given message, so
+ * Cloudflare's trace UI (and any OTel backend fed from it) shows the span as
+ * failed rather than only carrying an `exception` event. Skipped for an untraced
+ * span and on a runtime without `setStatus`.
+ *
+ * Guarded on its own so a throwing `setStatus` never escapes, and every caller
+ * runs it BEFORE the attribute writes so a throwing `setAttributes` /
+ * `recordException` cannot drop it. `message` must already be redacted — the
+ * host exports this span too, so it keeps Lunora's `captureRaw` posture.
+ */
+const setHostSpanErrorStatus = (span: HostSpanLike, message: string): void => {
+    if (!span.isTraced || typeof span.setStatus !== "function") {
+        return;
+    }
+
+    try {
+        span.setStatus({ code: "error", message });
+    } catch {
+        // Best-effort — the status is additive telemetry.
+    }
+};
+
+/**
  * Mirror a finished span's name-independent key attributes onto its Cloudflare
  * custom span, best-effort. Pure and side-effect-only, so the wrapping in
  * `createTracer` stays readable and this is directly unit-testable with a
@@ -128,6 +159,12 @@ const applyHostSpanAttributes = (
         return;
     }
 
+    if (meta.error !== undefined) {
+        // Status first: an `exception` event alone does not make a backend render
+        // the span as failed. Success stays `"unset"`, the OTel posture.
+        setHostSpanErrorStatus(span, meta.error.message);
+    }
+
     const attributes: Record<string, LogFields[string]> = {
         [LUNORA_ATTR.functionPath]: meta.functionPath,
         [LUNORA_ATTR.ok]: meta.ok,
@@ -153,5 +190,54 @@ const applyHostSpanAttributes = (
     }
 };
 
+/**
+ * Mirror a finished dispatch onto the host's invocation span — the one
+ * `tracing.getActiveSpan()` returns once every `ctx.trace` custom span has
+ * ended. Pure and fully best-effort: a missing `getActiveSpan`, an untraced span
+ * or a throwing setter is a silent no-op, never an error for the dispatch.
+ *
+ * `attributes` is the dispatch root span's already-redacted wide event, when it
+ * recorded one. `error` is set when the dispatch failed; its `serverFault` is the
+ * CALLER's verdict on whether that failure is the server's: the status of the
+ * response it actually sent (>= 500) for an RPC, always `true` for a trigger
+ * that threw. Only a server fault marks the span failed; a 4xx is an expected
+ * client outcome that OTel's server-span convention leaves `"unset"`. `message`
+ * must already be redacted.
+ *
+ * The status is written before the attributes so a throwing attribute setter
+ * cannot drop it.
+ */
+const applyHostRootSpan = (
+    tracing: HostTracingLike | undefined,
+    root: {
+        attributes?: Record<string, LogFields[string]>;
+        error?: { message: string; serverFault: boolean };
+    },
+): void => {
+    let span: HostSpanLike | undefined;
+
+    try {
+        span = tracing?.getActiveSpan?.();
+    } catch {
+        return;
+    }
+
+    if (span === undefined) {
+        return;
+    }
+
+    if (root.error?.serverFault === true) {
+        setHostSpanErrorStatus(span, root.error.message);
+    }
+
+    if (root.attributes !== undefined) {
+        try {
+            setHostSpanAttributes(span, root.attributes);
+        } catch {
+            // Best-effort — the mirror is additive telemetry.
+        }
+    }
+};
+
 export type { HostSpanLike, HostTracingLike, HostTracingResolver };
-export { applyHostSpanAttributes, setHostSpanAttributes };
+export { applyHostRootSpan, applyHostSpanAttributes, setHostSpanAttributes };
