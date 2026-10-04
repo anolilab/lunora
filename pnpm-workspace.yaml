@@ -129,7 +129,7 @@ overrides:
   tar@<=7.5.20: ^7.5.21
   tmp@<0.2.6: ^0.2.6
   undici@<6.27.0: ^6.28.0
-  undici@>=7.0.0 <7.29.0: ^7.29.0
+  undici@>=7.0.0 <7.29.0: ^8.10.2
   # dockerode pulls uuid@10, flagged by GHSA-w5hq-g745-h8pq (missing buffer
   # bounds check in v3/v5/v6 when `buf` is passed). dockerode only calls
   # `uuid.v4()`, so it's not exploitable here, but bump the whole tree to the
@@ -1080,7 +1080,8 @@ minimumReleaseAgeExclude:
   - 'tar@7.5.21'
   - 'tmp@0.2.4 || 0.2.6'
   - 'tsx@4.22.4'
-  - 'undici@6.27.0 || 6.28.0 || 7.29.0'
+  # Renovate security update: undici@8.10.2
+  - 'undici@6.27.0 || 6.28.0 || 7.29.0 || 8.10.2'
   - 'vite@8.0.16'
   - 'wrangler@4.97.0'
   - '@visulima/tui-binding-darwin-arm64@4.0.8'
