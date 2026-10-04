@@ -108,7 +108,7 @@ overrides:
   esbuild@>=0.27.3 <0.28.1: ^0.28.1
   fast-uri@>=3.0.0 <3.1.5: ^3.1.7
   fast-xml-parser@<5.7.0: ^5.7.0
-  hono@<4.12.34: ^4.12.34
+  hono@<4.12.34: ^4.13.7
   # react-native's `@react-native/community-cli-plugin` declares an OPTIONAL
   # `@react-native-community/cli: "*"` peer that `autoInstallPeers` resolves to
   # the ancient 13.5.1 (14+ narrows its own react-native peer, so pnpm backtracks).
@@ -1061,8 +1061,8 @@ minimumReleaseAgeExclude:
   - 'fast-uri@3.1.3 || 3.1.4 || 3.1.5 || 3.1.7'
   - 'fast-xml-parser@5.7.0'
   - 'fumadocs-mdx@15.0.11'
-  # Renovate security update: hono@4.12.34
-  - 'hono@4.12.34'
+  # Renovate security update: hono@4.12.34 || 4.13.7
+  - 'hono@4.12.34 || 4.13.7'
   - 'image-size@2.0.3'
   - 'ip-address@10.2.1 || 10.2.2 || 10.3.1'
   # Renovate security update: js-yaml@4.3.1 || 4.3.2
