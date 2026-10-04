@@ -117,7 +117,7 @@ overrides:
   # it. Nothing in the repo calls this CLI; the override just keeps `ip` out.
   "@react-native-community/cli@<20": ^20.2.0
   ip-address@<=10.3.0: ^10.3.1
-  js-yaml@<=4.1.1: ^4.3.1
+  js-yaml@<=4.1.1: ^4.3.2
   lodash@<=4.17.23: ^4.17.24
   next@>=16.0.0 <16.2.11: ^16.2.11
   nuxt@>=4.0.0 <4.5.1: ^4.5.1
@@ -1065,8 +1065,8 @@ minimumReleaseAgeExclude:
   - 'hono@4.12.34'
   - 'image-size@2.0.3'
   - 'ip-address@10.2.1 || 10.2.2 || 10.3.1'
-  # Renovate security update: js-yaml@4.3.1
-  - 'js-yaml@4.1.2 || 4.3.1'
+  # Renovate security update: js-yaml@4.3.1 || 4.3.2
+  - 'js-yaml@4.1.2 || 4.3.1 || 4.3.2'
   - 'lodash@4.17.23 || 4.17.24'
   - 'lunorash'
   - 'miniflare@4.20260601.0'
