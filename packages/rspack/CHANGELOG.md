@@ -1,3 +1,16 @@
+## @lunora/rspack [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.24...@lunora/rspack@1.0.0-alpha.25) (2026-10-04)
+
+### Features
+
+* **cli:** warn when a project has a cloudflare cli config ([#965](https://github.com/anolilab/lunora/issues/965)) ([070d20d](https://github.com/anolilab/lunora/commit/070d20d3d139d012b93410f9d8fb519305e30e38)), closes [#964](https://github.com/anolilab/lunora/issues/964) [#964](https://github.com/anolilab/lunora/issues/964)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.261
+* **@lunora/config:** upgraded to 1.0.0-alpha.304
+* **@lunora/studio:** upgraded to 1.0.0-alpha.261
+
 ## @lunora/rspack [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.23...@lunora/rspack@1.0.0-alpha.24) (2026-10-03)
 
 
