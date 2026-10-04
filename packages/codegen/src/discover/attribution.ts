@@ -267,7 +267,12 @@ const isReassignedBinding = (binding: BindingElement | FunctionDeclaration | Var
     const nameNode = binding.getNameNode();
     const list = Node.isFunctionDeclaration(binding) ? undefined : binding.getFirstAncestorByKind(SyntaxKind.VariableDeclarationList);
 
-    if (!Node.isIdentifier(nameNode) || list?.getDeclarationKind() === VariableDeclarationKind.Const) {
+    // A declaration file holds no statement that could assign anything, so its
+    // bindings are never reassigned — and its scope is the WHOLE file. Without
+    // this, resolving a global like `new URL(…)` or `console` (both `declare var`
+    // in `lib.dom.d.ts`) wrapped every identifier of that ~40k-line file in
+    // ts-morph nodes on each codegen run: ~1s for one item, ~15s under v8 coverage.
+    if (!Node.isIdentifier(nameNode) || list?.getDeclarationKind() === VariableDeclarationKind.Const || binding.getSourceFile().isDeclarationFile()) {
         return false;
     }
 

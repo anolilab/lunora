@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Project } from "ts-morph";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Node, Project } from "ts-morph";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import discoverBrowserUrlAccesses from "../../src/discover/browser-url-accesses";
 
@@ -97,6 +97,26 @@ export const c = action(async ({ ctx, args }) => ctx.browser.scrape(args.url));`
         write("other.ts", `export const grab = action(async ({ ctx, args }) => { return foo.screenshot(args.url); });`);
 
         expect(discoverBrowserUrlAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does not walk a lib declaration file to resolve a global the url passes through", () => {
+        expect.assertions(2);
+
+        // The `browser` registry item validates the url through `new URL(url)`,
+        // and `URL` is a `declare var` in `lib.dom.d.ts`. Following it asked
+        // whether that `var` is reassigned, which walked every identifier of the
+        // ~40k-line lib file: ~1s per codegen run, ~15s under v8 coverage — the
+        // CLI registry sweep timed out on exactly this.
+        write("parsed.ts", `export const grab = action(async ({ ctx, args }) => ctx.browser.pdf(new URL(args.url).href));`);
+
+        const walks = vi.spyOn(Node.prototype, "getDescendantsOfKind");
+
+        try {
+            expect(discoverBrowserUrlAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+            expect(walks.mock.contexts.filter((node) => (node as Node).getSourceFile().isDeclarationFile())).toStrictEqual([]);
+        } finally {
+            walks.mockRestore();
+        }
     });
 
     it("ignores a ctx.browser method that is not a URL-navigation method", () => {
