@@ -29,9 +29,10 @@
  * `ctx.storage.download()` or a signed URL.
  */
 import { LunoraError } from "@lunora/errors";
-import { File } from "@visulima/storage";
+import { ERRORS, File } from "@visulima/storage";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
 
+import { R2S3UploadStorage } from "./r2-s3-upload-storage";
 import type { DeclaredFile, RouteCheck, RoutePolicy } from "./tus-route-policy";
 import { TUS_RESUMABLE, tusRoutePolicy } from "./tus-route-policy";
 
@@ -249,9 +250,11 @@ const ID_METHODS: Readonly<Record<UploadProtocol, ReadonlySet<string>>> = {
 /**
  * An id `@visulima/storage` issues, as the URL's last path segment: a 21-character
  * nanoid, or the 2 or 3 hex groups it derives from a named file's name, size
- * and date, optionally followed by one extension (chunked REST appends one).
+ * and date, optionally followed by one extension. Chunked REST appends the
+ * MIME type's, and a few carry `_` or `-` (`x_t`, `vbox-extpack`,
+ * `disposition-notification`); it is stripped before any key is read.
  */
-const ISSUED_ID = /^(?:[\w-]{21}|[\da-f]{1,16}(?:-[\da-f]{1,16}){1,2})(?:\.[\da-z]{1,16})?$/iu;
+const ISSUED_ID = /^(?:[\w-]{21}|[\da-f]{1,16}(?:-[\da-f]{1,16}){1,2})(?:\.[\w-]{1,32})?$/iu;
 
 const notFoundResponse = (protocol: UploadProtocol): Response =>
     errorResponse(protocol, 404, { code: "FILE_NOT_FOUND", message: "Upload not found", name: "NotFoundError" });
@@ -259,31 +262,53 @@ const notFoundResponse = (protocol: UploadProtocol): Response =>
 /** One extension, as upstream strips it from a chunked-REST id. */
 const EXTENSION = /\.[^.]+$/u;
 
+/** A name upstream's `PUT` accepts for a new file. */
+const CLIENT_FILE_ID = /^[\w-]{1,255}$/u;
+
 /**
- * Whether a chunked-REST `PUT` names a file that exists: an upload with state,
- * or a finished one the provider still finds by key (`getCompletedFile`, which
- * the S3 providers answer from the stored object). Upstream's `PUT` would
- * replace either (visulima/visulima#919), so the route makes it create-only.
- * Over `createR2UploadStorage` this is check-then-write, so two `PUT`s racing
- * for one new name can still both write; the R2 binding provider also checks
- * atomically when it writes. A failed lookup counts as taken.
+ * The id a chunked-REST `PUT` would create, or `undefined` when upstream
+ * refuses the request anyway (an id it does not accept, no positive
+ * `Content-Length`, a size over the provider's `maxUploadSize`). Those keep
+ * upstream's own `400`/`413`, so a refused request learns nothing about the
+ * name from a `409`.
  */
-const putTargetExists = async (request: Request, storage: UploadStorage): Promise<boolean> => {
+const putCreateId = (request: Request, storage: UploadStorage): string | undefined => {
     const id = (new URL(request.url).pathname.split("/").findLast(Boolean) ?? "").replace(EXTENSION, "");
+    const length = Number(request.headers.get("Content-Length") ?? "");
+
+    return CLIENT_FILE_ID.test(id) && Number.isSafeInteger(length) && length > 0 && length <= storage.maxUploadSize ? id : undefined;
+};
+
+const isFileNotFound = (error: unknown): boolean =>
+    typeof error === "object" && error !== null && (error as { UploadErrorCode?: unknown }).UploadErrorCode === ERRORS.FILE_NOT_FOUND;
+
+/**
+ * Whether a chunked-REST `PUT` names a file that exists, which upstream's `PUT`
+ * would replace (visulima/visulima#919): an upload with state, or a stored
+ * object. Only a confirmed "not found" counts as free.
+ *
+ * Over `createR2UploadStorage` the provider's own lookup tells a 404 from a
+ * failure; it is check-then-write, so two `PUT`s racing for one new name can
+ * still both write. For any other provider, upstream's `getMeta` reports every
+ * failure as not found, and `getCompletedFile` swallows its errors; the R2
+ * binding provider checks again, atomically, when it writes.
+ */
+const putTargetExists = async (id: string, storage: UploadStorage): Promise<boolean> => {
+    if (storage instanceof R2S3UploadStorage) {
+        return storage.isNameTaken(id);
+    }
 
     try {
         await storage.getMeta(id);
 
         return true;
-    } catch {
-        // No upload state under this id.
+    } catch (error) {
+        if (!isFileNotFound(error)) {
+            return true;
+        }
     }
 
-    try {
-        return (await storage.getCompletedFile(id)) !== undefined;
-    } catch {
-        return true;
-    }
+    return (await storage.getCompletedFile(id)) !== undefined;
 };
 
 /**
@@ -601,18 +626,21 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
             }
         }
 
-        // After `authorize`, so a caller the gate refuses cannot tell a taken
-        // name from a free one by the 409.
-        if (protocol === "chunked-rest" && request.method === "PUT" && (await putTargetExists(request, options.storage))) {
-            return errorResponse(protocol, 409, { code: "FileConflict", message: "A file already exists under this name", name: "ConflictError" });
-        }
-
         if (maxFileSizeFor !== undefined && isCreateRequest(request, protocol)) {
             const refused = await checkSizeFor(maxFileSizeFor, context, checked.declared, maxFileSize);
 
             if (refused !== undefined) {
                 return refused;
             }
+        }
+
+        // Last, after `authorize` and every size check, and only for a request
+        // upstream would carry out: so a caller learns whether a name is taken
+        // only when it may store a file under that name.
+        const putId = protocol === "chunked-rest" && request.method === "PUT" ? putCreateId(request, options.storage) : undefined;
+
+        if (putId !== undefined && (await putTargetExists(putId, options.storage))) {
+            return errorResponse(protocol, 409, { code: "FileConflict", message: "A file already exists under this name", name: "ConflictError" });
         }
 
         return policy.finish(request, await handler.fetch(request));

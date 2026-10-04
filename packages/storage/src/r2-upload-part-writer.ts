@@ -175,6 +175,11 @@ class R2UploadPartWriter {
             etag = object.etag;
         } else {
             if (this.createOnly && (await objectExists(this.bucket, this.file.name))) {
+                // Nothing will complete these parts: drop them with the upload.
+                await this.multipart(this.uploadId)
+                    .abort()
+                    .catch(() => undefined);
+
                 return throwErrorCode(ERRORS.FILE_CONFLICT, NAME_TAKEN);
             }
 

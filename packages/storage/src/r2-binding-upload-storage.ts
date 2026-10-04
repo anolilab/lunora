@@ -157,6 +157,13 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
             const createOnly = fileInit.id !== undefined;
 
+            // A named file is written by its one PUT, which upstream refuses
+            // without content; refusing an empty one here keeps an empty object
+            // from being published before the upload's state is held.
+            if (createOnly && size === 0) {
+                return throwErrorCode(ERRORS.INVALID_FILE_SIZE, "A named file has to have content");
+            }
+
             // Same id, same upload: a client re-sending its create resumes it,
             // as the S3 providers do. A named file is never resumed or replaced.
             const existing = await this.meta.read(file.id);
@@ -361,6 +368,24 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
         return this.unsupported("move");
     }
 
+    /**
+     * Make the object. A create-only file refused there (`409`) leaves nothing
+     * behind: the writer aborted its multipart upload, and its segments and
+     * state are removed here.
+     */
+    private async finish(writer: R2UploadPartWriter, id: string, createOnly: boolean): Promise<string> {
+        try {
+            return await writer.finish();
+        } catch (error) {
+            if (createOnly && (error as { UploadErrorCode?: unknown }).UploadErrorCode === ERRORS.FILE_CONFLICT) {
+                await this.deleteSegments(id).catch(() => undefined);
+                await this.deleteMeta(id).catch(() => undefined);
+            }
+
+            throw error;
+        }
+    }
+
     /** The create that lost the race for an id: it resumes the winner's upload, unless it named its file (`409`). */
     private async racedCreate(id: string, createOnly: boolean): Promise<File> {
         const raced = await this.meta.read(id);
@@ -540,7 +565,7 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
         const interrupted = await this.pump(writer, body, size - file.bytesWritten, file.id, token);
         // The last byte arriving finishes the upload, even if the stream failed afterwards.
         const completed = writer.offset === size;
-        const etag = completed ? await writer.finish() : undefined;
+        const etag = completed ? await this.finish(writer, file.id, progress.createOnly === true) : undefined;
 
         if (!completed) {
             try {

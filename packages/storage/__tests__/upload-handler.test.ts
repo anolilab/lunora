@@ -893,6 +893,20 @@ describe("createUploadHandler chunked REST", () => {
         expect(Buffer.from(stored.content).toString()).toBe("0123456789");
     });
 
+    it.each(["model/vnd.parasolid.transmit.text", "application/x-virtualbox-vbox-extpack", "message/disposition-notification"])(
+        "completes an upload of %s, whose extension carries `_` or `-`",
+        async (contentType) => {
+            expect.hasAssertions();
+
+            const driver = chunkedRest(createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) }));
+            const location = await driver.create(4, contentType);
+            const patched = await driver.patch(location, 0, new Uint8Array(4).fill(1));
+
+            expect(patched.status).toBe(200);
+            await expect(driver.head(location)).resolves.toHaveProperty("status", 200);
+        },
+    );
+
     it("stores chunks sent out of order at their offsets (visulima/visulima#893)", async () => {
         expect.hasAssertions();
 

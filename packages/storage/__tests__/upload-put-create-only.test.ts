@@ -205,3 +205,107 @@ describe("a chunked-REST PUT over createR2BindingUploadStorage, raced", () => {
         expect(text(bucket.read("race"))).toBe(winner);
     });
 });
+
+describe("a chunked-REST PUT's name check", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it.each([
+        ["the object's HEAD", "/uploads/victim"],
+        ["the upload state's HEAD", "/uploads/victim.META"],
+    ])("over createR2UploadStorage counts a name as taken when %s fails (403), so nothing is replaced", async (_, failing) => {
+        expect.hasAssertions();
+
+        const s3 = createFakeR2S3("uploads");
+
+        await s3.fetch(new Request("https://acct.r2.cloudflarestorage.com/uploads/victim", { body: SECRET, method: "PUT" }));
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const request = input instanceof Request ? input : new Request(input, init);
+
+            if (request.method === "HEAD" && new URL(request.url).pathname === failing) {
+                // Not a 5xx, which aws4fetch retries with backoff for up to a minute first.
+                return new Response("<Error><Code>AccessDenied</Code></Error>", { status: 403 });
+            }
+
+            return s3.fetch(request);
+        });
+
+        const route = createUploadHandler({
+            protocol: "chunked-rest",
+            silent: true,
+            storage: createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", path: "/upload", secretAccessKey: "secret" }),
+        });
+
+        await expect(route.fetch(put("victim.txt", "evil"))).resolves.toHaveProperty("status", 409);
+
+        expect(sameBytes(s3.object("victim"), SECRET)).toBe(true);
+    });
+
+    it.each([
+        ["no Content-Length worth storing", new Request(`${ENDPOINT}/payroll-2026.txt`, { body: "", headers: { "content-length": "0" }, method: "PUT" }), 400],
+        ["a size the per-upload cap refuses", put("payroll-2026.txt", "too large for the cap"), 413],
+    ])("keeps upstream's or the cap's own answer for a PUT onto a taken name with %s, not 409", async (_, request, status) => {
+        expect.hasAssertions();
+
+        const bucket = bindingBucket();
+
+        await bucket.seed("payroll-2026", SECRET);
+
+        const route = createUploadHandler({ maxFileSizeFor: () => 4, protocol: "chunked-rest", silent: true, storage: bucket.storage() });
+
+        await expect(route.fetch(request)).resolves.toHaveProperty("status", status);
+        expect(sameBytes(bucket.read("payroll-2026"), SECRET)).toBe(true);
+    });
+});
+
+describe("a create-only PUT over createR2BindingUploadStorage that loses its name while it streams", () => {
+    /**
+     * `length` bytes in four pieces. Once the upload has started reading them
+     * (the first piece is pulled when the request is built, before any check),
+     * another writer stores `key`.
+     */
+    const racedBody = (bucket: ReturnType<typeof createFakeR2UploadBucket>, key: string, length: number): ReadableStream<Uint8Array> => {
+        let sent = 0;
+
+        return new ReadableStream<Uint8Array>({
+            async pull(controller) {
+                if (sent > 0 && !bucket.objects.has(key)) {
+                    await bucket.put(key, SECRET);
+                }
+
+                const size = Math.min(Math.ceil(length / 4), length - sent);
+
+                controller.enqueue(new Uint8Array(size).fill(7));
+                sent += size;
+
+                if (sent >= length) {
+                    controller.close();
+                }
+            },
+        });
+    };
+
+    it.each([
+        ["a single put (under 5 MiB)", 1024],
+        ["a multipart upload (over 5 MiB)", 6 * 1024 * 1024],
+    ])("answers 409 for %s, keeps the other writer's object, and leaves no upload, segment or state behind", async (_, length) => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const route = createUploadHandler({ protocol: "chunked-rest", silent: true, storage: createR2BindingUploadStorage(bucket) });
+        const response = await route.fetch(
+            new Request(`${ENDPOINT}/late.bin`, {
+                body: racedBody(bucket, "late", length),
+                duplex: "half",
+                headers: { "content-length": String(length), "content-type": "application/octet-stream" },
+                method: "PUT",
+            } as RequestInit),
+        );
+
+        expect(response.status).toBe(409);
+        expect(sameBytes(bucket.objects.get("late")?.bytes, SECRET)).toBe(true);
+        expect([...bucket.openUploads.keys()]).toStrictEqual([]);
+        expect([...bucket.objects.keys()]).toStrictEqual(["late"]);
+    });
+});

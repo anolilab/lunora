@@ -336,15 +336,22 @@ groups it derives from a named file, plus at most one extension) gets a `404`
 before `authorize` runs, and so does a chunked-REST `PUT` whose name carries a
 `%` escape. Over `createR2UploadStorage` upstream would otherwise answer a
 `HEAD` for any object in the bucket, nested ones included, from the object
-itself. The check is on the shape only: keep uploads in a bucket of their own,
-or under keys no other writer uses.
+itself. The check is on the shape only, so a `HEAD` can still reach a root key
+that happens to have that shape: 21 letters, digits, `_` or `-`, or hex groups
+such as `cafe-babe` or a date like `2026-10-04`. Keep uploads in a bucket of
+their own, or under keys no other writer uses.
 
 A chunked-REST `PUT` (`putFile` on the client) creates `<name>` and refuses
 (`409`) if a file already exists under that name: an earlier upload, or any
 object in the bucket at that key
 ([visulima/visulima#919](https://github.com/visulima/visulima/issues/919)).
-`@visulima/storage` alone would replace it. The check runs after `authorize`,
-so a caller the gate refuses gets its `403`, not a hint that the name is taken.
+`@visulima/storage` alone would replace it. The check runs last, after
+`authorize`, the size caps and the checks upstream makes on a `PUT` (a name of
+letters, digits, `_` and `-`, a positive `Content-Length`), so a request that
+would be refused anyway gets that refusal, not a hint that the name is taken.
+A caller who may upload can still learn whether a name is taken. Over
+`createR2UploadStorage` a name counts as free only when R2 answers 404 for both
+its upload state and its object; any other failure counts as taken.
 Over `createR2BindingUploadStorage` the final write is conditional too, so two
 `PUT`s racing for one new name store exactly one file (atomically for a file
 under 5 MiB, whose object is a single `put`; a larger one is checked again just
