@@ -95,20 +95,24 @@ overrides:
   "@hono/node-server@<2.0.5": ^2.0.5
   "@nuxt/devtools@<3.3.1": ^3.3.1
   "@opentelemetry/core@<2.8.0": ^2.8.0
-  adm-zip: ">=0.6.0"
+  adm-zip: ">=0.6.1"
   # astro's XSS fix needs a major bump to 7.0.10 — handled separately, it breaks
   # the adapter.
   astro@<6.4.6: ^6.4.6
-  axios: ">=1.18.0"
+  axios: ">=1.20.0"
   body-parser: ">=2.3.0"
-  brace-expansion@<1.1.18: ^1.1.18
-  brace-expansion@>=2.0.0 <2.1.4: ^2.1.4
-  brace-expansion@>=4.0.0 <5.0.9: ^5.0.9
-  dompurify@<=3.4.10: ^3.4.13
+  # Each line stays in its own major. v5 is ESM with only a named `expand` export:
+  # minimatch@3 calls `require("brace-expansion")(…)`, minimatch@5/9 import the
+  # default, so pointing v1/v2 consumers at v5 breaks them. 1.1.21 / 2.1.7 / 5.0.12
+  # patch GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7 and GHSA-q2hr-2g5m-vwhr.
+  brace-expansion@<1.1.18: ^1.1.21
+  brace-expansion@>=2.0.0 <2.1.4: ^2.1.7
+  brace-expansion@>=4.0.0 <5.0.9: ^5.0.12
+  dompurify@<=3.4.10: ^3.4.16
   esbuild@>=0.27.3 <0.28.1: ^0.28.1
-  fast-uri@>=3.0.0 <3.1.5: ^3.1.5
+  fast-uri@>=3.0.0 <3.1.5: ^3.1.7
   fast-xml-parser@<5.7.0: ^5.7.0
-  hono@<4.12.34: ^4.12.34
+  hono@<4.12.34: ^4.13.7
   # react-native's `@react-native/community-cli-plugin` declares an OPTIONAL
   # `@react-native-community/cli: "*"` peer that `autoInstallPeers` resolves to
   # the ancient 13.5.1 (14+ narrows its own react-native peer, so pnpm backtracks).
@@ -116,20 +120,27 @@ overrides:
   # severity, no fixed release — which fails the dependency-review gate. v20 drops
   # it. Nothing in the repo calls this CLI; the override just keeps `ip` out.
   "@react-native-community/cli@<20": ^20.2.0
-  ip-address@<=10.3.0: ^10.3.1
-  js-yaml@<=4.1.1: ^4.3.1
+  ip-address@<=10.3.0: ^10.7.1
+  js-yaml@<=4.1.1: ^4.3.2
   lodash@<=4.17.23: ^4.17.24
   next@>=16.0.0 <16.2.11: ^16.2.11
   nuxt@>=4.0.0 <4.5.1: ^4.5.1
-  postcss@<8.5.10: ^8.5.26
+  postcss@<8.5.10: ^8.5.28
   protobufjs: ">=7.6.5"
-  sharp@<0.35.0: ^0.35.0
+  sharp@<0.35.0: ^0.35.4
   shell-quote: ">=1.8.5"
-  svgo@>=4.0.0 <4.0.2: ^4.0.2
+  svgo@>=4.0.0 <4.0.2: ^4.1.0
   tar@<=7.5.20: ^7.5.21
   tmp@<0.2.6: ^0.2.6
-  undici@<6.27.0: ^6.28.0
-  undici@>=7.0.0 <7.29.0: ^7.29.0
+  # Each line stays in its own major: @actions/http-client wants undici ^6,
+  # @semantic-release/github and shadcn want ^7, and v8 removed the legacy
+  # dispatch-handler wrappers and turned on h2 by default. 6.28.1 / 7.29.1 patch
+  # GHSA-rfgv-xxqx-mfg5, GHSA-r53p-7pc4-xj5r and GHSA-3wwx-pv8p-q78v.
+  undici@<6.27.0: ^6.28.1
+  undici@>=7.0.0 <7.29.0: ^7.29.1
+  # jsdom, nuxt and unifont resolve undici 8.10.0; 8.10.2 patches GHSA-vp8m-p9jh-q5pm
+  # and the other 2026-09-29 advisories.
+  undici@>=8.0.0 <8.10.2: ^8.10.2
   # dockerode pulls uuid@10, flagged by GHSA-w5hq-g745-h8pq (missing buffer
   # bounds check in v3/v5/v6 when `buf` is passed). dockerode only calls
   # `uuid.v4()`, so it's not exploitable here, but bump the whole tree to the
@@ -273,9 +284,9 @@ catalogs:
     eslint-plugin-react-compiler: ^19.1.0-rc.2
     eslint-plugin-react-hooks: 7.1.1
     eslint-plugin-react-perf: ^3.3.3
-    eslint-plugin-react-refresh: 0.5.6
+    eslint-plugin-react-refresh: 0.5.7
     eslint-plugin-svelte: ^3.23.0
-    eslint-plugin-vue: ^10.11.0
+    eslint-plugin-vue: ^10.11.1
     svelte-eslint-parser: ^1.8.1
     vue-eslint-parser: ^10.4.1
     "@tanstack/eslint-plugin-query": 5.102.8
@@ -333,7 +344,7 @@ catalogs:
     "@vitest/expect": 4.1.10
     "@vitest/ui": 4.1.10
     fake-indexeddb: 6.2.5
-    vitest: 4.1.10
+    vitest: 4.1.11
   tsc:
     # Pinned to 6.0.3 — see the `typescript` override above. Bumping this to 7.x
     # installs nothing (the override wins) and only makes the catalog lie.
@@ -423,11 +434,11 @@ catalogs:
   # convention; react-reconciler is the custom renderer behind @visulima/tui.
   cli:
     "@bomb.sh/tab": 0.0.22
-    "@visulima/cerebro": 3.1.1
+    "@visulima/cerebro": 3.1.2
     "@visulima/colorize": 2.1.1
     "@visulima/find-ai-runner": 1.0.2
-    "@visulima/fs": 6.0.7
-    "@visulima/package": 5.0.20
+    "@visulima/fs": 6.0.19
+    "@visulima/package": 5.0.32
     "@visulima/pail": 5.0.0
     "@visulima/path": 4.0.0
     "@visulima/spinner": 1.0.1
@@ -436,8 +447,8 @@ catalogs:
     # the widget set moved to `@visulima/tui-kit` at flat subpaths — the CLI's
     # prompts import CommandPalette/ConfirmInput/SelectInput/Spinner/TextInput from
     # there now. tui-kit peers `@visulima/tui` EXACTLY, so bump the two together.
-    "@visulima/tui": 4.0.7
-    "@visulima/tui-kit": 1.0.10
+    "@visulima/tui": 4.0.19
+    "@visulima/tui-kit": 1.0.22
     giget: 3.3.1
     magic-string: ^1.2.3
     react-reconciler: ^0.33.0
@@ -464,7 +475,7 @@ catalogs:
     "@cloudflare/vite-plugin": 1.62.4
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3
-    "@visulima/vite-overlay": 2.0.20
+    "@visulima/vite-overlay": 2.0.32
     es-module-lexer: ^2.3.2
     jsonc-parser: ^3.3.1
     tailwindcss: ^4.3.3
@@ -613,11 +624,11 @@ catalogs:
     react-native: 0.87.1
     react-native-safe-area-context: ~5.9.1
   mail:
-    "@visulima/email": 3.0.5
+    "@visulima/email": 3.0.17
     "@react-email/render": 2.1.0
     "postal-mime": 3.0.0
   notify:
-    "@visulima/notification": 1.1.1
+    "@visulima/notification": 1.1.13
   mcp:
     "@modelcontextprotocol/sdk": ^1.30.0
     # The SDK's eval-free JSON Schema provider (`sdk/validation/cfworker`) needs
@@ -732,11 +743,11 @@ catalogs:
     eslint-plugin-react-compiler: 19.1.0-rc.2
     eslint-plugin-react-hooks: ^7.1.1
     eslint-plugin-react-perf: ^3.3.3
-    eslint-plugin-react-refresh: 0.5.6
+    eslint-plugin-react-refresh: 0.5.7
     eslint-plugin-react-you-might-not-need-an-effect: 1.0.2
     eslint-plugin-testing-library: 7.16.2
     eslint-plugin-validate-jsx-nesting: ^0.1.1
-    eslint-plugin-zod: 4.12.0
+    eslint-plugin-zod: 4.12.1
     fast-glob: ^3.3.3
     # 17.0.0 exists on npm for `fumadocs-core` and `fumadocs-ui` but is deprecated
     # upstream -- "accidentally published due to a bug in Changesets CLI, do not use
@@ -793,7 +804,7 @@ catalogs:
     vite: 8.2.2
     vite-imagetools: 12.0.1
     vite-plugin-svgr: 5.2.0
-    vitest: 4.1.10
+    vitest: 4.1.11
     zod: 4.5.4
   auth:
     # EXACT-pinned (no caret). The whole better-auth family versions in lockstep —
@@ -888,9 +899,9 @@ catalogs:
   redact:
     "@visulima/redact": 5.0.0
   email:
-    "@visulima/disposable-email-domains": 1.1.1
+    "@visulima/disposable-email-domains": 1.1.10
     "@visulima/free-email-domains": 1.0.1
-    "@visulima/email-verifier": 1.0.9
+    "@visulima/email-verifier": 1.0.21
 
 # multi-semantic-release rewrites every intra-repo dependency from `workspace:*`
 # to the exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and
