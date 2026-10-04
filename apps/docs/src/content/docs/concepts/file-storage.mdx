@@ -378,7 +378,8 @@ the binding of that same bucket.
   in parallel, so it can upload only as a single chunk (`chunkSize` at least the
   file size). `createUploadHandler` refuses chunked REST over
   `createR2UploadStorage`, where the chunk that completes an upload answers
-  `404`. Use TUS for resumable uploads;
+  `404` ([visulima/visulima#908](https://github.com/visulima/visulima/issues/908)).
+  Use TUS for resumable uploads;
   [@lunora/storage](/docs/packages/storage#chunked-rest) has the details.
 - **`maxFileSize`** defaults to 100 MiB, has no unlimited setting, and must be a
   finite, non-negative number. Uploads over it get a `413`.

@@ -491,7 +491,8 @@ open:
 provider refuses chunks out of order (`409`), but the chunk that completes an
 upload answers `404` though every byte is stored: the provider deletes the
 upload's metadata as it completes the file, before the chunked-REST handler
-records the chunk.
+records the chunk
+([visulima/visulima#908](https://github.com/visulima/visulima/issues/908)).
 
 The bundled client (`useChunkedRestUpload`, `createChunkedRestAdapter`, and
 `useUpload` when it picks chunked REST) sends **four chunks in parallel**. Over

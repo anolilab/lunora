@@ -135,7 +135,7 @@ describe("createR2UploadStorage", () => {
 
         // Upstream's own `Rest` handler, since `createUploadHandler` refuses the
         // pairing. Out-of-order and repeated chunks are refused (409) without
-        // being stored, but the completing chunk answers 404 though every byte
+        // being stored, but the completing chunk answers 404 (visulima/visulima#908) though every byte
         // is stored: the provider deletes the upload's metadata when it completes
         // the multipart upload, before the handler records the chunk. When this
         // answers 200, drop the construction-time refusal above.

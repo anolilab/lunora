@@ -608,14 +608,14 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
     }
 
     // Over the S3-API provider a chunked-REST upload stores every byte, but the
-    // `PATCH` that completes it answers `404`: the provider deletes the upload's
+    // `PATCH` that completes it answers `404` (visulima/visulima#908): the provider deletes the upload's
     // metadata when it completes the multipart upload, before the chunked-REST
     // handler records the chunk. Chunks out of order or sent twice are refused
     // (`409`) since `@visulima/storage` 2.0.26, so this is the only reason left.
     if (protocol === "chunked-rest" && options.storage instanceof AwsLightStorage) {
         throw new LunoraError(
             "VALIDATION_ERROR",
-            '@lunora/storage: chunked REST is not supported over createR2UploadStorage (R2\'s S3 API), where the request that completes an upload answers 404. Use protocol "tus", or createR2BindingUploadStorage',
+            '@lunora/storage: chunked REST is not supported over createR2UploadStorage (R2\'s S3 API), where the request that completes an upload answers 404 (visulima/visulima#908). Use protocol "tus", or createR2BindingUploadStorage',
         );
     }
 
