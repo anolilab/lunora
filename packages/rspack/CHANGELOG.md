@@ -1,3 +1,16 @@
+## @lunora/rspack [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.25...@lunora/rspack@1.0.0-alpha.26) (2026-10-04)
+
+### Bug Fixes
+
+* root-cause the rspack watch and cli registry-items CI timeouts ([#985](https://github.com/anolilab/lunora/issues/985)) ([b1938a5](https://github.com/anolilab/lunora/commit/b1938a5cca9b02f84b30858818dfaabf35e9591f))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.262
+* **@lunora/config:** upgraded to 1.0.0-alpha.305
+* **@lunora/studio:** upgraded to 1.0.0-alpha.262
+
 ## @lunora/rspack [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.24...@lunora/rspack@1.0.0-alpha.25) (2026-10-04)
 
 ### Features
