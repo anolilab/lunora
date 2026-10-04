@@ -32,10 +32,15 @@ interface R2UploadStorageOptions {
     path?: string;
 }
 
+/** Hosts a plain-`http:` endpoint may name: a local S3 (MinIO, a dev emulator) never leaves the machine. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
+
 /**
- * Parse an explicit `endpoint`. Anything but an absolute `http(s)` URL is a
- * configuration error, reported as such rather than as `new URL`'s bare
- * `TypeError` (a schemeless `<account>.eu.r2.cloudflarestorage.com` is the usual one).
+ * Parse an explicit `endpoint`. It carries signed requests and the uploaded
+ * bytes, so it must be an absolute `https:` URL, or `http:` to a loopback
+ * host. Anything else is a configuration error, reported as such rather than
+ * as `new URL`'s bare `TypeError` (a schemeless
+ * `<account>.eu.r2.cloudflarestorage.com` is the usual one).
  */
 const parseEndpoint = (endpoint: string): URL => {
     let url: URL | undefined;
@@ -46,10 +51,10 @@ const parseEndpoint = (endpoint: string): URL => {
         url = undefined;
     }
 
-    if (url?.protocol !== "https:" && url?.protocol !== "http:") {
+    if (url?.protocol !== "https:" && !(url?.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname))) {
         throw new LunoraError(
             "VALIDATION_ERROR",
-            `@lunora/storage: createR2UploadStorage's endpoint must be an absolute URL such as https://<account>.r2.cloudflarestorage.com (received ${JSON.stringify(endpoint)})`,
+            `@lunora/storage: createR2UploadStorage's endpoint must be an absolute https:// URL such as https://<account>.r2.cloudflarestorage.com, or http:// to localhost (received ${JSON.stringify(endpoint)})`,
         );
     }
 
@@ -93,9 +98,12 @@ const bucketEndpoint = (options: R2UploadStorageOptions): string => {
  *
  * Each chunk becomes one multipart part, so every chunk but the last has to be
  * the same size and at least 5 MiB, and chunks have to arrive in order (an
- * out-of-order or repeated one is a `409`). The R2 binding provider
- * (`./r2-binding-upload-storage`) has neither limit, needs no S3 credentials
- * and runs under `wrangler dev` too.
+ * out-of-order or repeated one is a `409`). Keep an upload to 1,000 chunks or
+ * fewer: the provider reads back only the first page of ListParts
+ * (visulima/visulima#916). The R2 binding provider
+ * (`./r2-binding-upload-storage`) has none of these limits, needs no S3
+ * credentials and runs under `wrangler dev` too. Chunked REST is refused over
+ * this provider (see `createUploadHandler`).
  *
  * The provider takes no `@visulima/storage` limits of its own (its upload cap
  * is the 5 TB default), so `maxFileSize` / `maxFileSizeFor` on the handler are

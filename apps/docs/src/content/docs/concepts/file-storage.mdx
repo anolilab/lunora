@@ -279,8 +279,9 @@ pair a type-based cap with `allowMIME` on the provider
 (`createR2BindingUploadStorage(env.UPLOADS, { allowMIME: ["image/*", "video/*"] })`).
 
 `createR2UploadStorage` is the other R2 provider: it writes over R2's S3 API
-with S3 credentials and no binding. Prefer `createR2BindingUploadStorage`: it
-needs no credentials and runs under `wrangler dev`.
+with S3 credentials and no binding, over TUS only. Prefer
+`createR2BindingUploadStorage`: it needs no credentials and runs under
+`wrangler dev`.
 
 #### Upload from the client
 
@@ -368,11 +369,14 @@ the binding of that same bucket.
 - **Method overrides.** A request carrying `X-HTTP-Method-Override` (or
   `X-HTTP-Method`, `X-Method-Override`) gets a `405`, so no request can pass the
   write gate as one method and run as another.
-- **Chunked REST** over either R2 provider takes one chunk at a time and in
-  order: a chunk at any other offset is a `409` and is not stored, and over the
-  binding provider so is one sent while another is streaming. The bundled client
-  sends four chunks in parallel, so it can upload only as a single chunk
-  (`chunkSize` at least the file size). Use TUS for resumable uploads;
+- **Chunked REST** runs over `createR2BindingUploadStorage`, one chunk at a
+  time and in order: a chunk at any other offset, or one sent while another is
+  streaming, is a `409` and is not stored. The bundled client sends four chunks
+  in parallel, so it can upload only as a single chunk (`chunkSize` at least the
+  file size). `createUploadHandler` refuses chunked REST over
+  `createR2UploadStorage`, where the bundled client's final `HEAD` answers `404`
+  ([visulima/visulima#915](https://github.com/visulima/visulima/issues/915)).
+  Use TUS for resumable uploads;
   [@lunora/storage](/docs/packages/storage#chunked-rest) has the details.
 - **`maxFileSize`** defaults to 100 MiB, has no unlimited setting, and must be a
   finite, non-negative number. Uploads over it get a `413`.

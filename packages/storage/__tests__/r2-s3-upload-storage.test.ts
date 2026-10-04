@@ -3,6 +3,7 @@
  * provider) behind `createUploadHandler`, over an in-memory path-style S3 fake.
  */
 import { Rest } from "@visulima/storage/handler/http/fetch";
+import { createChunkedRestAdapter } from "@visulima/storage-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createR2UploadStorage } from "../src/r2-s3-upload-storage";
@@ -16,6 +17,16 @@ import { tusDriver } from "./tus-driver";
 import { pattern, sameBytes } from "./upload-pattern";
 
 const MIB = 1024 * 1024;
+const ENDPOINT = "https://test.local/upload";
+
+/** A plain-`http:` endpoint to `host`, the scheme the provider refuses except to a loopback host. */
+const cleartext = (host: string): string => {
+    const url = new URL(`https://${host}`);
+
+    url.protocol = "http:";
+
+    return url.href.replace(/\/$/u, "");
+};
 
 const r2Storage = (endpoint?: string) =>
     createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", endpoint, path: "/upload", secretAccessKey: "secret" });
@@ -79,17 +90,37 @@ describe("createR2UploadStorage", () => {
         expect(s3.requests.every((request) => request.split(" ")[1]?.startsWith(base))).toBe(true);
     });
 
-    it.each(["acct.eu.r2.cloudflarestorage.com", "/uploads", "file:///acct.r2.cloudflarestorage.com"])(
-        "refuses the endpoint %j at construction with a VALIDATION_ERROR naming the expected form",
-        (endpoint) => {
+    it.each([
+        "acct.eu.r2.cloudflarestorage.com",
+        "/uploads",
+        "file:///acct.r2.cloudflarestorage.com",
+        // Cleartext to anything but a loopback host would carry the signed requests and the bytes in the open.
+        cleartext("acct.r2.cloudflarestorage.com"),
+        cleartext("10.0.0.5:9000"),
+    ])("refuses the endpoint %j at construction with a VALIDATION_ERROR naming the expected form", (endpoint) => {
+        expect.hasAssertions();
+
+        expect(() => r2Storage(endpoint)).toThrow(
+            expect.objectContaining({
+                code: "VALIDATION_ERROR",
+                message: expect.stringContaining(
+                    "must be an absolute https:// URL such as https://<account>.r2.cloudflarestorage.com, or http:// to localhost",
+                ),
+            }),
+        );
+    });
+
+    it.each([cleartext("localhost:9000"), cleartext("127.0.0.1:9000"), cleartext("[::1]:9000")])(
+        "accepts the loopback endpoint %j, as a local S3 needs",
+        async (endpoint) => {
             expect.hasAssertions();
 
-            expect(() => r2Storage(endpoint)).toThrow(
-                expect.objectContaining({
-                    code: "VALIDATION_ERROR",
-                    message: expect.stringContaining("must be an absolute URL such as https://<account>.r2.cloudflarestorage.com"),
-                }),
-            );
+            const { s3, tus } = tusOver(endpoint);
+
+            await tus.create(10);
+
+            expect(s3.requests.length).toBeGreaterThan(0);
+            expect(s3.requests.every((request) => request.split(" ")[1]?.startsWith(`${endpoint}/uploads/`))).toBe(true);
         },
     );
 
@@ -115,17 +146,14 @@ describe("createR2UploadStorage", () => {
         expect(sameBytes(s3.object(keyOf(location)), bytes)).toBe(true);
     });
 
-    it.each([
-        ["upstream's own Rest handler", (): ChunkedRestRoute => new Rest({ storage: r2Storage() })],
-        ["createUploadHandler", (): ChunkedRestRoute => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: r2Storage() })],
-    ])("stores a chunked-REST upload of three parts intact through %s, refusing chunks out of order or sent twice (409)", async (_, route) => {
+    it("stores a chunked-REST upload of three parts intact through upstream's Rest handler, refusing chunks out of order or sent twice (409)", async () => {
         expect.hasAssertions();
 
         const s3 = createFakeR2S3("uploads");
 
         vi.stubGlobal("fetch", s3.fetch);
 
-        const driver = chunkedRest(route());
+        const driver = chunkedRest(new Rest({ storage: r2Storage() }));
         const bytes = pattern(11 * MIB);
         const chunk = (offset: number): Uint8Array<ArrayBuffer> => bytes.slice(offset, offset + 5 * MIB);
         const location = await driver.create(bytes.byteLength);
@@ -142,5 +170,64 @@ describe("createR2UploadStorage", () => {
         expect(last.status).toBe(200);
         expect(last.headers.get("x-upload-complete")).toBe("true");
         expect(sameBytes(s3.object(uploadId(location)), bytes)).toBe(true);
+    });
+
+    it("refuses chunked REST through createUploadHandler, which the bundled client cannot complete; TUS and multipart are fine", () => {
+        expect.hasAssertions();
+
+        vi.stubGlobal("fetch", createFakeR2S3("uploads").fetch);
+
+        expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: r2Storage() })).toThrow(
+            expect.objectContaining({
+                code: "VALIDATION_ERROR",
+                message: expect.stringMatching(
+                    /chunked REST is not supported over createR2UploadStorage.*final HEAD answers 404.*#915.*"tus".*createR2BindingUploadStorage/,
+                ),
+            }),
+        );
+        expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: r2Storage() })).not.toThrow();
+        expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: r2Storage() })).not.toThrow();
+    });
+
+    it("lets the bundled client's final HEAD answer 404 over upstream's Rest handler, so it rejects a stored upload (visulima/visulima#915)", async () => {
+        expect.hasAssertions();
+
+        // Why the route refuses chunked REST here. When this resolves, drop that refusal.
+        const s3 = createFakeR2S3("uploads");
+        const requests: string[] = [];
+        // Built once the fake answers, since the provider probes its bucket from the constructor.
+        let rest: ChunkedRestRoute | undefined;
+
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const request = input instanceof Request ? input : new Request(input, init);
+
+            if (!request.url.startsWith(ENDPOINT)) {
+                return s3.fetch(request);
+            }
+
+            if (rest === undefined) {
+                throw new Error("the upload route is not built yet");
+            }
+
+            const response = await rest.fetch(request);
+
+            requests.push(`${request.method} ${String(response.status)}`);
+
+            return response;
+        });
+
+        rest = new Rest({ storage: r2Storage() });
+
+        const bytes = pattern(MIB);
+        const adapter = createChunkedRestAdapter({ chunkSize: bytes.byteLength, endpoint: ENDPOINT, retry: false });
+
+        await expect(adapter.upload(new File([bytes], "a.bin", { type: "application/octet-stream" }))).rejects.toThrow(/404/);
+        expect(requests).toStrictEqual(["POST 201", "HEAD 200", "PATCH 200", "HEAD 404"]);
+
+        const [key] = s3.requests
+            .filter((request) => request.startsWith("POST") && request.includes("?uploads"))
+            .map((request) => keyOf(request.split(" ")[1] ?? ""));
+
+        expect(sameBytes(s3.object(key ?? ""), bytes)).toBe(true);
     });
 });
