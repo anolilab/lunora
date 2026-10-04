@@ -328,6 +328,17 @@ A request carrying a method-override header (`X-HTTP-Method-Override`,
 The handler is also built with `allowMethodOverride: false`. Send each request
 with its real method; the bundled client does.
 
+An upload route only addresses ids it issued
+([visulima/visulima#918](https://github.com/visulima/visulima/issues/918)). A
+`HEAD`, `PATCH` or TUS `DELETE` whose last path segment is not the shape
+`@visulima/storage` gives an upload id (a 21-character nanoid, or the hex
+groups it derives from a named file, plus at most one extension) gets a `404`
+before `authorize` runs, and so does a chunked-REST `PUT` whose name carries a
+`%` escape. Over `createR2UploadStorage` upstream would otherwise answer a
+`HEAD` for any object in the bucket, nested ones included, from the object
+itself. The check is on the shape only: keep uploads in a bucket of their own,
+or under keys no other writer uses.
+
 On TUS every successful `PATCH` answers `204` with no body, the one that
 completes the upload included; read the new offset from `Upload-Offset`.
 

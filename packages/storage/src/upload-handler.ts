@@ -236,6 +236,50 @@ const methodNotAllowedResponse = (protocol: UploadProtocol, message: string): Re
 const METHOD_OVERRIDE_HEADERS = ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"] as const;
 
 /**
+ * The methods that address an upload the route created, by the id in the
+ * URL's last path segment. The create (`POST`, `OPTIONS`) has no id, and the
+ * chunked-REST `PUT` names its own (see {@link refuseUnissuedId}).
+ */
+const ID_METHODS: Readonly<Record<UploadProtocol, ReadonlySet<string>>> = {
+    "chunked-rest": new Set(["HEAD", "PATCH"]),
+    multipart: new Set(),
+    tus: new Set(["DELETE", "HEAD", "PATCH"]),
+};
+
+/**
+ * An id `@visulima/storage` issues, as the URL's last path segment: a 21-character
+ * nanoid, or the 2 or 3 hex groups it derives from a named file's name, size
+ * and date, optionally followed by one extension (chunked REST appends one).
+ */
+const ISSUED_ID = /^(?:[\w-]{21}|[\da-f]{1,16}(?:-[\da-f]{1,16}){1,2})(?:\.[\da-z]{1,16})?$/iu;
+
+const notFoundResponse = (protocol: UploadProtocol): Response =>
+    errorResponse(protocol, 404, { code: "FILE_NOT_FOUND", message: "Upload not found", name: "NotFoundError" });
+
+/**
+ * A request for an upload id the route cannot have issued is a `404`, before
+ * `authorize`. Over the S3-API provider upstream answers a `HEAD` for any id
+ * from the bucket object of that key once no upload state exists, so without
+ * this a `HEAD` on the upload route reports the size and type of any object in
+ * the bucket, nested ones included through an encoded `/` (visulima/visulima#918).
+ * The raw segment is checked, so no `%` escape reaches the provider; a `PUT`,
+ * which names its own file, is held to that alone.
+ */
+const refuseUnissuedId = (request: Request, protocol: UploadProtocol): Response | undefined => {
+    const isPut = protocol === "chunked-rest" && request.method === "PUT";
+
+    if (!isPut && !ID_METHODS[protocol].has(request.method)) {
+        return undefined;
+    }
+
+    const segment = new URL(request.url).pathname.split("/").findLast(Boolean) ?? "";
+
+    const refused = isPut ? segment.includes("%") : !ISSUED_ID.test(segment);
+
+    return refused ? notFoundResponse(protocol) : undefined;
+};
+
+/**
  * Best-effort declared upload size read off the request, checked against
  * `maxFileSize` before the request reaches the underlying protocol handler.
  *
@@ -325,6 +369,12 @@ const checkBeforeGate = (request: Request, protocol: UploadProtocol, maxFileSize
 
     if (override !== undefined) {
         return { refusal: methodNotAllowedResponse(protocol, `${override} is not allowed on this upload route: send the request with the method itself`) };
+    }
+
+    const unissued = refuseUnissuedId(request, protocol);
+
+    if (unissued !== undefined) {
+        return { refusal: unissued };
     }
 
     const declaredSize = declaredUploadSize(request, protocol);

@@ -219,4 +219,83 @@ describe("createR2UploadStorage", () => {
         expect(head.headers.get("x-upload-complete")).toBe("true");
         expect(head.headers.get("x-upload-offset")).toBe(String(bytes.byteLength));
     });
+
+    describe("bucket objects the route never created (visulima/visulima#918)", () => {
+        /** A fake bucket holding objects put there by something else, and a route of `protocol` over it. */
+        const seeded = async (protocol: "chunked-rest" | "tus") => {
+            const s3 = createFakeR2S3("uploads");
+
+            vi.stubGlobal("fetch", s3.fetch);
+
+            for (const key of ["payroll-2026", "report.pdf", "avatars/ceo"]) {
+                // eslint-disable-next-line no-await-in-loop -- seeding one object at a time
+                await s3.fetch(new Request(`https://acct.r2.cloudflarestorage.com/uploads/${key}`, { body: "SECRET", method: "PUT" }));
+            }
+
+            const authorize = vi.fn<() => boolean>(() => true);
+            const route = createUploadHandler({ authorize, protocol, storage: r2Storage() });
+
+            return { authorize, route, s3 };
+        };
+
+        it.each(
+            (["chunked-rest", "tus"] as const).flatMap((protocol) =>
+                ["payroll-2026", "payroll-2026.pdf", "report.pdf", "avatars%2Fceo", "avatars%2fceo.png"].map((path) => [protocol, path] as const),
+            ),
+        )("answers HEAD over %s for /upload/%s with 404, before authorize and without asking the bucket", async (protocol, path) => {
+            expect.hasAssertions();
+
+            const { authorize, route, s3 } = await seeded(protocol);
+            const before = s3.requests.length;
+            const response = await route.fetch(new Request(`${ENDPOINT}/${path}`, { headers: { "Tus-Resumable": "1.0.0" }, method: "HEAD" }));
+
+            expect(response.status).toBe(404);
+            expect(response.headers.get("content-length")).not.toBe("6");
+            expect(authorize).not.toHaveBeenCalled();
+            // The route's own bucket probe aside, nothing reached the bucket for this request.
+            expect(s3.requests.slice(before).filter((request) => !request.endsWith("/uploads/"))).toStrictEqual([]);
+        });
+
+        it.each(["PATCH", "DELETE"])("answers a TUS %s for a bucket object with 404 before authorize", async (method) => {
+            expect.hasAssertions();
+
+            const { authorize, route, s3 } = await seeded("tus");
+            const response = await route.fetch(
+                new Request(`${ENDPOINT}/payroll-2026`, {
+                    body: method === "PATCH" ? new Uint8Array(1) : undefined,
+                    headers: { "Content-Type": "application/offset+octet-stream", "Tus-Resumable": "1.0.0", "Upload-Offset": "0" },
+                    method,
+                }),
+            );
+
+            expect(response.status).toBe(404);
+            expect(authorize).not.toHaveBeenCalled();
+            expect(s3.object("payroll-2026")).toStrictEqual(new TextEncoder().encode("SECRET"));
+        });
+
+        it("refuses a chunked-REST PUT whose name carries an escape, so it cannot reach a nested key", async () => {
+            expect.hasAssertions();
+
+            const { authorize, route, s3 } = await seeded("chunked-rest");
+            const response = await route.fetch(
+                new Request(`${ENDPOINT}/avatars%2Fceo.png`, { body: "evil", headers: { "content-length": "4", "content-type": "image/png" }, method: "PUT" }),
+            );
+
+            expect(response.status).toBe(404);
+            expect(authorize).not.toHaveBeenCalled();
+            expect(s3.object("avatars/ceo")).toStrictEqual(new TextEncoder().encode("SECRET"));
+        });
+
+        it("still answers HEAD for an upload the route created", async () => {
+            expect.hasAssertions();
+
+            const { route } = await seeded("chunked-rest");
+            const driver = chunkedRest(route);
+            const location = await driver.create(10);
+            const head = await driver.head(location);
+
+            expect(head.status).toBe(200);
+            expect(head.headers.get("x-upload-offset")).toBe("0");
+        });
+    });
 });
