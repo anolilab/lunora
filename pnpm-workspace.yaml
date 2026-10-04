@@ -99,7 +99,7 @@ overrides:
   # astro's XSS fix needs a major bump to 7.0.10 — handled separately, it breaks
   # the adapter.
   astro@<6.4.6: ^6.4.6
-  axios: ">=1.18.0"
+  axios: ">=1.20.0"
   body-parser: ">=2.3.0"
   brace-expansion@<1.1.18: ^1.1.18
   brace-expansion@>=2.0.0 <2.1.4: ^2.1.4
@@ -1093,6 +1093,8 @@ minimumReleaseAgeExclude:
   - '@visulima/tui-binding-win32-x64-msvc@4.0.8'
   - '@visulima/tui-kit@1.0.11'
   - '@visulima/tui@4.0.8'
+  # Renovate security update: axios@1.20.0
+  - axios@1.20.0
 
 # recast@0.23.11 loads `@babel/parser` via a bare (phantom) require, so pnpm
 # hands it the hoisted @babel/parser@8.0.0. recast's parser plugin list is
