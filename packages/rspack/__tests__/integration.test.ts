@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { Compiler, Stats } from "@rspack/core";
@@ -23,12 +23,36 @@ import { createFixture, SCHEMA, SCHEMA_WITH_ERROR_ADVISORY, SCHEMA_WITH_GLOBAL, 
  * double.
  */
 
-/** Roots created by a test, removed afterwards. */
 /** The advisory a deliberately-broken schema raises; matched in two places. */
 const ERROR_ADVISORY_RE = /ERROR-level.*index_references_unknown_field/u;
 
 /** Roots created by a test, removed afterwards. */
 const roots: string[] = [];
+
+/** Every path under `root`, the root itself included. */
+const walk = (root: string): string[] => [root, ...readdirSync(root, { recursive: true, encoding: "utf8" }).map((entry) => join(root, entry))];
+
+/**
+ * Backdate everything a fixture wrote, well past the watcher's initial-scan window.
+ *
+ * Watchpack's first scan treats any file whose mtime lies within its filesystem
+ * accuracy (up to 2s, refined to ~10ms once it has seen an mtime) of the
+ * watcher's start as possibly changed, and fires a rebuild for it. A fixture
+ * written moments before `compiler.watch()` therefore produced a free second
+ * build — or not, depending on how long the runner took to construct the
+ * compiler. A test whose own edit was never watched still passed on the free
+ * build, and hung forever on a runner slow enough to miss it: that is how
+ * "clears a wrangler failure" timed out on CI while the plugin did not watch an
+ * absent `wrangler.jsonc` at all. With the fixture aged, the ONLY thing that can
+ * start the next build is the edit a test makes.
+ */
+const ageFixture = (root: string): void => {
+    const past = new Date(Date.now() - 60_000);
+
+    for (const path of walk(root)) {
+        utimesSync(path, past, past);
+    }
+};
 
 const fixture = (...args: Parameters<typeof createFixture>): string => {
     const root = createFixture(...args);
@@ -84,6 +108,23 @@ const closeCompiler = async (compiler: Compiler): Promise<void> =>
     });
 
 /**
+ * How long a watch session may take to reach the build count a test expects.
+ * Below the 60s test timeout on purpose: a session that stalls fails with the
+ * builds it DID see, and is torn down, instead of surfacing as a bare timeout
+ * that leaves its watcher running into the next test.
+ */
+const WATCH_DEADLINE_MS = 40_000;
+
+/**
+ * Teardowns of the watch sessions still open. A session that never settles must
+ * not outlive its test: a leaked watcher kept rebuilding against a deleted
+ * fixture and, when its promise finally resolved, ran the dead test's
+ * assertions inside the NEXT test ("expected number of assertions to be 2, but
+ * got 4").
+ */
+const openSessions = new Set<() => Promise<void>>();
+
+/**
  * Watch `root`, run `act(n)` after build `n`, and resolve with every build's
  * error list plus the total build count.
  *
@@ -97,6 +138,8 @@ const watchRun = async (
     options: { expectedBuilds: number; settleMs: number },
 ): Promise<{ builds: string[][]; devVarsExists: boolean }> =>
     new Promise((resolve, reject) => {
+        ageFixture(root);
+
         const compiler = rspack({
             context: root,
             entry: "./index.js",
@@ -108,25 +151,69 @@ const watchRun = async (
         const builds: string[][] = [];
         let settleTimer: NodeJS.Timeout | undefined;
         let watching: ReturnType<typeof compiler.watch> | undefined;
+        let closing: Promise<void> | undefined;
+
+        const teardown = async (): Promise<void> => {
+            closing ??= (async () => {
+                clearTimeout(settleTimer);
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the deadline is armed after the session it tears down
+                clearTimeout(deadline);
+                openSessions.delete(teardown);
+
+                if (watching !== undefined) {
+                    await closeWatching(watching);
+                }
+
+                await closeCompiler(compiler);
+            })();
+
+            await closing;
+        };
+
+        const fail = (reason: Error): void => {
+            const rejectAfterTeardown = async (): Promise<void> => {
+                try {
+                    await teardown();
+                } finally {
+                    reject(reason);
+                }
+            };
+
+            rejectAfterTeardown().catch(reject);
+        };
+
+        const deadline = setTimeout(() => {
+            fail(
+                new Error(
+                    `watch session reached ${String(builds.length)} of ${String(options.expectedBuilds)} expected builds in ${String(WATCH_DEADLINE_MS)}ms — ` +
+                        `the edit after build ${String(builds.length)} started no rebuild. Errors per build so far: ${JSON.stringify(builds)}`,
+                ),
+            );
+        }, WATCH_DEADLINE_MS);
+
+        openSessions.add(teardown);
 
         // Read `.dev.vars` before tearing down: the teardown removes nothing, but
         // reading first keeps the assertion independent of close ordering.
         const finish = (): void => {
             const devVarsExists = existsSync(join(root, ".dev.vars"));
 
-            const teardown = async (): Promise<void> => {
-                await closeWatching(watching as { close: (callback: () => void) => void });
-                await closeCompiler(compiler);
+            const resolveAfterTeardown = async (): Promise<void> => {
+                await teardown();
 
                 resolve({ builds, devVarsExists });
             };
 
-            teardown().catch(reject);
+            resolveAfterTeardown().catch(reject);
         };
 
         watching = compiler.watch({ aggregateTimeout: 50, poll: false }, (error, stats) => {
+            if (closing !== undefined) {
+                return;
+            }
+
             if (error) {
-                reject(error);
+                fail(error);
 
                 return;
             }
@@ -139,10 +226,9 @@ const watchRun = async (
                 return;
             }
 
-            if (builds.length >= options.expectedBuilds) {
-                clearTimeout(settleTimer);
-                settleTimer = setTimeout(finish, options.settleMs);
-            }
+            clearTimeout(deadline);
+            clearTimeout(settleTimer);
+            settleTimer = setTimeout(finish, options.settleMs);
         });
     });
 
@@ -238,7 +324,11 @@ describe("rspack build (real compiler)", () => {
 });
 
 describe("rspack watch (real compiler)", () => {
-    afterEach(() => {
+    afterEach(async () => {
+        // Close any session a failed or timed-out test left watching BEFORE its
+        // fixture is deleted out from under it.
+        await Promise.all([...openSessions].map(async (teardown) => teardown()));
+
         for (const root of roots.splice(0)) {
             rmSync(root, { force: true, recursive: true });
         }
