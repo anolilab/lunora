@@ -101,8 +101,12 @@ overrides:
   astro@<6.4.6: ^6.4.6
   axios: ">=1.20.0"
   body-parser: ">=2.3.0"
-  brace-expansion@<1.1.18: ^5.0.12
-  brace-expansion@>=2.0.0 <2.1.4: ^5.0.12
+  # Each line stays in its own major. v5 is ESM with only a named `expand` export:
+  # minimatch@3 calls `require("brace-expansion")(…)`, minimatch@5/9 import the
+  # default, so pointing v1/v2 consumers at v5 breaks them. 1.1.21 / 2.1.7 / 5.0.12
+  # patch GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7 and GHSA-q2hr-2g5m-vwhr.
+  brace-expansion@<1.1.18: ^1.1.21
+  brace-expansion@>=2.0.0 <2.1.4: ^2.1.7
   brace-expansion@>=4.0.0 <5.0.9: ^5.0.12
   dompurify@<=3.4.10: ^3.4.16
   esbuild@>=0.27.3 <0.28.1: ^0.28.1
