@@ -23,6 +23,8 @@ export type FileRecord = Pick<File, keyof File>;
 
 /** What the provider stores per upload next to the public file record. */
 export interface UploadProgress {
+    /** A file the client named (a chunked-REST `PUT`): its object is only written if none exists at that key. */
+    createOnly?: boolean;
     lock?: UploadLock;
     parts: R2UploadedPartLike[];
     segments: Segment[];

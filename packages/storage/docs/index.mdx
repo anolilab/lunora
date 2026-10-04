@@ -339,6 +339,19 @@ before `authorize` runs, and so does a chunked-REST `PUT` whose name carries a
 itself. The check is on the shape only: keep uploads in a bucket of their own,
 or under keys no other writer uses.
 
+A chunked-REST `PUT` (`putFile` on the client) creates `<name>` and refuses
+(`409`) if a file already exists under that name: an earlier upload, or any
+object in the bucket at that key
+([visulima/visulima#919](https://github.com/visulima/visulima/issues/919)).
+`@visulima/storage` alone would replace it. The check runs after `authorize`,
+so a caller the gate refuses gets its `403`, not a hint that the name is taken.
+Over `createR2BindingUploadStorage` the final write is conditional too, so two
+`PUT`s racing for one new name store exactly one file (atomically for a file
+under 5 MiB, whose object is a single `put`; a larger one is checked again just
+before R2 completes it, as `complete()` takes no precondition). Over
+`createR2UploadStorage` it is a check before the write, so two `PUT`s racing
+for one new name can both write.
+
 On TUS every successful `PATCH` answers `204` with no body, the one that
 completes the upload included; read the new offset from `Upload-Offset`.
 
@@ -521,7 +534,10 @@ to 1.0.7. What changes for an upload route:
 - **A `PUT` that creates a file** (chunked REST) needs an id of letters, digits,
   `_` and `-`, at most 255 characters, after its extension is stripped:
   `PUT /upload/report-v2.pdf` creates `report-v2`, `PUT /upload/report.v2.pdf`
-  is a `400`. Updating a file that exists is unchanged.
+  is a `400`.
+- **A `PUT` no longer replaces anything.** `PUT /upload/<name>` creates
+  `<name>` and refuses (`409`) if it already exists, see above. Replace a file
+  with `ctx.storage` instead.
 - **`Location`** on a chunked-REST `PUT` or `PATCH` is now
   `<collection>/<id>.<ext>`. It used to repeat the id
   (`<collection>/<id>/<id>.<ext>`).

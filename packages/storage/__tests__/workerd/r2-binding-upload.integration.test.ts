@@ -234,6 +234,39 @@ describe("chunked REST over the R2 binding (workerd + Miniflare R2)", () => {
         expect(stored.every((byte, index) => byte === bytes[index])).toBe(true);
     }, 60_000);
 
+    it("makes a PUT create-only: a new name is stored, a taken one (its own or a foreign object) is a 409 and kept (visulima/visulima#919)", async () => {
+        expect.hasAssertions();
+
+        const name = `put-${crypto.randomUUID().replaceAll("-", "")}`;
+        const foreign = `foreign-${crypto.randomUUID().replaceAll("-", "")}`;
+        const put = async (target: string, body: string): Promise<Response> =>
+            chunkedRoute.fetch(
+                new Request(`${ENDPOINT}/${target}.txt`, {
+                    body,
+                    headers: { "content-length": String(body.length), "content-type": "text/plain" },
+                    method: "PUT",
+                }),
+            );
+        const read = async (key: string): Promise<string | undefined> => {
+            const object = await env.BUCKET.get(key);
+
+            return object?.text();
+        };
+
+        await env.BUCKET.put(foreign, "SECRET");
+
+        await expect(put(name, "first")).resolves.toHaveProperty("status", 201);
+        await expect(read(name)).resolves.toBe("first");
+        await expect(put(name, "second")).resolves.toHaveProperty("status", 409);
+        await expect(read(name)).resolves.toBe("first");
+        await expect(put(foreign, "evil")).resolves.toHaveProperty("status", 409);
+        await expect(read(foreign)).resolves.toBe("SECRET");
+
+        const raced = await Promise.all([put(`${name}r`, "one"), put(`${name}r`, "two")]);
+
+        expect(raced.map((response) => response.status).toSorted((a, b) => a - b)).toStrictEqual([201, 409]);
+    });
+
     it("refuses GET on the upload route, so a stored file is never served from it", async () => {
         expect.hasAssertions();
 

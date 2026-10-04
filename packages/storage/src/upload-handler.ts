@@ -256,6 +256,36 @@ const ISSUED_ID = /^(?:[\w-]{21}|[\da-f]{1,16}(?:-[\da-f]{1,16}){1,2})(?:\.[\da-
 const notFoundResponse = (protocol: UploadProtocol): Response =>
     errorResponse(protocol, 404, { code: "FILE_NOT_FOUND", message: "Upload not found", name: "NotFoundError" });
 
+/** One extension, as upstream strips it from a chunked-REST id. */
+const EXTENSION = /\.[^.]+$/u;
+
+/**
+ * Whether a chunked-REST `PUT` names a file that exists: an upload with state,
+ * or a finished one the provider still finds by key (`getCompletedFile`, which
+ * the S3 providers answer from the stored object). Upstream's `PUT` would
+ * replace either (visulima/visulima#919), so the route makes it create-only.
+ * Over `createR2UploadStorage` this is check-then-write, so two `PUT`s racing
+ * for one new name can still both write; the R2 binding provider also checks
+ * atomically when it writes. A failed lookup counts as taken.
+ */
+const putTargetExists = async (request: Request, storage: UploadStorage): Promise<boolean> => {
+    const id = (new URL(request.url).pathname.split("/").findLast(Boolean) ?? "").replace(EXTENSION, "");
+
+    try {
+        await storage.getMeta(id);
+
+        return true;
+    } catch {
+        // No upload state under this id.
+    }
+
+    try {
+        return (await storage.getCompletedFile(id)) !== undefined;
+    } catch {
+        return true;
+    }
+};
+
 /**
  * A request for an upload id the route cannot have issued is a `404`, before
  * `authorize`. Over the S3-API provider upstream answers a `HEAD` for any id
@@ -569,6 +599,12 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
                 // A throwing RLS callback is a denial, never a 500 — fail closed.
                 return denyResponse(protocol);
             }
+        }
+
+        // After `authorize`, so a caller the gate refuses cannot tell a taken
+        // name from a free one by the 409.
+        if (protocol === "chunked-rest" && request.method === "PUT" && (await putTargetExists(request, options.storage))) {
+            return errorResponse(protocol, 409, { code: "FileConflict", message: "A file already exists under this name", name: "ConflictError" });
         }
 
         if (maxFileSizeFor !== undefined && isCreateRequest(request, protocol)) {

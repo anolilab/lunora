@@ -52,7 +52,7 @@ import type { BaseStorageOptions, FileInit, FilePart, FileQuery } from "@visulim
 import { AbstractBaseStorage, ERRORS, File, throwErrorCode, UploadError } from "@visulima/storage";
 
 import { readBody } from "./byte-queue";
-import { R2UploadPartWriter } from "./r2-upload-part-writer";
+import { NAME_TAKEN, objectExists, putObject, R2UploadPartWriter } from "./r2-upload-part-writer";
 import { PROVIDER_OWNED_FIELDS, R2UploadStateStore } from "./r2-upload-state-store";
 import type { FileRecord, R2UploadBucket, UploadLock, UploadProgress, UploadState } from "./r2-upload-types";
 import type { UploadStorage } from "./upload-handler";
@@ -128,6 +128,11 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
     /**
      * Start an upload. Its size has to be declared, as a non-negative integer:
      * every byte limit hangs off it, and `creation-defer-length` is not offered.
+     *
+     * An upload the client names (`fileInit.id`, a chunked-REST `PUT`) is
+     * create-only: refused (`409`) when its key is taken, here and again,
+     * atomically where R2 allows it, when its object is written
+     * (visulima/visulima#919).
      */
     public async create(fileInit: FileInit): Promise<File> {
         return this.instrumentOperation("create", async () => {
@@ -150,12 +155,18 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
             await this.validate(file);
 
+            const createOnly = fileInit.id !== undefined;
+
             // Same id, same upload: a client re-sending its create resumes it,
-            // as the S3 providers do.
+            // as the S3 providers do. A named file is never resumed or replaced.
             const existing = await this.meta.read(file.id);
 
             if (existing !== undefined) {
-                return existing.state.file;
+                return createOnly ? conflict(NAME_TAKEN) : existing.state.file;
+            }
+
+            if (createOnly && (await objectExists(this.bucket, file.name))) {
+                return conflict(NAME_TAKEN);
             }
 
             file.bytesWritten = 0;
@@ -164,16 +175,14 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
             // A zero-byte upload never receives a write, so it is finished here.
             if (size === 0) {
-                await this.bucket.put(file.name, new Uint8Array(0), { httpMetadata: { contentType: file.contentType } });
+                await putObject(this.bucket, file.name, new Uint8Array(0), file.contentType, createOnly);
                 file.status = "completed";
             }
 
             // Create-only, so of two racing creates for one id, one writes the
             // state and the other answers what it wrote.
-            if (!(await this.meta.create(file.id, { file, upload: { parts: [], segments: [] } }))) {
-                const raced = await this.meta.read(file.id);
-
-                return raced?.state.file ?? conflict("The upload is being created by another request");
+            if (!(await this.meta.create(file.id, { file, upload: { parts: [], segments: [], ...(createOnly ? { createOnly } : {}) } }))) {
+                return this.racedCreate(file.id, createOnly);
             }
 
             await this.onCreate(file);
@@ -350,6 +359,17 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
     /** Not supported: this provider stores uploads. Move stored objects with `ctx.storage`. */
     public move(): Promise<File> {
         return this.unsupported("move");
+    }
+
+    /** The create that lost the race for an id: it resumes the winner's upload, unless it named its file (`409`). */
+    private async racedCreate(id: string, createOnly: boolean): Promise<File> {
+        const raced = await this.meta.read(id);
+
+        if (createOnly) {
+            return conflict(NAME_TAKEN);
+        }
+
+        return raced?.state.file ?? conflict("The upload is being created by another request");
     }
 
     /** A finished upload's record and its stored object; `404` for anything else. */

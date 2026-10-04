@@ -587,11 +587,26 @@ describe(createR2BindingUploadStorage, () => {
 
         const bucket = createFakeR2UploadBucket();
         const storage = createR2BindingUploadStorage(bucket);
-        const init = { id: "same-upload-id", metadata: { name: "a.bin" }, size: 10 };
+        // The same named file re-sent: upstream derives the same id from its name, size and date.
+        const init = { metadata: { lastModified: 1, name: "a.bin" }, size: 10 };
         const [first, second] = await Promise.all([storage.create(init), storage.create(init)]);
 
-        expect(first.id).toBe("same-upload-id");
-        expect(second.id).toBe("same-upload-id");
+        expect(second.id).toBe(first.id);
+        expect(stateKeys(bucket)).toStrictEqual([`${STATE_PREFIX}${first.id}.json`]);
+    });
+
+    it("lets only one of two racing creates for a client-named id through; the other is a 409", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const storage = createR2BindingUploadStorage(bucket);
+        const init = { id: "same-upload-id", metadata: { name: "a.bin" }, size: 10 };
+        const results = await Promise.allSettled([storage.create(init), storage.create(init)]);
+
+        expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+        expect(results.filter((result) => result.status === "rejected")).toStrictEqual([
+            expect.objectContaining({ reason: expect.objectContaining({ UploadErrorCode: "FileConflict" }) }),
+        ]);
         expect(stateKeys(bucket)).toStrictEqual([`${STATE_PREFIX}same-upload-id.json`]);
     });
 
