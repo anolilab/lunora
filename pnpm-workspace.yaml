@@ -138,6 +138,9 @@ overrides:
   # GHSA-rfgv-xxqx-mfg5, GHSA-r53p-7pc4-xj5r and GHSA-3wwx-pv8p-q78v.
   undici@<6.27.0: ^6.28.1
   undici@>=7.0.0 <7.29.0: ^7.29.1
+  # jsdom, nuxt and unifont resolve undici 8.10.0; 8.10.2 patches GHSA-vp8m-p9jh-q5pm
+  # and the other 2026-09-29 advisories.
+  undici@>=8.0.0 <8.10.2: ^8.10.2
   # dockerode pulls uuid@10, flagged by GHSA-w5hq-g745-h8pq (missing buffer
   # bounds check in v3/v5/v6 when `buf` is passed). dockerode only calls
   # `uuid.v4()`, so it's not exploitable here, but bump the whole tree to the
