@@ -19,9 +19,9 @@
  * # Part buffering
  *
  * R2 rejects a multipart upload unless every part but the last is at least
- * 5 MiB **and all of them are the same size**. Clients send whatever chunk size
- * they like (the TUS client defaults to 5 MiB), so chunks are coalesced into parts of
- * exactly `R2_PART_SIZE` bytes: part `n` always holds bytes
+ * 5 MiB **and all of them are the same size**. Clients send whatever chunk
+ * size they like (the TUS client defaults to 5 MiB), so chunks are coalesced
+ * into parts of exactly `R2_PART_SIZE` bytes: part `n` always holds bytes
  * `[(n - 1) * R2_PART_SIZE, n * R2_PART_SIZE)` of the file. Whatever a request
  * leaves over (less than one part) is written to a small "segment" object and
  * recorded in the state; the request that completes the next part reads the

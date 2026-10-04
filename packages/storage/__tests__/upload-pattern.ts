@@ -9,5 +9,8 @@ const pattern = (length: number): Uint8Array<ArrayBuffer> => {
     return bytes;
 };
 
-// eslint-disable-next-line import/prefer-default-export -- a named test helper
-export { pattern };
+/** Byte equality without a structural diff over megabytes (which is what makes `toStrictEqual` crawl). */
+const sameBytes = (actual: Uint8Array | undefined, expected: Uint8Array): boolean =>
+    actual?.byteLength === expected.byteLength && actual.every((byte, index) => byte === expected[index]);
+
+export { pattern, sameBytes };

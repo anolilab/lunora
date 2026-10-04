@@ -25,17 +25,15 @@ const PROVIDER_OWNED_FIELDS = ["bytesWritten", "ETag", "id", "name", "size", "st
  *
  * `@visulima/storage`'s chunked-REST handler keeps the chunks it has received
  * in the upload's metadata (`_chunks`) and decides from that list alone whether
- * the upload is complete. Since 2.0.25 it records a chunk only after the
- * provider's write succeeds, which fixes #892 for a refused chunk. 2.0.27 still
- * misses a chunk whose body was cut off mid-request (its #902 fix makes
- * concurrent chunk records merge, not completion follow the provider's offset):
- * the write fails, so the chunk is never
- * recorded, but this provider keeps the bytes that arrived (as TUS requires)
- * and the client resumes from the offset `HEAD` reports. The list then has a
- * hole at the start and the upload is never reported complete. So the provider
- * answers the list from what it has actually stored, `[0, bytesWritten)`, and
- * never stores the handler's version. Drop all four pieces once upstream
- * derives completion from the provider's offset.
+ * the upload is complete. It records a chunk only after the provider's write
+ * succeeds, which fixes #892 for a refused chunk, but not for a chunk whose body
+ * was cut off mid-request: the write fails, so the chunk is never recorded, yet
+ * this provider keeps the bytes that arrived (as TUS requires) and the client
+ * resumes from the offset `HEAD` reports. The list then has a hole at the start
+ * and the upload is never reported complete. So the provider answers the list
+ * from what it has actually stored, `[0, bytesWritten)`, and never stores the
+ * handler's version. Drop all four pieces once upstream derives completion from
+ * the provider's offset.
  */
 
 /** The metadata key the chunked-REST handler keeps its received chunks under (visulima/visulima#892). */

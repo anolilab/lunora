@@ -8,21 +8,30 @@
  * live progress, survives pause/resume, resumes after a dropped connection, and
  * is gated by RLS (denied uploads are rejected, no admin gating involved).
  */
-import { createHash } from "node:crypto";
-
-import { ERRORS } from "@visulima/storage";
-import { Tus } from "@visulima/storage/handler/http/fetch";
 import { MemoryStorage } from "@visulima/storage/provider/memory";
 import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createR2BindingUploadStorage } from "../src/r2-binding-upload-storage";
 import type { UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
 import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
-import { createFakeR2UploadBucket } from "./fake-r2-upload-bucket";
+import { TUS_ENDPOINT, tusDriver } from "./tus-driver";
 
-const ENDPOINT = "https://test.local/upload";
+const ENDPOINT = TUS_ENDPOINT;
+const MiB = 1024 * 1024;
+
+/** Every method-override header, on every method the route takes, overridden to `GET` or to itself, at `/<id>` and `/<id>/metadata`. */
+const OVERRIDE_CASES: [header: string, method: string, value: string, suffix: string][] = [];
+
+for (const header of ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"]) {
+    for (const method of ["POST", "PATCH", "HEAD", "OPTIONS"]) {
+        for (const value of ["GET", method]) {
+            for (const suffix of ["", "/metadata"]) {
+                OVERRIDE_CASES.push([header, method, value, suffix]);
+            }
+        }
+    }
+}
 const B64 = (value: string): string => Buffer.from(value).toString("base64");
 
 /** A `File` from raw bytes (Node >=20 exposes `File` globally). */
@@ -65,41 +74,6 @@ const wireFetch = (handler: { fetch: (request: Request) => Promise<Response> }) 
         restore: (): void => {
             vi.unstubAllGlobals();
         },
-    };
-};
-
-/** A minimal raw-TUS driver so pause/resume and resume-after-drop are deterministic (no adapter timing). */
-const rawTus = (handler: { fetch: (request: Request) => Promise<Response> }) => {
-    return {
-        create: async (length: number, name: string): Promise<string> => {
-            const response = await handler.fetch(
-                new Request(ENDPOINT, {
-                    headers: { "Tus-Resumable": "1.0.0", "Upload-Length": String(length), "Upload-Metadata": `filename ${B64(name)}` },
-                    method: "POST",
-                }),
-            );
-
-            expect(response.status).toBe(201);
-
-            const location = response.headers.get("location") ?? "";
-
-            return location.startsWith("http") ? location : `https://test.local${location}`;
-        },
-        head: async (location: string): Promise<number> => {
-            const response = await handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "HEAD" }));
-
-            expect(response.status).toBe(200);
-
-            return Number(response.headers.get("upload-offset"));
-        },
-        patch: async (location: string, offset: number, chunk: Uint8Array): Promise<Response> =>
-            handler.fetch(
-                new Request(location, {
-                    body: Uint8Array.from(chunk),
-                    headers: { "Content-Type": "application/offset+octet-stream", "Tus-Resumable": "1.0.0", "Upload-Offset": String(offset) },
-                    method: "PATCH",
-                }),
-            ),
     };
 };
 
@@ -148,17 +122,17 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     it("refuses to delete a finished upload through the upload route", async () => {
         expect.hasAssertions();
 
-        const tus = rawTus(handler);
-        const location = await tus.create(4, "done.bin");
+        const tus = tusDriver(handler);
+        const location = await tus.create(4, { filename: "done.bin" });
 
         const patched = await tus.patch(location, 0, new Uint8Array(4).fill(1));
 
         expect(patched.ok).toBe(true);
 
-        const deleted = await handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "DELETE" }));
+        const deleted = await tus.delete(location);
 
         expect(deleted.status).toBeGreaterThanOrEqual(400);
-        await expect(tus.head(location)).resolves.toBe(4);
+        await expect(tus.offset(location)).resolves.toBe(4);
     });
 
     it.each(["chunked-rest", "multipart"] as const)("refuses DELETE on a %s route before the gate (405)", async (protocol) => {
@@ -194,31 +168,27 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             return id;
         };
 
-        it.each(["chunked-rest", "multipart", "tus"] as const)(
-            "refuses GET /<id>, GET /<id>/metadata and the collection GET on a %s route before the gate (405)",
-            async (protocol) => {
-                expect.hasAssertions();
+        // `@visulima/storage` serves all of these over fetch since 2.0.24.
+        it.each(
+            (["chunked-rest", "multipart", "tus"] as const).flatMap((protocol) =>
+                ["/<id>", "/<id>.txt", "/<id>/metadata", "", "?page=1"].map((path) => [protocol, path] as const),
+            ),
+        )("refuses GET on a %s route at %j before the gate (405)", async (protocol, path) => {
+            expect.hasAssertions();
 
-                const storage = new MemoryStorage({ path: "/upload" });
-                const id = await storeFile(storage);
-                const authorize = vi.fn<() => boolean>(() => true);
-                const route = createUploadHandler({ authorize, protocol, storage });
+            const storage = new MemoryStorage({ path: "/upload" });
+            const id = await storeFile(storage);
+            const authorize = vi.fn<() => boolean>(() => true);
+            const route = createUploadHandler({ authorize, protocol, storage });
+            const response = await route.fetch(
+                new Request(`${ENDPOINT}${path.replace("<id>", id)}`, { headers: { "Tus-Resumable": "1.0.0", range: "bytes=0-5" }, method: "GET" }),
+            );
 
-                // `@visulima/storage` 2.0.24 serves all three over fetch (2.0.22's
-                // Rest and Multipart answered 500; TUS served downloads already).
-                for (const path of [`${ENDPOINT}/${id}`, `${ENDPOINT}/${id}.txt`, `${ENDPOINT}/${id}/metadata`, ENDPOINT, `${ENDPOINT}?page=1`]) {
-                    // eslint-disable-next-line no-await-in-loop -- one path at a time
-                    const response = await route.fetch(new Request(path, { headers: { "Tus-Resumable": "1.0.0", range: "bytes=0-5" }, method: "GET" }));
-
-                    expect(response.status).toBe(405);
-                    expect(response.headers.get("Allow")).not.toContain("GET");
-                    // eslint-disable-next-line no-await-in-loop -- one path at a time
-                    await expect(response.text()).resolves.not.toContain("secret bytes");
-                }
-
-                expect(authorize).not.toHaveBeenCalled();
-            },
-        );
+            expect(response.status).toBe(405);
+            expect(response.headers.get("Allow")).not.toContain("GET");
+            await expect(response.text()).resolves.not.toContain("secret bytes");
+            expect(authorize).not.toHaveBeenCalled();
+        });
 
         it("refuses GET on a public route too, which has no gate at all", async () => {
             expect.hasAssertions();
@@ -305,13 +275,12 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
                 expect(authorize).not.toHaveBeenCalled();
             });
 
-            // `@visulima/storage` 2.0.26's TUS handler honors
-            // `X-HTTP-Method-Override` by default and swaps the method after
-            // this route's method check, so a `POST` overridden to `GET` would
-            // be served as a read past the write gate.
-            it.each(["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override", "x-http-method-override"])(
-                "refuses a request carrying %s (405) before the gate, and reads nothing",
-                async (header) => {
+            // A method-override header would swap the method after this
+            // route's method check, so a `POST` overridden to `GET` would be
+            // served as a read past the write gate.
+            it.each(OVERRIDE_CASES)(
+                "refuses %s on %s (overridden to %s) at /<id>%s with 405 before the gate, and reads nothing",
+                async (header, method, value, suffix) => {
                     expect.hasAssertions();
 
                     const storage = new MemoryStorage({ path: "/upload" });
@@ -319,26 +288,18 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
                     const getMeta = vi.spyOn(storage, "getMeta");
                     const authorize = vi.fn<() => boolean>(() => true);
                     const route = createUploadHandler({ authorize, protocol, storage });
+                    const response = await route.fetch(
+                        new Request(`${ENDPOINT}/${id}${suffix}`, { headers: { [header]: value, "Tus-Resumable": "1.0.0" }, method }),
+                    );
 
-                    for (const method of ["POST", "PATCH", "HEAD", "OPTIONS"]) {
-                        for (const value of ["GET", method]) {
-                            for (const path of [`${ENDPOINT}/${id}`, `${ENDPOINT}/${id}/metadata`]) {
-                                // eslint-disable-next-line no-await-in-loop -- one request at a time
-                                const response = await route.fetch(new Request(path, { headers: { [header]: value, "Tus-Resumable": "1.0.0" }, method }));
-
-                                expect(response.status).toBe(405);
-                                // Read in-process, so a HEAD's refusal has its body too.
-                                // eslint-disable-next-line no-await-in-loop -- one request at a time
-                                await expect(response.json()).resolves.toMatchObject({
-                                    error: {
-                                        code: "METHOD_NOT_ALLOWED",
-                                        message: expect.stringMatching(/^(X-[\w-]+|PATCH|HEAD) is not allowed on this upload route/),
-                                    },
-                                });
-                            }
-                        }
-                    }
-
+                    expect(response.status).toBe(405);
+                    // Read in-process, so a HEAD's refusal has its body too.
+                    await expect(response.json()).resolves.toMatchObject({
+                        error: {
+                            code: "METHOD_NOT_ALLOWED",
+                            message: expect.stringMatching(/^(X-[\w-]+|PATCH|HEAD) is not allowed on this upload route/),
+                        },
+                    });
                     expect(authorize).not.toHaveBeenCalled();
                     expect(getMeta).not.toHaveBeenCalled();
                 },
@@ -415,10 +376,10 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     it("survives pause/resume mid-upload", async () => {
         expect.hasAssertions();
 
-        const driver = rawTus(handler);
+        const driver = tusDriver(handler);
         const total = 300 * 1024;
         const bytes = new Uint8Array(total).fill(67);
-        const location = await driver.create(total, "paused.bin");
+        const location = await driver.create(total, { filename: "paused.bin" });
 
         // Upload the first third, then "pause" (simply stop issuing PATCHes).
         const cut = 100 * 1024;
@@ -429,7 +390,7 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         expect(Number(first.headers.get("upload-offset"))).toBe(cut);
 
         // A HEAD while paused still reports the persisted offset — resume anchor.
-        await expect(driver.head(location)).resolves.toBe(cut);
+        await expect(driver.offset(location)).resolves.toBe(cut);
 
         // "Resume": finish from the reported offset.
         const rest = await driver.patch(location, cut, bytes.slice(cut));
@@ -442,10 +403,10 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     it("resumes after a dropped connection", async () => {
         expect.hasAssertions();
 
-        const driver = rawTus(handler);
+        const driver = tusDriver(handler);
         const total = 500 * 1024;
         const bytes = new Uint8Array(total).fill(68);
-        const location = await driver.create(total, "dropped.bin");
+        const location = await driver.create(total, { filename: "dropped.bin" });
 
         // First chunk lands on the server.
         const cut = 200 * 1024;
@@ -454,7 +415,7 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 
         // Connection drops before the next chunk — the client lost its progress,
         // so it re-discovers the server offset via HEAD and continues.
-        const resumeOffset = await driver.head(location);
+        const resumeOffset = await driver.offset(location);
 
         expect(resumeOffset).toBe(cut);
 
@@ -463,278 +424,6 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         // The completing chunk answers 204, like a partial one.
         expect(finished.status).toBe(204);
         expect(Number(finished.headers.get("upload-offset"))).toBe(total);
-    });
-
-    describe("checksummed TUS chunks", () => {
-        const MiB = 1024 * 1024;
-
-        /** A memory provider that verifies md5 itself, so other algorithms are left to the handler's buffer. */
-        class Md5MemoryStorage extends MemoryStorage {
-            public override checksumTypes: string[] = ["md5"];
-        }
-
-        const checksummedPatch = (location: string, length: number, checksum: string, body: BodyInit): Request =>
-            new Request(location, {
-                body,
-                headers: {
-                    "Content-Length": String(length),
-                    "Content-Type": "application/offset+octet-stream",
-                    "Tus-Resumable": "1.0.0",
-                    "Upload-Checksum": `sha256 ${checksum}`,
-                    "Upload-Offset": "0",
-                },
-                method: "PATCH",
-                ...(body instanceof ReadableStream ? { duplex: "half" } : {}),
-            });
-
-        /** A `length`-byte body that counts its reads. `highWaterMark: 0` keeps it from reading ahead of its consumer. */
-        const countedBody = (length: number) => {
-            const counter = { pulled: 0 };
-            const body = new ReadableStream<Uint8Array>(
-                {
-                    pull(controller) {
-                        const sent = counter.pulled * MiB;
-
-                        counter.pulled += 1;
-                        controller.enqueue(new Uint8Array(Math.min(MiB, length - sent)));
-
-                        if (sent + MiB >= length) {
-                            controller.close();
-                        }
-                    },
-                },
-                { highWaterMark: 0 },
-            );
-
-            return { body, counter };
-        };
-
-        it.each([
-            ["the memory provider", () => new MemoryStorage({ path: "/upload" })],
-            ["createR2BindingUploadStorage", () => createR2BindingUploadStorage(createFakeR2UploadBucket())],
-        ] as const)("refuses Upload-Checksum over %s, which verifies none (400), before the gate and without reading the body", async (_name, storage) => {
-            expect.hasAssertions();
-
-            const authorize = vi.fn<() => boolean>(() => true);
-            const route = createUploadHandler({ authorize, storage: storage() });
-            const location = await rawTus({ fetch: async (request) => route.fetch(request) }).create(2 * MiB, "sum.bin");
-
-            authorize.mockClear();
-
-            const { body, counter } = countedBody(MiB);
-            const response = await route.fetch(checksummedPatch(location, MiB, "AAAA", body));
-
-            expect(response.status).toBe(400);
-            expect(response.headers.get("tus-resumable")).toBe("1.0.0");
-            await expect(response.json()).resolves.toMatchObject({ error: { code: ERRORS.UNSUPPORTED_CHECKSUM_ALGORITHM } });
-            expect(counter.pulled).toBe(0);
-            expect(authorize).not.toHaveBeenCalled();
-        });
-
-        it("drops Tus-Checksum-Algorithm from OPTIONS on a route that refuses checksums, and keeps it where they are verified", async () => {
-            expect.hasAssertions();
-
-            const refusing = await createUploadHandler({ silent: true, storage: new MemoryStorage({ path: "/upload" }) }).fetch(
-                new Request(ENDPOINT, { method: "OPTIONS" }),
-            );
-            const verifying = await createUploadHandler({ silent: true, storage: new Md5MemoryStorage({ path: "/upload" }) }).fetch(
-                new Request(ENDPOINT, { method: "OPTIONS" }),
-            );
-
-            expect(refusing.status).toBe(204);
-            expect(refusing.headers.has("tus-checksum-algorithm")).toBe(false);
-            expect(refusing.headers.get("tus-resumable")).toBe("1.0.0");
-            expect(verifying.headers.get("tus-checksum-algorithm")).toContain("sha256");
-
-            const extensions = (response: Response): string[] => (response.headers.get("tus-extension") ?? "").split(",");
-
-            expect(extensions(verifying)).toContain("checksum");
-            expect(extensions(refusing)).toStrictEqual(extensions(verifying).filter((extension) => extension !== "checksum"));
-        });
-
-        it.each(["HEAD", "DELETE", "OPTIONS"])("lets %s carry Upload-Checksum through, as upstream ignores it there", async (method) => {
-            expect.hasAssertions();
-
-            const authorize = vi.fn<() => boolean>(() => true);
-            const route = createUploadHandler({ authorize, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
-            const tus = rawTus(route);
-            const plain = await tus.create(4, "plain.bin");
-            const summed = await tus.create(4, "summed.bin");
-            const send = async (url: string, headers: Record<string, string>): Promise<Response> =>
-                route.fetch(new Request(method === "OPTIONS" ? ENDPOINT : url, { headers: { "Tus-Resumable": "1.0.0", ...headers }, method }));
-
-            authorize.mockClear();
-
-            const without = await send(plain, {});
-            const withChecksum = await send(summed, { "Upload-Checksum": "sha256 AAAA" });
-
-            expect(withChecksum.status).toBe(without.status);
-            expect(withChecksum.status).toBeLessThan(300);
-            expect(authorize).toHaveBeenCalledTimes(2);
-        });
-
-        it("refuses a buffered checksummed chunk just over 16 MiB (413) before reading any of it", async () => {
-            expect.hasAssertions();
-
-            const route = createUploadHandler({ silent: true, storage: new Md5MemoryStorage({ path: "/upload" }) });
-            const location = await rawTus(route).create(32 * MiB, "big.bin");
-            const length = 16 * MiB + 1;
-            const { body, counter } = countedBody(length);
-
-            const response = await route.fetch(checksummedPatch(location, length, "AAAA", body));
-
-            expect(response.status).toBe(413);
-            await expect(response.json()).resolves.toMatchObject({ error: { message: expect.stringMatching(/at most 16777216 bytes/) } });
-            expect(counter.pulled).toBe(0);
-            await expect(rawTus(route).head(location)).resolves.toBe(0);
-        });
-
-        it("verifies and stores a buffered checksummed 5 MiB chunk", async () => {
-            expect.hasAssertions();
-
-            const route = createUploadHandler({ silent: true, storage: new Md5MemoryStorage({ path: "/upload" }) });
-            const bytes = new Uint8Array(5 * MiB).fill(42);
-            const location = await rawTus(route).create(bytes.byteLength, "five.bin");
-            const checksum = createHash("sha256").update(bytes).digest("base64");
-
-            const response = await route.fetch(checksummedPatch(location, bytes.byteLength, checksum, bytes));
-
-            expect(response.status).toBe(204);
-            expect(Number(response.headers.get("upload-offset"))).toBe(bytes.byteLength);
-        });
-    });
-
-    describe("tus Upload-Metadata, parsed as @visulima/storage parses it", () => {
-        const MiB = 1024 * 1024;
-        const IMAGE_CAP = MiB;
-
-        /** A route that caps images at 1 MiB and records the type `maxFileSizeFor` saw. */
-        const cappedRoute = (storage: MemoryStorage) => {
-            const seen: string[] = [];
-            const authorize = vi.fn<() => boolean>(() => true);
-            const route = createUploadHandler({
-                authorize,
-                maxFileSizeFor: ({ contentType }: UploadSizeContext) => {
-                    seen.push(contentType);
-
-                    return contentType.startsWith("image/") ? IMAGE_CAP : undefined;
-                },
-                storage,
-            });
-
-            return { authorize, route, seen };
-        };
-
-        const create = async (route: { fetch: (request: Request) => Promise<Response> }, metadata: string, length = 40 * MiB): Promise<Response> =>
-            route.fetch(
-                new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": String(length), "Upload-Metadata": metadata }, method: "POST" }),
-            );
-
-        it.each([
-            ["a `, ` separator", `filename ${B64("a.png")}, filetype ${B64("image/png")}`],
-            ["mixed type keys, mimeType winning after a `, `", `filetype ${B64("video/mp4")}, mimeType ${B64("image/png")}`],
-            ["padding around every pair", `  filename ${B64("a.png")} ,  type ${B64("image/png")}  `],
-        ])("caps an image declared with %s at the image cap (413)", async (_label, metadata) => {
-            expect.hasAssertions();
-
-            const { route, seen } = cappedRoute(new MemoryStorage({ path: "/upload" }));
-
-            await expect(create(route, metadata)).resolves.toHaveProperty("status", 413);
-            expect(seen).toStrictEqual(["image/png"]);
-        });
-
-        it.each([
-            ["a duplicate key", `filetype ${B64("video/mp4")},filetype ${B64("image/png")}`, /duplicate key "filetype"/],
-            ["a pair of three parts", `filetype ${B64("image/png")} extra`, /malformed key-value pair/],
-            ["a value that is not base64", "filetype image/png!", /value of "filetype" is not base64/],
-            ["url-safe base64", `filename ${Buffer.from("??>").toString("base64url")}`, /value of "filename" is not base64/],
-            ["a reserved key", `uploadConcat ${B64("partial")}`, /reserved key "uploadConcat"/],
-        ])("refuses Upload-Metadata with %s (400) before authorize and maxFileSizeFor", async (_label, metadata, message) => {
-            expect.hasAssertions();
-
-            const { authorize, route, seen } = cappedRoute(new MemoryStorage({ path: "/upload" }));
-            const response = await create(route, metadata, 10);
-
-            expect(response.status).toBe(400);
-            expect(response.headers.get("tus-resumable")).toBe("1.0.0");
-            await expect(response.json()).resolves.toMatchObject({ error: { message: expect.stringMatching(message) } });
-            expect(authorize).not.toHaveBeenCalled();
-            expect(seen).toStrictEqual([]);
-        });
-
-        it("refuses an invalid Upload-Metadata on a PATCH too, where upstream also reads it", async () => {
-            expect.hasAssertions();
-
-            const { authorize, route } = cappedRoute(new MemoryStorage({ path: "/upload" }));
-            const location = await rawTus(route).create(4, "a.bin");
-
-            authorize.mockClear();
-
-            const response = await route.fetch(
-                new Request(location, {
-                    body: new Uint8Array(4),
-                    headers: {
-                        "Content-Type": "application/offset+octet-stream",
-                        "Tus-Resumable": "1.0.0",
-                        "Upload-Metadata": "a b c",
-                        "Upload-Offset": "0",
-                    },
-                    method: "PATCH",
-                }),
-            );
-
-            expect(response.status).toBe(400);
-            // Upstream answers this PATCH 400 too: only the gate shows the route refused it.
-            expect(authorize).not.toHaveBeenCalled();
-            await expect(rawTus(route).head(location)).resolves.toBe(0);
-        });
-
-        // Lunora's parse and upstream's must agree on every header: the same
-        // status, and on a create, the type `maxFileSizeFor` saw is the type
-        // stored.
-        it.each([
-            `filetype ${B64("image/png")}`,
-            `filename ${B64("a.png")}, filetype ${B64("image/png")}`,
-            `filetype ${B64("video/mp4")}, mimeType ${B64("image/png")}`,
-            `type ${B64("text/plain")},filetype ${B64("image/png")}`,
-            `mimeType ${B64("")},filetype ${B64("image/png")}`,
-            `mimeType,filetype ${B64("image/png")}`,
-            ` , ,filename ${B64("x")}`,
-            "",
-            "   ",
-            "flag",
-            `filetype ${B64("image/png")},filetype ${B64("image/png")}`,
-            "a b c",
-            "filetype %%%",
-            `partialIds ${B64("x")}`,
-            `filename ${Buffer.from("??>").toString("base64url")}`,
-        ])("agrees with @visulima/storage on %j", async (metadata) => {
-            expect.hasAssertions();
-
-            const upstreamStorage = new MemoryStorage({ path: "/upload" });
-            const upstream = await new Tus({ storage: upstreamStorage }).fetch(
-                new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10", "Upload-Metadata": metadata }, method: "POST" }),
-            );
-            const lunoraStorage = new MemoryStorage({ path: "/upload" });
-            const { route, seen } = cappedRoute(lunoraStorage);
-            const lunora = await create(route, metadata, 10);
-
-            expect(lunora.status).toBe(upstream.status);
-
-            const storedType = async (storage: MemoryStorage, response: Response): Promise<string | undefined> => {
-                if (response.status !== 201) {
-                    return undefined;
-                }
-
-                const file = await storage.getMeta(uploadId(response.headers.get("location") ?? ""));
-
-                return file.contentType;
-            };
-            const upstreamType = await storedType(upstreamStorage, upstream);
-
-            await expect(storedType(lunoraStorage, lunora)).resolves.toBe(upstreamType);
-            expect(seen).toStrictEqual(upstreamType === undefined ? [] : [upstreamType]);
-        });
     });
 
     it("recovers a client-driven upload after the connection drops once", async () => {
@@ -998,8 +687,6 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 });
 
 describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
-    const MiB = 1024 * 1024;
-
     const capped = (maxFileSizeFor: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>, maxFileSize = 100 * MiB) =>
         createUploadHandler({ maxFileSize, maxFileSizeFor, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
 

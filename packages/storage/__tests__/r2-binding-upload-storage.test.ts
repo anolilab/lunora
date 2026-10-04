@@ -10,64 +10,20 @@ import { createR2BindingUploadStorage, R2_PART_SIZE } from "../src/r2-binding-up
 import { createUploadHandler } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
 import { createFakeR2UploadBucket } from "./fake-r2-upload-bucket";
-import { pattern } from "./upload-pattern";
+import type { TusDriver } from "./tus-driver";
+import { tusDriver } from "./tus-driver";
+import { pattern, sameBytes } from "./upload-pattern";
 
 const ENDPOINT = "https://test.local/upload";
 const STATE_PREFIX = "_lunora/uploads/";
 const B64 = (value: string): string => Buffer.from(value).toString("base64");
 
-/** Byte equality without a structural diff over megabytes (which is what makes `toStrictEqual` crawl). */
-const sameBytes = (actual: Uint8Array | undefined, expected: Uint8Array): boolean => actual !== undefined && Buffer.from(actual).equals(Buffer.from(expected));
-
 const handlerOver = (bucket: R2UploadBucket) => createUploadHandler({ silent: true, storage: createR2BindingUploadStorage(bucket) });
 
 type Handler = ReturnType<typeof handlerOver>;
 
-const tus = (handler: Handler) => {
-    return {
-        create: async (length: number, name = "file.bin", filetype = "application/octet-stream"): Promise<string> => {
-            const response = await handler.fetch(
-                new Request(ENDPOINT, {
-                    headers: {
-                        "Tus-Resumable": "1.0.0",
-                        "Upload-Length": String(length),
-                        "Upload-Metadata": `filename ${B64(name)},filetype ${B64(filetype)}`,
-                    },
-                    method: "POST",
-                }),
-            );
-
-            expect(response.status).toBe(201);
-
-            const location = response.headers.get("location") ?? "";
-
-            return location.startsWith("http") ? location : `https://test.local${location}`;
-        },
-        delete: async (location: string): Promise<Response> =>
-            handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "DELETE" })),
-        head: async (location: string): Promise<Response> => handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "HEAD" })),
-        patch: async (location: string, offset: number, body: BodyInit): Promise<Response> =>
-            handler.fetch(
-                new Request(location, {
-                    body,
-                    headers: { "Content-Type": "application/offset+octet-stream", "Tus-Resumable": "1.0.0", "Upload-Offset": String(offset) },
-                    method: "PATCH",
-                    // A stream body needs half-duplex in Node's fetch.
-                    ...(body instanceof ReadableStream ? { duplex: "half" } : {}),
-                }),
-            ),
-    };
-};
-
 /** Upload `bytes` from `from` in chunks of `chunkSize`, asserting each PATCH's offset. */
-const sendChunks = async (
-    driver: ReturnType<typeof tus>,
-    location: string,
-    bytes: Uint8Array<ArrayBuffer>,
-    chunkSize: number,
-    from = 0,
-    until = bytes.byteLength,
-) => {
+const sendChunks = async (driver: TusDriver, location: string, bytes: Uint8Array<ArrayBuffer>, chunkSize: number, from = 0, until = bytes.byteLength) => {
     let offset = from;
 
     while (offset < until) {
@@ -144,10 +100,10 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const total = 2 * R2_PART_SIZE + 123_457;
         const bytes = pattern(total);
-        const location = await driver.create(total, "video.mp4", "video/mp4");
+        const location = await driver.create(total, { filename: "video.mp4", filetype: "video/mp4" });
 
         await sendChunks(driver, location, bytes, 1_000_003);
 
@@ -172,7 +128,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const bytes = pattern(300_001);
         const location = await driver.create(bytes.byteLength);
 
@@ -186,7 +142,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const bytes = pattern(2 * R2_PART_SIZE);
         const location = await driver.create(bytes.byteLength);
 
@@ -200,8 +156,8 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
-        const location = await driver.create(0, "empty.txt");
+        const driver = tusDriver(handlerOver(bucket));
+        const location = await driver.create(0, { filename: "empty.txt" });
 
         expect(sameBytes(storedObject(bucket, location)?.bytes, new Uint8Array(0))).toBe(true);
         await expect(offsetOf(driver.head(location))).resolves.toBe("0");
@@ -213,14 +169,14 @@ describe(createR2BindingUploadStorage, () => {
         const bucket = createFakeR2UploadBucket();
         const total = R2_PART_SIZE + 2_000_000;
         const bytes = pattern(total);
-        const first = tus(handlerOver(bucket));
+        const first = tusDriver(handlerOver(bucket));
         const location = await first.create(total);
 
         // 6.2 MB lands on isolate A: one part stored, the rest buffered as a segment.
         await sendChunks(first, location, bytes, 1_234_567, 0, 6_200_000);
 
         // Isolate B: a fresh provider and handler over the same binding.
-        const second = tus(handlerOver(bucket));
+        const second = tusDriver(handlerOver(bucket));
         const head = await second.head(location);
 
         expect(head.status).toBe(200);
@@ -258,7 +214,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const bytes = pattern(1_000_000);
         const location = await driver.create(bytes.byteLength);
 
@@ -278,11 +234,11 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         // A second handler over the same bucket stands in for another isolate:
         // it does not share the TUS handler's in-memory lock, so only the
         // provider's lease in the bucket stops it.
-        const elsewhere = tus(handlerOver(bucket));
+        const elsewhere = tusDriver(handlerOver(bucket));
         const bytes = pattern(600_000);
         const location = await driver.create(bytes.byteLength);
 
@@ -330,7 +286,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const bytes = pattern(500_000);
         const location = await driver.create(bytes.byteLength);
         const id = location.split("/").pop() ?? "";
@@ -351,7 +307,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const total = R2_PART_SIZE + 1_000_000;
         const bytes = pattern(total);
         const location = await driver.create(total);
@@ -384,7 +340,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const location = await driver.create(1000);
 
         await expect(driver.patch(location, 0, pattern(1001))).resolves.toHaveProperty("status", 413);
@@ -395,7 +351,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const bytes = pattern(R2_PART_SIZE + 700_000);
         const location = await driver.create(2 * R2_PART_SIZE);
 
@@ -417,7 +373,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const location = await driver.create(4);
 
         await sendChunks(driver, location, pattern(4), 4);
@@ -527,8 +483,8 @@ describe(createR2BindingUploadStorage, () => {
         try {
             const bucket = createFakeR2UploadBucket();
             const handler = createUploadHandler({ silent: true, storage: createR2BindingUploadStorage(bucket, { expiration: { maxAge: 1 } }) });
-            const driver = tus(handler);
-            const location = await driver.create(5, "a.txt");
+            const driver = tusDriver(handler);
+            const location = await driver.create(5, { filename: "a.txt" });
 
             await sendChunks(driver, location, pattern(5), 5);
             vi.setSystemTime(Date.now() + 60_000);
@@ -552,7 +508,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const bytes = pattern(R2_PART_SIZE + 1000);
         const location = await driver.create(bytes.byteLength);
         const paused = pausedBody(bytes.slice(0, 1000), bytes.slice(1000));
@@ -581,7 +537,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const bytes = pattern(2 * R2_PART_SIZE + 10);
         const location = await driver.create(bytes.byteLength);
         const cut = R2_PART_SIZE + 100;
@@ -603,7 +559,7 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
-        const driver = tus(handlerOver(bucket));
+        const driver = tusDriver(handlerOver(bucket));
         const bytes = pattern(30_000);
         const location = await driver.create(bytes.byteLength + 1);
 
@@ -668,7 +624,7 @@ describe(createR2BindingUploadStorage, () => {
                 };
             },
         };
-        const driver = tus(handlerOver(flaky));
+        const driver = tusDriver(handlerOver(flaky));
         const bytes = pattern(2 * R2_PART_SIZE + 100);
         const location = await driver.create(bytes.byteLength);
         const failed = await driver.patch(location, 0, bytes);
