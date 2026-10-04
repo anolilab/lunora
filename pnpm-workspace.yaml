@@ -123,7 +123,7 @@ overrides:
   nuxt@>=4.0.0 <4.5.1: ^4.5.1
   postcss@<8.5.10: ^8.5.26
   protobufjs: ">=7.6.5"
-  sharp@<0.35.0: ^0.35.0
+  sharp@<0.35.0: ^0.35.4
   shell-quote: ">=1.8.5"
   svgo@>=4.0.0 <4.0.2: ^4.0.2
   tar@<=7.5.20: ^7.5.21
@@ -1078,7 +1078,8 @@ minimumReleaseAgeExclude:
   - 'react@19.2.7'
   - 'react-doctor@0.5.1'
   - 'react-dom@19.2.7'
-  - 'sharp@0.35.0'
+  # Renovate security update: sharp@0.35.4
+  - 'sharp@0.35.0 || 0.35.4'
   - 'svgo@4.0.2'
   - 'tar@7.5.21'
   - 'tmp@0.2.4 || 0.2.6'
