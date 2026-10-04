@@ -26,7 +26,7 @@ interface FakeR2S3 {
     fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     /** The stored object under `key`, if any. */
     object: (key: string) => Uint8Array | undefined;
-    /** `METHOD path?query` of every request, in order. */
+    /** `METHOD url` of every request, in order. */
     requests: string[];
 }
 
@@ -91,7 +91,7 @@ const createFakeR2S3 = (bucket: string): FakeR2S3 => {
         const url = new URL(request.url);
         const prefix = `/${bucket}/`;
 
-        requests.push(`${request.method} ${url.pathname}${url.search}`);
+        requests.push(`${request.method} ${url.href}`);
 
         if (!url.pathname.startsWith(prefix)) {
             return s3Error("NoSuchBucket", 404);

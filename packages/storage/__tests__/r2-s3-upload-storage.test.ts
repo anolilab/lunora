@@ -57,24 +57,14 @@ describe("createR2UploadStorage", () => {
         vi.unstubAllGlobals();
     });
 
-    it("addresses the bucket in the path of the account endpoint, or of the endpoint passed", async () => {
+    it.each([
+        ["the default account endpoint", undefined, "https://acct.r2.cloudflarestorage.com/uploads/"],
+        ["an endpoint passed with a trailing slash", "https://acct.eu.r2.cloudflarestorage.com/", "https://acct.eu.r2.cloudflarestorage.com/uploads/"],
+        ["an endpoint that already names the bucket", "https://acct.eu.r2.cloudflarestorage.com/uploads", "https://acct.eu.r2.cloudflarestorage.com/uploads/"],
+    ])("stores a TUS upload of two parts intact under %s, every request naming the bucket once", async (_, endpoint, base) => {
         expect.hasAssertions();
 
-        for (const endpoint of [undefined, "https://acct.eu.r2.cloudflarestorage.com/"]) {
-            const { handler, s3 } = routeOver(endpoint);
-
-            // eslint-disable-next-line no-await-in-loop -- one endpoint at a time, each with its own fetch stub
-            await tusCreate(handler, 10);
-
-            expect(s3.requests.length).toBeGreaterThan(0);
-            expect(s3.requests.every((request) => request.split(" ")[1]?.startsWith("/uploads/"))).toBe(true);
-        }
-    });
-
-    it("stores a TUS upload of two parts intact", async () => {
-        expect.hasAssertions();
-
-        const { handler, s3 } = routeOver();
+        const { handler, s3 } = routeOver(endpoint);
         const bytes = pattern(6 * MIB);
         const location = await tusCreate(handler, bytes.byteLength);
 
@@ -85,12 +75,30 @@ describe("createR2UploadStorage", () => {
         expect(last.status).toBe(204);
         expect(last.headers.get("upload-offset")).toBe(String(bytes.byteLength));
         expect(sameBytes(s3.object(keyOf(location)), bytes)).toBe(true);
+
+        const key = `${base}${keyOf(location)}`;
+
+        expect(s3.requests).toStrictEqual(
+            expect.arrayContaining([
+                // The bucket probe, then the multipart calls and the metadata object.
+                `HEAD ${base}`,
+                `POST ${key}?uploads=`,
+                `GET ${key}?uploadId=upload-1`,
+                `PUT ${key}?partNumber=1&uploadId=upload-1`,
+                `PUT ${key}?partNumber=2&uploadId=upload-1`,
+                `POST ${key}?uploadId=upload-1`,
+                `HEAD ${key}.META`,
+                `PUT ${key}.META`,
+                `DELETE ${key}.META`,
+            ]),
+        );
+        expect(s3.requests.every((request) => request.split(" ")[1]?.startsWith(base))).toBe(true);
     });
 
     it("cannot store a third part: the provider reads back only the last part it listed (upstream)", async () => {
         expect.hasAssertions();
 
-        // `@visulima/storage` 2.0.27's aws-light XML parser keeps only the last
+        // visulima/visulima#907: `@visulima/storage` 2.0.27's aws-light XML parser keeps only the last
         // `<Part>` of a ListParts answer, so from the third part on the
         // provider computes its offset from one part and refuses the chunk.
         // When this starts passing with the third PATCH stored, drop the

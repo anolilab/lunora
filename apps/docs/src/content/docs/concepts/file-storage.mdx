@@ -282,7 +282,8 @@ pair a type-based cap with `allowMIME` on the provider
 with S3 credentials and no binding. Prefer `createR2BindingUploadStorage`: it
 needs no credentials and runs under `wrangler dev`. And as of `@visulima/storage`
 2.0.27 the S3 provider **fails any upload of more than two parts** (it reads
-back only the last stored part, so the third chunk gets a `409`).
+back only the last stored part, so the third chunk gets a `409`;
+[visulima/visulima#907](https://github.com/visulima/visulima/issues/907)).
 
 #### Upload from the client
 

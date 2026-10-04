@@ -190,8 +190,8 @@ interface R2UploadStorageOptions {
     bucket: string;
 
     /**
-     * Explicit R2 S3 account endpoint, without the bucket (it is appended as
-     * the first path segment). Defaults to
+     * Explicit R2 S3 account endpoint. The bucket is appended as a path
+     * segment unless the endpoint already ends in it. Defaults to
      * `https://<accountId>.r2.cloudflarestorage.com`. Pass this to pin a
      * jurisdiction (e.g. `https://<accountId>.eu.r2.cloudflarestorage.com`).
      */
@@ -699,12 +699,21 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
  * The bucket's S3 endpoint, path-style: `<account endpoint>/<bucket>/`. The
  * aws-light provider resolves every key against it with `new URL(key, endpoint)`,
  * so it has to name the bucket and end in `/`; given the bare account endpoint,
- * R2 would read each key's first segment as the bucket.
+ * R2 would read each key's first segment as the bucket. An `endpoint` that
+ * already ends in the bucket keeps it once.
  */
 const bucketEndpoint = (options: R2UploadStorageOptions): string => {
-    const account = options.endpoint ?? `https://${options.accountId}.r2.cloudflarestorage.com`;
+    const url = new URL(options.endpoint ?? `https://${options.accountId}.r2.cloudflarestorage.com`);
+    const bucket = encodeURIComponent(options.bucket);
+    const segments = url.pathname.split("/").filter((segment) => segment !== "");
 
-    return `${account}${account.endsWith("/") ? "" : "/"}${encodeURIComponent(options.bucket)}/`;
+    if (segments.at(-1) !== bucket) {
+        segments.push(bucket);
+    }
+
+    url.pathname = `/${segments.join("/")}/`;
+
+    return url.href;
 };
 
 /**
@@ -719,8 +728,8 @@ const bucketEndpoint = (options: R2UploadStorageOptions): string => {
  *
  * The bucket is addressed path-style, `<endpoint>/<bucket>/<key>`.
  *
- * **Uploads of more than two parts fail upstream** (`@visulima/storage`
- * 2.0.27): the aws-light provider parses only the last `<Part>` of R2's
+ * **Uploads of more than two parts fail upstream** (visulima/visulima#907,
+ * `@visulima/storage` 2.0.27): the aws-light provider parses only the last `<Part>` of R2's
  * ListParts answer, so from the third chunk on it reads its offset wrong and
  * refuses the chunk (`409`). TUS uploads of one or two chunks complete. Prefer
  * the R2 binding provider (`./r2-binding-upload-storage`): it needs no S3

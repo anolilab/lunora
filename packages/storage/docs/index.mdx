@@ -433,8 +433,9 @@ smaller (`413`, refused before any byte is read), where upstream's default is
 `createR2UploadStorage({ accountId, bucket, accessKeyId, secretAccessKey, endpoint?, partSize?, path? })`
 builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
 `nodejs_compat`). `path` must match the route the handler is mounted on, and
-`endpoint` is the account endpoint without the bucket (the bucket is added as
-the first path segment); pass it to pin a jurisdiction. Each upload chunk
+`endpoint` is the account endpoint; pass it to pin a jurisdiction. Requests go
+to `<endpoint>/<bucket>/<key>`, and an `endpoint` that already ends in the
+bucket keeps it once. Each upload chunk
 becomes one part of an R2 multipart upload, and R2 rejects parts under 5 MiB
 except the last (and parts of unequal size), so a TUS client must send equal
 chunks of at least 5 MiB (the TUS client's default `chunkSize` is 5 MiB). The
@@ -445,7 +446,9 @@ at module scope. It takes no upload limits of its own, so the handler's
 **Prefer `createR2BindingUploadStorage`.** It needs no S3 credentials, runs
 under `wrangler dev`, and has neither part-size restriction. And in
 `@visulima/storage` 2.0.27 the S3 provider still **fails any upload of more
-than two parts**: its ListParts parser keeps only the last part, so from the
+than two parts**
+([visulima/visulima#907](https://github.com/visulima/visulima/issues/907)): its
+ListParts parser keeps only the last part, so from the
 third chunk on it reads the offset wrong and refuses the chunk (`409`). A TUS
 upload of one or two chunks completes. Chunked REST is refused over it (see
 [below](#chunked-rest)).
@@ -539,5 +542,5 @@ to 1.0.6. What changes for an upload route:
   `status: "completed"` over providers that accept parallel chunks.
 - **`createR2UploadStorage` puts the bucket in the request path.** It sent every
   request to `<endpoint>/<key>`, which R2 read as a bucket named after the
-  file. `endpoint` is now the account endpoint without the bucket; drop the
-  bucket from it if you added it there.
+  file. It now goes to `<endpoint>/<bucket>/<key>`; an `endpoint` that already
+  ends in the bucket is not doubled.
