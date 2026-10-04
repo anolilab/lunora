@@ -16,7 +16,7 @@ import {
     lunoraLine,
     runPostCodegenHook,
 } from "@lunora/config";
-import { assertWranglerSatisfiesSchema, findWranglerFile, reconcileBindingsSafely } from "@lunora/config/cloudflare";
+import { assertWranglerSatisfiesSchema, findWranglerFile, reconcileBindingsSafely, WRANGLER_FILES } from "@lunora/config/cloudflare";
 
 import type { CodegenLogger } from "./codegen";
 import { createReusableProject, runCodegenPass } from "./codegen";
@@ -221,9 +221,22 @@ class LunoraRspackPlugin {
             // resolves, and an edited wrangler config changes what validation
             // accepts. Without these, fixing either one leaves the build showing
             // the stale error until something under `lunora/` happens to change.
-            for (const path of [findTsconfig(this.#schemaDirectory), findWranglerFile(this.#options.projectRoot)]) {
+            const wranglerPath = findWranglerFile(this.#options.projectRoot);
+
+            for (const path of [findTsconfig(this.#schemaDirectory), wranglerPath]) {
                 if (path !== undefined) {
                     compilation.fileDependencies.add(path);
+                }
+            }
+
+            // An ABSENT wrangler config is a finding too ("wrangler.jsonc not
+            // found"), and creating it is the fix. A file dependency cannot name a
+            // file that does not exist, so watch every candidate for its creation —
+            // otherwise the build sits on the stale error until something under
+            // `lunora/` happens to change.
+            if (wranglerPath === undefined) {
+                for (const candidate of WRANGLER_FILES) {
+                    compilation.missingDependencies.add(resolve(this.#options.projectRoot, candidate));
                 }
             }
 
