@@ -190,9 +190,10 @@ interface R2UploadStorageOptions {
     bucket: string;
 
     /**
-     * Explicit R2 S3 endpoint. Defaults to
+     * Explicit R2 S3 account endpoint, without the bucket (it is appended as
+     * the first path segment). Defaults to
      * `https://<accountId>.r2.cloudflarestorage.com`. Pass this to pin a
-     * jurisdiction (e.g. `<accountId>.eu.r2.cloudflarestorage.com`).
+     * jurisdiction (e.g. `https://<accountId>.eu.r2.cloudflarestorage.com`).
      */
     endpoint?: string;
     /** Client-side multipart part size (bytes or a size string like `"16MB"`). */
@@ -342,14 +343,14 @@ const declaredUploadSize = (request: Request, protocol: UploadProtocol): number 
     return largest;
 };
 
-/** A TUS `Upload-Metadata` value: standard base64, as `@visulima/storage` 2.0.26 accepts it. */
+/** A TUS `Upload-Metadata` value: standard base64, as `@visulima/storage` 2.0.27 accepts it. */
 const BASE64_VALUE = /^[a-z\d+/]*={0,2}$/iu;
 
 /** Metadata keys the TUS handler keeps for itself and refuses from a client. */
 const RESERVED_TUS_METADATA_KEYS = new Set(["partialIds", "uploadConcat"]);
 
 /**
- * TUS `Upload-Metadata`, parsed the way `@visulima/storage` 2.0.26's TUS
+ * TUS `Upload-Metadata`, parsed the way `@visulima/storage` 2.0.27's TUS
  * handler parses it (its `parseMetadata` is not exported): pairs split on
  * `,`, each pair trimmed, then split on a single space into a key and an
  * optional base64 value. A blank pair is skipped. A pair of more than two
@@ -606,14 +607,15 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: maxFileSize must be a finite, non-negative number (received ${String(maxFileSize)})`);
     }
 
-    // The S3-API provider appends each chunked-REST chunk as the next multipart
-    // part without checking its `X-Chunk-Offset`, so a chunk that arrives out of
-    // order (the bundled client sends four in parallel) or twice is silently
-    // stored in the wrong place.
+    // Over the S3-API provider a chunked-REST upload stores every byte, but the
+    // `PATCH` that completes it answers `404`: the provider deletes the upload's
+    // metadata when it completes the multipart upload, before the chunked-REST
+    // handler records the chunk. Chunks out of order or sent twice are refused
+    // (`409`) since `@visulima/storage` 2.0.26, so this is the only reason left.
     if (protocol === "chunked-rest" && options.storage instanceof AwsLightStorage) {
         throw new LunoraError(
             "VALIDATION_ERROR",
-            '@lunora/storage: chunked REST is not supported over createR2UploadStorage (R2\'s S3 API), which stores chunks in arrival order and can corrupt the file. Use protocol "tus", or createR2BindingUploadStorage',
+            '@lunora/storage: chunked REST is not supported over createR2UploadStorage (R2\'s S3 API), where the request that completes an upload answers 404. Use protocol "tus", or createR2BindingUploadStorage',
         );
     }
 
@@ -694,6 +696,18 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
 };
 
 /**
+ * The bucket's S3 endpoint, path-style: `<account endpoint>/<bucket>/`. The
+ * aws-light provider resolves every key against it with `new URL(key, endpoint)`,
+ * so it has to name the bucket and end in `/`; given the bare account endpoint,
+ * R2 would read each key's first segment as the bucket.
+ */
+const bucketEndpoint = (options: R2UploadStorageOptions): string => {
+    const account = options.endpoint ?? `https://${options.accountId}.r2.cloudflarestorage.com`;
+
+    return `${account}${account.endsWith("/") ? "" : "/"}${encodeURIComponent(options.bucket)}/`;
+};
+
+/**
  * Build an R2-backed storage provider for {@link createUploadHandler} using
  * `@visulima/storage`'s dependency-light `aws-light` provider (`aws4fetch`, no
  * AWS SDK). R2's S3 region alias is always `auto`.
@@ -703,17 +717,25 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
  * Worker the `aws-light` provider needs `nodejs_compat` (it imports
  * `node:stream`).
  *
- * **Currently broken upstream** (visulima/visulima#905, `@visulima/storage`
- * 2.0.25 and 2.0.26): the S3 base class runs its bucket check from its
- * constructor before the subclass sets up its S3 client, so the storage never
- * becomes ready and every upload request answers `503` after about five
- * seconds. Use the R2 binding provider (`./r2-binding-upload-storage`) instead.
+ * The bucket is addressed path-style, `<endpoint>/<bucket>/<key>`.
+ *
+ * **Uploads of more than two parts fail upstream** (`@visulima/storage`
+ * 2.0.27): the aws-light provider parses only the last `<Part>` of R2's
+ * ListParts answer, so from the third chunk on it reads its offset wrong and
+ * refuses the chunk (`409`). TUS uploads of one or two chunks complete. Prefer
+ * the R2 binding provider (`./r2-binding-upload-storage`): it needs no S3
+ * credentials and runs under `wrangler dev` too. Chunked REST is refused over
+ * this provider (see {@link createUploadHandler}).
+ *
+ * The provider takes no `@visulima/storage` limits of its own (its upload cap
+ * is the 5 TB default), so `maxFileSize` / `maxFileSizeFor` on the handler are
+ * the caps that apply.
  */
 const createR2UploadStorage = (options: R2UploadStorageOptions & { secretAccessKey: string }): AwsLightStorage =>
     new AwsLightStorage({
         accessKeyId: options.accessKeyId,
         bucket: options.bucket,
-        endpoint: options.endpoint ?? `https://${options.accountId}.r2.cloudflarestorage.com`,
+        endpoint: bucketEndpoint(options),
         path: options.path ?? "/",
         region: "auto",
         secretAccessKey: options.secretAccessKey,
