@@ -103,7 +103,7 @@ overrides:
   body-parser: ">=2.3.0"
   brace-expansion@<1.1.18: ^5.0.12
   brace-expansion@>=2.0.0 <2.1.4: ^5.0.12
-  brace-expansion@>=4.0.0 <5.0.9: ^5.0.9
+  brace-expansion@>=4.0.0 <5.0.9: ^5.0.12
   dompurify@<=3.4.10: ^3.4.13
   esbuild@>=0.27.3 <0.28.1: ^0.28.1
   fast-uri@>=3.0.0 <3.1.5: ^3.1.5
