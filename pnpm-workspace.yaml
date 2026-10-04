@@ -95,7 +95,7 @@ overrides:
   "@hono/node-server@<2.0.5": ^2.0.5
   "@nuxt/devtools@<3.3.1": ^3.3.1
   "@opentelemetry/core@<2.8.0": ^2.8.0
-  adm-zip: ">=0.6.0"
+  adm-zip: ">=0.6.1"
   # astro's XSS fix needs a major bump to 7.0.10 — handled separately, it breaks
   # the adapter.
   astro@<6.4.6: ^6.4.6
@@ -1093,6 +1093,8 @@ minimumReleaseAgeExclude:
   - '@visulima/tui-binding-win32-x64-msvc@4.0.8'
   - '@visulima/tui-kit@1.0.11'
   - '@visulima/tui@4.0.8'
+  # Renovate security update: adm-zip@0.6.1
+  - adm-zip@0.6.1
 
 # recast@0.23.11 loads `@babel/parser` via a bare (phantom) require, so pnpm
 # hands it the hoisted @babel/parser@8.0.0. recast's parser plugin list is
