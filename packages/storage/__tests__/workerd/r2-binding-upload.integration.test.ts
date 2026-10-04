@@ -287,7 +287,27 @@ describe("chunked REST over the R2 binding (workerd + Miniflare R2)", () => {
 
             await expect(driver.patch(location, 0, bytes)).resolves.toHaveProperty("status", 200);
 
-            const route = routedFetch(chunkedRoute);
+            // The real binding, with its `put`s counted: the resume must write nothing.
+            let puts = 0;
+            const counted = new Proxy(bucket, {
+                get: (target, property) => {
+                    const value: unknown = Reflect.get(target, property, target);
+
+                    if (property === "put") {
+                        return async (...args: Parameters<R2UploadBucket["put"]>) => {
+                            puts += 1;
+
+                            return target.put(...args);
+                        };
+                    }
+
+                    return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+                },
+            });
+            const route = routedFetch({
+                fetch: async (request: Request): Promise<Response> =>
+                    createUploadHandler({ protocol: "chunked-rest", silent: true, storage: createR2BindingUploadStorage(counted) }).fetch(request),
+            });
 
             vi.stubGlobal("fetch", route.fetch);
 
@@ -306,14 +326,22 @@ describe("chunked REST over the R2 binding (workerd + Miniflare R2)", () => {
                 removeEntry: async () => undefined,
             };
             const adapter = createChunkedRestAdapter({ chunkSize: 10, endpoint: ENDPOINT, retry: false, urlStorage: resumeFrom as never });
-            const result = await adapter.upload(new File([bytes], "done.bin", { type: "application/octet-stream" }));
+            // Different bytes from the stored ones, so a write would show.
+            const other = pattern(10).map((byte) => 255 - byte);
+            const result = await adapter.upload(new File([other], "done.bin", { type: "application/octet-stream" }));
 
             expect(result).toMatchObject({ bytesWritten: 10, id: uploadId(location), status: "completed" });
             // Upstream does not record the chunk that completes a sequential
-            // upload in `X-Received-Chunks`, so the client sends it once more;
-            // the route answers it 200 from the finished upload.
+            // upload in `X-Received-Chunks` (visulima/visulima#913), so the
+            // client sends it once more. The route answers it 200 from the
+            // finished upload and writes nothing.
             expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
             expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
+            expect(puts).toBe(0);
+
+            const stored = await storedBytes(location);
+
+            expect(stored.every((byte, index) => byte === bytes[index])).toBe(true);
         });
     });
 });

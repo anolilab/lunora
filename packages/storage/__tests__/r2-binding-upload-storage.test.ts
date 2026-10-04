@@ -699,6 +699,28 @@ describe("chunked REST over the R2 binding", () => {
     /** The stored object of a chunked-REST upload, keyed by its id. */
     const storedUpload = (bucket: ReturnType<typeof createFakeR2UploadBucket>, location: string) => bucket.objects.get(uploadId(location));
 
+    it("stores the chunk list of an upload sent in many small chunks as one range", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const driver = chunkedRest(chunkedHandlerOver(bucket));
+        const total = 200;
+        const bytes = pattern(total);
+        const location = await driver.create(total);
+
+        for (let offset = 0; offset < total - 1; offset += 1) {
+            // eslint-disable-next-line no-await-in-loop -- chunks are sent in order
+            await expect(driver.patch(location, offset, bytes.slice(offset, offset + 1))).resolves.toHaveProperty("status", 202);
+        }
+
+        // Upstream appends one `_chunks` entry per chunk; the provider stores the merged prefix.
+        const { file } = readState(bucket, uploadId(location)) as unknown as { file: { metadata: Record<string, unknown> } };
+
+        expect(file.metadata).toMatchObject({ _chunks: [{ length: total - 1, offset: 0 }] });
+        await expect(driver.patch(location, total - 1, bytes.slice(total - 1))).resolves.toHaveProperty("status", 200);
+        expect(sameBytes(storedUpload(bucket, location)?.bytes, bytes)).toBe(true);
+    });
+
     it("uploads in-order chunks across a part boundary and reports the upload complete", async () => {
         expect.hasAssertions();
 
@@ -957,14 +979,19 @@ describe("chunked REST over the R2 binding", () => {
                 removeEntry: async () => undefined,
             };
             const adapter = createChunkedRestAdapter({ chunkSize: 10, endpoint: ENDPOINT, retry: false, urlStorage: resumeFrom as never });
-            const result = await adapter.upload(new File([bytes], "done.bin", { type: "application/octet-stream" }));
+            const put = vi.spyOn(bucket, "put");
+            // Different bytes from the stored ones, so a write would show.
+            const other = pattern(10).map((byte) => 255 - byte);
+            const result = await adapter.upload(new File([other], "done.bin", { type: "application/octet-stream" }));
 
             expect(result).toMatchObject({ bytesWritten: 10, id: uploadId(location), status: "completed" });
             // Upstream does not record the chunk that completes a sequential
-            // upload in `X-Received-Chunks`, so the client sends it once more;
-            // the route answers it 200 from the finished upload and stores nothing.
+            // upload in `X-Received-Chunks` (visulima/visulima#913), so the
+            // client sends it once more. The route answers it 200 from the
+            // finished upload and writes nothing.
             expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
             expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
+            expect(put).not.toHaveBeenCalled();
             expect(sameBytes(bucket.objects.get(uploadId(location))?.bytes, bytes)).toBe(true);
         });
     });
