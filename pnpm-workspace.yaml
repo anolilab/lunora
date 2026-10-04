@@ -668,7 +668,7 @@ catalogs:
   # adapters (React/Vue/Solid/Svelte) with progress, pause/resume and per-part
   # retry. Both follow the repo's exact-pinned `@visulima/*` convention.
   storage:
-    "@visulima/storage": 2.0.27
+    "@visulima/storage": 2.0.28
     "@visulima/storage-client": 1.0.6
     # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional
     # peer pulled in by the `aws-light` provider that backs `createR2UploadStorage`.
@@ -1063,13 +1063,13 @@ minimumReleaseAgeExclude:
   - '@types/react@19.2.16'
   - '@visulima/email@1.0.0-alpha.41'
   - '@visulima/find-ai-runner@1.0.0-alpha.9'
-  # User-authorized one-off for the upstream storage fixes: storage 2.0.27 +
-  # storage-client 1.0.6 (visulima/visulima#905, #902 via PR #906, on top of #899/#900).
-  # Remove these three entries once they are 24h old: pagination 2026-10-04 11:14
-  # UTC (2.0.27 exact-pins it), storage-client 2026-10-04 20:05 UTC, storage
-  # 2026-10-05 04:40 UTC.
+  # User-authorized one-off for the upstream storage fixes: storage 2.0.28 +
+  # storage-client 1.0.6 (visulima/visulima#907, #908, #909, #910, on top of
+  # #899/#900/#902/#905). Remove these three entries once they are 24h old:
+  # pagination 2026-10-04 11:14 UTC (2.0.28 exact-pins it), storage-client
+  # 2026-10-04 20:05 UTC, storage 2026-10-05 08:28 UTC.
   - '@visulima/pagination@7.0.2'
-  - '@visulima/storage@2.0.27'
+  - '@visulima/storage@2.0.28'
   - '@visulima/storage-client@1.0.6'
   - '@visulima/vis@1.0.0-alpha.43 || 4.0.2'
   - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.43 || 4.0.2'

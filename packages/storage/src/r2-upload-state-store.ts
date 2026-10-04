@@ -18,62 +18,6 @@ const CAS_ATTEMPTS = 5;
  */
 const PROVIDER_OWNED_FIELDS = ["bytesWritten", "ETag", "id", "name", "size", "status"] as const satisfies ReadonlyArray<keyof File>;
 
-/*
- * visulima/visulima#892 — the chunked-REST chunk list. Four pieces:
- * `CHUNKS_KEY`, `withStoredChunks` (answers the list on `get`), `withoutChunks`
- * and the stripping in `save` (never stores it).
- *
- * `@visulima/storage`'s chunked-REST handler keeps the chunks it has received
- * in the upload's metadata (`_chunks`) and decides from that list alone whether
- * the upload is complete. It records a chunk only after the provider's write
- * succeeds, which fixes #892 for a refused chunk, but not for a chunk whose body
- * was cut off mid-request: the write fails, so the chunk is never recorded, yet
- * this provider keeps the bytes that arrived (as TUS requires) and the client
- * resumes from the offset `HEAD` reports. The list then has a hole at the start
- * and the upload is never reported complete. So the provider answers the list
- * from what it has actually stored, `[0, bytesWritten)`, and never stores the
- * handler's version. Drop all four pieces once upstream derives completion from
- * the provider's offset.
- */
-
-/** The metadata key the chunked-REST handler keeps its received chunks under (visulima/visulima#892). */
-const CHUNKS_KEY = "_chunks";
-
-/** The metadata flag the chunked-REST create sets on an upload. */
-const CHUNKED_UPLOAD_KEY = "_chunkedUpload";
-
-const isChunkedUpload = (file: FileRecord): boolean => file.metadata[CHUNKED_UPLOAD_KEY] === true;
-
-/**
- * The record with the chunk list this provider can vouch for: the one run of
- * bytes it has stored, `[0, bytesWritten)` (visulima/visulima#892).
- *
- * `Object.fromEntries` rather than a spread: `@typescript-eslint/no-misused-spread`
- * rejects spreading `metadata`, whose declared type is a class.
- */
-const withStoredChunks = (file: FileRecord): FileRecord => {
-    if (!isChunkedUpload(file)) {
-        return file;
-    }
-
-    const stored = file.bytesWritten;
-    const chunks = stored > 0 ? [{ length: stored, offset: 0 }] : [];
-
-    return { ...file, metadata: Object.fromEntries([...Object.entries(file.metadata), [CHUNKS_KEY, chunks]]) };
-};
-
-/**
- * A chunked-REST record without the chunk list, which is never stored
- * (visulima/visulima#892). Any other upload keeps a metadata key of that name.
- */
-const withoutChunks = (file: FileRecord): FileRecord => {
-    if (!isChunkedUpload(file) || !(CHUNKS_KEY in file.metadata)) {
-        return file;
-    }
-
-    return { ...file, metadata: Object.fromEntries(Object.entries(file.metadata).filter(([key]) => key !== CHUNKS_KEY)) };
-};
-
 /** Two records that differ at most in `modifiedAt`, which every `update()` bumps. */
 const sameRecord = (a: FileRecord, b: FileRecord): boolean =>
     JSON.stringify({ ...a, modifiedAt: undefined }) === JSON.stringify({ ...b, modifiedAt: undefined });
@@ -162,7 +106,7 @@ class R2UploadStateStore extends MetaStorage {
             throw new Error(`Upload state not found for id: ${id}`);
         }
 
-        return withStoredChunks(stored.state.file);
+        return stored.state.file;
     }
 
     /**
@@ -170,16 +114,12 @@ class R2UploadStateStore extends MetaStorage {
      * the caller's changes the base way, then saves. This lays that record over
      * the current state under a compare-and-swap, keeping the progress fields
      * from the stored record, so a metadata update can never rewind an upload.
-     *
-     * The chunked-REST chunk list is dropped: `get` derives it
-     * (visulima/visulima#892). That makes the handler's per-chunk list update
-     * a no-op apart from `modifiedAt`, so a record that differs in nothing
-     * else is not written: no conditional put on every chunk.
+     * A record that differs in nothing but `modifiedAt` is not written.
      */
     public override async save(id: string, file: File): Promise<File> {
         const next = await this.swap(id, (state) => {
             const saved: FileRecord = file;
-            const record: FileRecord = withoutChunks({ ...saved });
+            const record: FileRecord = { ...saved };
 
             for (const field of PROVIDER_OWNED_FIELDS) {
                 (record as Record<string, unknown>)[field] = state.file[field];

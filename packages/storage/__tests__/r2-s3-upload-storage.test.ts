@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createR2UploadStorage } from "../src/r2-s3-upload-storage";
 import { createUploadHandler } from "../src/upload-handler";
+import type { ChunkedRestRoute } from "./chunked-rest-driver";
 import { chunkedRest, uploadId } from "./chunked-rest-driver";
 import type { FakeR2S3 } from "./fake-r2-s3";
 import { createFakeR2S3 } from "./fake-r2-s3";
@@ -92,60 +93,54 @@ describe("createR2UploadStorage", () => {
         },
     );
 
-    it("cannot store a third part: the provider reads back only the last part it listed (upstream)", async () => {
+    it("stores a TUS upload of three parts intact", async () => {
         expect.hasAssertions();
 
-        // visulima/visulima#907: the aws-light XML parser keeps only the last
-        // `<Part>` of a ListParts answer, so from the third part on the
-        // provider computes its offset from one part and refuses the chunk.
-        // When the third PATCH is stored, drop the notes on createR2UploadStorage.
         const { s3, tus } = tusOver();
         const bytes = pattern(11 * MIB);
         const location = await tus.create(bytes.byteLength);
 
-        await expect(tus.patch(location, 0, bytes.slice(0, 5 * MIB))).resolves.toHaveProperty("status", 204);
-        await expect(tus.patch(location, 5 * MIB, bytes.slice(5 * MIB, 10 * MIB))).resolves.toHaveProperty("status", 204);
-        await expect(tus.patch(location, 10 * MIB, bytes.slice(10 * MIB))).resolves.toHaveProperty("status", 409);
-        expect(s3.object(keyOf(location))).toBeUndefined();
+        const offsets: (string | null)[] = [];
+
+        for (const offset of [0, 5 * MIB, 10 * MIB]) {
+            // eslint-disable-next-line no-await-in-loop -- TUS chunks are sequential
+            const response = await tus.patch(location, offset, bytes.slice(offset, offset + 5 * MIB));
+
+            expect(response.status).toBe(204);
+
+            offsets.push(response.headers.get("upload-offset"));
+        }
+
+        expect(offsets).toStrictEqual([String(5 * MIB), String(10 * MIB), String(bytes.byteLength)]);
+        expect(sameBytes(s3.object(keyOf(location)), bytes)).toBe(true);
     });
 
-    it("refuses chunked REST at construction, and TUS and multipart are fine", () => {
+    it.each([
+        ["upstream's own Rest handler", (): ChunkedRestRoute => new Rest({ storage: r2Storage() })],
+        ["createUploadHandler", (): ChunkedRestRoute => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: r2Storage() })],
+    ])("stores a chunked-REST upload of three parts intact through %s, refusing chunks out of order or sent twice (409)", async (_, route) => {
         expect.hasAssertions();
 
-        vi.stubGlobal("fetch", createFakeR2S3("uploads").fetch);
-
-        expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: r2Storage() })).toThrow(
-            expect.objectContaining({
-                code: "VALIDATION_ERROR",
-                message: expect.stringMatching(/chunked REST is not supported over createR2UploadStorage.*404.*"tus".*createR2BindingUploadStorage/),
-            }),
-        );
-        expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: r2Storage() })).not.toThrow();
-        expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: r2Storage() })).not.toThrow();
-    });
-
-    it("answers the chunk that completes a chunked-REST upload 404 upstream, which is why the route refuses the protocol", async () => {
-        expect.hasAssertions();
-
-        // Upstream's own `Rest` handler, since `createUploadHandler` refuses the
-        // pairing. Out-of-order and repeated chunks are refused (409) without
-        // being stored, but the completing chunk answers 404 though every byte is
-        // stored (visulima/visulima#908): the provider deletes the upload's
-        // metadata when it completes the multipart upload, before the handler
-        // records the chunk. When this answers 200, drop the refusal above.
         const s3 = createFakeR2S3("uploads");
 
         vi.stubGlobal("fetch", s3.fetch);
 
-        const driver = chunkedRest(new Rest({ storage: r2Storage() }));
-        const bytes = pattern(6 * MIB);
+        const driver = chunkedRest(route());
+        const bytes = pattern(11 * MIB);
+        const chunk = (offset: number): Uint8Array<ArrayBuffer> => bytes.slice(offset, offset + 5 * MIB);
         const location = await driver.create(bytes.byteLength);
 
-        await expect(driver.patch(location, 5 * MIB, bytes.slice(5 * MIB))).resolves.toHaveProperty("status", 409);
-        await expect(driver.patch(location, 0, bytes.slice(0, 5 * MIB))).resolves.toHaveProperty("status", 202);
-        await expect(driver.patch(location, 0, bytes.slice(0, 5 * MIB))).resolves.toHaveProperty("status", 409);
+        await expect(driver.patch(location, 5 * MIB, chunk(5 * MIB))).resolves.toHaveProperty("status", 409);
+        await expect(driver.patch(location, 0, chunk(0))).resolves.toHaveProperty("status", 202);
+        await expect(driver.patch(location, 0, chunk(0))).resolves.toHaveProperty("status", 409);
+        // Neither refused chunk reached the bucket.
         expect(s3.requests.filter((request) => request.includes("partNumber="))).toHaveLength(1);
-        await expect(driver.patch(location, 5 * MIB, bytes.slice(5 * MIB))).resolves.toHaveProperty("status", 404);
+        await expect(driver.patch(location, 5 * MIB, chunk(5 * MIB))).resolves.toHaveProperty("status", 202);
+
+        const last = await driver.patch(location, 10 * MIB, chunk(10 * MIB));
+
+        expect(last.status).toBe(200);
+        expect(last.headers.get("x-upload-complete")).toBe("true");
         expect(sameBytes(s3.object(uploadId(location)), bytes)).toBe(true);
     });
 });

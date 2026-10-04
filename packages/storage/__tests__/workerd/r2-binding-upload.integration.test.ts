@@ -186,6 +186,54 @@ describe("chunked REST over the R2 binding (workerd + Miniflare R2)", () => {
         expect(stored.every((byte, index) => byte === bytes[index])).toBe(true);
     });
 
+    it("keeps the bytes of a chunk cut off mid-body, and completes after the client resumes from HEAD", async () => {
+        expect.hasAssertions();
+
+        const driver = chunkedRest(chunkedRoute);
+        const total = R2_PART_SIZE + 1_000_000;
+        const bytes = pattern(total);
+        const location = await driver.create(total);
+        const cutAt = R2_PART_SIZE + 256 * 1024;
+        const piece = 64 * 1024;
+        let sent = 0;
+        const droppingBody = new ReadableStream<Uint8Array>({
+            pull(controller) {
+                if (sent >= cutAt) {
+                    controller.error(new Error("connection reset"));
+
+                    return;
+                }
+
+                controller.enqueue(bytes.slice(sent, sent + piece));
+                sent += piece;
+            },
+        });
+
+        // The whole file declared as one chunk, dropped past the first part.
+        const dropped = await driver.patch(location, 0, droppingBody, total);
+
+        expect(dropped.status).toBeGreaterThanOrEqual(400);
+
+        // `HEAD` reports the kept prefix (the provider declares
+        // `sequentialWrites`), and the client continues from there.
+        const head = await driver.head(location);
+        const received = Number(head.headers.get("x-upload-offset"));
+
+        expect(received).toBeGreaterThanOrEqual(R2_PART_SIZE);
+        expect(received).toBeLessThanOrEqual(cutAt);
+        expect(head.headers.get("x-upload-complete")).toBe("false");
+
+        const rest = await driver.patch(location, received, bytes.slice(received));
+
+        expect(rest.status).toBe(200);
+        expect(rest.headers.get("x-upload-complete")).toBe("true");
+
+        const stored = await storedBytes(location);
+
+        expect(stored.byteLength).toBe(total);
+        expect(stored.every((byte, index) => byte === bytes[index])).toBe(true);
+    }, 60_000);
+
     it("refuses GET on the upload route, so a stored file is never served from it", async () => {
         expect.hasAssertions();
 
@@ -230,7 +278,7 @@ describe("chunked REST over the R2 binding (workerd + Miniflare R2)", () => {
             await expect(adapter.upload(new File([pattern(400_000)], "four.bin", { type: "application/octet-stream" }))).rejects.toThrow(/409/);
         });
 
-        it("resumes an upload whose chunks are all stored: the /metadata GET gets 405 and the client still resolves", async () => {
+        it("resumes an upload whose chunks are all stored, and the client resolves it completed", async () => {
             expect.hasAssertions();
 
             const bytes = pattern(10);
@@ -261,8 +309,11 @@ describe("chunked REST over the R2 binding (workerd + Miniflare R2)", () => {
             const result = await adapter.upload(new File([bytes], "done.bin", { type: "application/octet-stream" }));
 
             expect(result).toMatchObject({ bytesWritten: 10, id: uploadId(location), status: "completed" });
-            expect(route.requests.filter((request) => request.startsWith("PATCH"))).toStrictEqual([]);
-            expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([`GET /upload/${uploadId(location)}/metadata`]);
+            // Upstream does not record the chunk that completes a sequential
+            // upload in `X-Received-Chunks`, so the client sends it once more;
+            // the route answers it 200 from the finished upload.
+            expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+            expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
         });
     });
 });

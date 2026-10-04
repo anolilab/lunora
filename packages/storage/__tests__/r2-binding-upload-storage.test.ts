@@ -872,64 +872,24 @@ describe("chunked REST over the R2 binding", () => {
         expect(head.headers.get("x-upload-complete")).toBe("true");
     });
 
-    it("does not write the upload state again for the handler's chunk-list update, which the provider derives (visulima/visulima#892)", async () => {
+    it("reports the stored prefix as X-Upload-Offset, and the upload complete once every byte is stored", async () => {
         expect.hasAssertions();
 
-        const bucket = createFakeR2UploadBucket();
-        const storage = createR2BindingUploadStorage(bucket);
-        const file = await storage.create({ contentType: "text/plain", id: "chunked-file", metadata: { _chunkedUpload: true, _totalSize: 10 }, size: 10 });
-        const meta = await storage.getMeta(file.id);
-        const puts = vi.spyOn(bucket, "put");
-
-        // What the chunked-REST handler sends after each chunk: the list it computed.
-        await storage.update({ id: file.id }, { metadata: Object.fromEntries([...Object.entries(meta.metadata), ["_chunks", [{ length: 5, offset: 5 }]]]) });
-
-        expect(puts).not.toHaveBeenCalled();
-        // The list stays the provider's own: nothing is stored yet.
-        await expect(storage.getMeta(file.id)).resolves.toMatchObject({ metadata: { _chunks: [] } });
-    });
-
-    it("keeps a `_chunks` metadata key on an upload that is not chunked REST", async () => {
-        expect.hasAssertions();
-
-        const storage = createR2BindingUploadStorage(createFakeR2UploadBucket());
-        const file = await storage.create({ contentType: "text/plain", id: "tus-file", metadata: { name: "a.txt" }, size: 10 });
-
-        await storage.update({ id: file.id }, { metadata: { _chunks: "user value", name: "a.txt" } });
-
-        await expect(storage.getMeta(file.id)).resolves.toMatchObject({ metadata: { _chunks: "user value", name: "a.txt" } });
-    });
-
-    it("reports X-Received-Chunks on PATCH as the stored run plus the chunk just written, and on HEAD as one run", async () => {
-        expect.hasAssertions();
-
+        // The provider declares `sequentialWrites`, so upstream takes the
+        // offset and completion from its `bytesWritten`, not from the chunk list.
         const driver = chunkedRest(chunkedHandlerOver(createFakeR2UploadBucket()));
         const bytes = pattern(15);
         const location = await driver.create(15);
-        const receivedChunks = (response: Response): unknown => JSON.parse(response.headers.get("x-received-chunks") ?? "null");
+        const progress = (response: Response): [string | null, string | null] => [
+            response.headers.get("x-upload-offset"),
+            response.headers.get("x-upload-complete"),
+        ];
 
-        // The handler records the chunk after the provider stored it, so the
-        // derived run already covers it, and the chunk is listed again.
-        const first = await driver.patch(location, 0, bytes.slice(0, 5));
-
-        expect(receivedChunks(first)).toStrictEqual([{ length: 5, offset: 0 }]);
-
-        const second = await driver.patch(location, 5, bytes.slice(5, 10));
-
-        expect(receivedChunks(second)).toStrictEqual([
-            { length: 10, offset: 0 },
-            { length: 5, offset: 5 },
-        ]);
-        expect(receivedChunks(await driver.head(location))).toStrictEqual([{ length: 10, offset: 0 }]);
-
-        const last = await driver.patch(location, 10, bytes.slice(10));
-
-        expect(last.headers.get("x-upload-complete")).toBe("true");
-        expect(receivedChunks(last)).toStrictEqual([
-            { length: 15, offset: 0 },
-            { length: 5, offset: 10 },
-        ]);
-        expect(receivedChunks(await driver.head(location))).toStrictEqual([{ length: 15, offset: 0 }]);
+        expect(progress(await driver.patch(location, 0, bytes.slice(0, 5)))).toStrictEqual(["5", "false"]);
+        expect(progress(await driver.patch(location, 5, bytes.slice(5, 10)))).toStrictEqual(["10", "false"]);
+        expect(progress(await driver.head(location))).toStrictEqual(["10", "false"]);
+        expect(progress(await driver.patch(location, 10, bytes.slice(10)))).toStrictEqual(["15", "true"]);
+        expect(progress(await driver.head(location))).toStrictEqual(["15", "true"]);
     });
 
     describe("the bundled chunked-REST client (@visulima/storage-client)", () => {
@@ -968,7 +928,7 @@ describe("chunked REST over the R2 binding", () => {
             expect([...bucket.objects.values()].some((object) => object.bytes.byteLength === bytes.byteLength)).toBe(false);
         });
 
-        it("resumes an upload whose chunks are all stored: the /metadata GET gets 405 and the client still resolves", async () => {
+        it("resumes an upload whose chunks are all stored, and the client resolves it completed", async () => {
             expect.hasAssertions();
 
             const bucket = createFakeR2UploadBucket();
@@ -1000,8 +960,12 @@ describe("chunked REST over the R2 binding", () => {
             const result = await adapter.upload(new File([bytes], "done.bin", { type: "application/octet-stream" }));
 
             expect(result).toMatchObject({ bytesWritten: 10, id: uploadId(location), status: "completed" });
-            expect(route.requests.filter((request) => request.startsWith("PATCH"))).toStrictEqual([]);
-            expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([`GET /upload/${uploadId(location)}/metadata`]);
+            // Upstream does not record the chunk that completes a sequential
+            // upload in `X-Received-Chunks`, so the client sends it once more;
+            // the route answers it 200 from the finished upload and stores nothing.
+            expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
+            expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
+            expect(sameBytes(bucket.objects.get(uploadId(location))?.bytes, bytes)).toBe(true);
         });
     });
 });

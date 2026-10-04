@@ -31,7 +31,6 @@
 import { LunoraError } from "@lunora/errors";
 import { File } from "@visulima/storage";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
-import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
 
 import type { DeclaredFile, RouteCheck, RoutePolicy } from "./tus-route-policy";
 import { TUS_RESUMABLE, tusRoutePolicy } from "./tus-route-policy";
@@ -462,17 +461,6 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
     // `UploadOptions.maxSize` in `createStorage`.
     if (!Number.isFinite(maxFileSize) || maxFileSize < 0) {
         throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: maxFileSize must be a finite, non-negative number (received ${String(maxFileSize)})`);
-    }
-
-    // Over the S3-API provider a chunked-REST upload stores every byte, but the
-    // `PATCH` that completes it answers `404` (visulima/visulima#908): the
-    // provider deletes the upload's metadata when it completes the multipart
-    // upload, before the chunked-REST handler records the chunk.
-    if (protocol === "chunked-rest" && options.storage instanceof AwsLightStorage) {
-        throw new LunoraError(
-            "VALIDATION_ERROR",
-            '@lunora/storage: chunked REST is not supported over createR2UploadStorage (R2\'s S3 API), where the request that completes an upload answers 404 (visulima/visulima#908). Use protocol "tus", or createR2BindingUploadStorage',
-        );
     }
 
     const handlerOptions: UploadHandlerOptions = {

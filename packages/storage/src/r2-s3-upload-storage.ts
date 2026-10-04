@@ -91,13 +91,11 @@ const bucketEndpoint = (options: R2UploadStorageOptions): string => {
  *
  * The bucket is addressed path-style, `<endpoint>/<bucket>/<key>`.
  *
- * **Uploads of more than two parts fail upstream** (visulima/visulima#907): the
- * aws-light provider parses only the last `<Part>` of R2's ListParts answer, so
- * from the third chunk on it reads its offset wrong and refuses the chunk
- * (`409`). TUS uploads of one or two chunks complete. Prefer the R2 binding
- * provider (`./r2-binding-upload-storage`): it needs no S3 credentials and runs
- * under `wrangler dev` too. Chunked REST is refused over this provider (see
- * `createUploadHandler`).
+ * Each chunk becomes one multipart part, so every chunk but the last has to be
+ * the same size and at least 5 MiB, and chunks have to arrive in order (an
+ * out-of-order or repeated one is a `409`). The R2 binding provider
+ * (`./r2-binding-upload-storage`) has neither limit, needs no S3 credentials
+ * and runs under `wrangler dev` too.
  *
  * The provider takes no `@visulima/storage` limits of its own (its upload cap
  * is the 5 TB default), so `maxFileSize` / `maxFileSizeFor` on the handler are

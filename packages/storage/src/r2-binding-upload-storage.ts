@@ -102,6 +102,14 @@ const MAX_BUFFERED_GET_BYTES: number = 32 * 1024 * 1024;
  * {@link createR2BindingUploadStorage}.
  */
 class R2BindingUploadStorage extends AbstractBaseStorage {
+    /**
+     * The provider only appends: a write must start at the stored offset
+     * (`409` otherwise), and the bytes of a chunk cut off mid-body are kept. So
+     * its `bytesWritten` is the stored prefix, which the chunked-REST handler
+     * then takes as the upload's offset and completion.
+     */
+    public override readonly sequentialWrites: boolean = true;
+
     protected override meta: R2UploadStateStore;
 
     private readonly bucket: R2UploadBucket;
@@ -559,7 +567,7 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
  * Chunked-REST chunks have to arrive one at a time and in order. A chunk at any
  * offset other than the upload's current one, or one sent while another is
  * still streaming, is a `409` and stores nothing, and it never counts towards
- * completion (see the chunk list in `r2-upload-state-store.ts`). The bundled
+ * completion. The bundled
  * `@visulima/storage-client` chunked-REST client sends four chunks in parallel,
  * so over this provider it can upload only as one chunk; use TUS for
  * resumable uploads.
