@@ -139,7 +139,7 @@ class LunoraRspackPlugin {
     /** Guards the once-per-session startup work from re-running on every rebuild. */
     #started = false;
 
-    /** Whether this session already ran {@link #announce} — kept apart from `#started`, which the codegen switches gate. */
+    /** Whether this session already warned via {@link #announce} — kept apart from `#started`, which the codegen switches gate. */
     #announced = false;
 
     /** Content hash of everything codegen reads, from the last pass that ran. */
@@ -258,19 +258,22 @@ class LunoraRspackPlugin {
      * The first thing a session does, ahead of every codegen and validation
      * switch (`LUNORA_CODEGEN=0`, `validateWrangler: false`, a skipped pass, a
      * failing `.dev.vars` scaffold): warn about a Cloudflare CLI config beside
-     * the wrangler config (#964). Once per session here, and once per process
-     * tree through the shared guard, so `lunora dev` having warned already keeps
-     * it quiet. Runs in watch mode and one-shot builds alike — a build is where
-     * someone reaches for `cf deploy` next.
+     * the wrangler config (#964). Runs in watch mode and one-shot builds alike —
+     * a build is where someone reaches for `cf deploy` next.
+     *
+     * Asked on every pass until it has warned, so a `cloudflare.config.ts` added
+     * mid-session (`cf migrate` run in another terminal) is caught on the next
+     * compile rather than never. The cost stays small: the shared process-tree
+     * guard is read before the filesystem probe (so once `lunora dev` or an
+     * earlier pass warned, it is an env read), and after this session warned,
+     * `#announced` skips even that.
      */
     #announce(): void {
         if (this.#announced) {
             return;
         }
 
-        this.#announced = true;
-
-        warnCloudflareCliConfigOnce(this.#options.projectRoot, (message) => {
+        this.#announced = warnCloudflareCliConfigOnce(this.#options.projectRoot, (message) => {
             consoleLogger.warn(lunoraLine(message));
         });
     }

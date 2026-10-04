@@ -370,6 +370,45 @@ describe("rspack watch (real compiler)", () => {
         60_000,
     );
 
+    it("warns once when a cloudflare.config.ts appears mid-session, and never repeats it", async () => {
+        expect.assertions(3);
+
+        vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+
+        const root = fixture();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const warningsAfterBuild: number[] = [];
+
+        try {
+            const { builds } = await watchRun(
+                root,
+                (buildNumber) => {
+                    warningsAfterBuild.push(cfWarnings(warn).length);
+
+                    if (buildNumber === 1) {
+                        // Session started clean; now `cf migrate` runs in another terminal.
+                        writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
+                    } else {
+                        // Release the process-tree guard: only the session's own
+                        // "already warned" state may keep this pass quiet.
+                        vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+                    }
+
+                    writeFileSync(join(root, "lunora", "schema.ts"), `${SCHEMA}\n// touched ${String(buildNumber)}\n`, "utf8");
+                },
+                { expectedBuilds: 3, settleMs: 2000 },
+            );
+
+            expect(builds.length).toBeGreaterThanOrEqual(3);
+            // Nothing before the file existed; exactly one after the pass that saw it.
+            expect(warningsAfterBuild).toStrictEqual([0, 1]);
+            expect(cfWarnings(warn)).toHaveLength(1);
+        } finally {
+            warn.mockRestore();
+            vi.unstubAllEnvs();
+        }
+    }, 60_000);
+
     it("scaffolds .dev.vars, which only runs when watchMode is actually true", async () => {
         expect.assertions(3);
 

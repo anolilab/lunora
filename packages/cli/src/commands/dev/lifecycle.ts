@@ -280,6 +280,11 @@ const printLifecycleHints = (logger: Logger): void => {
  * is an env var, so the Vite / wrangler / daemon children inherit it and the
  * plugins inside them stay quiet instead of repeating the warning — which, for a
  * background start, would only ever land in the log file, never the terminal.
+ *
+ * A startup notice, deliberately: nothing is claimed when there is no file, so a
+ * config added after the dev server started is reported by the next Vite
+ * restart (or Rspack pass) inside it, the next `lunora dev`, `lunora doctor`, or
+ * `lunora deploy`.
  */
 const printCloudflareCliConfigWarning = (logger: Logger, cwd: string): void => {
     warnCloudflareCliConfigOnce(cwd, (message) => {
