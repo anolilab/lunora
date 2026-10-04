@@ -99,6 +99,16 @@ export const c = action(async ({ ctx, args }) => ctx.browser.scrape(args.url));`
         expect(discoverBrowserUrlAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("flags an args-derived url passed through the `URL` global", () => {
+        expect.assertions(1);
+
+        // The `browser` registry item's shape: the url is parsed with `new URL(…)`,
+        // a `declare var` in `lib.dom.d.ts`, on its way to the sink.
+        write("parsed.ts", `export const grab = action(async ({ ctx, args }) => ctx.browser.pdf(new URL(args.url).href));`);
+
+        expect(discoverBrowserUrlAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("ignores a ctx.browser method that is not a URL-navigation method", () => {
         expect.assertions(1);
 

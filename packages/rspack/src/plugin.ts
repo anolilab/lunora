@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { findTsconfig, fingerprintSchemaSources } from "@lunora/codegen";
@@ -16,7 +16,13 @@ import {
     lunoraLine,
     runPostCodegenHook,
 } from "@lunora/config";
-import { assertWranglerSatisfiesSchema, findWranglerFile, reconcileBindingsSafely, warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
+import {
+    assertWranglerSatisfiesSchema,
+    findWranglerFile,
+    reconcileBindingsSafely,
+    warnCloudflareCliConfigOnce,
+    WRANGLER_FILES,
+} from "@lunora/config/cloudflare";
 
 import type { CodegenLogger } from "./codegen";
 import { createReusableProject, runCodegenPass } from "./codegen";
@@ -226,9 +232,24 @@ class LunoraRspackPlugin {
             // resolves, and an edited wrangler config changes what validation
             // accepts. Without these, fixing either one leaves the build showing
             // the stale error until something under `lunora/` happens to change.
-            for (const path of [findTsconfig(this.#schemaDirectory), findWranglerFile(this.#options.projectRoot)]) {
-                if (path !== undefined) {
+            const tsconfigPath = findTsconfig(this.#schemaDirectory);
+
+            if (tsconfigPath !== undefined) {
+                compilation.fileDependencies.add(tsconfigPath);
+            }
+
+            // EVERY wrangler candidate, as `@lunora/vite` does: creating one is an
+            // edit too — the fix for "wrangler.jsonc not found", or a
+            // `wrangler.jsonc` that now outranks an existing `wrangler.json`. A
+            // file dependency cannot name a file that does not exist yet, so an
+            // absent candidate is watched as a missing one.
+            for (const candidate of WRANGLER_FILES) {
+                const path = resolve(this.#options.projectRoot, candidate);
+
+                if (existsSync(path)) {
                     compilation.fileDependencies.add(path);
+                } else {
+                    compilation.missingDependencies.add(path);
                 }
             }
 

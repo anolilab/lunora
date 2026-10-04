@@ -169,4 +169,23 @@ export { warm as warmCache };`,
 
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
+
+    // `keys.d.v2.ts` is a file TypeScript 5 classes as a declaration file, yet
+    // codegen discovers it and it holds real code. A shortcut keyed on
+    // `isDeclarationFile()` treated its `let owner` as never reassigned, so the
+    // ctx-scoped initializer hid the args-derived reassignment.
+    it.each(["keys.ts", "keys.d.v2.ts"])("flags a ctx-scoped `let` later reassigned from args, in %s", (name) => {
+        expect.assertions(1);
+
+        write(
+            name,
+            `export const leak = query(async ({ ctx, args }) => {
+  let owner = ctx.auth.userId;
+  owner = args.victim;
+  return ctx.kv.get(\`\${owner}/\${args.name}\`);
+});`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
 });
