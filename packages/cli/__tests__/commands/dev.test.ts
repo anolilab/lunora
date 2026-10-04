@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readDevServerState, writeDevServerState } from "@lunora/config";
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { negatableDevFlags, runDevCommand } from "../../src/commands/dev/handler";
@@ -744,6 +745,47 @@ describe("lunora dev", () => {
             expect(codegenClosed).toBe(true);
             expect(studioClosed).toBe(true);
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
+        });
+
+        it("warns about a cloudflare.config.ts once, claiming the guard before any child is spawned", async () => {
+            expect.assertions(4);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const warnings: string[] = [];
+            const claimedAt: Record<string, string | undefined> = {};
+
+            try {
+                await runDevCommand({
+                    cwd: workdir,
+                    findFreePort: async () => 8787,
+                    logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                    // Each child inherits process.env as it is when it is spawned.
+                    startCodegen: () => {
+                        claimedAt.codegen = process.env[CLOUDFLARE_CLI_CONFIG_WARNING_ENV];
+
+                        return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    },
+                    startStudio: async () => {
+                        return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                    },
+                    startWorker: () => {
+                        claimedAt.worker = process.env[CLOUDFLARE_CLI_CONFIG_WARNING_ENV];
+
+                        return { exited: Promise.resolve(0), kill: () => {} };
+                    },
+                });
+            } finally {
+                vi.unstubAllEnvs();
+            }
+
+            const cfWarnings = warnings.filter((message) => message.includes("cloudflare.config.ts"));
+
+            expect(cfWarnings).toHaveLength(1);
+            expect(cfWarnings[0]).toContain("https://github.com/anolilab/lunora/issues/964");
+            expect(claimedAt.codegen).toBe("1");
+            expect(claimedAt.worker).toBe("1");
         });
 
         // celld has no Vite integration and refuses Cloudflare-only wrangler

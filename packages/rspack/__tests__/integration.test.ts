@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import type { Compiler, Stats } from "@rspack/core";
 import { rspack } from "@rspack/core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -86,6 +87,10 @@ const runOnce = async (compiler: Compiler): Promise<Stats> =>
             });
         });
     });
+
+/** The `console.warn` lines about a Cloudflare CLI config, from a spy. */
+const cfWarnings = (warn: { mock: { calls: unknown[][] } }): string[] =>
+    warn.mock.calls.map(([message]) => String(message)).filter((message) => message.includes("cloudflare.config.ts"));
 
 /** The compilation's error messages, as plain strings. */
 const errorsOf = (stats: Stats): string[] => stats.toJson({ all: false, errors: true }).errors?.map((entry) => entry.message ?? "") ?? [];
@@ -213,6 +218,38 @@ const watchRun = async (
     });
 
 describe("rspack build (real compiler)", () => {
+    // `LUNORA_CODEGEN=0` must not silence it: the warning is the first thing a
+    // session does, ahead of every codegen and validation switch.
+    it.each([
+        ["", "codegen on"],
+        ["0", "LUNORA_CODEGEN=0"],
+    ])(
+        "warns about a cloudflare.config.ts on a one-shot build (LUNORA_CODEGEN=%j, %s)",
+        async (codegen) => {
+            expect.assertions(2);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+            vi.stubEnv("LUNORA_CODEGEN", codegen);
+
+            const root = fixture();
+
+            writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                await runOnce(productionCompiler(root));
+
+                expect(cfWarnings(warn)).toHaveLength(1);
+                expect(cfWarnings(warn)[0]).toContain("https://github.com/anolilab/lunora/issues/964");
+            } finally {
+                warn.mockRestore();
+                vi.unstubAllEnvs();
+            }
+        },
+        TEST_TIMEOUT_MS,
+    );
+
     it(
         "generates the API surface and emits the bundle",
         async () => {
@@ -377,6 +414,91 @@ describe("rspack watch (real compiler)", () => {
             // not retrigger the dev watchers". Before the source-fingerprint gate this
             // measured 73 builds in 25 seconds, each spawning a subprocess.
             expect(builds.length).toBeLessThanOrEqual(3);
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    // Under `LUNORA_CODEGEN=0` a watch pass returns before any codegen work, and
+    // the warning used to sit behind that return.
+    it.each([
+        ["", "codegen on"],
+        ["0", "LUNORA_CODEGEN=0"],
+    ])(
+        "warns about a cloudflare.config.ts once per session, not on every pass (LUNORA_CODEGEN=%j, %s)",
+        async (codegen) => {
+            expect.assertions(2);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+            vi.stubEnv("LUNORA_CODEGEN", codegen);
+
+            const root = fixture();
+
+            writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                const { builds } = await watchRun(
+                    root,
+                    () => {
+                        // Release the process-tree guard, so only the plugin calling it
+                        // from its once-per-session slot (not every pass) keeps the
+                        // rebuild's pass quiet.
+                        vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+                        writeFileSync(join(root, "lunora", "schema.ts"), `${SCHEMA}\n// touched\n`, "utf8");
+                    },
+                    { expectedBuilds: 2, settleMs: 2000 },
+                );
+
+                expect(builds.length).toBeGreaterThanOrEqual(2);
+                expect(cfWarnings(warn)).toHaveLength(1);
+            } finally {
+                warn.mockRestore();
+                vi.unstubAllEnvs();
+            }
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
+        "warns once when a cloudflare.config.ts appears mid-session, and never repeats it",
+        async () => {
+            expect.assertions(3);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+
+            const root = fixture();
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+            const warningsAfterBuild: number[] = [];
+
+            try {
+                const { builds } = await watchRun(
+                    root,
+                    (buildNumber) => {
+                        warningsAfterBuild.push(cfWarnings(warn).length);
+
+                        if (buildNumber === 1) {
+                            // Session started clean; now `cf migrate` runs in another terminal.
+                            writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
+                        } else {
+                            // Release the process-tree guard: only the session's own
+                            // "already warned" state may keep this pass quiet.
+                            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+                        }
+
+                        writeFileSync(join(root, "lunora", "schema.ts"), `${SCHEMA}\n// touched ${String(buildNumber)}\n`, "utf8");
+                    },
+                    { expectedBuilds: 3, settleMs: 2000 },
+                );
+
+                expect(builds.length).toBeGreaterThanOrEqual(3);
+                // Nothing before the file existed; exactly one after the pass that saw it.
+                expect(warningsAfterBuild).toStrictEqual([0, 1]);
+                expect(cfWarnings(warn)).toHaveLength(1);
+            } finally {
+                warn.mockRestore();
+                vi.unstubAllEnvs();
+            }
         },
         TEST_TIMEOUT_MS,
     );

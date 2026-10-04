@@ -1,3 +1,18 @@
+## @lunora/cli [1.0.0-alpha.346](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.345...@lunora/cli@1.0.0-alpha.346) (2026-10-04)
+
+### Features
+
+* **cli:** warn when a project has a cloudflare cli config ([#965](https://github.com/anolilab/lunora/issues/965)) ([070d20d](https://github.com/anolilab/lunora/commit/070d20d3d139d012b93410f9d8fb519305e30e38)), closes [#964](https://github.com/anolilab/lunora/issues/964) [#964](https://github.com/anolilab/lunora/issues/964)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.261
+* **@lunora/config:** upgraded to 1.0.0-alpha.304
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.211
+* **@lunora/seed:** upgraded to 1.0.0-alpha.189
+* **@lunora/testing:** upgraded to 1.0.0-alpha.232
+
 ## @lunora/cli [1.0.0-alpha.345](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.344...@lunora/cli@1.0.0-alpha.345) (2026-10-03)
 
 

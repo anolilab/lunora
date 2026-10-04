@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DoctorData } from "../../src/commands/doctor/handler";
@@ -865,6 +866,64 @@ describe("runDoctor", () => {
             seed(workdir, CLEAN_WRANGLER);
 
             expect(cimdFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
+        });
+    });
+
+    describe("cloudflare cli config", () => {
+        const cfFinding = (result: Awaited<ReturnType<typeof runDoctor>>) => result.findings.find((finding) => finding.code === "cf-config-present");
+
+        it("warns when a cloudflare.config.ts sits beside wrangler.jsonc, without failing the run", async () => {
+            expect.assertions(6);
+
+            seed(workdir, CLEAN_WRANGLER);
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = cfFinding(result);
+
+            expect(finding?.level).toBe("warn");
+            expect(finding?.message).toContain("cloudflare.config.ts found next to wrangler.jsonc");
+            expect(finding?.message).toContain("Lunora manages wrangler.jsonc");
+            expect(finding?.fix).toContain("resource commands");
+            expect(finding?.fix).toContain("https://github.com/anolilab/lunora/issues/964");
+            expect(result.code).toBe(0);
+        });
+
+        it("reports every run, even after a once-per-process-tree warning was already claimed", async () => {
+            expect.assertions(2);
+
+            // What `lunora dev` / codegen / deploy leave behind once they warned.
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "1");
+
+            try {
+                seed(workdir, CLEAN_WRANGLER);
+                writeFileSync(join(workdir, "cloudflare.config.mjs"), "export default {};\n", "utf8");
+
+                expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))?.message).toContain("cloudflare.config.mjs");
+                expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeDefined();
+            } finally {
+                vi.unstubAllEnvs();
+            }
+        });
+
+        it("does not contradict wrangler-missing when there is no wrangler config", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(result.findings.some((finding) => finding.code === "wrangler-missing")).toBe(true);
+            expect(cfFinding(result)?.message).toContain("cloudflare.config.ts found in the project root.");
+            expect(cfFinding(result)?.message).not.toContain("next to");
+        });
+
+        it("says nothing for a project without one", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            expect(cfFinding(await runDoctor({ cwd: workdir, logger: makeLogger().logger }))).toBeUndefined();
         });
     });
 

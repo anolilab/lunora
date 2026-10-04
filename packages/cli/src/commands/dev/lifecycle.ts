@@ -37,6 +37,7 @@ import {
     targetRunsOwnDevServer,
     updateDevServerState,
 } from "@lunora/config";
+import { warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
@@ -271,6 +272,24 @@ const printLifecycleHints = (logger: Logger): void => {
     logger.info("  Stop:   lunora dev stop");
     logger.info("  Status: lunora dev status");
     logger.info("  Logs:   lunora dev logs");
+};
+
+/**
+ * Warn, once per process tree, when the project also has a Cloudflare CLI config
+ * that Lunora never updates (#964). Call it BEFORE spawning any child: the claim
+ * is an env var, so the Vite / wrangler / daemon children inherit it and the
+ * plugins inside them stay quiet instead of repeating the warning — which, for a
+ * background start, would only ever land in the log file, never the terminal.
+ *
+ * A startup notice, deliberately: nothing is claimed when there is no file, so a
+ * config added after the dev server started is reported by the next Vite
+ * restart (or Rspack pass) inside it, the next `lunora dev`, `lunora doctor`, or
+ * `lunora deploy`.
+ */
+const printCloudflareCliConfigWarning = (logger: Logger, cwd: string): void => {
+    warnCloudflareCliConfigOnce(cwd, (message) => {
+        logger.warn(message);
+    });
 };
 
 /** Report an already-running dev server + the lifecycle hints (the idempotent-start path). */
@@ -565,6 +584,10 @@ const startBackground = async (context: {
     }
 
     const handoff = { [DEV_HANDOFF_ENV]: String(process.pid) };
+
+    // In THIS terminal, before the detached child exists: its output goes to the
+    // log file, and the inherited claim keeps it from repeating the warning there.
+    printCloudflareCliConfigWarning(logger, cwd);
 
     try {
         // `--tunnel` needs a process that owns the cloudflared child, and the
@@ -933,6 +956,7 @@ export type { DevFlavor };
 export {
     codegenRequested,
     detectDevFlavor,
+    printCloudflareCliConfigWarning,
     reportExistingServer,
     runDevBackground,
     runDevLogs,

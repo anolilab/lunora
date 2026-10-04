@@ -3,7 +3,14 @@ import { join } from "node:path";
 
 import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries, resolveSchemaDirectory } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
-import { collectExportGaps, findWranglerFile, readWranglerJsonc, UNEXPORTED_CLASS_MARKER, validateWranglerProject } from "@lunora/config/cloudflare";
+import {
+    collectExportGaps,
+    detectCloudflareCliConfig,
+    findWranglerFile,
+    readWranglerJsonc,
+    UNEXPORTED_CLASS_MARKER,
+    validateWranglerProject,
+} from "@lunora/config/cloudflare";
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
@@ -37,6 +44,7 @@ const DOCTOR_CODES = [
     "ai-binding-missing",
     "ai-gateway-default",
     "ai-gateway-token-unused",
+    "cf-config-present",
     "cimd-fetch-not-strictly-public",
     "cli-shadowed",
     "cpu-limit-missing",
@@ -242,6 +250,30 @@ const checkStaleProjectConfig = (cwd: string, findings: Finding[]): void => {
         level: "warn",
         message: "lunora.json is present but no longer read — lunora.config.* replaced it, so any `target` or `remote` in it is being ignored.",
     });
+};
+
+/**
+ * A Cloudflare CLI config (`cloudflare.config.{ts,mts,js,mjs}`) in the project
+ * root → WARN.
+ *
+ * Lunora reconciles the wrangler config and never touches the `cf` config, so
+ * `cf dev` / `cf build` / `cf deploy` would ship without whatever Lunora adds
+ * after `cf migrate` wrote it. WARN rather than FAIL: nothing `lunora deploy`
+ * runs reads the file, and `cf` resource commands are fine — the risk is a
+ * separate `cf` lifecycle command. Reported on every run, ignoring the
+ * once-per-process-tree guard the other surfaces share: listing what it found is
+ * doctor's job. The message names the wrangler file actually present, or "the
+ * project root" when there is none, so it never contradicts `wrangler-missing`.
+ * See https://github.com/anolilab/lunora/issues/964.
+ */
+const checkCloudflareCliConfig = (cwd: string, findings: Finding[]): void => {
+    const detected = detectCloudflareCliConfig(cwd);
+
+    if (detected === undefined) {
+        return;
+    }
+
+    findings.push({ code: "cf-config-present", fix: detected.fix, level: "warn", message: detected.message });
 };
 
 /**
@@ -723,6 +755,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     const { parsed, path } = readWrangler(cwd);
 
     checkWrangler(cwd, parsed, path, findings);
+    checkCloudflareCliConfig(cwd, findings);
     checkD1Placeholders(parsed, findings);
     checkEmailDestination(parsed, findings);
     checkCpuLimit(parsed, findings);

@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { claimOncePerProcessTree } from "./process-tree-once";
+
 /**
  * Project-relative directory the Lunora agent skills ("rules") install into.
  * This is the portable [Agent Skills](https://tanstack.com/intent/latest/docs/registry)
@@ -55,15 +57,7 @@ const AGENT_RULES_HINT = "Lunora AI rules not installed — run `lunora rules in
  * Vite dev-server restart, or a child process that inherited the env) read it
  * and stay quiet. Returns `true` the first time, `false` afterwards.
  */
-const claimAgentRulesHint = (): boolean => {
-    if (process.env[AGENT_RULES_HINT_ENV] === "1") {
-        return false;
-    }
-
-    process.env[AGENT_RULES_HINT_ENV] = "1";
-
-    return true;
-};
+const claimAgentRulesHint = (): boolean => claimOncePerProcessTree(AGENT_RULES_HINT_ENV);
 
 interface AgentRulesStatus {
     /**
