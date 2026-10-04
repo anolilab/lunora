@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createR2BindingUploadStorage } from "../src/r2-binding-upload-storage";
 import type { UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
-import { createR2UploadStorage, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
+import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
 import { createFakeR2UploadBucket } from "./fake-r2-upload-bucket";
 
@@ -932,24 +932,6 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             expect(withinCap.status).toBe(201);
         });
 
-        it("refuses chunked REST over createR2UploadStorage (S3 API), which stores chunks in arrival order", () => {
-            expect.hasAssertions();
-
-            // Nothing here reaches the network: the aws-light provider probes the
-            // bucket on its first metadata read or write, not from its constructor.
-            const s3 = () => createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", path: "/upload", secretAccessKey: "secret" });
-
-            expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: s3() })).toThrow(
-                expect.objectContaining({
-                    code: "VALIDATION_ERROR",
-                    message: expect.stringMatching(/chunked REST is not supported over createR2UploadStorage.*"tus".*createR2BindingUploadStorage/),
-                }),
-            );
-            // TUS and multipart over the same provider are fine.
-            expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: s3() })).not.toThrow();
-            expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: s3() })).not.toThrow();
-        });
-
         it("rejects a maxFileSize that is not a finite, non-negative number", async () => {
             expect.hasAssertions();
 
@@ -1258,17 +1240,13 @@ describe("createUploadHandler chunked REST", () => {
         const adapter = createChunkedRestAdapter({ chunkSize: 10_000, endpoint: ENDPOINT, retry: false });
         const result = await adapter.upload(new File([bytes], "four.bin", { type: "application/octet-stream" }));
 
-        // Not `status: "completed"`: the client's four chunks run in parallel, and
-        // upstream loses `_chunks` records between concurrent PATCHes
-        // (visulima/visulima#902), so no PATCH may report the upload complete and
-        // the result can say "part" with every byte stored. What this test pins is
-        // what Lunora guarantees: all bytes land, and nothing is read back over GET.
-        expect(result).toMatchObject({ bytesWritten: 40_000 });
+        // The client's four chunks run in parallel. Since 2.0.27 concurrent
+        // PATCHes no longer lose each other's chunk records (visulima/visulima#902),
+        // so the PATCH that lands last reports the upload complete.
+        expect(result).toMatchObject({ bytesWritten: 40_000, status: "completed" });
         expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(4);
-        // The client never asks for the file's bytes. When no PATCH reports the
-        // upload complete it tries `/metadata`, gets 405, and builds the result
-        // from what it knows.
-        expect(route.requests.filter((request) => request.startsWith("GET") && !request.endsWith("/metadata"))).toStrictEqual([]);
+        // The client never asks for the file's bytes.
+        expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
 
         const stored = await storage.get({ id: result.id });
 
