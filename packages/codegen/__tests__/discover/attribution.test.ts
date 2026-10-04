@@ -2,11 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { SourceFile } from "ts-morph";
+import type { SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, Project, SyntaxKind } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { callSiteScopeOf } from "../../src/discover/attribution";
+import { callSiteScopeOf, isReassignedBinding } from "../../src/discover/attribution";
 import discoverCallEdges from "../../src/discover/call-edges";
 import discoverInserts from "../../src/discover/inserts";
 import discoverKvKeyAccesses from "../../src/discover/kv-key-accesses";
@@ -223,5 +223,37 @@ export const invite = mutation({ handler: (ctx) => notify(ctx) });
         });
 
         walks.mockRestore();
+    });
+});
+
+describe(isReassignedBinding, () => {
+    /** The `let` / `var` declaration named `name` anywhere in `source`. */
+    const variableNamed = (source: SourceFile, name: string): VariableDeclaration =>
+        source.getDescendantsOfKind(SyntaxKind.VariableDeclaration).find((declaration) => declaration.getName() === name) as VariableDeclaration;
+
+    it("treats a platform global declared in a TypeScript lib file as never reassigned", () => {
+        expect.assertions(2);
+
+        const project = new Project({ useInMemoryFileSystem: true });
+        const source = project.createSourceFile("/lunora/a.ts", `export const href = new URL("https://example.com").href;`);
+        const url = source.getFirstDescendantByKindOrThrow(SyntaxKind.NewExpression).getExpression();
+        const declaration = url
+            .getSymbol()
+            ?.getDeclarations()
+            .find((node) => Node.isVariableDeclaration(node));
+
+        // `declare var URL` — a `var`, so only the lib-file rule answers `false`.
+        expect(declaration?.getSourceFile().getBaseName()).toBe("lib.dom.d.ts");
+        expect(Node.isVariableDeclaration(declaration) && isReassignedBinding(declaration)).toBe(false);
+    });
+
+    it("still scans a user file that TypeScript classes as a declaration file", () => {
+        expect.assertions(2);
+
+        const project = new Project({ useInMemoryFileSystem: true });
+        const source = project.createSourceFile("/lunora/keys.d.v2.ts", `export const f = () => { let owner = "a"; owner = "b"; return owner; };`);
+
+        expect(source.isDeclarationFile()).toBe(true);
+        expect(isReassignedBinding(variableNamed(source, "owner"))).toBe(true);
     });
 });

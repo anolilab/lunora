@@ -1797,6 +1797,12 @@ interface BindingRequirement {
 }
 ```
 
+### `CLOUDFLARE_CLI_CONFIG_WARNING_ENV` (const)
+
+```ts
+const CLOUDFLARE_CLI_CONFIG_WARNING_ENV = "LUNORA_CF_CONFIG_WARNING_SHOWN";
+```
+
 ### `CLOUDFLARE_DRIVER` (const)
 
 ```ts
@@ -1807,6 +1813,15 @@ const CLOUDFLARE_DRIVER: DeployDriver;
 
 ```ts
 const CLOUDFLARE_TOOLCHAIN_VERSIONS: Readonly<Record<"@cloudflare/vite-plugin" | "@cloudflare/workers-types" | "wrangler", string>>;
+```
+
+### `CloudflareCliConfigFinding` (interface)
+
+```ts
+interface CloudflareCliConfigFinding {
+    fix: string;
+    message: string;
+}
 ```
 
 ### `DEFAULT_OBSERVABILITY` (const)
@@ -2536,6 +2551,12 @@ const collectWranglerSecretVariables: (projectRoot: string) => WranglerVariableI
 const describePreservedCrons: (preserved: ReadonlyArray<string>) => string | undefined;
 ```
 
+### `detectCloudflareCliConfig` (const)
+
+```ts
+const detectCloudflareCliConfig: (projectRoot: string) => CloudflareCliConfigFinding | undefined;
+```
+
 ### `findWranglerFile` (const)
 
 ```ts
@@ -2657,6 +2678,12 @@ const validateWranglerConfig: (wranglerInput: WranglerConfig | undefined, schema
 
 ```ts
 const validateWranglerProject: (options: WranglerProjectValidationOptions) => WranglerProjectValidationResult;
+```
+
+### `warnCloudflareCliConfigOnce` (const)
+
+```ts
+const warnCloudflareCliConfigOnce: (projectRoot: string, warn: (message: string) => void) => boolean;
 ```
 
 ### `withTailConsumer` (const)

@@ -257,17 +257,37 @@ const declarationOf = (identifier: Identifier): TsNode | undefined => {
 /** Per-binding {@link isReassignedBinding} verdicts, keyed on the compiler node so a re-parse recomputes. */
 const REASSIGNED_CACHE = new WeakMap<ts.Node, boolean>();
 
+/** A TypeScript standard-library declaration file (`…/typescript/lib/lib.es2015.d.ts`). */
+const TYPESCRIPT_LIB_FILE = /\/typescript\/lib\/lib\.[^/]+\.d\.ts$/u;
+
+/**
+ * Whether `sourceFile` declares the platform: TypeScript's own `lib.*.d.ts` or
+ * `@types/node`. Matched by path, not by `isDeclarationFile()` alone — since
+ * TS 5 that is also true for a user's `keys.d.v2.ts`, which codegen discovers
+ * and which holds real code.
+ */
+const isLibraryDeclarationFile = (sourceFile: SourceFile): boolean => {
+    const path = sourceFile.getFilePath();
+
+    return sourceFile.isDeclarationFile() && (TYPESCRIPT_LIB_FILE.test(path) || path.includes("/@types/node/"));
+};
+
 /**
  * Whether the binding a declaration creates is assigned after it: a `let` /
  * `var` (or an element of one) or a `function` declaration whose name is
  * written anywhere in its scope (`x = other`, `({ x } = other)`, `x++`). A
  * `const` never is.
+ *
+ * Neither is a platform global (`declare var URL`, `console`): a
+ * {@link isLibraryDeclarationFile} holds no assignment, and its scope is the
+ * whole file, so scanning it walked every identifier of the ~40k-line
+ * `lib.dom.d.ts` on each codegen run — ~1s per run, ~15s under v8 coverage.
  */
 const isReassignedBinding = (binding: BindingElement | FunctionDeclaration | VariableDeclaration): boolean => {
     const nameNode = binding.getNameNode();
     const list = Node.isFunctionDeclaration(binding) ? undefined : binding.getFirstAncestorByKind(SyntaxKind.VariableDeclarationList);
 
-    if (!Node.isIdentifier(nameNode) || list?.getDeclarationKind() === VariableDeclarationKind.Const) {
+    if (!Node.isIdentifier(nameNode) || list?.getDeclarationKind() === VariableDeclarationKind.Const || isLibraryDeclarationFile(binding.getSourceFile())) {
         return false;
     }
 
@@ -563,6 +583,7 @@ export {
     exportNamesByLocalOf,
     exportNamesOfDeclaration,
     isAddressableExportName,
+    isLibraryDeclarationFile,
     isReassignedBinding,
     isTypePosition,
     isValueIdentifier,

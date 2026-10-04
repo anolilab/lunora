@@ -2,7 +2,7 @@ import type { Finding } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 import { applyLintIgnores, detectLintTools, inferLunoraBindings, resolveSchemaDirectory } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
-import { collectExportGaps, collectWranglerSecretVariables } from "@lunora/config/cloudflare";
+import { collectExportGaps, collectWranglerSecretVariables, warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
@@ -262,6 +262,11 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions, Co
 
         syncLintIgnores(cwd, commandLogger);
         await warnAboutExportGaps(cwd, commandLogger);
+        // Lunora keeps wrangler.jsonc in step with what codegen emits; a `cf`
+        // config beside it never is (#964). Once per process tree.
+        warnCloudflareCliConfigOnce(cwd, (message) => {
+            commandLogger.warn(message);
+        });
     }
 
     return {

@@ -4,7 +4,13 @@ import type { CodegenResult } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/config";
 import { discoverContainerInfo, inferLunoraBindings, planToolchainInvocation, resolveDeployDriver, resolveSchemaDirectory } from "@lunora/config";
-import { describePreservedCrons, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, reconcileWranglerCrons } from "@lunora/config/cloudflare";
+import {
+    describePreservedCrons,
+    reconcileWranglerBindings,
+    reconcileWranglerCompatibilityDate,
+    reconcileWranglerCrons,
+    warnCloudflareCliConfigOnce,
+} from "@lunora/config/cloudflare";
 import { Spinner } from "@visulima/spinner";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
@@ -736,6 +742,14 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // `.dev.vars` values, so an edited `.dev.vars` would otherwise leave the
     // deployed worker with stale/missing secrets silently (Supabase #45242).
     warnDevVariablesNotPushed(cwd, options.logger, driver);
+
+    // Non-blocking too: nothing this deploy runs reads a `cloudflare.config.ts`
+    // (the target's own toolchain — wrangler, or celld — deploys from the
+    // reconciled wrangler config), so it is correct as it stands. The risk is a
+    // separate `cf deploy` shipping from a config Lunora never updates (#964).
+    warnCloudflareCliConfigOnce(cwd, (message) => {
+        options.logger.warn(message);
+    });
 
     // Detect required secrets not yet set on the target. Interactive: offer to
     // generate + push the mintable ones (provider keys flagged to set by hand).

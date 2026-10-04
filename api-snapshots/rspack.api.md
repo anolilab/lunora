@@ -179,6 +179,7 @@ interface CompilationLike {
     contextDependencies: DependencySet;
     errors: Error[];
     fileDependencies: DependencySet;
+    missingDependencies: DependencySet;
 }
 ```
 

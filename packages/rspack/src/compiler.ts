@@ -39,6 +39,9 @@ interface CompilationLike {
 
     /** Individual files that invalidate this compilation when they change. */
     fileDependencies: DependencySet;
+
+    /** Files that do not exist yet, and invalidate this compilation when they appear. */
+    missingDependencies: DependencySet;
 }
 
 /** The slice of `Compiler` this plugin taps. */

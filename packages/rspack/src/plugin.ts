@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { findTsconfig, fingerprintSchemaSources } from "@lunora/codegen";
@@ -16,7 +16,13 @@ import {
     lunoraLine,
     runPostCodegenHook,
 } from "@lunora/config";
-import { assertWranglerSatisfiesSchema, findWranglerFile, reconcileBindingsSafely } from "@lunora/config/cloudflare";
+import {
+    assertWranglerSatisfiesSchema,
+    findWranglerFile,
+    reconcileBindingsSafely,
+    warnCloudflareCliConfigOnce,
+    WRANGLER_FILES,
+} from "@lunora/config/cloudflare";
 
 import type { CodegenLogger } from "./codegen";
 import { createReusableProject, runCodegenPass } from "./codegen";
@@ -139,6 +145,9 @@ class LunoraRspackPlugin {
     /** Guards the once-per-session startup work from re-running on every rebuild. */
     #started = false;
 
+    /** Whether this session already warned via {@link #announce} — kept apart from `#started`, which the codegen switches gate. */
+    #announced = false;
+
     /** Content hash of everything codegen reads, from the last pass that ran. */
     #lastFingerprint: string | undefined;
 
@@ -178,6 +187,8 @@ class LunoraRspackPlugin {
      * Idempotent: the pass below sees `#started` and skips its own call.
      */
     public async prepareDevSession(): Promise<void> {
+        this.#announce();
+
         if (this.#started) {
             return;
         }
@@ -221,9 +232,24 @@ class LunoraRspackPlugin {
             // resolves, and an edited wrangler config changes what validation
             // accepts. Without these, fixing either one leaves the build showing
             // the stale error until something under `lunora/` happens to change.
-            for (const path of [findTsconfig(this.#schemaDirectory), findWranglerFile(this.#options.projectRoot)]) {
-                if (path !== undefined) {
+            const tsconfigPath = findTsconfig(this.#schemaDirectory);
+
+            if (tsconfigPath !== undefined) {
+                compilation.fileDependencies.add(tsconfigPath);
+            }
+
+            // EVERY wrangler candidate, as `@lunora/vite` does: creating one is an
+            // edit too — the fix for "wrangler.jsonc not found", or a
+            // `wrangler.jsonc` that now outranks an existing `wrangler.json`. A
+            // file dependency cannot name a file that does not exist yet, so an
+            // absent candidate is watched as a missing one.
+            for (const candidate of WRANGLER_FILES) {
+                const path = resolve(this.#options.projectRoot, candidate);
+
+                if (existsSync(path)) {
                     compilation.fileDependencies.add(path);
+                } else {
+                    compilation.missingDependencies.add(path);
                 }
             }
 
@@ -250,10 +276,36 @@ class LunoraRspackPlugin {
     }
 
     /**
+     * The first thing a session does, ahead of every codegen and validation
+     * switch (`LUNORA_CODEGEN=0`, `validateWrangler: false`, a skipped pass, a
+     * failing `.dev.vars` scaffold): warn about a Cloudflare CLI config beside
+     * the wrangler config (#964). Runs in watch mode and one-shot builds alike —
+     * a build is where someone reaches for `cf deploy` next.
+     *
+     * Asked on every pass until it has warned, so a `cloudflare.config.ts` added
+     * mid-session (`cf migrate` run in another terminal) is caught on the next
+     * compile rather than never. The cost stays small: the shared process-tree
+     * guard is read before the filesystem probe (so once `lunora dev` or an
+     * earlier pass warned, it is an env read), and after this session warned,
+     * `#announced` skips even that.
+     */
+    #announce(): void {
+        if (this.#announced) {
+            return;
+        }
+
+        this.#announced = warnCloudflareCliConfigOnce(this.#options.projectRoot, (message) => {
+            consoleLogger.warn(lunoraLine(message));
+        });
+    }
+
+    /**
      * One startup-or-rebuild pass. `watching` decides only whether a blocking
      * schema advisory is reported as a build error.
      */
     async #pass(watching: boolean): Promise<void> {
+        this.#announce();
+
         // A DEV switch, honoured only in watch mode. A one-shot build must keep
         // generating, because the escalation in `#generate` is the only thing that
         // fails a build on an ERROR-level advisory or platform diagnostic —

@@ -6,7 +6,7 @@ import type { ArrowFunction, CallExpression, FunctionDeclaration, FunctionExpres
 import { Node, SyntaxKind } from "ts-morph";
 
 import { chainRootOf, isConstDeclaration, isSameNode, isWriteTarget, outermostValueWrapper, unwrapExpression } from "../ast";
-import { declarationOf, isReassignedBinding, isTypePosition } from "../attribution";
+import { declarationOf, isLibraryDeclarationFile, isReassignedBinding, isTypePosition } from "../attribution";
 import { ECHOING_CONTEXT_METHODS } from "../context-root";
 
 /** Whether `node` resolves, by symbol, to the impl's `ctx` parameter or to a binding destructured out of it (`{ db }`). */
@@ -58,9 +58,6 @@ const isCopiedOnly = (node: TsNode): boolean => {
     return Node.isTemplateSpan(parent) && !Node.isTaggedTemplateExpression(parent.getParent().getParent());
 };
 
-/** A TypeScript standard-library declaration file (`…/typescript/lib/lib.es2015.d.ts`). */
-const TYPESCRIPT_LIB_FILE = /\/typescript\/lib\/lib\.[^/]+\.d\.ts$/u;
-
 /**
  * Whether `identifier` is the platform global it is spelled as: it resolves to
  * no declaration, or only to one in a library `.d.ts` (TypeScript's `lib.*`,
@@ -69,14 +66,7 @@ const TYPESCRIPT_LIB_FILE = /\/typescript\/lib\/lib\.[^/]+\.d\.ts$/u;
 const isLibraryGlobal = (identifier: Identifier): boolean => {
     const declaration = declarationOf(identifier);
 
-    if (declaration === undefined) {
-        return true;
-    }
-
-    const sourceFile = declaration.getSourceFile();
-    const path = sourceFile.getFilePath();
-
-    return sourceFile.isDeclarationFile() && (TYPESCRIPT_LIB_FILE.test(path) || path.includes("/@types/node/"));
+    return declaration === undefined || isLibraryDeclarationFile(declaration.getSourceFile());
 };
 
 /**
