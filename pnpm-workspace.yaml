@@ -423,11 +423,11 @@ catalogs:
   # convention; react-reconciler is the custom renderer behind @visulima/tui.
   cli:
     "@bomb.sh/tab": 0.0.22
-    "@visulima/cerebro": 3.1.1
+    "@visulima/cerebro": 3.1.2
     "@visulima/colorize": 2.1.1
     "@visulima/find-ai-runner": 1.0.2
-    "@visulima/fs": 6.0.7
-    "@visulima/package": 5.0.20
+    "@visulima/fs": 6.0.19
+    "@visulima/package": 5.0.32
     "@visulima/pail": 5.0.0
     "@visulima/path": 4.0.0
     "@visulima/spinner": 1.0.1
@@ -436,8 +436,8 @@ catalogs:
     # the widget set moved to `@visulima/tui-kit` at flat subpaths — the CLI's
     # prompts import CommandPalette/ConfirmInput/SelectInput/Spinner/TextInput from
     # there now. tui-kit peers `@visulima/tui` EXACTLY, so bump the two together.
-    "@visulima/tui": 4.0.7
-    "@visulima/tui-kit": 1.0.10
+    "@visulima/tui": 4.0.19
+    "@visulima/tui-kit": 1.0.22
     giget: 3.3.1
     magic-string: ^1.2.3
     react-reconciler: ^0.33.0
@@ -464,7 +464,7 @@ catalogs:
     "@cloudflare/vite-plugin": 1.62.4
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3
-    "@visulima/vite-overlay": 2.0.20
+    "@visulima/vite-overlay": 2.0.32
     es-module-lexer: ^2.3.2
     jsonc-parser: ^3.3.1
     tailwindcss: ^4.3.3
@@ -613,11 +613,11 @@ catalogs:
     react-native: 0.87.1
     react-native-safe-area-context: ~5.9.1
   mail:
-    "@visulima/email": 3.0.5
+    "@visulima/email": 3.0.17
     "@react-email/render": 2.1.0
     "postal-mime": 3.0.0
   notify:
-    "@visulima/notification": 1.1.1
+    "@visulima/notification": 1.1.13
   mcp:
     "@modelcontextprotocol/sdk": ^1.30.0
     # The SDK's eval-free JSON Schema provider (`sdk/validation/cfworker`) needs
@@ -888,9 +888,9 @@ catalogs:
   redact:
     "@visulima/redact": 5.0.0
   email:
-    "@visulima/disposable-email-domains": 1.1.1
+    "@visulima/disposable-email-domains": 1.1.10
     "@visulima/free-email-domains": 1.0.1
-    "@visulima/email-verifier": 1.0.9
+    "@visulima/email-verifier": 1.0.21
 
 # multi-semantic-release rewrites every intra-repo dependency from `workspace:*`
 # to the exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and
