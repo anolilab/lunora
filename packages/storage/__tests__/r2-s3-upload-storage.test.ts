@@ -3,6 +3,8 @@
  * provider) behind `createUploadHandler`, over an in-memory path-style S3 fake.
  */
 import { Rest } from "@visulima/storage/handler/http/fetch";
+import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
+import { MemoryStorage } from "@visulima/storage/provider/memory";
 import { createChunkedRestAdapter } from "@visulima/storage-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -187,6 +189,26 @@ describe("createR2UploadStorage", () => {
         );
         expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: r2Storage() })).not.toThrow();
         expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: r2Storage() })).not.toThrow();
+    });
+
+    it("refuses chunked REST over an aws-light provider from another copy of @visulima/storage, which fails instanceof", () => {
+        expect.hasAssertions();
+
+        // A duplicate install has its own class: same `static name`, different identity.
+        class ForeignAwsLight extends MemoryStorage {}
+
+        Object.defineProperty(ForeignAwsLight, "name", { value: "aws-light" });
+
+        const foreign = new ForeignAwsLight({ path: "/upload" });
+
+        // The marker the route reads: upstream's `static name` on its aws-light class.
+        expect(Reflect.get(AwsLightStorage, "name")).toBe("aws-light");
+        expect(foreign).not.toBeInstanceOf(AwsLightStorage);
+        expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: foreign })).toThrow(
+            expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.stringContaining("visulima/visulima#915") }),
+        );
+        // Any other provider is still accepted.
+        expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) })).not.toThrow();
     });
 
     it("lets the bundled client's final HEAD answer 404 over upstream's Rest handler, so it rejects a stored upload (visulima/visulima#915)", async () => {

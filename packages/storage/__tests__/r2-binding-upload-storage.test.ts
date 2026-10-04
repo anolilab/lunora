@@ -699,6 +699,38 @@ describe("chunked REST over the R2 binding", () => {
     /** The stored object of a chunked-REST upload, keyed by its id. */
     const storedUpload = (bucket: ReturnType<typeof createFakeR2UploadBucket>, location: string) => bucket.objects.get(uploadId(location));
 
+    it.each([
+        ["merges a valid list into one range", { length: 5, offset: 10 }, [{ length: 15, offset: 0 }]],
+        ["leaves a list with a NaN offset as it is", { length: 5, offset: Number.NaN }, undefined],
+        ["leaves a list with an infinite offset as it is", { length: 5, offset: Number.POSITIVE_INFINITY }, undefined],
+        ["leaves a list with a negative offset as it is", { length: 5, offset: -5 }, undefined],
+        ["leaves a list with a fractional offset as it is", { length: 5, offset: 5.5 }, undefined],
+        ["leaves a list with a negative length as it is", { length: -3, offset: 5 }, undefined],
+        ["leaves a list with a zero length as it is", { length: 0, offset: 5 }, undefined],
+        ["leaves a list with a fractional length as it is", { length: 2.5, offset: 5 }, undefined],
+    ])("%s when it saves a chunked record", async (_, second, merged) => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const storage = createR2BindingUploadStorage(bucket);
+        const file = await storage.create({ contentType: "text/plain", id: "chunked-file", metadata: { _chunkedUpload: true, _totalSize: 10 }, size: 10 });
+        const meta = await storage.getMeta(file.id);
+        // Two valid neighbours around the entry under test, which a merge would join.
+        const chunks = [{ length: 5, offset: 0 }, second, { length: 5, offset: 5 }];
+
+        // What the chunked-REST handler saves after a chunk: the list it computed.
+        await storage.update({ id: file.id }, { metadata: Object.fromEntries([...Object.entries(meta.metadata), ["_chunks", chunks]]) });
+
+        const { file: stored } = readState(bucket, file.id) as unknown as { file: { metadata: Record<string, unknown> } };
+
+        // Stored as JSON, which writes a non-finite number as `null`.
+        const asStored = chunks.map(({ length, offset }) => {
+            return { length: Number.isFinite(length) ? length : null, offset: Number.isFinite(offset) ? offset : null };
+        });
+
+        expect(stored.metadata).toMatchObject({ _chunks: merged ?? asStored });
+    });
+
     it("stores the chunk list of an upload sent in many small chunks as one range", async () => {
         expect.hasAssertions();
 

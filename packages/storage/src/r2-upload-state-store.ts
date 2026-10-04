@@ -30,8 +30,16 @@ interface ChunkRange {
     offset: number;
 }
 
-const isChunkRange = (value: unknown): value is ChunkRange =>
-    typeof value === "object" && value !== null && typeof (value as ChunkRange).offset === "number" && typeof (value as ChunkRange).length === "number";
+/** A range as upstream records one: a non-negative integer offset and a positive integer length. */
+const isChunkRange = (value: unknown): value is ChunkRange => {
+    if (typeof value !== "object" || value === null) {
+        return false;
+    }
+
+    const { length, offset } = value as Partial<Record<keyof ChunkRange, unknown>>;
+
+    return Number.isSafeInteger(offset) && (offset as number) >= 0 && Number.isSafeInteger(length) && (length as number) > 0;
+};
 
 /**
  * A chunked-REST record with its chunk list (`_chunks`) merged into
