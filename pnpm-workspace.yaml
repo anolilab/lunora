@@ -125,7 +125,7 @@ overrides:
   protobufjs: ">=7.6.5"
   sharp@<0.35.0: ^0.35.4
   shell-quote: ">=1.8.5"
-  svgo@>=4.0.0 <4.0.2: ^4.0.2
+  svgo@>=4.0.0 <4.0.2: ^4.1.0
   tar@<=7.5.20: ^7.5.21
   tmp@<0.2.6: ^0.2.6
   undici@<6.27.0: ^8.10.2
@@ -1081,7 +1081,8 @@ minimumReleaseAgeExclude:
   - 'react-dom@19.2.7'
   # Renovate security update: sharp@0.35.4
   - 'sharp@0.35.0 || 0.35.4'
-  - 'svgo@4.0.2'
+  # Renovate security update: svgo@4.1.0
+  - 'svgo@4.0.2 || 4.1.0'
   - 'tar@7.5.21'
   - 'tmp@0.2.4 || 0.2.6'
   - 'tsx@4.22.4'
