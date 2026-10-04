@@ -132,8 +132,12 @@ overrides:
   svgo@>=4.0.0 <4.0.2: ^4.1.0
   tar@<=7.5.20: ^7.5.21
   tmp@<0.2.6: ^0.2.6
-  undici@<6.27.0: ^8.10.2
-  undici@>=7.0.0 <7.29.0: ^8.10.2
+  # Each line stays in its own major: @actions/http-client wants undici ^6,
+  # @semantic-release/github and shadcn want ^7, and v8 removed the legacy
+  # dispatch-handler wrappers and turned on h2 by default. 6.28.1 / 7.29.1 patch
+  # GHSA-rfgv-xxqx-mfg5, GHSA-r53p-7pc4-xj5r and GHSA-3wwx-pv8p-q78v.
+  undici@<6.27.0: ^6.28.1
+  undici@>=7.0.0 <7.29.0: ^7.29.1
   # dockerode pulls uuid@10, flagged by GHSA-w5hq-g745-h8pq (missing buffer
   # bounds check in v3/v5/v6 when `buf` is passed). dockerode only calls
   # `uuid.v4()`, so it's not exploitable here, but bump the whole tree to the
