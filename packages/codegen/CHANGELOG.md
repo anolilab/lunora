@@ -1,3 +1,14 @@
+## @lunora/codegen [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.261...@lunora/codegen@1.0.0-alpha.262) (2026-10-04)
+
+### Bug Fixes
+
+* root-cause the rspack watch and cli registry-items CI timeouts ([#985](https://github.com/anolilab/lunora/issues/985)) ([b1938a5](https://github.com/anolilab/lunora/commit/b1938a5cca9b02f84b30858818dfaabf35e9591f))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.176
+
 ## @lunora/codegen [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.260...@lunora/codegen@1.0.0-alpha.261) (2026-10-04)
 
 
