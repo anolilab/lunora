@@ -42,7 +42,7 @@ import { createTuiConfirm } from "../../util/tui-prompts";
 import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
-import { codegenRequested, detectDevFlavor, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
+import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
 import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
 import type { Teardown } from "./supervise";
@@ -508,6 +508,9 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         await offerDevVariablesScaffold(options, cwd);
 
         logger.info(startBanner(plan));
+
+        // Before anything is spawned — see the helper.
+        printCloudflareCliConfigWarning(logger, cwd);
 
         if (plan.ipv4LoopbackForced) {
             logger.info(

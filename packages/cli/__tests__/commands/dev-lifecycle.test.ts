@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { claimDevServerState, clearDevServerState, DEV_LOG_FILE, readDevServerState, writeDevServerState } from "@lunora/config";
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevOptions } from "../../src/commands/dev/index";
@@ -295,6 +296,40 @@ describe("lunora dev lifecycle", () => {
             expect(envSeen?.LUNORA_DEV_HANDOFF_PID).toBe(String(process.pid));
             // No child superseded it, so the provisional record is gone.
             expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
+        it("warns about a cloudflare.config.ts in this terminal and claims the guard before spawning the child", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const { lines, logger } = recordingLogger();
+            let claimedAtSpawn: string | undefined;
+
+            try {
+                await startBackground({
+                    cwd: workdir,
+                    jsonLogs: false,
+                    logger,
+                    options: {} as DevOptions,
+                    remote: false,
+                    run: () => {
+                        // The detached child inherits process.env at spawn time.
+                        claimedAtSpawn = process.env[CLOUDFLARE_CLI_CONFIG_WARNING_ENV];
+
+                        return Promise.resolve({ code: 0 });
+                    },
+                });
+            } finally {
+                vi.unstubAllEnvs();
+            }
+
+            const warnings = lines.filter((line) => line.level === "warn" && line.message.includes("cloudflare.config.ts"));
+
+            expect(warnings).toHaveLength(1);
+            expect(warnings[0]?.message).toContain("https://github.com/anolilab/lunora/issues/964");
+            expect(claimedAtSpawn).toBe("1");
         });
 
         it("forwards --target to the daemon", async () => {

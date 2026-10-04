@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -394,6 +395,55 @@ describe("lunora deploy", () => {
             // A dry run answers "would this deploy?" — it must not edit a
             // hand-maintained, committed config to get there.
             expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
+        });
+
+        describe("cloudflare cli config", () => {
+            beforeEach(() => {
+                vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+            });
+
+            afterEach(() => {
+                vi.unstubAllEnvs();
+            });
+
+            it("warns about a cloudflare.config.ts before spawning wrangler, and still deploys", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+                const { logger, warns } = silentLogger();
+                const recording = createRecordingSpawner();
+                let warnedBeforeSpawn = false;
+                const spawner: Spawner = (descriptor) => {
+                    warnedBeforeSpawn = warns.some((message) => message.includes("cloudflare.config.ts"));
+
+                    return recording.spawner(descriptor);
+                };
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+                const cfWarnings = warns.filter((message) => message.includes("cloudflare.config.ts"));
+
+                expect(result.code).toBe(0);
+                expect(recording.calls).toHaveLength(1);
+                expect(warnedBeforeSpawn).toBe(true);
+                expect(cfWarnings).toHaveLength(1);
+                expect(cfWarnings[0]).toContain("https://github.com/anolilab/lunora/issues/964");
+            });
+
+            it("stays quiet without one", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+
+                expect(result.code).toBe(0);
+                expect(warns.some((message) => message.includes("cloudflare.config"))).toBe(false);
+            });
         });
 
         it("runs codegen, validates wrangler, then spawns `pnpm exec wrangler deploy`", async () => {
