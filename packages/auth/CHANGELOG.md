@@ -1,3 +1,10 @@
+## @lunora/auth [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.190...@lunora/auth@1.0.0-alpha.191) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.306
+
 ## @lunora/auth [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.189...@lunora/auth@1.0.0-alpha.190) (2026-10-03)
 
 
