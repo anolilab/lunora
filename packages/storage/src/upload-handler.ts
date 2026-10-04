@@ -484,7 +484,7 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         // admits can send to the upload route.
         disableTerminationForFinishedUploads: true,
         // Read only by the TUS handler; see MAX_CHECKSUM_BUFFER_BYTES.
-        maxChecksumBufferSize: Math.min(MAX_CHECKSUM_BUFFER_BYTES, maxFileSize),
+        maxChecksumBufferSize: MAX_CHECKSUM_BUFFER_BYTES,
         maxFileSize,
         storage: options.storage,
     };

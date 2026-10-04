@@ -1,5 +1,5 @@
 /**
- * An in-memory, path-style R2 S3 API (`https://<account>.r2.cloudflarestorage.com/<bucket>/<key>`)
+ * An in-memory R2 S3 API, path-style (`https://<account>.r2.cloudflarestorage.com/<bucket>/<key>`) or virtual-hosted,
  * for the `createR2UploadStorage` tests: the object and multipart calls
  * `@visulima/storage`'s aws-light provider makes, served from a `fetch` stub.
  * Like R2, it refuses a multipart completion that breaks R2's part rules, and
@@ -155,7 +155,8 @@ const createFakeR2S3 = (bucket: string): FakeR2S3 => {
 
     const serve = async (request: Request): Promise<Response> => {
         const url = new URL(request.url);
-        const prefix = `/${bucket}/`;
+        // Path-style, or virtual-hosted (`<bucket>.<account>.r2…`).
+        const prefix = url.hostname.startsWith(`${bucket}.`) ? "/" : `/${bucket}/`;
 
         requests.push(`${request.method} ${url.href}`);
 

@@ -426,16 +426,18 @@ The same refusal applies to any provider whose `checksumTypes` is empty
 `checksum` from `Tus-Extension` too. On a provider that verifies
 some algorithms itself, `@visulima/storage` verifies the others by buffering the
 chunk: it needs a `Content-Length` (`411`), a mismatch is a `460`, and
-`createUploadHandler` caps the chunk at 16 MiB, or `maxFileSize` when that is
-smaller (`413`, refused before any byte is read), where upstream's default is
-64 MiB.
+`createUploadHandler` caps the chunk at 16 MiB (`413`, refused before any byte
+is read), where upstream's default is 64 MiB.
 
 `createR2UploadStorage({ accountId, bucket, accessKeyId, secretAccessKey, endpoint?, partSize?, path? })`
 builds an R2 provider over the S3 API (`aws4fetch`, no AWS SDK; needs
 `nodejs_compat`). `path` must match the route the handler is mounted on, and
-`endpoint` is the account endpoint; pass it to pin a jurisdiction. Requests go
-to `<endpoint>/<bucket>/<key>`, and an `endpoint` that already ends in the
-bucket keeps it once. Each upload chunk
+`endpoint` is the account endpoint, an absolute URL such as
+`https://<accountId>.eu.r2.cloudflarestorage.com`; pass it to pin a
+jurisdiction. Anything else throws `VALIDATION_ERROR` when the storage is
+built. Requests go to `<endpoint>/<bucket>/<key>`, unless the `endpoint` already
+names the bucket, as its last path segment or as a virtual-hosted
+`https://<bucket>.<accountId>.r2.cloudflarestorage.com`. Each upload chunk
 becomes one part of an R2 multipart upload, and R2 rejects parts under 5 MiB
 except the last (and parts of unequal size), so a TUS client must send equal
 chunks of at least 5 MiB (the TUS client's default `chunkSize` is 5 MiB). The
@@ -544,4 +546,5 @@ to 1.0.6. What changes for an upload route:
 - **`createR2UploadStorage` puts the bucket in the request path.** It sent every
   request to `<endpoint>/<key>`, which R2 read as a bucket named after the
   file. It now goes to `<endpoint>/<bucket>/<key>`; an `endpoint` that already
-  ends in the bucket is not doubled.
+  names the bucket (in its path, or virtual-hosted) is not given it twice, and
+  one that is not an absolute URL throws `VALIDATION_ERROR`.

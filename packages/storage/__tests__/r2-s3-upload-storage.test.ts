@@ -39,6 +39,11 @@ describe("createR2UploadStorage", () => {
         ["the default account endpoint", undefined, "https://acct.r2.cloudflarestorage.com/uploads/"],
         ["an endpoint passed with a trailing slash", "https://acct.eu.r2.cloudflarestorage.com/", "https://acct.eu.r2.cloudflarestorage.com/uploads/"],
         ["an endpoint that already names the bucket", "https://acct.eu.r2.cloudflarestorage.com/uploads", "https://acct.eu.r2.cloudflarestorage.com/uploads/"],
+        [
+            "a virtual-hosted endpoint, whose host names the bucket",
+            "https://uploads.acct.r2.cloudflarestorage.com",
+            "https://uploads.acct.r2.cloudflarestorage.com/",
+        ],
     ])("stores a TUS upload of two parts intact under %s, every request naming the bucket once", async (_, endpoint, base) => {
         expect.hasAssertions();
 
@@ -72,6 +77,20 @@ describe("createR2UploadStorage", () => {
         );
         expect(s3.requests.every((request) => request.split(" ")[1]?.startsWith(base))).toBe(true);
     });
+
+    it.each(["acct.eu.r2.cloudflarestorage.com", "/uploads", "file:///acct.r2.cloudflarestorage.com"])(
+        "refuses the endpoint %j at construction with a VALIDATION_ERROR naming the expected form",
+        (endpoint) => {
+            expect.hasAssertions();
+
+            expect(() => r2Storage(endpoint)).toThrow(
+                expect.objectContaining({
+                    code: "VALIDATION_ERROR",
+                    message: expect.stringContaining("must be an absolute URL such as https://<account>.r2.cloudflarestorage.com"),
+                }),
+            );
+        },
+    );
 
     it("cannot store a third part: the provider reads back only the last part it listed (upstream)", async () => {
         expect.hasAssertions();

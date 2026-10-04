@@ -2,6 +2,7 @@
  * `createR2UploadStorage`: an upload provider over R2's S3 API, for
  * `createUploadHandler`, built on `@visulima/storage`'s `aws-light` provider.
  */
+import { LunoraError } from "@lunora/errors";
 import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
 
 /** R2 (S3-compatible) credentials + bucket for {@link createR2UploadStorage}. */
@@ -14,8 +15,9 @@ interface R2UploadStorageOptions {
     bucket: string;
 
     /**
-     * Explicit R2 S3 account endpoint. The bucket is appended as a path
-     * segment unless the endpoint already ends in it. Defaults to
+     * Explicit R2 S3 account endpoint, an absolute `https://` URL. The bucket
+     * is appended as a path segment, unless the endpoint already names it
+     * (as its last path segment, or as the host's first label). Defaults to
      * `https://<accountId>.r2.cloudflarestorage.com`. Pass this to pin a
      * jurisdiction (e.g. `https://<accountId>.eu.r2.cloudflarestorage.com`).
      */
@@ -31,22 +33,48 @@ interface R2UploadStorageOptions {
 }
 
 /**
- * The bucket's S3 endpoint, path-style: `<account endpoint>/<bucket>/`. The
- * aws-light provider resolves every key against it with `new URL(key, endpoint)`,
- * so it has to name the bucket and end in `/`; given the bare account endpoint,
- * R2 would read each key's first segment as the bucket. An `endpoint` that
- * already ends in the bucket keeps it once.
+ * Parse an explicit `endpoint`. Anything but an absolute `http(s)` URL is a
+ * configuration error, reported as such rather than as `new URL`'s bare
+ * `TypeError` (a schemeless `<account>.eu.r2.cloudflarestorage.com` is the usual one).
+ */
+const parseEndpoint = (endpoint: string): URL => {
+    let url: URL | undefined;
+
+    try {
+        url = new URL(endpoint);
+    } catch {
+        url = undefined;
+    }
+
+    if (url?.protocol !== "https:" && url?.protocol !== "http:") {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/storage: createR2UploadStorage's endpoint must be an absolute URL such as https://<account>.r2.cloudflarestorage.com (received ${JSON.stringify(endpoint)})`,
+        );
+    }
+
+    return url;
+};
+
+/**
+ * The bucket's S3 endpoint: `<account endpoint>/<bucket>/`. The aws-light
+ * provider resolves every key against it with `new URL(key, endpoint)`, so it
+ * has to name the bucket and end in `/`; given the bare account endpoint, R2
+ * would read each key's first segment as the bucket. An `endpoint` that names
+ * the bucket already, as its last path segment or as a virtual-hosted
+ * `<bucket>.<account>.r2…` host, is not given it twice.
  */
 const bucketEndpoint = (options: R2UploadStorageOptions): string => {
-    const url = new URL(options.endpoint ?? `https://${options.accountId}.r2.cloudflarestorage.com`);
+    const url = options.endpoint === undefined ? new URL(`https://${options.accountId}.r2.cloudflarestorage.com`) : parseEndpoint(options.endpoint);
     const bucket = encodeURIComponent(options.bucket);
     const segments = url.pathname.split("/").filter((segment) => segment !== "");
+    const virtualHosted = options.endpoint !== undefined && url.hostname.startsWith(`${options.bucket.toLowerCase()}.`);
 
-    if (segments.at(-1) !== bucket) {
+    if (!virtualHosted && segments.at(-1) !== bucket) {
         segments.push(bucket);
     }
 
-    url.pathname = `/${segments.join("/")}/`;
+    url.pathname = segments.length === 0 ? "/" : `/${segments.join("/")}/`;
 
     return url.href;
 };

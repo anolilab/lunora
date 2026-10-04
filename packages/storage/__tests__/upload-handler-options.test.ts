@@ -49,12 +49,4 @@ describe("createUploadHandler's protocol handler options", () => {
             maxChecksumBufferSize: 16 * 1024 * 1024,
         });
     });
-
-    it("lowers the checksum buffer to maxFileSize when that is smaller", () => {
-        expect.hasAssertions();
-
-        createUploadHandler({ maxFileSize: 1024, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
-
-        expect(built[0]?.options).toMatchObject({ maxChecksumBufferSize: 1024, maxFileSize: 1024 });
-    });
 });
