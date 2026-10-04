@@ -98,12 +98,9 @@ const bucketEndpoint = (options: R2UploadStorageOptions): string => {
  *
  * Each chunk becomes one multipart part, so every chunk but the last has to be
  * the same size and at least 5 MiB, and chunks have to arrive in order (an
- * out-of-order or repeated one is a `409`). Keep an upload to 1,000 chunks or
- * fewer: the provider reads back only the first page of ListParts
- * (visulima/visulima#916). The R2 binding provider
- * (`./r2-binding-upload-storage`) has none of these limits, needs no S3
- * credentials and runs under `wrangler dev` too. Chunked REST is refused over
- * this provider (see `createUploadHandler`).
+ * out-of-order or repeated one is a `409`). The R2 binding provider
+ * (`./r2-binding-upload-storage`) has neither limit, needs no S3 credentials
+ * and runs under `wrangler dev` too.
  *
  * The provider takes no `@visulima/storage` limits of its own (its upload cap
  * is the 5 TB default), so `maxFileSize` / `maxFileSizeFor` on the handler are

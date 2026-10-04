@@ -1017,12 +1017,14 @@ describe("chunked REST over the R2 binding", () => {
             const result = await adapter.upload(new File([other], "done.bin", { type: "application/octet-stream" }));
 
             expect(result).toMatchObject({ bytesWritten: 10, id: uploadId(location), status: "completed" });
-            // Upstream does not record the chunk that completes a sequential
-            // upload in `X-Received-Chunks` (visulima/visulima#913), so the
-            // client sends it once more. The route answers it 200 from the
-            // finished upload and writes nothing.
-            expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(1);
-            expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
+
+            // `HEAD` reports the whole file received and complete, so the
+            // client sends no chunk; its `/metadata` read gets the route's 405.
+            const head = await driver.head(location);
+
+            expect(JSON.parse(head.headers.get("x-received-chunks") ?? "null")).toStrictEqual([{ length: 10, offset: 0 }]);
+            expect(route.requests.filter((request) => request.startsWith("PATCH"))).toStrictEqual([]);
+            expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([`GET /upload/${uploadId(location)}/metadata`]);
             expect(put).not.toHaveBeenCalled();
             expect(sameBytes(bucket.objects.get(uploadId(location))?.bytes, bytes)).toBe(true);
         });

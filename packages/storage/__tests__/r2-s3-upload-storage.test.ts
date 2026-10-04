@@ -3,8 +3,6 @@
  * provider) behind `createUploadHandler`, over an in-memory path-style S3 fake.
  */
 import { Rest } from "@visulima/storage/handler/http/fetch";
-import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
-import { MemoryStorage } from "@visulima/storage/provider/memory";
 import { createChunkedRestAdapter } from "@visulima/storage-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -34,8 +32,8 @@ const r2Storage = (endpoint?: string) =>
     createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", endpoint, path: "/upload", secretAccessKey: "secret" });
 
 /** A fake bucket installed as `globalThis.fetch`, and a TUS route over it. */
-const tusOver = (endpoint?: string): { s3: FakeR2S3; tus: TusDriver } => {
-    const s3 = createFakeR2S3("uploads");
+const tusOver = (endpoint?: string, partsPerPage?: number): { s3: FakeR2S3; tus: TusDriver } => {
+    const s3 = createFakeR2S3("uploads", { partsPerPage });
 
     vi.stubGlobal("fetch", s3.fetch);
 
@@ -126,16 +124,15 @@ describe("createR2UploadStorage", () => {
         },
     );
 
-    it("stores a TUS upload of three parts intact", async () => {
+    it.each([1000, 2])("stores a TUS upload of five parts intact, with ListParts paged at %i parts", async (partsPerPage) => {
         expect.hasAssertions();
 
-        const { s3, tus } = tusOver();
-        const bytes = pattern(11 * MIB);
+        const { s3, tus } = tusOver(undefined, partsPerPage);
+        const bytes = pattern(21 * MIB);
         const location = await tus.create(bytes.byteLength);
-
         const offsets: (string | null)[] = [];
 
-        for (const offset of [0, 5 * MIB, 10 * MIB]) {
+        for (let offset = 0; offset < bytes.byteLength; offset += 5 * MIB) {
             // eslint-disable-next-line no-await-in-loop -- TUS chunks are sequential
             const response = await tus.patch(location, offset, bytes.slice(offset, offset + 5 * MIB));
 
@@ -144,7 +141,9 @@ describe("createR2UploadStorage", () => {
             offsets.push(response.headers.get("upload-offset"));
         }
 
-        expect(offsets).toStrictEqual([String(5 * MIB), String(10 * MIB), String(bytes.byteLength)]);
+        expect(offsets).toStrictEqual([5, 10, 15, 20, 21].map((mib) => String(mib * MIB)));
+        // With a small page the provider has to follow the marker to see every part.
+        expect(s3.requests.some((request) => request.includes("part-number-marker="))).toBe(partsPerPage < 5);
         expect(sameBytes(s3.object(keyOf(location)), bytes)).toBe(true);
     });
 
@@ -174,51 +173,16 @@ describe("createR2UploadStorage", () => {
         expect(sameBytes(s3.object(uploadId(location)), bytes)).toBe(true);
     });
 
-    it("refuses chunked REST through createUploadHandler, which the bundled client cannot complete; TUS and multipart are fine", () => {
+    it.each([
+        ["upstream's own Rest handler", (): ChunkedRestRoute => new Rest({ storage: r2Storage() })],
+        ["createUploadHandler", (): ChunkedRestRoute => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: r2Storage() })],
+    ])("lets the bundled chunked-REST client complete an upload through %s, with no HEAD after the completing PATCH", async (_, route) => {
         expect.hasAssertions();
 
-        vi.stubGlobal("fetch", createFakeR2S3("uploads").fetch);
-
-        expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: r2Storage() })).toThrow(
-            expect.objectContaining({
-                code: "VALIDATION_ERROR",
-                message: expect.stringMatching(
-                    /chunked REST is not supported over createR2UploadStorage.*final HEAD answers 404.*#915.*"tus".*createR2BindingUploadStorage/,
-                ),
-            }),
-        );
-        expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: r2Storage() })).not.toThrow();
-        expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: r2Storage() })).not.toThrow();
-    });
-
-    it("refuses chunked REST over an aws-light provider from another copy of @visulima/storage, which fails instanceof", () => {
-        expect.hasAssertions();
-
-        // A duplicate install has its own class: same `static name`, different identity.
-        class ForeignAwsLight extends MemoryStorage {}
-
-        Object.defineProperty(ForeignAwsLight, "name", { value: "aws-light" });
-
-        const foreign = new ForeignAwsLight({ path: "/upload" });
-
-        // The marker the route reads: upstream's `static name` on its aws-light class.
-        expect(Reflect.get(AwsLightStorage, "name")).toBe("aws-light");
-        expect(foreign).not.toBeInstanceOf(AwsLightStorage);
-        expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: foreign })).toThrow(
-            expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.stringContaining("visulima/visulima#915") }),
-        );
-        // Any other provider is still accepted.
-        expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) })).not.toThrow();
-    });
-
-    it("lets the bundled client's final HEAD answer 404 over upstream's Rest handler, so it rejects a stored upload (visulima/visulima#915)", async () => {
-        expect.hasAssertions();
-
-        // Why the route refuses chunked REST here. When this resolves, drop that refusal.
         const s3 = createFakeR2S3("uploads");
         const requests: string[] = [];
         // Built once the fake answers, since the provider probes its bucket from the constructor.
-        let rest: ChunkedRestRoute | undefined;
+        let handler: ChunkedRestRoute | undefined;
 
         vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
             const request = input instanceof Request ? input : new Request(input, init);
@@ -227,29 +191,32 @@ describe("createR2UploadStorage", () => {
                 return s3.fetch(request);
             }
 
-            if (rest === undefined) {
+            if (handler === undefined) {
                 throw new Error("the upload route is not built yet");
             }
 
-            const response = await rest.fetch(request);
+            const response = await handler.fetch(request);
 
             requests.push(`${request.method} ${String(response.status)}`);
 
             return response;
         });
 
-        rest = new Rest({ storage: r2Storage() });
+        handler = route();
 
         const bytes = pattern(MIB);
         const adapter = createChunkedRestAdapter({ chunkSize: bytes.byteLength, endpoint: ENDPOINT, retry: false });
+        const result = await adapter.upload(new File([bytes], "a.bin", { type: "application/octet-stream" }));
 
-        await expect(adapter.upload(new File([bytes], "a.bin", { type: "application/octet-stream" }))).rejects.toThrow(/404/);
-        expect(requests).toStrictEqual(["POST 201", "HEAD 200", "PATCH 200", "HEAD 404"]);
+        expect(result).toMatchObject({ bytesWritten: bytes.byteLength, status: "completed" });
+        expect(requests).toStrictEqual(["POST 201", "HEAD 200", "PATCH 200"]);
+        expect(sameBytes(s3.object(result.id), bytes)).toBe(true);
 
-        const [key] = s3.requests
-            .filter((request) => request.startsWith("POST") && request.includes("?uploads"))
-            .map((request) => keyOf(request.split(" ")[1] ?? ""));
+        // The upload's state is gone, but HEAD still reports it complete from the stored object.
+        const head = await handler.fetch(new Request(`${ENDPOINT}/${result.id}`, { method: "HEAD" }));
 
-        expect(sameBytes(s3.object(key ?? ""), bytes)).toBe(true);
+        expect(head.status).toBe(200);
+        expect(head.headers.get("x-upload-complete")).toBe("true");
+        expect(head.headers.get("x-upload-offset")).toBe(String(bytes.byteLength));
     });
 });

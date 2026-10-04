@@ -51,7 +51,11 @@ const metaHeaders = (request: Request): Record<string, string> => {
     return headers;
 };
 
-const createFakeR2S3 = (bucket: string): FakeR2S3 => {
+/**
+ * `partsPerPage` is how many parts one ListParts answer holds before it is
+ * truncated and points at the next page (S3's own maximum is 1,000).
+ */
+const createFakeR2S3 = (bucket: string, { partsPerPage = 1000 }: { partsPerPage?: number } = {}): FakeR2S3 => {
     const objects = new Map<string, StoredObject>();
     const uploads = new Map<string, MultipartUpload>();
     const requests: string[] = [];
@@ -94,11 +98,16 @@ const createFakeR2S3 = (bucket: string): FakeR2S3 => {
         }
 
         if (request.method === "GET") {
-            const parts = sortedParts(upload).map(([number, part]) =>
+            const marker = Number(url.searchParams.get("part-number-marker") ?? "0");
+            const after = sortedParts(upload).filter(([number]) => number > marker);
+            const page = after.slice(0, partsPerPage);
+            const parts = page.map(([number, part]) =>
                 tag("Part", tag("PartNumber", String(number)) + tag("ETag", `"${part.etag}"`) + tag("Size", String(part.body.byteLength))),
             );
+            const truncated = after.length > page.length;
+            const paging = tag("IsTruncated", String(truncated)) + (truncated ? tag("NextPartNumberMarker", String(page.at(-1)?.[0] ?? marker)) : "");
 
-            return xml(tag("ListPartsResult", parts.join("")));
+            return xml(tag("ListPartsResult", paging + parts.join("")));
         }
 
         uploads.delete(id);

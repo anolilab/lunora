@@ -31,7 +31,6 @@
 import { LunoraError } from "@lunora/errors";
 import { File } from "@visulima/storage";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
-import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
 
 import type { DeclaredFile, RouteCheck, RoutePolicy } from "./tus-route-policy";
 import { TUS_RESUMABLE, tusRoutePolicy } from "./tus-route-policy";
@@ -435,13 +434,6 @@ const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHand
     return new Tus(handlerOptions);
 };
 
-/** The `static name` upstream gives its aws-light provider class. */
-const AWS_LIGHT_CLASS_NAME = "aws-light";
-
-/** An aws-light provider (what `createR2UploadStorage` builds), from this copy of `@visulima/storage` or another. */
-const isAwsLightStorage = (storage: UploadStorage): boolean =>
-    storage instanceof AwsLightStorage || (storage.constructor as { name?: unknown } | undefined)?.name === AWS_LIGHT_CLASS_NAME;
-
 /** The protocol's route policy. A provider declares the checksums it verifies as a class field, so it is read once. */
 const routePolicy = (protocol: UploadProtocol, storage: UploadStorage): RoutePolicy => {
     if (protocol === "tus") {
@@ -469,19 +461,6 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
     // `UploadOptions.maxSize` in `createStorage`.
     if (!Number.isFinite(maxFileSize) || maxFileSize < 0) {
         throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: maxFileSize must be a finite, non-negative number (received ${String(maxFileSize)})`);
-    }
-
-    // The bundled chunked-REST client reads every upload back with a final
-    // `HEAD`, and over the S3-API provider the upload's state is already gone by
-    // then: the `HEAD` is a `404`, and the client rejects an upload it stored
-    // (visulima/visulima#915). A provider built from another copy of
-    // `@visulima/storage` fails `instanceof`, so the class's `static name`
-    // (`"aws-light"`, which survives bundling) is checked too.
-    if (protocol === "chunked-rest" && isAwsLightStorage(options.storage)) {
-        throw new LunoraError(
-            "VALIDATION_ERROR",
-            '@lunora/storage: chunked REST is not supported over createR2UploadStorage (R2\'s S3 API): the bundled client cannot complete an upload there, as its final HEAD answers 404 (visulima/visulima#915). Use protocol "tus", or createR2BindingUploadStorage',
-        );
     }
 
     const handlerOptions: UploadHandlerOptions = {
