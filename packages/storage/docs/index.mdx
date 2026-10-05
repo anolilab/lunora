@@ -513,7 +513,7 @@ to fit Cloudflare's request body limit, and `@visulima/storage` caps a chunk at
 
 ### Upgrading
 
-This release moves `@visulima/storage` to 2.0.32 and `@visulima/storage-client`
+This release moves `@visulima/storage` to 2.0.33 and `@visulima/storage-client`
 to 1.0.8. What changes for an upload route:
 
 - **`GET` is refused** (`405`) on every protocol, before `authorize` runs, as
@@ -551,6 +551,10 @@ to 1.0.8. What changes for an upload route:
 - **`X-Received-Chunks` lists merged byte ranges** instead of one entry per
   chunk, so the record stays small. A client checking whether a chunk arrived
   tests whether a range covers it; the bundled client does.
+- **Empty files are valid uploads** on every protocol and over both R2 providers:
+  TUS `Upload-Length: 0`, a chunked-REST create with `X-Total-Size: 0`, and a
+  `PUT` with `Content-Length: 0`. An empty `PUT` is create-only like any other,
+  so it gets a `409` on a taken name.
 - **`createR2UploadStorage` puts the bucket in the request path.** It sent every
   request to `<endpoint>/<key>`, which R2 read as a bucket named after the
   file. It now goes to `<endpoint>/<bucket>/<key>`; an `endpoint` that already

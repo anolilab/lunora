@@ -157,31 +157,33 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
             const createOnly = fileInit.id !== undefined;
 
-            // A named file is written by its one PUT, which upstream refuses
-            // without content; refusing an empty one here keeps an empty object
-            // from being published before the upload's state is held.
-            if (createOnly && size === 0) {
-                return throwErrorCode(ERRORS.INVALID_FILE_SIZE, "A named file has to have content");
-            }
-
             // Upstream generates every other id, so only a named file can find its id taken.
             if (createOnly && ((await this.meta.read(file.id)) !== undefined || (await objectExists(this.bucket, file.name)))) {
                 return conflict(NAME_TAKEN);
             }
 
             file.bytesWritten = 0;
-            file.status = "created";
+            file.status = size === 0 ? "completed" : "created";
             this.updateTimestamps(file);
 
-            // A zero-byte upload never receives a write, so it is finished here.
-            if (size === 0) {
-                await putObject(this.bucket, file.name, new Uint8Array(0), file.contentType, createOnly);
-                file.status = "completed";
-            }
-
-            // Create-only, so of two racing creates for one name, one writes the state.
+            // Create-only, so of two racing creates for one name, one writes the state. Taken
+            // before a zero-byte file's object is written, so a create that loses the race
+            // never publishes an object.
             if (!(await this.meta.create(file.id, { file, upload: { parts: [], segments: [], ...(createOnly ? { createOnly } : {}) } }))) {
                 return conflict(NAME_TAKEN);
+            }
+
+            // A zero-byte upload never receives a write, so it is finished here. A named file's
+            // object is written create-only: one stored meanwhile under its name refuses it, and
+            // the state goes again.
+            if (size === 0) {
+                try {
+                    await putObject(this.bucket, file.name, new Uint8Array(0), file.contentType, createOnly);
+                } catch (error) {
+                    await this.deleteMeta(file.id).catch(() => undefined);
+
+                    throw error;
+                }
             }
 
             await this.onCreate(file);

@@ -87,6 +87,28 @@ describe.each([
         expect(text(bucket.read("report-v2"))).toBe("first");
     });
 
+    // Upstream takes an empty PUT since storage 2.0.33, and its PUT replaces an existing upload: the
+    // name check must hold for an empty body too.
+    it("refuses an empty PUT to a taken name (409) and keeps the first file", async () => {
+        expect.hasAssertions();
+
+        const bucket = makeBucket();
+        const route = routeOver(bucket);
+
+        await expect(route.fetch(put("report-v2.txt", "first"))).resolves.toHaveProperty("status", 201);
+        await expect(route.fetch(put("report-v2.txt", ""))).resolves.toHaveProperty("status", 409);
+        expect(text(bucket.read("report-v2"))).toBe("first");
+    });
+
+    it("stores an empty file under a new name (201)", async () => {
+        expect.hasAssertions();
+
+        const bucket = makeBucket();
+
+        await expect(routeOver(bucket).fetch(put("empty.txt", ""))).resolves.toHaveProperty("status", 201);
+        expect(text(bucket.read("empty"))).toBe("");
+    });
+
     it("refuses a PUT onto an object the route never created (409) and leaves it as it was", async () => {
         expect.hasAssertions();
 
@@ -203,6 +225,19 @@ describe("a chunked-REST PUT over createR2BindingUploadStorage, raced", () => {
 
         expect(text(bucket.read("race"))).toBe(winner);
     });
+
+    // An empty file's object is written right after its state is taken, so the create that loses
+    // the race for the state never publishes one.
+    it("lets exactly one of two concurrent empty PUTs to one new name through, and leaves one empty file", async () => {
+        expect.hasAssertions();
+
+        const bucket = bindingBucket();
+        const route = createUploadHandler({ protocol: "chunked-rest", silent: true, storage: bucket.storage() });
+        const responses = await Promise.all([route.fetch(put("race.txt", "")), route.fetch(put("race.txt", ""))]);
+
+        expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toStrictEqual([201, 409]);
+        expect(text(bucket.read("race"))).toBe("");
+    });
 });
 
 describe("a chunked-REST PUT's name check", () => {
@@ -243,7 +278,8 @@ describe("a chunked-REST PUT's name check", () => {
     });
 
     it.each([
-        ["no Content-Length worth storing", new Request(`${ENDPOINT}/payroll-2026.txt`, { body: "", headers: { "content-length": "0" }, method: "PUT" }), 400],
+        // A create declaring no size gets the cap's 413, as it can't be checked against it.
+        ["no Content-Length", new Request(`${ENDPOINT}/payroll-2026.txt`, { method: "PUT" }), 413],
         ["a size the per-upload cap refuses", put("payroll-2026.txt", "too large for the cap"), 413],
     ])("keeps upstream's or the cap's own answer for a PUT onto a taken name with %s, not 409", async (_, request, status) => {
         expect.hasAssertions();

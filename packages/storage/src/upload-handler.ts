@@ -235,6 +235,9 @@ const methodNotAllowedResponse = (protocol: UploadProtocol, message: string): Re
  */
 const METHOD_OVERRIDE_HEADERS = ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"] as const;
 
+/** A declared size: decimal digits only, as TUS and HTTP define it. */
+const DIGITS = /^\d+$/u;
+
 /** One extension, as upstream strips it from a chunked-REST id. */
 const EXTENSION = /\.[^.]+$/u;
 
@@ -243,16 +246,18 @@ const CLIENT_FILE_ID = /^[\w-]{1,255}$/u;
 
 /**
  * The id a chunked-REST `PUT` would create, or `undefined` when upstream
- * refuses the request anyway (an id it does not accept, no positive
- * `Content-Length`, a size over the provider's `maxUploadSize`). Those keep
- * upstream's own `400`/`413`, so a refused request learns nothing about the
- * name from a `409`.
+ * refuses the request anyway (an id it does not accept, no `Content-Length`,
+ * a size over the provider's `maxUploadSize`). Those keep upstream's own
+ * `400`/`413`, so a refused request learns nothing about the name from a
+ * `409`. An empty body (`Content-Length: 0`) is checked like any other: since
+ * storage 2.0.33 upstream takes it, and its `PUT` replaces an existing upload.
  */
 const putCreateId = (request: Request, storage: UploadStorage): string | undefined => {
     const id = (new URL(request.url).pathname.split("/").findLast(Boolean) ?? "").replace(EXTENSION, "");
-    const length = Number(request.headers.get("Content-Length") ?? "");
+    const header = request.headers.get("Content-Length")?.trim() ?? "";
+    const length = DIGITS.test(header) ? Number(header) : Number.NaN;
 
-    return CLIENT_FILE_ID.test(id) && Number.isSafeInteger(length) && length > 0 && length <= storage.maxUploadSize ? id : undefined;
+    return CLIENT_FILE_ID.test(id) && Number.isSafeInteger(length) && length <= storage.maxUploadSize ? id : undefined;
 };
 
 const isFileNotFound = (error: unknown): boolean =>
@@ -305,8 +310,6 @@ const putTargetExists = async (id: string, storage: UploadStorage): Promise<bool
  * Known gap: a TUS upload created with `Upload-Defer-Length` (no declared
  * total up front) is not covered by this pre-check.
  */
-/** A declared size: decimal digits only, as TUS and HTTP define it. */
-const DIGITS = /^\d+$/u;
 
 const declaredUploadSize = (request: Request, protocol: UploadProtocol): number | undefined => {
     if (protocol === "multipart") {
