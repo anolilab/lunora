@@ -1,3 +1,11 @@
+## @lunora/testing [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.234...@lunora/testing@1.0.0-alpha.235) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.178
+* **@lunora/mail:** upgraded to 1.0.0-alpha.98
+
 ## @lunora/testing [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.233...@lunora/testing@1.0.0-alpha.234) (2026-10-04)
 
 

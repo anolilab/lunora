@@ -74,11 +74,17 @@ const renderStudio = (mock: MockClientHooks, { dataEditable, schemaEditable }: {
         </LunoraProvider>,
     );
 
+/**
+ * How long a test waits for a lazily loaded route to render: Testing Library's 1 s default is too
+ * short for its first import under a loaded runner (nightly #987), as the other studio app tests found.
+ */
+const ROUTE_LOAD = { timeout: 5000 };
+
 /** Wait until the studioFeatures RPC has settled and the studio knows which host it is talking to. */
 const settled = async (platform: StudioPlatform): Promise<void> => {
     await waitFor(() => {
         expect(screen.getByTestId("lunora-studio").dataset.platform).toBe(platform.id);
-    });
+    }, ROUTE_LOAD);
 };
 
 // Compile-time half of the pin below: a studio-side key that is not a matrix key fails tsc here.
@@ -150,7 +156,7 @@ describe("platform capability gate", () => {
 
         renderStudio(mock);
 
-        const notice = await screen.findByTestId("dash-unsupported");
+        const notice = await screen.findByTestId("dash-unsupported", undefined, ROUTE_LOAD);
 
         expect(notice.textContent).toContain("Node");
         // Stays on the URL the operator typed rather than bouncing to Home.
@@ -185,7 +191,7 @@ describe("platform capability gate", () => {
             mock.query.mock.calls.filter(([reference]) => (reference as { __lunoraRef?: string }).__lunoraRef === ADMIN_FUNCTIONS.getPitrBookmark).length;
 
         renderStudio(mock);
-        await screen.findByTestId("lunora-studio");
+        await screen.findByTestId("lunora-studio", undefined, ROUTE_LOAD);
         // Long enough for the lazy panel chunk to load and fire its first read, had it mounted.
         await new Promise((resolve) => {
             setTimeout(resolve, 300);
@@ -195,7 +201,7 @@ describe("platform capability gate", () => {
 
         release();
 
-        await expect(screen.findByTestId("dash-unsupported")).resolves.toBeDefined();
+        await expect(screen.findByTestId("dash-unsupported", undefined, ROUTE_LOAD)).resolves.toBeDefined();
         expect(pitrCalls()).toBe(0);
     });
 
@@ -206,7 +212,7 @@ describe("platform capability gate", () => {
         renderStudio(createClient(CLOUDFLARE));
         await settled(CLOUDFLARE);
 
-        await expect(screen.findByTestId("lunora-pitr")).resolves.toBeDefined();
+        await expect(screen.findByTestId("lunora-pitr", undefined, ROUTE_LOAD)).resolves.toBeDefined();
         expect(screen.queryByTestId("dash-unsupported")).toBeNull();
     });
 
@@ -220,7 +226,7 @@ describe("platform capability gate", () => {
             openCommandPalette();
         });
 
-        const list = within(await screen.findByTestId("dash-command-list"));
+        const list = within(await screen.findByTestId("dash-command-list", undefined, ROUTE_LOAD));
 
         expect(list.queryByText("Time Travel")).toBeNull();
         expect(list.queryByText("Agents")).toBeNull();
@@ -238,7 +244,7 @@ describe("platform capability gate", () => {
             openCommandPalette();
         });
 
-        const list = within(await screen.findByTestId("dash-command-list"));
+        const list = within(await screen.findByTestId("dash-command-list", undefined, ROUTE_LOAD));
 
         expect(list.getByText("Time Travel")).toBeDefined();
         expect(list.getByText("Agents")).toBeDefined();
@@ -256,8 +262,8 @@ describe("generate rows gate", () => {
         globalThis.history.pushState({}, "", "/data");
         renderStudio(createClient(CLOUDFLARE), { dataEditable: true });
 
-        fireEvent.click(await screen.findByTestId("db-table-messages"));
-        await screen.findByTestId("db-add-row");
+        fireEvent.click(await screen.findByTestId("db-table-messages", undefined, ROUTE_LOAD));
+        await screen.findByTestId("db-add-row", undefined, ROUTE_LOAD);
 
         expect(screen.queryByTestId("db-generate-rows")).toBeNull();
     });
@@ -268,8 +274,8 @@ describe("generate rows gate", () => {
         globalThis.history.pushState({}, "", "/data");
         renderStudio(createClient(CLOUDFLARE), { dataEditable: true, schemaEditable: true });
 
-        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        fireEvent.click(await screen.findByTestId("db-table-messages", undefined, ROUTE_LOAD));
 
-        await expect(screen.findByTestId("db-generate-rows")).resolves.toBeDefined();
+        await expect(screen.findByTestId("db-generate-rows", undefined, ROUTE_LOAD)).resolves.toBeDefined();
     });
 });
