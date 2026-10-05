@@ -1,3 +1,17 @@
+## @lunora/studio [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.263...@lunora/studio@1.0.0-alpha.264) (2026-10-05)
+
+### Tests
+
+* **studio:** give the capability-gate tests the route-load timeout ([#988](https://github.com/anolilab/lunora/issues/988)) ([dc3f719](https://github.com/anolilab/lunora/commit/dc3f719b41eda8d282418c9395a231fcadc9fdef))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.179
+* **@lunora/react:** upgraded to 1.0.0-alpha.191
+* **@lunora/mail:** upgraded to 1.0.0-alpha.98
+* **@lunora/notify:** upgraded to 1.0.0-alpha.74
+
 ## @lunora/studio [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.262...@lunora/studio@1.0.0-alpha.263) (2026-10-04)
 
 
