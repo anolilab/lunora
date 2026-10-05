@@ -12,8 +12,7 @@ import type { R2ConditionalLike, R2MultipartUploadLike, R2ObjectBodyLike, R2Obje
 
 import { toBytes } from "../src/byte-queue";
 import type { R2UploadBucket } from "../src/r2-binding-upload-storage";
-
-const MIN_PART = 5 * 1024 * 1024;
+import { concatParts, validParts } from "./r2-multipart-rules";
 
 interface StoredObject {
     bytes: Uint8Array;
@@ -86,40 +85,24 @@ const createFakeR2UploadBucket = (): R2UploadBucket & {
             },
             complete: async (uploadedParts) => {
                 const upload = open();
-                const chunks: Uint8Array[] = [];
-
-                uploadedParts.forEach(({ etag, partNumber }, index) => {
+                const chunks = uploadedParts.map(({ etag, partNumber }) => {
                     const part = upload.parts.get(partNumber);
 
                     if (part?.etag !== etag) {
                         throw new Error(`InvalidPart: ${String(partNumber)}`);
                     }
 
-                    const isLast = index === uploadedParts.length - 1;
-
-                    if (!isLast && part.bytes.byteLength < MIN_PART) {
-                        throw new Error("EntityTooSmall: every part but the last must be at least 5 MiB");
-                    }
-
-                    if (!isLast && index > 0 && part.bytes.byteLength !== chunks[0]?.byteLength) {
-                        throw new Error("InvalidPart: all non-trailing parts must have the same length");
-                    }
-
-                    chunks.push(part.bytes);
+                    return part.bytes;
                 });
 
-                const bytes = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
-                let offset = 0;
-
-                for (const chunk of chunks) {
-                    bytes.set(chunk, offset);
-                    offset += chunk.byteLength;
+                if (!validParts(chunks)) {
+                    throw new Error("InvalidPart: every part but the last must be at least 5 MiB, and all of them the same size");
                 }
 
                 partSizes.push(chunks.map((chunk) => chunk.byteLength));
                 openUploads.delete(uploadId);
 
-                return store(key, bytes, upload.contentType);
+                return store(key, concatParts(chunks), upload.contentType);
             },
             key,
             uploadId,

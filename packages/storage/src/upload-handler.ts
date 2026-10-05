@@ -13,7 +13,7 @@
  * Point the client's endpoint at the route the app mounts this handler on; the
  * bytes flow through the Worker → the configured provider (R2 through the
  * Worker's binding via `createR2BindingUploadStorage`, R2's S3 API via
- * {@link createR2UploadStorage}, an in-memory provider in tests).
+ * `createR2UploadStorage`, an in-memory provider in tests).
  *
  * The `authorize` callback is the RLS decision: it runs before every request
  * (create, chunk PATCH, resume HEAD, delete) and denies fail-closed — a thrown
@@ -24,12 +24,16 @@
  *
  * The route is write-only. `GET`, and any method the protocol does not need to
  * upload, is refused (405) before the gate runs, so the route never serves a
- * stored file. Downloads go through `ctx.storage.download()` or a signed URL.
+ * stored file. So is any request carrying a method-override header, which
+ * would change the method after that check. Downloads go through
+ * `ctx.storage.download()` or a signed URL.
  */
 import { LunoraError } from "@lunora/errors";
-import { File } from "@visulima/storage";
+import { ERRORS, File } from "@visulima/storage";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
-import { AwsLightStorage } from "@visulima/storage/provider/aws-light";
+
+import type { DeclaredFile, RouteCheck, RoutePolicy } from "./tus-route-policy";
+import { TUS_RESUMABLE, tusRoutePolicy } from "./tus-route-policy";
 
 /** Resumable upload wire protocols the handler can speak. */
 type UploadProtocol = "chunked-rest" | "multipart" | "tus";
@@ -42,12 +46,20 @@ type UploadProtocol = "chunked-rest" | "multipart" | "tus";
  */
 const DEFAULT_MAX_UPLOAD_BYTES: number = 100 * 1024 * 1024;
 
+/**
+ * The largest TUS chunk `@visulima/storage` buffers in memory to verify an
+ * `Upload-Checksum` the provider cannot verify itself; larger ones are refused
+ * (`413`) unread. Peak memory is about twice this, so upstream's 64 MiB default
+ * would let one request take most of a Worker isolate's 128 MB.
+ */
+const MAX_CHECKSUM_BUFFER_BYTES: number = 16 * 1024 * 1024;
+
 // Derive the visulima handler option/storage types from the class constructors
 // so we never import `@visulima/storage`'s internal `BaseStorage` / `UploadFile`
 // symbols (they are not part of the fetch-handler entry's public surface).
 type UploadHandlerOptions = ConstructorParameters<typeof Tus>[0];
 
-/** A `@visulima/storage` storage provider (e.g. {@link createR2UploadStorage} or a memory provider in tests). */
+/** A `@visulima/storage` storage provider (e.g. `createR2UploadStorage` or a memory provider in tests). */
 type UploadStorage = UploadHandlerOptions["storage"];
 
 /**
@@ -163,37 +175,7 @@ interface UploadHandler {
     protocol: UploadProtocol;
 }
 
-/** R2 (S3-compatible) credentials + bucket for {@link createR2UploadStorage}. */
-interface R2UploadStorageOptions {
-    /** R2 S3 API Access Key ID (from an R2 API token). */
-    accessKeyId: string;
-    /** Cloudflare account id — used to derive the R2 S3 endpoint host. */
-    accountId: string;
-    /** Target R2 bucket name. */
-    bucket: string;
-
-    /**
-     * Explicit R2 S3 endpoint. Defaults to
-     * `https://<accountId>.r2.cloudflarestorage.com`. Pass this to pin a
-     * jurisdiction (e.g. `<accountId>.eu.r2.cloudflarestorage.com`).
-     */
-    endpoint?: string;
-    /** Client-side multipart part size (bytes or a size string like `"16MB"`). */
-    partSize?: number | string;
-
-    /**
-     * Path prefix the handler is mounted on (must match the client endpoint's
-     * path). Default `"/"`.
-     */
-    path?: string;
-}
-
-// TUS requires `Tus-Resumable` on *every* response, denials included, or a
-// spec-compliant client treats the response as a protocol error rather than an
-// auth failure. The error body mirrors visulima's `ApiError` shape so
-// `@visulima/storage-client`'s `UploadError` surfaces `status` + `code`.
-const TUS_RESUMABLE = "1.0.0";
-
+/** An error in visulima's `ApiError` shape, so `@visulima/storage-client` surfaces `status` and `code`. */
 const errorResponse = (protocol: UploadProtocol, status: number, error: { code: string; message: string; name: string }): Response => {
     const headers: Record<string, string> = { "content-type": "application/json" };
 
@@ -238,16 +220,63 @@ const ALLOWED_METHODS: Readonly<Record<UploadProtocol, ReadonlySet<string>>> = {
     tus: new Set(["DELETE", "HEAD", "OPTIONS", "PATCH", "POST"]),
 };
 
-const methodNotAllowedResponse = (protocol: UploadProtocol, method: string): Response => {
-    const response = errorResponse(protocol, 405, {
-        code: "METHOD_NOT_ALLOWED",
-        message: `${method} is not allowed on this upload route: it is write-only. Serve stored files with ctx.storage.download() or a signed URL`,
-        name: "MethodNotAllowedError",
-    });
+const methodNotAllowedResponse = (protocol: UploadProtocol, message: string): Response => {
+    const response = errorResponse(protocol, 405, { code: "METHOD_NOT_ALLOWED", message, name: "MethodNotAllowedError" });
 
     response.headers.set("Allow", [...ALLOWED_METHODS[protocol]].join(", "));
 
     return response;
+};
+
+/**
+ * Headers that ask a server to treat the request as another method, after
+ * {@link ALLOWED_METHODS} and `authorize` ran on `request.method`: a `POST`
+ * overridden to `GET` would pass the write gate and be served as a read.
+ */
+const METHOD_OVERRIDE_HEADERS = ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"] as const;
+
+/** A declared size: decimal digits only, as TUS and HTTP define it. */
+const DIGITS = /^\d+$/u;
+
+/** One extension, as upstream strips it from a chunked-REST id. */
+const EXTENSION = /\.[^.]+$/u;
+
+/** A name upstream's `PUT` accepts for a new file. */
+const CLIENT_FILE_ID = /^[\w-]{1,255}$/u;
+
+/**
+ * The id a chunked-REST `PUT` would create, or `undefined` when upstream
+ * refuses the request anyway (an id it does not accept, no `Content-Length`,
+ * a size over the provider's `maxUploadSize`). Those keep upstream's own
+ * `400`/`413`, so a refused request learns nothing about the name from a
+ * `409`. An empty body (`Content-Length: 0`) is checked like any other: since
+ * storage 2.0.33 upstream takes it, and its `PUT` replaces an existing upload.
+ */
+const putCreateId = (request: Request, storage: UploadStorage): string | undefined => {
+    const id = (new URL(request.url).pathname.split("/").findLast(Boolean) ?? "").replace(EXTENSION, "");
+    const header = request.headers.get("Content-Length")?.trim() ?? "";
+    const length = DIGITS.test(header) ? Number(header) : Number.NaN;
+
+    return CLIENT_FILE_ID.test(id) && Number.isSafeInteger(length) && length <= storage.maxUploadSize ? id : undefined;
+};
+
+const isFileNotFound = (error: unknown): boolean =>
+    typeof error === "object" && error !== null && (error as { UploadErrorCode?: unknown }).UploadErrorCode === ERRORS.FILE_NOT_FOUND;
+
+/**
+ * Whether a chunked-REST `PUT` names an upload that exists, which upstream's
+ * `PUT` would replace. Only a confirmed "not found" counts as free. A stored
+ * object without upload state upstream refuses itself (visulima/visulima#919),
+ * and the R2 binding provider again, atomically, when it writes.
+ */
+const putTargetExists = async (id: string, storage: UploadStorage): Promise<boolean> => {
+    try {
+        await storage.getMeta(id);
+
+        return true;
+    } catch (error) {
+        return !isFileNotFound(error);
+    }
 };
 
 /**
@@ -281,8 +310,6 @@ const methodNotAllowedResponse = (protocol: UploadProtocol, method: string): Res
  * Known gap: a TUS upload created with `Upload-Defer-Length` (no declared
  * total up front) is not covered by this pre-check.
  */
-/** A declared size: decimal digits only, as TUS and HTTP define it. */
-const DIGITS = /^\d+$/u;
 
 const declaredUploadSize = (request: Request, protocol: UploadProtocol): number | undefined => {
     if (protocol === "multipart") {
@@ -315,20 +342,40 @@ const declaredUploadSize = (request: Request, protocol: UploadProtocol): number 
 };
 
 /**
- * TUS `Upload-Metadata`, decoded exactly as `@visulima/storage`'s TUS handler
- * decodes it: `key base64value,key2 base64value2`, a key may carry no value,
- * and the value is decoded with `Buffer` (which also takes url-safe base64).
+ * Everything the route refuses before `authorize` runs: a method the protocol
+ * does not need to upload, a method-override header, a declared size over
+ * `maxFileSize`, and the protocol policy's own checks. Answers the refusal, or
+ * what the request declares about its file.
  */
-const tusMetadata = (header: string): Record<string, string> => {
-    const metadata: Record<string, string> = {};
+const checkBeforeGate = (request: Request, protocol: UploadProtocol, maxFileSize: number, policy: RoutePolicy): RouteCheck => {
+    // HTTP methods are case-sensitive, and the protocol handlers dispatch on
+    // the exact string. `Request` upper-cases the standard ones (`get`,
+    // `post`, …) but keeps `patch` as sent, so a lowercase `patch` is not
+    // `PATCH`: refused here, before the gate, like any other method.
+    const { method } = request;
 
-    for (const [key, value] of header.split(",").map((pair) => pair.split(" "))) {
-        if (key !== undefined && key !== "") {
-            metadata[key] = value === undefined || value === "" ? "" : Buffer.from(value, "base64").toString();
-        }
+    if (!ALLOWED_METHODS[protocol].has(method)) {
+        return {
+            refusal: methodNotAllowedResponse(
+                protocol,
+                `${method} is not allowed on this upload route: it is write-only. Serve stored files with ctx.storage.download() or a signed URL`,
+            ),
+        };
     }
 
-    return metadata;
+    const override = METHOD_OVERRIDE_HEADERS.find((header) => request.headers.has(header));
+
+    if (override !== undefined) {
+        return { refusal: methodNotAllowedResponse(protocol, `${override} is not allowed on this upload route: send the request with the method itself`) };
+    }
+
+    const declaredSize = declaredUploadSize(request, protocol);
+
+    if (declaredSize !== undefined && declaredSize > maxFileSize) {
+        return { refusal: tooLargeResponse(protocol) };
+    }
+
+    return policy.check(request);
 };
 
 /** Chunked-REST `X-File-Metadata`: a JSON object, as `@visulima/storage` reads it. Malformed metadata declares nothing. */
@@ -342,6 +389,29 @@ const restMetadata = (header: string | null): Record<string, unknown> => {
     }
 };
 
+/** Chunked REST stores the request's `Content-Type` (an empty one falls back, as in the REST handler) and its `X-File-Metadata`. */
+const restRoutePolicy: RoutePolicy = {
+    check: (request) => {
+        const header = request.headers.get("Content-Type");
+
+        return {
+            declared: {
+                contentType: header === null || header === "" ? "application/octet-stream" : header,
+                metadata: restMetadata(request.headers.get("X-File-Metadata")),
+            },
+        };
+    },
+    finish: (_request, response) => response,
+};
+
+/** Multipart declares nothing a per-upload cap reads: its size is only known once the form is parsed. */
+const multipartRoutePolicy: RoutePolicy = {
+    check: () => {
+        return { declared: { contentType: undefined, metadata: {} } };
+    },
+    finish: (_request, response) => response,
+};
+
 /**
  * What a create request declares about its file. The MIME type is resolved by
  * building the same `File` the protocol handler builds, so the cap is decided
@@ -349,16 +419,11 @@ const restMetadata = (header: string | null): Record<string, unknown> => {
  * `Content-Type`, on TUS the metadata's `mimeType`, then `type`, then
  * `filetype`.
  */
-const declaredFile = (request: Request, protocol: UploadProtocol): { contentType: string; metadata: Record<string, string> } => {
-    const metadata = protocol === "tus" ? tusMetadata(request.headers.get("Upload-Metadata") ?? "") : restMetadata(request.headers.get("X-File-Metadata"));
-    const header = request.headers.get("Content-Type");
-    // An empty header falls back too, as it does in the REST handler.
-    const restType = header === null || header === "" ? "application/octet-stream" : header;
-    const contentType = protocol === "tus" ? undefined : restType;
-    const file = new File({ contentType, metadata });
+const describeFile = (declared: DeclaredFile): { contentType: string; metadata: Record<string, string> } => {
+    const file = new File({ contentType: declared.contentType, metadata: declared.metadata });
     const strings: Record<string, string> = {};
 
-    for (const [key, value] of Object.entries(metadata)) {
+    for (const [key, value] of Object.entries(declared.metadata)) {
         strings[key] = typeof value === "string" ? value : JSON.stringify(value);
     }
 
@@ -376,13 +441,14 @@ const isCreateRequest = (request: Request, protocol: UploadProtocol): boolean =>
 const checkSizeFor = async (
     maxFileSizeFor: NonNullable<CreateUploadHandlerOptions["maxFileSizeFor"]>,
     context: UploadAuthzContext,
+    declared: DeclaredFile,
     maxFileSize: number,
 ): Promise<Response | undefined> => {
     const declaredSize = declaredUploadSize(context.request, context.protocol);
     let cap: unknown;
 
     try {
-        cap = await maxFileSizeFor({ ...context, ...declaredFile(context.request, context.protocol), declaredSize });
+        cap = await maxFileSizeFor({ ...context, ...describeFile(declared), declaredSize });
     } catch {
         return denyResponse(context.protocol);
     }
@@ -410,6 +476,15 @@ const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHand
     return new Tus(handlerOptions);
 };
 
+/** The protocol's route policy. A provider declares the checksums it verifies as a class field, so it is read once. */
+const routePolicy = (protocol: UploadProtocol, storage: UploadStorage): RoutePolicy => {
+    if (protocol === "tus") {
+        return tusRoutePolicy(storage.checksumTypes.length > 0);
+    }
+
+    return protocol === "chunked-rest" ? restRoutePolicy : multipartRoutePolicy;
+};
+
 /**
  * Build an RLS-gated resumable upload handler over a `@visulima/storage`
  * provider. Mount its {@link UploadHandler.fetch} on the route your client
@@ -430,27 +505,22 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: maxFileSize must be a finite, non-negative number (received ${String(maxFileSize)})`);
     }
 
-    // The S3-API provider appends each chunked-REST chunk as the next multipart
-    // part without checking its `X-Chunk-Offset`, so a chunk that arrives out of
-    // order (the bundled client sends four in parallel) or twice is silently
-    // stored in the wrong place.
-    if (protocol === "chunked-rest" && options.storage instanceof AwsLightStorage) {
-        throw new LunoraError(
-            "VALIDATION_ERROR",
-            '@lunora/storage: chunked REST is not supported over createR2UploadStorage (R2\'s S3 API), which stores chunks in arrival order and can corrupt the file. Use protocol "tus", or createR2BindingUploadStorage',
-        );
-    }
-
     const handlerOptions: UploadHandlerOptions = {
+        // Read only by the TUS handler. Defence in depth beside
+        // METHOD_OVERRIDE_HEADERS, which lists only the names known today.
+        allowMethodOverride: false,
         // A finished upload is a stored file; removing it is the app's call
         // (`ctx.storage.delete`), not a `DELETE` any caller the upload gate
         // admits can send to the upload route.
         disableTerminationForFinishedUploads: true,
+        // Read only by the TUS handler; see MAX_CHECKSUM_BUFFER_BYTES.
+        maxChecksumBufferSize: MAX_CHECKSUM_BUFFER_BYTES,
         maxFileSize,
         storage: options.storage,
     };
 
     const handler = instantiateHandler(protocol, handlerOptions);
+    const policy = routePolicy(protocol, options.storage);
 
     const { authorize, maxFileSizeFor } = options;
 
@@ -464,20 +534,10 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
     }
 
     const fetch = async (request: Request): Promise<Response> => {
-        // HTTP methods are case-sensitive, and the protocol handlers dispatch on
-        // the exact string. `Request` upper-cases the standard ones (`get`,
-        // `post`, …) but keeps `patch` as sent, so a lowercase `patch` is not
-        // `PATCH`: refused here, before the gate, like any other method.
-        const { method } = request;
+        const checked = checkBeforeGate(request, protocol, maxFileSize, policy);
 
-        if (!ALLOWED_METHODS[protocol].has(method)) {
-            return methodNotAllowedResponse(protocol, method);
-        }
-
-        const declaredSize = declaredUploadSize(request, protocol);
-
-        if (declaredSize !== undefined && declaredSize > maxFileSize) {
-            return tooLargeResponse(protocol);
+        if ("refusal" in checked) {
+            return checked.refusal;
         }
 
         const context: UploadAuthzContext = { method: request.method, protocol, request, url: new URL(request.url) };
@@ -504,39 +564,27 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         }
 
         if (maxFileSizeFor !== undefined && isCreateRequest(request, protocol)) {
-            const refused = await checkSizeFor(maxFileSizeFor, context, maxFileSize);
+            const refused = await checkSizeFor(maxFileSizeFor, context, checked.declared, maxFileSize);
 
             if (refused !== undefined) {
                 return refused;
             }
         }
 
-        return handler.fetch(request);
+        // Last, after `authorize` and every size check, and only for a request
+        // upstream would carry out: so a caller learns whether a name is taken
+        // only when it may store a file under that name.
+        const putId = protocol === "chunked-rest" && request.method === "PUT" ? putCreateId(request, options.storage) : undefined;
+
+        if (putId !== undefined && (await putTargetExists(putId, options.storage))) {
+            return errorResponse(protocol, 409, { code: "FileConflict", message: "A file already exists under this name", name: "ConflictError" });
+        }
+
+        return policy.finish(request, await handler.fetch(request));
     };
 
     return { fetch, protocol };
 };
 
-/**
- * Build an R2-backed storage provider for {@link createUploadHandler} using
- * `@visulima/storage`'s dependency-light `aws-light` provider (`aws4fetch`, no
- * AWS SDK). R2's S3 region alias is always `auto`.
- *
- * Requires an R2 **S3 API** token's Access Key ID / Secret Access Key — the
- * same credential shape `@lunora/storage`'s presigned-URL helpers take. In a
- * Worker the `aws-light` provider needs `nodejs_compat` (it imports
- * `node:stream`).
- */
-const createR2UploadStorage = (options: R2UploadStorageOptions & { secretAccessKey: string }): AwsLightStorage =>
-    new AwsLightStorage({
-        accessKeyId: options.accessKeyId,
-        bucket: options.bucket,
-        endpoint: options.endpoint ?? `https://${options.accountId}.r2.cloudflarestorage.com`,
-        path: options.path ?? "/",
-        region: "auto",
-        secretAccessKey: options.secretAccessKey,
-        ...(options.partSize === undefined ? {} : { partSize: options.partSize }),
-    });
-
-export type { CreateUploadHandlerOptions, R2UploadStorageOptions, UploadAuthzContext, UploadHandler, UploadProtocol, UploadSizeContext, UploadStorage };
-export { createR2UploadStorage, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES };
+export type { CreateUploadHandlerOptions, UploadAuthzContext, UploadHandler, UploadProtocol, UploadSizeContext, UploadStorage };
+export { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES };

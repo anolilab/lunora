@@ -78,5 +78,5 @@ const routedFetch = (route: ChunkedRestRoute, origin = "https://test.local"): Ro
     return { fetch, requests };
 };
 
-export type { ChunkedRestDriver, ChunkedRestRoute, RoutedFetch };
+export type { ChunkBody, ChunkedRestDriver, ChunkedRestRoute, RoutedFetch };
 export { CHUNKED_REST_ENDPOINT, chunkedRest, routedFetch, uploadId };

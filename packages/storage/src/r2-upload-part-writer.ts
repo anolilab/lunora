@@ -3,7 +3,7 @@
  * `R2_PART_SIZE` bytes. Bytes that do not fill a part wait in the bucket as
  * "segment" objects until a later request completes the part.
  */
-import type { R2MultipartUploadLike, R2UploadedPartLike } from "@lunora/platform";
+import type { R2MultipartUploadLike, R2ObjectLike, R2UploadedPartLike } from "@lunora/platform";
 import { ERRORS, throwErrorCode } from "@visulima/storage";
 
 import { ByteQueue } from "./byte-queue";
@@ -20,6 +20,39 @@ const R2_PART_SIZE: number = 5 * 1024 * 1024;
 const MAX_SEGMENTS = 8;
 
 const sumSizes = (segments: Segment[]): number => segments.reduce((total, segment) => total + segment.size, 0);
+
+/** Why a create-only file is refused (`409`). */
+const NAME_TAKEN = "A file already exists under this name";
+
+/** Store `body` as the object at `key`. A create-only object is stored only where none exists: else a `409`. */
+const putObject = async (
+    bucket: R2UploadBucket,
+    key: string,
+    body: Uint8Array,
+    contentType: string | undefined,
+    createOnly: boolean,
+): Promise<R2ObjectLike> => {
+    if (!createOnly) {
+        return bucket.put(key, body, { httpMetadata: { contentType } });
+    }
+
+    const object = await bucket.put(key, body, { httpMetadata: { contentType }, onlyIf: { etagDoesNotMatch: "*" } });
+
+    return object ?? throwErrorCode(ERRORS.FILE_CONFLICT, NAME_TAKEN);
+};
+
+/** Whether an object is stored at `key`: R2's `head` where the binding has it, else a `get` whose body is dropped. */
+const objectExists = async (bucket: R2UploadBucket, key: string): Promise<boolean> => {
+    if (bucket.head !== undefined) {
+        return (await bucket.head(key)) !== null;
+    }
+
+    const object = await bucket.get(key);
+
+    await object?.body?.cancel();
+
+    return object !== null;
+};
 
 /** What the writer asks of the request holding the upload's lease. */
 interface PartWriterLease {
@@ -40,6 +73,9 @@ class R2UploadPartWriter {
 
     private readonly bucket: R2UploadBucket;
 
+    /** The object may only be made where none exists (a client-named file). */
+    private readonly createOnly: boolean;
+
     /** Segment keys joined into stored bytes: deleted once the saved state no longer lists them. */
     private consumed: string[] = [];
 
@@ -57,6 +93,7 @@ class R2UploadPartWriter {
         this.parts = [...progress.parts];
         this.segments = [...progress.segments];
         this.uploadId = progress.uploadId;
+        this.createOnly = progress.createOnly === true;
         this.segmentPrefix = segmentPrefix;
         this.lease = lease;
     }
@@ -73,7 +110,12 @@ class R2UploadPartWriter {
 
     /** The progress to record (without a lock). */
     public progress(): UploadProgress {
-        return { parts: [...this.parts], segments: [...this.segments], ...(this.uploadId === undefined ? {} : { uploadId: this.uploadId }) };
+        return {
+            parts: [...this.parts],
+            segments: [...this.segments],
+            ...(this.uploadId === undefined ? {} : { uploadId: this.uploadId }),
+            ...(this.createOnly ? { createOnly: true } : {}),
+        };
     }
 
     public async push(chunk: Uint8Array): Promise<void> {
@@ -115,6 +157,10 @@ class R2UploadPartWriter {
      * Write the last bytes and make the object: a single `put` when no part was
      * ever stored, else the short last part and `complete()`. Answers the
      * object's etag.
+     *
+     * A create-only file is refused (`409`) when an object already exists at its
+     * key. The single `put` checks that atomically (`onlyIf`); R2's `complete()`
+     * takes no precondition, so a larger file is checked just before it.
      */
     public async finish(): Promise<string> {
         const tail = await this.assemble(sumSizes(this.segments) + this.pending.size);
@@ -124,10 +170,19 @@ class R2UploadPartWriter {
         let etag: string;
 
         if (this.uploadId === undefined) {
-            const object = await this.bucket.put(this.file.name, tail, { httpMetadata: { contentType: this.file.contentType } });
+            const object = await putObject(this.bucket, this.file.name, tail, this.file.contentType, this.createOnly);
 
             etag = object.etag;
         } else {
+            if (this.createOnly && (await objectExists(this.bucket, this.file.name))) {
+                // Nothing will complete these parts: drop them with the upload.
+                await this.multipart(this.uploadId)
+                    .abort()
+                    .catch(() => undefined);
+
+                return throwErrorCode(ERRORS.FILE_CONFLICT, NAME_TAKEN);
+            }
+
             const upload = this.multipart(this.uploadId);
 
             if (tail.byteLength > 0) {
@@ -233,4 +288,4 @@ class R2UploadPartWriter {
 }
 
 export type { PartWriterLease };
-export { R2_PART_SIZE, R2UploadPartWriter };
+export { NAME_TAKEN, objectExists, putObject, R2_PART_SIZE, R2UploadPartWriter };

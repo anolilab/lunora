@@ -19,9 +19,9 @@
  * # Part buffering
  *
  * R2 rejects a multipart upload unless every part but the last is at least
- * 5 MiB **and all of them are the same size**. Clients send whatever chunk size
- * they like (TUS defaults to 1 MiB), so chunks are coalesced into parts of
- * exactly `R2_PART_SIZE` bytes: part `n` always holds bytes
+ * 5 MiB **and all of them are the same size**. Clients send whatever chunk
+ * size they like (the TUS client defaults to 5 MiB), so chunks are coalesced
+ * into parts of exactly `R2_PART_SIZE` bytes: part `n` always holds bytes
  * `[(n - 1) * R2_PART_SIZE, n * R2_PART_SIZE)` of the file. Whatever a request
  * leaves over (less than one part) is written to a small "segment" object and
  * recorded in the state; the request that completes the next part reads the
@@ -35,7 +35,11 @@
  * A write first checks the client's offset against the stored one (a mismatch
  * is a `409`, as TUS requires), then takes a lease on the upload by writing a
  * lock token into the state with a conditional put. Another request for the
- * same upload while the lease is held gets a `409` and writes nothing. Before
+ * same upload while the lease is held gets a `409` and writes nothing. (Only when
+ * one handler instance serves both requests does `@visulima/storage`'s TUS
+ * handler answer the second `PATCH` with a `423` first, from an in-memory
+ * lock. A handler built per request, or another isolate, leaves it to the
+ * lease, as does chunked REST, which has no such lock.) Before
  * every part is stored, and before the object is made, the writer confirms the
  * lease with a compare-and-swap; after every part it records its progress the
  * same way. A writer that finds its token gone (its lease expired and another
@@ -48,7 +52,7 @@ import type { BaseStorageOptions, FileInit, FilePart, FileQuery } from "@visulim
 import { AbstractBaseStorage, ERRORS, File, throwErrorCode, UploadError } from "@visulima/storage";
 
 import { readBody } from "./byte-queue";
-import { R2UploadPartWriter } from "./r2-upload-part-writer";
+import { NAME_TAKEN, objectExists, putObject, R2UploadPartWriter } from "./r2-upload-part-writer";
 import { PROVIDER_OWNED_FIELDS, R2UploadStateStore } from "./r2-upload-state-store";
 import type { FileRecord, R2UploadBucket, UploadLock, UploadProgress, UploadState } from "./r2-upload-types";
 import type { UploadStorage } from "./upload-handler";
@@ -98,6 +102,14 @@ const MAX_BUFFERED_GET_BYTES: number = 32 * 1024 * 1024;
  * {@link createR2BindingUploadStorage}.
  */
 class R2BindingUploadStorage extends AbstractBaseStorage {
+    /**
+     * The provider only appends: a write must start at the stored offset
+     * (`409` otherwise), and the bytes of a chunk cut off mid-body are kept. So
+     * its `bytesWritten` is the stored prefix, which the chunked-REST handler
+     * then takes as the upload's offset and completion.
+     */
+    public override readonly sequentialWrites: boolean = true;
+
     protected override meta: R2UploadStateStore;
 
     private readonly bucket: R2UploadBucket;
@@ -116,6 +128,11 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
     /**
      * Start an upload. Its size has to be declared, as a non-negative integer:
      * every byte limit hangs off it, and `creation-defer-length` is not offered.
+     *
+     * An upload the client names (`fileInit.id`, a chunked-REST `PUT`) is
+     * create-only: refused (`409`) when its key is taken, here and again,
+     * atomically where R2 allows it, when its object is written
+     * (visulima/visulima#919).
      */
     public async create(fileInit: FileInit): Promise<File> {
         return this.instrumentOperation("create", async () => {
@@ -138,30 +155,35 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
             await this.validate(file);
 
-            // Same id, same upload: a client re-sending its create resumes it,
-            // as the S3 providers do.
-            const existing = await this.meta.read(file.id);
+            const createOnly = fileInit.id !== undefined;
 
-            if (existing !== undefined) {
-                return existing.state.file;
+            // Upstream generates every other id, so only a named file can find its id taken.
+            if (createOnly && ((await this.meta.read(file.id)) !== undefined || (await objectExists(this.bucket, file.name)))) {
+                return conflict(NAME_TAKEN);
             }
 
             file.bytesWritten = 0;
-            file.status = "created";
+            file.status = size === 0 ? "completed" : "created";
             this.updateTimestamps(file);
 
-            // A zero-byte upload never receives a write, so it is finished here.
-            if (size === 0) {
-                await this.bucket.put(file.name, new Uint8Array(0), { httpMetadata: { contentType: file.contentType } });
-                file.status = "completed";
+            // Create-only, so of two racing creates for one name, one writes the state. Taken
+            // before a zero-byte file's object is written, so a create that loses the race
+            // never publishes an object.
+            if (!(await this.meta.create(file.id, { file, upload: { parts: [], segments: [], ...(createOnly ? { createOnly } : {}) } }))) {
+                return conflict(NAME_TAKEN);
             }
 
-            // Create-only, so of two racing creates for one id, one writes the
-            // state and the other answers what it wrote.
-            if (!(await this.meta.create(file.id, { file, upload: { parts: [], segments: [] } }))) {
-                const raced = await this.meta.read(file.id);
+            // A zero-byte upload never receives a write, so it is finished here. A named file's
+            // object is written create-only: one stored meanwhile under its name refuses it, and
+            // the state goes again.
+            if (size === 0) {
+                try {
+                    await putObject(this.bucket, file.name, new Uint8Array(0), file.contentType, createOnly);
+                } catch (error) {
+                    await this.deleteMeta(file.id).catch(() => undefined);
 
-                return raced?.state.file ?? conflict("The upload is being created by another request");
+                    throw error;
+                }
             }
 
             await this.onCreate(file);
@@ -340,6 +362,24 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
         return this.unsupported("move");
     }
 
+    /**
+     * Make the object. A create-only file refused there (`409`) leaves nothing
+     * behind: the writer aborted its multipart upload, and its segments and
+     * state are removed here.
+     */
+    private async finish(writer: R2UploadPartWriter, id: string, createOnly: boolean): Promise<string> {
+        try {
+            return await writer.finish();
+        } catch (error) {
+            if (createOnly && (error as { UploadErrorCode?: unknown }).UploadErrorCode === ERRORS.FILE_CONFLICT) {
+                await this.deleteSegments(id).catch(() => undefined);
+                await this.deleteMeta(id).catch(() => undefined);
+            }
+
+            throw error;
+        }
+    }
+
     /** A finished upload's record and its stored object; `404` for anything else. */
     private async completedObject(id: string): Promise<{ file: File; object: R2ObjectBodyLike }> {
         const file = await this.checkIfExpired(await this.getMeta(id));
@@ -508,7 +548,7 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
         const interrupted = await this.pump(writer, body, size - file.bytesWritten, file.id, token);
         // The last byte arriving finishes the upload, even if the stream failed afterwards.
         const completed = writer.offset === size;
-        const etag = completed ? await writer.finish() : undefined;
+        const etag = completed ? await this.finish(writer, file.id, progress.createOnly === true) : undefined;
 
         if (!completed) {
             try {
@@ -555,10 +595,8 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
  * Chunked-REST chunks have to arrive one at a time and in order. A chunk at any
  * offset other than the upload's current one, or one sent while another is
  * still streaming, is a `409` and stores nothing, and it never counts towards
- * completion (see the chunk list in `r2-upload-state-store.ts`). The bundled
- * `@visulima/storage-client` chunked-REST client sends four chunks in parallel,
- * so over this provider it can upload only as one chunk; use TUS for
- * resumable uploads.
+ * completion. The bundled `@visulima/storage-client` chunked-REST client
+ * sends one chunk at a time (since 1.0.8), so its uploads complete here.
  */
 const createR2BindingUploadStorage = (bucket: R2UploadBucket, options: R2BindingUploadStorageOptions = {}): UploadStorage =>
     new R2BindingUploadStorage(bucket, options);

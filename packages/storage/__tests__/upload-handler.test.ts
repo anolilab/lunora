@@ -13,10 +13,25 @@ import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visu
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
-import { createR2UploadStorage, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
+import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
+import { TUS_ENDPOINT, tusDriver } from "./tus-driver";
 
-const ENDPOINT = "https://test.local/upload";
+const ENDPOINT = TUS_ENDPOINT;
+const MiB = 1024 * 1024;
+
+/** Every method-override header, on every method the route takes, overridden to `GET` or to itself, at `/<id>` and `/<id>/metadata`. */
+const OVERRIDE_CASES: [header: string, method: string, value: string, suffix: string][] = [];
+
+for (const header of ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"]) {
+    for (const method of ["POST", "PATCH", "HEAD", "OPTIONS"]) {
+        for (const value of ["GET", method]) {
+            for (const suffix of ["", "/metadata"]) {
+                OVERRIDE_CASES.push([header, method, value, suffix]);
+            }
+        }
+    }
+}
 const B64 = (value: string): string => Buffer.from(value).toString("base64");
 
 /** A `File` from raw bytes (Node >=20 exposes `File` globally). */
@@ -62,41 +77,6 @@ const wireFetch = (handler: { fetch: (request: Request) => Promise<Response> }) 
     };
 };
 
-/** A minimal raw-TUS driver so pause/resume and resume-after-drop are deterministic (no adapter timing). */
-const rawTus = (handler: { fetch: (request: Request) => Promise<Response> }) => {
-    return {
-        create: async (length: number, name: string): Promise<string> => {
-            const response = await handler.fetch(
-                new Request(ENDPOINT, {
-                    headers: { "Tus-Resumable": "1.0.0", "Upload-Length": String(length), "Upload-Metadata": `filename ${B64(name)}` },
-                    method: "POST",
-                }),
-            );
-
-            expect(response.status).toBe(201);
-
-            const location = response.headers.get("location") ?? "";
-
-            return location.startsWith("http") ? location : `https://test.local${location}`;
-        },
-        head: async (location: string): Promise<number> => {
-            const response = await handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "HEAD" }));
-
-            expect(response.status).toBe(200);
-
-            return Number(response.headers.get("upload-offset"));
-        },
-        patch: async (location: string, offset: number, chunk: Uint8Array): Promise<Response> =>
-            handler.fetch(
-                new Request(location, {
-                    body: Uint8Array.from(chunk),
-                    headers: { "Content-Type": "application/offset+octet-stream", "Tus-Resumable": "1.0.0", "Upload-Offset": String(offset) },
-                    method: "PATCH",
-                }),
-            ),
-    };
-};
-
 describe("createUploadHandler (RLS-gated, non-admin)", () => {
     let handler: ReturnType<typeof createUploadHandler>;
 
@@ -130,14 +110,10 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
         wire.restore();
 
         expect(result.bytesWritten ?? 0).toBe(2_000_000);
-        // Progress is live and monotonic. It stops one chunk short of 100:
-        // `@visulima/storage`'s TUS handler answers the completing PATCH with
-        // 200, the client accepts only 204, so it re-reads the offset with HEAD
-        // and finishes without a last progress event: visulima/visulima#899.
-        // (2.0.24's MemoryStorage marked an upload complete early and hid this.)
+        // Progress is live, monotonic, and reaches 100%.
         expect(progress.length).toBeGreaterThan(1);
         expect(progress).toStrictEqual(progress.toSorted((a, b) => a - b));
-        expect(progress.at(-1)).toBeGreaterThan(90);
+        expect(progress.at(-1)).toBe(100);
         // The upload went through the RLS route (POST create + PATCH chunks), never an admin path.
         expect(wire.requests.some((entry) => entry.method === "POST")).toBe(true);
         expect(wire.requests.some((entry) => entry.method === "PATCH")).toBe(true);
@@ -146,17 +122,17 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     it("refuses to delete a finished upload through the upload route", async () => {
         expect.hasAssertions();
 
-        const tus = rawTus(handler);
-        const location = await tus.create(4, "done.bin");
+        const tus = tusDriver(handler);
+        const location = await tus.create(4, { filename: "done.bin" });
 
         const patched = await tus.patch(location, 0, new Uint8Array(4).fill(1));
 
         expect(patched.ok).toBe(true);
 
-        const deleted = await handler.fetch(new Request(location, { headers: { "Tus-Resumable": "1.0.0" }, method: "DELETE" }));
+        const deleted = await tus.delete(location);
 
         expect(deleted.status).toBeGreaterThanOrEqual(400);
-        await expect(tus.head(location)).resolves.toBe(4);
+        await expect(tus.offset(location)).resolves.toBe(4);
     });
 
     it.each(["chunked-rest", "multipart"] as const)("refuses DELETE on a %s route before the gate (405)", async (protocol) => {
@@ -192,31 +168,27 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             return id;
         };
 
-        it.each(["chunked-rest", "multipart", "tus"] as const)(
-            "refuses GET /<id>, GET /<id>/metadata and the collection GET on a %s route before the gate (405)",
-            async (protocol) => {
-                expect.hasAssertions();
+        // `@visulima/storage` serves all of these over fetch since 2.0.24.
+        it.each(
+            (["chunked-rest", "multipart", "tus"] as const).flatMap((protocol) =>
+                ["/<id>", "/<id>.txt", "/<id>/metadata", "", "?page=1"].map((path) => [protocol, path] as const),
+            ),
+        )("refuses GET on a %s route at %j before the gate (405)", async (protocol, path) => {
+            expect.hasAssertions();
 
-                const storage = new MemoryStorage({ path: "/upload" });
-                const id = await storeFile(storage);
-                const authorize = vi.fn<() => boolean>(() => true);
-                const route = createUploadHandler({ authorize, protocol, storage });
+            const storage = new MemoryStorage({ path: "/upload" });
+            const id = await storeFile(storage);
+            const authorize = vi.fn<() => boolean>(() => true);
+            const route = createUploadHandler({ authorize, protocol, storage });
+            const response = await route.fetch(
+                new Request(`${ENDPOINT}${path.replace("<id>", id)}`, { headers: { "Tus-Resumable": "1.0.0", range: "bytes=0-5" }, method: "GET" }),
+            );
 
-                // `@visulima/storage` 2.0.24 serves all three over fetch (2.0.22's
-                // Rest and Multipart answered 500; TUS served downloads already).
-                for (const path of [`${ENDPOINT}/${id}`, `${ENDPOINT}/${id}.txt`, `${ENDPOINT}/${id}/metadata`, ENDPOINT, `${ENDPOINT}?page=1`]) {
-                    // eslint-disable-next-line no-await-in-loop -- one path at a time
-                    const response = await route.fetch(new Request(path, { headers: { "Tus-Resumable": "1.0.0", range: "bytes=0-5" }, method: "GET" }));
-
-                    expect(response.status).toBe(405);
-                    expect(response.headers.get("Allow")).not.toContain("GET");
-                    // eslint-disable-next-line no-await-in-loop -- one path at a time
-                    await expect(response.text()).resolves.not.toContain("secret bytes");
-                }
-
-                expect(authorize).not.toHaveBeenCalled();
-            },
-        );
+            expect(response.status).toBe(405);
+            expect(response.headers.get("Allow")).not.toContain("GET");
+            await expect(response.text()).resolves.not.toContain("secret bytes");
+            expect(authorize).not.toHaveBeenCalled();
+        });
 
         it("refuses GET on a public route too, which has no gate at all", async () => {
             expect.hasAssertions();
@@ -303,27 +275,33 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
                 expect(authorize).not.toHaveBeenCalled();
             });
 
-            it.each(["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"])(
-                "ignores a %s: GET header: no bytes or metadata are served",
-                async (header) => {
+            // A method-override header would swap the method after this
+            // route's method check, so a `POST` overridden to `GET` would be
+            // served as a read past the write gate.
+            it.each(OVERRIDE_CASES)(
+                "refuses %s on %s (overridden to %s) at /<id>%s with 405 before the gate, and reads nothing",
+                async (header, method, value, suffix) => {
                     expect.hasAssertions();
 
                     const storage = new MemoryStorage({ path: "/upload" });
                     const id = await storeFile(storage);
-                    const route = createUploadHandler({ protocol, silent: true, storage });
+                    const getMeta = vi.spyOn(storage, "getMeta");
+                    const authorize = vi.fn<() => boolean>(() => true);
+                    const route = createUploadHandler({ authorize, protocol, storage });
+                    const response = await route.fetch(
+                        new Request(`${ENDPOINT}/${id}${suffix}`, { headers: { [header]: value, "Tus-Resumable": "1.0.0" }, method }),
+                    );
 
-                    for (const method of ["POST", "PATCH", "HEAD"]) {
-                        for (const path of [`${ENDPOINT}/${id}`, `${ENDPOINT}/${id}/metadata`]) {
-                            // eslint-disable-next-line no-await-in-loop -- one request at a time
-                            const response = await route.fetch(new Request(path, { headers: { [header]: "GET", "Tus-Resumable": "1.0.0" }, method }));
-                            // eslint-disable-next-line no-await-in-loop -- one request at a time
-                            const body = await response.text();
-
-                            expect(body).not.toContain("secret bytes");
-                            expect(body).not.toContain("secret.txt");
-                            expect(response.headers.get("content-disposition")).toBeNull();
-                        }
-                    }
+                    expect(response.status).toBe(405);
+                    // Read in-process, so a HEAD's refusal has its body too.
+                    await expect(response.json()).resolves.toMatchObject({
+                        error: {
+                            code: "METHOD_NOT_ALLOWED",
+                            message: expect.stringMatching(/^(X-[\w-]+|PATCH|HEAD) is not allowed on this upload route/),
+                        },
+                    });
+                    expect(authorize).not.toHaveBeenCalled();
+                    expect(getMeta).not.toHaveBeenCalled();
                 },
             );
         });
@@ -398,37 +376,37 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     it("survives pause/resume mid-upload", async () => {
         expect.hasAssertions();
 
-        const driver = rawTus(handler);
+        const driver = tusDriver(handler);
         const total = 300 * 1024;
         const bytes = new Uint8Array(total).fill(67);
-        const location = await driver.create(total, "paused.bin");
+        const location = await driver.create(total, { filename: "paused.bin" });
 
         // Upload the first third, then "pause" (simply stop issuing PATCHes).
         const cut = 100 * 1024;
         const first = await driver.patch(location, 0, bytes.slice(0, cut));
 
-        // A partial chunk is 204; the one that completes the upload is 200.
-        // (2.0.24's MemoryStorage completed the upload early: 200 here, then 204.)
+        // Every successful PATCH is 204, the completing one included (tus 1.0).
         expect(first.status).toBe(204);
         expect(Number(first.headers.get("upload-offset"))).toBe(cut);
 
         // A HEAD while paused still reports the persisted offset — resume anchor.
-        await expect(driver.head(location)).resolves.toBe(cut);
+        await expect(driver.offset(location)).resolves.toBe(cut);
 
         // "Resume": finish from the reported offset.
         const rest = await driver.patch(location, cut, bytes.slice(cut));
 
-        expect(rest.status).toBe(200);
+        expect(rest.status).toBe(204);
+        await expect(rest.text()).resolves.toBe("");
         expect(Number(rest.headers.get("upload-offset"))).toBe(total);
     });
 
     it("resumes after a dropped connection", async () => {
         expect.hasAssertions();
 
-        const driver = rawTus(handler);
+        const driver = tusDriver(handler);
         const total = 500 * 1024;
         const bytes = new Uint8Array(total).fill(68);
-        const location = await driver.create(total, "dropped.bin");
+        const location = await driver.create(total, { filename: "dropped.bin" });
 
         // First chunk lands on the server.
         const cut = 200 * 1024;
@@ -437,14 +415,14 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 
         // Connection drops before the next chunk — the client lost its progress,
         // so it re-discovers the server offset via HEAD and continues.
-        const resumeOffset = await driver.head(location);
+        const resumeOffset = await driver.offset(location);
 
         expect(resumeOffset).toBe(cut);
 
         const finished = await driver.patch(location, resumeOffset, bytes.slice(resumeOffset));
 
-        // The completing chunk answers 200 (a partial one 204).
-        expect(finished.status).toBe(200);
+        // The completing chunk answers 204, like a partial one.
+        expect(finished.status).toBe(204);
         expect(Number(finished.headers.get("upload-offset"))).toBe(total);
     });
 
@@ -643,38 +621,6 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             expect(withinCap.status).toBe(201);
         });
 
-        it("refuses chunked REST over createR2UploadStorage (S3 API), which stores chunks in arrival order", async () => {
-            expect.hasAssertions();
-
-            // The aws-light provider probes the bucket (`checkBucketAccess`) from its
-            // constructor, over the network and unawaited. Answer it locally: on CI the
-            // fake account's R2 endpoint fails the TLS handshake, and the rejection
-            // lands after the test as an unhandled error that fails the run.
-            const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(undefined, { status: 200 }));
-
-            try {
-                const s3 = () => createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", path: "/upload", secretAccessKey: "secret" });
-
-                expect(() => createUploadHandler({ protocol: "chunked-rest", silent: true, storage: s3() })).toThrow(
-                    expect.objectContaining({
-                        code: "VALIDATION_ERROR",
-                        message: expect.stringMatching(/chunked REST is not supported over createR2UploadStorage.*"tus".*createR2BindingUploadStorage/),
-                    }),
-                );
-                // TUS and multipart over the same provider are fine.
-                expect(() => createUploadHandler({ protocol: "tus", silent: true, storage: s3() })).not.toThrow();
-                expect(() => createUploadHandler({ protocol: "multipart", silent: true, storage: s3() })).not.toThrow();
-
-                // The probes are signed asynchronously before they fetch; keep the stub
-                // in place until all three constructors have issued theirs.
-                await vi.waitFor(() => {
-                    expect(fetchSpy).toHaveBeenCalledTimes(3);
-                });
-            } finally {
-                fetchSpy.mockRestore();
-            }
-        });
-
         it("rejects a maxFileSize that is not a finite, non-negative number", async () => {
             expect.hasAssertions();
 
@@ -741,8 +687,6 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
 });
 
 describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
-    const MiB = 1024 * 1024;
-
     const capped = (maxFileSizeFor: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>, maxFileSize = 100 * MiB) =>
         createUploadHandler({ maxFileSize, maxFileSizeFor, silent: true, storage: new MemoryStorage({ path: "/upload" }) });
 
@@ -885,7 +829,7 @@ describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
         ).resolves.toHaveProperty("status", 413);
     });
 
-    it("decodes url-safe base64 metadata as the TUS handler does", async () => {
+    it("refuses url-safe base64 metadata (400), as the TUS handler does since 2.0.26", async () => {
         expect.hasAssertions();
 
         const seen: UploadSizeContext[] = [];
@@ -896,9 +840,8 @@ describe("createUploadHandler maxFileSizeFor (per-request cap)", () => {
         });
         const urlSafe = Buffer.from("?>?>").toString("base64url");
 
-        await create(handler, { "Upload-Length": "1", "Upload-Metadata": `filename ${urlSafe}` });
-
-        expect(seen[0]?.metadata).toStrictEqual({ filename: "?>?>" });
+        await expect(create(handler, { "Upload-Length": "1", "Upload-Metadata": `filename ${urlSafe}` })).resolves.toHaveProperty("status", 400);
+        expect(seen).toStrictEqual([]);
     });
 
     it.each(["-1", "1.5", "abc", "1e3", ""])("reads a declared size of %j as too large, never as small (regression)", async (length) => {
@@ -950,6 +893,20 @@ describe("createUploadHandler chunked REST", () => {
         expect(Buffer.from(stored.content).toString()).toBe("0123456789");
     });
 
+    it.each(["model/vnd.parasolid.transmit.text", "application/x-virtualbox-vbox-extpack", "message/disposition-notification"])(
+        "completes an upload of %s, whose extension carries `_` or `-`",
+        async (contentType) => {
+            expect.hasAssertions();
+
+            const driver = chunkedRest(createUploadHandler({ protocol: "chunked-rest", silent: true, storage: new MemoryStorage({ path: "/upload" }) }));
+            const location = await driver.create(4, contentType);
+            const patched = await driver.patch(location, 0, new Uint8Array(4).fill(1));
+
+            expect(patched.status).toBe(200);
+            await expect(driver.head(location)).resolves.toHaveProperty("status", 200);
+        },
+    );
+
     it("stores chunks sent out of order at their offsets (visulima/visulima#893)", async () => {
         expect.hasAssertions();
 
@@ -984,17 +941,12 @@ describe("createUploadHandler chunked REST", () => {
         const adapter = createChunkedRestAdapter({ chunkSize: 10_000, endpoint: ENDPOINT, retry: false });
         const result = await adapter.upload(new File([bytes], "four.bin", { type: "application/octet-stream" }));
 
-        // Not `status: "completed"`: the client's four chunks run in parallel, and
-        // upstream loses `_chunks` records between concurrent PATCHes
-        // (visulima/visulima#902), so no PATCH may report the upload complete and
-        // the result can say "part" with every byte stored. What this test pins is
-        // what Lunora guarantees: all bytes land, and nothing is read back over GET.
-        expect(result).toMatchObject({ bytesWritten: 40_000 });
+        // The client sends its four chunks one at a time (storage-client 1.0.8);
+        // the last one reports the upload complete.
+        expect(result).toMatchObject({ bytesWritten: 40_000, status: "completed" });
         expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(4);
-        // The client never asks for the file's bytes. When no PATCH reports the
-        // upload complete it tries `/metadata`, gets 405, and builds the result
-        // from what it knows.
-        expect(route.requests.filter((request) => request.startsWith("GET") && !request.endsWith("/metadata"))).toStrictEqual([]);
+        // The client never asks for the file's bytes.
+        expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
 
         const stored = await storage.get({ id: result.id });
 
