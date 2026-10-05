@@ -174,9 +174,8 @@ One handler speaks one protocol:
 
 - `"tus"` (the default): resumable. The client can pause, resume, and continue
   after a dropped connection from the last acknowledged byte.
-- `"chunked-rest"`: plain REST chunks, one at a time and in order, over
-  `createR2BindingUploadStorage` only. The bundled client sends four chunks in
-  parallel, so with it this protocol works only for a single chunk. Prefer TUS.
+- `"chunked-rest"`: plain REST chunks, one at a time and in order, which is how
+  the bundled client sends them. Not resumable mid-chunk the way TUS is.
 - `"multipart"`: one `multipart/form-data` request per file. Not resumable.
 
 #### Mount the handler
@@ -371,8 +370,7 @@ the binding of that same bucket.
 - **Chunked REST** over either R2 provider takes one chunk at a time and in
   order: a chunk at any other offset is a `409` and is not stored, and over the
   binding provider so is one sent while another is streaming. The bundled client
-  sends four chunks in parallel, so it can upload only as a single chunk
-  (`chunkSize` at least the file size). Use TUS for resumable uploads;
+  sends one chunk at a time, so its uploads complete;
   [@lunora/storage](/docs/packages/storage#chunked-rest) has the details.
 - **`maxFileSize`** defaults to 100 MiB, has no unlimited setting, and must be a
   finite, non-negative number. Uploads over it get a `413`.

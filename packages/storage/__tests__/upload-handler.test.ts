@@ -941,9 +941,8 @@ describe("createUploadHandler chunked REST", () => {
         const adapter = createChunkedRestAdapter({ chunkSize: 10_000, endpoint: ENDPOINT, retry: false });
         const result = await adapter.upload(new File([bytes], "four.bin", { type: "application/octet-stream" }));
 
-        // The client's four chunks run in parallel. Since 2.0.27 concurrent
-        // PATCHes no longer lose each other's chunk records (visulima/visulima#902),
-        // so the PATCH that lands last reports the upload complete.
+        // The client sends its four chunks one at a time (storage-client 1.0.8);
+        // the last one reports the upload complete.
         expect(result).toMatchObject({ bytesWritten: 40_000, status: "completed" });
         expect(route.requests.filter((request) => request.startsWith("PATCH"))).toHaveLength(4);
         // The client never asks for the file's bytes.

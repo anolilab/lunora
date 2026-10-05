@@ -1,10 +1,10 @@
 /**
  * The per-protocol checks an upload route makes around `@visulima/storage`'s
- * handler, and the TUS ones: `Upload-Metadata` parsed as upstream parses it,
+ * handler, and the TUS ones: `Upload-Metadata` parsed by upstream's parser,
  * `Upload-Checksum` refused where the provider verifies none, and an `OPTIONS`
  * answer that then offers no checksums.
  */
-import { ERRORS } from "@visulima/storage";
+import { ERRORS, parseTusMetadata } from "@visulima/storage";
 
 /** What a request declares about its file, as the protocol handler reads it. */
 interface DeclaredFile {
@@ -32,48 +32,17 @@ const TUS_RESUMABLE = "1.0.0";
 const tusErrorResponse = (status: number, error: { code: string; message: string; name: string }): Response =>
     Response.json({ error }, { headers: { "content-type": "application/json", "Tus-Resumable": TUS_RESUMABLE }, status });
 
-/** A TUS `Upload-Metadata` value: standard base64. */
-const BASE64_VALUE = /^[a-z\d+/]*={0,2}$/iu;
-
-/** Metadata keys the TUS handler keeps for itself and refuses from a client. */
-const RESERVED_TUS_METADATA_KEYS = new Set(["_writeClaim", "partialIds", "uploadConcat"]);
-
 /**
- * TUS `Upload-Metadata`, parsed as `@visulima/storage`'s TUS handler parses it
- * (its `parseMetadata` is not exported), so `maxFileSizeFor` decides on the
- * metadata that is stored. A header upstream refuses is refused here too.
+ * TUS `Upload-Metadata`, parsed by `@visulima/storage`'s own TUS parser, so
+ * `maxFileSizeFor` decides on the metadata that is stored and a header
+ * upstream refuses is refused here too.
  */
 const tusMetadata = (header: string): { error: string } | { metadata: Record<string, string> } => {
-    const metadata: Record<string, string> = {};
-
-    for (const pair of header.split(",")) {
-        if (pair.trim() === "") {
-            continue;
-        }
-
-        const parts = pair.trim().split(" ");
-        const [key, value] = parts;
-
-        if (key === undefined || key === "" || parts.length > 2) {
-            return { error: "Invalid Upload-Metadata header: malformed key-value pair" };
-        }
-
-        if (Object.hasOwn(metadata, key)) {
-            return { error: `Invalid Upload-Metadata header: duplicate key "${key}"` };
-        }
-
-        if (RESERVED_TUS_METADATA_KEYS.has(key)) {
-            return { error: `Invalid Upload-Metadata header: reserved key "${key}"` };
-        }
-
-        if (value !== undefined && value !== "" && !BASE64_VALUE.test(value)) {
-            return { error: `Invalid Upload-Metadata header: value of "${key}" is not base64` };
-        }
-
-        metadata[key] = value === undefined || value === "" ? "" : Buffer.from(value, "base64").toString();
+    try {
+        return { metadata: Object.fromEntries(Object.entries(parseTusMetadata(header))) as Record<string, string> };
+    } catch (error) {
+        return { error: error instanceof Error ? error.message : "Invalid Upload-Metadata header" };
     }
-
-    return { metadata };
 };
 
 /**

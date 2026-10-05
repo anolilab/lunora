@@ -709,38 +709,6 @@ describe("chunked REST over the R2 binding", () => {
     /** The stored object of a chunked-REST upload, keyed by its id. */
     const storedUpload = (bucket: ReturnType<typeof createFakeR2UploadBucket>, location: string) => bucket.objects.get(uploadId(location));
 
-    it.each([
-        ["merges a valid list into one range", { length: 5, offset: 10 }, [{ length: 15, offset: 0 }]],
-        ["leaves a list with a NaN offset as it is", { length: 5, offset: Number.NaN }, undefined],
-        ["leaves a list with an infinite offset as it is", { length: 5, offset: Number.POSITIVE_INFINITY }, undefined],
-        ["leaves a list with a negative offset as it is", { length: 5, offset: -5 }, undefined],
-        ["leaves a list with a fractional offset as it is", { length: 5, offset: 5.5 }, undefined],
-        ["leaves a list with a negative length as it is", { length: -3, offset: 5 }, undefined],
-        ["leaves a list with a zero length as it is", { length: 0, offset: 5 }, undefined],
-        ["leaves a list with a fractional length as it is", { length: 2.5, offset: 5 }, undefined],
-    ])("%s when it saves a chunked record", async (_, second, merged) => {
-        expect.hasAssertions();
-
-        const bucket = createFakeR2UploadBucket();
-        const storage = createR2BindingUploadStorage(bucket);
-        const file = await storage.create({ contentType: "text/plain", id: "chunked-file", metadata: { _chunkedUpload: true, _totalSize: 10 }, size: 10 });
-        const meta = await storage.getMeta(file.id);
-        // Two valid neighbours around the entry under test, which a merge would join.
-        const chunks = [{ length: 5, offset: 0 }, second, { length: 5, offset: 5 }];
-
-        // What the chunked-REST handler saves after a chunk: the list it computed.
-        await storage.update({ id: file.id }, { metadata: Object.fromEntries([...Object.entries(meta.metadata), ["_chunks", chunks]]) });
-
-        const { file: stored } = readState(bucket, file.id) as unknown as { file: { metadata: Record<string, unknown> } };
-
-        // Stored as JSON, which writes a non-finite number as `null`.
-        const asStored = chunks.map(({ length, offset }) => {
-            return { length: Number.isFinite(length) ? length : null, offset: Number.isFinite(offset) ? offset : null };
-        });
-
-        expect(stored.metadata).toMatchObject({ _chunks: merged ?? asStored });
-    });
-
     it("stores the chunk list of an upload sent in many small chunks as one range", async () => {
         expect.hasAssertions();
 
@@ -755,7 +723,7 @@ describe("chunked REST over the R2 binding", () => {
             await expect(driver.patch(location, offset, bytes.slice(offset, offset + 1))).resolves.toHaveProperty("status", 202);
         }
 
-        // Upstream appends one `_chunks` entry per chunk; the provider stores the merged prefix.
+        // Upstream merges the chunk list into ranges, so the state object stays small however many chunks arrive.
         const { file } = readState(bucket, uploadId(location)) as unknown as { file: { metadata: Record<string, unknown> } };
 
         expect(file.metadata).toMatchObject({ _chunks: [{ length: total - 1, offset: 0 }] });
@@ -979,17 +947,18 @@ describe("chunked REST over the R2 binding", () => {
             expect(requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
         });
 
-        it("cannot send a multi-chunk upload: its four parallel chunks race the provider's in-order lease (409)", async () => {
+        // The client sends one chunk at a time since storage-client 1.0.8, so its chunks arrive in
+        // the order the provider's lease takes them; four in parallel used to race into a 409.
+        it("sends a multi-chunk upload, which arrives intact", async () => {
             expect.hasAssertions();
 
             const bucket = createFakeR2UploadBucket();
             const bytes = pattern(400_000);
             const { adapter } = clientOver(bucket, 100_000);
+            const result = await adapter.upload(new File([bytes], "four.bin", { type: "application/octet-stream" }));
 
-            await expect(adapter.upload(new File([bytes], "four.bin", { type: "application/octet-stream" }))).rejects.toThrow(/409/);
-
-            // Nothing half-written was finished as a file.
-            expect([...bucket.objects.values()].some((object) => object.bytes.byteLength === bytes.byteLength)).toBe(false);
+            expect(result).toMatchObject({ status: "completed" });
+            expect(sameBytes(bucket.objects.get(result.id)?.bytes, bytes)).toBe(true);
         });
 
         it("resumes an upload whose chunks are all stored, and the client resolves it completed", async () => {

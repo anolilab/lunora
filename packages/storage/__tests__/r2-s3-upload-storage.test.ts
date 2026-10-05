@@ -76,14 +76,15 @@ describe("createR2UploadStorage", () => {
         expect(s3.requests).toStrictEqual(
             expect.arrayContaining([
                 // The bucket probe, then the multipart calls and the metadata object,
-                // which a finished upload keeps.
+                // which a finished upload keeps. Since storage 2.0.32 the record is the
+                // object's body, so it is read with GET.
                 `HEAD ${base}`,
                 `POST ${key}?uploads=`,
                 `GET ${key}?uploadId=upload-1`,
                 `PUT ${key}?partNumber=1&uploadId=upload-1`,
                 `PUT ${key}?partNumber=2&uploadId=upload-1`,
                 `POST ${key}?uploadId=upload-1`,
-                `HEAD ${key}.META`,
+                `GET ${key}.META`,
                 `PUT ${key}.META`,
             ]),
         );

@@ -18,59 +18,6 @@ const CAS_ATTEMPTS = 5;
  */
 const PROVIDER_OWNED_FIELDS = ["bytesWritten", "ETag", "id", "name", "size", "status"] as const satisfies ReadonlyArray<keyof File>;
 
-/** The metadata key the chunked-REST handler records its chunks under. */
-const CHUNKS_KEY = "_chunks";
-
-/** The metadata flag the chunked-REST create sets on an upload. */
-const CHUNKED_UPLOAD_KEY = "_chunkedUpload";
-
-/** A chunk the chunked-REST handler records: a byte range of the upload. */
-interface ChunkRange {
-    length: number;
-    offset: number;
-}
-
-/** A range as upstream records one: a non-negative integer offset and a positive integer length. */
-const isChunkRange = (value: unknown): value is ChunkRange => {
-    if (typeof value !== "object" || value === null) {
-        return false;
-    }
-
-    const { length, offset } = value as Partial<Record<keyof ChunkRange, unknown>>;
-
-    return Number.isSafeInteger(offset) && (offset as number) >= 0 && Number.isSafeInteger(length) && (length as number) > 0;
-};
-
-/**
- * A chunked-REST record with its chunk list (`_chunks`) merged into
- * contiguous ranges. Upstream appends one entry per chunk; this provider only
- * appends bytes, so the list is one prefix and is stored as one entry however
- * many chunks the upload takes, which keeps the state object small.
- */
-const coalesceChunks = (file: FileRecord): FileRecord => {
-    const chunks: unknown = file.metadata[CHUNKS_KEY];
-
-    if (file.metadata[CHUNKED_UPLOAD_KEY] !== true || !Array.isArray(chunks) || !chunks.every((chunk) => isChunkRange(chunk))) {
-        return file;
-    }
-
-    const merged: ChunkRange[] = [];
-
-    const ranges: ChunkRange[] = chunks;
-
-    for (const { length, offset } of ranges.toSorted((a, b) => a.offset - b.offset)) {
-        const last = merged.at(-1);
-
-        if (last !== undefined && offset <= last.offset + last.length) {
-            last.length = Math.max(last.length, offset + length - last.offset);
-        } else {
-            merged.push({ length, offset });
-        }
-    }
-
-    return { ...file, metadata: Object.fromEntries([...Object.entries(file.metadata), [CHUNKS_KEY, merged]]) };
-};
-
 /** Two records that differ at most in `modifiedAt`, which every `update()` bumps. */
 const sameRecord = (a: FileRecord, b: FileRecord): boolean =>
     JSON.stringify({ ...a, modifiedAt: undefined }) === JSON.stringify({ ...b, modifiedAt: undefined });
@@ -172,7 +119,7 @@ class R2UploadStateStore extends MetaStorage {
     public override async save(id: string, file: File): Promise<File> {
         const next = await this.swap(id, (state) => {
             const saved: FileRecord = file;
-            const record: FileRecord = coalesceChunks({ ...saved });
+            const record: FileRecord = { ...saved };
 
             for (const field of PROVIDER_OWNED_FIELDS) {
                 (record as Record<string, unknown>)[field] = state.file[field];

@@ -498,29 +498,23 @@ hold a chunk for a gap that is still open:
 - When a chunk is cut off mid-request over the binding provider, the bytes that
   arrived are kept, and `HEAD` reports them. A raw protocol client re-reads the
   offset with `HEAD` and continues from there.
-- `X-Received-Chunks` covers every byte stored, so the bundled client resuming
-  an upload that is already complete sends no chunk.
-- Over `createR2UploadStorage` the upload's state is deleted once it completes;
-  a `HEAD` on the finished upload still answers it complete, from the stored
-  object.
+- `X-Received-Chunks` lists the byte ranges stored, contiguous chunks merged
+  into one, so the bundled client resuming an upload that is already complete
+  sends no chunk.
+- A finished upload keeps its state on both providers, so a `HEAD` answers it
+  complete.
 
 The bundled client (`useChunkedRestUpload`, `createChunkedRestAdapter`, and
-`useUpload` when it picks chunked REST) sends **four chunks in parallel**. Over
-either R2 provider all but one of them get a `409`, which the client does not
-retry, so the upload fails. It works only when `chunkSize` is at
-least the file size, which makes the upload a single `PATCH`. That chunk has to
-fit Cloudflare's request body limit, and `@visulima/storage` caps a chunk at
-100 MiB. For the same reason the bundled client cannot resume an interrupted
-upload over R2: use TUS.
-
-Over providers that accept parallel chunks, such as `@visulima/storage`'s
-memory provider, the bundled client's multi-chunk upload completes with
-`status: "completed"`.
+`useUpload` when it picks chunked REST) sends **one chunk at a time** since
+`@visulima/storage-client` 1.0.8, so multi-chunk uploads complete over both R2
+providers, and an interrupted one resumes from `X-Upload-Offset`. Each chunk has
+to fit Cloudflare's request body limit, and `@visulima/storage` caps a chunk at
+100 MiB.
 
 ### Upgrading
 
-This release moves `@visulima/storage` to 2.0.31 and `@visulima/storage-client`
-to 1.0.7. What changes for an upload route:
+This release moves `@visulima/storage` to 2.0.32 and `@visulima/storage-client`
+to 1.0.8. What changes for an upload route:
 
 - **`GET` is refused** (`405`) on every protocol, before `authorize` runs, as
   described above. Nothing that uploads needs it. Code that read files back
@@ -551,9 +545,12 @@ to 1.0.7. What changes for an upload route:
   malformed `Upload-Length`, `Upload-Offset` or `Upload-Metadata` is a `400`.
 - **The TUS client's default `chunkSize` is 5 MiB** (it was 1 MiB), and it
   retries a `423`.
-- **Parallel chunked-REST chunks complete.** Concurrent `PATCH`es no longer
-  lose each other's chunk records, so the bundled client's upload reports
-  `status: "completed"` over providers that accept parallel chunks.
+- **The chunked-REST client sends one chunk at a time.** It sent four in
+  parallel, which the handlers refuse (`423`, or the R2 lease's `409`), so a
+  multi-chunk upload failed. It now completes, over both R2 providers too.
+- **`X-Received-Chunks` lists merged byte ranges** instead of one entry per
+  chunk, so the record stays small. A client checking whether a chunk arrived
+  tests whether a range covers it; the bundled client does.
 - **`createR2UploadStorage` puts the bucket in the request path.** It sent every
   request to `<endpoint>/<key>`, which R2 read as a bucket named after the
   file. It now goes to `<endpoint>/<bucket>/<key>`; an `endpoint` that already

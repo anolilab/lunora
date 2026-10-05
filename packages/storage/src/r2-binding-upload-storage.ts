@@ -593,10 +593,8 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
  * Chunked-REST chunks have to arrive one at a time and in order. A chunk at any
  * offset other than the upload's current one, or one sent while another is
  * still streaming, is a `409` and stores nothing, and it never counts towards
- * completion. The bundled
- * `@visulima/storage-client` chunked-REST client sends four chunks in parallel,
- * so over this provider it can upload only as one chunk; use TUS for
- * resumable uploads.
+ * completion. The bundled `@visulima/storage-client` chunked-REST client
+ * sends one chunk at a time (since 1.0.8), so its uploads complete here.
  */
 const createR2BindingUploadStorage = (bucket: R2UploadBucket, options: R2BindingUploadStorageOptions = {}): UploadStorage =>
     new R2BindingUploadStorage(bucket, options);

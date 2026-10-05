@@ -301,14 +301,17 @@ describe("chunked REST over the R2 binding (workerd + Miniflare R2)", () => {
             expect(route.requests.filter((request) => request.startsWith("GET"))).toStrictEqual([]);
         });
 
-        it("cannot send a multi-chunk upload: its four parallel chunks race the provider's in-order lease (409)", async () => {
+        // The client sends one chunk at a time since storage-client 1.0.8; four in parallel used to race the lease into a 409.
+        it("sends a multi-chunk upload, which completes", async () => {
             expect.hasAssertions();
 
             vi.stubGlobal("fetch", routedFetch(chunkedRoute).fetch);
 
             const adapter = createChunkedRestAdapter({ chunkSize: 100_000, endpoint: ENDPOINT, retry: false });
 
-            await expect(adapter.upload(new File([pattern(400_000)], "four.bin", { type: "application/octet-stream" }))).rejects.toThrow(/409/);
+            await expect(adapter.upload(new File([pattern(400_000)], "four.bin", { type: "application/octet-stream" }))).resolves.toMatchObject({
+                status: "completed",
+            });
         });
 
         it("resumes an upload whose chunks are all stored, and the client resolves it completed", async () => {

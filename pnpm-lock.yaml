@@ -569,11 +569,11 @@ catalogs:
       version: 0.1.9
   storage:
     '@visulima/storage':
-      specifier: 2.0.31
-      version: 2.0.31
+      specifier: 2.0.32
+      version: 2.0.32
     '@visulima/storage-client':
-      specifier: 1.0.7
-      version: 1.0.7
+      specifier: 1.0.8
+      version: 1.0.8
     aws4fetch:
       specifier: 1.0.20
       version: 1.0.20
@@ -2528,7 +2528,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.7(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@angular/core':
         specifier: catalog:angular
@@ -3027,7 +3027,7 @@ importers:
         version: link:../errors
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.7(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
@@ -4271,7 +4271,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.7(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.8(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@babel/core':
         specifier: catalog:build
@@ -4782,7 +4782,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.7(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.15)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.15)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@babel/core':
         specifier: catalog:build
@@ -4889,7 +4889,7 @@ importers:
         version: link:../platform
       '@visulima/storage':
         specifier: catalog:storage
-        version: 2.0.31(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.2.3)(magicast@0.5.4)(oxc-parser@0.147.0)(rolldown@1.2.7)(unplugin@3.3.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.5.4))(aws4fetch@1.0.20)(hono@4.13.7)(sharp@0.35.5(@types/node@26.4.1))(supports-color@10.2.2)(zod@4.5.4)
+        version: 2.0.32(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.2.3)(magicast@0.5.4)(oxc-parser@0.147.0)(rolldown@1.2.7)(unplugin@3.3.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.5.4))(aws4fetch@1.0.20)(hono@4.13.7)(sharp@0.35.5(@types/node@26.4.1))(supports-color@10.2.2)(zod@4.5.4)
       aws4fetch:
         specifier: catalog:storage
         version: 1.0.20
@@ -4911,7 +4911,7 @@ importers:
         version: 2.1.0(06f93f6fe66fe649addba78f5a611cb1)
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.7(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.10(vitest@4.1.11)
@@ -5092,7 +5092,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.7(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -5276,7 +5276,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.7(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
+        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -14651,8 +14651,8 @@ packages:
     resolution: {integrity: sha512-/rVVuYA2Y0vQl7orDBLd5VBKHPxp3K/G5MU9MPI4s6QkH6EFJ0CorluQPplIRk6onr9nfXmeE08ZR6C3O2zNkQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/storage-client@1.0.7':
-    resolution: {integrity: sha512-JJI6IJ/WHm8Y2pVGsmjQxmnyRjgTJsSO//HX1L0/ngX0m6oJI+IEWai02TJWohiqMJJcOmSRG160RjviRItsOA==}
+  '@visulima/storage-client@1.0.8':
+    resolution: {integrity: sha512-oFyeqCaBEzXhfOrOy4pUl07yY+BplhGMsKGLjvg+vC7fBlGboLWS3MZuw4WlzbKzpFXKzd3seoyCC8MbcL6sYQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@tanstack/react-query': '>=5.100.9'
@@ -14664,8 +14664,8 @@ packages:
       svelte: '>=3.0.0'
       vue: '>=3.5.34'
 
-  '@visulima/storage@2.0.31':
-    resolution: {integrity: sha512-CqP8JuH/aO+azgEPJl85TsXaVT8ax8C7q8GUpb6pTw/estvOGNwsUVxTVc8b9zSDgeNpRHHMsHO57KEQVeSvQA==}
+  '@visulima/storage@2.0.32':
+    resolution: {integrity: sha512-1iLaAztlnnjQqK6DZVJzkt1xX5Es2HpdALtNeXRjSUDoYuzA4aFMjo9mKsSFPOSLBVXX9BdSMEo9qn1iQH6NxA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@anthropic-ai/claude-agent-sdk': '>=0.2.0'
@@ -25877,14 +25877,14 @@ snapshots:
       '@csstools/css-color-parser': 4.1.10(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.0)
       '@csstools/css-tokenizer': 4.0.0
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
 
   '@asamuzakjp/dom-selector@8.3.2':
     dependencies:
       bidi-js: 1.0.3
       css-tree: 3.2.1
       is-potential-custom-element-name: 1.0.1
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
 
   '@ast-grep/napi-darwin-arm64@0.44.1':
     optional: true
@@ -26120,7 +26120,7 @@ snapshots:
       '@babel/compat-data': 8.0.0
       '@babel/helper-validator-option': 8.0.0
       browserslist: 4.28.6
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
       semver: 7.8.5
 
   '@babel/helper-create-class-features-plugin@7.29.7(@babel/core@7.29.7(supports-color@10.2.2))(supports-color@10.2.2)':
@@ -36759,7 +36759,7 @@ snapshots:
     dependencies:
       '@visulima/interactive-manager': 1.0.1
 
-  '@visulima/storage-client@1.0.7(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
+  '@visulima/storage-client@1.0.8(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
     dependencies:
       '@tanstack/react-query': 5.101.4(react@19.2.8)
       '@tanstack/solid-query': 5.101.3(solid-js@2.0.0-rc.0)
@@ -36770,7 +36770,7 @@ snapshots:
       svelte: 5.57.0(@typescript-eslint/types@8.69.0)
       vue: 3.5.42(typescript@6.0.3)
 
-  '@visulima/storage-client@1.0.7(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.15)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
+  '@visulima/storage-client@1.0.8(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.15)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
     dependencies:
       '@tanstack/react-query': 5.102.8(react@19.2.8)
       '@tanstack/solid-query': 5.101.3(solid-js@1.9.15)
@@ -36781,7 +36781,7 @@ snapshots:
       svelte: 5.57.0(@typescript-eslint/types@8.69.0)
       vue: 3.5.42(typescript@6.0.3)
 
-  '@visulima/storage-client@1.0.7(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
+  '@visulima/storage-client@1.0.8(@tanstack/react-query@5.102.8(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.0))(@tanstack/svelte-query@6.1.37(svelte@5.57.0(@typescript-eslint/types@8.69.0)))(@tanstack/vue-query@5.101.3(vue@3.5.42(typescript@6.0.3)))(react@19.2.8)(solid-js@2.0.0-rc.0)(svelte@5.57.0(@typescript-eslint/types@8.69.0))(vue@3.5.42(typescript@6.0.3))':
     dependencies:
       '@tanstack/react-query': 5.102.8(react@19.2.8)
       '@tanstack/solid-query': 5.101.3(solid-js@2.0.0-rc.0)
@@ -36792,7 +36792,7 @@ snapshots:
       svelte: 5.57.0(@typescript-eslint/types@8.69.0)
       vue: 3.5.42(typescript@6.0.3)
 
-  '@visulima/storage@2.0.31(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.2.3)(magicast@0.5.4)(oxc-parser@0.147.0)(rolldown@1.2.7)(unplugin@3.3.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.5.4))(aws4fetch@1.0.20)(hono@4.13.7)(sharp@0.35.5(@types/node@26.4.1))(supports-color@10.2.2)(zod@4.5.4)':
+  '@visulima/storage@2.0.32(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.2.3)(magicast@0.5.4)(oxc-parser@0.147.0)(rolldown@1.2.7)(unplugin@3.3.0(@rspack/core@2.2.7(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.7)(rollup@4.63.1)(vite@7.3.5(@types/node@26.4.1)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.0))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.5.4))(aws4fetch@1.0.20)(hono@4.13.7)(sharp@0.35.5(@types/node@26.4.1))(supports-color@10.2.2)(zod@4.5.4)':
     dependencies:
       '@remix-run/multipart-parser': 1.0.0
       '@visulima/pagination': 7.0.2(openapi-types@12.1.3)
@@ -42231,7 +42231,7 @@ snapshots:
 
   hosted-git-info@10.1.1:
     dependencies:
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
 
   hosted-git-info@7.0.2:
     dependencies:
@@ -42239,7 +42239,7 @@ snapshots:
 
   hosted-git-info@9.0.3:
     dependencies:
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
 
   html-encoding-sniffer@6.0.0(@noble/hashes@2.2.0):
     dependencies:
@@ -42961,7 +42961,7 @@ snapshots:
       decimal.js: 10.6.0
       html-encoding-sniffer: 6.0.0(@noble/hashes@2.2.0)
       is-potential-custom-element-name: 1.0.1
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
       parse5: 8.0.1
       saxes: 6.0.0
       symbol-tree: 3.2.4
@@ -45265,7 +45265,7 @@ snapshots:
 
   path-scurry@2.0.2:
     dependencies:
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
       minipass: 7.1.3
 
   path-to-regexp@6.3.0: {}
@@ -48726,7 +48726,7 @@ snapshots:
       chokidar: 5.0.0
       destr: 2.0.5
       h3: 1.15.11
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
       node-fetch-native: 1.6.7
       ofetch: 1.5.1
       ufo: 1.6.4
@@ -48742,7 +48742,7 @@ snapshots:
       chokidar: 5.0.0
       destr: 2.0.5
       h3: 1.15.11
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
       node-fetch-native: 1.6.7
       ofetch: 1.5.1
       ufo: 1.6.4
