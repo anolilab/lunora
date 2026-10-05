@@ -1,3 +1,14 @@
+## @lunora/vite [1.0.0-alpha.306](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.305...@lunora/vite@1.0.0-alpha.306) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.265
+* **@lunora/config:** upgraded to 1.0.0-alpha.308
+* **@lunora/studio:** upgraded to 1.0.0-alpha.265
+* **@cloudflare/vite-plugin:** 1.62.4 → 1.62.5
+* **@visulima/vite-overlay:** 2.0.32 → 2.0.41
+
 ## @lunora/vite [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.304...@lunora/vite@1.0.0-alpha.305) (2026-10-05)
 
 
