@@ -1,3 +1,24 @@
+## @lunora/cli [1.0.0-alpha.350](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.349...@lunora/cli@1.0.0-alpha.350) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.190
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.265
+* **@lunora/config:** upgraded to 1.0.0-alpha.308
+* **@lunora/d1:** upgraded to 1.0.0-alpha.163
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.215
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.177
+* **@lunora/seed:** upgraded to 1.0.0-alpha.193
+* **@lunora/testing:** upgraded to 1.0.0-alpha.236
+* **csv-parse:** 7.0.2 → 7.0.3
+* **@visulima/fs:** 6.0.19 → 6.0.28
+* **@visulima/tui:** 4.0.19 → 4.0.28
+* **@visulima/tui-kit:** 1.0.22 → 1.0.31
+* **magic-string:** ^1.2.3 → ^1.4.2
+* **smol-toml:** 1.8.0 → 1.9.0
+* **react:** ^19.2.8 → ^19.3.0
+
 ## @lunora/cli [1.0.0-alpha.349](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.348...@lunora/cli@1.0.0-alpha.349) (2026-10-05)
 
 

@@ -1,3 +1,20 @@
+## @lunora/auth [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.192...@lunora/auth@1.0.0-alpha.193) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.308
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.177
+* **@lunora/server:** upgraded to 1.0.0-alpha.178
+* **@better-auth/api-key:** 1.7.3 → 1.7.7
+* **@better-auth/cimd:** 1.7.3 → 1.7.7
+* **@better-auth/mcp:** 1.7.3 → 1.7.7
+* **@better-auth/oauth-provider:** 1.7.3 → 1.7.7
+* **@better-auth/passkey:** 1.7.3 → 1.7.7
+* **@better-auth/scim:** 1.7.3 → 1.7.7
+* **@visulima/disposable-email-domains:** 1.1.10 → 1.1.14
+* **@visulima/email-verifier:** 1.0.21 → 1.0.30
+
 ## @lunora/auth [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.191...@lunora/auth@1.0.0-alpha.192) (2026-10-05)
 
 
