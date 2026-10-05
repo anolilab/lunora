@@ -1,3 +1,25 @@
+## @lunora/studio [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.264...@lunora/studio@1.0.0-alpha.265) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.190
+* **@lunora/client:** upgraded to 1.0.0-alpha.180
+* **@lunora/react:** upgraded to 1.0.0-alpha.192
+* **@lunora/mail:** upgraded to 1.0.0-alpha.99
+* **@lunora/notify:** upgraded to 1.0.0-alpha.75
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.177
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.112
+* **@lingui/core:** ^6.6.0 → ^6.9.0
+* **@lingui/message-utils:** ^6.6.0 → ^6.9.0
+* **@hugeicons/core-free-icons:** ^4.3.0 → ^4.3.5
+* **tailwind-merge:** ^3.6.0 → ^3.7.0
+* **motion:** ^13.2.0 → ^14.0.0
+* **@tanstack/react-router:** ^1.170.32 → ^1.170.41
+* **@tanstack/react-table:** ^9.2.4 → ^9.2.6
+* **@tanstack/react-virtual:** ^3.14.10 → ^3.14.13
+* **@xyflow/react:** ^12.11.6 → ^12.12.0
+
 ## @lunora/studio [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.263...@lunora/studio@1.0.0-alpha.264) (2026-10-05)
 
 ### Tests
