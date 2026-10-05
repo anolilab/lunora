@@ -1,3 +1,11 @@
+## @lunora/mail [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.98...@lunora/mail@1.0.0-alpha.99) (2026-10-05)
+
+
+### Dependencies
+
+* **@visulima/email:** 3.0.17 → 3.0.26
+* **postal-mime:** 3.0.0 → 3.0.1
+
 ## @lunora/mail [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.97...@lunora/mail@1.0.0-alpha.98) (2026-10-05)
 
 ## @lunora/mail [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.96...@lunora/mail@1.0.0-alpha.97) (2026-10-04)
