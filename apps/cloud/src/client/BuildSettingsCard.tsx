@@ -43,7 +43,7 @@ export const BuildSettingsCard = ({
 }): ReactElement => {
     const update = useMutation(api.projects.updateBuildSettings);
     const [root, setRoot] = useState(rootDirectory);
-    const [paths, setPaths] = useState(watchPaths.join("\n"));
+    const [paths, setPaths] = useState(() => watchPaths.join("\n"));
     const [error, setError] = useState<null | string>(null);
     const problem = validate(root, paths);
     const preview = problem === null ? effectiveWatchPaths(normalizeRootDirectory(root) || undefined, normalizeWatchPaths(paths.split("\n"))) : [];
