@@ -32,7 +32,6 @@ import { LunoraError } from "@lunora/errors";
 import { ERRORS, File } from "@visulima/storage";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
 
-import { R2S3UploadStorage } from "./r2-s3-upload-storage";
 import type { DeclaredFile, RouteCheck, RoutePolicy } from "./tus-route-policy";
 import { TUS_RESUMABLE, tusRoutePolicy } from "./tus-route-policy";
 
@@ -236,29 +235,6 @@ const methodNotAllowedResponse = (protocol: UploadProtocol, message: string): Re
  */
 const METHOD_OVERRIDE_HEADERS = ["X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override"] as const;
 
-/**
- * The methods that address an upload the route created, by the id in the
- * URL's last path segment. The create (`POST`, `OPTIONS`) has no id, and the
- * chunked-REST `PUT` names its own (see {@link refuseUnissuedId}).
- */
-const ID_METHODS: Readonly<Record<UploadProtocol, ReadonlySet<string>>> = {
-    "chunked-rest": new Set(["HEAD", "PATCH"]),
-    multipart: new Set(),
-    tus: new Set(["DELETE", "HEAD", "PATCH"]),
-};
-
-/**
- * An id `@visulima/storage` issues, as the URL's last path segment: a 21-character
- * nanoid, or the 2 or 3 hex groups it derives from a named file's name, size
- * and date, optionally followed by one extension. Chunked REST appends the
- * MIME type's, and a few carry `_` or `-` (`x_t`, `vbox-extpack`,
- * `disposition-notification`); it is stripped before any key is read.
- */
-const ISSUED_ID = /^(?:[\w-]{21}|[\da-f]{1,16}(?:-[\da-f]{1,16}){1,2})(?:\.[\w-]{1,32})?$/iu;
-
-const notFoundResponse = (protocol: UploadProtocol): Response =>
-    errorResponse(protocol, 404, { code: "FILE_NOT_FOUND", message: "Upload not found", name: "NotFoundError" });
-
 /** One extension, as upstream strips it from a chunked-REST id. */
 const EXTENSION = /\.[^.]+$/u;
 
@@ -283,55 +259,19 @@ const isFileNotFound = (error: unknown): boolean =>
     typeof error === "object" && error !== null && (error as { UploadErrorCode?: unknown }).UploadErrorCode === ERRORS.FILE_NOT_FOUND;
 
 /**
- * Whether a chunked-REST `PUT` names a file that exists, which upstream's `PUT`
- * would replace (visulima/visulima#919): an upload with state, or a stored
- * object. Only a confirmed "not found" counts as free.
- *
- * Over `createR2UploadStorage` the provider's own lookup tells a 404 from a
- * failure; it is check-then-write, so two `PUT`s racing for one new name can
- * still both write. For any other provider, upstream's `getMeta` reports every
- * failure as not found, and `getCompletedFile` swallows its errors; the R2
- * binding provider checks again, atomically, when it writes.
+ * Whether a chunked-REST `PUT` names an upload that exists, which upstream's
+ * `PUT` would replace. Only a confirmed "not found" counts as free. A stored
+ * object without upload state upstream refuses itself (visulima/visulima#919),
+ * and the R2 binding provider again, atomically, when it writes.
  */
 const putTargetExists = async (id: string, storage: UploadStorage): Promise<boolean> => {
-    if (storage instanceof R2S3UploadStorage) {
-        return storage.isNameTaken(id);
-    }
-
     try {
         await storage.getMeta(id);
 
         return true;
     } catch (error) {
-        if (!isFileNotFound(error)) {
-            return true;
-        }
+        return !isFileNotFound(error);
     }
-
-    return (await storage.getCompletedFile(id)) !== undefined;
-};
-
-/**
- * A request for an upload id the route cannot have issued is a `404`, before
- * `authorize`. Over the S3-API provider upstream answers a `HEAD` for any id
- * from the bucket object of that key once no upload state exists, so without
- * this a `HEAD` on the upload route reports the size and type of any object in
- * the bucket, nested ones included through an encoded `/` (visulima/visulima#918).
- * The raw segment is checked, so no `%` escape reaches the provider; a `PUT`,
- * which names its own file, is held to that alone.
- */
-const refuseUnissuedId = (request: Request, protocol: UploadProtocol): Response | undefined => {
-    const isPut = protocol === "chunked-rest" && request.method === "PUT";
-
-    if (!isPut && !ID_METHODS[protocol].has(request.method)) {
-        return undefined;
-    }
-
-    const segment = new URL(request.url).pathname.split("/").findLast(Boolean) ?? "";
-
-    const refused = isPut ? segment.includes("%") : !ISSUED_ID.test(segment);
-
-    return refused ? notFoundResponse(protocol) : undefined;
 };
 
 /**
@@ -424,12 +364,6 @@ const checkBeforeGate = (request: Request, protocol: UploadProtocol, maxFileSize
 
     if (override !== undefined) {
         return { refusal: methodNotAllowedResponse(protocol, `${override} is not allowed on this upload route: send the request with the method itself`) };
-    }
-
-    const unissued = refuseUnissuedId(request, protocol);
-
-    if (unissued !== undefined) {
-        return { refusal: unissued };
     }
 
     const declaredSize = declaredUploadSize(request, protocol);

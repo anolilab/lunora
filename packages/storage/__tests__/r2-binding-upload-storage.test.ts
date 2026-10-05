@@ -312,26 +312,34 @@ describe(createR2BindingUploadStorage, () => {
         const bytes = pattern(total);
         const location = await driver.create(total);
         const received = R2_PART_SIZE + 250_000;
-        let sent = false;
+        const piece = 64 * 1024;
+        let sent = 0;
+        // Arrives as a network body does, in small chunks, then breaks off.
         const droppingBody = new ReadableStream<Uint8Array>({
             pull(controller) {
-                if (sent) {
+                if (sent >= received) {
                     controller.error(new Error("connection reset"));
 
                     return;
                 }
 
-                sent = true;
-                controller.enqueue(bytes.slice(0, received));
+                controller.enqueue(bytes.slice(sent, Math.min(sent + piece, received)));
+                sent += piece;
             },
         });
 
         const dropped = await driver.patch(location, 0, droppingBody);
 
         expect(dropped.status).toBeGreaterThanOrEqual(400);
-        await expect(offsetOf(driver.head(location))).resolves.toBe(String(received));
 
-        await sendChunks(driver, location, bytes, 500_000, received);
+        // Upstream reads the body through Node's `Readable.fromWeb`, which drops
+        // what it read ahead when the body errors; everything before that is kept.
+        const offset = Number(await offsetOf(driver.head(location)));
+
+        expect(offset).toBeGreaterThan(R2_PART_SIZE);
+        expect(offset).toBeLessThanOrEqual(received);
+
+        await sendChunks(driver, location, bytes, 500_000, offset);
 
         expect(sameBytes(storedObject(bucket, location)?.bytes, bytes)).toBe(true);
     });
@@ -580,19 +588,6 @@ describe(createR2BindingUploadStorage, () => {
 
         await expect(storage.create({ metadata: { name: "a.bin" }, size: 4 })).rejects.toMatchObject({ UploadErrorCode: "InvalidFileName" });
         expect([...bucket.objects.keys()]).toStrictEqual([]);
-    });
-
-    it("lets one of two racing creates for an id write the state, and both answer it", async () => {
-        expect.hasAssertions();
-
-        const bucket = createFakeR2UploadBucket();
-        const storage = createR2BindingUploadStorage(bucket);
-        // The same named file re-sent: upstream derives the same id from its name, size and date.
-        const init = { metadata: { lastModified: 1, name: "a.bin" }, size: 10 };
-        const [first, second] = await Promise.all([storage.create(init), storage.create(init)]);
-
-        expect(second.id).toBe(first.id);
-        expect(stateKeys(bucket)).toStrictEqual([`${STATE_PREFIX}${first.id}.json`]);
     });
 
     it("lets only one of two racing creates for a client-named id through; the other is a 409", async () => {

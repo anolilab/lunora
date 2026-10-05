@@ -242,6 +242,7 @@ describe("tus Upload-Metadata, parsed as @visulima/storage parses it", () => {
         "a b c",
         "filetype %%%",
         `partialIds ${B64("x")}`,
+        `_writeClaim ${B64("x")}`,
         `filename ${Buffer.from("??>").toString("base64url")}`,
     ])("agrees with @visulima/storage on %j", async (metadata) => {
         expect.hasAssertions();

@@ -75,7 +75,8 @@ describe("createR2UploadStorage", () => {
 
         expect(s3.requests).toStrictEqual(
             expect.arrayContaining([
-                // The bucket probe, then the multipart calls and the metadata object.
+                // The bucket probe, then the multipart calls and the metadata object,
+                // which a finished upload keeps.
                 `HEAD ${base}`,
                 `POST ${key}?uploads=`,
                 `GET ${key}?uploadId=upload-1`,
@@ -84,10 +85,10 @@ describe("createR2UploadStorage", () => {
                 `POST ${key}?uploadId=upload-1`,
                 `HEAD ${key}.META`,
                 `PUT ${key}.META`,
-                `DELETE ${key}.META`,
             ]),
         );
         expect(s3.requests.every((request) => request.split(" ")[1]?.startsWith(base))).toBe(true);
+        expect(s3.requests).not.toContain(`DELETE ${key}.META`);
     });
 
     it.each([
@@ -212,7 +213,7 @@ describe("createR2UploadStorage", () => {
         expect(requests).toStrictEqual(["POST 201", "HEAD 200", "PATCH 200"]);
         expect(sameBytes(s3.object(result.id), bytes)).toBe(true);
 
-        // The upload's state is gone, but HEAD still reports it complete from the stored object.
+        // A finished upload keeps its state, so a later HEAD reports it complete.
         const head = await handler.fetch(new Request(`${ENDPOINT}/${result.id}`, { method: "HEAD" }));
 
         expect(head.status).toBe(200);
@@ -232,34 +233,32 @@ describe("createR2UploadStorage", () => {
                 await s3.fetch(new Request(`https://acct.r2.cloudflarestorage.com/uploads/${key}`, { body: "SECRET", method: "PUT" }));
             }
 
-            const authorize = vi.fn<() => boolean>(() => true);
-            const route = createUploadHandler({ authorize, protocol, storage: r2Storage() });
+            const route = createUploadHandler({ protocol, silent: true, storage: r2Storage() });
 
-            return { authorize, route, s3 };
+            return { route, s3 };
         };
 
         it.each(
             (["chunked-rest", "tus"] as const).flatMap((protocol) =>
                 ["payroll-2026", "payroll-2026.pdf", "report.pdf", "avatars%2Fceo", "avatars%2fceo.png"].map((path) => [protocol, path] as const),
             ),
-        )("answers HEAD over %s for /upload/%s with 404, before authorize and without asking the bucket", async (protocol, path) => {
+        )("answers HEAD over %s for /upload/%s with 404, without looking at the object", async (protocol, path) => {
             expect.hasAssertions();
 
-            const { authorize, route, s3 } = await seeded(protocol);
+            const { route, s3 } = await seeded(protocol);
             const before = s3.requests.length;
             const response = await route.fetch(new Request(`${ENDPOINT}/${path}`, { headers: { "Tus-Resumable": "1.0.0" }, method: "HEAD" }));
 
             expect(response.status).toBe(404);
             expect(response.headers.get("content-length")).not.toBe("6");
-            expect(authorize).not.toHaveBeenCalled();
-            // The route's own bucket probe aside, nothing reached the bucket for this request.
-            expect(s3.requests.slice(before).filter((request) => !request.endsWith("/uploads/"))).toStrictEqual([]);
+            // Only upload state is read: the bucket probe aside, nothing but a `.META` key is asked for.
+            expect(s3.requests.slice(before).filter((request) => !request.endsWith("/uploads/") && !request.endsWith(".META"))).toStrictEqual([]);
         });
 
-        it.each(["PATCH", "DELETE"])("answers a TUS %s for a bucket object with 404 before authorize", async (method) => {
+        it.each(["PATCH", "DELETE"])("answers a TUS %s for a bucket object with 404 and leaves it as it was", async (method) => {
             expect.hasAssertions();
 
-            const { authorize, route, s3 } = await seeded("tus");
+            const { route, s3 } = await seeded("tus");
             const response = await route.fetch(
                 new Request(`${ENDPOINT}/payroll-2026`, {
                     body: method === "PATCH" ? new Uint8Array(1) : undefined,
@@ -269,20 +268,18 @@ describe("createR2UploadStorage", () => {
             );
 
             expect(response.status).toBe(404);
-            expect(authorize).not.toHaveBeenCalled();
             expect(s3.object("payroll-2026")).toStrictEqual(new TextEncoder().encode("SECRET"));
         });
 
         it("refuses a chunked-REST PUT whose name carries an escape, so it cannot reach a nested key", async () => {
             expect.hasAssertions();
 
-            const { authorize, route, s3 } = await seeded("chunked-rest");
+            const { route, s3 } = await seeded("chunked-rest");
             const response = await route.fetch(
                 new Request(`${ENDPOINT}/avatars%2Fceo.png`, { body: "evil", headers: { "content-length": "4", "content-type": "image/png" }, method: "PUT" }),
             );
 
-            expect(response.status).toBe(404);
-            expect(authorize).not.toHaveBeenCalled();
+            expect(response.status).toBe(400);
             expect(s3.object("avatars/ceo")).toStrictEqual(new TextEncoder().encode("SECRET"));
         });
 

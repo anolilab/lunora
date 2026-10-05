@@ -151,12 +151,12 @@ class R2UploadStateStore extends MetaStorage {
         return throwErrorCode(ERRORS.FILE_CONFLICT, "The upload kept changing while it was being written; resume from the current offset");
     }
 
-    /** The public file record (what `getMeta` answers). */
+    /** The public file record (what `getMeta` answers). Upstream reads only `FILE_NOT_FOUND` as "no upload"; any other error is a failing store. */
     public override async get(id: string): Promise<File> {
         const stored = await this.read(id);
 
         if (stored === undefined) {
-            throw new Error(`Upload state not found for id: ${id}`);
+            return throwErrorCode(ERRORS.FILE_NOT_FOUND);
         }
 
         return stored.state.file;

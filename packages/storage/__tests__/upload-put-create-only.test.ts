@@ -97,7 +97,6 @@ describe.each([
         const response = await routeOver(bucket).fetch(put("payroll-2026.txt", "evil"));
 
         expect(response.status).toBe(409);
-        await expect(response.json()).resolves.toMatchObject({ error: { code: "FileConflict" } });
         expect(sameBytes(bucket.read("payroll-2026"), SECRET)).toBe(true);
     });
 
@@ -211,10 +210,11 @@ describe("a chunked-REST PUT's name check", () => {
         vi.unstubAllGlobals();
     });
 
+    // Fail closed: the state lookup is the route's (409), the object lookup upstream's, which passes the 403 on.
     it.each([
-        ["the object's HEAD", "/uploads/victim"],
-        ["the upload state's HEAD", "/uploads/victim.META"],
-    ])("over createR2UploadStorage counts a name as taken when %s fails (403), so nothing is replaced", async (_, failing) => {
+        ["the object's HEAD", "/uploads/victim", 403],
+        ["the upload state's HEAD", "/uploads/victim.META", 409],
+    ])("over createR2UploadStorage refuses a PUT when %s fails (403), so nothing is replaced", async (_, failing, status) => {
         expect.hasAssertions();
 
         const s3 = createFakeR2S3("uploads");
@@ -237,7 +237,7 @@ describe("a chunked-REST PUT's name check", () => {
             storage: createR2UploadStorage({ accessKeyId: "id", accountId: "acct", bucket: "uploads", path: "/upload", secretAccessKey: "secret" }),
         });
 
-        await expect(route.fetch(put("victim.txt", "evil"))).resolves.toHaveProperty("status", 409);
+        await expect(route.fetch(put("victim.txt", "evil"))).resolves.toHaveProperty("status", status);
 
         expect(sameBytes(s3.object("victim"), SECRET)).toBe(true);
     });

@@ -84,34 +84,6 @@ const bucketEndpoint = (options: R2UploadStorageOptions): string => {
     return url.href;
 };
 
-/** The aws-light adapter's error for a `HEAD` R2 answered 404, the one failure that means "absent". */
-const HEAD_NOT_FOUND = /^Failed to head object: 404\b/u;
-
-/** The aws-light provider, with a name lookup that tells "absent" from "could not tell". */
-class R2S3UploadStorage extends AwsLightStorage {
-    /**
-     * Whether an upload's state or a stored object exists under `id`. Only a
-     * confirmed 404 for both counts as free; any other failure counts as taken,
-     * so a flaky bucket refuses a create-only `PUT` rather than letting it
-     * replace a file. Upstream's own lookups (`getMeta`, `getCompletedFile`)
-     * turn every error into "not found", so they cannot answer this.
-     */
-    public async isNameTaken(id: string): Promise<boolean> {
-        const api = this.getS3Api();
-        const exists = async (key: string): Promise<boolean> => {
-            try {
-                await api.headObject({ Bucket: this.bucket, Key: key });
-
-                return true;
-            } catch (error) {
-                return !(error instanceof Error && HEAD_NOT_FOUND.test(error.message));
-            }
-        };
-
-        return (await exists(this.meta.getMetaName(id))) || exists(id);
-    }
-}
-
 /**
  * Build an R2-backed storage provider for `createUploadHandler` using
  * `@visulima/storage`'s dependency-light `aws-light` provider (`aws4fetch`, no
@@ -135,7 +107,7 @@ class R2S3UploadStorage extends AwsLightStorage {
  * the caps that apply.
  */
 const createR2UploadStorage = (options: R2UploadStorageOptions & { secretAccessKey: string }): AwsLightStorage =>
-    new R2S3UploadStorage({
+    new AwsLightStorage({
         accessKeyId: options.accessKeyId,
         bucket: options.bucket,
         endpoint: bucketEndpoint(options),
@@ -146,4 +118,4 @@ const createR2UploadStorage = (options: R2UploadStorageOptions & { secretAccessK
     });
 
 export type { R2UploadStorageOptions };
-export { createR2UploadStorage, R2S3UploadStorage };
+export { createR2UploadStorage };

@@ -36,7 +36,7 @@ const tusErrorResponse = (status: number, error: { code: string; message: string
 const BASE64_VALUE = /^[a-z\d+/]*={0,2}$/iu;
 
 /** Metadata keys the TUS handler keeps for itself and refuses from a client. */
-const RESERVED_TUS_METADATA_KEYS = new Set(["partialIds", "uploadConcat"]);
+const RESERVED_TUS_METADATA_KEYS = new Set(["_writeClaim", "partialIds", "uploadConcat"]);
 
 /**
  * TUS `Upload-Metadata`, parsed as `@visulima/storage`'s TUS handler parses it

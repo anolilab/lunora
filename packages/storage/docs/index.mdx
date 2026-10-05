@@ -328,30 +328,19 @@ A request carrying a method-override header (`X-HTTP-Method-Override`,
 The handler is also built with `allowMethodOverride: false`. Send each request
 with its real method; the bundled client does.
 
-An upload route only addresses ids it issued
-([visulima/visulima#918](https://github.com/visulima/visulima/issues/918)). A
-`HEAD`, `PATCH` or TUS `DELETE` whose last path segment is not the shape
-`@visulima/storage` gives an upload id (a 21-character nanoid, or the hex
-groups it derives from a named file, plus at most one extension) gets a `404`
-before `authorize` runs, and so does a chunked-REST `PUT` whose name carries a
-`%` escape. Over `createR2UploadStorage` upstream would otherwise answer a
-`HEAD` for any object in the bucket, nested ones included, from the object
-itself. The check is on the shape only, so a `HEAD` can still reach a root key
-that happens to have that shape: 21 letters, digits, `_` or `-`, or hex groups
-such as `cafe-babe` or a date like `2026-10-04`. Keep uploads in a bucket of
-their own, or under keys no other writer uses.
+A `HEAD`, `PATCH` or TUS `DELETE` answers only for an upload the route
+created: an id without upload state is a `404`, whatever object the bucket
+holds under that key
+([visulima/visulima#918](https://github.com/visulima/visulima/issues/918)).
 
 A chunked-REST `PUT` (`putFile` on the client) creates `<name>` and refuses
 (`409`) if a file already exists under that name: an earlier upload, or any
 object in the bucket at that key
 ([visulima/visulima#919](https://github.com/visulima/visulima/issues/919)).
-`@visulima/storage` alone would replace it. The check runs last, after
-`authorize`, the size caps and the checks upstream makes on a `PUT` (a name of
-letters, digits, `_` and `-`, a positive `Content-Length`), so a request that
-would be refused anyway gets that refusal, not a hint that the name is taken.
-A caller who may upload can still learn whether a name is taken. Over
-`createR2UploadStorage` a name counts as free only when R2 answers 404 for both
-its upload state and its object; any other failure counts as taken.
+`@visulima/storage` alone would replace an earlier upload. The check runs
+after `authorize` and the size caps, so a request that would be refused anyway
+gets that refusal, not a hint that the name is taken. A caller who may upload
+can still learn whether a name is taken. A lookup that fails (other than a 404) refuses the `PUT` rather than letting it replace a file.
 Over `createR2BindingUploadStorage` the final write is conditional too, so two
 `PUT`s racing for one new name store exactly one file (atomically for a file
 under 5 MiB, whose object is a single `put`; a larger one is checked again just
@@ -530,7 +519,7 @@ memory provider, the bundled client's multi-chunk upload completes with
 
 ### Upgrading
 
-This release moves `@visulima/storage` to 2.0.30 and `@visulima/storage-client`
+This release moves `@visulima/storage` to 2.0.31 and `@visulima/storage-client`
 to 1.0.7. What changes for an upload route:
 
 - **`GET` is refused** (`405`) on every protocol, before `authorize` runs, as
@@ -571,3 +560,12 @@ to 1.0.7. What changes for an upload route:
   names the bucket (in its path, or virtual-hosted) is not given it twice, and
   one that is not an absolute `https://` URL (or `http://` to a loopback host)
   throws `VALIDATION_ERROR`.
+- **Every upload gets a random id**
+  ([visulima/visulima#921](https://github.com/visulima/visulima/issues/921)).
+  The id was derived from the file's name, size and `lastModified`, so a second
+  client with the same file could take over the upload. A create that is sent
+  again now starts a new upload; the bundled clients resume from the `Location`
+  they kept, which is unaffected.
+- **A finished upload keeps its state on `createR2UploadStorage`**, as it
+  already did on `createR2BindingUploadStorage`: a small `<id>.META` object
+  beside the file, so a `HEAD` reports it complete.

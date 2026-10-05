@@ -164,15 +164,8 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
                 return throwErrorCode(ERRORS.INVALID_FILE_SIZE, "A named file has to have content");
             }
 
-            // Same id, same upload: a client re-sending its create resumes it,
-            // as the S3 providers do. A named file is never resumed or replaced.
-            const existing = await this.meta.read(file.id);
-
-            if (existing !== undefined) {
-                return createOnly ? conflict(NAME_TAKEN) : existing.state.file;
-            }
-
-            if (createOnly && (await objectExists(this.bucket, file.name))) {
+            // Upstream generates every other id, so only a named file can find its id taken.
+            if (createOnly && ((await this.meta.read(file.id)) !== undefined || (await objectExists(this.bucket, file.name)))) {
                 return conflict(NAME_TAKEN);
             }
 
@@ -186,10 +179,9 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
                 file.status = "completed";
             }
 
-            // Create-only, so of two racing creates for one id, one writes the
-            // state and the other answers what it wrote.
+            // Create-only, so of two racing creates for one name, one writes the state.
             if (!(await this.meta.create(file.id, { file, upload: { parts: [], segments: [], ...(createOnly ? { createOnly } : {}) } }))) {
-                return this.racedCreate(file.id, createOnly);
+                return conflict(NAME_TAKEN);
             }
 
             await this.onCreate(file);
@@ -384,17 +376,6 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
 
             throw error;
         }
-    }
-
-    /** The create that lost the race for an id: it resumes the winner's upload, unless it named its file (`409`). */
-    private async racedCreate(id: string, createOnly: boolean): Promise<File> {
-        const raced = await this.meta.read(id);
-
-        if (createOnly) {
-            return conflict(NAME_TAKEN);
-        }
-
-        return raced?.state.file ?? conflict("The upload is being created by another request");
     }
 
     /** A finished upload's record and its stored object; `404` for anything else. */
