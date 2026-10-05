@@ -1,3 +1,14 @@
+## @lunora/config [1.0.0-alpha.308](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.307...@lunora/config@1.0.0-alpha.308) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.265
+* **@lunora/seed:** upgraded to 1.0.0-alpha.193
+* **@lunora/studio:** upgraded to 1.0.0-alpha.265
+* **dotenv:** 17.4.2 → 18.0.5
+* **@visulima/package:** 5.0.32 → 5.0.41
+
 ## @lunora/config [1.0.0-alpha.307](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.306...@lunora/config@1.0.0-alpha.307) (2026-10-05)
 
 
