@@ -1,0 +1,274 @@
+"name": "Deploy Cloud"
+
+# Ships `apps/cloud` — the three Workers that make up a Lunora Cloud cell — when
+# something that ends up inside them changes.
+#
+# `push`, not `pull_request`: a deploy publishes to a real Cloudflare account, so
+# it happens after review, from the branch that carries the merged change.
+# `alpha` is the staging cell, `main` the production one, which mirrors how the
+# npm packages already release from those two branches (semantic-release.yml).
+#
+# The path list is wider than `apps/cloud/**` on purpose. The control plane
+# BUNDLES the workspace packages rather than resolving them at runtime, so a
+# change to `packages/**` or `shared/**` is a change to the deployed bytes — the
+# same reasoning the `packages` filter in `.github/file-filters.yml` already
+# applies to the test matrix. The workflow lists itself so a PR that breaks the
+# pipeline by editing the pipeline still runs it.
+"on": # yamllint disable-line rule:truthy
+    "push":
+        "branches": ["main", "alpha"]
+        "paths":
+            - ".github/workflows/deploy-cloud.yml"
+            - "apps/cloud/**"
+            - "packages/**"
+            - "shared/**"
+            - "protocol/**"
+            - "pnpm-lock.yaml"
+            - "pnpm-workspace.yaml"
+    "workflow_dispatch":
+        "inputs":
+            "target":
+                "description": "Which cell to deploy (defaults to the one the branch maps to)"
+                "required": false
+                "type": "choice"
+                "options": ["staging", "production"]
+
+# Never cancel a deploy in flight. Three Workers are published in sequence and a
+# cell is only coherent once all three land: killing the run between the control
+# plane and the dispatcher leaves tenant traffic routed by an old dispatcher
+# against a new control-plane contract.
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.ref }}"
+    "cancel-in-progress": false
+
+"permissions":
+    "contents": "read" # for checkout
+
+"jobs":
+    "deploy":
+        # The branch → cell mapping lives in this one expression, repeated in
+        # `environment` below because the `env` context is not available there.
+        "name": "Deploy (${{ inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }})"
+        "if": "github.repository == 'anolilab/lunora'"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 40
+        # Gates the Cloudflare credentials behind a GitHub Environment, so the
+        # production token is scoped to production and can carry a required
+        # reviewer. Create `cloud-staging` and `cloud-production` with:
+        #   CLOUDFLARE_API_TOKEN   (secret) — Workers Scripts:Edit, Workers KV:Edit,
+        #                                     D1:Edit, R2:Edit, Queues:Edit,
+        #                                     Workers for Platforms:Edit, Account
+        #                                     Analytics:Read, and Zone:Workers
+        #                                     Routes:Edit for the routed zone
+        #   CLOUDFLARE_ACCOUNT_ID  (secret) — the account the cell provisions into
+        # Worker SECRETS (SECRET_ENCRYPTION_KEY, AUTH_SECRET, LUNORA_ADMIN_TOKEN,
+        # CREEM_*, GITHUB_WEBHOOK_SECRET, LUNORA_TAIL_SECRET, CONTROL_PLANE_TOKEN …)
+        # are NOT set here: they are per-cell Worker secrets, applied once with
+        # `wrangler secret put --env <cell>`. See apps/cloud/README.md.
+        "environment": "cloud-${{ inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }}"
+        "outputs":
+            "target": "${{ steps.target.outputs.name }}"
+        "env":
+            "CLOUDFLARE_ACCOUNT_ID": "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+            "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              # SECURITY TODO: this job holds a Cloudflare API token that can create
+              # and overwrite Workers. `block` needs an allowlist confirmed from a
+              # real audit run — an incomplete one breaks the deploy. Known-required
+              # hosts: registry.npmjs.org, api.cloudflare.com, github.com.
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              # Full history: the release job below derives its changelog range from
+              # the previous `cloud-v*` tag, which a shallow clone does not carry.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "with":
+                  "fetch-depth": "0"
+
+            - "name": "Resolve the target cell"
+              "id": "target"
+              "shell": "bash"
+              "env":
+                  "REQUESTED": "${{ inputs.target }}"
+                  "REF_NAME": "${{ github.ref_name }}"
+              "run": |
+                  set -euo pipefail
+
+                  if [ -n "${REQUESTED}" ]; then
+                      name="${REQUESTED}"
+                  elif [ "${REF_NAME}" = "main" ]; then
+                      name="production"
+                  else
+                      name="staging"
+                  fi
+
+                  echo "name=${name}" >> "$GITHUB_OUTPUT"
+                  echo "Deploying the ${name} cell from ${REF_NAME}."
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "deploy-cloud"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Before anything is published: refuse a config that still carries a
+            # `<replace-with-…>` id. Wrangler will happily deploy a Worker bound to
+            # a D1 database that does not exist — green deploy, first query fails in
+            # production. This is the step that turns that into a build failure.
+            - "name": "Check the deploy config for unresolved placeholders"
+              "env":
+                  "TARGET": "${{ steps.target.outputs.name }}"
+              "run": |
+                  pnpm --filter @lunora/cloud run deploy:check "${TARGET}"
+
+            - "name": "Build packages"
+              # `build:prod`, never `build`: a development build ships the React dev
+              # JSX runtime into the deployed Worker. Same rule as the npm release.
+              "run": "pnpm run build:packages:prod"
+
+            # The gates `lunora deploy` would have run, run here instead — see the
+            # note on the deploy step below for why that command is not the one
+            # publishing this app. `verify` writes nothing: wrangler-config
+            # validation, a codegen dry-run, the ERROR-advisory gate, the
+            # schema-drift gate (a `.global()` table reshaped without a migration is
+            # refused rather than discovered by the first write) and `tsc --noEmit`.
+            - "name": "Verify the control plane"
+              "working-directory": "apps/cloud"
+              "run": "pnpm exec lunora verify"
+
+            # `CLOUDFLARE_ENV` is how `@cloudflare/vite-plugin` picks a named
+            # environment: it resolves `env.<name>` into the deploy config it emits
+            # at `dist/server/wrangler.json`, which has NO `env` key of its own.
+            # Passing `--env` to the wrangler call below instead would look right
+            # and do nothing.
+            - "name": "Build the control plane"
+              "env":
+                  "CLOUDFLARE_ENV": "${{ steps.target.outputs.name }}"
+              "run": "pnpm --filter @lunora/cloud run build"
+
+            # Not `lunora deploy`: this app's `main` is a hand-written entry that
+            # Vite builds (TanStack Start route tree, client assets, Tailwind), so
+            # what gets published is the plugin's `dist/server` output — deploying
+            # the source config would bundle `src/server.ts` raw and ship a control
+            # plane with no studio. The gates that command carries are the `verify`
+            # step above; its health probe is the last step of this job.
+            - "name": "Deploy the control plane"
+              "working-directory": "apps/cloud"
+              "run": "pnpm exec wrangler deploy -c dist/server/wrangler.json"
+
+            # The dispatcher and the tail consumer are plain Workers with no Vite
+            # build of their own, so these two deploy straight from their source
+            # configs and select the cell with `--env`.
+            - "name": "Deploy the dispatcher"
+              "working-directory": "apps/cloud"
+              "env":
+                  "TARGET": "${{ steps.target.outputs.name }}"
+              "run": |
+                  pnpm exec wrangler deploy -c dispatcher.wrangler.jsonc --env "${TARGET}"
+
+            - "name": "Deploy the tail consumer"
+              "working-directory": "apps/cloud"
+              "env":
+                  "TARGET": "${{ steps.target.outputs.name }}"
+              "run": |
+                  pnpm exec wrangler deploy -c tail.wrangler.jsonc --env "${TARGET}"
+
+            # Opt-in, because the cell's reachable origin is not derivable from
+            # here: a workers.dev URL carries the account's subdomain, and a custom
+            # hostname needs a zone. Set `CLOUD_HEALTH_URL` as a variable on the
+            # GitHub Environment once the cell has an address and every deploy is
+            # probed; leave it unset and the deploy is published unverified, which
+            # the notice says out loud rather than passing quietly.
+            - "name": "Probe the deployment"
+              "working-directory": "apps/cloud"
+              "env":
+                  "HEALTH_URL": "${{ vars.CLOUD_HEALTH_URL }}"
+              "run": |
+                  set -euo pipefail
+
+                  if [ -z "${HEALTH_URL}" ]; then
+                      echo "::warning::CLOUD_HEALTH_URL is not set on this environment — the deploy was published without a health probe."
+                      exit 0
+                  fi
+
+                  pnpm exec lunora verify --health-url "${HEALTH_URL}" --no-typecheck
+
+    "release":
+        # Production only. A staging deploy is not a release — tagging every alpha
+        # merge would make `cloud-v*` a commit log rather than a list of what is
+        # actually serving tenants.
+        "name": "Tag + GitHub Release"
+        "needs": "deploy"
+        "if": "needs.deploy.outputs.target == 'production'"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "permissions":
+            "contents": "write" # to create the tag + GitHub release
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "with":
+                  "fetch-depth": "0"
+
+            # `cloud-v*`, deliberately outside the `@lunora/<pkg>@<version>` shape
+            # semantic-release owns: `apps/cloud` is private and never published to
+            # npm, so it has no semver of its own, and a tag in that namespace would
+            # be read by multi-semantic-release as a package release that never
+            # happened. The run number is monotonic per workflow file, which is
+            # enough to order deploys; the sha the release points at identifies the
+            # code. (Renaming this file restarts the counter — bump the tag prefix if
+            # that ever happens.)
+            #
+            # `gh release create --target` mints the tag itself, rather than
+            # `git tag && git push`: the shared checkout composite does not persist
+            # credentials, so a git push from here has nothing to authenticate with.
+            #
+            # `--notes-start-tag` rather than a bare `--generate-notes`: the repo
+            # publishes a GitHub release per `@lunora/*` package on every
+            # semantic-release run, so "the previous release" is almost never the
+            # previous CLOUD release, and the auto-generated range would be wrong by
+            # dozens of unrelated package bumps.
+            - "name": "Tag the deployed commit and cut its release"
+              "shell": "bash"
+              "env":
+                  "GH_TOKEN": "${{ github.token }}"
+                  "RUN_NUMBER": "${{ github.run_number }}"
+                  "SHA": "${{ github.sha }}"
+              "run": |
+                  set -euo pipefail
+
+                  tag="cloud-v${RUN_NUMBER}"
+
+                  git fetch --quiet origin '+refs/tags/*:refs/tags/*'
+
+                  # `-v:refname` sorts `cloud-v9` before `cloud-v10`; the numeric
+                  # suffix is the whole version, so a lexical sort would pick the
+                  # wrong start tag the first time the counter passes ten.
+                  previous="$(git tag --list 'cloud-v*' --sort=-v:refname | head -n 1)"
+
+                  # Re-running a workflow reuses its run number, so the release may
+                  # already exist. That is a no-op, not a failure.
+                  if gh release view "${tag}" >/dev/null 2>&1; then
+                      echo "::notice::Release ${tag} already exists; leaving it as it is."
+                      exit 0
+                  fi
+
+                  args=(--target "${SHA}" --title "Lunora Cloud ${tag}" --generate-notes --latest=false)
+
+                  if [ -n "${previous}" ]; then
+                      args+=(--notes-start-tag "${previous}")
+                  fi
+
+                  gh release create "${tag}" "${args[@]}"

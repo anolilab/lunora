@@ -338,6 +338,7 @@ export type {
     WranglerObservability,
     WranglerObservabilityLogs,
     WranglerObservabilityTraces,
+    WranglerQueueConsumer,
     WranglerValidationReport,
     WranglerWorkflowEntry,
 };

@@ -1,0 +1,25 @@
+{
+    "manifest": {
+        "bindings": [
+            { "binding": "ASSETS", "type": "assets" },
+            { "binding": "DB", "resource": "app-db", "resourceId": "0000-1111", "type": "d1" },
+            { "binding": "SHARD", "className": "ShardDO", "sqlite": true, "type": "durable_object" },
+            { "binding": "SCHEDULER", "className": "SchedulerDO", "sqlite": true, "type": "durable_object" },
+            { "binding": "CACHE", "resourceId": "kv-id", "type": "kv" },
+            { "binding": "jobs", "resource": "jobs", "type": "queue_consumer" },
+            { "binding": "JOBS", "resource": "jobs", "type": "queue_producer" },
+            { "binding": "UPLOADS", "resource": "uploads", "type": "r2" },
+            { "binding": "OnboardingWorkflow", "className": "OnboardingWorkflow", "resource": "onboarding", "type": "workflow" }
+        ],
+        "compatibilityDate": "2026-04-01",
+        "compatibilityFlags": ["nodejs_compat", "sqlite_vec"]
+    },
+    "options": {
+        "alias": "my-app",
+        "assetsConfig": { "not_found_handling": "single-page-application" },
+        "compatibilityDate": "2026-09-01",
+        "crons": ["*/5 * * * *"],
+        "hasAssets": true,
+        "vars": { "API_KEY": "secret", "LUNORA_ADMIN_TOKEN": "admin" }
+    }
+}
