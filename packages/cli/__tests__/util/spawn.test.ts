@@ -81,6 +81,28 @@ describe("spawnShellCompat", () => {
         });
     });
 
+    it("doubles every backslash run before an embedded quote", () => {
+        expect.assertions(1);
+
+        expect(spawnShellCompat("pnpm", ["--msg", String.raw`a\\"b \x\"`], "win32")).toStrictEqual({
+            args: ["--msg", String.raw`"a\\\\\"b \x\\\""`],
+            command: "pnpm",
+            shell: true,
+        });
+    });
+
+    // The escaping was a regex pair that re-scanned a backslash run from every position in it
+    // (CodeQL js/polynomial-redos); one pass keeps a long run linear.
+    it("escapes a very long run of backslashes in linear time", () => {
+        expect.assertions(1);
+
+        const started = performance.now();
+
+        spawnShellCompat("pnpm", [`a ${"\\".repeat(200_000)}x`], "win32");
+
+        expect(performance.now() - started).toBeLessThan(1000);
+    });
+
     it("emits an explicit empty token for an empty argument so following positionals don't shift", () => {
         expect.assertions(1);
 

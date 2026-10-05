@@ -22,13 +22,13 @@
         "solid-js": "^1.9.13"
     },
     "devDependencies": {
-        "@cloudflare/vite-plugin": "^1.62.4",
-        "@cloudflare/workers-types": "^5.20261002.1",
+        "@cloudflare/vite-plugin": "^1.62.5",
+        "@cloudflare/workers-types": "^5.20261004.1",
         "@lunora/studio": "^0.0.0",
         "@lunora/vite": "^0.0.0",
         "typescript": "^6.0.3",
         "vite": "^8.0.16",
         "vite-plugin-solid": "^2.11.12",
-        "wrangler": "^4.146.0"
+        "wrangler": "^4.147.0"
     }
 }

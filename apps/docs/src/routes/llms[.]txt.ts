@@ -54,10 +54,10 @@ const normalise = (index: string): string =>
 export const Route = createFileRoute("/llms.txt")({
     server: {
         handlers: {
-            GET() {
+            async GET() {
                 // Insert the summary and the MCP notice directly after the H1 that
                 // fumadocs emits, so the file reads title → summary → sections.
-                const index = normalise(llms(source).index()).replace(LEADING_HEADING, `$1\n${SUMMARY}\n\n${MCP_NOTICE}\n`);
+                const index = normalise(await llms(source).index()).replace(LEADING_HEADING, `$1\n${SUMMARY}\n\n${MCP_NOTICE}\n`);
 
                 return new Response(index, {
                     headers: { "Content-Type": "text/plain; charset=utf-8" },

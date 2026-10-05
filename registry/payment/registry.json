@@ -9,7 +9,7 @@
         "@lunora/payment": "workspace:*",
         "@lunora/errors": "workspace:*",
         "@lunora/server": "workspace:*",
-        "stripe": "^22.0.0"
+        "stripe": "^23.0.0"
     },
     "envVars": [
         {

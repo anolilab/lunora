@@ -16,9 +16,9 @@
         "lunorash": "^0.0.0"
     },
     "devDependencies": {
-        "@cloudflare/workers-types": "^5.20261002.1",
+        "@cloudflare/workers-types": "^5.20261004.1",
         "@lunora/studio": "^0.0.0",
         "typescript": "^6.0.3",
-        "wrangler": "^4.146.0"
+        "wrangler": "^4.147.0"
     }
 }
