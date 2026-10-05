@@ -12,10 +12,31 @@ import { LunoraError } from "@lunora/errors";
  * `C:\Dev&Ops\dist` can't spawn `Ops\dist` as a second command.
  */
 const NEEDS_CMD_QUOTING = /[\s"%&<>^|]/u;
-// eslint-disable-next-line sonarjs/slow-regex -- linear (no nested quantifier); input is a bounded developer-supplied CLI argument
-const BACKSLASH_RUN_BEFORE_QUOTE = /(\\*)"/gu;
-// eslint-disable-next-line sonarjs/slow-regex -- linear; bounded CLI-argument input
-const TRAILING_BACKSLASH_RUN = /(\\+)$/u;
+
+/**
+ * Escapes `value` for the child's CommandLineToArgvW re-parse inside the double quotes that
+ * `quote` wraps it in: a run of backslashes right before a `"` (an embedded quote, or the closing
+ * quote appended after the value) is doubled, and each embedded `"` becomes `\"`. Without this,
+ * `C:\path\` before the closing quote would escape it and re-split the value mid-argument.
+ *
+ * One pass, so a long run of backslashes costs linear time: the regex pair this replaces scanned
+ * the run again from every position in it (CodeQL js/polynomial-redos).
+ */
+const escapeForCommandLineToArgv = (value: string): string => {
+    let escaped = "";
+    let backslashes = 0;
+
+    for (const character of value) {
+        if (character === "\\") {
+            backslashes += 1;
+        } else {
+            escaped += character === '"' ? `${"\\".repeat(backslashes * 2 + 1)}"` : `${"\\".repeat(backslashes)}${character}`;
+            backslashes = 0;
+        }
+    }
+
+    return escaped + "\\".repeat(backslashes * 2);
+};
 
 export interface SpawnDescriptor {
     args: ReadonlyArray<string>;
@@ -120,14 +141,7 @@ export const spawnShellCompat = (
             return value;
         }
 
-        // Escape for the child's CommandLineToArgvW re-parse: any run of
-        // backslashes immediately before a `"` (an embedded quote, or the closing
-        // quote we append) must be doubled, and each embedded `"` becomes `\"`.
-        // Without this, `C:\path\` before the closing quote would escape it and
-        // re-split the value mid-argument.
-        const escaped = value.replaceAll(BACKSLASH_RUN_BEFORE_QUOTE, String.raw`$1$1\"`).replace(TRAILING_BACKSLASH_RUN, "$1$1");
-
-        return `"${escaped}"`;
+        return `"${escapeForCommandLineToArgv(value)}"`;
     };
 
     return { args: args.map((argument) => quote(argument)), command: quote(command), shell: true };
