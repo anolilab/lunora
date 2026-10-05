@@ -221,8 +221,7 @@ export const reconcileBoxDns = async (
     api: CloudflareApi,
     input: { domain: string; live: () => Promise<ReadonlyArray<LiveBoxDns>>; maxWrites: number; zoneId: string },
 ): Promise<BoxDnsReconcileResult> => {
-    const { records, truncated } = await api.listDnsRecordsUnder({ domain: input.domain, zoneId: input.zoneId });
-    const live = await input.live();
+    const [{ records, truncated }, live] = await Promise.all([api.listDnsRecordsUnder({ domain: input.domain, zoneId: input.zoneId }), input.live()]);
     const operations = planBoxDns(records, input.domain, live, !truncated);
     const executed = operations.slice(0, input.maxWrites);
     const failures = new Map<string, string[]>(live.map((box) => [box.boxId, []]));

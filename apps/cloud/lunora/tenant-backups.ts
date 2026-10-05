@@ -238,6 +238,7 @@ export const beginRestore = internalMutation
                 status: "running",
                 trigger: "pre-restore",
             });
+            // react-doctor-disable-next-line react-doctor/server-sequential-independent-await -- two writes on one serialized mutation writer: `Promise.all` buys no concurrency and makes a partial failure harder to reason about
             const restoreId = await context.db.insert("tenantBackups", {
                 ...common,
                 key: source.key,

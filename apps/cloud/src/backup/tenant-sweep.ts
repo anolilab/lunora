@@ -168,9 +168,8 @@ const prune = async (
         }
     }
 
-    for (const projectId of new Set(rows.map((row) => row.projectId))) {
-        const organizationId = rows.find((row) => row.projectId === projectId)?.organizationId ?? "";
-
+    // A project lives in exactly one organization, so any of its rows names it.
+    for (const [projectId, organizationId] of new Map(rows.map((row) => [row.projectId, row.organizationId]))) {
         for (const row of snapshotsPastRetention(rows, projectId, backupRetentionFor(planByOrg.get(organizationId)))) {
             doomed.set(row._id, row);
         }
