@@ -1,3 +1,13 @@
+## @lunora/agent [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.178...@lunora/agent@1.0.0-alpha.179) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/mail:** upgraded to 1.0.0-alpha.99
+* **@lunora/server:** upgraded to 1.0.0-alpha.178
+* **yaml:** ^2.9.0 → ^2.9.1
+* **@modelcontextprotocol/sdk:** ^1.30.0 → ^1.32.0
+
 ## @lunora/agent [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.177...@lunora/agent@1.0.0-alpha.178) (2026-10-05)
 
 
