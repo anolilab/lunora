@@ -1,3 +1,10 @@
+## @lunora/shard-engine [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.111...@lunora/shard-engine@1.0.0-alpha.112) (2026-10-05)
+
+
+### Dependencies
+
+* **drizzle-orm:** ^0.45.2 → ^0.45.3
+
 ## @lunora/shard-engine [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.110...@lunora/shard-engine@1.0.0-alpha.111) (2026-10-03)
 
 
