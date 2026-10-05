@@ -206,9 +206,7 @@ export const createEnrolment = action
 export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<BoxView[]> => {
     await assertMember(context, organizationId);
 
-    const { page } = await context.db.boxes.findMany({ where: { organizationId } });
-
-    const latest = await latestStableVersions(context);
+    const [{ page }, latest] = await Promise.all([context.db.boxes.findMany({ where: { organizationId } }), latestStableVersions(context)]);
 
     return (page as BoxRow[]).map((row) => toBoxView(row, latest)).toSorted((a, b) => b.createdAt - a.createdAt);
 });

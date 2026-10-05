@@ -21,8 +21,11 @@ export const permissionLabel = (id: string): string =>
     Object.hasOwn(CLOUDFLARE_TOKEN_PERMISSIONS, id) ? CLOUDFLARE_TOKEN_PERMISSIONS[id as CloudflarePermission].label : id;
 
 /** The permissions a connection's token was NOT seen to hold — what an app binding that type would fail on. */
-export const missingPermissions = (granted: ReadonlyArray<string>): string[] =>
-    TOKEN_PERMISSIONS.filter((permission) => !granted.includes(permission.id)).map((permission) => permission.label);
+export const missingPermissions = (granted: ReadonlyArray<string>): string[] => {
+    const held = new Set(granted);
+
+    return TOKEN_PERMISSIONS.filter((permission) => !held.has(permission.id)).map((permission) => permission.label);
+};
 
 /** A connection's display name: its label, then the account's own name. */
 export const accountTitle = (account: Pick<CloudflareAccountView, "displayName" | "label">): string =>

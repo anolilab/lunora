@@ -466,6 +466,7 @@ const resolveActive = (
  * `null` on success.
  */
 const requestRollback = async (deploymentId: string, organizationId: OrgId): Promise<null | string> => {
+    // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check -- `response.ok` is checked right below; only the error path reads the body
     const response = await fetch("/v1/rollback", {
         body: JSON.stringify({ deploymentId, organizationId }),
         credentials: "include",

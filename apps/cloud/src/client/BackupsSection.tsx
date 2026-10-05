@@ -134,7 +134,8 @@ export const BackupsSection = ({ organizationId, projectId, target }: { organiza
                 <FormError message={error} />
                 {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
                 {confirming ? (
-                    <div className="flex flex-col gap-3 rounded-md border border-warning/40 p-4 text-sm" role="alertdialog">
+                    // react-doctor-disable-next-line react-doctor/prefer-html-dialog -- an inline confirmation inside the card, not a modal: nothing behind it is inert, so a top-layer `<dialog>` would misdescribe it
+                    <div aria-label="Confirm restore" className="flex flex-col gap-3 rounded-md border border-warning/40 p-4 text-sm" role="alertdialog">
                         <p className="m-0">
                             Restore the snapshot from <span className="font-medium">{formatDateTime(confirming.createdAt)}</span>? Rows deleted since then come
                             back; nothing is removed or reverted. The current data is backed up first.
