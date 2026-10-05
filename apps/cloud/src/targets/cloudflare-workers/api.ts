@@ -1,0 +1,262 @@
+/**
+ * The `cloudflare-workers` target's REST and GraphQL reads against a
+ * customer's OWN Cloudflare account, with the scoped API token the
+ * organization connected (`lunora/cloudflare-accounts.ts`). Workerd-safe: plain
+ * `fetch`, injectable, so every call is unit-tested with a fake.
+ *
+ * Read-only by construction. Converging resources and uploading the Worker is
+ * the provision box's job (Alchemy 2, `src/targets/provision-box/`); this
+ * module only checks a token when it is connected, finds the account's
+ * `workers.dev` subdomain, and reads request counts back for metering.
+ *
+ * The token never appears in an error message or a log line: every failure is
+ * reported by status and Cloudflare's own error text, which never echoes it.
+ */
+
+import { fetchBillableUsage } from "../../cloudflare/billable-usage";
+import type { CloudflareAccountAccess } from "../../cloudflare/fetch";
+import { CLOUDFLARE_API_ROOT, cloudflareFetch, CloudflareTokenError } from "../../cloudflare/fetch";
+import type { CloudflarePermission } from "../../provision-contract";
+import { CLOUDFLARE_TOKEN_PERMISSIONS } from "../../provision-contract";
+
+/** A Cloudflare account id: 32 lowercase hex characters. */
+const ACCOUNT_ID = /^[\da-f]{32}$/u;
+
+export const isCloudflareAccountId = (value: unknown): value is string => typeof value === "string" && ACCOUNT_ID.test(value);
+
+/** GET one v4 endpoint's `result`; a refused token throws `CloudflareTokenError`, any other failure (or no result) a plain Error. */
+const call = async <T>(access: CloudflareAccountAccess, path: string): Promise<T> => {
+    const answer = await cloudflareFetch(access)<T>(path);
+
+    if (answer?.result === undefined) {
+        throw new Error(`Cloudflare API ${path.split("?")[0] ?? path} answered no result`);
+    }
+
+    return answer.result;
+};
+
+/** What `tokens/verify` reports about a token. */
+export interface VerifiedToken {
+    expiresAt?: number;
+    id?: string;
+}
+
+interface VerifyResult {
+    expires_on?: string;
+    id?: string;
+    status?: string;
+}
+
+/**
+ * Verify the token is valid and active. A user-owned token answers
+ * `GET /user/tokens/verify`; an account-owned one only
+ * `GET /accounts/{id}/tokens/verify`, so the second is tried when the first refuses.
+ * @throws {CloudflareTokenError} when neither accepts it, or it is not `active`.
+ */
+export const verifyToken = async (access: CloudflareAccountAccess): Promise<VerifiedToken> => {
+    let result: VerifyResult;
+
+    try {
+        result = await call<VerifyResult>(access, "/user/tokens/verify");
+    } catch {
+        result = await call<VerifyResult>(access, `/accounts/${access.accountId}/tokens/verify`);
+    }
+
+    if (result.status !== "active") {
+        throw new CloudflareTokenError(`the token is ${result.status ?? "not active"}`);
+    }
+
+    const expiresAt = result.expires_on === undefined ? Number.NaN : Date.parse(result.expires_on);
+
+    return { ...(Number.isFinite(expiresAt) ? { expiresAt } : {}), ...(result.id === undefined ? {} : { id: result.id }) };
+};
+
+/**
+ * The account's `workers.dev` subdomain (`GET /accounts/{id}/workers/subdomain`,
+ * Workers Scripts Read or Edit). A tenant Worker answers at
+ * `https://{script}.{subdomain}.workers.dev`.
+ * @throws {Error} when the account has none registered — it must claim one in the dashboard first.
+ */
+export const readWorkersSubdomain = async (access: CloudflareAccountAccess): Promise<string> => {
+    const result = await call<{ subdomain?: string }>(access, `/accounts/${access.accountId}/workers/subdomain`);
+
+    if (typeof result.subdomain !== "string" || result.subdomain === "") {
+        throw new Error("this Cloudflare account has no workers.dev subdomain yet; open Workers & Pages in its dashboard once to claim one");
+    }
+
+    return result.subdomain;
+};
+
+/**
+ * The account's display name, best-effort: `GET /accounts/{id}` needs Account
+ * Settings Read, which the target does not otherwise need, so a token without
+ * it is fine and answers `null`.
+ */
+export const readDisplayName = async (access: CloudflareAccountAccess): Promise<null | string> => {
+    try {
+        const result = await call<{ name?: string }>(access, `/accounts/${access.accountId}`);
+
+        return typeof result.name === "string" ? result.name.slice(0, 128) : null;
+    } catch {
+        return null;
+    }
+};
+
+export const CLOUDFLARE_PERMISSIONS = Object.keys(CLOUDFLARE_TOKEN_PERMISSIONS) as CloudflarePermission[];
+
+/** One script's requests in a window. */
+export interface ScriptRequests {
+    requests: number;
+    scriptName: string;
+}
+
+interface GraphqlResponse {
+    data?: {
+        viewer?: {
+            accounts?: { workersInvocationsAdaptive?: { dimensions?: { scriptName?: string }; sum?: { requests?: number } }[] }[];
+        };
+    } | null;
+    errors?: { message?: string }[] | null;
+}
+
+/** How the GraphQL API words a token that lacks the permission for a query. */
+const AUTHORIZATION_ERROR = /\bauthoriz|permission|not allowed/iu;
+
+/** Row cap of one readback: one row per script, so this is the number of Workers an account may run before a window under-counts. */
+const MAX_SCRIPTS = 10_000;
+
+const REQUESTS_QUERY = `query LunoraWorkerRequests($accountTag: string!, $since: Time!) {
+  viewer {
+    accounts(filter: { accountTag: $accountTag }) {
+      workersInvocationsAdaptive(limit: ${String(MAX_SCRIPTS)}, filter: { datetime_gt: $since }) {
+        sum { requests }
+        dimensions { scriptName }
+      }
+    }
+  }
+}`;
+
+/**
+ * Requests per Worker script in the account with an invocation time strictly
+ * after `sinceMs` — the GraphQL Analytics API's `workersInvocationsAdaptive`
+ * dataset (Account Analytics Read), summed per `scriptName`. Its `sum` fields
+ * are already corrected for Cloudflare's adaptive sampling, so the total is an
+ * estimate only where Cloudflare's own dashboard is one.
+ * @throws {CloudflareTokenError} when the token lacks Account Analytics Read.
+ */
+export const readScriptRequests = async (access: CloudflareAccountAccess, sinceMs: number): Promise<ScriptRequests[]> => {
+    const response = await (access.fetch ?? globalThis.fetch)(`${CLOUDFLARE_API_ROOT}/graphql`, {
+        body: JSON.stringify({ query: REQUESTS_QUERY, variables: { accountTag: access.accountId, since: new Date(sinceMs).toISOString() } }),
+        headers: { authorization: `Bearer ${access.apiToken}`, "content-type": "application/json" },
+        method: "POST",
+    });
+    const body = (await response.json().catch(() => null)) as GraphqlResponse | null;
+
+    if (response.status === 401 || response.status === 403) {
+        throw new CloudflareTokenError("Cloudflare refused the token for the GraphQL Analytics API");
+    }
+
+    const errors = (body?.errors ?? []).map((error) => error.message ?? "").filter((message) => message !== "");
+
+    if (!response.ok || errors.length > 0 || !body?.data) {
+        const reason = errors.length > 0 ? errors.join("; ").slice(0, 300) : `HTTP ${String(response.status)}`;
+
+        // GraphQL answers a missing permission as a 200 with an authorization error.
+        if (AUTHORIZATION_ERROR.test(reason)) {
+            throw new CloudflareTokenError(`Cloudflare refused the token for the GraphQL Analytics API: ${reason}`);
+        }
+
+        throw new Error(`Cloudflare GraphQL Analytics API failed: ${reason}`);
+    }
+
+    const totals = new Map<string, number>();
+
+    for (const account of body.data.viewer?.accounts ?? []) {
+        for (const row of account.workersInvocationsAdaptive ?? []) {
+            const scriptName = row.dimensions?.scriptName;
+            const requests = row.sum?.requests ?? 0;
+
+            if (typeof scriptName === "string" && scriptName !== "" && Number.isFinite(requests) && requests > 0) {
+                totals.set(scriptName, (totals.get(scriptName) ?? 0) + requests);
+            }
+        }
+    }
+
+    return [...totals].map(([scriptName, requests]) => {
+        return { requests, scriptName };
+    });
+};
+
+/**
+ * How each permission in {@link CLOUDFLARE_TOKEN_PERMISSIONS} is detected: a
+ * read that succeeds only when the token holds the permission group (read or
+ * edit). The probes are read-only, so what is recorded at connect time is
+ * "this permission group is granted", not "this permission is Edit" —
+ * Cloudflare's API does not expose a token's own policies without the API
+ * Tokens Read permission, which the target deliberately does not ask for. A
+ * token granted Read where Edit is needed fails its first converge, with
+ * Cloudflare's own error. `analytics` and `billing` are probed with the very
+ * reads they enable: the GraphQL request counts and the billable usage.
+ */
+const PROBES: Record<CloudflarePermission, (access: CloudflareAccountAccess) => Promise<unknown>> = {
+    analytics: async (access) => readScriptRequests(access, Date.now() - 60_000),
+    billing: async (access) => fetchBillableUsage(access),
+    d1: async (access) => call(access, `/accounts/${access.accountId}/d1/database?per_page=1`),
+    kv: async (access) => call(access, `/accounts/${access.accountId}/storage/kv/namespaces?per_page=1`),
+    queues: async (access) => call(access, `/accounts/${access.accountId}/queues?per_page=1`),
+    r2: async (access) => call(access, `/accounts/${access.accountId}/r2/buckets?per_page=1`),
+    workersScripts: async (access) => call(access, `/accounts/${access.accountId}/workers/scripts`),
+};
+
+/** Probe one permission: `true` when its read answers, `false` when Cloudflare refuses the token for it. */
+const probe = async (access: CloudflareAccountAccess, permission: CloudflarePermission): Promise<boolean> => {
+    try {
+        await PROBES[permission](access);
+
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+/** What connecting a token established about the account. */
+export interface AccountInspection {
+    displayName: null | string;
+    /** The permission groups the token was seen to hold, in {@link CLOUDFLARE_PERMISSIONS} order. */
+    permissions: CloudflarePermission[];
+    token: VerifiedToken;
+    workersSubdomain: string;
+}
+
+/**
+ * Everything connecting (or rotating) a token checks: the token is active,
+ * reaches THIS account, holds every required permission, and the account has
+ * a `workers.dev` subdomain to serve tenants on.
+ * @throws {CloudflareTokenError} with a message for the person who pasted the token.
+ */
+export const inspectAccount = async (access: CloudflareAccountAccess): Promise<AccountInspection> => {
+    if (!isCloudflareAccountId(access.accountId)) {
+        throw new CloudflareTokenError("the account id must be the 32-character hex id from the Cloudflare dashboard");
+    }
+
+    const token = await verifyToken(access);
+    const granted = await Promise.all(CLOUDFLARE_PERMISSIONS.map(async (permission) => [permission, await probe(access, permission)] as const));
+    const permissions = granted.filter(([, ok]) => ok).map(([permission]) => permission);
+    const missing = CLOUDFLARE_PERMISSIONS.filter((permission) => CLOUDFLARE_TOKEN_PERMISSIONS[permission].required && !permissions.includes(permission));
+
+    if (missing.length > 0) {
+        throw new CloudflareTokenError(
+            `the token cannot reach this account with ${missing.map((permission) => CLOUDFLARE_TOKEN_PERMISSIONS[permission].label).join(", ")}; create it with that permission on this account`,
+        );
+    }
+
+    let workersSubdomain: string;
+
+    try {
+        workersSubdomain = await readWorkersSubdomain(access);
+    } catch (error) {
+        throw new CloudflareTokenError(error instanceof Error ? error.message : "could not read the account's workers.dev subdomain");
+    }
+
+    return { displayName: await readDisplayName(access), permissions, token, workersSubdomain };
+};

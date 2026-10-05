@@ -25,6 +25,8 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [463](./463-experimental-graduation.md)    | Graduate the experimental tier to stable               | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
 | [166](./166-enterprise-auth-saml-scim.md)  | Enterprise auth: SAML SSO + SCIM                       | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
 | [464](./464-replay-conflict-resolution.md) | Replayed offline writes that conflict                  | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
+| [458](./458-cloud-celld-vps-target.md)    | Lunora Cloud manages a customer VPS (`celld-vps` target)    | Control plane, hostd and install path landed on PR #85; live-box gates open |
+| [365](./365-cloud-spend-guardrails-and-anomaly-research.md) | Cloud spend guardrails, anomaly alerting, recursion protection | W0 + W1 shipped                                         |
 
 ## Open (TODO)
 

@@ -47,6 +47,9 @@ packages: &packages
 # .d.ts surface, plus the snapshots and the tool itself.
 api_surface:
     - "packages/**"
+    # `@lunora/hostd` lives in `apps/` but its `./protocol` subpath is a covered
+    # contract (`APP_CONTRACTS` in scripts/api-snapshot.js).
+    - "apps/hostd/**"
     # Inlined, so it is part of the built surface: a `shared/` type that a package
     # re-exports lands in that package's .d.ts, and the dist bytes `dist-production`
     # weighs are the inlined copy. Neither job could see a `shared/`-only change.
@@ -113,6 +116,11 @@ dependency_manifests:
     # notice the drift.
     - "commitlint.config.cjs"
     - "scripts/check-pr-title-types.js"
+    # The react-doctor pin lives in two files; the check that compares them, and
+    # both of its inputs, gate the job — otherwise a PR that bumps only the
+    # workflow matches `yaml_lintable` and nothing notices the drift.
+    - "scripts/check-react-doctor-pin.js"
+    - ".github/workflows/react-doctor.yml"
     - ".github/workflows/semantic-pull-request.yml"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
@@ -152,6 +160,14 @@ generated_files:
     # The generated error-code reference itself: a hand edit to the output is drift
     # too, and its generator's only other input (packages/errors) is listed below.
     - "apps/docs/src/content/docs/errors.mdx"
+    # The bring-your-own capability tables, and the contract they are generated from.
+    - "apps/docs/src/content/docs/cloud/your-own-*.mdx"
+    - "apps/cloud/src/provision-contract.ts"
+    # Any app that commits a `lunora/_generated` tree — its schema and functions
+    # are what codegen reads, so a change here is a change to generated output.
+    # Listed because the sweep walks `apps/*` as well as `examples/*`:
+    # `apps/cloud` commits its tree and went stale with nothing to catch it.
+    - "apps/*/lunora/**"
     - "scripts/generate-*.js"
     - "scripts/check-generated-files.mjs"
     - "packages/advisor/**"
@@ -216,6 +232,9 @@ e2e:
 # docs-only PRs skip the install+build entirely.
 benchmarks:
     - "packages/**"
+    # apps/cloud's box-session benches, and the hostd wire protocol they decode with.
+    - "apps/cloud/**"
+    - "apps/hostd/**"
     - "shared/**"
     - "**/tsconfig*.json"
     - "pnpm-lock.yaml"
@@ -367,6 +386,20 @@ node_capabilities_docs:
     - "scripts/check-node-capabilities-docs.js"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
+
+# The `test-hostd` job: the hostd lane (`pnpm run test:hostd`) — the daemon as a single
+# executable under its real systemd unit, the pinned celld release, a Caddy built from
+# release-pins.json, moto — so it runs when hostd, what it builds on (`@lunora/config`
+# writes the celld config of every release it deploys) or the hostd wire protocol
+# changes, plus its own workflow and this file, per the self-listing rule above.
+hostd:
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - "apps/hostd/**"
+    - "packages/config/**"
+    - "protocol/hostd/**"
 
 # The `test-celld` job: a live celld (GitHub release), moto (pipx) and a Docker Hub
 # image, so it runs only when something it can observe changes — the packages its

@@ -20,7 +20,16 @@ import { defineConfig } from "vitest/config";
  * React Email templates), and JSX is compiled with the automatic runtime so
  * `.tsx` benches need no explicit `React` import.
  */
-export const getBenchConfig = (options: ViteUserConfig = {}) =>
+/**
+ * `codspeed` is the plugin instance to load. It defaults to the one this file
+ * resolves (the repo root's), which is only right while the caller's `vitest`
+ * is that same copy: CodSpeed's analysis runner reads each bench's function
+ * from `vitest/suite` next to the plugin, and `bench()` registers it in the
+ * vitest the bench file imports. A workspace whose `vitest` resolves to a
+ * different copy (other peers — `apps/cloud` sits on vite 8) must pass the
+ * plugin it resolves itself, or every bench fails with `fn is not a function`.
+ */
+export const getBenchConfig = (options: ViteUserConfig = {}, codspeed: () => unknown = codspeedPlugin) =>
     defineConfig({
         ...options,
         esbuild: {
@@ -28,7 +37,10 @@ export const getBenchConfig = (options: ViteUserConfig = {}) =>
             jsxImportSource: "react",
             ...options.esbuild,
         },
-        plugins: [codspeedPlugin(), ...(options.plugins ?? [])],
+        // `unknown`, then cast: a caller's own plugin instance is typed against ITS
+        // vite (the reason it passes one), not this file's, and the two `Plugin`
+        // types differ only across vite majors, never at runtime.
+        plugins: [codspeed() as NonNullable<ViteUserConfig["plugins"]>[number], ...(options.plugins ?? [])],
         test: {
             environment: "node",
             // CodSpeed instruments benches under cachegrind (~50-100x slower than

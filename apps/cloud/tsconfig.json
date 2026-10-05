@@ -1,0 +1,14 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node", "vite/client"],
+        "lib": ["DOM", "DOM.Iterable", "ES2024"],
+        "noUncheckedIndexedAccess": false,
+        "declaration": false,
+        "paths": { "@/*": ["./src/*"] }
+    },
+    "include": ["src/**/*", "lunora/**/*", "scripts/**/*", "vite.config.ts", "vitest.config.ts", "vitest.bench.config.ts", "__tests__/**/*", "__bench__/**/*"],
+    "exclude": ["node_modules", "dist"]
+}

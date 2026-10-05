@@ -2,7 +2,7 @@
 #
 # The `workerd` vitest projects — the gate `pnpm run test` cannot cover.
 #
-# Every package listed here also has its own CI job ("Workerd integration (<pkg>)"),
+# Every workspace listed here also has its own CI job ("Workerd integration (<dir>)"),
 # and those jobs are the only ones that run these suites. Locally the suites are
 # gated behind LUNORA_WORKERD_TESTS=1 and so absent from `pnpm run test`, for two
 # reasons that are not going away:
@@ -21,9 +21,11 @@
 # reads it as a string literal, and the node suites could not see the difference.
 # Run this before pushing anything that touches SQL, storage, or a Durable Object.
 #
-# Packages are discovered, never listed — the same `name: "workerd"` predicate the
+# Workspaces are discovered, never listed — the same `name: "workerd"` predicate the
 # CI drift guard in .github/workflows/test.yml asserts the job matrix against, so
-# this script and that matrix are the same set by construction.
+# this script and that matrix are the same set by construction. Packages and apps
+# both (`apps/cloud` holds the BoxSessionDO suite); each is addressed by its
+# directory, since an app's vis project and package names differ from it.
 #
 # Suites run ONE AT A TIME on purpose: every package's vitest in parallel fails a
 # different arbitrary set each run (resource contention, not real failures), which
@@ -34,14 +36,14 @@
 #   1  — at least one suite failed
 #
 # Usage:
-#   pnpm run test:workerd              # all packages declaring a workerd project
-#   pnpm run test:workerd auth do      # just these
+#   pnpm run test:workerd                              # every workspace declaring a workerd project
+#   pnpm run test:workerd packages/auth apps/cloud     # just these
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 if [ "$#" -gt 0 ]; then
-    packages=("$@")
+    workspaces=("$@")
 else
     # `grep -l` exits 1 when nothing matches, and under `set -e` + `pipefail` that
     # status propagates out of the assignment and kills the script BEFORE the
@@ -50,21 +52,21 @@ else
     # 1 ("no match", explained below) distinct from 2 (a real grep failure, e.g. an
     # unreadable tree), which must not be reported as an empty repo.
     set +e
-    discovered="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts | sed 's|packages/||; s|/vitest.config.ts||' | sort)"
+    discovered="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts apps/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
     status=$?
     set -e
 
     if [ "$status" -gt 1 ]; then
-        echo "Could not scan packages/*/vitest.config.ts (grep exited ${status})." >&2
+        echo "Could not scan packages/*/vitest.config.ts and apps/*/vitest.config.ts (grep exited ${status})." >&2
         exit 1
     fi
 
-    # shellcheck disable=SC2206 # deliberate word-split: the predicate yields one bare package name per line
-    packages=($discovered)
+    # shellcheck disable=SC2206 # deliberate word-split: the predicate yields one workspace directory per line
+    workspaces=($discovered)
 fi
 
-if [ "${#packages[@]}" -eq 0 ]; then
-    echo "No package declares a \`workerd\` vitest project — nothing to run." >&2
+if [ "${#workspaces[@]}" -eq 0 ]; then
+    echo "No workspace declares a \`workerd\` vitest project — nothing to run." >&2
     exit 1
 fi
 
@@ -73,15 +75,15 @@ pnpm run build:packages
 
 failed=()
 
-for package in "${packages[@]}"; do
+for workspace in "${workspaces[@]}"; do
     echo
-    echo "==> @lunora/${package} (workerd)"
+    echo "==> ${workspace} (workerd)"
 
-    if LUNORA_WORKERD_TESTS=1 pnpm --filter "@lunora/${package}" run test --project workerd; then
-        echo "PASS  @lunora/${package}"
+    if LUNORA_WORKERD_TESTS=1 pnpm --filter "./${workspace}" run test --project workerd; then
+        echo "PASS  ${workspace}"
     else
-        echo "FAIL  @lunora/${package}"
-        failed+=("${package}")
+        echo "FAIL  ${workspace}"
+        failed+=("${workspace}")
     fi
 done
 
@@ -89,8 +91,8 @@ echo
 echo "================================================================"
 
 if [ "${#failed[@]}" -gt 0 ]; then
-    echo "${#failed[@]} of ${#packages[@]} workerd suites FAILED: ${failed[*]}"
+    echo "${#failed[@]} of ${#workspaces[@]} workerd suites FAILED: ${failed[*]}"
     exit 1
 fi
 
-echo "All ${#packages[@]} workerd suites passed."
+echo "All ${#workspaces[@]} workerd suites passed."

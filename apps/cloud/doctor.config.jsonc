@@ -1,0 +1,115 @@
+{
+    // React Doctor configuration for `@lunora/cloud`.
+    //
+    // Package-wide policy lives here rather than as a suppression comment
+    // repeated at every site — the same call `packages/studio` and
+    // `packages/auth-ui` already make. Anything genuinely per-site (a false
+    // positive, a load-bearing identity, one deliberate trade-off) stays an
+    // inline `react-doctor-disable-next-line` with its own reason; this file is
+    // only for rules that do not apply to a whole directory.
+    //
+    // No `ignore.files` key, deliberately: React Doctor treats it as a
+    // whole-project lint kill switch — any value, even a glob matching nothing,
+    // drops every diagnostic in the package. `packages/auth-ui` learned that the
+    // hard way. Everything below is scoped per rule instead.
+    "ignore": {
+        "overrides": [
+            {
+                // `lunora/**` is the Lunora FUNCTION layer and most of `src/**`
+                // is Worker code — server, not React. React Doctor is pulled in
+                // here because the hosted studio under `src/client` and
+                // `src/routes` is React, and it then scans the whole package.
+                //
+                // `async-await-in-loop` is the bulk of it: these are `ctx.db`
+                // writes inside a single Lunora mutation, serialized on one
+                // connection. The bodies are order-dependent (an
+                // `assertRowInOrg` gate ahead of the `patch` it authorizes), the
+                // sets are bounded by the page cap above them, and `Promise.all`
+                // over a serialized writer buys no concurrency while making a
+                // partial failure much harder to reason about. Every one of
+                // these sites already carries an
+                // `eslint-disable-next-line no-await-in-loop` with that reason —
+                // this is the same decision, made once instead of forty times.
+                //
+                // `js-combine-iterations` is the same shape one level down: two
+                // passes over an already-materialised, page-capped array, where
+                // fusing a filter and a fold saves one traversal of a bounded
+                // list and costs the next reader the ability to see what the
+                // loop is for.
+                //
+                // Scoped to the server directories rather than the package, so
+                // both rules keep firing in `src/client` and `src/routes` — in a
+                // React component an awaited loop IS usually the finding.
+                "files": [
+                    "lunora/**",
+                    "scripts/**",
+                    "src/admin/**",
+                    "src/backup/**",
+                    "src/billing/**",
+                    "src/builds/**",
+                    "src/cloudflare/**",
+                    "src/deploy/**",
+                    "src/dispatcher/**",
+                    "src/domains/**",
+                    "src/fanout/**",
+                    "src/github/**",
+                    "src/mail/**",
+                    "src/mcp/**",
+                    "src/metering/**",
+                    "src/provision.ts",
+                    "src/secrets/**",
+                    "src/tail/**",
+                    "src/telemetry/**",
+                    "src/uptime/**",
+                ],
+                "rules": ["react-doctor/async-await-in-loop", "react-doctor/js-combine-iterations"],
+            },
+            {
+                // Copy-in auth screens, installed by `lunora registry add` and
+                // byte-identical to `registry/auth-ui-react`. Upstream
+                // `packages/auth-ui` scopes these same rules off for the same two
+                // files (`src/react/use-controller.ts`,
+                // `src/react/provider.tsx`) — the copy inherits the decision
+                // along with the code.
+                //
+                // Editing the copy to satisfy a rule is the one change
+                // guaranteed to be undone: the next `registry add` overwrites it.
+                // That divergence is how this copy reached 35 stale files before
+                // it was refreshed. Fixes belong upstream.
+                "files": ["lunora/auth-ui/**"],
+                "rules": [
+                    "react-doctor/exhaustive-deps",
+                    "react-doctor/no-barrel-import",
+                    "react-doctor/no-floating-then-in-jsx-handler",
+                    "react-doctor/react-compiler-no-manual-memoization",
+                    "react-hooks-js/use-memo",
+                ],
+            },
+            {
+                // Vendored shadcn / Base UI primitives, copied verbatim from
+                // `packages/studio` so `shadcn add`/diff stays clean — already
+                // exempt from this app's ESLint surface for the same reason
+                // (`eslint.config.js`, `**/components/ui/**`).
+                "files": ["src/components/ui/**", "src/hooks/**", "src/lib/utils.ts"],
+                "rules": ["react-doctor/context-provider-value-from-unmemoized-local-literal", "react-hooks-js/set-state-in-effect"],
+            },
+            {
+                // Standalone spike harnesses, deployed independently with their
+                // own wrangler/tsc and not part of the control-plane build (see
+                // `spikes/*/README.md`). Already outside the ESLint surface.
+                "files": ["spikes/**"],
+                "rules": ["react-doctor/async-await-in-loop", "react-doctor/no-fetch-response-used-without-status-check"],
+            },
+            {
+                // `scripts/seed.ts` is a terminal dev script, not served code: it
+                // drives the local dev server over HTTP and its whole output is a
+                // progress report. A sequential await there is the point (each
+                // step seeds what the next one reads), and a non-ok response is
+                // deliberately tolerated — re-running the seed hits "already
+                // exists" on nearly every call.
+                "files": ["scripts/**"],
+                "rules": ["react-doctor/no-fetch-response-used-without-status-check", "react-doctor/server-sequential-independent-await"],
+            },
+        ],
+    },
+}

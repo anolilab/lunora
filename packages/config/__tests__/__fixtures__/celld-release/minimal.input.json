@@ -1,0 +1,4 @@
+{
+    "manifest": { "bindings": [] },
+    "options": { "alias": "hello", "crons": [], "hasAssets": false, "vars": {} }
+}

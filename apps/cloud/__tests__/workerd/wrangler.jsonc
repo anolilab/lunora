@@ -1,0 +1,22 @@
+{
+    "$schema": "../../node_modules/wrangler/config-schema.json",
+    // The `workerd` vitest project's worker (vitest.config.ts): a real
+    // BoxSessionDO over a real hibernatable WebSocket, with a local D1 standing
+    // in for the control-plane database.
+    "name": "lunora-cloud-box-session-test",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "class_name": "BoxSessionDO", "name": "BOX_SESSION" }],
+    },
+    "migrations": [{ "new_sqlite_classes": ["BoxSessionDO"], "tag": "v1" }],
+    "d1_databases": [{ "binding": "DB", "database_id": "box-session-test", "database_name": "box-session-test" }],
+    // A throwaway master key: the session mints and seals the organization's ingest key under it.
+    "vars": {
+        "LUNORA_BOX_DOMAIN": "boxes.test",
+        "LUNORA_ORIGIN_URL": "https://cloud.test",
+        "LUNORA_OTLP_ENDPOINT": "https://cloud.test",
+        "SECRET_ENCRYPTION_KEY": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    },
+}

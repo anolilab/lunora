@@ -1,0 +1,22 @@
+{
+    "name": "my-app",
+    "main": "worker.js",
+    "no_bundle": true,
+    "compatibility_date": "2026-09-01",
+    "compatibility_flags": ["nodejs_compat", "sqlite_vec"],
+    "vars": { "API_KEY": "secret", "LUNORA_ADMIN_TOKEN": "admin" },
+    "triggers": { "crons": ["*/5 * * * *"] },
+    "assets": { "binding": "ASSETS", "directory": "./assets", "not_found_handling": "single-page-application" },
+    "d1_databases": [{ "binding": "DB", "database_id": "my-app--db", "database_name": "my-app--db" }],
+    "durable_objects": {
+        "bindings": [
+            { "class_name": "ShardDO", "name": "SHARD" },
+            { "class_name": "SchedulerDO", "name": "SCHEDULER" }
+        ]
+    },
+    "kv_namespaces": [{ "binding": "CACHE", "id": "my-app--cache" }],
+    "migrations": [{ "new_sqlite_classes": ["SchedulerDO", "ShardDO"], "tag": "lunora-v1" }],
+    "queues": { "producers": [{ "binding": "JOBS", "queue": "my-app--jobs" }], "consumers": [{ "queue": "my-app--jobs" }] },
+    "r2_buckets": [{ "binding": "UPLOADS", "bucket_name": "my-app--uploads" }],
+    "workflows": [{ "binding": "OnboardingWorkflow", "class_name": "OnboardingWorkflow", "name": "onboarding" }]
+}
