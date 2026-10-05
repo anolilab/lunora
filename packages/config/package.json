@@ -40,6 +40,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./celld": {
+            "types": "./dist/celld/index.d.ts",
+            "import": "./dist/celld/index.mjs"
+        },
         "./cloudflare": {
             "types": "./dist/cloudflare/index.d.ts",
             "import": "./dist/cloudflare/index.mjs"

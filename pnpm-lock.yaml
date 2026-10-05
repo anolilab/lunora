@@ -96,6 +96,9 @@ catalogs:
     esbuild:
       specifier: ^0.28.2
       version: 0.28.2
+    postject:
+      specifier: 1.0.0-alpha.6
+      version: 1.0.0-alpha.6
     rollup-plugin-svelte:
       specifier: ^7.2.3
       version: 7.2.3
@@ -455,6 +458,9 @@ catalogs:
     dotenv:
       specifier: 18.0.5
       version: 18.0.5
+    picomatch:
+      specifier: ^4.0.7
+      version: 4.0.7
     rimraf:
       specifier: 6.1.3
       version: 6.1.3
@@ -593,6 +599,9 @@ catalogs:
     vitest:
       specifier: 4.1.11
       version: 4.1.11
+    ws:
+      specifier: 8.21.3
+      version: 8.21.3
   tooling:
     '@types/better-sqlite3':
       specifier: ^9.6.0
@@ -625,14 +634,23 @@ catalogs:
     '@types/node':
       specifier: 26.6.4
       version: 26.6.4
+    '@types/picomatch':
+      specifier: ^4.0.3
+      version: 4.0.3
     '@types/semver':
       specifier: ^7.8.0
       version: 7.8.0
+    '@types/ws':
+      specifier: 8.18.1
+      version: 8.18.1
   ui:
     '@base-ui/react':
       specifier: 1.8.0
       version: 1.8.0
     '@fontsource-variable/geist':
+      specifier: ^5.3.0
+      version: 5.3.0
+    '@fontsource-variable/geist-mono':
       specifier: ^5.3.0
       version: 5.3.0
     '@hugeicons/core-free-icons':
@@ -1050,6 +1068,7 @@ overrides:
   '@lunora/errors': workspace:*
   '@lunora/fingerprint': workspace:*
   '@lunora/flags': workspace:*
+  '@lunora/hostd': workspace:*
   '@lunora/hyperdrive': workspace:*
   '@lunora/mail': workspace:*
   '@lunora/mcp': workspace:*
@@ -1222,6 +1241,190 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+
+  apps/cloud:
+    dependencies:
+      '@base-ui/react':
+        specifier: catalog:ui
+        version: 1.8.0(@types/react@19.3.0)(date-fns@4.4.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@fontsource-variable/geist':
+        specifier: catalog:ui
+        version: 5.3.0
+      '@fontsource-variable/geist-mono':
+        specifier: catalog:ui
+        version: 5.3.0
+      '@hugeicons/core-free-icons':
+        specifier: catalog:ui
+        version: 4.3.5
+      '@hugeicons/react':
+        specifier: catalog:ui
+        version: 1.1.10(react@19.3.0)
+      '@lunora/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+      '@lunora/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../../packages/bindings
+      '@lunora/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@lunora/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@lunora/container':
+        specifier: workspace:*
+        version: link:../../packages/container
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../../packages/d1
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../../packages/do
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../../packages/errors
+      '@lunora/fingerprint':
+        specifier: workspace:*
+        version: link:../../packages/fingerprint
+      '@lunora/hostd':
+        specifier: workspace:*
+        version: link:../hostd
+      '@lunora/mail':
+        specifier: workspace:*
+        version: link:../../packages/mail
+      '@lunora/payment':
+        specifier: workspace:*
+        version: link:../../packages/payment
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../../packages/ratelimit
+      '@lunora/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../../packages/server
+      '@lunora/values':
+        specifier: workspace:*
+        version: link:../../packages/values
+      '@tanstack/react-query':
+        specifier: catalog:frontend
+        version: 5.101.4(react@19.3.0)
+      '@tanstack/react-router':
+        specifier: catalog:web
+        version: 1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@tanstack/react-start':
+        specifier: catalog:web
+        version: 1.168.60(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.12)(rollup@4.63.1)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.13(solid-js@1.9.15))(solid-js@1.9.15)(supports-color@10.2.2)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))
+      '@xyflow/react':
+        specifier: catalog:frontend
+        version: 12.12.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(immer@11.1.8)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      better-auth:
+        specifier: catalog:auth
+        version: 1.7.7(ee346aa81353edf39ffe0dca1b312043)
+      class-variance-authority:
+        specifier: catalog:ui
+        version: 0.7.1
+      clsx:
+        specifier: catalog:ui
+        version: 2.1.1
+      creem:
+        specifier: ^1.5.3
+        version: 1.13.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)
+      picomatch:
+        specifier: catalog:node
+        version: 4.0.7
+      posthog-js:
+        specifier: catalog:web
+        version: 1.435.8(@types/react@19.3.0)(react@19.3.0)
+      react:
+        specifier: 19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: 19.3.0
+        version: 19.3.0(react@19.3.0)
+      tailwind-merge:
+        specifier: catalog:ui
+        version: 3.7.0
+    devDependencies:
+      '@cloudflare/vite-plugin':
+        specifier: catalog:vite
+        version: 1.62.5(@types/node@26.6.4)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(wrangler@4.147.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4))
+      '@cloudflare/vitest-plugin':
+        specifier: catalog:cloudflare
+        version: 1.3.6(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93)
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))
+      '@lunora/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
+      '@lunora/codegen':
+        specifier: workspace:*
+        version: link:../../packages/codegen
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
+      '@lunora/vite':
+        specifier: workspace:*
+        version: link:../../packages/vite
+      '@rolldown/plugin-babel':
+        specifier: catalog:web
+        version: 0.2.4(@babel/core@8.0.6)(@babel/plugin-transform-runtime@7.29.7(@babel/core@8.0.6)(supports-color@10.2.2))(@babel/runtime@7.29.7)(rolldown@1.2.12)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      '@tailwindcss/vite':
+        specifier: catalog:vite
+        version: 4.3.3(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      '@types/node':
+        specifier: catalog:types
+        version: 26.6.4
+      '@types/picomatch':
+        specifier: catalog:types
+        version: 4.0.3
+      '@types/react':
+        specifier: catalog:frontend
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: catalog:frontend
+        version: 19.3.0(@types/react@19.3.0)
+      '@vitejs/plugin-react':
+        specifier: catalog:web
+        version: 6.1.1(@rolldown/plugin-babel@0.2.4(@babel/core@8.0.6)(@babel/plugin-transform-runtime@7.29.7(@babel/core@8.0.6)(supports-color@10.2.2))(@babel/runtime@7.29.7)(rolldown@1.2.12)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(babel-plugin-react-compiler@1.0.0)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      babel-plugin-react-compiler:
+        specifier: catalog:build
+        version: 1.0.0
+      jsonc-parser:
+        specifier: catalog:vite
+        version: 3.3.1
+      tailwindcss:
+        specifier: catalog:vite
+        version: 4.3.3
+      tw-animate-css:
+        specifier: catalog:vite
+        version: 1.4.0
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: catalog:vite
+        version: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vitest:
+        specifier: catalog:test
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.147.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
 
   apps/docs:
     dependencies:
@@ -1517,6 +1720,43 @@ importers:
       vitest:
         specifier: catalog:web
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+
+  apps/hostd:
+    dependencies:
+      '@lunora/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      aws4fetch:
+        specifier: catalog:storage
+        version: 1.0.20
+    devDependencies:
+      '@types/node':
+        specifier: catalog:types
+        version: 26.6.4
+      '@types/ws':
+        specifier: catalog:types
+        version: 8.18.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.1.0(362c6d1d7e7728cf868e47db0f47e4d6)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.10(vitest@4.1.11)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.2
+      postject:
+        specifier: catalog:build
+        version: 1.0.0-alpha.6
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      ws:
+        specifier: catalog:test
+        version: 8.21.3
 
   apps/playground:
     dependencies:
@@ -7910,6 +8150,9 @@ packages:
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
 
+  '@fontsource-variable/geist-mono@5.3.0':
+    resolution: {integrity: sha512-vBbuwDEo9AkrqADMXOrlAR3DFcJi4/JxeuU43FoiQERnNwsfXNnvxvReZG02cQKmyk4DZkZdBZX3oTDvy2zBAw==}
+
   '@fontsource-variable/geist@5.3.0':
     resolution: {integrity: sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA==}
 
@@ -13457,6 +13700,9 @@ packages:
   '@types/pg@8.23.1':
     resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
 
+  '@types/picomatch@4.0.3':
+    resolution: {integrity: sha512-iG0T6+nYJ9FAPmx9SsUlnwcq1ZVRuCXcVEvWnntoPlrOpwtSTKNDC9uVAxTsC3PUvJ+99n4RpAcNgBbHX3JSnQ==}
+
   '@types/react-dom@19.3.0':
     resolution: {integrity: sha512-ZI7bU42mZXXKHn/qNLEw2IrbiINU7X5+vfgdixBHkCNpYWXjKgfQ/P+uyGb5CjOLB9UcnTeg3rylQtV2hym44Q==}
     peerDependencies:
@@ -16698,6 +16944,10 @@ packages:
   commander@8.3.0:
     resolution: {integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==}
     engines: {node: '>= 12'}
+
+  commander@9.5.0:
+    resolution: {integrity: sha512-KRs7WVDKg86PWiuAqhDrAQnTXZKraVcCc6vFdL14qrZ/DcWwuRo7VoiYXalXO7S5GKpqYiVEwCbgFDfxNHKJBQ==}
+    engines: {node: ^12.20.0 || >=14}
 
   comment-parser@1.4.6:
     resolution: {integrity: sha512-ObxuY6vnbWTN6Od72xfwN9DbzC7Y2vv8u1Soi9ahRKL37gb6y1qk6/dgjs+3JWuXJHWvsg3BXIwzd/rkmAwavg==}
@@ -22087,6 +22337,11 @@ packages:
       react:
         optional: true
 
+  postject@1.0.0-alpha.6:
+    resolution: {integrity: sha512-b9Eb8h2eVqNE8edvKdwqkrY6O7kAwmI8kcnBv1NScolYJbo59XUF0noFq+lxbC1yN20bmC0WBEbDC5H/7ASb0A==}
+    engines: {node: '>=14.0.0'}
+    hasBin: true
+
   powershell-utils@0.1.0:
     resolution: {integrity: sha512-dM0jVuXJPsDN6DvRpea484tCUaMiXWjuCn++HGTqUWzGDjv5tZkEZldAJ/UMlqRYGFrD/etByo4/xOuC/snX2A==}
     engines: {node: '>=20'}
@@ -26758,6 +27013,22 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@cloudflare/vitest-plugin@1.3.6(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))':
+    dependencies:
+      '@vitest/runner': 4.1.11
+      '@vitest/snapshot': 4.1.11
+      cjs-module-lexer: 1.2.3
+      esbuild: 0.28.1
+      miniflare: 5.20261001.0-alpha(@types/node@26.6.4)
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      wrangler: 4.147.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@cloudflare/workers-types'
+      - '@types/node'
+      - bufferutil
+      - utf-8-validate
+
   '@cloudflare/vitest-plugin@1.3.6(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11)':
     dependencies:
       '@vitest/runner': 4.1.11
@@ -26808,6 +27079,16 @@ snapshots:
       tinybench: 6.1.4
       vite: 7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)
       vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+    transitivePeerDependencies:
+      - debug
+      - supports-color
+
+  '@codspeed/vitest-plugin@5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))':
+    dependencies:
+      '@codspeed/core': 5.7.1(supports-color@10.2.2)
+      tinybench: 6.1.4
+      vite: 8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
     transitivePeerDependencies:
       - debug
       - supports-color
@@ -28007,6 +28288,8 @@ snapshots:
       react-dom: 19.3.0(react@19.3.0)
 
   '@floating-ui/utils@0.2.12': {}
+
+  '@fontsource-variable/geist-mono@5.3.0': {}
 
   '@fontsource-variable/geist@5.3.0': {}
 
@@ -33614,7 +33897,6 @@ snapshots:
       - vite
       - vite-plugin-solid
       - webpack
-    optional: true
 
   '@tanstack/react-start-rsc@0.1.59(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.12)(rollup@4.63.1)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11))(solid-js@2.0.0-rc.13)(supports-color@10.2.2)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))':
     dependencies:
@@ -33773,7 +34055,6 @@ snapshots:
       - unloader
       - vite-plugin-solid
       - webpack
-    optional: true
 
   '@tanstack/react-start@1.168.60(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.12)(rollup@4.63.1)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11))(solid-js@2.0.0-rc.13)(supports-color@10.2.2)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))':
     dependencies:
@@ -33966,7 +34247,6 @@ snapshots:
       - rollup
       - supports-color
       - unloader
-    optional: true
 
   '@tanstack/router-plugin@1.168.42(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.63.1)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11))(solid-js@2.0.0-rc.13)(supports-color@10.2.2)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))':
     dependencies:
@@ -34175,7 +34455,6 @@ snapshots:
       - unloader
       - vite-plugin-solid
       - webpack
-    optional: true
 
   '@tanstack/start-plugin-core@1.171.49(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(@tanstack/react-router@1.170.41(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.63.1)(supports-color@10.2.2)(vite-plugin-solid@3.0.0-next.27(@solidjs/web@2.0.0-rc.13(solid-js@2.0.0-rc.13))(@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.2)(vitest@4.1.11))(solid-js@2.0.0-rc.13)(supports-color@10.2.2)(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1)))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))':
     dependencies:
@@ -34743,6 +35022,8 @@ snapshots:
       '@types/node': 26.6.4
       pg-protocol: 1.16.1
       pg-types: 2.2.0
+
+  '@types/picomatch@4.0.3': {}
 
   '@types/react-dom@19.3.0(@types/react@19.3.0)':
     dependencies:
@@ -36485,7 +36766,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.1
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
 
   '@vitest/eslint-plugin@1.6.19(@typescript-eslint/eslint-plugin@8.66.0(@typescript-eslint/parser@8.59.1(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)))':
     dependencies:
@@ -38393,6 +38674,8 @@ snapshots:
   commander@7.2.0: {}
 
   commander@8.3.0: {}
+
+  commander@9.5.0: {}
 
   comment-parser@1.4.6: {}
 
@@ -44713,6 +44996,10 @@ snapshots:
       react: 19.3.0
     transitivePeerDependencies:
       - preact-render-to-string
+
+  postject@1.0.0-alpha.6:
+    dependencies:
+      commander: 9.5.0
 
   powershell-utils@0.1.0: {}
 

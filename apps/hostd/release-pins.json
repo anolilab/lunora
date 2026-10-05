@@ -1,0 +1,32 @@
+{
+    "$comment": "Inputs to a hostd release (plan 458 W7). celld: upstream denoland/celld release assets, sha256 and size checked against the downloaded bytes; keep the version in step with CELLD_VERSION in .github/workflows/test.yml. caddy: no upstream release ships the caddy-ratelimit module, so .github/workflows/hostd-release.yml builds this Caddy version with these modules at these commits (xcaddy) and attaches the gzipped binaries to the hostd-v<version> release; make-release-manifest.mjs hashes those built files. It refuses to sign while any input is missing or a PLACEHOLDER.",
+    "celld": {
+        "version": "v0.6.0",
+        "artifacts": [
+            {
+                "platform": "linux-x64",
+                "url": "https://github.com/denoland/celld/releases/download/v0.6.0/celld-x86_64-unknown-linux-gnu.gz",
+                "sha256": "8f1e18072c234ab75459d4da104c13cebc9b29a3e4a4772086bf985829bea8aa",
+                "size": 25031703,
+                "compression": "gzip"
+            },
+            {
+                "platform": "linux-arm64",
+                "url": "https://github.com/denoland/celld/releases/download/v0.6.0/celld-aarch64-unknown-linux-gnu.gz",
+                "sha256": "3d4945df3abcc6832b6e7fa978b9ee3c26e46a0b7791924843d42c0ed14eff96",
+                "size": 24113149,
+                "compression": "gzip"
+            }
+        ]
+    },
+    "caddy": {
+        "version": "v2.11.6",
+        "modules": [
+            {
+                "path": "github.com/mholt/caddy-ratelimit",
+                "commit": "5625512f24f6f59d6f64fb3aafe5eecff0b286db",
+                "$comment": "master, 2026-06-12"
+            }
+        ]
+    }
+}
