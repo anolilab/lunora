@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { backfillAggregateIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { clearCompanionSignatures } from "../src/ctx-db-companion-state";
 import type { AggregateIndexDefinitionLike } from "../src/schema-types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -942,7 +943,7 @@ describe("ctx-db aggregates", () => {
             await seed(setupWriter(schema));
 
             // What a shard built by an older tally format holds.
-            harness.raw(`UPDATE "__lunora_agg_state" SET "signature" = 'older-format'`);
+            harness.raw(`UPDATE "__lunora_companion_state" SET "signature" = 'older-format'`);
             plant();
 
             await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(4);
@@ -969,6 +970,58 @@ describe("ctx-db aggregates", () => {
             await freshWriter(without).insert("todos", { _id: "t6", archived: false, projectId: "p1", seq: 6 }, { allowExplicitId: true });
 
             runShardMigrations(harness.sql, schema);
+
+            await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(5);
+        });
+
+        it("records the marker on an eager backfill, so the first touch trusts it", async () => {
+            expect.assertions(1);
+
+            await seed(setupWriter(makeSchema()));
+
+            const schema = makeSchema(byProject);
+
+            runShardMigrations(harness.sql, schema);
+            backfillAggregateIndexes(harness.sql, schema);
+            plant();
+
+            await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(99);
+        });
+
+        it("rebuilds on an eager backfill when the index definition changed", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter(makeSchema(byProject));
+
+            await seed(writer);
+
+            await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
+
+            const changed = makeSchema({ ...byProject, where: { archived: false } });
+
+            runShardMigrations(harness.sql, changed);
+            plant();
+            backfillAggregateIndexes(harness.sql, changed);
+
+            await expect(freshWriter(changed).count("todos", { archived: false, projectId: "p1" })).resolves.toBe(3);
+        });
+
+        it("rebuilds after clearCompanionSignatures, the way out of a rollback to a pre-marker build", async () => {
+            expect.assertions(2);
+
+            const schema = makeSchema(byProject);
+
+            await seed(setupWriter(schema));
+            await freshWriter(schema).count("todos", { projectId: "p1" });
+
+            // A pre-marker build with the index undeclared: it writes the row,
+            // steps no companion, and never runs this build's prune.
+            await freshWriter(makeSchema()).insert("todos", { _id: "t6", archived: false, projectId: "p1", seq: 6 }, { allowExplicitId: true });
+            runShardMigrations(harness.sql, schema);
+
+            await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(4);
+
+            clearCompanionSignatures(harness.sql);
 
             await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(5);
         });

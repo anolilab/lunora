@@ -988,46 +988,32 @@ const runGeoTerminalScored = (
 const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
 
 /**
- * Whether `field` MAY be stored as an order-preserving sort key rather than as
- * its value — the condition SQL cannot reduce or group.
+ * Refuse a SQL-side reduce or group over a column that MAY be stored as an
+ * order-preserving sort key. `json_extract` hands SQL the key, not the value:
+ * `SUM` over a zero-padded bigint key coerces to nonsense (2e+39 for a couple
+ * of small amounts), `MIN`/`MAX` return the padded string, and a `GROUP BY` key
+ * comes back as 40 characters of padding. All three look like answers.
  *
  * The test is `mayHoldProjectedValue`, not `isProjectedKind`: the projection
  * dispatches on the RUNTIME type, so a `bigint`/bytes written into a `v.any()`
  * / `v.union()` / `v.from()` column is stored as the same padded key a declared
- * one gets. Reading the declared kind saw only `"any"` and waved the scan
- * through — `sum` of two small amounts came back as `2e+39`, `max` as the
- * 40-character key, and `groupBy` keyed on the padding. The write side has used
- * the wide test since a declared-kind gate wrote ~1e39 into a companion
- * (`ctx-db-companions.ts`); this is the read side matching it.
+ * one gets. The write side has used the wide test since a declared-kind gate
+ * wrote ~1e39 into a companion (`ctx-db-companions.ts`); this is the read side
+ * matching it.
  *
  * Refusing per COLUMN over-matches: an untyped column that only ever holds
  * plain numbers is refused too. That is the deliberate side to be wrong on —
  * the declared-kind version returned a confident wrong number instead, and the
- * escape hatch (a declared `aggregateIndex`, which the error names) answers
- * both cases exactly. `count()` passes SQL no field at all and is unaffected.
- * @returns `true` when the column is projected, or is declared loosely enough to hold a projected value
- */
-const isProjectedField = (definition: TableDefinitionLike, field: string | undefined): boolean => {
-    const validator = field === undefined ? undefined : definition.shape[field];
-
-    return validator !== undefined && mayHoldProjectedValue(validator);
-};
-
-/**
- * Refuse a SQL-side reduce or group over a column stored as a projected sort
- * key. `json_extract` hands SQL the key, not the value: `SUM` over a
- * zero-padded bigint key coerces to nonsense (2e+39 for a couple of small
- * amounts), `MIN`/`MAX` return the padded string, and a `GROUP BY` key comes
- * back as 40 characters of padding. All three look like answers.
- *
- * The maintained companion is exact for these, so the error names it rather
- * than just refusing. Applied at every SQL-reducing entry point —
- * `aggregate`'s scan and both halves of `groupBy` — because guarding one and
- * not its sibling is how the first version of this shipped.
- * @throws LunoraError `BAD_REQUEST` when `field` is stored as a projected key
+ * maintained companion is exact for both, so the error names it rather than
+ * just refusing. Applied at every SQL-reducing entry point — `aggregate`'s scan
+ * and both halves of `groupBy` — because guarding one and not its sibling is
+ * how the first version of this shipped. `count()` hands SQL no field.
+ * @throws LunoraError `BAD_REQUEST` when `field` may be stored as a projected key
  */
 const assertReducibleBySql = (definition: TableDefinitionLike, field: string, label: string): void => {
-    if (isProjectedField(definition, field)) {
+    const validator = definition.shape[field];
+
+    if (validator !== undefined && mayHoldProjectedValue(validator)) {
         throw new LunoraError(
             "BAD_REQUEST",
             `${label}: "${field}" may hold an order-preserving key rather than a value SQL can reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,

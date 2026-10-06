@@ -30,7 +30,7 @@ import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
 import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateCommitSeq } from "./ctx-db-commit-seq";
-import { migrateAggregateState } from "./ctx-db-companions";
+import { migrateCompanionState } from "./ctx-db-companion-state";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { migrateRelayShapes } from "./ctx-db-relay-shapes";
@@ -291,7 +291,7 @@ const migrateGeoIndexes = (sql: SqlExec, tableName: string, definition: TableDef
  * Create the counter tables backing `aggregateIndex` declarations. One row per
  * distinct `by`-tuple; `__key__` is a canonical-JSON encoding so lookups stay
  * stable. Not populated here — the first touch rebuilds a companion whose
- * durable marker (`migrateAggregateState`) does not match its definition, and
+ * durable marker (`ctx-db-companion-state`) does not match its definition, and
  * the write path steps every counter from then on.
  */
 const migrateAggregateIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
@@ -313,12 +313,11 @@ const migrateAggregateIndexes = (sql: SqlExec, tableName: string, definition: Ta
         );
 
         // Alpha-era companion-rebuild caveat: a DO persisted before `__count__`
-        // existed gets the column added here (defaulted 0). Such a DO predates the
-        // durable marker, so the first read/write that touches the index re-runs
-        // the full backfill (`ensureBackfilled`),
-        // so the seeded 0s are overwritten with real per-op values — no stale
-        // count survives. We pragma-check rather than blindly ALTER so a fresh
-        // table (created above with the column) doesn't raise "duplicate column".
+        // existed gets the column added here (defaulted 0). Such a DO also predates
+        // the durable marker, so the first read/write that touches the index
+        // rebuilds it and overwrites the seeded 0s with real per-op values — no
+        // stale count survives. We pragma-check rather than blindly ALTER so a
+        // fresh table (created above with the column) doesn't raise "duplicate column".
         const columns = runDrizzle<{ name: string }>(sql, dsql`PRAGMA table_info(${dsql.identifier(aggTable)})`).toArray();
 
         if (!columns.some((column) => column.name === "__count__")) {
@@ -390,7 +389,8 @@ export const runShardMigrations = (
     // Before any table: the search backfill records its progress here, and it
     // runs inside the per-table pass below.
     migrateSearchState(sql);
-    migrateAggregateState(sql, schema);
+
+    const declaredCompanions: string[] = [];
 
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind === "global") {
@@ -438,7 +438,16 @@ export const runShardMigrations = (
         migrateGeoIndexes(sql, tableName, definition);
         migrateAggregateIndexes(sql, tableName, definition);
         migrateRankIndexes(sql, tableName, definition);
+
+        declaredCompanions.push(
+            ...(definition.aggregateIndexes ?? []).map((index) => aggregateTableName(tableName, index.name)),
+            ...(definition.rankIndexes ?? []).map((index) => rankTableName(tableName, index.name)),
+        );
     }
+
+    // After the pass, so it can prune every rebuild marker whose companion the
+    // schema no longer declares.
+    migrateCompanionState(sql, declaredCompanions);
 
     if (options.cdc) {
         // The row-history index is only worth its storage when a table actually

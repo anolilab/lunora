@@ -1,12 +1,12 @@
 /**
  * One-shot index backfill for the DO store, extracted from `ctx-db.ts`.
  *
- * `backfillAggregateIndexes` / `backfillRankIndexes` populate the aggregate
- * counter and rank companion tables up-front by scanning each source table
- * once — the explicit twins of the reader's lazy `ensureBackfilled` /
- * `ensureRankBackfilled` paths, for tests and production hosts that prefer to
- * pay the backfill cost eagerly. Both are idempotent: a companion that already
- * carries rows is left untouched, so they are safe to call twice.
+ * `backfillAggregateIndexes` / `backfillRankIndexes` build the aggregate
+ * counter and rank companion tables up-front, for hosts that prefer to pay the
+ * rebuild eagerly rather than on a request's first touch. They run the same
+ * marker-aware ensure as the lazy path (`ctx-db-companions`), so a companion
+ * already built from its current definition is left alone, one built from
+ * another definition is rebuilt, and the lazy path trusts what they built.
  *
  * These touch the store only through `SqlExec`; `ctx-db.ts` re-exports the two
  * public entry points so existing import sites (the index barrel, tests) are
@@ -20,21 +20,15 @@ import { analyzedSearchText, ftsTableName, planBackfillPass, searchIndexProfile 
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
-import { matchesStaticWhere } from "./aggregate-sql";
-import type { AggregateTally } from "./aggregate-tally";
-import { aggregateTableName, encodeAggregateKey, foldAggregateTally } from "./aggregate-tally";
 // Type-only imports for the structural surfaces threaded in — value imports
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SearchIndexDefinitionLike, SqlExec } from "./ctx-db";
-import { insertRankRow, rankColumnsSql } from "./ctx-db-companions";
+import { ensureAggregateCompanion, ensureRankCompanion } from "./ctx-db-companions";
 import { migrateSearchState, readSearchBackfillState, readSearchIndexCoverage, writeSearchBackfillState } from "./ctx-db-search-state";
 import { runAll, runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, tryRowToDocument } from "./do-sql";
+import { DOC_COLUMN, isFtsAvailable, tryRowToDocument } from "./do-sql";
 import { sqliteInList } from "./drizzle";
 import { ftsPurgeDocument, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows } from "./fts-companion";
-import { isLiveForCompanion } from "./query-args";
-import { matchesRankStaticWhere, rankTableName } from "./rank";
-import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
 
 /** One page's outcome: whether the index is now complete, and how many rows it walked. */
 interface SearchBackfillPass {
@@ -50,120 +44,39 @@ interface SearchBackfillProgress {
     pages: number;
 }
 
-/** True when `table` already carries rows — the backfills' idempotence check. */
-const hasRows = (sql: SqlExec, table: string): boolean =>
-    runDrizzle<{ count: number }>(sql, dsql`SELECT COUNT(*) AS count FROM ${dsql.identifier(table)}`).one().count > 0;
-
 /**
- * Does `tableName` hold anything at all? `LIMIT 1`, not the `COUNT(*)` above:
- * this one runs on the search read path, where counting a large table per read
- * is the cost `staged` exists to avoid in the first place.
+ * Does `tableName` hold anything at all? `LIMIT 1`, not a `COUNT(*)`: this
+ * runs on the search read path, where counting a large table per read is the
+ * cost `staged` exists to avoid in the first place.
  */
 const tableHasRows = (sql: SqlExec, table: string): boolean => runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(table)} LIMIT 1`).toArray().length > 0;
 
-/** One full scan of `tableName`'s stored rows, decoded per row by the caller. */
-const scanRows = (sql: SqlExec, tableName: string): Record<string, unknown>[] =>
-    runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
-
 /**
- * Backfill one aggregate counter table by scanning the source rows once and
- * tallying per canonical `by`-key. No-op when the counter already has rows.
- *
- * `softField` is the table's soft-delete marker column when it has one:
- * companions tally LIVE rows only, matching the incremental maintenance in
- * `ctx-db-companions`, so the two seeds agree.
- */
-const backfillAggregateIndex = (sql: SqlExec, tableName: string, index: AggregateIndexDefinitionLike, softField: string | undefined): void => {
-    const aggTable = aggregateTableName(tableName, index.name);
-
-    if (hasRows(sql, aggTable)) {
-        return;
-    }
-
-    const by = index.by ?? [];
-    const tallies = new Map<string, AggregateTally>();
-    const rows = scanRows(sql, tableName);
-
-    for (const row of rows) {
-        const record = rowToDocument(row);
-
-        if (!record || !isLiveForCompanion(record, softField) || (index.where && !matchesStaticWhere(record, index.where))) {
-            continue;
-        }
-
-        const encoded = encodeAggregateKey(by, record);
-
-        foldAggregateTally(tallies, encoded, index, record);
-    }
-
-    for (const [encoded, tally] of tallies) {
-        runDrizzle(
-            sql,
-            dsql`INSERT INTO ${dsql.identifier(aggTable)} (${AGG_KEY}, ${AGG_VALUE}, ${AGG_COUNT}) VALUES (${encoded}, ${tally.value}, ${tally.count})`,
-        );
-    }
-};
-
-/**
- * One-shot backfill of every declared aggregate index. Used by tests and
- * production hosts that want to populate counters up-front instead of on first
- * read. Idempotent: counter rows that already exist are left alone, so it's
- * safe to call twice.
- *
- * The reader uses `ensureBackfilled` internally for the lazy path; this
- * helper is the explicit twin so callers can opt out of the lazy cost.
+ * Build every declared aggregate companion up-front: each one whose durable
+ * marker does not record its current definition is rebuilt, and the rest cost
+ * one primary-key lookup. Safe to call any number of times.
  */
 const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind === "global" || !definition.aggregateIndexes) {
+        if (definition.shardMode?.kind === "global") {
             continue;
         }
 
-        for (const index of definition.aggregateIndexes) {
-            backfillAggregateIndex(sql, tableName, index, definition.softDeleteMode?.field);
+        for (const index of definition.aggregateIndexes ?? []) {
+            ensureAggregateCompanion(sql, tableName, index, definition.softDeleteMode?.field);
         }
     }
 };
 
-/**
- * Backfill one rank companion table by scanning the source rows once. No-op
- * when the companion already carries rows.
- */
-const backfillRankIndex = (sql: SqlExec, tableName: string, index: RankIndexDefinitionLike): void => {
-    const rankTable = rankTableName(tableName, index.name);
-
-    if (hasRows(sql, rankTable)) {
-        return;
-    }
-
-    const columnsSql = rankColumnsSql(index);
-    const rows = scanRows(sql, tableName);
-
-    for (const row of rows) {
-        const record = rowToDocument(row);
-
-        if (!record || (index.where && !matchesRankStaticWhere(record, index.where))) {
-            continue;
-        }
-
-        insertRankRow(sql, rankTable, index, columnsSql, record["_id"] as string, record);
-    }
-};
-
-/**
- * One-shot backfill of every declared rank index. The runtime path uses
- * `ensureRankBackfilled` lazily; this is the explicit twin for production
- * hosts that prefer to populate companions up-front. Idempotent: skips
- * rank companions that already carry rows.
- */
+/** The rank twin of {@link backfillAggregateIndexes}. */
 const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind === "global" || !definition.rankIndexes) {
+        if (definition.shardMode?.kind === "global") {
             continue;
         }
 
-        for (const index of definition.rankIndexes) {
-            backfillRankIndex(sql, tableName, index);
+        for (const index of definition.rankIndexes ?? []) {
+            ensureRankCompanion(sql, tableName, index, definition.softDeleteMode?.field);
         }
     }
 };
