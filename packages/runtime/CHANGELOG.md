@@ -1,3 +1,10 @@
+## @lunora/runtime [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.179...@lunora/runtime@1.0.0-alpha.180) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.98
+
 ## @lunora/runtime [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.178...@lunora/runtime@1.0.0-alpha.179) (2026-10-06)
 
 ### Features
