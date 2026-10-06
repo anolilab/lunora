@@ -91,7 +91,9 @@
         "dinero.js": "catalog:payment"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/shard-engine": "1.0.0-alpha.113",
         "@polar-sh/sdk": "catalog:payment",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -103,7 +105,8 @@
         "fallow": "catalog:lint",
         "stripe": "catalog:payment",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
         "@polar-sh/sdk": "^0.48.0",
