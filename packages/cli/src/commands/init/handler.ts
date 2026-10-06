@@ -1,8 +1,8 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { applyLintIgnores, BADGES, detectLintTools, isInteractive } from "@lunora/config";
-import { walkSync } from "@visulima/fs";
+import { applyLintIgnores, BADGES, detectLintTools, isInteractive, readProjectDependencies } from "@lunora/config";
+import { readJsonSync, walkSync } from "@visulima/fs";
 import { basename, dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
 import { applyEdits, modify } from "jsonc-parser";
@@ -645,14 +645,8 @@ const isWorkspaceRoot = (directory: string): boolean => {
         return true;
     }
 
-    const packagePath = join(directory, "package.json");
-
-    if (!existsSync(packagePath)) {
-        return false;
-    }
-
     try {
-        return (JSON.parse(readFileSync(packagePath, "utf8")) as { workspaces?: unknown }).workspaces !== undefined;
+        return (readJsonSync(join(directory, "package.json")) as { workspaces?: unknown }).workspaces !== undefined;
     } catch {
         // Unreadable / invalid package.json — not a workspace root we can trust.
         return false;
@@ -1420,18 +1414,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         projectName: basename(projectDirectory),
         // Detect the per-framework auth-UI item from the scaffolded template's deps.
         resolveAuthUiItem: () => {
-            let dependencies: Record<string, string>;
-
-            try {
-                const pkg = JSON.parse(readFileSync(join(projectDirectory, "package.json"), "utf8")) as {
-                    dependencies?: Record<string, string>;
-                    devDependencies?: Record<string, string>;
-                };
-
-                dependencies = { ...pkg.dependencies, ...pkg.devDependencies };
-            } catch {
-                return "auth-ui-react";
-            }
+            const dependencies = readProjectDependencies(projectDirectory);
 
             // The same gate `lunora add auth-ui` applies, and for the same reason:
             // every auth-UI port renders DOM, so there is no item that fits an Expo

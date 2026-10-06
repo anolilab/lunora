@@ -38,7 +38,7 @@ export type {
     ToolchainCommand,
 } from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
-export { detectFramework, projectUsesUmbrella, readProjectDependencyNames } from "./detect-framework";
+export { detectFramework, projectUsesUmbrella, readProjectDependencies, readProjectDependencyNames } from "./detect-framework";
 export type { DevProcess, DevProcessOptions, DevProcessSpawner } from "./dev-process";
 export { acceptsConnection, startDevProcess } from "./dev-process";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";

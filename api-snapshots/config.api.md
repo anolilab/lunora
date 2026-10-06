@@ -1562,6 +1562,12 @@ const readLinkedProject: (projectRoot: string) => LinkedProject | undefined;
 const readLiveDevServerState: (projectRoot: string) => DevServerState | undefined;
 ```
 
+### `readProjectDependencies` (const)
+
+```ts
+const readProjectDependencies: (root: string) => Readonly<Record<string, string>>;
+```
+
 ### `readProjectDependencyNames` (const)
 
 ```ts

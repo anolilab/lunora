@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 
+import { projectUsesUmbrella } from "@lunora/config";
 import { join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
@@ -61,22 +62,11 @@ interface IntrospectCommandResult {
 }
 
 /**
- * Resolve which server package the emitted imports should point at. A project
- * depending on the `lunorash` umbrella gets `lunorash/server`; everything else
- * gets `@lunora/server`. Mirrors the rule codegen uses for `_generated/*`.
+ * Resolve which server package the emitted imports should point at: the
+ * `lunorash` umbrella's `lunorash/server`, else `@lunora/server`. Mirrors the
+ * rule codegen uses for `_generated/*`.
  */
-const resolveServerImport = (cwd: string): string => {
-    try {
-        const manifest = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as {
-            dependencies?: Record<string, string>;
-            devDependencies?: Record<string, string>;
-        };
-
-        return manifest.dependencies?.lunorash === undefined && manifest.devDependencies?.lunorash === undefined ? "@lunora/server" : "lunorash/server";
-    } catch {
-        return "@lunora/server";
-    }
-};
+const resolveServerImport = (cwd: string): string => (projectUsesUmbrella(cwd) ? "lunorash/server" : "@lunora/server");
 
 /** Write one emitted file, honoring `--force` and `--dry-run`. Returns `true` when it was written. */
 const writeEmittedFile = async (file: EmittedFile, directory: string, options: IntrospectCommandOptions): Promise<boolean> => {

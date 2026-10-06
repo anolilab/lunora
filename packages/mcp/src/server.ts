@@ -1,5 +1,4 @@
 /* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases". Ours qualifies: we dispatch tools defined with plain JSON Schema and bridge structured results ourselves, which avoids McpServer's per-tool zod dependency. */
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +8,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { findUpSync, readJsonSync } from "@visulima/fs";
 
 import type { McpAgentExposure } from "./agent-tools";
 import { agentToolDefinitions, callAgentTool, isAgentToolName } from "./agent-tools";
@@ -21,38 +21,32 @@ import { callTool, toolDefinitions } from "./tools";
  * semantic-release bumps; if resolution ever fails we fall back to `0.0.0`.
  */
 const resolveVersion = (): string => {
-    // Walk up from this module's directory to the nearest `package.json`. A
-    // relative `../package.json` is unreliable because the bundler emits this
-    // code into a hashed shared-chunk subdirectory whose depth isn't fixed.
-    try {
-        let directory = dirname(fileURLToPath(import.meta.url));
+    // Walk up from this module's directory to our own `package.json`. A relative
+    // `../package.json` is unreliable because the bundler emits this code into a
+    // hashed shared-chunk subdirectory whose depth isn't fixed, and the name
+    // check skips any nested `package.json` that isn't ours.
+    let version: unknown;
 
-        for (let depth = 0; depth < 8; depth += 1) {
+    findUpSync(
+        (directory) => {
             try {
-                const raw = readFileSync(join(directory, "package.json"), "utf8");
-                const pkg = JSON.parse(raw) as { name?: string; version?: string };
+                const manifest = readJsonSync(join(directory, "package.json")) as { name?: unknown; version?: unknown };
 
-                // Skip any nested package.json that isn't ours.
-                if (pkg.name === "@lunora/mcp" && typeof pkg.version === "string" && pkg.version.length > 0) {
-                    return pkg.version;
+                if (manifest.name === "@lunora/mcp") {
+                    version = manifest.version;
+
+                    return "package.json";
                 }
             } catch {
                 // No package.json at this level (or unreadable); keep climbing.
             }
 
-            const parent = dirname(directory);
+            return undefined;
+        },
+        { cwd: dirname(fileURLToPath(import.meta.url)) },
+    );
 
-            if (parent === directory) {
-                break;
-            }
-
-            directory = parent;
-        }
-    } catch {
-        // Fall through to the static fallback below.
-    }
-
-    return "0.0.0";
+    return typeof version === "string" && version.length > 0 ? version : "0.0.0";
 };
 
 /** Server name/version advertised in the MCP `initialize` handshake. */

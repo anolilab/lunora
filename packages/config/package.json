@@ -74,6 +74,7 @@
         "@lunora/seed": "1.0.0-alpha.193",
         "@visulima/colorize": "catalog:cli",
         "@visulima/find-ai-runner": "catalog:cli",
+        "@visulima/fs": "catalog:cli",
         "@visulima/package": "catalog:cli",
         "dockerode": "catalog:tooling",
         "dotenv": "catalog:node",

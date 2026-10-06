@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { readJsonSync } from "@visulima/fs";
 
 /**
  * The meta-frameworks Lunora can compose with, plus `"none"` for a standalone
@@ -53,29 +54,24 @@ const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: s
 const STANDALONE: FrameworkDetection = { class: "C", framework: "none" };
 
 /**
- * Read and parse the project `package.json`, returning its merged
- * `dependencies` + `devDependencies` name set (empty on any failure). Public
- * so sibling consumers (e.g. the CLI's Vite-project detection) share one
- * best-effort reader instead of re-parsing `package.json` themselves.
+ * The project `package.json`'s merged `devDependencies` + `dependencies` map
+ * (a runtime dependency wins a name declared in both), or `{}` on any failure —
+ * a missing or malformed manifest must never crash a consumer, which falls back
+ * to standalone behaviour. Public so sibling consumers (the CLI's `add`, `init`
+ * and `doctor`) share one best-effort reader instead of re-parsing it.
  */
-const readProjectDependencyNames = (root: string): ReadonlySet<string> => {
-    const packageJsonPath = join(root, "package.json");
-
-    if (!existsSync(packageJsonPath)) {
-        return new Set();
-    }
-
+const readProjectDependencies = (root: string): Readonly<Record<string, string>> => {
     try {
-        const raw = readFileSync(packageJsonPath, "utf8");
-        const parsed = JSON.parse(raw) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
+        const manifest = readJsonSync(join(root, "package.json")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
 
-        return new Set([...Object.keys(parsed.dependencies ?? {}), ...Object.keys(parsed.devDependencies ?? {})]);
+        return { ...manifest.devDependencies, ...manifest.dependencies };
     } catch {
-        // A malformed / unreadable package.json must never crash a consumer —
-        // fall back to standalone behaviour.
-        return new Set();
+        return {};
     }
 };
+
+/** The names {@link readProjectDependencies} reads — empty on any failure. */
+const readProjectDependencyNames = (root: string): ReadonlySet<string> => new Set(Object.keys(readProjectDependencies(root)));
 
 /**
  * Whether the project depends on the unscoped `lunorash` umbrella rather than
@@ -116,4 +112,4 @@ const detectFramework = (root: string): FrameworkDetection => {
 };
 
 export type { DetectedFramework, FrameworkClass, FrameworkDetection };
-export { detectFramework, projectUsesUmbrella, readProjectDependencyNames };
+export { detectFramework, projectUsesUmbrella, readProjectDependencies, readProjectDependencyNames };

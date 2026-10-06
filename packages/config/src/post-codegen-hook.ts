@@ -33,8 +33,9 @@
  * A missing script is not an error — it is the common case.
  */
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
+import { readJsonSync } from "@visulima/fs";
 
 import { detectPackageManager, runScriptArgsFor } from "./package-manager";
 
@@ -103,15 +104,8 @@ const defaultHookSpawner: HookSpawner = (descriptor) =>
  * deploy for a reason unrelated to it.
  */
 const hasPostCodegenScript = (projectRoot: string): boolean => {
-    const manifestPath = join(projectRoot, "package.json");
-
-    if (!existsSync(manifestPath)) {
-        return false;
-    }
-
     try {
-        const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
-        const scripts = (parsed as { scripts?: Record<string, unknown> } | null)?.scripts;
+        const scripts = (readJsonSync(join(projectRoot, "package.json")) as { scripts?: Record<string, unknown> } | null)?.scripts;
 
         return typeof scripts?.[POST_CODEGEN_SCRIPT] === "string" && scripts[POST_CODEGEN_SCRIPT] !== "";
     } catch {

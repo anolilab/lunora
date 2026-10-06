@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 
-import { applyLintIgnores, detectLintTools } from "@lunora/config";
+import { applyLintIgnores, detectLintTools, readProjectDependencies } from "@lunora/config";
 import { findWranglerFile } from "@lunora/config/cloudflare";
 import { basename, join } from "@visulima/path";
 
@@ -86,20 +86,6 @@ const providerToItem = (provider: string): FeatureItem | undefined => {
     );
 
     return match?.value;
-};
-
-/** Read the project's merged (deps + devDeps) dependency map; `{}` if unreadable. */
-const readProjectDependencies = (cwd: string): Record<string, string> => {
-    try {
-        const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as {
-            dependencies?: Record<string, string>;
-            devDependencies?: Record<string, string>;
-        };
-
-        return { ...pkg.dependencies, ...pkg.devDependencies };
-    } catch {
-        return {};
-    }
 };
 
 /**

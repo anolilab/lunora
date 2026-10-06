@@ -1,7 +1,15 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries, resolveSchemaDirectory } from "@lunora/config";
+import {
+    DEV_VARS_FILE,
+    discoverSchemaInfo,
+    inferLunoraBindings,
+    isPlaceholderValue,
+    parseDevVariableEntries,
+    readProjectDependencies,
+    resolveSchemaDirectory,
+} from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import {
     collectExportGaps,
@@ -599,21 +607,8 @@ const parseLunoraVersion = (spec: string): LunoraVersion | undefined => {
  * is normal and is reported as INFO with the spread, so a reader can judge it.
  */
 const checkVersionSkew = (cwd: string, findings: Finding[]): void => {
-    const manifestPath = join(cwd, "package.json");
-
-    if (!existsSync(manifestPath)) {
-        return;
-    }
-
-    let manifest: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-
-    try {
-        manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as typeof manifest;
-    } catch {
-        return; // A malformed manifest is another check's problem.
-    }
-
-    const specs = { ...manifest.devDependencies, ...manifest.dependencies };
+    // A missing or malformed manifest reads as no dependencies — another check's problem.
+    const specs = readProjectDependencies(cwd);
     const parsed: { name: string; version: LunoraVersion }[] = [];
 
     for (const [name, spec] of Object.entries(specs)) {

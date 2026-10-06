@@ -38,6 +38,7 @@ import {
     updateDevServerState,
 } from "@lunora/config";
 import { warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
+import { readJsonSync } from "@visulima/fs";
 
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
@@ -135,9 +136,7 @@ const viteDevCommand = (cwd: string): { args: ReadonlyArray<string>; command: st
     let script: string | undefined;
 
     try {
-        const raw = readFileSync(join(cwd, "package.json"), "utf8");
-
-        script = (JSON.parse(raw) as { scripts?: Record<string, string> }).scripts?.dev;
+        script = (readJsonSync(join(cwd, "package.json")) as { scripts?: Record<string, string> }).scripts?.dev;
     } catch {
         // Missing / malformed package.json — fall through to the vite default.
     }

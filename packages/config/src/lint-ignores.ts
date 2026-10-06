@@ -42,6 +42,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { readJsonSync } from "@visulima/fs";
 import { parse as parseJsonc } from "jsonc-parser";
 
 import { readProjectDependencyNames } from "./detect-framework";
@@ -217,7 +218,7 @@ const detectLintTools = (projectRoot: string): LintTool[] => {
     // dependency fact.
     const configuresPrettierInManifest = (): boolean => {
         try {
-            return (JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8")) as Record<string, unknown>)["prettier"] !== undefined;
+            return (readJsonSync(join(projectRoot, "package.json")) as Record<string, unknown>)["prettier"] !== undefined;
         } catch {
             return false;
         }

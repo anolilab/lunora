@@ -3,10 +3,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { projectUsesUmbrella } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runAddFeature } from "../../src/commands/add/handler";
-import { applyDeps, confirmDepMutation, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
+import { applyDeps, confirmDepMutation, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
 import { parseManifest, runAddCommand } from "../../src/commands/registry/index";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";

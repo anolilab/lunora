@@ -7,6 +7,7 @@ import type { LinkedProject } from "@lunora/config";
 import { readLinkedProject } from "@lunora/config";
 import type { BindingManifest } from "@lunora/config/cloudflare";
 import { findWranglerFile } from "@lunora/config/cloudflare";
+import { readJsonSync } from "@visulima/fs";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
@@ -125,16 +126,10 @@ const summariseSchema = (schema: SchemaIR): SchemaSummary => {
 };
 
 const collectLunoraPackages = (projectRoot: string): ReadonlyArray<LunoraPackageInfo> => {
-    const pkgPath = join(projectRoot, "package.json");
-
-    if (!existsSync(pkgPath)) {
-        return [];
-    }
-
     let pkg: unknown;
 
     try {
-        pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+        pkg = readJsonSync(join(projectRoot, "package.json"));
     } catch {
         return [];
     }
