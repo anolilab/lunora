@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.56...@lunora/platform@1.0.0-alpha.57) (2026-10-06)
+
+### Features
+
+* **platform-celld:** publish the package and test against celld v0.6.1 ([#1013](https://github.com/anolilab/lunora/issues/1013)) ([e695d1c](https://github.com/anolilab/lunora/commit/e695d1ccf114755b1d8169d6ce635487eef11bbb))
+
 ## @lunora/platform [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.55...@lunora/platform@1.0.0-alpha.56) (2026-10-06)
 
 ### Features
