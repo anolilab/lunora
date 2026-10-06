@@ -142,7 +142,7 @@ await ctx.topics.signups.publish({ userId });
 - **At-least-once, per subscription.** If one send fails, `publish` rejects. A retry re-delivers to the subscriptions whose send had already succeeded, so handlers must be idempotent.
 - **No ordering.** Cloudflare Queues does not order messages, so neither do topics.
 - **Subscriptions are queues.** A subscription deploys, reconciles into `wrangler.jsonc`, and shows in Studio exactly like a `defineQueue` export of the same name (`welcomeEmail` → queue `welcome-email`, binding `QUEUE_WELCOME_EMAIL`). It is published to only through its topic, never through `ctx.queues`. Renaming a subscription creates a new queue; messages still in the old one are not moved.
-- **Declare both in `lunora/queues.ts`.** The topic passed to `defineSubscription` must be a `defineTopic` export of the same file. A topic with no subscriptions yet accepts publishes and delivers them to nobody.
+- **Declare both in `lunora/queues.ts`, or in a [module's](/docs/concepts/modules) own `queues.ts`.** The topic passed to `defineSubscription` must be a `defineTopic` export of one of those files, so a module can import a topic declared elsewhere and subscribe to it. A topic with no subscriptions yet accepts publishes and delivers them to nobody.
 
 ## Push vs pull consumers
 

@@ -1350,7 +1350,7 @@ describe("reconcileWranglerBindings", () => {
     // agree. These start from a consumer an earlier reconcile already wrote.
     describe("queue tuning on an existing queues.consumers[] entry", () => {
         const receiptQueue = (tuning: Record<string, unknown>) => {
-            return { bindingName: "QUEUE_RECEIPT", exportName: "receiptQueue", mode: "push" as const, name: "receipt-queue", tuning };
+            return { bindingName: "QUEUE_RECEIPT", exportName: "receiptQueue", filePath: "queues", mode: "push" as const, name: "receipt-queue", tuning };
         };
 
         const seedConsumer = (consumer: string): void => {
@@ -1415,7 +1415,14 @@ describe("reconcileWranglerBindings", () => {
 
             seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
 
-            const invoiceQueue = { bindingName: "QUEUE_INVOICE", exportName: "invoiceQueue", mode: "push" as const, name: "invoice-queue", tuning: {} };
+            const invoiceQueue = {
+                bindingName: "QUEUE_INVOICE",
+                exportName: "invoiceQueue",
+                filePath: "queues",
+                mode: "push" as const,
+                name: "invoice-queue",
+                tuning: {},
+            };
 
             reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 }), invoiceQueue] }));
 
@@ -1735,7 +1742,14 @@ describe("reconcileWranglerBindings", () => {
     // config this tool cannot prove it wrote, so the orphan is named in
     // `warnings` instead.
     describe("orphaned workflow / queue entries", () => {
-        const RECEIPT_QUEUE = { bindingName: "QUEUE_RECEIPT", exportName: "receiptQueue", mode: "push" as const, name: "receipt-queue", tuning: {} };
+        const RECEIPT_QUEUE = {
+            bindingName: "QUEUE_RECEIPT",
+            exportName: "receiptQueue",
+            filePath: "queues",
+            mode: "push" as const,
+            name: "receipt-queue",
+            tuning: {},
+        };
         const SEND_RECEIPT = {
             className: "SendReceiptWorkflow",
             exported: true,

@@ -8,11 +8,12 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { QueueIR, TopicIR } from "../ir";
-import { findObjectProperty, stringPropertyFor } from "./ast";
+import { findObjectProperty, lunoraRelativePath, stringPropertyFor } from "./ast";
 import { addressableExportNameOf } from "./attribution";
 import { resolveHandlerReference } from "./handler-reference";
+import { discoverModules } from "./modules";
 
-/** The only file queues may be declared in — mirrors `lunora/workflows.ts`. */
+/** The file queues are declared in: `lunora/queues.ts`, and the same name directly inside a module folder. */
 const QUEUES_FILENAME = "queues.ts";
 
 /** The `@lunora/queue` factories `lunora/queues.ts` declares with. */
@@ -99,6 +100,7 @@ const queueFromConfig = (argument: ObjectLiteralExpression, exportName: string, 
     const ir: QueueIR = {
         bindingName: queueBindingName(exportName),
         exportName,
+        filePath: lunoraRelativePath(lunoraDirectory, argument.getSourceFile().getFilePath()),
         mode: "push",
         name: queueNameOverride(argument, exportName) ?? queueDefaultName(exportName),
         ...(topic === undefined ? {} : { topic }),
@@ -150,24 +152,46 @@ const queueFromCall = (call: CallExpression, exportName: string, lunoraDirectory
     return queueFromConfig(argument, exportName, undefined, lunoraDirectory);
 };
 
+/** The key a topic is registered under: its declaring file plus its local binding name. */
+const topicKey = (filePath: string, localName: string): string => `${filePath}:${localName}`;
+
+/**
+ * The {@link topicKey} of the binding an identifier refers to, following an
+ * import to its declaration so a module can subscribe to a topic another queues
+ * file declares. Falls back to the identifier's own file when the checker
+ * resolves nothing.
+ */
+const topicKeyOf = (identifier: Identifier): string => {
+    const symbol = identifier.getSymbol();
+    const declaration = (symbol?.isAlias() === true ? symbol.getAliasedSymbol() : symbol)?.getDeclarations()[0];
+
+    return declaration !== undefined && Node.isVariableDeclaration(declaration)
+        ? topicKey(declaration.getSourceFile().getFilePath(), declaration.getName())
+        : topicKey(identifier.getSourceFile().getFilePath(), identifier.getText());
+};
+
 /**
  * Lift one exported `defineSubscription(topic, {...})` into the push {@link QueueIR}
  * it deploys as. The topic must be an identifier naming a `defineTopic` export of
- * the same file — that is what lets codegen wire `ctx.topics.<topic>` to this
- * subscription's binding without evaluating anything.
+ * a queues file (this one, or one it imports from) — that is what lets codegen
+ * wire `ctx.topics.<topic>` to this subscription's binding without evaluating anything.
  */
 const subscriptionFromCall = (call: CallExpression, exportName: string, topics: ReadonlyMap<string, string>, lunoraDirectory: string): QueueIR => {
     const [topicArgument, configArgument] = call.getArguments();
+    const topic = topicArgument !== undefined && Node.isIdentifier(topicArgument) ? topics.get(topicKeyOf(topicArgument)) : undefined;
 
-    if (!topicArgument || !Node.isIdentifier(topicArgument) || !topics.has(topicArgument.getText())) {
-        throw diagnosticAt(topicArgument ?? call, `subscription "${exportName}": the first argument must name a \`defineTopic()\` export of lunora/queues.ts`);
+    if (topic === undefined) {
+        throw diagnosticAt(
+            topicArgument ?? call,
+            `subscription "${exportName}": the first argument must name a \`defineTopic()\` export of lunora/queues.ts or a module's queues.ts`,
+        );
     }
 
     if (!configArgument || !Node.isObjectLiteralExpression(configArgument)) {
         throw diagnosticAt(call, `subscription "${exportName}": defineSubscription must be passed an inline object literal`);
     }
 
-    return queueFromConfig(configArgument, exportName, topics.get(topicArgument.getText()), lunoraDirectory);
+    return queueFromConfig(configArgument, exportName, topic, lunoraDirectory);
 };
 
 /** One exported `define*(...)` call in `lunora/queues.ts`. */
@@ -221,11 +245,38 @@ const factoryExports = (source: SourceFile): FactoryExport[] => {
     return found;
 };
 
-/** Collect the queues (subscriptions included) and topics one source file declares. */
-const queuesFromSource = (source: SourceFile, lunoraDirectory: string): { queues: QueueIR[]; topics: TopicIR[] } => {
-    const exports = factoryExports(source);
-    // A subscription names its topic by the LOCAL binding; the topic registers under its exported name.
-    const topicNames = new Map(exports.filter((entry) => entry.factory === "defineTopic").map((entry) => [entry.localName, entry.exportName] as const));
+/**
+ * Reject an export name two queues files share. The name is the `ctx.queues` /
+ * `ctx.topics` key, the binding name and the import name in `_generated/`, so it
+ * has to be unique across the app, not just within one file.
+ */
+const assertUniqueExportNames = (exports: ReadonlyArray<FactoryExport>, lunoraDirectory: string): void => {
+    const seen = new Map<string, string>();
+
+    for (const entry of exports) {
+        const file = lunoraRelativePath(lunoraDirectory, entry.call.getSourceFile().getFilePath());
+        const prior = seen.get(entry.exportName);
+
+        if (prior !== undefined) {
+            throw diagnosticAt(
+                entry.call,
+                `"${entry.exportName}" is exported by both lunora/${prior}.ts and lunora/${file}.ts — queue and topic export names must be unique across the app`,
+            );
+        }
+
+        seen.set(entry.exportName, file);
+    }
+};
+
+/** Collect the queues (subscriptions included) and topics a set of queues files declares. */
+const queuesFromSources = (sources: ReadonlyArray<SourceFile>, lunoraDirectory: string): { queues: QueueIR[]; topics: TopicIR[] } => {
+    const exports = sources.flatMap((source) => factoryExports(source));
+
+    assertUniqueExportNames(exports, lunoraDirectory);
+
+    // A subscription names its topic by a local or imported binding; the topic registers under its exported name.
+    const topicEntries = exports.filter((entry) => entry.factory === "defineTopic");
+    const topicNames = new Map(topicEntries.map((entry) => [topicKey(entry.call.getSourceFile().getFilePath(), entry.localName), entry.exportName] as const));
     const queues: QueueIR[] = [];
 
     for (const entry of exports) {
@@ -236,12 +287,19 @@ const queuesFromSource = (source: SourceFile, lunoraDirectory: string): { queues
         }
     }
 
-    const topics = [...topicNames.values()].map((exportName) => {
-        return { exportName };
+    const topics = topicEntries.map((entry): TopicIR => {
+        return { exportName: entry.exportName, filePath: lunoraRelativePath(lunoraDirectory, entry.call.getSourceFile().getFilePath()) };
     });
 
     return { queues, topics };
 };
+
+/** `lunora/queues.ts` and each declared module's `<module>/queues.ts`, those that exist. */
+const queueFilesIn = (project: Project, lunoraDirectory: string): string[] =>
+    [
+        join(lunoraDirectory, QUEUES_FILENAME),
+        ...discoverModules(project, lunoraDirectory).map((entry) => join(lunoraDirectory, entry.name, QUEUES_FILENAME)),
+    ].filter((path) => existsSync(path));
 
 /**
  * Reject queues whose deployed `name` or `bindingName` collide across exports —
@@ -283,21 +341,17 @@ const assertUniqueNames = (queues: ReadonlyArray<QueueIR>): void => {
 };
 
 /**
- * Discover what `lunora/queues.ts` declares, in one parse: the queues
- * (`defineQueue` and `defineSubscription` exports — a subscription deploys as a
- * push queue carrying `topic`) and the `defineTopic` exports. Both are `[]` when
- * the file doesn't exist. Only the wrangler-relevant literals (`name`/`mode`/batch
- * tuning) are read; handler bodies are runtime-only, so codegen never evaluates them.
+ * Discover what `lunora/queues.ts` and each module's `queues.ts` declare, in one
+ * parse: the queues (`defineQueue` and `defineSubscription` exports — a
+ * subscription deploys as a push queue carrying `topic`) and the `defineTopic`
+ * exports. Both are `[]` when no such file exists. Only the wrangler-relevant
+ * literals (`name`/`mode`/batch tuning) are read; handler bodies are
+ * runtime-only, so codegen never evaluates them.
  */
 const discoverQueueDeclarations = (project: Project, lunoraDirectory: string): { queues: QueueIR[]; topics: TopicIR[] } => {
-    const queuesPath = join(lunoraDirectory, QUEUES_FILENAME);
-
-    if (!existsSync(queuesPath)) {
-        return { queues: [], topics: [] };
-    }
-
-    const source = project.getSourceFile(queuesPath) ?? project.addSourceFileAtPath(queuesPath);
-    const { queues, topics } = queuesFromSource(source, lunoraDirectory);
+    // Every file is added before any is read, so a subscription's imported topic resolves.
+    const sources = queueFilesIn(project, lunoraDirectory).map((path) => project.getSourceFile(path) ?? project.addSourceFileAtPath(path));
+    const { queues, topics } = queuesFromSources(sources, lunoraDirectory);
     const sortedQueues = queues.toSorted((a, b) => a.exportName.localeCompare(b.exportName));
 
     assertUniqueNames(sortedQueues);

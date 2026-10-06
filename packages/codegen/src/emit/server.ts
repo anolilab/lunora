@@ -294,9 +294,15 @@ ${workflows.map((workflow) => `    get(name: ${JSON.stringify(workflow.exportNam
     const hasQueues = sendableQueues.length > 0;
     const hasTopics = topics.length > 0;
     const queueTypeNames = [...(hasQueues ? ["QueueProducer"] : []), ...(hasTopics ? ["TopicPublisher"] : [])];
+    // One namespace import per declaring file, `lunora/queues.ts` first under the bare name.
+    const queueFiles = [...new Set([...sendableQueues, ...topics].map((entry) => entry.filePath))].toSorted(
+        (a, b) => Number(b === "queues") - Number(a === "queues") || a.localeCompare(b),
+    );
+    const queueNamespace = (filePath: string): string =>
+        filePath === "queues" ? "lunoraQueueDefinitions" : `lunoraQueueDefinitions${String(queueFiles.indexOf(filePath))}`;
     const queuesTypeImport =
         queueTypeNames.length > 0
-            ? `import type { ${queueTypeNames.join(", ")} } from "@lunora/queue";\nimport type * as lunoraQueueDefinitions from "../queues.js";\n`
+            ? `import type { ${queueTypeNames.join(", ")} } from "@lunora/queue";\n${queueFiles.map((filePath) => `import type * as ${queueNamespace(filePath)} from "../${filePath}.js";\n`).join("")}`
             : "";
     const queueBodyHelper =
         queueTypeNames.length > 0
@@ -310,7 +316,7 @@ type QueueBodyOf<Definition> = Definition extends { __lunoraBody?: infer Body } 
 
 /** This project's declared queues, addressable from \`ctx.queues\` by their \`lunora/queues.ts\` export name. */
 export interface LunoraQueues {
-${sendableQueues.map((queue) => `    readonly ${queue.exportName}: QueueProducer<QueueBodyOf<typeof lunoraQueueDefinitions.${queue.exportName}>>;`).join("\n")}
+${sendableQueues.map((queue) => `    readonly ${queue.exportName}: QueueProducer<QueueBodyOf<typeof ${queueNamespace(queue.filePath)}.${queue.exportName}>>;`).join("\n")}
 }`
         : "";
     const topicsInterface = hasTopics
@@ -318,7 +324,7 @@ ${sendableQueues.map((queue) => `    readonly ${queue.exportName}: QueueProducer
 
 /** This project's declared topics, addressable from \`ctx.topics\` by their \`lunora/queues.ts\` export name. */
 export interface LunoraTopics {
-${topics.map((topic) => `    readonly ${topic.exportName}: TopicPublisher<QueueBodyOf<typeof lunoraQueueDefinitions.${topic.exportName}>>;`).join("\n")}
+${topics.map((topic) => `    readonly ${topic.exportName}: TopicPublisher<QueueBodyOf<typeof ${queueNamespace(topic.filePath)}.${topic.exportName}>>;`).join("\n")}
 }`
         : "";
     const queuesTypeBlock = `${queueBodyHelper}${queuesInterface}${topicsInterface}`;

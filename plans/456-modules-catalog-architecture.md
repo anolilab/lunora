@@ -1,7 +1,7 @@
 # Plan 456 — Modules (formerly "services"): catalog, call graph, and an auto-drawn architecture diagram
 
 **Baseline:** `30823cc90` (2026-10-01)
-**Status:** IN PROGRESS (core shipped on `feat/services-catalog`; see below for what remains)
+**Status:** IN PROGRESS (core shipped in #917, then per-module queues; only the optional §9 Q1 and Q3 follow-ups remain)
 
 ## What shipped, and where it differs from the design below
 
@@ -65,8 +65,15 @@
 - **Advisor `cacheKey`s for findings inside `export default …` change** from
   `<module>` to `default` (call sites there are now attributed), so a dismissed
   finding of that shape reappears once.
-- **Not done:** the `lunora-functions` skill section, and per-module
-  `queues.ts`/`topics.ts` discovery (§9 Q2).
+- **Per-module queues (§9 Q2) shipped.** A module's own `queues.ts` (directly in
+  its folder) is read beside `lunora/queues.ts`. Topics live in `queues.ts` since
+  plan 455, so there is no `topics.ts`. `QueueIR`/`TopicIR` carry `filePath`, which
+  the generated registry and `server.ts` import from and the architecture view
+  uses for the module lane. A subscription may name a topic imported from
+  another queues file. Export names stay app-wide, and a name two files share is
+  a located codegen error. Crons stay root-only.
+- **Open follow-ups, not planned:** §9 Q1 (nested `api.*` naming) and §9 Q3
+  (architecture diff on deploy).
 
 ## 0. Headline finding
 
@@ -245,6 +252,6 @@ Plan 455 is not a dependency. `publish`/`subscribe` edges land with whichever pl
 1. Do we want nested `api.billing.invoices.*` naming at all? (A separate breaking plan; see §4.2.)
 2. Once services exist, should `queues.ts` / `topics.ts` / `crons.ts` be discoverable per
    service folder (`lunora/billing/topics.ts`) instead of root-only? Likely yes, and it
-   would land as a follow-up to plans 455 and 456.
+   would land as a follow-up to plans 455 and 456. **Answered: yes for `queues.ts` (shipped); crons stay root-only.**
 3. Should `lunora deploy` print a short architecture diff (new or removed edges) next
    to the schema-drift gate?

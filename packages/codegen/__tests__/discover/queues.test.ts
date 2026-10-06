@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,6 +43,7 @@ describe("discover/queues", () => {
             {
                 bindingName: "QUEUE_EMAIL_QUEUE",
                 exportName: "emailQueue",
+                filePath: "queues",
                 mode: "push",
                 name: "email-queue",
                 tuning: {},
@@ -115,18 +116,22 @@ describe("discover/queues", () => {
         `);
 
         expect(discoverQueues(newProject(), workdir)).toEqual([
-            { bindingName: "QUEUE_AUDIT", exportName: "audit", mode: "push", name: "signup-audit", topic: "signups", tuning: {} },
-            { bindingName: "QUEUE_EMAIL_QUEUE", exportName: "emailQueue", mode: "push", name: "email-queue", tuning: {} },
+            { bindingName: "QUEUE_AUDIT", exportName: "audit", filePath: "queues", mode: "push", name: "signup-audit", topic: "signups", tuning: {} },
+            { bindingName: "QUEUE_EMAIL_QUEUE", exportName: "emailQueue", filePath: "queues", mode: "push", name: "email-queue", tuning: {} },
             {
                 bindingName: "QUEUE_WELCOME",
                 exportName: "welcome",
+                filePath: "queues",
                 mode: "push",
                 name: "welcome",
                 topic: "signups",
                 tuning: { deadLetterQueue: "welcome-dlq", maxRetries: 5 },
             },
         ]);
-        expect(discoverQueueDeclarations(newProject(), workdir).topics).toEqual([{ exportName: "orders" }, { exportName: "signups" }]);
+        expect(discoverQueueDeclarations(newProject(), workdir).topics).toEqual([
+            { exportName: "orders", filePath: "queues" },
+            { exportName: "signups", filePath: "queues" },
+        ]);
     });
 
     it("rejects a subscription whose topic is not a defineTopic export of the file", () => {
@@ -188,7 +193,93 @@ describe("discover/queues", () => {
 
         const { queues, topics } = discoverQueueDeclarations(newProject(), workdir);
 
-        expect(topics).toEqual([{ exportName: "signups" }]);
+        expect(topics).toEqual([{ exportName: "signups", filePath: "queues" }]);
         expect(queues[0]?.topic).toBe("signups");
+    });
+
+    describe("module queues.ts", () => {
+        const writeModule = (name: string, queuesSource: string): void => {
+            mkdirSync(join(workdir, name), { recursive: true });
+            writeFileSync(join(workdir, name, "module.ts"), `import { defineModule } from "@lunora/server";\n\nexport default defineModule({});\n`);
+            writeFileSync(join(workdir, name, "queues.ts"), queuesSource);
+        };
+
+        it("discovers a module's queues and topics with their declaring file, without a root queues.ts", () => {
+            expect.assertions(2);
+
+            writeModule(
+                "billing",
+                `
+                import { defineQueue, defineTopic } from "@lunora/queue";
+
+                export const invoices = defineQueue({ handler: async () => {} });
+                export const paid = defineTopic();
+            `,
+            );
+
+            const { queues, topics } = discoverQueueDeclarations(newProject(), workdir);
+
+            expect(queues).toEqual([
+                { bindingName: "QUEUE_INVOICES", exportName: "invoices", filePath: "billing/queues", mode: "push", name: "invoices", tuning: {} },
+            ]);
+            expect(topics).toEqual([{ exportName: "paid", filePath: "billing/queues" }]);
+        });
+
+        it("ignores a queues.ts in a folder that is not a module", () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, "misc"));
+            writeFileSync(
+                join(workdir, "misc", "queues.ts"),
+                `import { defineQueue } from "@lunora/queue";\n\nexport const stray = defineQueue({ handler: async () => {} });\n`,
+            );
+
+            expect(discoverQueues(newProject(), workdir)).toEqual([]);
+        });
+
+        it("lets a module subscribe to a topic lunora/queues.ts declares", () => {
+            expect.assertions(1);
+
+            writeQueues(`
+                import { defineTopic } from "@lunora/queue";
+
+                export const signups = defineTopic();
+            `);
+            writeModule(
+                "billing",
+                `
+                import { defineSubscription } from "@lunora/queue";
+                import { signups } from "../queues";
+
+                export const openAccount = defineSubscription(signups, { handler: async () => {} });
+            `,
+            );
+
+            expect(discoverQueues(newProject(), workdir)).toEqual([
+                expect.objectContaining({ exportName: "openAccount", filePath: "billing/queues", topic: "signups" }),
+            ]);
+        });
+
+        it("rejects an export name two queues files share, pointing at the second", () => {
+            expect.assertions(1);
+
+            writeQueues(`
+                import { defineQueue } from "@lunora/queue";
+
+                export const invoices = defineQueue({ handler: async () => {} });
+            `);
+            writeModule(
+                "billing",
+                `
+                import { defineQueue } from "@lunora/queue";
+
+                export const invoices = defineQueue({ name: "billing-invoices", handler: async () => {} });
+            `,
+            );
+
+            expect(() => discoverQueues(newProject(), workdir)).toThrow(
+                /"invoices" is exported by both lunora\/queues\.ts and lunora\/billing\/queues\.ts .*billing\/queues\.ts:4:\d+\)/u,
+            );
+        });
     });
 });

@@ -277,8 +277,8 @@ await ctx.topics.signups.publish({ userId });
   idempotent. A failed send rejects `publish`, and a retry re-delivers to the
   subscriptions that already got it.
 - A subscription is published to only through its topic, never `ctx.queues`.
-  The topic passed to `defineSubscription` must be a `defineTopic` export of the
-  same file.
+  The topic passed to `defineSubscription` must be a `defineTopic` export of
+  `lunora/queues.ts` or a module's `queues.ts` (import it from there).
 - Rate-limit public procedures that publish: one publish is one send per
   subscription (`privileged_fanout_from_public_procedure` flags it).
 
@@ -297,6 +297,9 @@ export default defineModule({ description: "Invoices and payments", tables: ["in
 
 - Write `description` and `tables` inline; codegen reads them without running
   the file. Modules do not nest.
+- A module can declare its own queues, topics and subscriptions in
+  `lunora/<module>/queues.ts`. Export names stay app-wide (`ctx.queues.<name>`),
+  so two queues files exporting the same name is a codegen error.
 - `cross_module_table_write` warns when a function outside the owning module
   writes an owned table (insert, `patch`/`replace`/`delete`, batch or facade),
   including through a same-file helper. Move the write into the owning module:
