@@ -27,6 +27,7 @@
  */
 import type { TenantSend } from "../backup/tenant-transport";
 import type { ControlPlaneStore } from "../d1-store";
+import type { EdgeProtection } from "../edge/protection";
 import type { TargetId, TenantDeploymentSpec } from "../provision-contract";
 
 /** What one edge-block tick did (`TargetFleet.edgeBlock`). */
@@ -183,6 +184,14 @@ export interface TargetFleet {
      * customer's, and the suspension still holds through the plan lookup.
      */
     edgeBlock?: (database: ControlPlaneStore, options: { log: (line: string) => void; now: number }) => Promise<EdgeBlockResult>;
+
+    /**
+     * The platform edge in front of this target's hostnames — firewall events and
+     * per-organization edge rules (plan 365 W7). Absent on a target whose traffic
+     * the platform's edge does not front (`celld-vps`, `cloudflare-workers`), or
+     * on a deployment without the zone and token configured.
+     */
+    edge?: EdgeProtection;
 
     readonly id: TargetId;
 

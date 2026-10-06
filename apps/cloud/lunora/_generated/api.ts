@@ -75,14 +75,20 @@ export interface ApiTypes {
         list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
         routeForHostname: FunctionReference<"query", { hostname: unknown }, { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
     };
+    edge: {
+        firewall: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { capabilities: { ddosOverride: boolean; rateLimit: boolean; }; events: import("../../src/edge/protection.js").FirewallEvent[]; hostnames: number; reason?: string; status: "unavailable" | "ok" | "unconfigured"; unsupported: { name: string; reason: string; target: string; }[] }>;
+        rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { applied: boolean; armed?: false | true; engaged?: false | true; hostnames: string[]; kind: "ddos_l7" | "rate_limit"; lastError?: string; periodSeconds?: 60 | 10; requestsPerPeriod?: number; sensitivity?: "default" | "low" | "medium"; status: "pending" | "failed" | "applied" | "removed" | "unavailable"; updatedAt: number }[]>;
+        setAnomalyRateLimit: FunctionReference<"mutation", { enabled: boolean; organizationId: Id<"organizations">; periodSeconds?: 10 | 60; requestsPerPeriod?: number }, null>;
+        setDdosSensitivity: FunctionReference<"mutation", { organizationId: Id<"organizations">; sensitivity: "default" | "medium" | "low" }, null>;
+    };
     github_installations: {
         claim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"githubInstallations">; accountLogin: string; claimedAt?: number; createdAt: number; installationId: number; organizationId?: Id<"organizations"> }[]>;
         unclaim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
     };
     incidents: {
-        investigate: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
-        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; investigatedAt?: number; investigation?: { by: "deterministic" | "llm"; confidence: "high" | "low" | "medium"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
+        investigate: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { by: "deterministic" | "llm"; confidence: "low" | "medium" | "high"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
+        list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"incidents">; closedAt?: number; container?: string; count: number; instance?: string; investigatedAt?: number; investigation?: { by: "deterministic" | "llm"; confidence: "low" | "medium" | "high"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }; kind: "crash_loop" | "error_spike" | "oom"; lastSeen: number; openedAt: number; organizationId: Id<"organizations">; status: "open" | "resolved"; title: string }[]>;
         setStatus: FunctionReference<"mutation", { id: Id<"incidents">; organizationId: Id<"organizations">; status: "open" | "resolved" }, Id<"incidents">>;
         triage: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { summary: string; }>;
     };

@@ -51,6 +51,21 @@ export const env = defineEnv({
      * the routes, the box session and the scheduler read the Worker env directly.
      */
     LUNORA_ORIGIN_URL: v.optional(v.string()),
+    /** The platform apex (`{alias}.{this}`); read by `edge.firewall` to name an org's hostnames. Defaults to `lunora.app`. */
+    LUNORA_APP_DOMAIN: v.optional(v.string()),
+
+    /**
+     * How many per-org edge rules of each kind this cell's zone may hold (plan 365
+     * W7). Unset → 0 → the setting is shown as unavailable. Set only to what the
+     * zone's plan allows: host-scoped DDoS overrides need Enterprise with Advanced
+     * DDoS (10 rules), host-scoped rate limits Business or above.
+     */
+    LUNORA_DDOS_OVERRIDE_BUDGET: v.optional(v.string()),
+    LUNORA_RATE_LIMIT_RULE_BUDGET: v.optional(v.string()),
+
+    /** The SaaS zone (zone of `LUNORA_APP_DOMAIN`) the firewall-events read queries. Absent → `edge.firewall` answers unconfigured. */
+    LUNORA_SAAS_ZONE_ID: v.optional(v.string()),
+
     /** Bearer token for R2 SQL (archived-span read-back). Absent → the archive read no-ops. A secret. */
     R2_SQL_TOKEN: v.optional(v.string()),
 

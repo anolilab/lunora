@@ -424,6 +424,7 @@ class AppBuilder<Env extends object> {
             ["alertRuleState", { mode: { kind: "global" } }],
             ["alerts", { mode: { kind: "global" } }],
             ["anomalyBaselines", { mode: { kind: "global" } }],
+            ["edgeRules", { mode: { kind: "global" } }],
             ["anomalySilences", { mode: { kind: "global" } }],
             ["uptimeChecks", { mode: { kind: "global" } }],
             ["uptimeState", { mode: { kind: "global" } }],

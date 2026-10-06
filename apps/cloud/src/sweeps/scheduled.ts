@@ -30,6 +30,8 @@ import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
 import { runCertificateSweep } from "../domains/certificate-sweep";
 import { localIssuer } from "../domains/issuers";
+import { edgeBudget } from "../edge/protection";
+import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../edge/rules";
 import type { CronTarget, CronTick } from "../fanout/cron";
 import { fanOutCron } from "../fanout/cron";
 import type { LiveDeploymentRow } from "../fanout/live";
@@ -265,9 +267,38 @@ const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const now = Date.now();
-    const { deliveries } = await runAnomalySweep(database, { now });
+    const { deliveries, transitions } = await runAnomalySweep(database, { now });
 
     await deliverFiredAlerts(env, database, deliveries, now);
+    // The anomaly → rate-limit action (plan 365 W7): intent only; `sweepEdgeRules` applies it.
+    await engageAnomalyRateLimits(database, transitions, now);
+};
+
+/**
+ * Converge each organization's edge rules on the platform zone onto their rows
+ * (plan 365 W7, `src/cloudflare/edge-rules.ts`). Every minute for pending and
+ * failed rows; on the top-of-hour tick also re-checks applied rows for hostname
+ * drift. Without the zone and token, rows record why nothing was applied.
+ */
+const sweepEdgeRules = async (env: ControlPlaneEnv, controller: ScheduledControllerLike): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    // Only `cloudflare-wfp`'s fleet fronts tenants with the platform edge.
+    const edge = registeredFleet("cloudflare-wfp", env)?.edge;
+    const counts = await runEdgeRuleSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+        appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
+        budgets: { ddos_l7: edgeBudget(env.LUNORA_DDOS_OVERRIDE_BUDGET), rate_limit: edgeBudget(env.LUNORA_RATE_LIMIT_RULE_BUDGET) },
+        ...(edge ? { edge } : {}),
+        includeApplied: new Date(controller.scheduledTime).getUTCMinutes() === 0,
+        now: Date.now(),
+    });
+
+    if (Object.keys(counts).length > 0) {
+        // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+        console.log("[edge-rules]", JSON.stringify(counts));
+    }
 };
 
 /**
@@ -586,6 +617,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     // cannot be delivered where they are fired — plus anything an earlier
     // delivery dropped. Rides the existing every-minute trigger.
     { cron: EVERY_MINUTE, run: sweepAlertDrain },
+    // Edge rules (plan 365 W7): settings and anomaly engagements applied within a minute.
+    { cron: EVERY_MINUTE, run: sweepEdgeRules },
     // Queue depth for the platform's own metrics (GAPS.md E1), sampled once a minute.
     { cron: EVERY_MINUTE, run: sampleQueueDepth },
     // A suspension or recovery reaches customer boxes within a minute (plan 365).

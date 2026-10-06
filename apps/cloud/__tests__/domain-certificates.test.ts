@@ -47,6 +47,7 @@ const PURGED_TABLES = [
     "cloudflareAccounts",
     "dashboards",
     "deployKeys",
+    "edgeRules",
     "githubInstallations",
     "incidents",
     "invitations",

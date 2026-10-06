@@ -291,6 +291,9 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         "cloudflareAccounts",
         "dashboards",
         "deployKeys",
+        // The edge-rule reconciler takes an org's rules off the zone as soon as its
+        // deletion is requested, long before this purge runs.
+        "edgeRules",
         "domains",
         "githubInstallations",
         "incidents",

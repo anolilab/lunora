@@ -27,6 +27,7 @@ import { issueCertificate, refreshCertificate, removeCertificate } from "./certi
 import type { DispatchNamespaceLike } from "./dispatch";
 import { dispatchTenantSender } from "./dispatch";
 import { reconcileEdgeBlocks } from "./edge-block";
+import { createEdgeProtection } from "./edge";
 
 /** The tail Worker every tenant ships its console events to (`tail.wrangler.jsonc`). */
 export const TAIL_CONSUMER = "lunora-log-tail";
@@ -105,6 +106,8 @@ export interface CloudflareWfpFleetPorts {
     deleteHostnames?: boolean;
     /** The bound dispatch namespace (`DISPATCHER`); absent → no in-network fan-out, and backups go over the public URL. */
     dispatcher?: DispatchNamespaceLike;
+    /** Edge protection on the SaaS zone (plan 365 W7); absent without the zone and a token. */
+    edge?: TargetFleet["edge"];
     /** The SaaS zone this cell issues custom-domain certificates in; absent → nothing to refresh or release. */
     saasZone?: SaasZone;
     /** The suspended-hostnames WAF list (`LUNORA_SUSPENDED_HOSTS_LIST_ID`, Enterprise-only); absent → custom-hostname removal only. */
@@ -114,7 +117,7 @@ export interface CloudflareWfpFleetPorts {
 }
 
 export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): TargetFleet => {
-    const { appDomain, cell, deleteHostnames, dispatcher, saasZone, suspendedHostList, usage } = ports;
+    const { appDomain, cell, deleteHostnames, dispatcher, edge, saasZone, suspendedHostList, usage } = ports;
     const dispatch = dispatcher ? (tenant: { adminToken: string; resourceRef: string }) => dispatchTenantSender(dispatcher, tenant) : undefined;
 
     return {
@@ -131,6 +134,7 @@ export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): Target
                           ...(suspendedHostList === undefined ? {} : { hostList: suspendedHostList }),
                       }),
               }),
+        ...(edge ? { edge } : {}),
         id: "cloudflare-wfp",
         // The dispatch namespace when bound — the call never leaves Cloudflare —
         // else the deployment's public URL (local dev, where namespaces are not emulated).
@@ -248,6 +252,7 @@ export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment)
     const accountId = environment.CLOUDFLARE_ACCOUNT_ID;
     const apiToken = environment.CLOUDFLARE_API_TOKEN;
     const saasZone = saasZoneOf(environment);
+    const zoneId = environment.LUNORA_SAAS_ZONE_ID;
 
     const listId = environment.LUNORA_SUSPENDED_HOSTS_LIST_ID;
 
@@ -257,6 +262,7 @@ export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment)
         deleteHostnames: edgeBlockModeOf(environment) === "delete-hostnames",
         ...(accountId && apiToken && listId ? { suspendedHostList: createHttpHostList({ accountId, apiToken, listId }) } : {}),
         ...(environment.DISPATCHER ? { dispatcher: environment.DISPATCHER } : {}),
+        ...(apiToken && zoneId ? { edge: createEdgeProtection({ credentials: { apiToken }, zoneId }) } : {}),
         ...(saasZone === undefined ? {} : { saasZone }),
         ...(accountId && apiToken
             ? { usage: createHttpAnalyticsReader({ accountId, apiToken, dataset: environment.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage" }) }

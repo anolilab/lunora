@@ -647,6 +647,61 @@ row created in that hour. An hour with no usage report, for example from a box
 that went offline, scores as zero traffic, which an `lt` rule reads as a
 collapse.
 
+### Edge protection & DDoS (`lunora/edge.ts`, `src/edge/`, plan 365 W7)
+
+Every `cloudflare-wfp` tenant is behind Cloudflare's always-on L3/L4/L7 DDoS
+protection, because every request reaches the dispatcher through the SaaS zone
+(the zone of `LUNORA_APP_DOMAIN`). The platform builds no mitigation of its own.
+The Traffic tab's **Edge protection** card shows what the edge did and offers
+two settings:
+
+- **Firewall events** (`edge.firewall`, members). This is a read of the GraphQL
+  Analytics API's `firewallEventsAdaptive` on the SaaS zone over the last 24
+  hours, at most 100 events. It is filtered to the organization's own hostnames,
+  and rows for any other host are dropped a second time after the read. Client
+  IPs are never read. Without `LUNORA_SAAS_ZONE_ID` and a token the card says
+  "not configured". When the token or the zone's plan refuses the read, the card
+  shows Cloudflare's reason.
+- **HTTP DDoS sensitivity** (`edge.setDdosSensitivity`, owners/admins). This
+  sets `default`, `medium` or `low` on the HTTP DDoS managed ruleset, as a
+  `ddos_l7` entrypoint override scoped to the organization's hostnames. Turning
+  protection off is not offered.
+- **Anomaly → rate limit** (`edge.setAnomalyRateLimit`, owners/admins). While
+  armed, a firing `usage_anomaly` rule installs a per-IP rate limit
+  (`http_ratelimit`, 10 or 60 s window, block) on the organization's hostnames.
+  The rule's recovery, or disarming, removes it. This is the CrowdSec split: the
+  anomaly sweep detects, and Cloudflare enforces.
+
+The settings only record intent, on the organization's `edgeRules` row (one per
+kind). The reconciler (`src/edge/rules.ts`, every minute) is the only code that
+writes to the zone. It writes the row before it calls Cloudflare, applies each
+rule as an idempotent upsert or delete under a stable `ref`, and records every
+outcome (`applied`, `removed`, `failed`, `unavailable`) on the row and in the
+audit log. A failed or interrupted write is therefore never a rule nobody
+recorded: the next pass retries with backoff and finds the rule by its ref.
+Each hour the reconciler also re-checks applied rules, so a hostname added
+later is covered. A rule covers at most 50 hostnames, and every hostname is
+re-validated before it enters a Rules expression. An organization whose
+deletion was requested has its rules removed.
+
+Writes are off until an operator says what the zone's plan allows.
+`LUNORA_DDOS_OVERRIDE_BUDGET` and `LUNORA_RATE_LIMIT_RULE_BUDGET` cap how many
+organizations can hold each rule at once. Unset means 0, and the setting then
+shows "not enabled on this cell". Host-scoped DDoS overrides need Enterprise
+with Advanced DDoS Protection (10 rules). Host-scoped rate limits need Business
+or above. The cell's `CLOUDFLARE_API_TOKEN` needs Zone → Analytics:Read and
+Zone → WAF:Edit on the SaaS zone.
+
+| Target                     | Firewall events | DDoS override | Anomaly rate limit | Why                                                                    |
+| -------------------------- | --------------- | ------------- | ------------------ | ---------------------------------------------------------------------- |
+| `cloudflare-wfp`           | yes             | yes           | yes                | served from the platform's SaaS zone                                   |
+| `cloudflare-workers` (BYO) | no              | no            | no                 | served from the customer's own account, whose zone we do not manage    |
+| `celld-vps` (box)          | no              | no            | no                 | served from the customer's box, which the platform edge does not front |
+
+The card names a box or BYO project rather than leaving it out. Usage
+anomalies still fire for those projects (see above), but nothing is enforced at
+the edge for them.
+
 ### Tenant secrets (`lunora/secrets.ts`, `src/secrets/crypto.ts`, §7)
 
 Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:
@@ -1251,7 +1306,8 @@ once per cell with `wrangler secret put <NAME> --env <cell>`:
   there: every box gets its A/AAAA records at enrolment (plan 458 G13), and
   Zone → SSL and Certificates:Edit on the SaaS zone (`LUNORA_SAAS_ZONE_ID`, the
   zone of `LUNORA_APP_DOMAIN`) to create, read and delete the custom hostnames
-  that carry custom-domain certificates (GAPS.md B1). Scoping them per environment is what lets production carry a
+  that carry custom-domain certificates (GAPS.md B1). Edge protection (plan 365
+  W7) adds Zone → Analytics:Read and Zone → WAF:Edit on that same zone. Scoping them per environment is what lets production carry a
   required reviewer.
 - The gates run as `lunora verify` (wrangler validation, codegen dry-run, the
   ERROR-advisory gate, the schema-drift gate, `tsc --noEmit`) before anything is

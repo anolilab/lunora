@@ -349,6 +349,37 @@ export const observabilityTables = {
         .global()
         .index("by_org_signal", ["organizationId", "signal"], { unique: true }),
 
+    // Edge rules on the platform zone (plan 365 W7): at most one per (org, kind).
+    // The row is the INTENT, written before Cloudflare is called; the reconciler
+    // (`src/cloudflare/edge-rules.ts`) is the only writer to Cloudflare and records
+    // every outcome here, so no rule exists on the zone that no row names.
+    edgeRules: defineTable({
+        // Whether Cloudflare holds the rule, as last confirmed by the reconciler.
+        applied: v.boolean(),
+        appliedAt: v.optional(v.number()),
+        // `rate_limit`: the org opted in to anomaly-triggered rate limiting.
+        armed: v.optional(v.boolean()),
+        attempts: v.number(),
+        // The rule's id on the zone, once applied.
+        cloudflareRuleId: v.optional(v.string()),
+        createdAt: v.number(),
+        // `rate_limit`: a usage anomaly is firing, so the limit is wanted now.
+        engaged: v.optional(v.boolean()),
+        // The hostnames the applied rule covers (bounded by MAX_EDGE_HOSTNAMES).
+        hostnames: v.array(v.string()),
+        kind: v.union(v.literal("ddos_l7"), v.literal("rate_limit")),
+        // Why the last pass did not apply it (bounded, token-free).
+        lastError: v.optional(v.string()),
+        organizationId: v.id("organizations"),
+        periodSeconds: v.optional(v.union(v.literal(10), v.literal(60))),
+        requestsPerPeriod: v.optional(v.number()),
+        sensitivity: v.optional(v.union(v.literal("default"), v.literal("medium"), v.literal("low"))),
+        status: v.union(v.literal("pending"), v.literal("applied"), v.literal("removed"), v.literal("failed"), v.literal("unavailable")),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_org_kind", ["organizationId", "kind"], { unique: true }),
+
     // Anomaly silences (plan 365 W4): while one overlaps an hour, the anomaly sweep
     // skips that hour of its target's signal entirely — no score, no baseline update
     // — so a planned load test neither pages anyone nor becomes the new "normal".

@@ -583,6 +583,29 @@ export const anomalyBaselines = sqliteTable("anomalyBaselines", {
     by_org_signal: uniqueIndex("by_org_signal").on(t.organizationId, t.signal),
 }));
 
+export const edgeRules = sqliteTable("edgeRules", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    applied: integer("applied", { mode: "boolean" }).notNull(),
+    appliedAt: real("appliedAt"),
+    armed: integer("armed", { mode: "boolean" }),
+    attempts: real("attempts").notNull(),
+    cloudflareRuleId: text("cloudflareRuleId"),
+    createdAt: real("createdAt").notNull(),
+    engaged: integer("engaged", { mode: "boolean" }),
+    hostnames: text("hostnames", { mode: "json" }).$type<Array<string>>().notNull(),
+    kind: text("kind", { mode: "json" }).$type<"ddos_l7" | "rate_limit">().notNull(),
+    lastError: text("lastError"),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    periodSeconds: text("periodSeconds", { mode: "json" }).$type<10 | 60>(),
+    requestsPerPeriod: real("requestsPerPeriod"),
+    sensitivity: text("sensitivity", { mode: "json" }).$type<"default" | "medium" | "low">(),
+    status: text("status", { mode: "json" }).$type<"pending" | "applied" | "removed" | "failed" | "unavailable">().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org_kind: uniqueIndex("by_org_kind").on(t.organizationId, t.kind),
+}));
+
 export const anomalySilences = sqliteTable("anomalySilences", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
