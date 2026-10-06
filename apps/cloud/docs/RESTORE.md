@@ -200,15 +200,23 @@ import reads both.
 | Every table in the app's schema on every shard (the default DO and, with a shard registry, every `.shardBy()` shard)                                                                      | Vectorize — the binding cannot list an index's vectors; re-embed with `backfillVectors` |
 | `.global()` D1 tables                                                                                                                                                                     | Queues, Hyperdrive-backed databases                                                     |
 | `$auth` — the auth tables outside the schema (users, accounts, plugin tables, the audit log; never live sessions or one-time tokens, so users sign in again after a restore), either mode | Runtime-internal state: scheduled jobs, CDC log, workflow state                         |
-| `$kv` — every bound KV namespace: raw bytes, metadata, expiration                                                                                                                         | A KV value over 512 KiB — written as a `tooLarge` marker and reported on restore        |
-| `$storage` — every object in the app's `@lunora/storage` buckets, in 512 KiB base64 chunks, with type and metadata                                                                        | Objects under `_lunora/` (resumable-upload state, restore staging)                      |
+| `$kv` — every bound KV namespace: raw bytes, metadata, expiration (a value over 512 KiB in 512 KiB chunks)                                                                                | Objects under `_lunora/` (resumable-upload state, restore staging)                      |
+| `$storage` — every object in the app's `@lunora/storage` buckets, in 512 KiB base64 chunks, with type and metadata                                                                        |                                                                                         |
 
 A restore writes each section append-only, the way it writes rows: an auth row
 whose key or unique value exists, a KV key that exists (or has expired since), or
-an object key that exists is left alone and counted as already present. An object
-of more than one chunk is staged under `_lunora/restore/` in its bucket and
-assembled when its last chunk arrives, so a restore stops at objects of 32 MiB
-(the rest are reported, and stay in the file). Storage objects count toward the
+an object key that exists is left alone and counted as already present. A KV
+value or object of more than one chunk is staged under
+`_lunora/restore/<target>/<session>/` (in the object's bucket; a KV value's in
+the default bucket) and assembled when its last chunk arrives, checked against
+the SHA-256 the export wrote: a KV value (at most 25 MiB) in memory, an object up
+to 32 MiB in memory with one checksummed put, and a larger one through an R2
+multipart upload in equal 5 MiB parts, one in memory at a time, aborted with
+nothing written when the digest does not match. The session's chunks are
+deleted once the target is written; a restore that stops partway leaves its
+session, and the next restore deletes every session over a day old when its
+header line arrives, touching nothing else under `_lunora/`. Storage objects
+count toward the
 64 MiB cap below, so an app with a large bucket can outgrow snapshots it fit
 before.
 

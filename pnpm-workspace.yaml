@@ -672,6 +672,9 @@ catalogs:
   # adapters (React/Vue/Solid/Svelte) with progress, pause/resume and per-part
   # retry. Both follow the repo's exact-pinned `@visulima/*` convention.
   storage:
+    # Incremental SHA-256 for @lunora/runtime's restore: WebCrypto digests only a
+    # whole buffer, and a multipart-assembled object never sits in memory whole.
+    "@noble/hashes": 2.2.0
     "@visulima/storage": 2.0.33
     "@visulima/storage-client": 1.0.8
     # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional

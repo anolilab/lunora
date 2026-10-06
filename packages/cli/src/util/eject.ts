@@ -191,8 +191,11 @@ ${creates}
 
 Import the snapshot: \`lunora import ${outputDirectory}/export.ndjson\` against your new deployment,
 once it is deployed with its KV namespaces and buckets bound — the KV entries and
-storage objects are written through them. A storage object over 32 MiB is in the
-file (as \`$storage\` chunks) but the import reports it rather than restoring it.
+storage objects are written through them. A KV value over 512 KiB, or a storage
+object of more than one chunk, waits under \`_lunora/restore/\` in its bucket (KV
+values in the default one) until its last chunk lands; one over 32 MiB is written
+with a multipart upload. Anything a stopped import left there is deleted by the
+next import once it is a day old.
 
 Your managed deployment at ${target.url} keeps serving until you delete it.
 `;

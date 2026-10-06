@@ -88,7 +88,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         dataExportSections: {
             level: "emulated",
-            note: "Same sections and limits as on Cloudflare, over celld's KV and R2 bindings, which are native here. Vectorize is not a celld binding, so there is no index to export either way",
+            note: "Same sections and limits as on Cloudflare, over celld's KV and R2 bindings, which are native here; an object over 32 MiB restores through a multipart upload, which one import request starts and finishes on one node, so celld's no-resume-across-nodes gap does not apply. Vectorize is not a celld binding, so there is no index to export either way",
         },
         durableStreams: {
             level: "emulated",

@@ -1,3 +1,4 @@
+import type { R2MultipartUploadLike } from "@lunora/platform";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, StorageObject, WorkerOptions } from "../src/create-worker";
@@ -13,7 +14,90 @@ const fakeContext: ExecutionContextLike = { passThroughOnException: () => undefi
 const IMPORT_BATCH_BYTES = 900_000;
 
 type KvEntry = { expiration?: number; metadata?: unknown; value: Uint8Array };
-type StoredObject = { bytes: Uint8Array<ArrayBuffer>; contentType?: string; customMetadata?: Record<string, string> };
+type StoredObject = { bytes: Uint8Array<ArrayBuffer>; contentType?: string; customMetadata?: Record<string, string>; sha256?: string };
+
+const MIN_PART_BYTES = 5 * 1024 * 1024;
+
+/** What the multipart double saw: its peak buffer, and the uploads that never became an object. */
+type MultipartStats = { aborted: number; largestPart: number; parts: number };
+
+/**
+ * R2's `createMultipartUpload` under the rules R2 enforces — every part but the
+ * last at least 5 MiB and all of them equal, ascending part numbers, matching
+ * ETags — with the object invisible until `complete`.
+ */
+const fakeMultipart = (): {
+    create: (bucket: Map<string, StoredObject>, key: string, opts?: { contentType?: string; customMetadata?: Record<string, string> }) => R2MultipartUploadLike;
+    stats: MultipartStats;
+} => {
+    const stats: MultipartStats = { aborted: 0, largestPart: 0, parts: 0 };
+
+    const create = (
+        bucket: Map<string, StoredObject>,
+        key: string,
+        opts?: { contentType?: string; customMetadata?: Record<string, string> },
+    ): R2MultipartUploadLike => {
+        const staged = new Map<number, { body: Uint8Array; etag: string }>();
+
+        return {
+            abort: async () => {
+                stats.aborted += 1;
+                staged.clear();
+            },
+            complete: async (parts) => {
+                const bodies = parts.map((part, index) => {
+                    const stored = staged.get(part.partNumber);
+
+                    if (stored?.etag !== part.etag || (index > 0 && part.partNumber <= parts[index - 1]!.partNumber)) {
+                        throw new Error(`InvalidPart: part ${String(part.partNumber)}`);
+                    }
+
+                    return stored.body;
+                });
+
+                for (const body of bodies.slice(0, -1)) {
+                    if (body.byteLength < MIN_PART_BYTES || body.byteLength !== bodies[0]!.byteLength) {
+                        throw new Error("InvalidPart: a non-final part is under 5 MiB or differs in size");
+                    }
+                }
+
+                const bytes = new Uint8Array(bodies.reduce((sum, body) => sum + body.byteLength, 0));
+                let offset = 0;
+
+                for (const body of bodies) {
+                    bytes.set(body, offset);
+                    offset += body.byteLength;
+                }
+
+                bucket.set(key, {
+                    bytes,
+                    ...(opts?.contentType === undefined ? {} : { contentType: opts.contentType }),
+                    ...(opts?.customMetadata === undefined ? {} : { customMetadata: opts.customMetadata }),
+                });
+
+                return { etag: "multipart", key, size: bytes.byteLength };
+            },
+            key,
+            uploadId: "upload-1",
+            uploadPart: async (partNumber, value) => {
+                if (!(value instanceof Uint8Array)) {
+                    throw new TypeError("the import uploads parts as bytes");
+                }
+
+                const body = Uint8Array.from(value);
+                const etag = `etag-${String(partNumber)}`;
+
+                stats.parts += 1;
+                stats.largestPart = Math.max(stats.largestPart, body.byteLength);
+                staged.set(partNumber, { body, etag });
+
+                return { etag, partNumber };
+            },
+        };
+    };
+
+    return { create, stats };
+};
 
 /** One deployment's non-table state: KV namespaces, storage buckets, auth rows. */
 const createStores = () => {
@@ -31,6 +115,7 @@ const createStores = () => {
     ]);
 
     const bucketOf = (name?: string): Map<string, StoredObject> => buckets.get(name ?? "default")!;
+    const multipart = fakeMultipart();
 
     const kvIntrospector: KvIntrospector = {
         deleteKey: async ({ key, namespace }) => {
@@ -111,10 +196,11 @@ const createStores = () => {
                 ? { body: new Blob([object.bytes]).stream(), httpMetadata: { contentType: object.contentType }, size: object.bytes.byteLength }
                 : null;
         },
-        storageList: async (_prefix, opts) => {
-            const keys = [...bucketOf(opts?.bucket).keys()].toSorted((a, b) => a.localeCompare(b));
+        storageList: async (prefix, opts) => {
+            const keys = [...bucketOf(opts?.bucket).keys()].filter((key) => key.startsWith(prefix ?? "")).toSorted((a, b) => a.localeCompare(b));
             const start = opts?.cursor === undefined ? 0 : Number(opts.cursor);
-            const page = keys.slice(start, start + 2);
+            const pageSize = Math.min(2, opts?.limit ?? 2);
+            const page = keys.slice(start, start + pageSize);
             const objects: StorageObject[] = page.map((key) => {
                 const object = bucketOf(opts?.bucket).get(key)!;
 
@@ -123,13 +209,15 @@ const createStores = () => {
                     etag: "e",
                     httpMetadata: { contentType: object.contentType },
                     key,
+                    ...(object.sha256 === undefined ? {} : { sha256: object.sha256 }),
                     size: object.bytes.byteLength,
                 };
             });
-            const more = start + 2 < keys.length;
+            const more = start + pageSize < keys.length;
 
-            return { objects, truncated: more, ...(more ? { cursor: String(start + 2) } : {}) };
+            return { objects, truncated: more, ...(more ? { cursor: String(start + pageSize) } : {}) };
         },
+        storageMultipartUpload: async (key, opts) => multipart.create(bucketOf(opts?.bucket), key, opts),
         storageUpload: async (key, body, opts) => {
             bucketOf(opts?.bucket).set(key, {
                 bytes: new Uint8Array(body),
@@ -141,7 +229,7 @@ const createStores = () => {
         },
     };
 
-    return { auth, buckets, kv, options };
+    return { auth, buckets, kv, multipart: multipart.stats, options };
 };
 
 const workerFor = (options: Partial<WorkerOptions>) =>
@@ -245,6 +333,14 @@ const importInto = async (worker: ReturnType<typeof workerFor>, lines: ReadonlyA
     return total;
 };
 
+const sha256Hex = async (bytes: Uint8Array<ArrayBuffer>): Promise<string> => Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString("hex");
+
+/** A staging key whose session started `ageMs` ago. */
+const stagedKey = (hash: string, ageMs: number): string =>
+    `_lunora/restore/${hash.repeat(64)}/${String(9_999_999_999_999 - (Date.now() - ageMs)).padStart(13, "0")}/${"0".repeat(16)}`;
+
+const stagingKeys = (bucket: Map<string, StoredObject>): string[] => [...bucket.keys()].filter((key) => key.startsWith("_lunora/restore/"));
+
 const randomBytes = (size: number): Uint8Array<ArrayBuffer> => {
     const bytes = new Uint8Array(size);
 
@@ -276,13 +372,14 @@ describe("admin export — auth, KV and storage sections", () => {
         const source = createStores();
         const binary = new Uint8Array([0, 255, 1, 254, 128]);
         const large = randomBytes(SECTION_CHUNK_BYTES * 2 + 12_345);
+        const huge = randomBytes(SECTION_CHUNK_BYTES * 2 + 7);
         const future = Math.floor(Date.now() / 1000) + 3600;
 
         source.auth.get("user")!.set("u1", { email: "a@example.com", id: "u1" });
         source.auth.get("session")!.set("s1", { id: "s1", userId: "u1" });
         source.kv.get("CACHE")!.set("binary", { metadata: { kind: "bin" }, value: binary });
         source.kv.get("CACHE")!.set("text", { expiration: future, value: new TextEncoder().encode("hello") });
-        source.kv.get("FLAGS")!.set("huge", { value: new Uint8Array(SECTION_CHUNK_BYTES + 1) });
+        source.kv.get("FLAGS")!.set("huge", { expiration: future, metadata: { big: true }, value: huge });
         source.buckets
             .get("default")!
             .set("small.txt", { bytes: new TextEncoder().encode("small"), contentType: "text/plain", customMetadata: { owner: "u1" } });
@@ -296,17 +393,19 @@ describe("admin export — auth, KV and storage sections", () => {
         expect(parsed[0]).toStrictEqual({ doc: { format: 2, sections: ["auth", "kv", "storage"] }, table: "$lunora" });
         expect(parsed[1]).toStrictEqual({ doc: { _id: "t1" }, table: "todos" });
         expect(parsed.filter((row) => row.table === "$storage" && row.doc["key"] === "large.bin")).toHaveLength(3);
+        expect(parsed.filter((row) => row.table === "$kv" && row.doc["key"] === "huge")).toHaveLength(3);
         expect(parsed.some((row) => row.doc["key"] === "_lunora/uploads/state.json")).toBe(false);
 
         const target = createStores();
         const summary = await importInto(workerFor(target.options), lines);
 
-        expect(summary.errors.map((error) => error.code)).toStrictEqual(["KV_VALUE_TOO_LARGE"]);
+        expect(summary.errors).toStrictEqual([]);
         expect(summary.received).toBe(lines.length);
         expect(target.auth.get("user")!.get("u1")).toStrictEqual({ email: "a@example.com", id: "u1" });
         expect(target.auth.get("session")!.get("s1")).toStrictEqual({ id: "s1", userId: "u1" });
         expect(target.kv.get("CACHE")!.get("binary")).toStrictEqual({ metadata: { kind: "bin" }, value: binary });
         expect(target.kv.get("CACHE")!.get("text")).toStrictEqual({ expiration: future, value: new TextEncoder().encode("hello") });
+        expect(target.kv.get("FLAGS")!.get("huge")).toStrictEqual({ expiration: future, metadata: { big: true }, value: huge });
         expect(target.buckets.get("default")!.get("small.txt")).toStrictEqual({
             bytes: new TextEncoder().encode("small"),
             contentType: "text/plain",
@@ -316,12 +415,15 @@ describe("admin export — auth, KV and storage sections", () => {
         expect(target.buckets.get("avatars")!.get("large.bin")?.bytes).toStrictEqual(large);
         // The staged chunks are cleaned up once the object is assembled.
         expect([...target.buckets.get("avatars")!.keys()]).toStrictEqual(["large.bin"]);
+        expect([...target.buckets.get("default")!.keys()].filter((key) => key.startsWith("_lunora/"))).toStrictEqual([]);
 
         // Append-only: a second restore writes nothing and counts every record as present.
         const again = await importInto(workerFor(target.options), lines);
 
         expect(again.inserted["$auth"] ?? 0).toBe(0);
-        expect(again.inserted["$kv"] ?? 0).toBe(0);
+        // Only the chunks in front of a large value's last are written (to staging):
+        // whether the key exists is checked once, when the value is assembled.
+        expect(again.inserted["$kv"] ?? 0).toBe(2);
         expect(again.conflicts).toBeGreaterThanOrEqual(2 + 2 + 3);
     });
 
@@ -474,5 +576,101 @@ describe("admin export — auth, KV and storage sections", () => {
 
         expect(summary.errors.map((error) => error.code)).toStrictEqual(["STORAGE_RESTORE_INCOMPLETE"]);
         expect(stores.buckets.get("default")!.has("partial")).toBe(false);
+    });
+
+    it("restores an object over 32 MiB through a multipart upload of equal 5 MiB parts", async () => {
+        expect.hasAssertions();
+
+        const source = createStores();
+        const big = randomBytes(33 * 1024 * 1024 + 3);
+
+        source.buckets.get("default")!.set("big.bin", { bytes: big, contentType: "application/zip", customMetadata: { a: "1" }, sha256: await sha256Hex(big) });
+
+        const lines = await exportFrom(workerFor(source.options), { sections: ["storage"] });
+        const target = createStores();
+        const summary = await importInto(workerFor(target.options), lines);
+        const { bytes, ...restored } = target.buckets.get("default")!.get("big.bin")!;
+
+        expect(summary.errors).toStrictEqual([]);
+        expect(restored).toStrictEqual({ contentType: "application/zip", customMetadata: { a: "1" } });
+        // Not a deep equality: a 33 MiB diff is more than the reporter can print.
+        expect(Buffer.from(bytes).equals(big)).toBe(true);
+        // Seven parts: six of exactly 5 MiB and the remainder; one part held at a time.
+        expect(target.multipart).toStrictEqual({ aborted: 0, largestPart: 5 * 1024 * 1024, parts: 7 });
+        expect(stagingKeys(target.buckets.get("default")!)).toStrictEqual([]);
+    });
+
+    it("aborts the multipart upload when the restored bytes do not match the exported sha256", async () => {
+        expect.hasAssertions();
+
+        const source = createStores();
+
+        source.buckets.get("default")!.set("big.bin", { bytes: randomBytes(33 * 1024 * 1024), sha256: "0".repeat(64) });
+
+        const lines = await exportFrom(workerFor(source.options), { sections: ["storage"] });
+        const target = createStores();
+        const summary = await importInto(workerFor(target.options), lines);
+
+        expect(summary.errors.map((error) => error.code)).toStrictEqual(["STORAGE_SHA256_MISMATCH"]);
+        expect(target.buckets.get("default")!.has("big.bin")).toBe(false);
+        expect(target.multipart.aborted).toBe(1);
+        expect(stagingKeys(target.buckets.get("default")!)).toStrictEqual([]);
+    });
+
+    it("refuses an object over 32 MiB without a multipart upload, staging nothing past the ceiling", async () => {
+        expect.hasAssertions();
+
+        const source = createStores();
+
+        source.buckets.get("default")!.set("big.bin", { bytes: randomBytes(33 * 1024 * 1024) });
+
+        const lines = await exportFrom(workerFor(source.options), { sections: ["storage"] });
+        const target = createStores();
+        const summary = await importInto(workerFor({ ...target.options, storageMultipartUpload: undefined }), lines);
+
+        expect(summary.errors.map((error) => error.code)).toStrictEqual(["STORAGE_OBJECT_TOO_LARGE"]);
+        expect(target.buckets.get("default")!.has("big.bin")).toBe(false);
+    });
+
+    it("refuses a chunked KV value whose bytes do not match its sha256, and drops its staging", async () => {
+        expect.hasAssertions();
+
+        const source = createStores();
+
+        source.kv.get("CACHE")!.set("big", { value: randomBytes(SECTION_CHUNK_BYTES * 2) });
+
+        const exported = await exportFrom(workerFor(source.options), { sections: ["kv"] });
+        const lines = exported.map((line) => {
+            const row = JSON.parse(line) as { doc: Record<string, unknown>; table: string };
+
+            return row.doc["last"] === true ? JSON.stringify({ ...row, doc: { ...row.doc, sha256: "0".repeat(64) } }) : line;
+        });
+        const target = createStores();
+        const summary = await importInto(workerFor(target.options), lines);
+
+        expect(summary.errors.map((error) => error.code)).toStrictEqual(["KV_SHA256_MISMATCH"]);
+        expect(target.kv.get("CACHE")!.has("big")).toBe(false);
+        expect(stagingKeys(target.buckets.get("default")!)).toStrictEqual([]);
+    });
+
+    it("sweeps staging older than a day when the next import starts, and nothing else under _lunora/", async () => {
+        expect.hasAssertions();
+
+        const stores = createStores();
+        const blob = { bytes: new Uint8Array([1]) };
+        const fresh = stagedKey("b", 60 * 60 * 1000);
+
+        stores.buckets.get("default")!.set(stagedKey("a", 25 * 60 * 60 * 1000), blob);
+        stores.buckets.get("default")!.set(fresh, blob);
+        // An earlier layout's leftover, with no session segment.
+        stores.buckets.get("default")!.set(`_lunora/restore/${"c".repeat(64)}/${"0".repeat(16)}`, blob);
+        stores.buckets.get("default")!.set("_lunora/uploads/state.json", blob);
+        stores.buckets.get("avatars")!.set(stagedKey("d", 48 * 60 * 60 * 1000), blob);
+
+        const summary = await importInto(workerFor(stores.options), [JSON.stringify({ doc: { format: 2, sections: ["storage"] }, table: "$lunora" })]);
+
+        expect(summary.errors).toStrictEqual([]);
+        expect(new Set(stores.buckets.get("default")!.keys())).toStrictEqual(new Set(["_lunora/uploads/state.json", fresh]));
+        expect([...stores.buckets.get("avatars")!.keys()]).toStrictEqual([]);
     });
 });

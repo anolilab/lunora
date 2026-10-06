@@ -1,5 +1,5 @@
 import { isLunoraError, toErrorBody } from "@lunora/errors";
-import type { HttpCacheLike } from "@lunora/platform";
+import type { HttpCacheLike, R2MultipartUploadLike } from "@lunora/platform";
 
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
@@ -417,6 +417,16 @@ type StorageUploadFunction = (
     body: ArrayBuffer,
     options?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string>; sha256?: string },
 ) => Promise<{ etag?: string; key: string }> | { etag?: string; key: string };
+
+/**
+ * Begins a multipart upload of one object. Structurally `@lunora/storage`'s
+ * `Storage["createMultipartUpload"]` with the target `bucket` added; the
+ * import assembles a restored object over 32 MiB through it.
+ */
+type StorageMultipartUploadFunction = (
+    key: string,
+    options?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string> },
+) => Promise<R2MultipartUploadLike>;
 
 /**
  * Reads one object's bytes back out of a storage bucket. Structurally the part
@@ -1535,6 +1545,17 @@ interface WorkerOptions {
      * responds `STORAGE_NOT_CONFIGURED`.
      */
     storageList?: StorageListFunction;
+
+    /**
+     * Begins a multipart upload, which the admin import uses to assemble a
+     * restored storage object over 32 MiB from its staged chunks (in parts of
+     * at least 5 MiB, one held at a time). The generated app worker emits
+     * `(key, opts) => pick(opts?.bucket).createMultipartUpload(key, opts)`.
+     * Omit it, or run on a bucket without multipart uploads, and such an
+     * object is reported (`STORAGE_OBJECT_TOO_LARGE` / `STORAGE_IMPORT_FAILED`)
+     * instead of restored; smaller ones are unaffected.
+     */
+    storageMultipartUpload?: StorageMultipartUploadFunction;
 
     /**
      * Mints a (signed or public) URL for one object, backing the admin-gated
@@ -6258,6 +6279,7 @@ export type {
     StorageDeleteFunction as StorageDeleteFn,
     StorageDownloadFunction as StorageDownloadFn,
     StorageListFunction as StorageListFn,
+    StorageMultipartUploadFunction as StorageMultipartUploadFn,
     StorageObject,
     StorageSignedUrlFunction as StorageSignedUrlFn,
     StorageUploadFunction as StorageUploadFn,

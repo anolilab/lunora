@@ -45,7 +45,7 @@ const SIGNABLE_METHODS = new Set(["GET", "PUT"]);
  * Lowercase hex-encode an `ArrayBuffer` — WebCrypto digest output (base16) as
  * the storage importer's `sha256` surface expects it.
  */
-const toHex = (buffer: ArrayBuffer): string => {
+const toHex = (buffer: ArrayBuffer | Uint8Array): string => {
     const bytes = new Uint8Array(buffer);
     let out = "";
 

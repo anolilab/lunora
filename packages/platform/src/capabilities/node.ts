@@ -61,7 +61,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         dataExportSections: {
             level: "emulated",
-            note: "`$auth` and `$storage` work as on Cloudflare (auth over the host's SQL, objects through createNodeR2Bucket). `$kv` exports nothing: KV here is the ShardKvStore table, not a Workers KV namespace binding, and the export enumerates only those. No Vectorize equivalent, so no index to export",
+            note: "`$auth` and `$storage` work as on Cloudflare (auth over the host's SQL, objects through createNodeR2Bucket), except that restoring an object over 32 MiB is unsupported: it needs a multipart upload, which createNodeR2Bucket does not implement, so the import reports it (STORAGE_IMPORT_FAILED) and the export still holds it. `$kv` exports nothing: KV here is the ShardKvStore table, not a Workers KV namespace binding, and the export enumerates only those. No Vectorize equivalent, so no index to export",
         },
         durableStreams: {
             level: "unsupported",

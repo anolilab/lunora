@@ -370,6 +370,7 @@ class AppBuilder<Env extends object> {
             storageDelete: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).delete(key),
             storageDownload: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).download(key),
             storageList: (prefix?: string, opts?: { bucket?: string; cursor?: string; limit?: number }) => pick(opts?.bucket).list(prefix, opts),
+            storageMultipartUpload: (key: string, opts?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string> }) => pick(opts?.bucket).createMultipartUpload(key, opts),
             storageSignedUrl: hasSigning
                 ? (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT"; origin?: string }) =>
                       pick(opts?.bucket, opts?.origin).getSignedUrl(key, { contentType: opts?.contentType, expiresInSeconds: opts?.expiresInSeconds, method: opts?.method })

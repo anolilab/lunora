@@ -18,8 +18,9 @@
  * (`shared/wire-codec`), so a byte column survives.
  *
  * `$kv` is one entry, `{ namespace, key, value, metadata?, expiration? }`, with
- * `value` the base64 of the stored bytes. A value too large for one line is
- * written as `{ namespace, key, tooLarge: true, size }` and reported on import.
+ * `value` the base64 of the stored bytes. A value over {@link SECTION_CHUNK_BYTES}
+ * is cut into chunks like a storage object, `{ namespace, key, offset, data }`,
+ * with `last: true, size, sha256, metadata?, expiration?` on the final chunk.
  *
  * `$storage` is one chunk of one object, `{ bucket?, key, offset, data }`, with
  * `last: true, size, contentType?, customMetadata?, sha256?` on the final chunk;
@@ -32,9 +33,13 @@
  *
  * Export holds one KV value, or a few storage chunks, at a time: objects are
  * streamed off their body, never read whole. Import writes each chunk of a
- * multi-chunk object to a staging object (`_lunora/restore/…`) as it arrives —
- * the chunks of one object span several import requests — and assembles the
- * object when its last chunk lands.
+ * multi-chunk value or object to a staging object (`_lunora/restore/…`, see
+ * `section-chunks.ts`) as it arrives — the chunks span several import
+ * requests — and assembles it when its last chunk lands. A KV value (at most
+ * 25 MiB) is assembled in memory: the KV port writes a base64 string, so there
+ * is no stream to hand it. A storage object up to 32 MiB is assembled in memory
+ * and written with one checksummed put; a larger one goes through a multipart
+ * upload in parts of at least 5 MiB, holding one part at a time.
  *
  * Vectorize is not a section: the binding can query, upsert and fetch vectors by
  * id, but cannot enumerate them (only the account-token REST API can, which a
@@ -46,6 +51,21 @@ import { LunoraError } from "./errors";
 import type { ExportRow } from "./export-stream";
 import type { ImportRowError } from "./import-stream";
 import type { KvIntrospector } from "./kv-admin-routes";
+import type { ChunkRecord, StagingStore } from "./section-chunks";
+import {
+    collectChunks,
+    currentSession,
+    deleteSession,
+    fixedChunks,
+    listAll,
+    parseChunk,
+    stageChunk,
+    stagedChunks,
+    stagingRoot,
+    stagingStore,
+    sweepStaleStaging,
+    uploadMultipart,
+} from "./section-chunks";
 import { STORAGE_UPLOAD_MAX_BODY_BYTES, toHex } from "./storage-admin-routes";
 
 /** The export stream's format version. 1 is a file with no header (schema tables only). */
@@ -72,16 +92,17 @@ const DEFAULT_EXPORT_SECTIONS: ReadonlyArray<ExportSection> = ["kv", "storage"];
 type ExportSection = (typeof EXPORT_SECTIONS)[number];
 
 /**
- * Raw bytes per storage chunk and the largest KV value written inline. Base64
- * makes 512 KiB about 700 KB, which leaves room for the envelope under a
- * restore's ~900 KB batch.
+ * Raw bytes per chunk, and the largest KV value written inline. Base64 makes
+ * 512 KiB about 700 KB, which leaves room for the envelope under a restore's
+ * ~900 KB batch.
  */
 const SECTION_CHUNK_BYTES: number = 512 * 1024;
 
+/** Workers KV's largest value. */
+const KV_MAX_VALUE_BYTES: number = 25 * 1024 * 1024;
+
 /** Objects under this prefix are Lunora's own (resumable-upload state, restore staging), never exported. */
 const RESERVED_STORAGE_PREFIX = "_lunora/";
-
-const RESTORE_STAGING_PREFIX = `${RESERVED_STORAGE_PREFIX}restore/`;
 
 /** KV refuses an absolute expiration closer than this many seconds. */
 const KV_MIN_EXPIRATION_SECONDS = 60;
@@ -149,32 +170,6 @@ const streamValues = async function* streamValues(stream: ReadableStream<Uint8Ar
     }
 };
 
-/** Re-cut a stream into `size`-byte pieces; the final one may be shorter, and an empty stream yields none. */
-const fixedChunks = async function* fixedChunks(stream: ReadableStream<Uint8Array>, size: number): AsyncGenerator<Uint8Array> {
-    let buffer = new Uint8Array(size);
-    let filled = 0;
-
-    for await (const value of streamValues(stream)) {
-        for (let offset = 0; offset < value.byteLength;) {
-            const take = Math.min(size - filled, value.byteLength - offset);
-
-            buffer.set(value.subarray(offset, offset + take), filled);
-            filled += take;
-            offset += take;
-
-            if (filled === size) {
-                yield buffer;
-                buffer = new Uint8Array(size);
-                filled = 0;
-            }
-        }
-    }
-
-    if (filled > 0) {
-        yield buffer.subarray(0, filled);
-    }
-};
-
 /** Flag the final chunk, holding one back to know it. An empty stream is one empty, final chunk. */
 const flagLast = async function* flagLast(chunks: AsyncIterable<Uint8Array>): AsyncGenerator<{ bytes: Uint8Array; last: boolean }> {
     let pending: Uint8Array | undefined;
@@ -190,13 +185,6 @@ const flagLast = async function* flagLast(chunks: AsyncIterable<Uint8Array>): As
     yield { bytes: pending ?? new Uint8Array(0), last: true };
 };
 
-/** The byte length a base64 string decodes to. */
-const base64Size = (value: string): number => {
-    const padding = value.endsWith("==") ? 2 : Number(value.endsWith("="));
-
-    return (value.length * 3) / 4 - padding;
-};
-
 /** Every key of one namespace, following the listing's cursor. */
 const kvKeys = async function* kvKeys(kv: KvIntrospector, namespace: string): AsyncGenerator<{ expiration?: number; name: string }> {
     let cursor: string | undefined;
@@ -210,6 +198,30 @@ const kvKeys = async function* kvKeys(kv: KvIntrospector, namespace: string): As
     } while (cursor !== undefined);
 };
 
+/** One KV value's records: inline up to {@link SECTION_CHUNK_BYTES}, else chunks with the size, digest and `extras` on the last. */
+const kvRecords = async function* kvRecords(
+    where: { key: string; namespace: string },
+    value: string,
+    extras: Record<string, unknown>,
+): AsyncGenerator<ExportRow> {
+    const bytes = fromBase64(value);
+
+    if (bytes.byteLength <= SECTION_CHUNK_BYTES) {
+        yield { doc: { ...where, value, ...extras }, table: KV_TABLE };
+
+        return;
+    }
+
+    const sha256 = toHex(await crypto.subtle.digest("SHA-256", bytes));
+
+    for (let offset = 0; offset < bytes.byteLength; offset += SECTION_CHUNK_BYTES) {
+        const data = toBase64(bytes.subarray(offset, offset + SECTION_CHUNK_BYTES));
+        const tail = offset + SECTION_CHUNK_BYTES >= bytes.byteLength ? { last: true, sha256, size: bytes.byteLength, ...extras } : {};
+
+        yield { doc: { ...where, data, offset, ...tail }, table: KV_TABLE };
+    }
+};
+
 const exportKv = async function* exportKv(kv: KvIntrospector): AsyncGenerator<ExportRow> {
     for (const { binding: namespace } of await kv.listNamespaces()) {
         // eslint-disable-next-line no-await-in-loop -- namespaces one at a time
@@ -221,23 +233,10 @@ const exportKv = async function* exportKv(kv: KvIntrospector): AsyncGenerator<Ex
                 continue;
             }
 
-            const size = base64Size(value);
-
-            if (size > SECTION_CHUNK_BYTES) {
-                yield { doc: { key: entry.name, namespace, size, tooLarge: true }, table: KV_TABLE };
-                continue;
-            }
-
-            yield {
-                doc: {
-                    key: entry.name,
-                    namespace,
-                    value,
-                    ...(metadata === null || metadata === undefined ? {} : { metadata }),
-                    ...(entry.expiration === undefined ? {} : { expiration: entry.expiration }),
-                },
-                table: KV_TABLE,
-            };
+            yield* kvRecords({ key: entry.name, namespace }, value, {
+                ...(metadata === null || metadata === undefined ? {} : { metadata }),
+                ...(entry.expiration === undefined ? {} : { expiration: entry.expiration }),
+            });
         }
     }
 };
@@ -247,16 +246,10 @@ const storageObjects = async function* storageObjects(
     list: NonNullable<WorkerOptions["storageList"]>,
     bucket: string | undefined,
 ): AsyncGenerator<StorageObject> {
-    let cursor: string | undefined;
-    let more = true;
-
-    while (more) {
-        // eslint-disable-next-line no-await-in-loop -- each page starts at the previous page's cursor
-        const page = await list(undefined, { bucket, cursor, limit: LIST_PAGE_SIZE });
-
-        yield* page.objects.filter((object) => !object.key.startsWith(RESERVED_STORAGE_PREFIX));
-        cursor = page.cursor;
-        more = cursor !== undefined && (page.truncated ?? true);
+    for await (const object of listAll(list, undefined, bucket === undefined ? {} : { bucket })) {
+        if (!object.key.startsWith(RESERVED_STORAGE_PREFIX)) {
+            yield object;
+        }
     }
 };
 
@@ -281,7 +274,7 @@ const objectRecords = async function* objectRecords(
     const contentType = object.httpMetadata?.contentType ?? downloaded.httpMetadata?.contentType;
     let offset = 0;
 
-    for await (const { bytes, last } of flagLast(fixedChunks(downloaded.body as ReadableStream<Uint8Array>, SECTION_CHUNK_BYTES))) {
+    for await (const { bytes, last } of flagLast(fixedChunks(streamValues(downloaded.body as ReadableStream<Uint8Array>), SECTION_CHUNK_BYTES))) {
         const tail = last ? storageTail(object, contentType, offset + bytes.byteLength) : {};
 
         yield { doc: { ...where, data: toBase64(bytes), offset, ...tail }, table: STORAGE_TABLE };
@@ -419,9 +412,140 @@ const importAuth = async (options: WorkerOptions, rows: ReadonlyArray<SectionRow
     }
 };
 
+/** Where one target's chunks are staged, and the prefix of the error codes it reports. */
+interface Staging {
+    kind: "KV" | "STORAGE";
+    root: string;
+    where: { bucket?: string };
+}
+
+const isAssemblyError = (error: unknown): error is LunoraError =>
+    error instanceof LunoraError && (error.code.endsWith("_RESTORE_INCOMPLETE") || error.code.endsWith("_SHA256_MISMATCH"));
+
+/** Stage a chunk in front of the last, or report that the first chunk never opened a session for it. */
+const stageOrReport = async (store: StagingStore, row: SectionRow, staging: Staging, chunk: ChunkRecord, totals: SectionTotals): Promise<void> => {
+    if (await stageChunk(store, staging.root, staging.where, chunk)) {
+        count(totals, row.table);
+    } else {
+        rowError(
+            totals,
+            row,
+            `${staging.kind}_RESTORE_INCOMPLETE`,
+            `the chunk at byte 0 never arrived, so the one at byte ${String(chunk.offset)} has nothing to join`,
+        );
+    }
+};
+
+/**
+ * The last chunk: hand `write` the staged chunks in order, then drop the
+ * session. A gap or a digest mismatch is reported on the row and the session
+ * dropped too, since no retry of this line can complete it; any other failure
+ * propagates and leaves the session for the next import's sweep.
+ */
+const finishStaged = async (
+    store: StagingStore,
+    row: SectionRow,
+    staging: Staging,
+    last: ChunkRecord,
+    totals: SectionTotals,
+    write: (chunks: AsyncIterable<Uint8Array>) => Promise<void>,
+): Promise<void> => {
+    const session = last.offset === 0 ? undefined : await currentSession(store, staging.root, staging.where);
+
+    if (last.offset > 0 && session === undefined) {
+        rowError(totals, row, `${staging.kind}_RESTORE_INCOMPLETE`, "the chunk at byte 0 never arrived");
+
+        return;
+    }
+
+    try {
+        await write(stagedChunks(store, staging.where, session ?? "", last, staging.kind));
+    } catch (error) {
+        if (!isAssemblyError(error)) {
+            throw error;
+        }
+
+        rowError(totals, row, error.code, error.message);
+    }
+
+    if (session !== undefined) {
+        await deleteSession(store, session, staging.where);
+    }
+};
+
+/** One KV key an import writes. */
+interface KvTarget {
+    expiration: number | undefined;
+    key: string;
+    kv: KvIntrospector;
+    metadata: unknown;
+    namespace: string;
+}
+
+/**
+ * Append-only like the table import: a key that exists now is left alone, and
+ * one that has expired since the export (or would before KV accepts it) is gone
+ * already, so neither is written.
+ */
+const putKvValue = async (target: KvTarget, value: string, totals: SectionTotals): Promise<void> => {
+    const { expiration, key, kv, metadata, namespace } = target;
+    const existing = await kv.getValue({ key, namespace });
+    const expired = expiration !== undefined && expiration < Math.floor(Date.now() / 1000) + KV_MIN_EXPIRATION_SECONDS;
+
+    if (existing.value !== null || expired) {
+        conflict(totals);
+
+        return;
+    }
+
+    await kv.putValue({
+        encoding: "base64",
+        key,
+        namespace,
+        value,
+        ...(expiration === undefined ? {} : { expiration }),
+        ...(metadata === undefined ? {} : { metadata }),
+    });
+    count(totals, KV_TABLE);
+};
+
+/**
+ * One chunk of a value over {@link SECTION_CHUNK_BYTES}. KV has no staging of
+ * its own that reads back consistently, so the chunks wait in the default
+ * storage bucket; the value is assembled in memory (25 MiB at most) because the
+ * KV port writes a base64 string, not a stream.
+ */
+const importKvChunk = async (options: WorkerOptions, row: SectionRow, target: KvTarget, chunk: ChunkRecord, totals: SectionTotals): Promise<void> => {
+    const store = stagingStore(options);
+    const label = `KV value ${target.namespace}/${target.key}`;
+
+    // Both reported once, on the last chunk; the chunks in front of it are not staged for nothing.
+    if (!store || chunk.offset + chunk.bytes.byteLength > KV_MAX_VALUE_BYTES) {
+        if (chunk.lastSize !== undefined && !store) {
+            rowError(
+                totals,
+                row,
+                "KV_STAGING_NOT_CONFIGURED",
+                `${label} is over ${String(SECTION_CHUNK_BYTES)} bytes; its chunks are staged in the default storage bucket, and this worker has no storage ops`,
+            );
+        } else if (chunk.lastSize !== undefined) {
+            rowError(totals, row, "KV_VALUE_TOO_LARGE", `${label} is ${String(chunk.lastSize)} bytes, over KV's ${String(KV_MAX_VALUE_BYTES)}`);
+        }
+
+        return;
+    }
+
+    const staging: Staging = { kind: "KV", root: await stagingRoot(`kv\u0000${target.namespace}\u0000${target.key}`), where: {} };
+    const size = chunk.lastSize;
+
+    await (size === undefined
+        ? stageOrReport(store, row, staging, chunk, totals)
+        : finishStaged(store, row, staging, chunk, totals, async (chunks) => putKvValue(target, toBase64(await collectChunks(chunks, size)), totals)));
+};
+
 const importKvRow = async (options: WorkerOptions, row: SectionRow, totals: SectionTotals): Promise<void> => {
     const kv = options.kvIntrospector;
-    const { expiration, key, metadata, namespace, tooLarge, value } = row.doc;
+    const { expiration, key, metadata, namespace, value } = row.doc;
 
     if (!kv) {
         rowError(totals, row, "KV_NOT_CONFIGURED", "row targets a KV namespace but this worker has no `kvIntrospector`");
@@ -435,52 +559,30 @@ const importKvRow = async (options: WorkerOptions, row: SectionRow, totals: Sect
         return;
     }
 
-    if (tooLarge === true) {
-        rowError(totals, row, "KV_VALUE_TOO_LARGE", `KV value ${namespace}/${key} was over ${String(SECTION_CHUNK_BYTES)} bytes and is not in the export`);
+    const chunk = value === undefined ? parseChunk(row.doc) : undefined;
+
+    if ((typeof value !== "string" && !chunk) || (expiration !== undefined && typeof expiration !== "number")) {
+        rowError(totals, row, "BAD_ROW", "a `$kv` record needs a base64 string `value` (or a chunk's `data` and `offset`) and a numeric `expiration` if any");
 
         return;
     }
 
-    if (typeof value !== "string" || (expiration !== undefined && typeof expiration !== "number")) {
-        rowError(totals, row, "BAD_ROW", "a `$kv` record needs a base64 string `value` and a numeric `expiration` if any");
-
-        return;
-    }
+    const target = { expiration, key, kv, metadata, namespace };
 
     try {
-        // Append-only like the table import: a key that exists now is left alone, and
-        // one that has expired since the export (or would before KV accepts it) is
-        // gone already, so neither is written.
-        const existing = await kv.getValue({ key, namespace });
-        const expired = expiration !== undefined && expiration < Math.floor(Date.now() / 1000) + KV_MIN_EXPIRATION_SECONDS;
-
-        if (existing.value !== null || expired) {
-            conflict(totals);
-
-            return;
+        if (typeof value === "string") {
+            await putKvValue(target, value, totals);
+        } else if (chunk) {
+            await importKvChunk(options, row, target, chunk, totals);
         }
-
-        await kv.putValue({
-            encoding: "base64",
-            key,
-            namespace,
-            value,
-            ...(expiration === undefined ? {} : { expiration }),
-            ...(metadata === undefined ? {} : { metadata }),
-        });
-        count(totals, KV_TABLE);
     } catch (error) {
         rowError(totals, row, "KV_IMPORT_FAILED", `KV ${namespace}/${key}: ${errorMessage(error)}`);
     }
 };
 
-/** A validated `$storage` record. */
-interface StorageRecord {
-    bytes: Uint8Array<ArrayBuffer>;
+/** A validated `$storage` record: one chunk, and the object it belongs to. */
+interface StorageRecord extends ChunkRecord {
     key: string;
-    /** `size` of the whole object on the last chunk; `undefined` on the others. */
-    lastSize: number | undefined;
-    offset: number;
     /** The upload options of the final object. */
     upload: { bucket?: string; contentType?: string; customMetadata?: Record<string, string>; sha256?: string };
     /** Where it lives: the bucket, also where its chunks are staged. */
@@ -488,39 +590,27 @@ interface StorageRecord {
 }
 
 const parseStorageRecord = (document: Record<string, unknown>): StorageRecord | undefined => {
-    const { bucket, contentType, customMetadata, data, key, last, offset, sha256, size } = document;
-    const validLast = last !== true || (typeof size === "number" && Number.isInteger(size) && size >= 0);
+    const { bucket, contentType, customMetadata, key } = document;
+    const chunk = parseChunk(document);
 
-    if (typeof key !== "string" || typeof data !== "string" || !Number.isInteger(offset) || (offset as number) < 0 || !validLast) {
-        return undefined;
-    }
-
-    if (bucket !== undefined && typeof bucket !== "string") {
+    if (typeof key !== "string" || !chunk || (bucket !== undefined && typeof bucket !== "string")) {
         return undefined;
     }
 
     const where = bucket === undefined ? {} : { bucket };
 
     return {
-        bytes: fromBase64(data),
+        ...chunk,
         key,
-        lastSize: last === true ? (size as number) : undefined,
-        offset: offset as number,
         upload: {
             ...where,
             ...(typeof contentType === "string" ? { contentType } : {}),
             ...(isRecord(customMetadata) ? { customMetadata: customMetadata as Record<string, string> } : {}),
-            ...(typeof sha256 === "string" ? { sha256 } : {}),
+            ...(chunk.sha256 === undefined ? {} : { sha256: chunk.sha256 }),
         },
         where,
     };
 };
-
-/** Where a chunk of a multi-chunk object waits until its last chunk arrives. */
-const stagingPrefix = async (record: StorageRecord): Promise<string> =>
-    `${RESTORE_STAGING_PREFIX}${toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${record.where.bucket ?? ""}\u0000${record.key}`)))}/`;
-
-const stagingKey = (prefix: string, offset: number): string => `${prefix}${String(offset).padStart(16, "0")}`;
 
 const objectExists = async (options: WorkerOptions, record: StorageRecord): Promise<boolean> => {
     const existing = await options.storageDownload?.(record.key, record.where);
@@ -530,91 +620,50 @@ const objectExists = async (options: WorkerOptions, record: StorageRecord): Prom
     return existing !== null && existing !== undefined;
 };
 
-/** Read the staged chunks in front of the last one back into a buffer of the object's size. */
-const assembleStaged = async (
-    download: NonNullable<WorkerOptions["storageDownload"]>,
+/** The last chunk of a multi-chunk object: assemble it, in memory or through a multipart upload, unless it exists. */
+const finishStagedObject = async (
+    options: WorkerOptions,
+    store: StagingStore,
+    row: SectionRow,
     record: StorageRecord,
-    prefix: string,
-    size: number,
-): Promise<{ buffer: Uint8Array<ArrayBuffer>; staged: string[] } | string> => {
-    const buffer = new Uint8Array(size);
-    const staged: string[] = [];
-    let position = 0;
+    staging: Staging,
+    totals: SectionTotals,
+): Promise<void> => {
+    const size = record.lastSize ?? 0;
+    const multipart = size > STORAGE_UPLOAD_MAX_BODY_BYTES ? options.storageMultipartUpload : undefined;
 
-    while (position < record.offset) {
-        const partKey = stagingKey(prefix, position);
-        // eslint-disable-next-line no-await-in-loop -- parts are read back in order
-        const part = await download(partKey, record.where);
-
-        if (!part?.body) {
-            return `the chunk at byte ${String(position)} never arrived`;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- parts are read back in order
-        const bytes = new Uint8Array(await new Response(part.body).arrayBuffer());
-
-        if (position + bytes.byteLength > record.offset) {
-            return `the chunk at byte ${String(position)} overlaps the last chunk`;
-        }
-
-        buffer.set(bytes, position);
-        staged.push(partKey);
-        position += bytes.byteLength;
-    }
-
-    if (record.offset + record.bytes.byteLength !== size) {
-        return `chunks add up to ${String(record.offset + record.bytes.byteLength)} of ${String(size)} bytes`;
-    }
-
-    buffer.set(record.bytes, record.offset);
-
-    return { buffer, staged };
-};
-
-/** The last chunk of a multi-chunk object: read the staged chunks back, write the object, drop the staging. */
-const finishStagedObject = async (options: WorkerOptions, row: SectionRow, record: StorageRecord, size: number, totals: SectionTotals): Promise<void> => {
-    const { storageDelete, storageDownload, storageUpload } = options;
-
-    // ponytail: an object is assembled in memory, so restore stops at the 32 MiB the
-    // upload route also buffers; a multipart upload from the staged chunks lifts it.
-    if (size > STORAGE_UPLOAD_MAX_BODY_BYTES) {
+    if (size > STORAGE_UPLOAD_MAX_BODY_BYTES && !multipart) {
         rowError(
             totals,
             row,
             "STORAGE_OBJECT_TOO_LARGE",
-            `${record.key} is ${String(size)} bytes; restoring objects over ${String(STORAGE_UPLOAD_MAX_BODY_BYTES)} bytes is not supported (the export holds it)`,
+            `${record.key} is ${String(size)} bytes; restoring an object over ${String(STORAGE_UPLOAD_MAX_BODY_BYTES)} bytes needs \`storageMultipartUpload\` on the worker (the export holds it)`,
         );
 
         return;
     }
 
-    if (!storageUpload || !storageDownload || !storageDelete) {
-        rowError(
-            totals,
-            row,
-            "STORAGE_NOT_CONFIGURED",
-            "restoring a multi-chunk object needs `storageUpload`, `storageDownload` and `storageDelete` on the worker",
-        );
+    await finishStaged(store, row, staging, record, totals, async (chunks) => {
+        if (await objectExists(options, record)) {
+            conflict(totals);
 
-        return;
-    }
+            return;
+        }
 
-    const assembled = await assembleStaged(storageDownload, record, await stagingPrefix(record), size);
+        if (multipart) {
+            const { contentType, customMetadata } = record.upload;
 
-    if (typeof assembled === "string") {
-        rowError(totals, row, "STORAGE_RESTORE_INCOMPLETE", `${record.key}: ${assembled}`);
+            // No sha256 on the upload: R2 records none for a multipart object, so the
+            // digest is checked as the chunks stream through instead.
+            await uploadMultipart(await multipart(record.key, { ...record.where, contentType, customMetadata }), chunks, size);
+        } else {
+            const bytes = await collectChunks(chunks, size);
 
-        return;
-    }
+            await store.upload(record.key, bytes.buffer, record.upload);
+        }
 
-    if (await objectExists(options, record)) {
-        conflict(totals);
-    } else {
-        await storageUpload(record.key, assembled.buffer.buffer, record.upload);
         count(totals, STORAGE_TABLE);
-    }
-
-    await Promise.all(assembled.staged.map(async (partKey) => storageDelete(partKey, record.where)));
+    });
 };
 
 const writeStorageRecord = async (options: WorkerOptions, row: SectionRow, record: StorageRecord, totals: SectionTotals): Promise<void> => {
@@ -638,17 +687,29 @@ const writeStorageRecord = async (options: WorkerOptions, row: SectionRow, recor
         return;
     }
 
-    if (record.lastSize !== undefined) {
-        await finishStagedObject(options, row, record, record.lastSize, totals);
+    const store = stagingStore(options);
+
+    if (!store) {
+        if (record.lastSize !== undefined) {
+            rowError(
+                totals,
+                row,
+                "STORAGE_NOT_CONFIGURED",
+                "restoring a multi-chunk object needs `storageUpload`, `storageDownload`, `storageList` and `storageDelete` on the worker",
+            );
+        }
 
         return;
     }
 
-    // Past the ceiling the object cannot be assembled anyway; its last chunk
-    // reports it, so the chunks in front of it are not staged for nothing.
-    if (record.offset + record.bytes.byteLength <= STORAGE_UPLOAD_MAX_BODY_BYTES) {
-        await upload(stagingKey(await stagingPrefix(record), record.offset), record.bytes.buffer, record.where);
-        count(totals, STORAGE_TABLE);
+    const staging: Staging = { kind: "STORAGE", root: await stagingRoot(`storage\u0000${record.where.bucket ?? ""}\u0000${record.key}`), where: record.where };
+
+    if (record.lastSize !== undefined) {
+        await finishStagedObject(options, store, row, record, staging, totals);
+    } else if (options.storageMultipartUpload || record.offset + record.bytes.byteLength <= STORAGE_UPLOAD_MAX_BODY_BYTES) {
+        // Past the in-memory ceiling without a multipart upload the object cannot
+        // be assembled anyway; its last chunk reports it, so these are not staged.
+        await stageOrReport(store, row, staging, record, totals);
     }
 };
 
@@ -665,6 +726,25 @@ const importStorageRow = async (options: WorkerOptions, row: SectionRow, totals:
         await writeStorageRecord(options, row, record, totals);
     } catch (error) {
         rowError(totals, row, "STORAGE_IMPORT_FAILED", `${record.key}: ${errorMessage(error)}`);
+    }
+};
+
+/**
+ * A new import starts with its header: drop what earlier restores left staged
+ * and never finished. A failed sweep is reported, never fatal — it frees space,
+ * it does not decide what this import writes.
+ */
+const sweepStaging = async (options: WorkerOptions, row: SectionRow, totals: SectionTotals): Promise<void> => {
+    const store = stagingStore(options);
+
+    if (!store) {
+        return;
+    }
+
+    try {
+        await sweepStaleStaging(store, options.storageBuckets ?? [undefined], Date.now());
+    } catch (error) {
+        rowError(totals, row, "RESTORE_STAGING_SWEEP_FAILED", `could not delete stale staged chunks: ${errorMessage(error)}`);
     }
 };
 
@@ -686,6 +766,8 @@ const importSectionRows = async (options: WorkerOptions, rows: ReadonlyArray<Sec
         switch (row.table) {
             case HEADER_TABLE: {
                 count(totals, HEADER_TABLE);
+                // eslint-disable-next-line no-await-in-loop -- the header is the import's first line
+                await sweepStaging(options, row, totals);
                 break;
             }
             case KV_TABLE: {

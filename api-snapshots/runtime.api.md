@@ -2331,6 +2331,7 @@ interface WorkerOptions {
     storageDelete?: StorageDeleteFunction;
     storageDownload?: StorageDownloadFunction;
     storageList?: StorageListFunction;
+    storageMultipartUpload?: StorageMultipartUploadFunction;
     storageSignedUrl?: StorageSignedUrlFunction;
     storageUpload?: StorageUploadFunction;
     syncGlobals?: GlobalCdcSyncFunction;
@@ -3257,6 +3258,16 @@ type StorageDownloadFunction = (key: string, options?: {
     };
     size?: number;
 } | null>;
+```
+
+### `StorageMultipartUploadFunction` (type)
+
+```ts
+type StorageMultipartUploadFunction = (key: string, options?: {
+    bucket?: string;
+    contentType?: string;
+    customMetadata?: Record<string, string>;
+}) => Promise<R2MultipartUploadLike>;
 ```
 
 ### `StorageSignedUrlFunction` (type)

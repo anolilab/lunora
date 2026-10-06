@@ -571,6 +571,9 @@ catalogs:
       specifier: 0.1.9
       version: 0.1.9
   storage:
+    '@noble/hashes':
+      specifier: 2.2.0
+      version: 2.2.0
     '@visulima/storage':
       specifier: 2.0.33
       version: 2.0.33
@@ -4697,6 +4700,9 @@ importers:
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
+      '@noble/hashes':
+        specifier: catalog:storage
+        version: 2.2.0
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
