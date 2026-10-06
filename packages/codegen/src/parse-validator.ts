@@ -379,6 +379,29 @@ const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorI
     }
 };
 
+/**
+ * A literal computed name (`["id"]`, `` [`id`] ``) resolves to its key in
+ * `propertyKeyName`. Any other computed name aborts the run: the key still exists
+ * at runtime, so dropping it from the IR would let the compiled args validator
+ * commit records the interpreted parser rejects (the soundness contract in
+ * `@lunora/values` `validator-map.ts`), and would silently drop a table column
+ * from `Doc_*`.
+ */
+const assertResolvableKey = (nameNode: Node): void => {
+    if (!Node.isComputedPropertyName(nameNode)) {
+        return;
+    }
+
+    const expression = nameNode.getExpression();
+
+    if (!Node.isStringLiteral(expression) && !Node.isNoSubstitutionTemplateLiteral(expression)) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/codegen: computed property name ${nameNode.getText()} in ${nameNode.getSourceFile().getFilePath()} cannot be resolved at codegen time — use a literal key. A dropped field would silently bypass argument validation.`,
+        );
+    }
+};
+
 const parseObjectShape = (object: ObjectLiteralExpression): Record<string, ValidatorIR> => {
     const out: Record<string, ValidatorIR> = {};
 
@@ -405,13 +428,7 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
             continue;
         }
 
-        // Skip computed property names (`[expr]: ...`) — we can't derive a stable
-        // identifier from them and they can't be emitted safely.
-        const nameNode = property.getNameNode();
-
-        if (Node.isComputedPropertyName(nameNode)) {
-            continue;
-        }
+        assertResolvableKey(property.getNameNode());
 
         const initializer = shorthand ? property.getNameNode() : property.getInitializer();
 

@@ -124,6 +124,10 @@ describe("compileArgsValidator — differential parity vs interpreted oracle", (
         // A repeated bound: the runtime applies both checks, so the tighter one
         // wins — emitting the later `10` would accept what the oracle rejects.
         "{ name: v.string().max(3).max(10) }",
+        // A literal computed key resolves at runtime, so the live map carries
+        // `id`; an IR that dropped it would commit `{ name: "ada" }` (corpus)
+        // although the oracle rejects it for the missing `id`.
+        '{ name: v.string(), ["id"]: v.string() }',
     ];
 
     // eslint-disable-next-line vitest/expect-expect, vitest/prefer-expect-assertions -- assertions live in the shared assertParity() helper; some snippets legitimately defer to the interpreted path with zero assertions
@@ -175,6 +179,12 @@ describe("compileArgsValidator — modelled behaviour", () => {
         expect.assertions(1);
 
         expect(compileArgsValidator(irFromSnippet("{ u: v.union(v.string(), v.number()) }") as never)).toBeUndefined();
+    });
+
+    it("aborts on a computed key it cannot resolve instead of dropping the field", () => {
+        expect.assertions(1);
+
+        expect(() => irFromSnippet("{ id: v.string(), [KEY]: v.string() }")).toThrow(/computed property name \[KEY\]/u);
     });
 
     it("declines to compile records (returns undefined source)", () => {
