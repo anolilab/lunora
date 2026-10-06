@@ -1,7 +1,7 @@
 # Plan 457 — Services: typed service bindings to sibling Workers
 
 **Baseline:** `522a7799d` (2026-10-01)
-**Status:** IN PROGRESS (phases 0–3 shipped; neore-v2 migration open)
+**Status:** IN PROGRESS (phases 0–3 shipped in #918, #935, #938; remaining in §12: two in-repo items awaiting a design call, the real celld fleet deploy, and the neore-v2 migration in anolilab/neore-v2)
 
 ## 0. Headline finding
 
@@ -303,3 +303,37 @@ deploy` does not deploy services there either.
   scope `dev:services`). Still open: an RPC service's sources join the app's
   type check.
 - **Not done here:** the neore-v2 migration itself (another repo).
+
+## 12. What remains (checked 2026-10-07)
+
+Both in-repo items left need a decision before code. Neither is a mechanical
+follow-up.
+
+- **An RPC service's sources join the app's type check.** `emit/server.ts`
+  imports the service entry (`lunoraService_<key>` from `<dir>/src/index`) for
+  `ServiceRpc<typeof …>`. The app's `tsc` then checks the service's `.ts` files
+  under the app's compiler options, so a type error there, or a service built
+  against different `types`/paths, fails the app's check. `skipLibCheck` only skips `.d.ts`, so no import form avoids it
+  while the target is source. The options all change how a service is typed:
+    1. Codegen emits a declaration snapshot of the entrypoint
+       (`_generated/services/<key>.d.ts`, via a ts-morph declaration emit of
+       the service). The open question is how the snapshot's imports
+       (the service's own deps and relative files) resolve from `_generated/`.
+    2. TypeScript project references. The service gets a `composite` tsconfig
+       and the app references it. That puts a requirement on the service, which
+       §3 rules out ("services stay ordinary Workers").
+    3. Keep it documented (`concepts/services`), with `rpc: false` as the escape
+       hatch. This is the current behaviour.
+- **Studio Home "Services" bindings card (G).** Studio's only source for service
+  bindings is the architecture manifest, and codegen emits that only once the
+  app declares a module (`wantsArchitecture` in `run-codegen.ts`). A
+  services-only app such as `examples/services` has no data for the card. §11 G
+  deferred it because the card adds nothing the diagram lacks. Building it
+  needs one of these:
+    1. Emit the manifest when services are declared too. This changes that app's
+       `_generated/` output and the admin route, and shows the Architecture page
+       for apps with no module.
+    2. A `services` field on `studioFeatures`.
+- **The real celld fleet deploy (S3 bucket).** It cannot run here, and only
+  `--dry-run` has been exercised.
+- **The neore-v2 migration (§8).** It lives in `anolilab/neore-v2`.
