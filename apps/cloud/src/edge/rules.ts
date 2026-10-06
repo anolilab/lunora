@@ -119,6 +119,20 @@ const sameTargets = (left: ReadonlyArray<EdgeTarget>, right: ReadonlyArray<EdgeT
 /** A bounded reason for the row and the audit log. The edge's errors never carry the token. */
 const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : "unknown error").slice(0, 300);
 
+/** The fields that record what the zone holds, as opposed to what the row asks for. */
+const ZONE_FACTS = new Set(["applied", "appliedAt", "cloudflareRuleId", "targets"]);
+
+/**
+ * Whether the row is still the one this pass planned against: same organization
+ * and kind, and not re-written since. A row that changed is left for the next
+ * pass, which plans against its new intent; a row that is gone is not written for.
+ */
+const stillCurrent = async (database: ControlPlaneStore, row: EdgeRuleRow): Promise<boolean> => {
+    const fresh = (await database.get(row._id, "edgeRules")) as EdgeRuleRow | null;
+
+    return fresh !== null && fresh.organizationId === row.organizationId && fresh.kind === row.kind && fresh.updatedAt === row.updatedAt;
+};
+
 /** Patch the row with its outcome and append the matching audit entry. */
 const recordOutcome = async (
     database: ControlPlaneStore,
@@ -126,6 +140,20 @@ const recordOutcome = async (
     now: number,
     outcome: { audit: string; detail: string; fields: Record<string, unknown>; status: EdgeRuleRow["status"] },
 ): Promise<EdgeRuleRow["status"]> => {
+    // The row may have taken a new intent while the edge was called. Overwriting
+    // it would lose that intent (a removal the owner asked for, recorded as
+    // "applied"). So a changed row gets only the facts about the zone — what is on
+    // it now — and keeps its own status, which the next pass reconciles.
+    if (!(await stillCurrent(database, row))) {
+        const facts = Object.fromEntries(Object.entries(outcome.fields).filter(([field]) => ZONE_FACTS.has(field)));
+
+        if (Object.keys(facts).length > 0) {
+            await database.patch(row._id, facts, "edgeRules");
+        }
+
+        return outcome.status;
+    }
+
     await database.patch(row._id, { ...outcome.fields, status: outcome.status, updatedAt: now }, "edgeRules");
     await database.insert("auditLog", {
         action: `edge.${row.kind}.${outcome.audit}`,
@@ -167,17 +195,6 @@ const refusalOf = (
     }
 
     return undefined;
-};
-
-/**
- * Whether the row is still the one this pass planned against: same organization
- * and kind, and not re-written since. A row that changed is left for the next
- * pass, which plans against its new intent; a row that is gone is not written for.
- */
-const stillCurrent = async (database: ControlPlaneStore, row: EdgeRuleRow): Promise<boolean> => {
-    const fresh = (await database.get(row._id, "edgeRules")) as EdgeRuleRow | null;
-
-    return fresh !== null && fresh.organizationId === row.organizationId && fresh.kind === row.kind && fresh.updatedAt === row.updatedAt;
 };
 
 /** Call the edge and record what happened. */

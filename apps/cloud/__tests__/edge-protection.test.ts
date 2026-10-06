@@ -57,6 +57,10 @@ const memoryZone = (seed: Record<string, { ref: string }[]> = {}, failOn?: strin
             return Response.json({ errors: [{ message: "upstream exploded" }], success: false }, { status: 500 });
         }
 
+        if (url.endsWith("/zones/zone123")) {
+            return ok({ id: "zone123" });
+        }
+
         const entry = /\/zones\/zone123\/rulesets\/phases\/(\w+)\/entrypoint$/.exec(url);
 
         if (entry) {
@@ -182,7 +186,7 @@ describe(applyEdgeRule, () => {
         });
     });
 
-    it("creates the entrypoint only when the zone has none", async () => {
+    it("creates the entrypoint only on an explicit 404 for it, on a zone confirmed to exist", async () => {
         const zone = memoryZone();
 
         await expect(applyEdgeRule({ apiToken: "t", fetch: zone.fetch }, { phase: "ddos_l7", ref, rule, zoneId: ZONE })).resolves.toStrictEqual({
@@ -190,9 +194,10 @@ describe(applyEdgeRule, () => {
         });
         expect(zone.calls.map((call) => `${call.method} ${call.url}`)).toStrictEqual([
             `GET ${API}/zones/${ZONE}/rulesets/phases/ddos_l7/entrypoint`,
+            `GET ${API}/zones/${ZONE}`,
             `PUT ${API}/zones/${ZONE}/rulesets/phases/ddos_l7/entrypoint`,
         ]);
-        expect(zone.calls[1]?.body).toStrictEqual({ rules: [rule] });
+        expect(zone.calls[2]?.body).toStrictEqual({ rules: [rule] });
     });
 
     it("adds to an existing entrypoint without touching its other rules", async () => {

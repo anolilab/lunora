@@ -685,7 +685,14 @@ domain rows. Each hostname is bound to the row id and project that gave it
 (`edgeRules.targets`). A domain that was deleted, moved, or re-added under
 another organization therefore drops off the old organization's rule within a
 minute. Writes never use a stored Cloudflare id. The zone is re-read on every
-call, and the rule is found by the organization's own ref. Two rules under one
+call, and the rule is found by the organization's own ref. Every call fails
+closed. A Cloudflare error, a 10-second timeout, or a malformed or partial
+answer is recorded as `failed` and retried. It is never read as "no rule".
+The entrypoint is created only on an explicit 404 for a zone confirmed to
+exist. A write counts only if Cloudflare's answer holds the rule as sent, and
+a removal only if a fresh read no longer finds it. If the row takes a new
+intent while a write is in flight, it keeps that intent. The pass records only
+what the zone now holds, and the next pass reconciles. Two rules under one
 ref, or an id that cannot form an unambiguous ref, refuse the write. The row is
 also re-read right before the write and skipped if it changed. A rule covers at
 most 50 hostnames, and every hostname is re-validated before it enters a Rules
