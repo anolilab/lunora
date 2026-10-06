@@ -36,7 +36,7 @@ const collect = async (port: AuthDataPortLike): Promise<{ doc: Record<string, un
 };
 
 describe("auth data port on Durable Object SQLite", () => {
-    it("exports every table user-first and imports it append-only into another object", async () => {
+    it("exports every table user-first, never the sessions, and imports it append-only into another object", async () => {
         expect.hasAssertions();
 
         const source = portFor("data-port-source");
@@ -62,9 +62,8 @@ describe("auth data port on Durable Object SQLite", () => {
         expect(rows.filter((row) => row.table === "user")).toHaveLength(150);
         expect(rows[0]?.table).toBe("user");
 
-        const sessionAt = rows.findIndex((row) => row.table === "session");
-
-        expect(sessionAt).toBeGreaterThan(rows.findLastIndex((row) => row.table === "user"));
+        // A signed-in session is a working login, not data: it never leaves the object.
+        expect(rows.some((row) => row.table === "session")).toBe(false);
 
         // In batches, as a restore sends them.
         const first = await target.importRows(rows.slice(0, 100));
