@@ -330,8 +330,13 @@ const otlpLogBody = (event: LogEvent): unknown => {
 
     // OTel semconv for an exception carried on a log record: the same
     // `exception.*` keys the RPC span's exception event uses.
+    // A caller field of the same name gives way, so the record never carries a
+    // key twice (collectors may reject that).
     if (event.error !== undefined) {
-        (logRecord.attributes as OtlpAttribute[]).push(...exceptionAttributes(event.error.name, event.error.message, event.error.stack));
+        const exception = exceptionAttributes(event.error.name, event.error.message, event.error.stack);
+        const keys = new Set(exception.map((attribute) => attribute.key));
+
+        logRecord.attributes = [...(logRecord.attributes as OtlpAttribute[]).filter((attribute) => !keys.has(attribute.key)), ...exception];
     }
 
     if (event.eventName !== undefined) {

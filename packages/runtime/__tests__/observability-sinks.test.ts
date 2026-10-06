@@ -1027,6 +1027,53 @@ describe("observability-sinks", () => {
             expect(JSON.stringify(attrValue(record.attributes, "exception.stacktrace"))).not.toContain("buyer@example.com");
         });
 
+        it.each([
+            // A one-letter message also occurs inside the name: the cut must not land in `Erro|r`.
+            ["a message that also occurs in the name", "r", "Error: r\n    at charge (orders.ts:4:2)", "TypeError: r\n    at charge (orders.ts:4:2)"],
+            // V8 prints no `: ` for an empty message.
+            ["an empty message", "", "Error\n    at charge (orders.ts:4:2)", "TypeError: \n    at charge (orders.ts:4:2)"],
+        ])("rebuilds a well-formed stack header for %s", (_label, message, stack, expected) => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            otlpSink({ batch: false, endpoint: "https://collector.example" }).onLog!({
+                args: [],
+                error: { message, name: "TypeError", stack },
+                functionPath: "orders:place",
+                level: "error",
+                message: "charge failed",
+                ts: 1,
+            });
+
+            const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(attrValue(record.attributes, "exception.stacktrace")).toStrictEqual({ stringValue: expected });
+        });
+
+        it("lets a logged error's exception.* keys replace caller fields of the same name", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            otlpSink({ batch: false, endpoint: "https://collector.example", redactLogs: false }).onLog!({
+                args: [],
+                error: { message: "declined", name: "TypeError" },
+                fields: { "exception.type": "caller" },
+                functionPath: "orders:place",
+                level: "error",
+                message: "charge failed",
+                ts: 1,
+            });
+
+            const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(record.attributes.filter((attribute) => attribute.key === "exception.type")).toHaveLength(1);
+            expect(attrValue(record.attributes, "exception.type")).toStrictEqual({ stringValue: "TypeError" });
+        });
+
         it("ships the raw log record when redactLogs is opted out", () => {
             expect.assertions(2);
 

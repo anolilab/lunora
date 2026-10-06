@@ -67,8 +67,37 @@ export const findLoggedError = (args: readonly unknown[]): ErrorDetail | undefin
     return undefined;
 };
 
-/** Header-safe (ASCII) encoding of an {@link ErrorDetail}. */
-export const encodeErrorDetail = (detail: ErrorDetail): string => encodeURIComponent(JSON.stringify(detail));
+/**
+ * Encoded-size cap. The detail rides a response header and Cloudflare caps a
+ * response's headers at 128 KiB in total, so an unbounded message (or a
+ * non-ASCII one, which URI-encoding inflates up to 9×) would fail the very
+ * response it describes.
+ */
+const MAX_ENCODED_LENGTH = 16_384;
+
+/** How much of the message survives when the full detail is over the cap. */
+const TRUNCATED_MESSAGE_LENGTH = 1024;
+
+/**
+ * Header-safe (ASCII) encoding of an {@link ErrorDetail}, at most
+ * {@link MAX_ENCODED_LENGTH} characters: over it, the stack is dropped and the
+ * message and name truncated, which always fits.
+ */
+export const encodeErrorDetail = (detail: ErrorDetail): string => {
+    const encoded = encodeURIComponent(JSON.stringify(detail));
+
+    if (encoded.length <= MAX_ENCODED_LENGTH) {
+        return encoded;
+    }
+
+    return encodeURIComponent(
+        JSON.stringify({
+            ...(detail.code === undefined ? {} : { code: detail.code.slice(0, 128) }),
+            message: detail.message.slice(0, TRUNCATED_MESSAGE_LENGTH),
+            name: detail.name.slice(0, 128),
+        }),
+    );
+};
 
 /** Decode {@link encodeErrorDetail}'s output; `undefined` for an absent or malformed value. */
 export const decodeErrorDetail = (value: null | string | undefined): ErrorDetail | undefined => {

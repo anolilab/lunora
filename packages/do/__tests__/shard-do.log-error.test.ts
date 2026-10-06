@@ -80,6 +80,23 @@ describe("shardDO ctx.log errors", () => {
         expect(event.fields).toStrictEqual({ err: "RangeError: too large", orderId: "o-1" });
     });
 
+    it("finds an Error in a `with()` bound field and in a structured `event()`", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const bound = await run((log) => {
+            log.with({ err: new TypeError("bound") }).error("charge failed");
+        });
+        const structured = await run((log) => {
+            log.event("charge.failed", { err: new TypeError("structured") });
+        });
+
+        expect(bound.error).toMatchObject({ message: "bound", name: "TypeError" });
+        expect(structured.error).toMatchObject({ message: "structured", name: "TypeError" });
+    });
+
     it("leaves `error` off a line that logged no Error", async () => {
         expect.assertions(1);
 

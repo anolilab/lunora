@@ -254,6 +254,7 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
+import type { ErrorDetail } from "../../../shared/error-detail";
 import { describeError, encodeErrorDetail, ERROR_DETAIL_HEADER, findLoggedError, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
@@ -6330,6 +6331,11 @@ abstract class ShardDO {
         sink?: TelemetrySink,
         eventName?: string,
         anchor?: TraceAnchor,
+        // The `Error` the line logged. Searched in `fields` too, which covers
+        // `ctx.log.event(name, { err })`; `makeLogger` passes it explicitly when
+        // the Error sat in a `with()` bound field, which `fields` has already
+        // stringified by the time it gets here.
+        error: ErrorDetail | undefined = findLoggedError(fields === undefined ? args : [...args, fields]),
     ): void {
         // Correlate the line to its dispatch span. Read from the resolved anchor
         // rather than re-parsing the inbound `traceparent`, so a dispatch that
@@ -6346,7 +6352,6 @@ abstract class ShardDO {
         // One canonical event built once, fed to all three destinations. Only the
         // console event drops raw `args` (see emitLogEvent); the buffer and sink
         // get the full payload. Structured `fields` DO ride every destination.
-        const error = findLoggedError(args);
         const event: LogEventInput = {
             args,
             ...(error === undefined ? {} : { error }),
@@ -6396,8 +6401,10 @@ abstract class ShardDO {
             (level: ContextLogLevel) =>
             (...args: unknown[]): void => {
                 const { fields, message } = parseLogArgs(args, boundFields);
+                // Searched before `parseLogArgs` stringified any Error in the fields.
+                const error = findLoggedError(boundFields === undefined ? args : [...args, boundFields]);
 
-                this.recordUserLog(functionPath, level, args, message, fields, sink);
+                this.recordUserLog(functionPath, level, args, message, fields, sink, undefined, undefined, error);
             };
 
         return {

@@ -26,8 +26,39 @@ interface StackFrame {
     lineno: number;
 }
 
-/** `    at fn (file.js:3:9)` and `    at file.js:3:9` — the V8 stack-line shapes workerd prints. */
-const V8_FRAME = /^\s*at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?$/u;
+/**
+ * Parse one V8 stack line — `at fn (file.js:3:9)` or `at file.js:3:9` — or
+ * `undefined` for a line without a location. String slicing rather than a
+ * regex: the input is an arbitrary error's stack, and a backtracking pattern
+ * over it is a ReDoS.
+ */
+const parseFrame = (line: string): StackFrame | undefined => {
+    const trimmed = line.trim();
+
+    if (!trimmed.startsWith("at ")) {
+        return undefined;
+    }
+
+    let location = trimmed.slice(3);
+    let name = "<anonymous>";
+    const open = location.lastIndexOf(" (");
+
+    if (location.endsWith(")") && open !== -1) {
+        name = location.slice(0, open);
+        location = location.slice(open + 2, -1);
+    }
+
+    const colonBeforeColumn = location.lastIndexOf(":");
+    const colonBeforeLine = colonBeforeColumn <= 0 ? -1 : location.lastIndexOf(":", colonBeforeColumn - 1);
+    const lineno = Number.parseInt(location.slice(colonBeforeLine + 1, colonBeforeColumn), 10);
+    const colno = Number.parseInt(location.slice(colonBeforeColumn + 1), 10);
+
+    if (colonBeforeLine <= 0 || Number.isNaN(lineno) || Number.isNaN(colno)) {
+        return undefined;
+    }
+
+    return { colno, filename: location.slice(0, colonBeforeLine), function: name, lineno };
+};
 
 /**
  * Rebuild a throwable from an event's `error`, carrying the original `name`,
@@ -63,10 +94,10 @@ export const parseStackFrames = (stack: string | undefined): StackFrame[] => {
     const frames: StackFrame[] = [];
 
     for (const line of stack.split("\n")) {
-        const match = V8_FRAME.exec(line);
+        const frame = parseFrame(line);
 
-        if (match !== null) {
-            frames.push({ colno: Number(match[4]), filename: match[2] as string, function: match[1] ?? "<anonymous>", lineno: Number(match[3]) });
+        if (frame !== undefined) {
+            frames.push(frame);
         }
     }
 
