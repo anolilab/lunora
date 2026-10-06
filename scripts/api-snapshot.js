@@ -1048,7 +1048,10 @@ const rendered = buildAll();
  * This runs before `update` writes anything, so `pnpm run api:update` cannot
  * launder a newly-tagged export into the committed snapshot either.
  */
-const FULLY_TRACKED_SNAPSHOTS = new Set(["container.api.md"]);
+// Every Core and Stable-adapter package is here: their SemVer promise is only as wide as the
+// tracked signatures, so an `@experimental` tag in one of them is a silent hole in the 1.0
+// guarantee. `container` is the one experimental package that also documents the invariant.
+const FULLY_TRACKED_SNAPSHOTS = new Set([...TIER_1, ...TIER_2, "container"].map((dir) => snapshotFileName(dir)));
 
 // A configured snapshot that no longer renders would make this check silently
 // inert — the loop below only sees what `rendered` contains, so a package

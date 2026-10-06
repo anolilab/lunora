@@ -50,7 +50,9 @@ The _public API_ is what a package exports from its documented entry points
 
 - **Experimental APIs** (anything tagged `@experimental` in its JSDoc) may
   change or disappear in a **minor** release. The tag is the contract: if an
-  export carries it, don't build load-bearing code on it without pinning.
+  export carries it, don't build load-bearing code on it without pinning. Only
+  experimental-tier packages carry it; `api:check` fails if a Core or
+  Stable-adapter export is tagged.
 - **Internal packages** (`@lunora/config`, `@lunora/sql-store`) are published
   for transparency but are implementation details of the CLI/Vite plugin;
   depend on those instead.
@@ -71,7 +73,7 @@ enforces cannot drift apart unnoticed.
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
 | **Core (stable 1.0)**   | `lunorash`, `@lunora/server`, `values`, `errors`, `runtime`, `do`, `shard-engine`, `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`, `observability`, `platform`, `platform-cloudflare`                                                                                          | Full SemVer commitment, API-guarded in CI                                                         |
 | **Stable adapters**     | `vue`, `solid`, `svelte`, `astro`, `nuxt`, `auth`, `auth-ui` (private), `storage`, `scheduler`, `mail`, `notify`, `ratelimit`, `seed`, `db`, `sql-store`, `studio`, `advisor`, `mcp`, `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`, `fingerprint`, `dispatch` (private) | 1.0 if they pass the same gates; any that don't hold at `0.x` / `-beta`                           |
-| **Experimental at 1.0** | `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`, `container`, `payment`, `platform-node`                                                                                                                                                                                        | Published as `1.0.0-beta.*` or `0.x`, tagged experimental in docs; not part of the stable promise |
+| **Experimental at 1.0** | `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`, `container`, `payment`, `platform-celld`, `platform-node`, `rspack`                                                                                                                                                            | Published as `1.0.0-beta.*` or `0.x`, tagged experimental in docs; not part of the stable promise |
 
 What the tiers buy you:
 

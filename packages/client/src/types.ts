@@ -12,7 +12,6 @@ export type { ArgsOf, FunctionReference, ReturnOf } from "../../../shared/functi
  * and the route path; the phantom marker carries the chunk / searchParams /
  * params types so `httpStream` (and the framework hooks over it) infer the
  * chunk type end-to-end.
- * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
  */
 export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params = unknown> {
     /**
@@ -30,7 +29,6 @@ export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params =
 
 /**
  * The call-side args of an HTTP-SSE stream route: `:name` path params plus URL query params.
- * @experimental Part of the HTTP-SSE stream surface.
  */
 export interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
     /** Values for the route path's `:name` segments. */
@@ -41,13 +39,11 @@ export interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
 
 /**
  * Extract the chunk type from a {@link HttpStreamRef}.
- * @experimental Part of the HTTP-SSE stream surface.
  */
 export type HttpStreamChunkOf<R> = R extends HttpStreamRef<infer Chunk, infer _S, infer _P> ? Chunk : never;
 
 /**
  * Extract the call-side args type from a {@link HttpStreamRef}.
- * @experimental Part of the HTTP-SSE stream surface.
  */
 export type HttpStreamArgsOf<R> = R extends HttpStreamRef<infer _C, infer S, infer P> ? HttpStreamCallArgs<S, P> : never;
 

@@ -504,10 +504,10 @@ re-export the class from your worker entry (that is what makes the config layer 
 at it.
 
 <Callout type="warn">
-    `lunoraDoAdapter` is `@experimental`, and the trade is architectural rather than cosmetic: `user`, `session` and the SCIM tables live inside **one** Durable
-    Object, so writes serialise through a single object, the object's storage limits apply, and backup/export follows the DO path rather than D1's. Two things
-    it does not do: `ensureMigrated` (better-auth's migrator is kysely-only, so the object materialises its schema from `authTables` itself), and sharding
-    (there is one auth object). Measure it before moving an existing deployment.
+    D1 stays the recommended default for `lunoraDoAdapter`: the trade is architectural rather than cosmetic: `user`, `session` and the SCIM tables live inside
+    **one** Durable Object, so writes serialise through a single object, the object's storage limits apply, and backup/export follows the DO path rather than
+    D1's. Two things it does not do: `ensureMigrated` (better-auth's migrator is kysely-only, so the object materialises its schema from `authTables` itself),
+    and sharding (there is one auth object). Measure it before moving an existing deployment.
 </Callout>
 
 ### SCIM on Hyperdrive

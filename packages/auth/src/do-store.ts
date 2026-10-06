@@ -17,11 +17,9 @@
  *
  * ## Status
  *
- * `@experimental`; D1 remains the recommended default. Experimental here is about the
- * signature, not the primitive: the transaction path is covered by a workerd suite over
- * the real `state.storage.transaction`, but `api-snapshots/auth.api.md` records the export
- * as untracked, so its shape can churn without failing the gate that backs this package's
- * stability guarantee.
+ * Stable, and covered by `api-snapshots/auth.api.md` like the rest of the package; D1
+ * remains the recommended default. The transaction path is covered by a workerd suite over
+ * the real `state.storage.transaction`.
  *
  * What makes it a deliberate choice rather than a drop-in swap:
  *
@@ -50,7 +48,6 @@
  *     plugins: [scim({ connections: [...] })],
  * });
  * ```
- * @experimental
  */
 import type { SqlExecutor } from "./sql-store";
 
@@ -80,7 +77,6 @@ export interface DoStorageLike {
  * `storage.sql.exec` is synchronous and returns a cursor, so both methods resolve
  * immediately; the async signature exists to satisfy the shared executor seam that
  * D1 (genuinely async) also implements.
- * @experimental
  */
 export const doExecutor = (storage: DoStorageLike): SqlExecutor => {
     return {
@@ -100,7 +96,6 @@ export const doExecutor = (storage: DoStorageLike): SqlExecutor => {
  *
  * Handed to `lunoraAuthAdapter` as its transaction runner; it is what makes
  * `@better-auth/scim` accept the adapter at all.
- * @experimental
  */
 export const doTransactionRunner =
     (storage: DoStorageLike) =>

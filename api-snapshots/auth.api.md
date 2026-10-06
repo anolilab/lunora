@@ -375,7 +375,11 @@ interface AuthConfigInfo {
 
 ### `AuthDoOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface AuthDoOptions {
+    internalSecret?: string;
+}
+```
 
 ### `AuthDoState` (interface)
 
@@ -778,7 +782,13 @@ interface LunoraAuthApiContext<Auth extends LunoraAuth> {
 
 ### `LunoraAuthDO` (class)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+class LunoraAuthDO {
+    #private;
+    constructor(state: AuthDoState, optionsFactory: () => LunoraAuthOptions, options?: AuthDoOptions);
+    fetch(request: Request): Promise<Response>;
+}
+```
 
 ### `LunoraAuthHeadersError` (class)
 
@@ -933,11 +943,15 @@ const authDiscoveryPathsFor: <Env>(declaration: {
 
 ### `authDoColumnAdditions` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+const authDoColumnAdditions: (options: LunoraAuthOptions, existingColumns: (table: string) => Iterable<string>) => string[];
+```
 
 ### `authDoSchemaStatements` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+const authDoSchemaStatements: (options: LunoraAuthOptions) => string[];
+```
 
 ### `authTables` (const)
 
@@ -986,7 +1000,9 @@ const createAuthAuditReader: (executor: SqlExecutor) => AuthAuditReader;
 
 ### `createDoAuthWiring` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+const createDoAuthWiring: (options: DoAuthWiringOptions) => DoAuthWiring;
+```
 
 ### `createMemoryAuthStore` (const)
 
@@ -1062,7 +1078,9 @@ const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string)
 
 ### `legacyIssuerCleanupStatements` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+const legacyIssuerCleanupStatements: (accountTable?: string, indexNames?: Iterable<string>) => string[];
+```
 
 ### `listSignUpInvitations` (const)
 
@@ -1092,7 +1110,9 @@ const lunoraD1Adapter: (d1: Parameters<typeof d1Executor>[0]) => ReturnType<type
 
 ### `lunoraDoAdapter` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+const lunoraDoAdapter: (storage: DoStorageLike) => ReturnType<typeof lunoraAuthAdapter>;
+```
 
 ### `matchesWhere` (const)
 
@@ -1186,7 +1206,7 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `lunoraDoAdapter` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/audit`
 
@@ -1695,21 +1715,44 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 ### `OIDCConfig` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface OIDCConfig {
+    issuer: string;
+    pkce: boolean;
+    clientId: string;
+    clientSecret?: string;
+    authorizationEndpoint?: string | undefined;
+    discoveryEndpoint: string;
+    userInfoEndpoint?: string | undefined;
+    scopes?: string[] | undefined;
+    overrideUserInfo?: boolean | undefined;
+    tokenEndpoint?: string | undefined;
+    tokenEndpointAuthentication?: ("client_secret_post" | "client_secret_basic" | "private_key_jwt") | undefined;
+    privateKeyId?: string | undefined;
+    privateKeyAlgorithm?: string | undefined;
+    jwksEndpoint?: string | undefined;
+    mapping?: OIDCMapping | undefined;
+    allowIdpInitiated?: boolean | undefined;
+}
+```
 
 ### `sso` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+const sso: typeof sso$1;
+```
 
 ## `@lunora/auth/plugins/enterprise/client`
 
 ### `SSOClientPlugin` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type SSOClientPlugin = ReturnType<typeof ssoClient>;
+```
 
 ### `ssoClient` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@better-auth/sso` — signature tracked at its source.
 
 ## `@lunora/auth/schema`
 
@@ -1795,6 +1838,18 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `AlgorithmValidationOptions` (interface)
+
+```ts
+interface AlgorithmValidationOptions {
+    onDeprecated?: DeprecatedAlgorithmBehavior;
+    allowedSignatureAlgorithms?: string[];
+    allowedDigestAlgorithms?: string[];
+    allowedKeyEncryptionAlgorithms?: string[];
+    allowedDataEncryptionAlgorithms?: string[];
+}
+```
+
 ### `AuditHookContext` (interface)
 
 ```ts
@@ -1827,6 +1882,47 @@ interface AuditHookContext {
 }
 ```
 
+### `BaseSSOProvider` (type)
+
+```ts
+type BaseSSOProvider = {
+    issuer: string;
+    oidcConfig?: OIDCConfig | undefined;
+    samlConfig?: SAMLConfig | undefined;
+    userId: string;
+    providerId: string;
+    organizationId?: string | undefined;
+    domain: string;
+};
+```
+
+### `BaseSSOProviderMutationGuardInput` (interface)
+
+```ts
+interface BaseSSOProviderMutationGuardInput {
+    provider: {
+        id: string;
+        providerId: string;
+        organizationId: string | null;
+    };
+    providerReference: SSOProviderReference;
+}
+```
+
+### `BaseSSOUserResolutionInput` (interface)
+
+```ts
+interface BaseSSOUserResolutionInput {
+    providerId: string;
+    accountKey: {
+        issuer: string;
+        accountId: string;
+    };
+    providerUser: SSOProviderUserProfile;
+    providerReference: SSOProviderReference;
+}
+```
+
 ### `D1Like` (interface)
 
 ```ts
@@ -1848,6 +1944,12 @@ interface D1Like {
 type DatabaseHooks = NonNullable<BetterAuthOptions["databaseHooks"]>;
 ```
 
+### `DeprecatedAlgorithmBehavior` (type)
+
+```ts
+type DeprecatedAlgorithmBehavior = "reject" | "warn" | "allow";
+```
+
 ### `DoStorageLike` (interface)
 
 ```ts
@@ -1857,6 +1959,25 @@ interface DoStorageLike {
     };
     transaction: <R>(closure: () => Promise<R>) => Promise<R>;
 }
+```
+
+### `DomainVerificationEndpoints` (type)
+
+```ts
+type DomainVerificationEndpoints = {
+    requestDomainVerification: ReturnType<typeof requestDomainVerification>;
+    verifyDomain: ReturnType<typeof verifyDomain>;
+};
+```
+
+### `InferSSOProvider` (type)
+
+```ts
+type InferSSOProvider<O extends SSOOptions, IsClientSide extends boolean = true> = (O["domainVerification"] extends {
+    enabled: true;
+} ? {
+    domainVerified: boolean;
+} & BaseSSOProvider : BaseSSOProvider) & SSOProviderAdditionalFields<O, IsClientSide>;
 ```
 
 ### `McpAuthInstance` (type)
@@ -1882,6 +2003,361 @@ interface MiddlewareNext<ContextIn> {
 }
 ```
 
+### `OIDCMapping` (interface)
+
+```ts
+interface OIDCMapping {
+    email?: string | undefined;
+    emailVerified?: string | undefined;
+    name?: string | undefined;
+    image?: string | undefined;
+    extraFields?: Record<string, string> | undefined;
+}
+```
+
+### `ParsedCert` (type)
+
+```ts
+type ParsedCert = ReturnType<typeof parseCertificate>;
+```
+
+### `SAMLConfig` (interface)
+
+```ts
+interface SAMLConfig {
+    issuer: string;
+    entryPoint: string;
+    cert?: string | string[];
+    audience?: string | undefined;
+    callbackUrl?: string | undefined;
+    idpInitiatedCallbackUrl?: string | undefined;
+    idpMetadata: SAMLIdentityProviderMetadata;
+    spMetadata?: {
+        metadata?: string | undefined;
+        entityID?: string | undefined;
+        binding?: string | undefined;
+        privateKey?: string | undefined;
+        privateKeyPass?: string | undefined;
+        isAssertionEncrypted?: boolean | undefined;
+        encPrivateKey?: string | undefined;
+        encPrivateKeyPass?: string | undefined;
+    };
+    wantAssertionsSigned?: boolean | undefined;
+    authnRequestsSigned?: boolean | undefined;
+    signatureAlgorithm?: string | undefined;
+    digestAlgorithm?: string | undefined;
+    identifierFormat?: string | undefined;
+    privateKey?: string | undefined;
+    mapping?: SAMLMapping | undefined;
+}
+```
+
+### `SAMLIdentityProviderMetadata` (type)
+
+```ts
+type SAMLIdentityProviderMetadata = SAMLIdentityProviderMetadataBase & ({
+    metadata: string;
+    entityID?: string | undefined;
+} | {
+    metadata?: undefined;
+    entityID: string;
+});
+```
+
+### `SAMLIdentityProviderMetadataBase` (interface)
+
+```ts
+interface SAMLIdentityProviderMetadataBase {
+    cert?: string | string[] | undefined;
+    privateKey?: string | undefined;
+    privateKeyPass?: string | undefined;
+    isAssertionEncrypted?: boolean | undefined;
+    encPrivateKey?: string | undefined;
+    encPrivateKeyPass?: string | undefined;
+    singleSignOnService?: Array<{
+        Binding: string;
+        Location: string;
+    }> | undefined;
+    singleLogoutService?: Array<{
+        Binding: string;
+        Location: string;
+    }> | undefined;
+}
+```
+
+### `SAMLMapping` (interface)
+
+```ts
+interface SAMLMapping {
+    email?: string | undefined;
+    emailVerified?: string | undefined;
+    name?: string | undefined;
+    firstName?: string | undefined;
+    lastName?: string | undefined;
+    extraFields?: Record<string, string> | undefined;
+}
+```
+
+### `SSOEndpoints` (type)
+
+```ts
+type SSOEndpoints<O extends SSOOptions> = {
+    spMetadata: ReturnType<typeof spMetadata>;
+    registerSSOProvider: ReturnType<typeof registerSSOProvider<O>>;
+    signInSSO: ReturnType<typeof signInSSO>;
+    callbackSSO: ReturnType<typeof callbackSSO>;
+    callbackSSOShared: ReturnType<typeof callbackSSOShared>;
+    acsEndpoint: ReturnType<typeof acsEndpoint>;
+    sloEndpoint: ReturnType<typeof sloEndpoint>;
+    initiateSLO: ReturnType<typeof initiateSLO>;
+    listSSOProviders: ReturnType<typeof listSSOProviders>;
+    getSSOProvider: ReturnType<typeof getSSOProvider>;
+    updateSSOProvider: ReturnType<typeof updateSSOProvider>;
+    deleteSSOProvider: ReturnType<typeof deleteSSOProvider>;
+};
+```
+
+### `SSOOIDCUserResolutionInput` (interface)
+
+```ts
+interface SSOOIDCUserResolutionInput extends BaseSSOUserResolutionInput {
+    protocol: "oidc";
+    providerClaims: Record<string, unknown>;
+    verifiedIdTokenClaims: Record<string, unknown>;
+}
+```
+
+### `SSOOptions` (interface)
+
+```ts
+interface SSOOptions {
+    resolveUser?: ((input: SSOUserResolutionInput, context: SSOUserResolutionContext) => Awaitable<SSOUserResolution>) | undefined;
+    guardProviderMutation?: ((input: SSOProviderMutationGuardInput, context: SSOProviderMutationGuardContext) => Awaitable<void>) | undefined;
+    provisionUser?: ((data: {
+        user: User & Record<string, any>;
+        userInfo: Record<string, any>;
+        token?: OAuth2Tokens;
+        provider: SSOProvider<SSOOptions>;
+    }) => Awaitable<void>) | undefined;
+    provisionUserOnEveryLogin?: boolean;
+    organizationProvisioning?: {
+        disabled?: boolean;
+        defaultRole?: "member" | "admin";
+        getRole?: (data: {
+            user: User & Record<string, any>;
+            userInfo: Record<string, any>;
+            token?: OAuth2Tokens;
+            provider: SSOProvider<SSOOptions>;
+        }) => Promise<"member" | "admin">;
+    } | undefined;
+    defaultSSO?: Array<{
+        domain: string;
+        providerId: string;
+        samlConfig?: SAMLConfig;
+        oidcConfig?: OIDCConfig;
+        privateKey?: {
+            privateKeyJwk?: JsonWebKey;
+            privateKeyPem?: string;
+        };
+    }> | undefined;
+    defaultOverrideUserInfo?: boolean | undefined;
+    disableImplicitSignUp?: boolean | undefined;
+    modelName?: string;
+    fields?: {
+        issuer?: string | undefined;
+        oidcConfig?: string | undefined;
+        samlConfig?: string | undefined;
+        userId?: string | undefined;
+        providerId?: string | undefined;
+        organizationId?: string | undefined;
+        domain?: string | undefined;
+    };
+    schema?: {
+        ssoProvider?: {
+            modelName?: string | undefined;
+            fields?: {
+                issuer?: string | undefined;
+                oidcConfig?: string | undefined;
+                samlConfig?: string | undefined;
+                userId?: string | undefined;
+                providerId?: string | undefined;
+                organizationId?: string | undefined;
+                domain?: string | undefined;
+                domainVerified?: string | undefined;
+            };
+            additionalFields?: {
+                [key in string]: DBFieldAttribute;
+            };
+        };
+    } | undefined;
+    providersLimit?: (number | ((user: User) => Awaitable<number>)) | undefined;
+    trustEmailVerified?: boolean | undefined;
+    domainVerification?: {
+        enabled?: boolean;
+        tokenPrefix?: string;
+    };
+    redirectURI?: string;
+    resolvePrivateKey?: (params: {
+        providerId: string;
+        keyId?: string;
+        issuer: string;
+    }) => Promise<{
+        privateKeyJwk?: JsonWebKey;
+        privateKeyPem?: string;
+        kid?: string;
+        algorithm?: string;
+    }>;
+    saml?: {
+        enableInResponseToValidation?: boolean;
+        allowIdpInitiated?: boolean;
+        requestTTL?: number;
+        clockSkew?: number;
+        requireTimestamps?: boolean;
+        algorithms?: AlgorithmValidationOptions;
+        maxResponseSize?: number;
+        maxMetadataSize?: number;
+        enableSingleLogout?: boolean;
+        logoutRequestTTL?: number;
+        wantLogoutRequestSigned?: boolean;
+        wantLogoutResponseSigned?: boolean;
+        idpInitiatedCallbackUrl?: string | undefined;
+    };
+}
+```
+
+### `SSOProvider` (type)
+
+```ts
+type SSOProvider<O extends SSOOptions> = O["domainVerification"] extends {
+    enabled: true;
+} ? {
+    domainVerified: boolean;
+} & BaseSSOProvider & SSOProviderAdditionalFields<O, false> : BaseSSOProvider & SSOProviderAdditionalFields<O, false>;
+```
+
+### `SSOProviderAdditionalFields` (type)
+
+```ts
+type SSOProviderAdditionalFields<O extends SSOOptions, IsClientSide extends boolean> = O["schema"] extends {
+    ssoProvider?: {
+        additionalFields: infer Field extends Record<string, DBFieldAttribute>;
+    };
+} ? IsClientSide extends true ? FieldAttributeToObject<RemoveFieldsWithReturnedFalse<Field>> : FieldAttributeToObject<Field> : {};
+```
+
+### `SSOProviderAdditionalFieldsInput` (type)
+
+```ts
+type SSOProviderAdditionalFieldsInput<O extends SSOOptions, IsClientSide extends boolean = true> = InferAdditionalFieldsFromPluginOptions<"ssoProvider", O, IsClientSide>;
+```
+
+### `SSOProviderMutationGuardContext` (interface)
+
+```ts
+interface SSOProviderMutationGuardContext {
+    database: DBTransactionAdapter;
+}
+```
+
+### `SSOProviderMutationGuardInput` (type)
+
+```ts
+type SSOProviderMutationGuardInput = (BaseSSOProviderMutationGuardInput & {
+    action: "update";
+    isAuthenticationBoundaryChange: boolean;
+}) | (BaseSSOProviderMutationGuardInput & {
+    action: "delete";
+});
+```
+
+### `SSOProviderReference` (interface)
+
+```ts
+interface SSOProviderReference {
+    providerId: string;
+    source: {
+        type: "configured";
+    } | {
+        type: "persisted";
+        recordId: string;
+    };
+    authenticationConfigurationFingerprint: string;
+}
+```
+
+### `SSOProviderSchema` (type)
+
+```ts
+type SSOProviderSchema<O extends SSOOptions> = {
+    ssoProvider: {
+        modelName: string;
+        fields: Record<string, DBFieldAttribute> & (O["schema"] extends {
+            ssoProvider?: {
+                additionalFields: infer Field extends Record<string, DBFieldAttribute>;
+            };
+        } ? Field : {});
+    };
+};
+```
+
+### `SSOProviderUserProfile` (type)
+
+```ts
+type SSOProviderUserProfile = {
+    email: string;
+    emailVerified: boolean;
+    name: string;
+    image?: string | null | undefined;
+} & Record<string, unknown>;
+```
+
+### `SSOSAMLUserResolutionInput` (interface)
+
+```ts
+interface SSOSAMLUserResolutionInput extends BaseSSOUserResolutionInput {
+    protocol: "saml";
+    providerAttributes: Record<string, string | readonly string[]>;
+}
+```
+
+### `SSOUserResolution` (type)
+
+```ts
+type SSOUserResolution = {
+    action: "continue";
+} | {
+    action: "link";
+    userId: string;
+    profile: "preserve" | "update";
+} | {
+    action: "reject";
+    code: string;
+    message?: string | undefined;
+};
+```
+
+### `SSOUserResolutionContext` (interface)
+
+```ts
+interface SSOUserResolutionContext {
+    database: DBTransactionAdapter;
+}
+```
+
+### `SSOUserResolutionInput` (type)
+
+```ts
+type SSOUserResolutionInput = SSOOIDCUserResolutionInput | SSOSAMLUserResolutionInput;
+```
+
+### `SanitizedCert` (type)
+
+```ts
+type SanitizedCert = ParsedCert | {
+    error: string;
+};
+```
+
 ### `TransactionRunner` (type)
 
 ```ts
@@ -1892,4 +2368,1053 @@ type TransactionRunner = <R>(closure: () => Promise<R>) => Promise<R>;
 
 ```ts
 type WhereValue = boolean | number | string;
+```
+
+### `acsEndpoint` (const)
+
+```ts
+const acsEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/sp/acs/:providerId", {
+    method: ("GET" | "POST")[];
+    body: z.ZodOptional<z.ZodObject<{
+        SAMLResponse: z.ZodString;
+        RelayState: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    query: z.ZodOptional<z.ZodObject<{
+        RelayState: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    metadata: {
+        allowedMediaTypes: string[];
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            responses: {
+                "302": {
+                    description: string;
+                };
+                "400": {
+                    description: string;
+                };
+                "404": {
+                    description: string;
+                };
+            };
+        };
+        scope: "server";
+    };
+}, never>;
+```
+
+### `callbackSSO` (const)
+
+```ts
+const callbackSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/callback/:providerId", {
+    method: "GET";
+    query: z.ZodObject<{
+        code: z.ZodOptional<z.ZodString>;
+        state: z.ZodOptional<z.ZodString>;
+        error: z.ZodOptional<z.ZodString>;
+        error_description: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>;
+    allowedMediaTypes: readonly [
+        "application/x-www-form-urlencoded",
+        "application/json"
+    ];
+    metadata: {
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            responses: {
+                "302": {
+                    description: string;
+                };
+            };
+        };
+        scope: "server";
+    };
+}, never>;
+```
+
+### `callbackSSOShared` (const)
+
+```ts
+const callbackSSOShared: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/callback", {
+    metadata: {
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            responses: {
+                "302": {
+                    description: string;
+                };
+            };
+        };
+        scope: "server";
+    };
+    method: "GET";
+    query: z.ZodObject<{
+        code: z.ZodOptional<z.ZodString>;
+        state: z.ZodOptional<z.ZodString>;
+        error: z.ZodOptional<z.ZodString>;
+        error_description: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>;
+    allowedMediaTypes: readonly [
+        "application/x-www-form-urlencoded",
+        "application/json"
+    ];
+}, never>;
+```
+
+### `deleteSSOProvider` (const)
+
+```ts
+const deleteSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/delete-provider", {
+    method: "POST";
+    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+        session: {
+            session: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                userId: string;
+                expiresAt: Date;
+                token: string;
+                ipAddress?: string | null | undefined;
+                userAgent?: string | null | undefined;
+            };
+            user: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                email: string;
+                emailVerified: boolean;
+                name: string;
+                image?: string | null | undefined;
+            };
+        };
+    }>>[];
+    body: z.ZodObject<{
+        providerId: z.ZodString;
+    }, z.core.$strip>;
+    metadata: {
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            responses: {
+                "200": {
+                    description: string;
+                };
+                "404": {
+                    description: string;
+                };
+                "403": {
+                    description: string;
+                };
+            };
+        };
+    };
+}, {
+    success: boolean;
+}>;
+```
+
+### `getSSOProvider` (const)
+
+```ts
+const getSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/get-provider", {
+    method: "GET";
+    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+        session: {
+            session: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                userId: string;
+                expiresAt: Date;
+                token: string;
+                ipAddress?: string | null | undefined;
+                userAgent?: string | null | undefined;
+            };
+            user: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                email: string;
+                emailVerified: boolean;
+                name: string;
+                image?: string | null | undefined;
+            };
+        };
+    }>>[];
+    query: z.ZodObject<{
+        providerId: z.ZodString;
+    }, z.core.$strip>;
+    metadata: {
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            responses: {
+                "200": {
+                    description: string;
+                };
+                "404": {
+                    description: string;
+                };
+                "403": {
+                    description: string;
+                };
+            };
+        };
+    };
+}, {
+    providerId: string;
+    type: string;
+    issuer: string;
+    domain: string;
+    organizationId: string | null;
+    domainVerified: boolean;
+    oidcConfig: {
+        discoveryEndpoint: string;
+        clientIdLastFour: string;
+        pkce: boolean;
+        authorizationEndpoint: string | undefined;
+        tokenEndpoint: string | undefined;
+        userInfoEndpoint: string | undefined;
+        jwksEndpoint: string | undefined;
+        scopes: string[] | undefined;
+        tokenEndpointAuthentication: "client_secret_post" | "client_secret_basic" | "private_key_jwt" | undefined;
+    } | undefined;
+    samlConfig: {
+        entryPoint: string;
+        callbackUrl: string | undefined;
+        idpInitiatedCallbackUrl: string | undefined;
+        audience: string | undefined;
+        wantAssertionsSigned: boolean | undefined;
+        authnRequestsSigned: boolean | undefined;
+        identifierFormat: string | undefined;
+        signatureAlgorithm: string | undefined;
+        digestAlgorithm: string | undefined;
+        certificate: SanitizedCert[] | undefined;
+    } | undefined;
+    spMetadataUrl: string;
+}>;
+```
+
+### `initiateSLO` (const)
+
+```ts
+const initiateSLO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/logout/:providerId", {
+    method: "POST";
+    body: z.ZodObject<{
+        callbackURL: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>;
+    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+        session: {
+            session: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                userId: string;
+                expiresAt: Date;
+                token: string;
+                ipAddress?: string | null | undefined;
+                userAgent?: string | null | undefined;
+            };
+            user: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                email: string;
+                emailVerified: boolean;
+                name: string;
+                image?: string | null | undefined;
+            };
+        };
+    }>>[];
+    metadata: {
+        readonly scope: "server";
+    };
+}, never>;
+```
+
+### `listSSOProviders` (const)
+
+```ts
+const listSSOProviders: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/providers", {
+    method: "GET";
+    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+        session: {
+            session: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                userId: string;
+                expiresAt: Date;
+                token: string;
+                ipAddress?: string | null | undefined;
+                userAgent?: string | null | undefined;
+            };
+            user: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                email: string;
+                emailVerified: boolean;
+                name: string;
+                image?: string | null | undefined;
+            };
+        };
+    }>>[];
+    metadata: {
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            responses: {
+                "200": {
+                    description: string;
+                };
+            };
+        };
+    };
+}, {
+    providers: {
+        providerId: string;
+        type: string;
+        issuer: string;
+        domain: string;
+        organizationId: string | null;
+        domainVerified: boolean;
+        oidcConfig: {
+            discoveryEndpoint: string;
+            clientIdLastFour: string;
+            pkce: boolean;
+            authorizationEndpoint: string | undefined;
+            tokenEndpoint: string | undefined;
+            userInfoEndpoint: string | undefined;
+            jwksEndpoint: string | undefined;
+            scopes: string[] | undefined;
+            tokenEndpointAuthentication: "client_secret_post" | "client_secret_basic" | "private_key_jwt" | undefined;
+        } | undefined;
+        samlConfig: {
+            entryPoint: string;
+            callbackUrl: string | undefined;
+            idpInitiatedCallbackUrl: string | undefined;
+            audience: string | undefined;
+            wantAssertionsSigned: boolean | undefined;
+            authnRequestsSigned: boolean | undefined;
+            identifierFormat: string | undefined;
+            signatureAlgorithm: string | undefined;
+            digestAlgorithm: string | undefined;
+            certificate: SanitizedCert[] | undefined;
+        } | undefined;
+        spMetadataUrl: string;
+    }[];
+}>;
+```
+
+### `parseCertificate` (function)
+
+```ts
+function parseCertificate(certPem: string): {
+    fingerprintSha256: string;
+    notBefore: string;
+    notAfter: string;
+    publicKeyAlgorithm: string;
+};
+```
+
+### `registerSSOProvider` (const)
+
+```ts
+const registerSSOProvider: <O extends SSOOptions>(options: O) => _$better_call0.StrictEndpoint<"/sso/register", {
+    method: "POST";
+    body: z.ZodObject<{
+        [x: string]: z.ZodOptional<z.ZodAny>;
+    }, z.core.$strip>;
+    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+        session: {
+            session: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                userId: string;
+                expiresAt: Date;
+                token: string;
+                ipAddress?: string | null | undefined;
+                userAgent?: string | null | undefined;
+            };
+            user: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                email: string;
+                emailVerified: boolean;
+                name: string;
+                image?: string | null | undefined;
+            };
+        };
+    }>>[];
+    metadata: {
+        $Infer: {
+            body: Record<string, any> & SSOProviderAdditionalFieldsInput<O>;
+        };
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            responses: {
+                "200": {
+                    description: string;
+                    content: {
+                        "application/json": {
+                            schema: {
+                                type: "object";
+                                properties: {
+                                    issuer: {
+                                        type: string;
+                                        format: string;
+                                        description: string;
+                                    };
+                                    domain: {
+                                        type: string;
+                                        description: string;
+                                    };
+                                    domainVerified: {
+                                        type: string;
+                                        description: string;
+                                    };
+                                    domainVerificationToken: {
+                                        type: string;
+                                        description: string;
+                                    };
+                                    oidcConfig: {
+                                        type: string;
+                                        properties: {
+                                            issuer: {
+                                                type: string;
+                                                format: string;
+                                                description: string;
+                                            };
+                                            pkce: {
+                                                type: string;
+                                                description: string;
+                                            };
+                                            clientId: {
+                                                type: string;
+                                                description: string;
+                                            };
+                                            clientSecret: {
+                                                type: string;
+                                                description: string;
+                                            };
+                                            authorizationEndpoint: {
+                                                type: string;
+                                                format: string;
+                                                nullable: boolean;
+                                                description: string;
+                                            };
+                                            discoveryEndpoint: {
+                                                type: string;
+                                                format: string;
+                                                description: string;
+                                            };
+                                            userInfoEndpoint: {
+                                                type: string;
+                                                format: string;
+                                                nullable: boolean;
+                                                description: string;
+                                            };
+                                            scopes: {
+                                                type: string;
+                                                items: {
+                                                    type: string;
+                                                };
+                                                nullable: boolean;
+                                                description: string;
+                                            };
+                                            tokenEndpoint: {
+                                                type: string;
+                                                format: string;
+                                                nullable: boolean;
+                                                description: string;
+                                            };
+                                            tokenEndpointAuthentication: {
+                                                type: string;
+                                                enum: string[];
+                                                nullable: boolean;
+                                                description: string;
+                                            };
+                                            jwksEndpoint: {
+                                                type: string;
+                                                format: string;
+                                                nullable: boolean;
+                                                description: string;
+                                            };
+                                            mapping: {
+                                                type: string;
+                                                nullable: boolean;
+                                                properties: {
+                                                    email: {
+                                                        type: string;
+                                                        description: string;
+                                                    };
+                                                    emailVerified: {
+                                                        type: string;
+                                                        nullable: boolean;
+                                                        description: string;
+                                                    };
+                                                    name: {
+                                                        type: string;
+                                                        description: string;
+                                                    };
+                                                    image: {
+                                                        type: string;
+                                                        nullable: boolean;
+                                                        description: string;
+                                                    };
+                                                    extraFields: {
+                                                        type: string;
+                                                        additionalProperties: {
+                                                            type: string;
+                                                        };
+                                                        nullable: boolean;
+                                                        description: string;
+                                                    };
+                                                };
+                                                required: string[];
+                                            };
+                                        };
+                                        required: string[];
+                                        description: string;
+                                    };
+                                    organizationId: {
+                                        type: string;
+                                        nullable: boolean;
+                                        description: string;
+                                    };
+                                    userId: {
+                                        type: string;
+                                        description: string;
+                                    };
+                                    providerId: {
+                                        type: string;
+                                        description: string;
+                                    };
+                                    redirectURI: {
+                                        type: string;
+                                        format: string;
+                                        description: string;
+                                    };
+                                };
+                                required: string[];
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
+}, O["domainVerification"] extends {
+    enabled: true;
+} ? {
+    redirectURI: string;
+    oidcConfig: OIDCConfig | null;
+    samlConfig: SAMLConfig | null;
+} & Omit<InferSSOProvider<O>, "samlConfig" | "oidcConfig"> & {
+    domainVerified: boolean;
+    domainVerificationToken: string;
+} : {
+    redirectURI: string;
+    oidcConfig: OIDCConfig | null;
+    samlConfig: SAMLConfig | null;
+} & Omit<InferSSOProvider<O>, "samlConfig" | "oidcConfig">>;
+```
+
+### `requestDomainVerification` (const)
+
+```ts
+const requestDomainVerification: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/request-domain-verification", {
+    method: "POST";
+    body: z.ZodObject<{
+        providerId: z.ZodString;
+    }, z.core.$strip>;
+    metadata: {
+        openapi: {
+            summary: string;
+            description: string;
+            responses: {
+                "404": {
+                    description: string;
+                };
+                "409": {
+                    description: string;
+                };
+                "201": {
+                    description: string;
+                };
+            };
+        };
+    };
+    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+        session: {
+            session: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                userId: string;
+                expiresAt: Date;
+                token: string;
+                ipAddress?: string | null | undefined;
+                userAgent?: string | null | undefined;
+            };
+            user: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                email: string;
+                emailVerified: boolean;
+                name: string;
+                image?: string | null | undefined;
+            };
+        };
+    }>>[];
+}, {
+    domainVerificationToken: string;
+}>;
+```
+
+### `signInSSO` (const)
+
+```ts
+const signInSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sign-in/sso", {
+    method: "POST";
+    body: z.ZodObject<{
+        email: z.ZodOptional<z.ZodString>;
+        organizationSlug: z.ZodOptional<z.ZodString>;
+        providerId: z.ZodOptional<z.ZodString>;
+        domain: z.ZodOptional<z.ZodString>;
+        callbackURL: z.ZodString;
+        errorCallbackURL: z.ZodOptional<z.ZodString>;
+        newUserCallbackURL: z.ZodOptional<z.ZodString>;
+        scopes: z.ZodOptional<z.ZodArray<z.ZodString>>;
+        loginHint: z.ZodOptional<z.ZodString>;
+        additionalParams: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
+        requestSignUp: z.ZodOptional<z.ZodBoolean>;
+        providerType: z.ZodOptional<z.ZodEnum<{
+            saml: "saml";
+            oidc: "oidc";
+        }>>;
+    }, z.core.$strip>;
+    metadata: {
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        schema: {
+                            type: "object";
+                            properties: {
+                                email: {
+                                    type: string;
+                                    description: string;
+                                };
+                                organizationSlug: {
+                                    type: string;
+                                    description: string;
+                                };
+                                providerId: {
+                                    type: string;
+                                    description: string;
+                                };
+                                domain: {
+                                    type: string;
+                                    description: string;
+                                };
+                                callbackURL: {
+                                    type: string;
+                                    description: string;
+                                };
+                                errorCallbackURL: {
+                                    type: string;
+                                    description: string;
+                                };
+                                newUserCallbackURL: {
+                                    type: string;
+                                    description: string;
+                                };
+                                scopes: {
+                                    type: string;
+                                    items: {
+                                        type: string;
+                                    };
+                                    description: string;
+                                };
+                                loginHint: {
+                                    type: string;
+                                    description: string;
+                                };
+                                additionalParams: {
+                                    type: string;
+                                    additionalProperties: {
+                                        type: string;
+                                    };
+                                    description: string;
+                                };
+                                requestSignUp: {
+                                    type: string;
+                                    description: string;
+                                };
+                                providerType: {
+                                    type: string;
+                                    enum: string[];
+                                    description: string;
+                                };
+                            };
+                            required: string[];
+                        };
+                    };
+                };
+            };
+            responses: {
+                "200": {
+                    description: string;
+                    content: {
+                        "application/json": {
+                            schema: {
+                                type: "object";
+                                properties: {
+                                    url: {
+                                        type: string;
+                                        format: string;
+                                        description: string;
+                                    };
+                                    redirect: {
+                                        type: string;
+                                        description: string;
+                                        enum: boolean[];
+                                    };
+                                };
+                                required: string[];
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
+}, {
+    url: string;
+    redirect: boolean;
+}>;
+```
+
+### `sloEndpoint` (const)
+
+```ts
+const sloEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/sp/slo/:providerId", {
+    method: ("GET" | "POST")[];
+    body: z.ZodOptional<z.ZodObject<{
+        SAMLRequest: z.ZodOptional<z.ZodString>;
+        SAMLResponse: z.ZodOptional<z.ZodString>;
+        RelayState: z.ZodOptional<z.ZodString>;
+        SigAlg: z.ZodOptional<z.ZodString>;
+        Signature: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    query: z.ZodOptional<z.ZodObject<{
+        SAMLRequest: z.ZodOptional<z.ZodString>;
+        SAMLResponse: z.ZodOptional<z.ZodString>;
+        RelayState: z.ZodOptional<z.ZodString>;
+        SigAlg: z.ZodOptional<z.ZodString>;
+        Signature: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    metadata: {
+        allowedMediaTypes: string[];
+        scope: "server";
+    };
+}, void | Response>;
+```
+
+### `spMetadata` (const)
+
+```ts
+const spMetadata: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/sp/metadata", {
+    method: "GET";
+    query: z.ZodObject<{
+        providerId: z.ZodString;
+    }, z.core.$strip>;
+    metadata: {
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            responses: {
+                "200": {
+                    description: string;
+                };
+            };
+        };
+    };
+}, Response>;
+```
+
+### `sso$1` (function)
+
+```ts
+function sso$1<O extends SSOOptions & {
+    domainVerification?: {
+        enabled: true;
+    };
+}>(options?: O | undefined): {
+    id: "sso";
+    version: string;
+    endpoints: SSOEndpoints<O> & DomainVerificationEndpoints;
+    schema: SSOProviderSchema<O>;
+    $Infer: {
+        SSOProvider: InferSSOProvider<O>;
+    };
+    options: NoInfer<O>;
+};
+```
+
+### `sso$1` (function)
+
+```ts
+function sso$1<O extends SSOOptions>(options?: O | undefined): {
+    id: "sso";
+    version: string;
+    endpoints: SSOEndpoints<O>;
+    schema: SSOProviderSchema<O>;
+    $Infer: {
+        SSOProvider: InferSSOProvider<O>;
+    };
+    options: NoInfer<O>;
+};
+```
+
+### `updateSSOProvider` (const)
+
+```ts
+const updateSSOProvider: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/update-provider", {
+    method: "POST";
+    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+        session: {
+            session: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                userId: string;
+                expiresAt: Date;
+                token: string;
+                ipAddress?: string | null | undefined;
+                userAgent?: string | null | undefined;
+            };
+            user: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                email: string;
+                emailVerified: boolean;
+                name: string;
+                image?: string | null | undefined;
+            };
+        };
+    }>>[];
+    body: z.ZodObject<{
+        issuer: z.ZodOptional<z.ZodString>;
+        domain: z.ZodOptional<z.ZodString>;
+        oidcConfig: z.ZodOptional<z.ZodObject<{
+            clientId: z.ZodOptional<z.ZodString>;
+            clientSecret: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            authorizationEndpoint: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            tokenEndpoint: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            userInfoEndpoint: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            tokenEndpointAuthentication: z.ZodOptional<z.ZodOptional<z.ZodEnum<{
+                client_secret_post: "client_secret_post";
+                client_secret_basic: "client_secret_basic";
+                private_key_jwt: "private_key_jwt";
+            }>>>;
+            privateKeyId: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            privateKeyAlgorithm: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            jwksEndpoint: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            discoveryEndpoint: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            skipDiscovery: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
+            scopes: z.ZodOptional<z.ZodOptional<z.ZodArray<z.ZodString>>>;
+            pkce: z.ZodOptional<z.ZodOptional<z.ZodDefault<z.ZodBoolean>>>;
+            overrideUserInfo: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
+            mapping: z.ZodOptional<z.ZodOptional<z.ZodObject<{
+                email: z.ZodString;
+                emailVerified: z.ZodOptional<z.ZodString>;
+                name: z.ZodString;
+                image: z.ZodOptional<z.ZodString>;
+                extraFields: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodAny>>;
+            }, z.core.$strict>>>;
+        }, z.core.$strip>>;
+        samlConfig: z.ZodOptional<z.ZodObject<{
+            audience: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            mapping: z.ZodOptional<z.ZodOptional<z.ZodObject<{
+                email: z.ZodString;
+                emailVerified: z.ZodOptional<z.ZodString>;
+                name: z.ZodString;
+                firstName: z.ZodOptional<z.ZodString>;
+                lastName: z.ZodOptional<z.ZodString>;
+                extraFields: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodAny>>;
+            }, z.core.$strict>>>;
+            privateKey: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            spMetadata: z.ZodOptional<z.ZodOptional<z.ZodObject<{
+                metadata: z.ZodOptional<z.ZodString>;
+                entityID: z.ZodOptional<z.ZodString>;
+                binding: z.ZodOptional<z.ZodString>;
+                privateKey: z.ZodOptional<z.ZodString>;
+                privateKeyPass: z.ZodOptional<z.ZodString>;
+                isAssertionEncrypted: z.ZodOptional<z.ZodBoolean>;
+                encPrivateKey: z.ZodOptional<z.ZodString>;
+                encPrivateKeyPass: z.ZodOptional<z.ZodString>;
+            }, z.core.$strip>>>;
+            cert: z.ZodOptional<z.ZodOptional<z.ZodUnion<readonly [
+                z.ZodString,
+                z.ZodArray<z.ZodString>
+            ]>>>;
+            entryPoint: z.ZodOptional<z.ZodString>;
+            callbackUrl: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            wantAssertionsSigned: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
+            authnRequestsSigned: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
+            signatureAlgorithm: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            digestAlgorithm: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            identifierFormat: z.ZodOptional<z.ZodOptional<z.ZodString>>;
+            idpInitiatedCallbackUrl: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+            idpMetadata: z.ZodOptional<z.ZodObject<{
+                cert: z.ZodOptional<z.ZodUnion<readonly [
+                    z.ZodString,
+                    z.ZodArray<z.ZodString>
+                ]>>;
+                privateKey: z.ZodOptional<z.ZodString>;
+                privateKeyPass: z.ZodOptional<z.ZodString>;
+                isAssertionEncrypted: z.ZodOptional<z.ZodBoolean>;
+                encPrivateKey: z.ZodOptional<z.ZodString>;
+                encPrivateKeyPass: z.ZodOptional<z.ZodString>;
+                singleSignOnService: z.ZodOptional<z.ZodArray<z.ZodObject<{
+                    Binding: z.ZodString;
+                    Location: z.ZodString;
+                }, z.core.$strip>>>;
+                singleLogoutService: z.ZodOptional<z.ZodArray<z.ZodObject<{
+                    Binding: z.ZodString;
+                    Location: z.ZodString;
+                }, z.core.$strip>>>;
+                metadata: z.ZodOptional<z.ZodString>;
+                entityID: z.ZodOptional<z.ZodString>;
+            }, z.core.$strip>>;
+        }, z.core.$strip>>;
+        providerId: z.ZodString;
+    }, z.core.$strip>;
+    metadata: {
+        openapi: {
+            operationId: string;
+            summary: string;
+            description: string;
+            responses: {
+                "200": {
+                    description: string;
+                };
+                "404": {
+                    description: string;
+                };
+                "403": {
+                    description: string;
+                };
+            };
+        };
+    };
+}, {
+    providerId: string;
+    type: string;
+    issuer: string;
+    domain: string;
+    organizationId: string | null;
+    domainVerified: boolean;
+    oidcConfig: {
+        discoveryEndpoint: string;
+        clientIdLastFour: string;
+        pkce: boolean;
+        authorizationEndpoint: string | undefined;
+        tokenEndpoint: string | undefined;
+        userInfoEndpoint: string | undefined;
+        jwksEndpoint: string | undefined;
+        scopes: string[] | undefined;
+        tokenEndpointAuthentication: "client_secret_post" | "client_secret_basic" | "private_key_jwt" | undefined;
+    } | undefined;
+    samlConfig: {
+        entryPoint: string;
+        callbackUrl: string | undefined;
+        idpInitiatedCallbackUrl: string | undefined;
+        audience: string | undefined;
+        wantAssertionsSigned: boolean | undefined;
+        authnRequestsSigned: boolean | undefined;
+        identifierFormat: string | undefined;
+        signatureAlgorithm: string | undefined;
+        digestAlgorithm: string | undefined;
+        certificate: SanitizedCert[] | undefined;
+    } | undefined;
+    spMetadataUrl: string;
+}>;
+```
+
+### `verifyDomain` (const)
+
+```ts
+const verifyDomain: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/verify-domain", {
+    method: "POST";
+    body: z.ZodObject<{
+        providerId: z.ZodString;
+    }, z.core.$strip>;
+    metadata: {
+        openapi: {
+            summary: string;
+            description: string;
+            responses: {
+                "404": {
+                    description: string;
+                };
+                "409": {
+                    description: string;
+                };
+                "502": {
+                    description: string;
+                };
+                "204": {
+                    description: string;
+                };
+            };
+        };
+    };
+    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+        session: {
+            session: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                userId: string;
+                expiresAt: Date;
+                token: string;
+                ipAddress?: string | null | undefined;
+                userAgent?: string | null | undefined;
+            };
+            user: Record<string, any> & {
+                id: string;
+                createdAt: Date;
+                updatedAt: Date;
+                email: string;
+                emailVerified: boolean;
+                name: string;
+                image?: string | null | undefined;
+            };
+        };
+    }>>[];
+}, void>;
 ```

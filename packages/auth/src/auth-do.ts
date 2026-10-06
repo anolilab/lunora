@@ -25,7 +25,6 @@
  * hot path, enable better-auth's `session.cookieCache` so most requests are served
  * from the signed cookie instead of a round-trip in here — at the cost of a
  * staleness window on revocation, which is the trade to make deliberately.
- * @experimental
  */
 import { getAuthTablesWithResolvedIndexes } from "@better-auth/core/db/internal";
 import { toErrorBody } from "@lunora/errors";
@@ -110,7 +109,6 @@ const parseReadAuditOptions = (parsed: unknown): { error: string } | { options: 
 
 /**
  * Options for the auth DO, beyond the better-auth options themselves.
- * @experimental
  */
 interface AuthDoOptions {
     /**
@@ -140,7 +138,6 @@ interface AuthDoOptions {
  *     }
  * }
  * ```
- * @experimental
  */
 class LunoraAuthDO {
     /**

@@ -8,7 +8,6 @@
  * template literal cannot be unit-tested — it is only ever typechecked after
  * generation, so a wrong header name or a mis-built URL compiles cleanly and fails in
  * production. Here it is ordinary code with ordinary tests, and codegen emits a call.
- * @experimental
  */
 /* eslint-disable unicorn/no-null -- `resolveIdentity` is a runtime contract that returns `null` for an anonymous request; `undefined` would be a different signal */
 import { LunoraError } from "@lunora/errors";
@@ -130,7 +129,6 @@ export interface DoAuthWiring {
  * The exception is a `jurisdiction` the namespace cannot express, which throws here.
  * @param options The resolved namespace, secret, and names.
  * @returns The `authHandler` / `resolveIdentity` pair.
- * @experimental
  */
 export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
     const { internalSecret, jurisdiction, objectName = "auth" } = options;

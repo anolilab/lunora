@@ -747,7 +747,16 @@ const isFunctionUsagePanel: (value: unknown) => value is FunctionUsagePanel;
 
 ### `ArtifactsActivityEnvelope` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface ArtifactsActivityEnvelope {
+    metadata: ArtifactsEventMetadata;
+    source: {
+        namespace: string;
+        repoName: string;
+        type: "artifacts.repo";
+    };
+}
+```
 
 ### `ArtifactsBindingLike` (interface)
 
@@ -846,11 +855,20 @@ interface ArtifactsErrorData {
 
 ### `ArtifactsEvent` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type ArtifactsEvent = ArtifactsRepoActivityEvent | ArtifactsRepoLifecycleEvent;
+```
 
 ### `ArtifactsEventMetadata` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface ArtifactsEventMetadata {
+    accountId: string;
+    eventSchemaVersion: 1;
+    eventSubscriptionId: string;
+    eventTimestamp: string;
+}
+```
 
 ### `ArtifactsForkOptions` (interface)
 
@@ -883,7 +901,16 @@ interface ArtifactsImportParams {
 
 ### `ArtifactsLifecycleEnvelope` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface ArtifactsLifecycleEnvelope {
+    metadata: ArtifactsEventMetadata;
+    source: {
+        namespace: string;
+        repoName: string;
+        type: "artifacts";
+    };
+}
+```
 
 ### `ArtifactsListOptions` (interface)
 
@@ -929,7 +956,37 @@ interface ArtifactsReadFileArgs {
 
 ### `ArtifactsRepoActivityEvent` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type ArtifactsRepoActivityEvent = (ArtifactsActivityEnvelope & {
+    payload: {
+        after: string;
+        before: string;
+        commits: ArtifactsPushedCommit[];
+        commitsTruncated: boolean;
+        ref: string;
+        totalCommitsCount: number;
+    };
+    type: "cf.artifacts.repo.pushed";
+}) | (ArtifactsActivityEnvelope & {
+    payload: {
+        expiresAt: string;
+        scope: ArtifactsTokenScope;
+        tokenId: string;
+    };
+    type: "cf.artifacts.repo.token.created";
+}) | (ArtifactsActivityEnvelope & {
+    payload: {
+        tokenId: string;
+    };
+    type: "cf.artifacts.repo.token.revoked";
+}) | (ArtifactsActivityEnvelope & {
+    payload: Record<string, never>;
+    type: "cf.artifacts.repo.cloned";
+}) | (ArtifactsActivityEnvelope & {
+    payload: Record<string, never>;
+    type: "cf.artifacts.repo.fetched";
+});
+```
 
 ### `ArtifactsRepoClient` (interface)
 
@@ -981,7 +1038,27 @@ interface ArtifactsRepoInfo {
 
 ### `ArtifactsRepoLifecycleEvent` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type ArtifactsRepoLifecycleEvent = (ArtifactsLifecycleEnvelope & {
+    payload: ArtifactsRepoEventState & {
+        branch: string;
+        sourceUrl: string;
+    };
+    type: "cf.artifacts.repo.imported";
+}) | (ArtifactsLifecycleEnvelope & {
+    payload: ArtifactsRepoEventState & {
+        namespace: string;
+        repoName: string;
+    };
+    type: "cf.artifacts.repo.forked";
+}) | (ArtifactsLifecycleEnvelope & {
+    payload: ArtifactsRepoEventState;
+    type: "cf.artifacts.repo.created";
+}) | (ArtifactsLifecycleEnvelope & {
+    payload: ArtifactsRepoEventState;
+    type: "cf.artifacts.repo.deleted";
+});
+```
 
 ### `ArtifactsRepoLike` (interface)
 
