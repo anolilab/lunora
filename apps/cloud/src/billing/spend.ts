@@ -304,3 +304,56 @@ export const evaluateSpendCap = (input: SpendCapInput): SpendCapDecision => {
 
     return { ...limits, level: spendLevel(spendMinor, limits), spendMinor };
 };
+
+/** Epoch ms of the first instant of `now`'s UTC month — the usage period bucket. */
+export const periodStartOf = (now: number): number => {
+    const date = new Date(now);
+
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+};
+
+/**
+ * The running current-period spend an organization row carries for the
+ * admission fast path (plan 365 D4): `spendNanoCents` accrued since
+ * `spendPeriod` began. An estimate kept beside the ledger, never instead of it —
+ * the hourly sweep recomputes it from the ledger and overwrites it.
+ */
+export interface SpendAccrual {
+    spendNanoCents?: null | number;
+    spendPeriod?: null | number;
+}
+
+/**
+ * The accrual after one ledger row lands, or `null` when the row does not move
+ * it: a row for any period but the current one (a tenant-supplied future
+ * `periodStart` must not reset the running total), an unknown meter, or a
+ * non-positive quantity.
+ */
+export const accruedSpend = (
+    accrual: SpendAccrual,
+    row: { kind: string; periodStart: number; quantity: number },
+    now: number,
+): null | { spendNanoCents: number; spendPeriod: number } => {
+    const period = periodStartOf(now);
+
+    if (row.periodStart !== period || !isUsageMeter(row.kind) || !Number.isFinite(row.quantity) || row.quantity <= 0) {
+        return null;
+    }
+
+    const base = accrual.spendPeriod === period ? (accrual.spendNanoCents ?? 0) : 0;
+
+    return { spendNanoCents: base + row.quantity * RATE_CARD[row.kind].nanoCentsPerUnit, spendPeriod: period };
+};
+
+/**
+ * Whether an organization row's running spend already breaches its cap — the
+ * breach bit the dispatcher's plan lookup carries, so an over-cap org is
+ * refused at admission as soon as the ledger write lands rather than at the
+ * next hourly sweep. A stale period's accrual never counts.
+ */
+export const accrualBreached = (organization: SpendAccrual & { plan: string; spendCapMinor?: null | number }, now: number): boolean =>
+    organization.spendPeriod === periodStartOf(now) &&
+    spendLevel(
+        Math.round((organization.spendNanoCents ?? 0) / NANO_CENTS_PER_CENT),
+        spendLimits({ capMinorOverride: organization.spendCapMinor, plan: organization.plan }),
+    ) === "breach";

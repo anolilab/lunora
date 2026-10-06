@@ -31,6 +31,8 @@ export const organizations = sqliteTable("organizations", {
     spendCapMinor: real("spendCapMinor"),
     spendWarnMinor: real("spendWarnMinor"),
     spendWarnedPeriod: real("spendWarnedPeriod"),
+    spendNanoCents: real("spendNanoCents"),
+    spendPeriod: real("spendPeriod"),
     suspendedAt: real("suspendedAt"),
     suspendedReason: text("suspendedReason"),
     paymentFailedAt: real("paymentFailedAt"),

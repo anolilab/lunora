@@ -143,12 +143,18 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
             return cached.facts;
         }
 
+        // A refresh that fails keeps refusing a tenant last known to be suspended
+        // (spend-cap breach included, plan 365 W3): failing open is for a control-plane
+        // blip on a healthy tenant, never a way for a blocked one back in. Every
+        // other tenant still fails open to the free tier, as below.
+        const lastKnown = cached?.facts.plan === "suspended" ? cached.facts : {};
+
         try {
             const url = `${options.controlPlaneUrl}/v1/tenants/plan?script=${encodeURIComponent(scriptName)}`;
             const response = await fetchImpl(url, { headers: { authorization: `Bearer ${options.controlPlaneToken}` } });
 
             if (!response.ok) {
-                return {};
+                return lastKnown;
             }
 
             const body = await readJson<{ plan?: string; protected?: boolean }>(response);
@@ -161,7 +167,7 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
                 return facts;
             }
 
-            return {};
+            return lastKnown;
         } catch {
             // A control-plane blip must never take the data plane down, so this
             // fails OPEN on the plan (→ free tier) — but note it also fails open on
@@ -169,7 +175,7 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
             // casual visitors out of a preview, not defending a secret: a platform
             // outage that also 503s every protected preview would be worse. The
             // password itself is never bypassed, only the decision to ask for it.
-            return {};
+            return lastKnown;
         }
     };
 };

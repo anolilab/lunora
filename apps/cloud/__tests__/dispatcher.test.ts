@@ -102,4 +102,42 @@ describe(createPlanResolver, () => {
 
         await expect(resolve("acme-app")).resolves.toStrictEqual({});
     });
+
+    /**
+     * Failing open is for a healthy tenant during a blip. A tenant last known to
+     * be suspended (a spend-cap breach, plan 365 W3) stays refused when the
+     * refresh fails — by a 5xx or by a throw — or an outage would lift the cap.
+     */
+    it.each([
+        ["a 5xx", (): Promise<Response> => Promise.resolve(new Response("nope", { status: 503 }))],
+        ["a thrown fetch", (): Promise<Response> => Promise.reject(new Error("connect timeout"))],
+    ])("keeps refusing a suspended tenant past its TTL when the refresh fails with %s", async (_label, failure) => {
+        let clock = 0;
+        const fetchMock = vi
+            .fn<typeof globalThis.fetch>()
+            .mockResolvedValueOnce(Response.json({ plan: "suspended" }))
+            .mockImplementation(failure);
+        const resolve = createPlanResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch: fetchMock, now: () => clock, ttlMs: 10 });
+
+        await expect(resolve("acme-app")).resolves.toStrictEqual({ plan: "suspended" });
+
+        clock = 100;
+
+        await expect(resolve("acme-app")).resolves.toStrictEqual({ plan: "suspended" });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("lets a tenant back in once the control plane answers that it is no longer suspended", async () => {
+        let clock = 0;
+        const fetchMock = vi
+            .fn<typeof globalThis.fetch>()
+            .mockResolvedValueOnce(Response.json({ plan: "suspended" }))
+            .mockResolvedValueOnce(Response.json({ plan: "pro" }));
+        const resolve = createPlanResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch: fetchMock, now: () => clock, ttlMs: 10 });
+
+        await resolve("acme-app");
+        clock = 100;
+
+        await expect(resolve("acme-app")).resolves.toStrictEqual({ plan: "pro" });
+    });
 });

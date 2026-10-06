@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server";
 import { enforceSpendCaps, ingest, rollup, setSpendWarning } from "../lunora/usage";
+import { RATE_CARD } from "../src/billing/spend";
 import { hashDeployKey } from "../src/deploy/keys";
 
 /**
@@ -180,6 +181,9 @@ const organization = (over: Row = {}): Row => {
     return { _id: "org_1", plan: "free", ...over };
 };
 
+/** A state-transition patch — not the sweep's rewrite of the admission fast path's accrual. */
+const isTransition = (op: Op): boolean => op.kind === "patch" && !("spendNanoCents" in op.patch);
+
 describe("usage.enforceSpendCaps", () => {
     it("suspends an org over its cap and records why", async () => {
         const { ctx, ops } = makeCtx({
@@ -189,7 +193,7 @@ describe("usage.enforceSpendCaps", () => {
 
         await enforceSpendCaps.handler(ctx, {});
 
-        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "org_1", patch: { suspendedReason: "spend-cap" } });
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedReason: "spend-cap" } });
         expect(ops.find((op) => op.kind === "insert")).toMatchObject({ document: { action: "organization.suspend" }, table: "auditLog" });
     });
 
@@ -216,7 +220,7 @@ describe("usage.enforceSpendCaps", () => {
 
         await enforceSpendCaps.handler(ctx, {});
 
-        expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
+        expect(ops.filter((op) => isTransition(op))).toStrictEqual([]);
     });
 
     it("lifts a spend-cap suspension once usage is back under the cap", async () => {
@@ -224,7 +228,7 @@ describe("usage.enforceSpendCaps", () => {
 
         await enforceSpendCaps.handler(ctx, {});
 
-        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "org_1", patch: { suspendedAt: null, suspendedReason: null } });
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedAt: null, suspendedReason: null } });
     });
 });
 
@@ -263,7 +267,7 @@ describe("usage.enforceSpendCaps soft cap (plan 365 W2)", () => {
 
         await expect(enforceSpendCaps.handler(ctx, {})).resolves.toStrictEqual({ suspended: 0, unsuspended: 0, warned: 1 });
 
-        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "org_1", patch: { spendWarnedPeriod: thisPeriod() } });
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { spendWarnedPeriod: thisPeriod() } });
         expect(inserted(ops, "auditLog")).toMatchObject([{ action: "organization.spend_warn", actorUserId: "system:spend-cap" }]);
 
         // The disabled rule stays quiet; the enabled one is queued for the drain.
@@ -282,7 +286,7 @@ describe("usage.enforceSpendCaps soft cap (plan 365 W2)", () => {
         });
 
         await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ warned: 0 });
-        expect(ops).toStrictEqual([]);
+        expect(ops.filter((op) => op.kind === "insert" || isTransition(op))).toStrictEqual([]);
     });
 
     it("fires a breach alert with the suspension and latches the warning with it", async () => {
@@ -293,7 +297,7 @@ describe("usage.enforceSpendCaps soft cap (plan 365 W2)", () => {
         });
 
         await expect(enforceSpendCaps.handler(ctx, {})).resolves.toStrictEqual({ suspended: 1, unsuspended: 0, warned: 0 });
-        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ patch: { spendWarnedPeriod: thisPeriod(), suspendedReason: "spend-cap" } });
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ patch: { spendWarnedPeriod: thisPeriod(), suspendedReason: "spend-cap" } });
         expect(String(inserted(ops, "alerts")[0]?.["subject"])).toContain("suspended");
     });
 
@@ -308,6 +312,56 @@ describe("usage.enforceSpendCaps soft cap (plan 365 W2)", () => {
         });
 
         await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ suspended: 1 });
+    });
+
+    /** The ledger is the authority: whatever a racing writer left in the accrual, the sweep rewrites it. */
+    it("rewrites the admission fast path's accrual from the ledger", async () => {
+        const { ctx, ops } = makeCtx({
+            organizations: [organization({ spendNanoCents: 1, spendPeriod: 0 })],
+            platformUsage: currentSpend(),
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.find((op) => op.kind === "patch" && "spendNanoCents" in op.patch)).toMatchObject({
+            id: "org_1",
+            patch: { spendNanoCents: 10_000_000 * RATE_CARD.requests.nanoCentsPerUnit, spendPeriod: thisPeriod() },
+        });
+    });
+});
+
+const ingestArgs = (over: Row = {}): Row => {
+    return { deployKey: "production:org_1|secret", kind: "requests", organizationId: "org_1", periodStart: 1000, quantity: 5, ...over };
+};
+
+describe("usage.ingest accrual (plan 365 W3)", () => {
+    const keyed = async (organizations: Row[]): Promise<ReturnType<typeof makeCtx>> =>
+        makeCtx(
+            {
+                deployKeys: [{ _id: "dk1", capability: "deploy", hashedKey: await hashDeployKey("production:org_1|secret"), organizationId: "org_1" }],
+                organizations,
+            },
+            Date.now(),
+        );
+
+    it("adds a current-period row's cost to the key's org running spend", async () => {
+        const { ctx, ops } = await keyed([organization({ spendNanoCents: 100, spendPeriod: thisPeriod() })]);
+
+        await ingest.handler(ctx, ingestArgs({ periodStart: thisPeriod(), quantity: 2 }) as never);
+
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({
+            id: "org_1",
+            patch: { spendNanoCents: 100 + 2 * RATE_CARD.requests.nanoCentsPerUnit, spendPeriod: thisPeriod() },
+        });
+    });
+
+    /** A tenant-chosen periodStart must not be able to reset its own running spend. */
+    it("ignores a row for any other period", async () => {
+        const { ctx, ops } = await keyed([organization({ spendNanoCents: 100, spendPeriod: thisPeriod() })]);
+
+        await ingest.handler(ctx, ingestArgs({ periodStart: thisPeriod() + 86_400_000 * 40 }) as never);
+
+        expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
     });
 });
 
@@ -336,10 +390,6 @@ describe("usage.setSpendWarning", () => {
         await expect(setSpendWarning.handler(ctx, { organizationId: "org_1", warnMinor: 100 } as never)).rejects.toThrow("requires one of");
     });
 });
-
-const ingestArgs = (over: Row = {}): Row => {
-    return { deployKey: "production:org_1|secret", kind: "requests", organizationId: "org_1", periodStart: 1000, quantity: 5, ...over };
-};
 
 describe("usage.ingest", () => {
     /**

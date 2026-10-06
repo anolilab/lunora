@@ -2,6 +2,8 @@ import { LunoraError } from "@lunora/server";
 
 import { isDataMovementPath } from "../src/admin/proxy";
 import { highestPlan } from "../src/billing/plans";
+import type { SpendAccrual } from "../src/billing/spend";
+import { accrualBreached } from "../src/billing/spend";
 import { previewExpiry } from "../src/deploy/preview";
 import type { TargetId } from "../src/provision-contract";
 import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
@@ -256,9 +258,15 @@ export const planForScript = query
         // A suspended org (spend cap breached / abuse, GAPS.md C1) resolves to the
         // sentinel plan "suspended" — the dispatcher serves 503 for it. Encoded in
         // the plan string so the dispatcher's existing TTL cache carries it.
-        const organization = (await context.db.get(deployment.organizationId)) as { suspendedAt?: number } | null;
+        //
+        // The breach bit (plan 365 W3) rides the same read: an org whose running
+        // accrual already breaches its cap is refused here as soon as the ledger
+        // write lands, not an hour later when the sweep suspends it. An org row
+        // this lookup cannot find is refused too — unknown state fails closed.
+        const organization = (await context.db.get(deployment.organizationId)) as
+            null | (SpendAccrual & { plan: string; spendCapMinor?: null | number; suspendedAt?: null | number });
 
-        if (organization?.suspendedAt != null) {
+        if (organization === null || organization.suspendedAt != null || accrualBreached(organization, context.now)) {
             return { plan: "suspended" };
         }
 

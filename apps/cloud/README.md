@@ -511,6 +511,24 @@ rows and returns a `level`:
 
 `usage.spendStatus` is the console's read of the same decision.
 
+The hourly sweep is the authority, but breach is also caught **at admission**.
+Every billable ledger write (`usage.ingest`, `usage.record`, the readback sweep)
+adds its priced cost to `organizations.spendNanoCents` for the current
+`spendPeriod`. `deployments.planForScript`, the dispatcher's one cached
+control-plane lookup, answers `"suspended"` once that running total reaches the
+cap, so the next plan refresh refuses the org (at most the resolver's 60 s TTL)
+without waiting up to an hour for the sweep. A row for any other period does
+not move the total, so a tenant cannot reset it with a chosen `periodStart`.
+The sweep rewrites the total from the ledger each hour, which corrects any
+increment a concurrent writer lost. The lookup also fails closed: an org row it
+cannot find answers `"suspended"`, and the dispatcher's plan cache keeps
+refusing a tenant last seen suspended when a refresh fails, instead of failing
+open to the free tier.
+
+On `celld-vps` (customer boxes) none of this applies. Box-reported usage is
+display-only (plan 458 D12), so it never moves the cap, and boxes route their
+own traffic without going through the dispatcher.
+
 ### Tenant secrets (`lunora/secrets.ts`, `src/secrets/crypto.ts`, §7)
 
 Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:

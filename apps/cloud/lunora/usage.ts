@@ -1,11 +1,19 @@
 import { LunoraError } from "@lunora/server";
 
-import type { PeriodUsage, SpendCapDecision, UsageMeter } from "../src/billing/spend";
-import { estimatedSpendMinor, evaluateSpendCap, isUsageMeter, MAX_SPEND_THRESHOLD_MINOR } from "../src/billing/spend";
+import type { PeriodUsage, SpendAccrual, SpendCapDecision, UsageMeter } from "../src/billing/spend";
+import {
+    accruedSpend,
+    estimatedSpendMinor,
+    estimatedSpendNanoCents,
+    evaluateSpendCap,
+    isUsageMeter,
+    MAX_SPEND_THRESHOLD_MINOR,
+    periodStartOf,
+} from "../src/billing/spend";
 import type { UsageTotals } from "../src/billing/usage";
 import { aggregateUsage, isBillableUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
-import type { QueryCtx as QueryContext } from "./_generated/server.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { fireSpendAlerts } from "./alerts";
 import { assertMember, assertRowInOrg, authorizeDeployKeyRow } from "./authz";
@@ -69,6 +77,29 @@ const kind = v.union(
     v.literal("workflowStorageGbMonths"),
 );
 
+/**
+ * Fold one billable ledger row into its org's running spend — the accrual the
+ * dispatcher's plan lookup refuses an over-cap org on (plan 365 W3), between
+ * hourly sweeps.
+ *
+ * ponytail: read-modify-write on the org row, so a concurrent writer outside
+ * this serialized mutation (the readback sweep) can lose an increment. That
+ * under-counts only the fast path; the hourly sweep rewrites the accrual from
+ * the ledger, which stays the authority. A per-org counter DO if it matters.
+ */
+const accrueSpend = async (
+    context: MutationContext,
+    organizationId: Id<"organizations">,
+    row: { kind: string; periodStart: number; quantity: number },
+): Promise<void> => {
+    const organization = (await context.db.get(organizationId)) as null | SpendAccrual;
+    const next = organization === null ? null : accruedSpend(organization, row, context.now);
+
+    if (next !== null) {
+        await context.db.patch(organizationId, next);
+    }
+};
+
 /** Record a metered event. SYSTEM only (internalMutation — cron/metering writer). */
 export const record = internalMutation
     .input({
@@ -78,16 +109,20 @@ export const record = internalMutation
         periodStart: v.number(),
         quantity: v.number(),
     })
-    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> =>
-        context.db.insert("platformUsage", {
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> => {
+        const id = await context.db.insert("platformUsage", {
             createdAt: context.now,
             deploymentId: arguments_.deploymentId,
             kind: arguments_.kind,
             organizationId: arguments_.organizationId,
             periodStart: arguments_.periodStart,
             quantity: arguments_.quantity,
-        }),
-    );
+        });
+
+        await accrueSpend(context, arguments_.organizationId, arguments_);
+
+        return id;
+    });
 
 /**
  * Ingest a metered event from the platform data plane (`POST /v1/usage`).
@@ -129,7 +164,7 @@ export const ingest = mutation
             await assertRowInOrg(context, arguments_.deploymentId, arguments_.organizationId, "deployment");
         }
 
-        return context.db.insert("platformUsage", {
+        const id = await context.db.insert("platformUsage", {
             createdAt: context.now,
             deploymentId: arguments_.deploymentId,
             kind: arguments_.kind,
@@ -137,6 +172,10 @@ export const ingest = mutation
             periodStart: arguments_.periodStart,
             quantity: arguments_.quantity,
         });
+
+        await accrueSpend(context, key.organizationId, arguments_);
+
+        return id;
     });
 
 interface PlatformUsageRow {
@@ -155,11 +194,7 @@ interface PlatformUsageRow {
 const ROLLUP_BATCH = 1000;
 
 /** Epoch ms for the first instant of the current UTC month. */
-const currentPeriodStart = (): number => {
-    const now = new Date();
-
-    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-};
+const currentPeriodStart = (): number => periodStartOf(Date.now());
 
 /**
  * Compact closed-period metering events. Per
@@ -369,6 +404,8 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         name: string;
         plan: string;
         spendCapMinor?: null | number;
+        spendNanoCents?: null | number;
+        spendPeriod?: null | number;
         spendWarnedPeriod?: null | number;
         spendWarnMinor?: null | number;
         suspendedAt?: null | number;
@@ -391,6 +428,14 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         const audit = async (action: string, target: string): Promise<void> => {
             await context.db.insert("auditLog", { action, actorUserId: "system:spend-cap", createdAt: context.now, organizationId, target });
         };
+        const spendNanoCents = estimatedSpendNanoCents(usage);
+
+        // The ledger is the authority: rewrite the admission fast path's running
+        // accrual (plan 365 W3) from it, correcting any increment a racing writer lost.
+        if (organization.spendPeriod !== periodStart || organization.spendNanoCents !== spendNanoCents) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(organizationId, { spendNanoCents, spendPeriod: periodStart });
+        }
 
         if (decision.level === "breach" && organization.suspendedAt == null) {
             // The warn latch is stamped with the suspension, so recovering inside the

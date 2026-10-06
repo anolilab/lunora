@@ -46,6 +46,8 @@ export interface Doc_organizations {
     spendCapMinor?: number;
     spendWarnMinor?: number;
     spendWarnedPeriod?: number;
+    spendNanoCents?: number;
+    spendPeriod?: number;
     suspendedAt?: number;
     suspendedReason?: string;
     paymentFailedAt?: number;
@@ -901,6 +903,8 @@ export interface Insert_organizations {
     spendCapMinor?: number;
     spendWarnMinor?: number;
     spendWarnedPeriod?: number;
+    spendNanoCents?: number;
+    spendPeriod?: number;
     suspendedAt?: number;
     suspendedReason?: string;
     paymentFailedAt?: number;
