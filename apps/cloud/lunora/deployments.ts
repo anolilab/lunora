@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { isDataMovementPath } from "../src/admin/proxy";
 import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
 import type { TargetId } from "../src/provision-contract";
@@ -190,21 +191,25 @@ const PHASE_TIMESTAMP: Record<DeploymentStatus, "destroyedAt" | "failedAt" | "li
  * `null` when the deployment is missing, in another org, has no admin token, or
  * is not yet live.
  */
-export const adminTarget = query
-    .input({ dataMovement: v.optional(v.boolean()), deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
+export const adminTarget = internalQuery
+    .input({ adminPath: v.string(), deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
     .query(
         async ({
             ctx: context,
-            args: { dataMovement, deploymentId, organizationId },
+            args: { adminPath, deploymentId, organizationId },
         }): Promise<null | { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string }> => {
             // Not bare `assertMember`. This resolves the tenant's ADMIN bearer for
             // the studio proxy, which forwards writes to the tenant's own admin
             // API — so a `viewer`, whose whole role is read-only, was able to
             // mutate tenant data through it. Roles are named explicitly here
             // rather than at the route, because the token is handed out here.
-            // `dataMovement` (the tenant's export / import) is owner/admin: an export
-            // carries every end user's data, an import rewrites it.
-            await assertMember(context, organizationId, dataMovement === true ? ["owner", "admin"] : ["owner", "admin", "member"]);
+            // Internal, and handed the admin path the proxy will forward: the role is
+            // decided here from the action itself, never from a flag a caller sets, and
+            // no browser can call this to collect a target for some other path. Export
+            // and import are owner/admin — an export carries every end user's data, an
+            // import rewrites it. The caller's identity still applies: the HTTP route's
+            // internal call runs under the session it was made with.
+            await assertMember(context, organizationId, isDataMovementPath(adminPath) ? ["owner", "admin"] : ["owner", "admin", "member"]);
 
             const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
             const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);

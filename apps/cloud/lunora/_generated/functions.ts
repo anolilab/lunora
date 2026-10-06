@@ -471,16 +471,10 @@ return { "id": source["id"], "organizationId": source["organizationId"] };
 installCompiledValidatorMap(lunora_deployments_9.adminTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-let __has1 = false;
-let __val1;
-if (source["dataMovement"] !== undefined) {
-if (typeof source["dataMovement"] !== "boolean") return DEFER;
-__val1 = source["dataMovement"];
-__has1 = true;
-}
+if (typeof source["adminPath"] !== "string") return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
-return { ...(__has1 ? { "dataMovement": __val1 } : {}), "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
+return { "adminPath": source["adminPath"], "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_deployments_9.listByProject.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -980,7 +974,7 @@ export interface Caller {
     };
     deployments: {
         activate: (args: { deployKey?: unknown; id: Id<"deployments"> }) => Promise<void>;
-        adminTarget: (args: { dataMovement?: boolean; deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
+        adminTarget: (args: { adminPath: string; deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
         ejectTarget: (args: { deployKey: unknown; deploymentId: Id<"deployments"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
