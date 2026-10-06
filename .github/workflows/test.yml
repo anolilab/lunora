@@ -494,7 +494,9 @@
             # runs directly, never through pnpm: as root, pnpm's pre-run deps check
             # sees a foreign store and config, decides to reinstall, and aborts the
             # modules purge for want of a TTY (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY)
-            # before a test starts.
+            # before a test starts. RUSTUP_HOME and CARGO_HOME point root at the runner's
+            # Rust toolchain: the upgrade test builds lunora-hostd variants with cargo, and
+            # root's own rustup has no default toolchain.
             - "name": "Run the hostd lane"
               "working-directory": "apps/hostd"
               "env":
@@ -503,7 +505,8 @@
                   "LUNORA_HOSTD_S3_ENDPOINT": "http://127.0.0.1:19000"
               "run": |
                   sudo --preserve-env=LUNORA_HOSTD_TESTS,LUNORA_HOSTD_ISOLATION,LUNORA_HOSTD_S3_ENDPOINT,LUNORA_HOSTD_BIN,LUNORA_CELLD_BIN,LUNORA_CADDY_BIN \
-                      env "PATH=${PATH}" ./node_modules/.bin/vitest run --project integration
+                      env "PATH=${PATH}" "RUSTUP_HOME=${RUSTUP_HOME:-${HOME}/.rustup}" "CARGO_HOME=${CARGO_HOME:-${HOME}/.cargo}" \
+                      ./node_modules/.bin/vitest run --project integration
 
             - "name": "Show hostd's journal"
               "if": "failure()"
