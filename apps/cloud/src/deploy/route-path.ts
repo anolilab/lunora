@@ -6,7 +6,7 @@
  * segment of `[A-Za-z0-9_-]` — the protocol's id alphabet — so a parameter can
  * never smuggle a `/`, a `.` or an encoded byte into the handler.
  */
-import { isProtocolId } from "@lunora/hostd/protocol";
+import { isProtocolId } from "../hostd/protocol";
 
 const PARAMETER_SEGMENT = /^:(?<name>\w+)$/u;
 

@@ -18,7 +18,7 @@
  * conformance suite drives it with a fake box. {@link celldVpsDriverFromEnv} is
  * the one place those ports are read off the Worker env.
  */
-import type { DeployJob, HostdJob } from "@lunora/hostd/protocol";
+import type { DeployJob, HostdJob } from "../../hostd/protocol";
 
 import { tenantSender } from "../../backup/tenant-transport";
 import type { BoxSession, BoxSessionNamespace } from "../../boxes/session-client";

@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 
-import type { HostdReleaseManifest } from "@lunora/hostd/release";
-import { signReleaseManifest } from "@lunora/hostd/release/verify";
+import type { HostdReleaseManifest } from "../src/hostd/release";
+import { signReleaseManifest } from "./support/release-verify";
 import { describe, expect, it } from "vitest";
 
 import { list, setDesiredRelease } from "../lunora/boxes";

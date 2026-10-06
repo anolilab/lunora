@@ -334,7 +334,7 @@ public key and nothing else (plan 458 §3).
   single-use nonce) → `auth` (Ed25519 over the challenge, verified with
   WebCrypto). Hibernatable WebSockets; a 30-second alarm pings, closes a box
   silent for 90 seconds (it goes `offline`) and cuts a revoked box off. Every
-  frame is strictly decoded and rate-limited (`@lunora/hostd/protocol`). The
+  frame is strictly decoded and rate-limited (`src/hostd/protocol.ts`). The
   control plane calls the object over native RPC — `dispatch`, `pushRoutes`,
   `close`, `claimNonce` (`BoxSession`, `src/boxes/session-client.ts`); only the
   upgrade crosses `fetch`.
@@ -362,7 +362,7 @@ public key and nothing else (plan 458 §3).
   studio, never billed. Billing is per box per
   month instead (`BOX_CREDITS_PER_MONTH`, through the prepaid-credits debit).
 - **Releases.** Signed `lunora-hostd` releases are stored with
-  `POST /v1/hostd/releases` (admin token; verified by `@lunora/hostd/release`'s
+  `POST /v1/hostd/releases` (admin token; verified by `src/hostd/release.ts`'s
   `verifyReleaseManifest` — the box's own verifier, on WebCrypto — against the
   pinned release keys, so nothing is accepted until a real key replaces the
   placeholder) and

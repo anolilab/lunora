@@ -596,9 +596,6 @@ catalogs:
     vitest:
       specifier: 4.1.11
       version: 4.1.11
-    ws:
-      specifier: 8.21.3
-      version: 8.21.3
   tooling:
     '@types/better-sqlite3':
       specifier: ^9.6.0
@@ -637,9 +634,6 @@ catalogs:
     '@types/semver':
       specifier: ^7.8.0
       version: 7.8.0
-    '@types/ws':
-      specifier: 8.18.1
-      version: 8.18.1
   ui:
     '@base-ui/react':
       specifier: 1.8.0
@@ -1065,7 +1059,6 @@ overrides:
   '@lunora/errors': workspace:*
   '@lunora/fingerprint': workspace:*
   '@lunora/flags': workspace:*
-  '@lunora/hostd': workspace:*
   '@lunora/hyperdrive': workspace:*
   '@lunora/mail': workspace:*
   '@lunora/mcp': workspace:*
@@ -1286,9 +1279,6 @@ importers:
       '@lunora/fingerprint':
         specifier: workspace:*
         version: link:../../packages/fingerprint
-      '@lunora/hostd':
-        specifier: workspace:*
-        version: link:../hostd
       '@lunora/mail':
         specifier: workspace:*
         version: link:../../packages/mail
@@ -1717,39 +1707,6 @@ importers:
       vitest:
         specifier: catalog:web
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
-
-  apps/hostd:
-    devDependencies:
-      '@lunora/config':
-        specifier: workspace:*
-        version: link:../../packages/config
-      '@types/node':
-        specifier: catalog:types
-        version: 26.6.4
-      '@types/ws':
-        specifier: catalog:types
-        version: 8.18.1
-      '@visulima/packem':
-        specifier: catalog:build
-        version: 2.1.0(362c6d1d7e7728cf868e47db0f47e4d6)
-      '@vitest/coverage-v8':
-        specifier: catalog:test
-        version: 4.1.10(vitest@4.1.11)
-      aws4fetch:
-        specifier: catalog:storage
-        version: 1.0.20
-      esbuild:
-        specifier: catalog:build
-        version: 0.28.2
-      typescript:
-        specifier: 6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: catalog:test
-        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
-      ws:
-        specifier: catalog:test
-        version: 8.21.3
 
   apps/playground:
     dependencies:
@@ -36750,7 +36707,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.1
-      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+      vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/coverage-v8@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))
 
   '@vitest/eslint-plugin@1.6.19(@typescript-eslint/eslint-plugin@8.66.0(@typescript-eslint/parser@8.59.1(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3))(eslint@10.12.0(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@6.0.3)(vitest@4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1)))':
     dependencies:

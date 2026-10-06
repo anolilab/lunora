@@ -217,20 +217,6 @@ const TIER_2 = [
 const TIER_3 = ["agent", "ai", "angular", "browser", "container", "payment", "platform-celld", "platform-node", "react-native", "replica", "rspack", "x402"];
 
 /**
- * Workspace packages under `apps/`, not `packages/`, that publish a contract
- * another workspace consumes. Covered by DIRECTORY name (`apps/<dir>`).
- *
- * `hostd` (`@lunora/hostd`) lives in `apps/` because it is a customer-installed
- * daemon, not a framework package (plan 458 D17), but its `./protocol` subpath
- * is the wire contract `apps/cloud` builds against and every installed box
- * speaks. A box in the field cannot be upgraded in lockstep with the control
- * plane, so a surface change here has to be reviewed as a protocol change.
- * Kept out of the TIER_* lists on purpose: those mirror `packages/` and
- * `ROADMAP.md` (see `check-roadmap-tiers`), and this package is in neither.
- */
-const APP_CONTRACTS = ["hostd"];
-
-/**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
  *
  * One table rather than a label here and a matching `if` at the render site: the
@@ -254,19 +240,9 @@ const TIERS = [
             "SemVer promise until the package graduates.",
         ],
     },
-    {
-        dirs: APP_CONTRACTS,
-        label: "app-contract",
-        root: "apps",
-        stability: [
-            "here is a change to a contract between separately deployed programs and must be",
-            "reviewed as one. The package is not published; installed peers cannot be",
-            "upgraded in lockstep, so a breaking change needs a protocol version bump.",
-        ],
-    },
 ];
 
-const COVERED = TIERS.flatMap(({ dirs, label, root = "packages" }) => dirs.map((dir) => ({ dir, path: `${root}/${dir}`, tier: label })));
+const COVERED = TIERS.flatMap(({ dirs, label }) => dirs.map((dir) => ({ dir, path: `packages/${dir}`, tier: label })));
 
 /** Find the `types` condition of an exports-map entry, at any nesting depth. */
 const findTypesCondition = (value) => {

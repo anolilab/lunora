@@ -1,5 +1,5 @@
-import type { DeployJob } from "@lunora/hostd/protocol";
-import { HOSTD_PROTOCOL_LIMITS } from "@lunora/hostd/protocol";
+import type { DeployJob } from "../src/hostd/protocol";
+import { HOSTD_PROTOCOL_LIMITS } from "../src/hostd/protocol";
 import { describe, expect, it } from "vitest";
 
 import { createDiagnoseCollector, DIAGNOSE_TIMEOUT_MS } from "../src/boxes/diagnose";

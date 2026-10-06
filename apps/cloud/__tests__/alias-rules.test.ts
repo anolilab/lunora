@@ -1,5 +1,5 @@
 import { isReleaseAlias, MAX_RELEASE_ALIAS_LENGTH } from "@lunora/config/celld";
-import { HOSTD_PROTOCOL_LIMITS, isAlias } from "@lunora/hostd/protocol";
+import { HOSTD_PROTOCOL_LIMITS, isAlias } from "../src/hostd/protocol";
 import { describe, expect, it } from "vitest";
 
 /**

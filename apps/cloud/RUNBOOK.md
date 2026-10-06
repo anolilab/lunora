@@ -185,10 +185,10 @@ Exact steps in [`../hostd/README.md`](../hostd/README.md) § Releases & signing:
 
 1. `openssl genpkey -algorithm ed25519 -out hostd-release.pem` on a trusted
    machine.
-2. `node apps/hostd/scripts/release-public-key.mjs hostd-release.pem` prints the
-   public key entry; commit it to `HOSTD_TRUSTED_RELEASE_KEYS` and delete the
-   placeholder (a pull request — the control plane refuses every release until
-   this lands).
+2. `cargo run --release --bin hostd-release -- public-key hostd-release.pem` (in
+   `apps/hostd`) prints the public key entry; commit it to
+   `HOSTD_TRUSTED_RELEASE_KEYS` and delete the placeholder (a pull request —
+   the control plane refuses every release until this lands).
 3. Create GitHub Environment `hostd-release` **with a required reviewer**; store
    the whole PEM as secret `HOSTD_RELEASE_SIGNING_KEY`.
 4. Keep an offline backup; delete the local copy.

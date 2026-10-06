@@ -231,7 +231,7 @@ for this plan.
 | D14 | When the box is offline               | **The deploy fails fast** with `BOX_OFFLINE`                                                                                                                                                                                                                                                                                                                   | Queueing jobs until reconnect: a deploy that lands hours later, unannounced, is worse than a clear failure. Revisit with real usage                                                                                                                                                                                              |
 | D15 | License of `hostd`                    | **FSL-1.1-Apache-2.0**, the framework's own license (repo `LICENSE.md`). Customers may run it for any purpose except a Competing Use. Each release converts to Apache-2.0 after two years                                                                                                                                                                      | PolyForm Noncommercial (`apps/cloud`'s license): forbids exactly what customers do, which is run their business on the box. Apache-2.0 or MIT: lets a competitor ship `hostd` as their own managed-VPS service with no rebuild. A closed binary: customers run it as root on their own machine, so they must be able to audit it |
 | D16 | Who may drive `hostd`                 | **Lunora Cloud only.** `hostd` has no standalone mode and no local UI, and takes jobs only from the control plane it enrolled with. That defaults to production; a `--control-plane` override exists for staging and tests. Users who want celld without Lunora Cloud already have the CLI's celld deploy driver (`packages/config/src/celld/celld-driver.ts`) | A standalone or self-hosted control-plane mode: that is Noite, and it gives away the product we sell. Technical endpoint pinning (DRM): it breaks staging and tests, and the FSL Competing Use clause is the real enforcement                                                                                                    |
-| D17 | Where `hostd` lives                   | **`apps/hostd`** (`@lunora/hostd`, its own FSL `LICENSE.md`). It owns the wire protocol (`@lunora/hostd/protocol`). The manifest-to-config function lives in `@lunora/config/celld`. `apps/cloud` depends on both                                                                                                                                              | Under `apps/cloud/`: that tree is PolyForm and is slated for extraction into a private repo (PR #85 `EXTRACT.md`), so a customer-installed binary cannot live there. Dependencies must run public → private, never the reverse                                                                                                   |
+| D17 | Where `hostd` lives                   | **`apps/hostd`** (the `lunora-hostd` Rust crate, its own FSL `LICENSE.md`). The wire protocol's spec and golden frames are public in `protocol/hostd/`; its TypeScript half lives in `apps/cloud/src/hostd` (2026-10-06, replacing `@lunora/hostd/protocol`). The manifest-to-config function lives in `@lunora/config/celld`. `apps/cloud` depends on both    | Under `apps/cloud/`: that tree is PolyForm and is slated for extraction into a private repo (PR #85 `EXTRACT.md`), so a customer-installed binary cannot live there. Dependencies must run public → private, never the reverse                                                                                                   |
 
 ## 5. Workstreams
 
@@ -661,13 +661,13 @@ control-plane changes.
   code-quality pass the verifier itself is in `@lunora/hostd/release`, on
   WebCrypto (`verifyReleaseManifest`, async); `/verify` keeps signing and
   artifact hashing.
-- `apps/hostd/daemon/`: the daemon in Rust (2026-10-06; it was a Node 24
+- `apps/hostd/`: the daemon in Rust (2026-10-06; it was a Node 24
   single executable): a static musl binary of a few MiB, cross-built with
   `cargo zigbuild`, smoke-tested with `--version`. The wire protocol and the
-  release manifest stay in TypeScript for the control plane; the Rust side is
+  release manifest's control-plane half live in `apps/cloud/src/hostd`; the Rust side is
   held to them by `protocol/hostd/fixtures/messages.json` and a celld-config
   parity fixture.
-- `apps/hostd/scripts/make-release-manifest.mjs` + `release-pins.json`: make,
+- `hostd-release` (a second binary of the crate) + `release-pins.json`: make,
   sign and `--verify` manifests. celld is pinned to v0.6.0 (checksums verified
   against the downloaded assets).
 - `.github/workflows/hostd-release.yml`: on a `hostd-v*` tag or dispatch, build
