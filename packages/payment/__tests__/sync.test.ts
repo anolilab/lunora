@@ -60,6 +60,28 @@ describe("applyWebhookAction", () => {
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 3000, referenceId: "user_1", state: "past_due" });
     });
 
+    it("fails closed on a same-instant event that would re-entitle, and applies other ties", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+
+        await applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 1000, type: "subscription.active" });
+        await applyWebhookAction(store, { ...event, eventId: "e2", occurredAt: 2000, type: "subscription.past_due" });
+
+        // Same Stripe second as the past_due: order unknowable, so it must not re-entitle.
+        await expect(applyWebhookAction(store, { ...event, eventId: "e3", occurredAt: 2000, type: "subscription.active" })).resolves.toEqual({
+            applied: false,
+            reason: "stale",
+        });
+        // A same-instant tie that does not re-entitle still applies.
+        await expect(applyWebhookAction(store, { ...event, eventId: "e4", occurredAt: 2000, type: "subscription.canceled" })).resolves.toEqual({
+            applied: true,
+            reason: "ok",
+        });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "canceled" });
+    });
+
     it("adopts an orphan from a checkout whose session reconcile already captured", async () => {
         expect.assertions(1);
 

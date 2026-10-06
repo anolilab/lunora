@@ -10,10 +10,12 @@
 const extendContext = (context: unknown, extension: Record<string, unknown>): object => {
     const base: object = typeof context === "object" && context !== null ? context : {};
 
-    return Object.defineProperties(
-        Object.create(Object.getPrototypeOf(base) as object | null, Object.getOwnPropertyDescriptors(base)) as object,
-        Object.getOwnPropertyDescriptors(extension),
-    );
+    // One merged descriptor map, so an extension key replaces a base key outright, even one the
+    // base defined non-configurable, rather than being redefined on top of it.
+    return Object.create(Object.getPrototypeOf(base) as object | null, {
+        ...Object.getOwnPropertyDescriptors(base),
+        ...Object.getOwnPropertyDescriptors(extension),
+    }) as object;
 };
 
 export default extendContext;

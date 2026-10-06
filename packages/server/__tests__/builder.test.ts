@@ -68,6 +68,17 @@ describe(".meta()", () => {
     // `ctx.payments` / `ctx.ip` are getters that must stay lazy: reading one builds a payment
     // facade (running an app thunk that may throw) or marks the cache entry as per-address.
     // A spread or `Object.assign` in the `.meta()` clone or the `.use()` merge would read them.
+    it("lets .use() replace a non-configurable context property", async () => {
+        expect.assertions(1);
+
+        const context = Object.defineProperty({}, "tenant", { configurable: false, enumerable: true, value: "a" });
+        const procedure = c.query
+            .use(async ({ next }) => await next({ ctx: { tenant: "b" } }))
+            .query(({ ctx }) => (ctx as unknown as { tenant: string }).tenant);
+
+        await expect(procedure.handler(context, {})).resolves.toBe("b");
+    });
+
     it("keeps context getters lazy through .meta() and .use()", async () => {
         expect.assertions(2);
 

@@ -371,6 +371,29 @@ const mergeSubscriptionEvent = (existing: Subscription, action: WebhookAction, n
     };
 };
 
+/** Subscription states that grant entitlements (mirrors `entitlements.ts`). */
+const ENTITLING_STATES: ReadonlySet<SubscriptionState> = new Set<SubscriptionState>(["active", "trialing"]);
+
+/**
+ * Older than the last applied event, or the same instant and re-entitling. Stripe stamps whole
+ * seconds and carries no sequence, so a tie cannot be ordered: other equal-time events still apply
+ * in arrival order, but one that would re-entitle a non-entitled row fails closed — the next event
+ * or a reconcile sweep restores provider truth.
+ */
+const isStaleSubscriptionEvent = (existing: Subscription, action: WebhookAction): boolean => {
+    if (action.occurredAt === undefined || existing.lastEventAt === undefined) {
+        return false;
+    }
+
+    if (action.occurredAt !== existing.lastEventAt) {
+        return action.occurredAt < existing.lastEventAt;
+    }
+
+    const target = SUBSCRIPTION_STATE_BY_TYPE[action.type];
+
+    return target !== undefined && ENTITLING_STATES.has(target) && !ENTITLING_STATES.has(existing.state);
+};
+
 const applySubscription = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
     if (!action.subscriptionId) {
         return { applied: false, reason: "unhandled" };
@@ -381,9 +404,8 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
 
     // Providers redeliver after a 5xx, so an event can land after a newer one already applied — and
     // `past_due → active` is a legal edge, so a late `active` would re-entitle a customer whose
-    // payment has since failed. Drop anything older than the last event applied to this row. Strictly
-    // older: Stripe stamps whole seconds, so same-instant events still apply in arrival order.
-    if (action.occurredAt !== undefined && existing?.lastEventAt !== undefined && action.occurredAt < existing.lastEventAt) {
+    // payment has since failed. Drop anything older than the last event applied to this row.
+    if (existing && isStaleSubscriptionEvent(existing, action)) {
         // Its state is stale, but the owner it names still fills a blank row.
         const referenceId = ownerOf(existing.referenceId, action.referenceId);
 

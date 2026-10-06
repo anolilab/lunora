@@ -109,6 +109,21 @@ describe(migrateLegacyPaymentTables, () => {
         expect(rows("subscriptions")).toStrictEqual([]);
     });
 
+    it("keeps one customer per reference when the store minted a new one before the move", async () => {
+        expect.assertions(2);
+
+        // A checkout between the deploy and the move created cus_2 for org_1 in the new table.
+        const { db, rows } = makeDb({
+            customers: [{ createdAt: 1, provider: "stripe", providerCustomerId: "cus_1", referenceId: "org_1" }],
+            payment_customers: [{ createdAt: 2, provider: "stripe", providerCustomerId: "cus_2", referenceId: "org_1" }],
+        });
+
+        await migrateLegacyPaymentTables(db);
+
+        expect(rows("payment_customers")).toStrictEqual([expect.objectContaining({ providerCustomerId: "cus_2" })]);
+        expect(rows("customers")).toStrictEqual([]);
+    });
+
     it("is a no-op once the legacy tables are empty", async () => {
         expect.assertions(1);
 

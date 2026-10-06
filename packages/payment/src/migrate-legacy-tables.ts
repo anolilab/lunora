@@ -2,27 +2,38 @@ import type { LunoraDatabaseLike } from "./context";
 import { PAYMENT_TABLES } from "./database-store";
 
 /**
- * Each legacy inline table, the `paymentExtension` table it moves to, and the natural unique key
- * that identifies a row in both — what makes a re-run (or a row the store already wrote to the new
- * table) a skip instead of a duplicate.
+ * Each legacy inline table, the `paymentExtension` table it moves to, and the keys that identify a
+ * row in both. A target row matching ANY of them makes the copy a skip — a re-run, or a row the
+ * store already wrote to the new table. Customers also match on `(provider, referenceId)`, the key
+ * the store looks them up by: a checkout between the deploy and this move mints a new customer for
+ * the reference, and copying the legacy one beside it would leave two for one reference.
  */
-const LEGACY_TABLES: ReadonlyArray<{ readonly from: string; readonly key: ReadonlyArray<string>; readonly to: string }> = [
-    { from: "customers", key: ["provider", "providerCustomerId"], to: PAYMENT_TABLES.customers },
-    { from: "events", key: ["provider", "providerEventId"], to: PAYMENT_TABLES.events },
-    { from: "paymentSessions", key: ["provider", "providerSessionId"], to: PAYMENT_TABLES.sessions },
-    { from: "subscriptions", key: ["provider", "providerSubscriptionId"], to: PAYMENT_TABLES.subscriptions },
-    { from: "usageEvents", key: ["provider", "idempotencyKey"], to: PAYMENT_TABLES.usageEvents },
+const LEGACY_TABLES: ReadonlyArray<{ readonly from: string; readonly keys: ReadonlyArray<ReadonlyArray<string>>; readonly to: string }> = [
+    {
+        from: "customers",
+        keys: [
+            ["provider", "providerCustomerId"],
+            ["provider", "referenceId"],
+        ],
+        to: PAYMENT_TABLES.customers,
+    },
+    { from: "events", keys: [["provider", "providerEventId"]], to: PAYMENT_TABLES.events },
+    { from: "paymentSessions", keys: [["provider", "providerSessionId"]], to: PAYMENT_TABLES.sessions },
+    { from: "subscriptions", keys: [["provider", "providerSubscriptionId"]], to: PAYMENT_TABLES.subscriptions },
+    { from: "usageEvents", keys: [["provider", "idempotencyKey"]], to: PAYMENT_TABLES.usageEvents },
 ];
 
 const DEFAULT_BATCH_SIZE = 100;
 
 const SYSTEM_FIELDS = new Set(["_creationTime", "_id"]);
 
-const moveRow = async (database: LunoraDatabaseLike, row: Record<string, unknown>, key: ReadonlyArray<string>, to: string): Promise<void> => {
+const moveRow = async (database: LunoraDatabaseLike, row: Record<string, unknown>, keys: ReadonlyArray<ReadonlyArray<string>>, to: string): Promise<void> => {
     const document = Object.fromEntries(Object.entries(row).filter(([field]) => !SYSTEM_FIELDS.has(field)));
-    const where = Object.fromEntries(key.map((field) => [field, document[field]]));
+    const matches = await Promise.all(
+        keys.map(async (key) => database.findFirst(to, { where: Object.fromEntries(key.map((field) => [field, document[field]])) })),
+    );
 
-    if ((await database.findFirst(to, { where })) === null) {
+    if (matches.every((match) => match === null)) {
         await database.insert(to, document);
     }
 
@@ -46,7 +57,7 @@ const migrateLegacyPaymentTables = async (
     let budget = options.batchSize ?? DEFAULT_BATCH_SIZE;
     let moved = 0;
 
-    for (const { from, key, to } of LEGACY_TABLES) {
+    for (const { from, keys, to } of LEGACY_TABLES) {
         if (budget <= 0) {
             break;
         }
@@ -57,7 +68,7 @@ const migrateLegacyPaymentTables = async (
 
         for (const row of page) {
             // eslint-disable-next-line no-await-in-loop -- serial on purpose: one transaction's writes, each row's key check must see the last insert
-            await moveRow(database, row, key, to);
+            await moveRow(database, row, keys, to);
         }
 
         moved += page.length;
