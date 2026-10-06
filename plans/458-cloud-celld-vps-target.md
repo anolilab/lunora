@@ -684,7 +684,7 @@ remains.
 Still open: no release key is committed (a placeholder that verification
 refuses). The only manual step before a first release is a maintainer
 generating the Ed25519 release key, committing its public half to
-`trusted-release-keys.ts` and setting the `hostd-release` environment secret;
+`protocol/hostd/trusted-release-keys.json` and setting the `hostd-release` environment secret;
 the workflow stops at signing until then. Next in W7:
 `install.sh` and the `upgrade` job on the box.
 
@@ -1152,9 +1152,9 @@ PR #85 (`MULTIPLATFORM.md` Phase 3 status). What it means here:
 2. ~~**Signing:** minisign (small, offline key) or Sigstore keyless (CI-bound
    identity)?~~ **Answered 2026-10-02:** neither as a runtime dependency. A
    release is authenticated by an **Ed25519 signature over the canonical bytes
-   of a SHA-256 release manifest**, verified with `node:crypto` (zero
+   of a SHA-256 release manifest**, verified with ed25519-dalek in `hostd` and WebCrypto in the control plane (zero
    dependencies) against public keys pinned in the `hostd` binary and in the
-   control plane (`apps/hostd/src/trusted-release-keys.ts`). The private key
+   control plane (`protocol/hostd/trusted-release-keys.json`). The private key
    lives only in the `hostd-release` GitHub Environment, behind a required
    reviewer. GitHub artifact attestations (`actions/attest-build-provenance`)
    add build provenance for auditors; a box never needs them. Format:
@@ -1313,7 +1313,7 @@ v.id("cloudflareAccounts")` union), its table implied by
 **Still open after this branch:**
 
 - **Release key** (🌐 ops): generate the Ed25519 release key, commit its
-  public half to `trusted-release-keys.ts` and `install.sh`, set the
+  public half to `protocol/hostd/trusted-release-keys.json` and `install.sh`, set the
   `hostd-release` environment secret (W7). Until then every release is refused.
 - **A running cell** (G1, 🌐 ops): PR #85 merged, staging/production
   `wrangler.jsonc` ids, the GitHub App credentials.
