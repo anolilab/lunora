@@ -1,3 +1,9 @@
+## @lunora/observability [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.122...@lunora/observability@1.0.0-alpha.123) (2026-10-06)
+
+### Features
+
+* **runtime:** report shard errors with their stack to any tracker ([#1000](https://github.com/anolilab/lunora/issues/1000)) ([a178d5a](https://github.com/anolilab/lunora/commit/a178d5a6bb1f3134b897e9237377734f0348ea5d))
+
 ## @lunora/observability [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.121...@lunora/observability@1.0.0-alpha.122) (2026-10-06)
 
 
