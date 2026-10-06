@@ -24,6 +24,8 @@ interface Subscription {
     /** Start of the current billing period — the window metered usage is summed over. */
     readonly currentPeriodStart?: number;
     readonly id: string;
+    /** When the provider says the last applied event happened (epoch ms); older redeliveries are ignored. */
+    readonly lastEventAt?: number;
     readonly priceId: string;
 
     /**
