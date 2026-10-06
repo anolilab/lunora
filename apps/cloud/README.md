@@ -560,10 +560,19 @@ Setup, the trade-off and failure handling are in
 On `celld-vps` (customer boxes) none of this applies. Box-reported usage is
 display-only (plan 458 D12), so it never moves the cap, and boxes route their
 own traffic without going through the dispatcher. The box fleet has no
-`edgeBlock`, because a box's hostnames never cross the platform's zone. A
-suspended org's box tenants keep serving: the box routing table does not read
-the suspension today. `cloudflare-workers` tenants run on the customer's own
-account and are not edge-blocked either.
+`edgeBlock`, because a box's hostnames never cross the platform's zone.
+
+A box enforces suspension through its routing table instead. `routesForBox`
+reads each project's organization row at push time and leaves out the projects
+of an org that is suspended, over its cap at admission (W3) or missing. The
+daemon stops the fleets its table no longer names and never deletes them. It
+starts them again when a later push names them. Every push reads the rows
+afresh: deploys, domain changes, reconnects, and the every-minute suspension
+sweep (`src/boxes/suspension-sweep.ts`). The sweep pushes to any online box
+whose last push (`boxes.routesWithheld`) no longer matches, so a suspension or
+recovery reaches a connected box within a minute. Other orgs' projects on the
+same box are unaffected. `cloudflare-workers` tenants run on the customer's own
+account and are not edge-blocked.
 
 **Billing for agents** (plan 365 W6). Two read-only, deploy-key routes are
 opted in as tools on the MCP surface (`POST /v1/mcp`):

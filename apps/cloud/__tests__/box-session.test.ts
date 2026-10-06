@@ -237,7 +237,7 @@ describe("job ownership", () => {
 describe("boxSessionDO", () => {
     const setup = async (row: Record<string, unknown> = {}) => {
         const key = await boxKey();
-        const store = memoryStore({ boxes: [boxRow(key, row)], deployments: [], domains: [], projects: [] });
+        const store = memoryStore({ boxes: [boxRow(key, row)], deployments: [], domains: [], organizations: [{ _id: "org_1", plan: "free" }], projects: [] });
         const state = fakeState();
         const session = new TestBoxSession(state, store, { LUNORA_BOX_DOMAIN: "boxes.test" });
 
@@ -267,6 +267,80 @@ describe("boxSessionDO", () => {
                 { alias: "web", hostname: "www.example.com" },
             ],
             type: "routes",
+        });
+    });
+
+    /**
+     * Suspension on a box (plan 365): a suspended or over-cap org's aliases are
+     * left out of the routing table, so the box stops those fleets (it stops a
+     * fleet its table no longer names, never deletes it), and a later push
+     * restores them. Read from the org rows at push time, on every push.
+     */
+    describe("suspension", () => {
+        const routed = (socket: FakeSocket): unknown[] =>
+            (socket.received().findLast((frame) => frame.type === "routes") as { table: { alias: string }[] } | undefined)?.table.map((entry) => entry.alias) ??
+            [];
+        const twoOrgs = async (org1: Record<string, unknown>) => {
+            const world = await setup();
+
+            world.store.tables["organizations"] = [
+                { _id: "org_1", plan: "free", ...org1 },
+                { _id: "org_2", plan: "free" },
+            ];
+            world.store.tables["projects"] = [
+                { _id: "proj_1", organizationId: "org_1", placementRef: "box_1" },
+                { _id: "proj_2", organizationId: "org_2", placementRef: "box_1" },
+            ];
+            world.store.tables["deployments"] = [
+                { _id: "dep_1", alias: "web", projectId: "proj_1", status: "live" },
+                { _id: "dep_2", alias: "shop", projectId: "proj_2", status: "live" },
+            ];
+
+            return world;
+        };
+        const period = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1);
+
+        it.each([
+            ["suspended", { suspendedAt: 1 }],
+            ["over its cap at admission", { spendNanoCents: 600e9, spendPeriod: period }],
+        ])("withholds a %s org's aliases on connect, records it, and leaves other orgs on the box alone", async (_label, org1) => {
+            const { key, session, state, store } = await twoOrgs(org1);
+            const socket = await handshake(session, state, key, "box_1");
+
+            expect(routed(socket)).toStrictEqual(["shop"]);
+            expect(store.tables["boxes"]?.[0]).toMatchObject({ routesWithheld: ["org_1"] });
+        });
+
+        it("restores the aliases on the next push once the org recovers", async () => {
+            const { key, session, state, store } = await twoOrgs({ suspendedAt: 1 });
+            const socket = await handshake(session, state, key, "box_1");
+
+            store.tables["organizations"] = [
+                { _id: "org_1", plan: "free", suspendedAt: null },
+                { _id: "org_2", plan: "free" },
+            ];
+
+            await expect(session.pushRoutes()).resolves.toBe(true);
+            expect(routed(socket)).toStrictEqual(["shop", "web"]);
+            expect(store.tables["boxes"]?.[0]).toMatchObject({ routesWithheld: [] });
+        });
+
+        it("withholds them again on a reconnect while still suspended", async () => {
+            const { key, session, state } = await twoOrgs({ suspendedAt: 1 });
+
+            await handshake(session, state, key, "box_1");
+
+            const reconnected = await handshake(session, state, key, "box_1");
+
+            expect(routed(reconnected)).toStrictEqual(["shop"]);
+        });
+
+        it("withholds an org whose row is missing — unknown state fails closed", async () => {
+            const { key, session, state, store } = await twoOrgs({});
+
+            store.tables["organizations"] = [{ _id: "org_2", plan: "free" }];
+
+            expect(routed(await handshake(session, state, key, "box_1"))).toStrictEqual(["shop"]);
         });
     });
 

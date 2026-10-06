@@ -358,11 +358,15 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
             return false;
         }
 
-        const table = await routesForBox(database, box, boxDomainOf(this.env));
+        const { table, withheld } = await routesForBox(database, box, boxDomainOf(this.env), Date.now());
 
         for (const socket of sockets) {
             sendFrame(socket, { table, type: "routes" });
         }
+
+        // What this push withheld, so the suspension sweep can tell when a
+        // suspension or recovery has not reached the box yet.
+        await database.patch(boxId, { routesWithheld: withheld }, "boxes");
 
         return true;
     }

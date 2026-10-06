@@ -19,7 +19,8 @@ import { buildOverageReconcileData, overageFleetPorts } from "../billing/reconci
 import { runOutdatedBoxAlerts } from "../boxes/outdated";
 import { runBoxSweep, sixHourlyTickRunsBoxSweep } from "../boxes/reconcile";
 import { resumeHostdRollouts, upgradeDispatch } from "../boxes/rollout";
-import { retireBox } from "../boxes/session-client";
+import { boxSession, retireBox } from "../boxes/session-client";
+import { runBoxSuspensionSweep } from "../boxes/suspension-sweep";
 import { manifestUrlOf } from "../boxes/urls";
 import type { ControlPlaneEnv } from "../control-plane-env";
 import { controlPlaneDatabase } from "../d1-store";
@@ -442,6 +443,34 @@ const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Suspension on customer boxes (plan 365, `src/boxes/suspension-sweep.ts`):
+ * push a fresh routing table to every online box whose last one no longer
+ * matches its organizations' suspension, so a suspended org's fleets stop and
+ * a recovered one's start again. No-ops without the box sessions bound.
+ */
+const sweepBoxSuspensions = async (env: ControlPlaneEnv): Promise<void> => {
+    const namespace = env.BOX_SESSION;
+
+    if (!env.DB || namespace === undefined) {
+        return;
+    }
+
+    const result = await runBoxSuspensionSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+        log: (line) => {
+            // eslint-disable-next-line no-console -- a failed push is only visible here; the next tick retries it
+            console.warn(line);
+        },
+        now: Date.now(),
+        push: async (boxId) => boxSession(namespace, boxId).pushRoutes(),
+    });
+
+    if (result.pushed > 0 || result.failed > 0) {
+        // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+        console.log("[boxes] suspension pushes", JSON.stringify(result));
+    }
+};
+
+/**
  * Edge-block suspension (plan 365 W8): block suspended organizations' hostnames
  * in front of the Worker, and restore recovered ones, through every fleet that
  * can (`cloudflare-wfp` with the SaaS zone or the suspended-hostnames list).
@@ -537,6 +566,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     { cron: EVERY_MINUTE, run: sweepAlertDrain },
     // Queue depth for the platform's own metrics (GAPS.md E1), sampled once a minute.
     { cron: EVERY_MINUTE, run: sampleQueueDepth },
+    // A suspension or recovery reaches customer boxes within a minute (plan 365).
+    { cron: EVERY_MINUTE, run: sweepBoxSuspensions },
 ];
 
 /**

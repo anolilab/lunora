@@ -357,3 +357,19 @@ export const accrualBreached = (organization: SpendAccrual & { plan: string; spe
         Math.round((organization.spendNanoCents ?? 0) / NANO_CENTS_PER_CENT),
         spendLimits({ capMinorOverride: organization.spendCapMinor, plan: organization.plan }),
     ) === "breach";
+
+/** The organization columns admission reads. `.global()` rows answer SQL NULL for an unset column. */
+export interface AdmissionRow extends SpendAccrual {
+    plan: string;
+    spendCapMinor?: null | number;
+    suspendedAt?: null | number;
+}
+
+/**
+ * Whether an organization may serve traffic right now: its row exists, it is
+ * not suspended (spend cap, dunning, overage, support), and its running spend
+ * does not already breach its cap (plan 365 W3). The one admission test the
+ * dispatcher's plan lookup, the domain routes and the box routing table share.
+ */
+export const organizationServing = (organization: AdmissionRow | null, now: number): boolean =>
+    organization !== null && organization.suspendedAt == null && !accrualBreached(organization, now);

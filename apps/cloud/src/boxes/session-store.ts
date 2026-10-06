@@ -9,6 +9,8 @@
  */
 import { isReleaseAlias } from "@lunora/config/celld";
 
+import type { AdmissionRow } from "../billing/spend";
+import { organizationServing } from "../billing/spend";
 import type { ControlPlaneStore } from "../d1-store";
 import type { BoxResources, BoxVersions, FleetSummary, RouteEntry } from "../hostd/protocol";
 import { HOSTD_PROTOCOL_LIMITS, isHostname } from "../hostd/protocol";
@@ -117,6 +119,7 @@ const ROUTED_STATUSES: ReadonlySet<string> = new Set(["live", "provisioning", "v
 interface ProjectRow {
     _id: string;
     activeScriptName?: null | string;
+    organizationId: string;
 }
 
 interface DomainRow {
@@ -157,22 +160,51 @@ const projectRoutes = async (database: ControlPlaneStore, project: ProjectRow, d
 };
 
 /**
+ * The projects placed on a box, split by whether their organization may serve
+ * (`organizationServing`, read from each organization's row at call time): a
+ * suspended org, one refused at admission for breaching its cap (plan 365 W3),
+ * or one whose row is gone is `withheld` — its ids sorted, so two reads compare.
+ */
+export const boxProjects = async (database: ControlPlaneStore, boxId: string, now: number): Promise<{ serving: ProjectRow[]; withheld: string[] }> => {
+    const { page } = await database.findMany("projects", { where: { placementRef: boxId } });
+    const projects = page as ProjectRow[];
+    const organizationIds = [...new Set(projects.map((project) => project.organizationId))];
+    const rows = await Promise.all(organizationIds.map(async (id) => (await database.get(id, "organizations")) as AdmissionRow | null));
+    const withheld = new Set(organizationIds.filter((_id, index) => !organizationServing(rows[index] ?? null, now)));
+
+    return { serving: projects.filter((project) => !withheld.has(project.organizationId)), withheld: [...withheld].toSorted((a, b) => a.localeCompare(b)) };
+};
+
+/**
  * The full routing table a box serves (`routes` frame): every routed alias of the
  * projects placed on it, at its default hostname `{alias}.{slug}.{boxDomain}`,
  * plus each verified custom domain of those projects, pointed at the project's
  * production alias. Capped at the protocol's table size; hostnames unique.
+ *
+ * A suspended or over-cap organization's projects are left out (`withheld`), so
+ * the box stops their fleets — it stops a fleet the table no longer names and
+ * never deletes one — until a later push names them again. Every push reads the
+ * suspension afresh: the routine ones, a reconnect, and the suspension sweep's.
  */
-export const routesForBox = async (database: ControlPlaneStore, box: { _id: string; slug: string }, boxDomain: string): Promise<RouteEntry[]> => {
-    const { page: projects } = await database.findMany("projects", { where: { placementRef: box._id } });
+export const routesForBox = async (
+    database: ControlPlaneStore,
+    box: { _id: string; slug: string },
+    boxDomain: string,
+    now: number,
+): Promise<{ table: RouteEntry[]; withheld: string[] }> => {
+    const { serving, withheld } = await boxProjects(database, box._id, now);
     const perProject = await Promise.all(
-        (projects as ProjectRow[]).map((project) => projectRoutes(database, project, (alias) => `${alias}.${box.slug}.${boxDomain}`.toLowerCase())),
+        serving.map((project) => projectRoutes(database, project, (alias) => `${alias}.${box.slug}.${boxDomain}`.toLowerCase())),
     );
     const table = new Map(perProject.flat());
 
-    return [...table]
-        .toSorted(([a], [b]) => (a < b ? -1 : 1))
-        .slice(0, HOSTD_PROTOCOL_LIMITS.maxRoutes)
-        .map(([hostname, alias]) => {
-            return { alias, hostname };
-        });
+    return {
+        table: [...table]
+            .toSorted(([a], [b]) => (a < b ? -1 : 1))
+            .slice(0, HOSTD_PROTOCOL_LIMITS.maxRoutes)
+            .map(([hostname, alias]) => {
+                return { alias, hostname };
+            }),
+        withheld,
+    };
 };

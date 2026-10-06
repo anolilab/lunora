@@ -342,6 +342,7 @@ export const boxes = sqliteTable("boxes", {
     publicKey: text("publicKey").notNull(),
     resources: text("resources", { mode: "json" }).$type<{ diskFreeMb: number; memMb: number }>(),
     revokedAt: real("revokedAt"),
+    routesWithheld: text("routesWithheld", { mode: "json" }).$type<Array<string>>(),
     singleTrust: integer("singleTrust", { mode: "boolean" }).notNull(),
     slug: text("slug").notNull(),
     status: text("status", { mode: "json" }).$type<"pending" | "online" | "offline" | "revoked">().notNull(),

@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
-import type { SpendAccrual } from "../src/billing/spend";
-import { accrualBreached } from "../src/billing/spend";
+import type { AdmissionRow } from "../src/billing/spend";
+import { organizationServing } from "../src/billing/spend";
 import { randomSecret } from "../src/deploy/keys";
 import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
 import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
@@ -74,10 +74,9 @@ const isRedirectTarget = (value: string): boolean => {
  * @throws {LunoraError} `FORBIDDEN` while the organization is suspended or over its cap.
  */
 const assertServing = async (context: QueryContext, organizationId: Id<"organizations">): Promise<void> => {
-    const organization = (await context.db.get(organizationId)) as
-        null | (SpendAccrual & { plan: string; spendCapMinor?: null | number; suspendedAt?: null | number });
+    const organization = (await context.db.get(organizationId)) as AdmissionRow | null;
 
-    if (organization === null || organization.suspendedAt != null || accrualBreached(organization, context.now)) {
+    if (!organizationServing(organization, context.now)) {
         throw new LunoraError("FORBIDDEN", "this organization is suspended; custom domains cannot be added or verified until it recovers");
     }
 };

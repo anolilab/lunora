@@ -2,8 +2,8 @@ import { LunoraError } from "@lunora/server";
 
 import { isDataMovementPath } from "../src/admin/proxy";
 import { highestPlan } from "../src/billing/plans";
-import type { SpendAccrual } from "../src/billing/spend";
-import { accrualBreached } from "../src/billing/spend";
+import type { AdmissionRow } from "../src/billing/spend";
+import { organizationServing } from "../src/billing/spend";
 import { previewExpiry } from "../src/deploy/preview";
 import type { TargetId } from "../src/provision-contract";
 import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
@@ -293,10 +293,9 @@ export const planForScript = query
         // accrual already breaches its cap is refused here as soon as the ledger
         // write lands, not an hour later when the sweep suspends it. An org row
         // this lookup cannot find is refused too — unknown state fails closed.
-        const organization = (await context.db.get(deployment.organizationId)) as
-            null | (SpendAccrual & { plan: string; spendCapMinor?: null | number; suspendedAt?: null | number });
+        const organization = (await context.db.get(deployment.organizationId)) as AdmissionRow | null;
 
-        if (organization === null || organization.suspendedAt != null || accrualBreached(organization, context.now)) {
+        if (!organizationServing(organization, context.now)) {
             return { plan: "suspended" };
         }
 
