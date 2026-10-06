@@ -1674,9 +1674,9 @@ under-counted exactly when AE starts sampling — i.e. during the runaway-tenant
 scenario the hard cap exists to stop. The same repo already documented AE as "not
 for billing math" (`apps/cloud/src/telemetry/metrics-read.ts:9-14`).
 
-| Plan | Title                                                                              | Category       | Pkg   | Pri | Effort | Risk | Status                        |
-| ---- | ---------------------------------------------------------------------------------- | -------------- | ----- | --- | ------ | ---- | ----------------------------- |
-| 365  | Cloud spend guardrails, anomaly alerting, recursion protection & billing usage API | cloud/platform | cloud | P1  | L      | MED  | IN PROGRESS — W0 + W1 shipped |
+| Plan | Title                                                                              | Category       | Pkg   | Pri | Effort | Risk | Status                                                              |
+| ---- | ---------------------------------------------------------------------------------- | -------------- | ----- | --- | ------ | ---- | ------------------------------------------------------------------- |
+| 365  | Cloud spend guardrails, anomaly alerting, recursion protection & billing usage API | cloud/platform | cloud | P1  | L      | MED  | DONE (code) — W0–W8 shipped (PR #1003); live checks open (plan §4b) |
 
 ### Notes
 
