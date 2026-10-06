@@ -35,8 +35,18 @@
  * package that never releases at all. That drift is invisible today (nothing
  * walks `dependencies`) and, for a published sibling, means two installers of
  * two different `@lunora/*` packages can resolve two physical copies of a
- * shared dependency. This mode never fails the install — it only reports —
- * because mid-release-train drift between trains is normal and expected.
+ * shared dependency. For published packages this mode never fails the install
+ * — it only reports — because mid-release-train drift between trains is normal
+ * and expected.
+ *
+ * Private packages are the exception and DO fail the install: nothing ever
+ * rewrites their pins, so once the local sibling moves past the pin, pnpm
+ * resolves the npm registry tarball instead of the workspace copy (and a
+ * bundled private package such as `@lunora/dispatch` would inline that stale
+ * copy into the published packages that bundle it). Any sibling specifier in a
+ * private package's `dependencies` / `devDependencies` that is not
+ * `workspace:` or `catalog:` fails — on the shape, not on current drift, since
+ * a pin that matches today goes stale on the sibling's next release.
  *
  * Run on every `pnpm install` via the root `postinstall` script.
  */
@@ -65,7 +75,7 @@ for (const entry of packageDirs) {
     try {
         const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 
-        manifests.push({ dir: entry.name, manifest });
+        manifests.push({ dir: entry.name, isPrivate: manifest.private === true, manifest });
 
         if (typeof manifest.name === "string" && typeof manifest.version === "string") {
             versions[manifest.name] = manifest.version;
@@ -91,12 +101,38 @@ for (const { dir, manifest } of manifests) {
     }
 }
 
-// Report-only: exact sibling `dependencies` pins that have drifted behind the
-// dependency's current published version. Never fails the install — see the
-// doc comment above for why this is a report, not a gate.
+// Private packages: any non-workspace/catalog sibling specifier fails — nothing
+// rewrites it on release, so it silently falls through to the registry tarball.
+for (const { dir, isPrivate, manifest } of manifests) {
+    if (!isPrivate) {
+        continue;
+    }
+
+    for (const field of ["dependencies", "devDependencies"]) {
+        for (const [name, specifier] of Object.entries(manifest[field] ?? {})) {
+            if (!isSibling(name) || typeof specifier !== "string" || specifier.startsWith("workspace:") || specifier.startsWith("catalog:")) {
+                continue;
+            }
+
+            hasFailure = true;
+
+            console.error(`❌ packages/${dir} is private but its ${field} pin "${name}": "${specifier}".`);
+            console.error("   A private package never releases, so nothing rewrites the pin; once it goes stale pnpm installs the registry copy.");
+            console.error(`   Use "${name}": "workspace:*" instead.`);
+        }
+    }
+}
+
+// Report-only: exact sibling `dependencies` pins in published packages that have
+// drifted behind the dependency's current published version. Never fails the
+// install — see the doc comment above for why this is a report, not a gate.
 let dependencyWarnings = 0;
 
-for (const { dir, manifest } of manifests) {
+for (const { dir, isPrivate, manifest } of manifests) {
+    if (isPrivate) {
+        continue;
+    }
+
     for (const [name, specifier] of Object.entries(manifest.dependencies ?? {})) {
         if (!isSibling(name) || typeof specifier !== "string" || specifier.startsWith("workspace:")) {
             continue;
