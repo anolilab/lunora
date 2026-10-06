@@ -3,11 +3,12 @@
  *
  * This is what codegen wires `ctx.payments` to: the store rides the request's `ctx.db` (the app's
  * ShardDO), and authorization defaults to "the caller may only act on their own `userId`" — apps
- * keyed on org/workspace references pass a custom `authorize`. Adapters carry secrets, so the
+ * keyed on org/workspace references pass a custom `authorize`, which receives the caller's `userId`
+ * and the request's `db` (e.g. to check the caller is an owner/admin of the org being billed). Adapters carry secrets, so the
  * adapter is supplied by the caller (typically from a `config.payment(env)` thunk).
  */
 import type { PaymentAdapter } from "./adapter";
-import type { AuthorizeReference, LunoraPayment } from "./create-payment";
+import type { LunoraPayment } from "./create-payment";
 import { createPayment } from "./create-payment";
 import type { PaymentDatabase, PaymentRow } from "./database-store";
 import { createDatabasePaymentStore } from "./database-store";
@@ -45,13 +46,23 @@ export interface PaymentContextLike {
 }
 
 /**
+ * Returns whether the caller may act on `referenceId`, given who they are and the request's `db`.
+ * Throwing is treated as denial. `userId` is `undefined` for an unauthenticated caller.
+ * @experimental
+ */
+export type AuthorizeContextReference = (
+    referenceId: string,
+    caller: { readonly db: LunoraDatabaseLike; readonly userId: string | undefined },
+) => boolean | Promise<boolean>;
+
+/**
  * `PaymentsFromContextOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
  * @experimental
  */
 export interface PaymentsFromContextOptions {
     readonly adapter: PaymentAdapter;
     /** Override the default "caller owns the referenceId" authorization. */
-    readonly authorize?: AuthorizeReference;
+    readonly authorize?: AuthorizeContextReference;
     /** Plan → features/limits map, forwarded to the facade. Required to use `ctx.payments.check`. */
     readonly entitlements?: EntitlementsConfig;
     /** Optional telemetry sink, forwarded to the facade. */
@@ -86,12 +97,15 @@ export const paymentsFromContext = (context: PaymentContextLike, options: Paymen
     // blank principal from matching an empty/orphan `referenceId` is the `referenceId.trim() !== ""`
     // clause in the default authorizer below, so do not drop that clause on the strength of this line.
     const userId = context.auth?.userId ?? undefined;
+    const { authorize } = options;
 
     return createPayment({
         adapter: options.adapter,
         // The default authorizer fails closed on an empty/whitespace reference: a missing identity or a
         // blank reference (e.g. webhook-orphaned rows with `referenceId: ""`) is never authorized.
-        authorize: options.authorize ?? ((referenceId) => referenceId.trim() !== "" && userId !== undefined && referenceId === userId),
+        authorize: authorize
+            ? (referenceId) => authorize(referenceId, { db: context.db, userId })
+            : (referenceId) => referenceId.trim() !== "" && userId !== undefined && referenceId === userId,
         entitlements: options.entitlements,
         observability: options.observability,
         store: createDatabasePaymentStore(lunoraDatabaseToPaymentDatabase(context.db)),

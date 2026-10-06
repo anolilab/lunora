@@ -133,6 +133,25 @@ describe("paymentsFromContext", () => {
         ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
+    it("hands a custom authorizer the caller and ctx.db so org-scoped billing can be authorized", async () => {
+        expect.assertions(3);
+
+        const db = makeDb();
+
+        await db.insert("members", { orgId: "org_1", role: "owner", userId: "user_1" });
+
+        const authorize = async (referenceId: string, caller: { db: LunoraDatabaseLike; userId: string | undefined }): Promise<boolean> =>
+            (await caller.db.findFirst("members", { where: { orgId: referenceId, role: "owner", userId: caller.userId } })) !== null;
+        const checkout = { cancelUrl: "https://x/c", mode: "subscription", priceId: "price_1", successUrl: "https://x/o" } as const;
+
+        const owner = paymentsFromContext({ auth: { userId: "user_1" }, db }, { adapter: fakeAdapter, authorize });
+        const stranger = paymentsFromContext({ auth: { userId: "user_2" }, db }, { adapter: fakeAdapter, authorize });
+
+        await expect(owner.createCheckout({ ...checkout, referenceId: "org_1" })).resolves.toMatchObject({ id: "cs_1" });
+        await expect(stranger.createCheckout({ ...checkout, referenceId: "org_1" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(owner.createCheckout({ ...checkout, referenceId: "org_2" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
     it("treats an empty-string identity as unauthenticated (no empty-reference orphan match)", async () => {
         expect.assertions(1);
 
