@@ -103,12 +103,13 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
         return Promise.resolve(jsonError(500, "lunora context unavailable"));
     }
 
-    // Only for the preview path filter's compare call; absent credentials leave
-    // previews building unfiltered rather than failing the webhook.
+    // For the preview path filter's compare call and a skipped build's commit
+    // status; absent credentials leave previews building unfiltered and skips
+    // unreported rather than failing the webhook.
     const githubApp = createGitHubApp({ appId: environment.GITHUB_APP_ID, privateKeyPem: environment.GITHUB_APP_PRIVATE_KEY });
 
     return handleGitHubWebhook(request, {
-        ...(githubApp === null ? {} : { listChangedFiles: githubApp.listChangedFiles }),
+        ...(githubApp === null ? {} : { listChangedFiles: githubApp.listChangedFiles, postCommitStatus: githubApp.postCommitStatus }),
         // installation created/deleted → link/unlink the org (GAPS.md A4).
         onInstallation: async (intent) => {
             await (intent.action === "created"

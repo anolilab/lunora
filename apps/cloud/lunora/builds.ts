@@ -69,7 +69,8 @@ type BuildTrigger = "pull_request" | "push";
  */
 const pushChangesValidator = v.union(v.object({ files: v.array(v.string()) }), v.object({ unknown: v.string() }));
 
-type RecordPushResult = null | { buildId: Id<"builds">; reused: boolean; skipped?: string } | { duplicate: true };
+/** `pathFiltered`: the skip is the path filter's — the commit has no other status, so the webhook posts one. */
+type RecordPushResult = null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string } | { duplicate: true };
 
 /**
  * How long a webhook delivery id is remembered. GitHub lets a delivery be
@@ -116,12 +117,15 @@ const planBuild = (push: {
     rootDirectory: string | undefined;
     trigger: BuildTrigger;
     watchPaths: ReadonlyArray<string> | undefined;
-}): { decision: BuildDecision; reusesBuildId?: Id<"builds"> } => {
+    workspacePackages: undefined | { paths: ReadonlyArray<string>; rootDirectory: string };
+}): { decision: BuildDecision; filtered: { pathFiltered?: true }; reusesBuildId?: Id<"builds"> } => {
     const { rereleased } = push;
+    // Recorded for another root directory, the set describes another app.
+    const packages = push.workspacePackages?.rootDirectory === (push.rootDirectory ?? "") ? push.workspacePackages.paths : undefined;
     const staleReason = push.trigger === "push" && rereleased !== undefined ? staleRelease(push.projectBuilds, push.branch, push.before) : undefined;
 
     if (staleReason !== undefined) {
-        return { decision: { build: false, reason: staleReason } };
+        return { decision: { build: false, reason: staleReason }, filtered: {} };
     }
 
     const bounded: PushChanges =
@@ -129,7 +133,11 @@ const planBuild = (push: {
             ? { unknown: `the push changed more than ${String(MAX_CHANGED_FILES)} files` }
             : push.changes;
 
-    return { decision: decideBuild(bounded, push.rootDirectory, push.watchPaths), ...(rereleased === undefined ? {} : { reusesBuildId: rereleased._id }) };
+    return {
+        decision: decideBuild(bounded, push.rootDirectory, push.watchPaths, packages),
+        filtered: { pathFiltered: true },
+        ...(rereleased === undefined ? {} : { reusesBuildId: rereleased._id }),
+    };
 };
 
 /**
@@ -281,7 +289,17 @@ export const recordPush = internalMutation
             // Only a build that recorded a deployment has a stored release to re-release.
             const rereleased = prior?.deployment == null ? undefined : prior.build;
             const { page: projectBuilds } = await context.db.builds.findMany({ where: { projectId: project._id } }); // secret-scanner:allow -- domain field name
-            const { decision, reusesBuildId } = planBuild({ before, branch, changes, projectBuilds, rereleased, rootDirectory, trigger, watchPaths });
+            const { decision, filtered, reusesBuildId } = planBuild({
+                before,
+                branch,
+                changes,
+                projectBuilds,
+                rereleased,
+                rootDirectory,
+                trigger,
+                watchPaths,
+                workspacePackages: project.workspacePackages,
+            });
             const common = {
                 branch,
                 commitSha,
@@ -299,7 +317,7 @@ export const recordPush = internalMutation
             if (!decision.build) {
                 const buildId = await context.db.insert("builds", { ...common, skipReason: decision.reason, status: "skipped" });
 
-                return { buildId, reused: false, skipped: decision.reason };
+                return { buildId, ...filtered, reused: false, skipped: decision.reason };
             }
 
             // Backpressure: cap unfinished builds per project so a webhook storm
@@ -400,13 +418,39 @@ export const appendLog = internalMutation
         await context.db.insert("buildLogs", { buildId, createdAt: context.now, level, line, organizationId: build.organizationId });
     });
 
-/** Mark a claimed build successful with its bundle hash. SYSTEM only. */
+/** Beyond this many workspace packages the set is not stored, and pushes build without the path check. */
+const MAX_WORKSPACE_PACKAGES = 200;
+
+/**
+ * Mark a claimed build successful with its bundle hash. A production build's
+ * `workspacePackages` (the build box's walk of the installed workspace) become
+ * the project's, unless a newer build already recorded them. Only production:
+ * a pull request's branch may have dropped a dependency the default branch
+ * still has, and a set too small skips a deploy that should have happened.
+ * SYSTEM only.
+ */
 export const complete = internalMutation
-    .input({ buildId: v.id("builds"), bundleHash: v.string(), deploymentId: v.optional(v.string()), runnerId: v.string() })
-    .mutation(async ({ ctx: context, args: { buildId, bundleHash, deploymentId, runnerId } }): Promise<void> => {
-        assertLease(await context.db.get(buildId), runnerId);
+    .input({
+        buildId: v.id("builds"),
+        bundleHash: v.string(),
+        deploymentId: v.optional(v.string()),
+        runnerId: v.string(),
+        workspacePackages: v.optional(v.array(boundedString(LIMITS.token))),
+    })
+    .mutation(async ({ ctx: context, args: { buildId, bundleHash, deploymentId, runnerId, workspacePackages } }): Promise<void> => {
+        const build = assertLease(await context.db.get(buildId), runnerId);
 
         const { now } = context;
+
+        if (workspacePackages !== undefined && workspacePackages.length <= MAX_WORKSPACE_PACKAGES && build.trigger === "push") {
+            const project = (await context.db.get(build.projectId)) as null | { workspacePackages?: { builtAt: number } };
+
+            if (project && (project.workspacePackages?.builtAt ?? -1) <= build.createdAt) {
+                await context.db.patch(build.projectId, {
+                    workspacePackages: { builtAt: build.createdAt, paths: workspacePackages, rootDirectory: build.rootDirectory ?? "" },
+                });
+            }
+        }
 
         await context.db.patch(buildId, {
             bundleHash,

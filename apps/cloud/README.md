@@ -747,9 +747,31 @@ project's **Build settings** in the Studio (`projects.updateBuildSettings`):
   that does not exist or that resolves outside the repository through a symlink.
 - **Watch paths** — optional globs (picomatch, dotfiles included, at most 20,
   no `!` negations). A push to the default branch builds only if a changed file
-  matches one. The default is everything under the root directory, and the
+  matches one. The default is everything under the root directory plus the
+  **workspace packages the app imports from outside it** (below), and the
   lockfiles at the repository root and at every directory down to the root
-  directory are always watched, so a dependency bump rebuilds.
+  directory are always watched, so a dependency bump rebuilds. Explicit watch
+  paths replace the default, workspace packages included.
+
+**Workspace packages** are found by the build box, not the webhook. After the
+install it follows the app's `dependencies`, `devDependencies`,
+`optionalDependencies` and `peerDependencies` through `node_modules`,
+transitively: a dependency whose link resolves to a directory inside the
+repository and outside any `node_modules` is a workspace package (pnpm, npm and
+Yarn's node-modules linker all install them as links, so `workspace:`, `file:`
+and `link:` specifiers, workspace globs and hoisting are already resolved). Each
+successful **production** build stores the set on the project (newest build
+wins, at most 200 packages); later pushes and PR previews match changed files
+against those directories. Pull-request builds never store it, since a branch
+may have dropped a dependency the default branch still has.
+
+The set stays current without a re-scan: the dependency graph only changes
+through a `package.json` under the root directory or under a recorded package,
+or a lockfile, and every one of those is watched — so the push that adds a
+dependency builds and records the new set. Until a production build has recorded
+a set for the current root directory (a new project, a changed root directory,
+an over-cap repo), a push that touches nothing under the root directory builds
+anyway, with the reason in its log.
 
 The build box installs at the **workspace root** — the nearest directory at or
 above the root directory holding `pnpm-lock.yaml`, `package-lock.json` or
@@ -757,7 +779,12 @@ above the root directory holding `pnpm-lock.yaml`, `package-lock.json` or
 `lunora build` in the root directory and collects its output there.
 
 A push whose files match nothing is recorded as a `skipped` build with its
-reason ("no changes under apps/web/ …"), shown on the Builds tab. The filter
+reason ("no changes under apps/web/ …"), shown on the Builds tab, and its
+commit gets a **success** `lunora/deploy` status reading "Skipped: <reason>", so
+a required check does not wait on a build that will never run (needs the App
+credentials, like every status; a failed post never fails the webhook). A stale
+push's skip posts nothing — its commit already carries its own build's status.
+The filter
 **fails open**: a forced push, a new branch, a push listing 20+ commits (GitHub
 may have truncated it), a commit without file lists, or more than 1000 changed
 files all build. Pull-request previews use the same filter, with the PR's

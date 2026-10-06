@@ -146,8 +146,21 @@ export type BuildDecision = { build: false; reason: string } | { build: true; re
  * Fails OPEN: when the push cannot prove which files it changed, it builds.
  * A skipped deploy that should have happened is invisible until someone
  * notices production is stale; a redundant build costs a few minutes.
+ *
+ * `workspacePackages` are the repo-relative directories of the workspace
+ * packages the app imports from outside its root, as the last production build
+ * recorded them (`containers/build/workspace.mjs`). They join the default watch
+ * set — explicit watch paths replace it, packages and all. Until a build has
+ * recorded them (`undefined`) a subdirectory project cannot prove a push
+ * misses its dependencies, so it builds. Matched as path prefixes rather than
+ * globs, so a directory name with glob characters in it means itself.
  */
-export const decideBuild = (changes: PushChanges, rootDirectory: string | undefined, watchPaths: ReadonlyArray<string> | undefined): BuildDecision => {
+export const decideBuild = (
+    changes: PushChanges,
+    rootDirectory: string | undefined,
+    watchPaths: ReadonlyArray<string> | undefined,
+    workspacePackages?: ReadonlyArray<string>,
+): BuildDecision => {
     if ("unknown" in changes) {
         return { build: true, reason: `building without a path check: ${changes.unknown}` };
     }
@@ -158,14 +171,20 @@ export const decideBuild = (changes: PushChanges, rootDirectory: string | undefi
         return { build: true, reason: "the project watches the whole repository" };
     }
 
+    const explicit = watchPaths !== undefined && watchPaths.length > 0;
+    const packages = explicit ? [] : (workspacePackages ?? []);
     const isMatch = picomatch(patterns, { dot: true });
-    const hit = changes.files.find((file) => isMatch(file));
+    const hit = changes.files.find((file) => isMatch(file) || packages.some((directory) => directory === "" || file.startsWith(`${directory}/`)));
 
     if (hit !== undefined) {
         return { build: true, reason: `${hit} changed` };
     }
 
-    const watched = watchPaths !== undefined && watchPaths.length > 0 ? watchPaths.join(", ") : `${rootDirectory ?? ""}/`;
+    if (!explicit && workspacePackages === undefined) {
+        return { build: true, reason: "the workspace packages the app imports are not known until a production build records them" };
+    }
+
+    const watched = explicit ? watchPaths.join(", ") : [rootDirectory ?? "", ...packages].map((directory) => `${directory}/`).join(", ");
 
     return { build: false, reason: `no changes under ${watched} or the lockfile (${String(changes.files.length)} files changed)` };
 };

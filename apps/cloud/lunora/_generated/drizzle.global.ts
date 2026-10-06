@@ -68,6 +68,7 @@ export const projects = sqliteTable("projects", {
     target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">(),
     placementRef: text("placementRef", { mode: "json" }).$type<Id<"boxes"> | Id<"cloudflareAccounts">>(),
     watchPaths: text("watchPaths", { mode: "json" }).$type<Array<string>>(),
+    workspacePackages: text("workspacePackages", { mode: "json" }).$type<{ builtAt: number; paths: Array<string>; rootDirectory: string }>(),
 }, (t) => ({
     by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),
     by_github_repo: index("by_github_repo").on(t.githubRepo),

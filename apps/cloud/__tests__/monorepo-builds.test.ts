@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DELIVERY_TTL_MS, recordPush, releaseTarget } from "../lunora/builds";
+import { complete, DELIVERY_TTL_MS, recordPush, releaseTarget } from "../lunora/builds";
 import { updateBuildSettings } from "../lunora/projects";
 import type { Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -32,15 +32,35 @@ const push = { branch: "main", commitSha: "abc123", installationId: 42, reposito
 
 describe("builds.recordPush path filter", () => {
     it("records a skipped build with the reason when no watched path changed", async () => {
-        const { ctx, ops } = makeCtx(world(project({ rootDirectory: "apps/web" })));
+        const { ctx, ops } = makeCtx(world(project({ rootDirectory: "apps/web", workspacePackages: { builtAt: 1, paths: [], rootDirectory: "apps/web" } })));
 
         const result = await recordPush.handler(ctx, { ...push, changes: { files: ["apps/docs/index.md"] } });
 
         const reason = "no changes under apps/web/ or the lockfile (1 files changed)";
 
-        expect(result).toStrictEqual({ buildId: "builds_new", reused: false, skipped: reason });
+        expect(result).toStrictEqual({ buildId: "builds_new", pathFiltered: true, reused: false, skipped: reason });
         expect(ops.find((op) => op.kind === "insert" && op.table === "builds")).toMatchObject({
             document: { rootDirectory: "apps/web", skipReason: reason, status: "skipped" },
+        });
+    });
+
+    it("builds on a change to a workspace package the last production build recorded", async () => {
+        const recorded = { builtAt: 1, paths: ["packages/ui"], rootDirectory: "apps/web" };
+        const { ctx } = makeCtx(world(project({ rootDirectory: "apps/web", workspacePackages: recorded })));
+
+        await expect(recordPush.handler(ctx, { ...push, changes: { files: ["packages/ui/button.tsx"] } })).resolves.toStrictEqual({
+            buildId: "builds_new",
+            reused: false,
+        });
+    });
+
+    it("builds rather than trust workspace packages recorded for another root directory", async () => {
+        const recorded = { builtAt: 1, paths: [], rootDirectory: "apps/old" };
+        const { ctx } = makeCtx(world(project({ rootDirectory: "apps/web", workspacePackages: recorded })));
+
+        await expect(recordPush.handler(ctx, { ...push, changes: { files: ["packages/ui/button.tsx"] } })).resolves.toStrictEqual({
+            buildId: "builds_new",
+            reused: false,
         });
     });
 
@@ -176,6 +196,8 @@ describe("builds.recordPush path filter", () => {
             reused: false,
             skipped: expect.stringContaining("the newest push recorded for it is def456") as unknown,
         });
+        // Not the path filter's: the commit already carries its own build's status.
+        expect(result).not.toHaveProperty("pathFiltered");
         expect(inserted?.document).toMatchObject({ status: "skipped" });
         expect(inserted?.document).not.toHaveProperty("reusesBuildId");
     });
@@ -303,6 +325,38 @@ describe("builds.recordPush path filter", () => {
             buildId: "builds_new",
             reused: false,
         });
+    });
+});
+
+describe("builds.complete workspace packages", () => {
+    const claimed = (over: Row = {}): Row => {
+        return { _id: "bld_1", createdAt: 5, processingBy: "runner_1", projectId: "prj_1", rootDirectory: "apps/web", trigger: "push", ...over };
+    };
+    const args = { buildId: "bld_1" as never, bundleHash: "h", runnerId: "runner_1", workspacePackages: ["packages/ui"] };
+    const projectPatch = (ops: ReturnType<typeof makeCtx>["ops"]) => ops.find((op) => op.kind === "patch" && op.id === "prj_1");
+
+    it("records a production build's set on the project, with the root directory it describes", async () => {
+        const { ctx, ops } = makeCtx(world(project({ rootDirectory: "apps/web" }), [claimed()]));
+
+        await complete.handler(ctx, args);
+
+        expect(projectPatch(ops)).toMatchObject({ patch: { workspacePackages: { builtAt: 5, paths: ["packages/ui"], rootDirectory: "apps/web" } } });
+    });
+
+    it("ignores a pull request's set: its branch may have dropped a dependency", async () => {
+        const { ctx, ops } = makeCtx(world(project(), [claimed({ trigger: "pull_request" })]));
+
+        await complete.handler(ctx, args);
+
+        expect(projectPatch(ops)).toBeUndefined();
+    });
+
+    it("never lets an older build overwrite a newer build's set", async () => {
+        const { ctx, ops } = makeCtx(world(project({ workspacePackages: { builtAt: 9, paths: [], rootDirectory: "apps/web" } }), [claimed()]));
+
+        await complete.handler(ctx, args);
+
+        expect(projectPatch(ops)).toBeUndefined();
     });
 });
 

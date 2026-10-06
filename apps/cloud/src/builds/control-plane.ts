@@ -74,8 +74,14 @@ const runnerPortsFor = (input: BuildWiring, runnerId: string): BuildRunnerPorts 
 
     const runnerPorts: BuildRunnerPorts = {
         appendLog,
-        complete: async (buildId, bundleHash, deploymentId) => {
-            await context.runMutation(internal.builds.complete, { buildId, bundleHash, ...(deploymentId === undefined ? {} : { deploymentId }), runnerId });
+        complete: async (buildId, bundleHash, deploymentId, workspacePackages) => {
+            await context.runMutation(internal.builds.complete, {
+                buildId,
+                bundleHash,
+                ...(deploymentId === undefined ? {} : { deploymentId }),
+                runnerId,
+                ...(workspacePackages === undefined ? {} : { workspacePackages }),
+            });
         },
         // `.any()` — a build is stateless, so any instance will do, and `.any()`
         // is the handle that retries THROUGH a cold start (a 503 "no instance"

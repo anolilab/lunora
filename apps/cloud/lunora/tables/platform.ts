@@ -126,6 +126,11 @@ export const platformTables = {
         // absent for a cell-placed one — enforced by `projects.setTarget`, its one writer.
         placementRef: v.optional(placementHost),
         watchPaths: v.optional(v.array(v.string())),
+        // The workspace packages outside rootDirectory the app imports, as the
+        // newest production build that ran from `rootDirectory` found them
+        // (`builds.complete`). Joins the default watch set; ignored once the
+        // root directory changes, until a build records the new one.
+        workspacePackages: v.optional(v.object({ builtAt: v.number(), paths: v.array(v.string()), rootDirectory: v.string() })),
     })
         .global()
         // A host's projects: a box's routing table and every usage report it sends

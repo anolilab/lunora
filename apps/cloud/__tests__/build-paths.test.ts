@@ -83,10 +83,33 @@ describe(decideBuild, () => {
     });
 
     it("skips, with a reason naming the watched paths, when nothing matches", () => {
-        expect(decideBuild({ files: ["apps/docs/index.md", "apps/web-admin/x.ts"] }, "apps/web", undefined)).toStrictEqual({
+        expect(decideBuild({ files: ["apps/docs/index.md", "apps/web-admin/x.ts"] }, "apps/web", undefined, [])).toStrictEqual({
             build: false,
             reason: "no changes under apps/web/ or the lockfile (2 files changed)",
         });
+    });
+
+    it("builds on a change to a workspace package the app imports, matched as a path prefix", () => {
+        expect(decideBuild({ files: ["packages/ui/button.tsx"] }, "apps/web", undefined, ["packages/ui"])).toStrictEqual({
+            build: true,
+            reason: "packages/ui/button.tsx changed",
+        });
+        expect(decideBuild({ files: ["packages/ui-kit/x.ts"] }, "apps/web", undefined, ["packages/ui"])).toStrictEqual({
+            build: false,
+            reason: "no changes under apps/web/, packages/ui/ or the lockfile (1 files changed)",
+        });
+    });
+
+    it("fails open while the app's workspace packages are unknown", () => {
+        expect(decideBuild({ files: ["packages/ui/button.tsx"] }, "apps/web", undefined)).toMatchObject({
+            build: true,
+            reason: expect.stringContaining("not known") as unknown,
+        });
+    });
+
+    it("lets explicit watch paths replace the workspace packages too", () => {
+        expect(decideBuild({ files: ["packages/ui/button.tsx"] }, "apps/web", ["apps/web/**"], ["packages/ui"]).build).toBe(false);
+        expect(decideBuild({ files: ["packages/ui/button.tsx"] }, "apps/web", ["apps/web/**"]).build).toBe(false);
     });
 
     it("builds on a root lockfile change even when no app file changed", () => {

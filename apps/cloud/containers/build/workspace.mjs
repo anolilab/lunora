@@ -12,8 +12,8 @@
  * project that holds a lockfile, never above the repo — where dependencies are
  * installed.
  */
-import { access, readdir, realpath, stat } from "node:fs/promises";
-import { dirname, join, resolve, sep } from "node:path";
+import { access, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 /**
  * An error whose message is written FOR the person who pushed the commit.
@@ -199,4 +199,96 @@ const resolveLunoraBin = async (project, workspaceRoot) => {
     );
 };
 
-export { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory };
+/** Must match `MAX_WORKSPACE_PACKAGES` in `lunora/builds.ts`. */
+const MAX_WORKSPACE_PACKAGES = 200;
+
+/** Every dependency kind: over-watching costs a redundant build, under-watching a missed deploy. */
+const DEPENDENCY_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+
+/**
+ * Where `name` is installed for a package in `directory`: the nearest
+ * `node_modules/<name>` from there up to the workspace root, as a real path.
+ * @param {string} directory Real path of the depending package.
+ * @param {string} name The dependency's package name.
+ * @param {string} workspaceRoot Real path of the workspace root.
+ * @returns {Promise<string | undefined>} The installed package's real path, or `undefined`.
+ */
+const installedPath = async (directory, name, workspaceRoot) => {
+    for (let current = directory; isInside(workspaceRoot, current); current = dirname(current)) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- nearest first
+            return await realpath(join(current, "node_modules", name));
+        } catch {
+            // Keep walking up.
+        }
+
+        if (current === workspaceRoot) {
+            break;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The repo-relative directories of the workspace packages the project depends
+ * on from outside its own directory, transitively — what a push must touch,
+ * besides the project and the lockfile, to change the build.
+ *
+ * Read off the installed tree rather than the workspace manifest: after the
+ * install, a workspace dependency is a `node_modules` link to its source
+ * directory under every node-modules linker (pnpm, npm, Yarn's), so the
+ * package manager has already resolved `workspace:`, `file:` and `link:`
+ * specifiers, globs and hoisting, and a registry package is the target that
+ * lands inside a `node_modules`. A link resolving outside the repo is ignored,
+ * so the answer never names anything but the tenant's own tree.
+ * @param {string} project Real path of the project directory.
+ * @param {string} workspaceRoot Real path of the workspace root.
+ * @param {string} repo Real path of the extracted repo.
+ * @returns {Promise<string[] | undefined>} Sorted directories (`""` is the repo root), or `undefined` past the cap.
+ */
+const workspacePackages = async (project, workspaceRoot, repo) => {
+    const seen = new Set([project]);
+    const queue = [project];
+    const found = [];
+
+    while (queue.length > 0) {
+        const directory = queue.shift();
+        let manifest;
+
+        try {
+            // eslint-disable-next-line no-await-in-loop -- breadth-first over a small graph
+            manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
+        } catch {
+            continue;
+        }
+
+        const names = DEPENDENCY_FIELDS.flatMap((field) =>
+            typeof manifest?.[field] === "object" && manifest[field] !== null ? Object.keys(manifest[field]) : [],
+        );
+
+        for (const name of names) {
+            // eslint-disable-next-line no-await-in-loop -- see above
+            const target = await installedPath(directory, name, workspaceRoot);
+
+            if (target === undefined || seen.has(target) || !isInside(repo, target) || relative(repo, target).split(sep).includes("node_modules")) {
+                continue;
+            }
+
+            seen.add(target);
+            queue.push(target);
+
+            if (!isInside(project, target)) {
+                found.push(relative(repo, target).split(sep).join("/"));
+            }
+
+            if (found.length > MAX_WORKSPACE_PACKAGES) {
+                return undefined;
+            }
+        }
+    }
+
+    return found.toSorted();
+};
+
+export { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory, workspacePackages };

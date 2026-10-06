@@ -99,6 +99,7 @@ describe(executeInContainer, () => {
             cronSpecs: ["0 0 * * *"],
             manifest: { bindings: [{ binding: "DB", type: "d1" }], compatibilityDate: "2026-01-01" },
             scriptName: "app",
+            workspacePackages: ["packages/ui"],
         };
 
         await expect(
@@ -115,6 +116,7 @@ describe(executeInContainer, () => {
             cronSpecs: ["0 0 * * *", 7],
             manifest: ["not", "an", "object"],
             scriptName: "",
+            workspacePackages: ["packages/ui", 7],
         });
 
         // The deploy path validates the contents; this only refuses to forward a

@@ -78,6 +78,7 @@ export interface Doc_projects {
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     watchPaths?: Array<string>;
+    workspacePackages?: { builtAt: number; paths: Array<string>; rootDirectory: string };
 }
 
 export interface Doc_invitations {
@@ -926,6 +927,7 @@ export interface Insert_projects {
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     watchPaths?: Array<string>;
+    workspacePackages?: { builtAt: number; paths: Array<string>; rootDirectory: string };
 }
 
 export interface Insert_invitations {
