@@ -20,6 +20,8 @@ import type { RouterEnv } from "../deploy/routes/shared";
 import { jsonError, rejected, requireContext } from "../deploy/routes/shared";
 import { targetOf } from "../targets/placement";
 import { targetFleet } from "../targets/registry";
+import { offsiteBucket } from "./offsite";
+import { offsiteFields } from "./tenant-sweep";
 import type { RestoreSummary, TenantBackupBucket, TenantSend } from "./tenant-transport";
 import { captureTenantSnapshot, restoreTenantSnapshot } from "./tenant-transport";
 
@@ -50,11 +52,20 @@ const senderFor = async (target: TenantTarget, environment: RouterEnv): Promise<
  * revoked mid-flight, say) leaves the row `running` until the sweep reaps it —
  * the tenant-side outcome is already decided, so the response still reports it.
  */
-const settle = async (context: Context, organizationId: string, id: string, outcome: Record<string, number | string>): Promise<void> => {
+const settle = async (
+    context: Context,
+    organizationId: string,
+    id: string,
+    outcome: Record<string, number | Record<string, number> | string>,
+): Promise<void> => {
     await context.runMutation(internal.tenant_backups.finish, { id, organizationId, ...outcome }).catch(() => undefined);
 };
 
-/** Take one snapshot into `key` and settle its row. Resolves to the stored size, or rejects with the failure (already recorded). */
+/**
+ * Take one snapshot into `key` (and the off-site copy, when configured) and
+ * settle its row. A failed off-site copy is recorded on the row, not raised.
+ * Resolves to the stored size, or rejects with the failure (already recorded).
+ */
 const snapshot = async (
     context: Context,
     environment: RouterEnv & { TENANT_BACKUPS: TenantBackupBucket },
@@ -62,9 +73,15 @@ const snapshot = async (
     row: { id: string; key: string; target: TenantTarget },
 ): Promise<number> => {
     try {
-        const bytes = await captureTenantSnapshot({ bucket: environment.TENANT_BACKUPS, key: row.key, send: await senderFor(row.target, environment) });
+        const offsite = offsiteBucket(environment);
+        const { bytes, offsite: copied } = await captureTenantSnapshot({
+            bucket: environment.TENANT_BACKUPS,
+            key: row.key,
+            ...(offsite ? { offsite } : {}),
+            send: await senderFor(row.target, environment),
+        });
 
-        await settle(context, organizationId, row.id, { bytes, status: "succeeded" });
+        await settle(context, organizationId, row.id, { bytes, status: "succeeded", ...offsiteFields(copied) });
 
         return bytes;
     } catch (error) {
@@ -117,10 +134,11 @@ export const handleBackupNowRoute = async (request: Request, environment: Router
  * production Worker.
  *
  * Takes a snapshot of the current data FIRST and refuses to touch anything if
- * that fails. Then replays the chosen snapshot through the tenant's append-only
- * import: rows missing since the snapshot come back with their original ids;
- * rows that still exist keep their CURRENT contents; rows created since are left
- * alone. It is a "bring back what was deleted" restore, not a rewind.
+ * that fails. Then rewinds the tenant to the chosen snapshot through its staged
+ * replace import — every batch staged, then one commit: rows deleted since come
+ * back, rows edited since get their snapshot contents, rows created since are
+ * removed. A failure while staging aborts, leaving the tenant untouched.
+ * Restoring the pre-restore snapshot the same way undoes it.
  */
 export const handleRestoreRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
@@ -173,20 +191,13 @@ export const handleRestoreRoute = async (request: Request, environment: RouterEn
         return jsonError(502, reason);
     }
 
-    const partial = summary.unreachableShards > 0;
-
     await settle(context, organizationId, started.restoreId, {
-        ...(partial ? { error: `${String(summary.unreachableShards)} import batch(es) could not reach a shard — the restore is partial; run it again` } : {}),
-        restoreConflicts: summary.conflicts,
+        restoreDeleted: summary.deletedByTable,
         restoreInserted: summary.inserted,
-        restoreRowErrors: summary.rowErrors,
-        status: partial ? "failed" : "succeeded",
+        status: "succeeded",
     });
 
-    return Response.json(
-        { ok: !partial, preRestoreBackupId: started.preRestoreBackupId, restoreId: started.restoreId, summary },
-        { status: partial ? 207 : 200 },
-    );
+    return Response.json({ ok: true, preRestoreBackupId: started.preRestoreBackupId, restoreId: started.restoreId, summary });
 };
 
 /** `POST /v1/backups/download` — stream one snapshot (gzipped NDJSON) to an owner/admin. */

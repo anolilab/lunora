@@ -409,6 +409,13 @@ interface QueryCoordinator {
      * other tables fall back to the runtime's default `__root__` shard.
      */
     orchestrateImport: (namespace: ShardNamespaceInput, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
+
+    /**
+     * Send each shard its own staged-import session RPC (bounded concurrency,
+     * the per-shard timeout) and return every shard's outcome in call order.
+     */
+    orchestrateImportSession: (namespace: ShardNamespaceInput, request: ImportSessionFanOutRequest) => Promise<ReadonlyArray<ImportSessionShardOutcome>>;
+
     /** Fan a migration admin RPC out to every live shard of a table and roll up the per-shard outcomes. */
     orchestrateMigration: (namespace: ShardNamespaceInput, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
 
@@ -441,7 +448,15 @@ interface QueryCoordinator {
      * set's request volumes (a failed shard surfaces as `requests: 0`).
      */
     orchestrateShardTraffic: (namespace: ShardNamespaceInput, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
+
     readonly registry: ShardRegistry;
+
+    /**
+     * Every live shard holding any of `tables` (the registry, plus the default
+     * shard for a table it cannot list) — the shards a replace import must reach
+     * so that one the import does not mention is still emptied.
+     */
+    shardKeysForTables: (tables: ReadonlyArray<string>, defaultShardKey: DefaultShardKey) => Promise<ReadonlyArray<string>>;
 }
 
 /**
@@ -553,6 +568,23 @@ interface ImportFanOutRequest {
      */
     batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
     headers?: Record<string, string>;
+}
+
+/**
+ * One staged-import session RPC per shard (`__lunora_admin__:importStage`,
+ * `importCommit`, `importAbort`, …), each with its own args.
+ */
+interface ImportSessionFanOutRequest {
+    calls: ReadonlyArray<{ args: Record<string, unknown>; shardKey: string }>;
+    functionPath: string;
+    headers?: Record<string, string>;
+}
+
+/** One shard's answer to an {@link ImportSessionFanOutRequest}: its unwrapped result, or why it failed. */
+interface ImportSessionShardOutcome {
+    error?: { code: string; message: string; timedOut: boolean };
+    shardKey: string;
+    value?: unknown;
 }
 
 interface ShardImportOutcome {
@@ -1876,6 +1908,22 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpImport(outcomes);
         },
+        async orchestrateImportSession(namespace: ShardNamespaceInput, request: ImportSessionFanOutRequest): Promise<ReadonlyArray<ImportSessionShardOutcome>> {
+            const outcomes = await runBoundedJobs(request.calls, maxConcurrency, async (call) =>
+                callOneShard(
+                    namespace,
+                    call.shardKey,
+                    prepareShardRpc({ args: call.args, functionPath: request.functionPath, headers: request.headers }),
+                    perShardTimeoutMs,
+                ),
+            );
+
+            return outcomes.map((outcome) =>
+                outcome.kind === "err"
+                    ? { error: { code: outcome.code, message: outcome.message, timedOut: outcome.timedOut }, shardKey: outcome.shardKey }
+                    : { shardKey: outcome.shardKey, value: unwrapResult(outcome.value) },
+            );
+        },
         async orchestrateApplyCdc(namespace: ShardNamespaceInput, request: ApplyCdcFanOutRequest): Promise<ApplyCdcFanOutResult> {
             // Per-shard pre-bucketed batches — same worker-loop shape as
             // orchestrateImport (each shard gets distinct args, so we can't use
@@ -2040,6 +2088,9 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             return rollUpShardTraffic(results);
         },
         registry: options.registry,
+        async shardKeysForTables(tables: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): Promise<ReadonlyArray<string>> {
+            return withDefaultShard(await unionShardKeys(options.registry, tables, defaultShardKey), defaultShardKey);
+        },
     };
 };
 
@@ -2052,6 +2103,8 @@ export type {
     FanOutSpec,
     ImportFanOutRequest,
     ImportFanOutResult,
+    ImportSessionFanOutRequest,
+    ImportSessionShardOutcome,
     MergeStrategy,
     MigrationFanOutRequest,
     MigrationFanOutResult,

@@ -47,6 +47,7 @@
         "@tanstack/react-router": "catalog:web",
         "@tanstack/react-start": "catalog:web",
         "@xyflow/react": "catalog:frontend",
+        "aws4fetch": "catalog:storage",
         "better-auth": "catalog:auth",
         "class-variance-authority": "catalog:ui",
         "clsx": "catalog:ui",

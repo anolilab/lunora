@@ -334,6 +334,42 @@ Because documents carry their `_id`, a restore preserves identity, so
 [relations](/docs/concepts/relations) between tables survive the round trip.
 Import the referenced table before the table that references it.
 
+Every import request shows up in the Studio's Audit log. Each shard it wrote
+records an `importShard` entry. The parts no shard sees are recorded on the
+default shard: `importGlobal` for the `.global()` rows, `importSections` for
+the `$auth` / `$kv` / `$storage` records. An entry holds the mode, the tables,
+per-table inserted and deleted counts, and the number of errors. Row values
+are never recorded.
+
+### Replacing instead of appending
+
+A plain import only adds rows: an `_id` that already exists is skipped as a
+conflict. `--replace` makes the file the exact contents of its tables instead.
+Rows the file carries overwrite theirs, and every other row in those tables is
+deleted. `--tables` limits it to the tables you name, and `--table` to its one
+table. Without either, every table in the schema is in scope, and a table the
+file has no rows for is emptied.
+
+```bash
+lunora import ./backup.ndjson --replace                      # asks before it deletes anything
+lunora import ./backup.ndjson --replace --tables users --yes # restore one table from a full backup
+```
+
+The command asks for confirmation first. `--yes` skips the prompt, and without
+a terminal to ask on, `--yes` is required. With `--tables`, rows of other tables
+in the file are skipped and counted, and so are the `$auth` / `$kv` / `$storage`
+records. The summary lists how many rows were deleted from each table.
+
+Every batch is staged into one import session first
+(`/_lunora/admin/import?mode=replace&stage=…`), which changes nothing readers
+see, and the whole file is then swapped in by one commit: each shard after a dry
+run on all of them, in one transaction per shard, then the `.global()` tables and
+the sections. A batch that refuses a row, a shard the import cannot reach, or a
+file that fails to read aborts the session and leaves the data as it was. A
+commit that fails part-way is sent again; one that still does not finish says
+so, and re-running the import finishes the job. A worker from before staged
+import is refused before a row is sent.
+
 ## Streaming data out continuously
 
 Snapshots are point-in-time. To keep an external warehouse or ETL sink in step

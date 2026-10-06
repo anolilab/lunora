@@ -39,6 +39,7 @@ export type {
     FunctionRegistryLike,
     GlobalExportFn,
     GlobalImportFn,
+    GlobalImportStaging,
     GlobalIntrospector,
     GlobalTableInfo as GlobalTableInfoMeta,
     GlobalTablePage as GlobalTablePageMeta,
@@ -92,6 +93,7 @@ export type { ReportedError, StackFrame } from "./error-reporting";
 export { parseStackFrames, toError } from "./error-reporting";
 export type { LunoraErrorBody } from "./errors";
 export { LunoraError, toErrorResponse } from "./errors";
+export type { AuthDataPort } from "./export-sections";
 export type { ExportBatch, ExportChange, ExportCursorStore, ExportSink, ExportTapFailure, ExportTapResult, RunExportTapOptions } from "./export-tap";
 export { createKvCursorStore, createMemoryCursorStore, defineExportSink, r2Sink, runExportTap, sanitizeChange, webhookExportSink } from "./export-tap";
 export type { HealthAuthPosture, HealthBody, HealthCheckReport, HealthProbe, HealthProbeKind, HealthProbeResult, HealthRouteDeps } from "./health-routes";
@@ -143,6 +145,8 @@ export type {
     FanOutSpec,
     ImportFanOutRequest,
     ImportFanOutResult,
+    ImportSessionFanOutRequest,
+    ImportSessionShardOutcome,
     MergeStrategy,
     MigrationFanOutRequest,
     MigrationFanOutResult,

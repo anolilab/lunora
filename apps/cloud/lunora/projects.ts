@@ -39,6 +39,7 @@ interface ProjectRow {
     slug: string;
     target?: null | string;
     watchPaths?: string[];
+    workspacePackages?: null | { builtAt: number; paths: string[]; rootDirectory: string };
 }
 
 /**
@@ -88,6 +89,8 @@ export interface ProjectView {
     target: TargetId;
     /** Globs a push must touch to rebuild; absent means everything under `rootDirectory`. */
     watchPaths?: string[];
+    /** The workspace packages the last production build recorded the app importing, for `rootDirectory` at the time. */
+    workspacePackages?: { builtAt: number; paths: string[]; rootDirectory: string };
 }
 
 /** Project one stored row onto the public view, dropping the protection secrets. */
@@ -110,6 +113,7 @@ export const toProjectView = (row: ProjectRow): ProjectView => {
         ...(productionAlias == null ? {} : { productionAlias }),
         ...(row.rootDirectory === undefined ? {} : { rootDirectory: row.rootDirectory }),
         ...(row.watchPaths === undefined ? {} : { watchPaths: row.watchPaths }),
+        ...(row.workspacePackages == null ? {} : { workspacePackages: row.workspacePackages }),
     };
 };
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { PushChanges } from "../src/builds/paths";
+import type { CommitStatus } from "../src/github/app";
+import type { BuildRecordResult, GitHubWebhookHooks } from "../src/github/webhook";
 import { handleGitHubWebhook, parsePullRequestEvent, pushChanges, verifyGitHubSignature } from "../src/github/webhook";
 
 const sign = async (secret: string, body: string): Promise<string> => {
@@ -287,5 +289,109 @@ describe("preview path filter", () => {
 
     it("builds unfiltered without App credentials", async () => {
         await expect(deliver()).resolves.toStrictEqual({ unknown: "the control plane cannot list pull request files (no GitHub App credentials)" });
+    });
+});
+
+describe("skipped build commit status", () => {
+    const secret = "whsec";
+    const resolveProject = () => Promise.resolve({ organizationId: "org_1", projectId: "proj_1", slug: "app" });
+    const pushBody = JSON.stringify({
+        after: "def456",
+        before: "abc123",
+        commits: [{ added: [], modified: ["apps/docs/x.md"], removed: [] }],
+        installation: { id: 42 },
+        ref: "refs/heads/main",
+        repository: { default_branch: "main", full_name: "acme/mono" },
+    });
+    const prBody = JSON.stringify({
+        action: "synchronize",
+        installation: { id: 42 },
+        number: 7,
+        pull_request: { base: { sha: "base1" }, head: { ref: "feat/x", repo: { full_name: "acme/mono" }, sha: "head1" } },
+        repository: { full_name: "acme/mono" },
+    });
+    const filtered: BuildRecordResult = {
+        buildId: "b1",
+        pathFiltered: true,
+        reused: false,
+        skipped: "no changes under apps/web/ or the lockfile (1 files changed)",
+    };
+
+    const deliver = async (
+        event: "pull_request" | "push",
+        result: BuildRecordResult,
+        postCommitStatus: GitHubWebhookHooks["postCommitStatus"],
+    ): Promise<Response> => {
+        const body = event === "push" ? pushBody : prBody;
+        const request = new Request("https://cloud/v1/github/webhook", {
+            body,
+            headers: { "x-github-event": event, "x-hub-signature-256": await sign(secret, body) },
+            method: "POST",
+        });
+
+        return handleGitHubWebhook(request, {
+            listChangedFiles: () => Promise.resolve({ files: ["apps/docs/x.md"] }),
+            onPreviewBuild: () => Promise.resolve(result),
+            onPush: () => Promise.resolve(result),
+            ...(postCommitStatus === undefined ? {} : { postCommitStatus }),
+            resolveProject,
+            secret,
+        });
+    };
+
+    it.each([
+        ["push", "def456"],
+        ["pull_request", "head1"],
+    ] as const)("posts a success status naming the skip reason for a path-filtered %s", async (event, sha) => {
+        const posted: CommitStatus[] = [];
+
+        await deliver(event, filtered, (status) => {
+            posted.push(status);
+
+            return Promise.resolve();
+        });
+
+        expect(posted).toStrictEqual([
+            {
+                description: "Skipped: no changes under apps/web/ or the lockfile (1 files changed)",
+                installationId: 42,
+                repository: "acme/mono",
+                sha,
+                state: "success",
+            },
+        ]);
+    });
+
+    it("reposts a recorded path-filter skip on a redelivery, so a failed first post recovers", async () => {
+        const posted: CommitStatus[] = [];
+        const response = await deliver("push", { duplicate: true, pathFiltered: true, skipped: filtered.skipped }, (status) => {
+            posted.push(status);
+
+            return Promise.resolve();
+        });
+
+        await expect(response.json()).resolves.toStrictEqual({ duplicate: true, ignored: true });
+        expect(posted.map((status) => status.description)).toStrictEqual([`Skipped: ${String(filtered.skipped)}`]);
+    });
+
+    it("posts nothing for a stale push's skip or a queued build", async () => {
+        const posted: CommitStatus[] = [];
+        const post = (status: CommitStatus) => {
+            posted.push(status);
+
+            return Promise.resolve();
+        };
+
+        await deliver("push", { buildId: "b1", reused: false, skipped: "not re-released: stale" }, post);
+        await deliver("push", { buildId: "b1", reused: false }, post);
+
+        expect(posted).toStrictEqual([]);
+    });
+
+    it("still acknowledges the push when the status post fails", async () => {
+        const response = await deliver("push", filtered, () => Promise.reject(new Error("github commit status failed: 502")));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toMatchObject({ accepted: true, skipped: filtered.skipped });
     });
 });

@@ -119,7 +119,9 @@ App can be installed on public repositories.
   (64 hex), `CLOUDFLARE_API_TOKEN` (the cell token), `GITHUB_WEBHOOK_SECRET`,
   `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `CREEM_API_KEY`,
   `CREEM_WEBHOOK_SECRET`, `LUNORA_TAIL_SECRET`, `LUNORA_STATE_STORE_URL` +
-  `LUNORA_STATE_STORE_TOKEN` (step 1; for `cloudflare-workers`), and the optional ones in
+  `LUNORA_STATE_STORE_TOKEN` (step 1; for `cloudflare-workers`), the four
+  `BACKUP_OFFSITE_*` values for the off-site backup copy (a bucket and R2 token in
+  a second account, [`docs/RESTORE.md`](./docs/RESTORE.md)), and the optional ones in
   [`.dev.vars.example`](./.dev.vars.example) (each documents its symptom when
   unset).
 - `lunora-dispatcher`: `CONTROL_PLANE_TOKEN` = the control plane's

@@ -6,6 +6,7 @@
  * `LUNORA_ADMIN_TOKEN`. `--prod` (with an explicit `--url`) is the guardrail
  * against accidentally targeting localhost in production scripts.
  */
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
@@ -15,8 +16,10 @@ import type { Refusal } from "../../util/exit-code";
 import { EXIT_CODE, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { CommandResult, OutputFormat } from "../../util/output-format";
+import { tuiConfirm } from "../../util/tui-prompts";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
-import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
+import { resolveTables } from "./export";
+import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportStagedReplace, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
@@ -49,6 +52,8 @@ const MAX_IMPORT_BATCH_BYTES = 900_000;
 interface ImportCommandOptions {
     /** Rows per HTTP request. Defaults to {@link DEFAULT_IMPORT_BATCH_SIZE}. */
     batchSize?: number;
+    /** Inject a custom confirmer for `--replace` (tests, non-TTY callers). Returns `true` on confirmation. */
+    confirm?: (prompt: string) => Promise<boolean>;
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
     /** Source NDJSON file. Required. */
@@ -65,6 +70,13 @@ interface ImportCommandOptions {
     from?: ImportSourceName;
     logger: Logger;
     prod?: boolean;
+
+    /**
+     * Make the import the exact contents of its tables (`?mode=replace`): rows
+     * the file carries overwrite theirs, every other row is deleted. Scoped by
+     * `tables`; without it, every table in the schema.
+     */
+    replace?: boolean;
 
     /**
      * Scan the export for columns holding `_storage` ids and write a candidate
@@ -84,6 +96,13 @@ interface ImportCommandOptions {
      * shape.
      */
     table?: string;
+
+    /**
+     * `--replace` scope, comma-separated. Rows of other tables in the file are
+     * skipped, as are the `$auth`/`$kv`/`$storage` sections. Defaults to `table`
+     * when `--table` is set.
+     */
+    tables?: string;
     token?: string;
 
     url?: string;
@@ -116,6 +135,8 @@ interface ImportCommandOptions {
  */
 interface ImportSummary {
     conflicts: number;
+    /** `--replace` only: rows removed per table because the file did not carry them. */
+    deleted?: Record<string, number>;
     errors: ImportRowError[];
     /** Shards the endpoint could not reach (it answered 207). Their rows are MISSING, not rejected — present only when non-empty. */
     failed?: ImportShardFailure[];
@@ -166,6 +187,12 @@ interface ImportRequest {
  * a bare `undefined` left the caller unable to tell them apart.
  */
 const resolveImportRequest = async (options: ImportCommandOptions): Promise<ImportRequest | Refusal> => {
+    if (options.tables !== undefined && options.replace !== true) {
+        options.logger.error("--tables scopes a --replace; an append imports every table in the file");
+
+        return { refused: EXIT_CODE.USAGE };
+    }
+
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to import to the implicit localhost worker)");
 
@@ -231,6 +258,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
 const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string> | undefined, report: StorageRemapReport): ImportSummary => {
     return {
         conflicts: totals.conflicts,
+        ...(totals.deleted === undefined ? {} : { deleted: totals.deleted }),
         errors: totals.errors,
         ...(totals.failed.length > 0 ? { failed: totals.failed } : {}),
         inserted: totals.inserted,
@@ -279,6 +307,126 @@ const openSourceStream = (
             return createReadStream(options.file, { encoding: "utf8" });
         }
     }
+};
+
+/** Section lines a scoped replace leaves out; the `$lunora` header still goes through. */
+const SECTION_TABLES = new Set(["$auth", "$kv", "$storage"]);
+
+/** The `table` of a serialised import row, or `undefined` when it is not one (the endpoint then reports the line). */
+const tableOf = (row: string): string | undefined => {
+    try {
+        const parsed: unknown = JSON.parse(row);
+
+        return typeof parsed === "object" && parsed !== null && typeof (parsed as { table?: unknown }).table === "string"
+            ? (parsed as { table: string }).table
+            : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Narrow a row transform to the `--tables` of a scoped replace, counting what
+ * it skips: anything else in the file is not part of the replace, and the
+ * endpoint would refuse the whole request over it.
+ */
+const scopeRows = (
+    toRow: (line: string, lineNumber: number) => string | undefined,
+    tables: ReadonlySet<string> | undefined,
+    skipped: Map<string, number>,
+): ((line: string, lineNumber: number) => string | undefined) => {
+    if (tables === undefined) {
+        return toRow;
+    }
+
+    return (line, lineNumber) => {
+        const row = toRow(line, lineNumber);
+
+        if (row === undefined) {
+            return undefined;
+        }
+
+        const table = tableOf(row);
+
+        if (table === undefined) {
+            return row;
+        }
+
+        if (tables.has(table) || (table.startsWith("$") && !SECTION_TABLES.has(table))) {
+            return row;
+        }
+
+        skipped.set(table, (skipped.get(table) ?? 0) + 1);
+
+        return undefined;
+    };
+};
+
+/**
+ * Confirm a `--replace`, following `lunora reset`: `--yes` skips the prompt, a
+ * TTY asks, anything else is refused. `undefined` means go ahead.
+ */
+const confirmReplace = async (
+    options: ImportCommandOptions,
+    baseUrl: string,
+    tables: ReadonlyArray<string> | undefined,
+): Promise<ImportCommandResult | undefined> => {
+    if (options.yes === true) {
+        return undefined;
+    }
+
+    const scope = tables === undefined ? "every table in the schema" : `the table(s) ${tables.join(", ")}`;
+
+    if (!process.stdin.isTTY && options.confirm === undefined) {
+        const error = `import --replace: stdin is not a TTY — re-run with --yes to confirm replacing ${scope}`;
+
+        options.logger.error(error);
+
+        return { body: undefined, code: EXIT_CODE.USAGE, error, inserted: 0 };
+    }
+
+    const confirmer = options.confirm ?? tuiConfirm;
+
+    if (await confirmer(`This replaces ${scope} on ${baseUrl}: every row ${options.file} does not carry is deleted. Continue?`)) {
+        return undefined;
+    }
+
+    options.logger.info("import: aborted");
+
+    return { body: undefined, code: EXIT_CODE.CANCELLED, error: "import: aborted at the confirmation prompt", inserted: 0 };
+};
+
+/**
+ * Resolve a `--replace` run: confirm it, then name its staged session's URLs
+ * and the tables it is scoped to (`undefined`: the whole schema). An append run
+ * resolves to neither.
+ */
+const planReplace = async (
+    options: ImportCommandOptions,
+    baseUrl: string,
+    requestUrl: string,
+): Promise<{ refused: ImportCommandResult } | { replace?: ImportStagedReplace; scope?: ReadonlySet<string> }> => {
+    if (options.replace !== true) {
+        return {};
+    }
+
+    const tables = resolveTables(options.tables) ?? (options.table === undefined ? undefined : [options.table]);
+    const refused = await confirmReplace(options, baseUrl, tables);
+
+    if (refused !== undefined) {
+        return { refused };
+    }
+
+    const session = `cli-${randomUUID()}`;
+    const scoped = tables === undefined ? "" : `&tables=${encodeURIComponent(tables.join(","))}`;
+    const replace: ImportStagedReplace = {
+        abortUrl: `${requestUrl}/abort`,
+        commitUrl: `${requestUrl}/commit`,
+        session,
+        stageUrl: `${requestUrl}?mode=replace${scoped}&stage=${session}`,
+    };
+
+    return tables === undefined ? { replace } : { replace, scope: new Set(tables) };
 };
 
 /**
@@ -612,10 +760,22 @@ const runStoragePhase = async (
  */
 const reportImportOutcome = (
     logger: Logger,
-    outcome: { conflicts: number; errorCount: number; failed: boolean; insertedTotal: number; received: number; warnings: ReadonlyArray<string> },
+    outcome: {
+        conflicts: number;
+        deleted: Record<string, number> | undefined;
+        errorCount: number;
+        failed: boolean;
+        insertedTotal: number;
+        received: number;
+        warnings: ReadonlyArray<string>;
+    },
 ): void => {
     for (const warning of outcome.warnings) {
         logger.warn(warning);
+    }
+
+    for (const [table, count] of Object.entries(outcome.deleted ?? {})) {
+        logger.info(`replace: deleted ${String(count)} row(s) from ${table}`);
     }
 
     const unaccounted = outcome.received - outcome.insertedTotal - outcome.conflicts - outcome.errorCount;
@@ -624,7 +784,9 @@ const reportImportOutcome = (
         logger.warn(`${String(unaccounted)} of ${String(outcome.received)} rows were neither inserted, conflicted, nor reported as errors`);
     }
 
-    const summary = `imported ${String(outcome.insertedTotal)} of ${String(outcome.received)} rows (${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)`;
+    const deletedTotal = Object.values(outcome.deleted ?? {}).reduce((a, b) => a + b, 0);
+    const deletedNote = outcome.deleted === undefined ? "" : `, deleted ${String(deletedTotal)}`;
+    const summary = `imported ${String(outcome.insertedTotal)} of ${String(outcome.received)} rows (${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)${deletedNote}`;
 
     // A run that exits 1 must not end on a green line — the summary is the last
     // thing an operator reads, and only the exit code disagreed with it.
@@ -647,6 +809,39 @@ const scanOnly = async (source: ImportSource, cwd: string, options: ImportComman
     }
 
     return { body: undefined, code: 0, inserted: 0 };
+};
+
+/**
+ * Run the drain inside a replace's staged session: refuse a worker without one
+ * first, commit once every batch staged, abort when the drain failed. A plain
+ * append is just the drain. Returns the failure, as the drain does.
+ */
+const drainReplace = async (batcher: ImportBatcher, drain: () => Promise<unknown>, logger: Logger): Promise<unknown> => {
+    try {
+        await batcher.start();
+    } catch (error: unknown) {
+        logger.error(`import: ${error instanceof Error ? error.message : String(error)}`);
+
+        return error;
+    }
+
+    const failure = await drain();
+
+    if (failure !== undefined) {
+        await batcher.abort();
+
+        return failure;
+    }
+
+    try {
+        await batcher.finish();
+
+        return undefined;
+    } catch (error: unknown) {
+        logger.error(`import: ${error instanceof Error ? error.message : String(error)}`);
+
+        return error;
+    }
 };
 
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
@@ -677,6 +872,11 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
 
     const { baseUrl, fetchImpl, requestUrl, token } = request;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
+    const replace = await planReplace(options, baseUrl, requestUrl);
+
+    if ("refused" in replace) {
+        return replace.refused;
+    }
 
     // Phase 1: move the files first, so no imported document can reference an
     // object that is not there yet.
@@ -707,9 +907,15 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // parity check after the run compares that against what the endpoint says it
     // inserted.
     const sourceRows = new Map<string, number>();
-    const stream = openSourceStream(source, options, storageIdMap !== undefined, sourceRows);
-    const batcher = createImportBatcher({ batchSize, fetchImpl, maxBatchBytes: MAX_IMPORT_BATCH_BYTES, requestUrl, token });
-    const toRow = createSourceRowTransformer({
+    const batcher = createImportBatcher({
+        batchSize,
+        fetchImpl,
+        maxBatchBytes: MAX_IMPORT_BATCH_BYTES,
+        replace: replace.replace,
+        requestUrl,
+        token,
+    });
+    const transform = createSourceRowTransformer({
         report: remapReport,
         source,
         storageColumns,
@@ -718,10 +924,21 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         transferredPaths,
         unresolvedPaths,
     });
+    const skippedRows = new Map<string, number>();
+    const toRow = scopeRows(transform, replace.scope, skippedRows);
 
-    const streamFailure = await drainIntoBatcher(stream, toRow, batcher, options.logger);
+    // The source is opened only once a replace's worker check passed, so a refused run reads nothing.
+    const streamFailure = await drainReplace(
+        batcher,
+        async () => drainIntoBatcher(openSourceStream(source, options, storageIdMap !== undefined, sourceRows), toRow, batcher, options.logger),
+        options.logger,
+    );
 
-    const { conflicts, errors, failed: failedShards, inserted, received, warnings } = batcher.totals;
+    const { conflicts, deleted, errors, failed: failedShards, inserted, received, warnings } = batcher.totals;
+
+    for (const [table, count] of skippedRows) {
+        options.logger.warn(`replace: skipped ${String(count)} row(s) of ${table}, which is not in --tables`);
+    }
 
     // Parity over an aborted run only restates the abort, so skip it there and
     // let the failure be the verdict.
@@ -753,7 +970,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         options.logger.info(JSON.stringify(body, undefined, 2));
     }
 
-    reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });
+    reportImportOutcome(options.logger, { conflicts, deleted, errorCount: errors.length, failed, insertedTotal, received, warnings });
 
     const data = { file: options.file, inserted: insertedTotal, summary: body };
 

@@ -354,21 +354,6 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["runnerId"] !== "string") return DEFER;
 return { "runnerId": source["runnerId"] };
 });
-installCompiledValidatorMap(lunora_builds_4.complete.args, (source) => {
-if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
-if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
-if (typeof source["buildId"] !== "string") return DEFER;
-if (typeof source["bundleHash"] !== "string") return DEFER;
-let __has1 = false;
-let __val1;
-if (source["deploymentId"] !== undefined) {
-if (typeof source["deploymentId"] !== "string") return DEFER;
-__val1 = source["deploymentId"];
-__has1 = true;
-}
-if (typeof source["runnerId"] !== "string") return DEFER;
-return { "buildId": source["buildId"], "bundleHash": source["bundleHash"], ...(__has1 ? { "deploymentId": __val1 } : {}), "runnerId": source["runnerId"] };
-});
 installCompiledValidatorMap(lunora_builds_4.fail.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -486,9 +471,10 @@ return { "id": source["id"], "organizationId": source["organizationId"] };
 installCompiledValidatorMap(lunora_deployments_9.adminTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["adminPath"] !== "string") return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
-return { "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
+return { "adminPath": source["adminPath"], "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_deployments_9.listByProject.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -948,12 +934,12 @@ export interface Caller {
     builds: {
         appendLog: (args: { buildId: Id<"builds">; level: "info" | "error"; line: string; runnerId: string }) => Promise<void>;
         claimNext: (args: { runnerId: string }) => Promise<null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string; }>;
-        complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string }) => Promise<void>;
+        complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string; workspacePackages?: Array<unknown> }) => Promise<void>;
         expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; deploymentId?: string; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; deploymentId?: string; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; pathFiltered?: false | true; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
-        recordPush: (args: { before?: unknown; branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; deliveryId?: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<null | { buildId: Id<"builds">; reused: boolean; skipped?: string; } | { duplicate: true; }>;
+        recordPush: (args: { before?: unknown; branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; deliveryId?: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string; } | { duplicate: true; pathFiltered?: true; skipped?: string; }>;
         releaseTarget: (args: { buildId: Id<"builds"> }) => Promise<null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: (args: { buildId: Id<"builds"> }) => Promise<{ commitSha: string; installationId: number; repository: string; } | null>;
         reusableRelease: (args: { buildId: Id<"builds"> }) => Promise<null | { bundleHash: string; cronSpecs?: string[]; deploymentId: string }>;
@@ -988,7 +974,7 @@ export interface Caller {
     };
     deployments: {
         activate: (args: { deployKey?: unknown; id: Id<"deployments"> }) => Promise<void>;
-        adminTarget: (args: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
+        adminTarget: (args: { adminPath: string; deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
         ejectTarget: (args: { deployKey: unknown; deploymentId: Id<"deployments"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
@@ -1074,7 +1060,7 @@ export interface Caller {
     projects: {
         byGithubRepo: (args: { repository: unknown }) => Promise<{ organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string; } | null>;
         create: (args: { framework?: unknown; githubRepo?: unknown; name: unknown; organizationId: Id<"organizations">; slug: unknown }) => Promise<Id<"projects">>;
-        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">; previewProtected: boolean; productionAlias?: string; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; watchPaths?: string[] }[]>;
+        listByOrg: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"projects">; activeDeploymentId?: string; createdAt: number; framework?: string; githubRepo?: string; name: string; organizationId: Id<"organizations">; placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">; previewProtected: boolean; productionAlias?: string; rootDirectory?: string; slug: string; target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; watchPaths?: string[]; workspacePackages?: { builtAt: number; paths: string[]; rootDirectory: string; } }[]>;
         placement: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ cellName?: string; host?: { accountId: string; id: string; workersSubdomain: string; } | { id: string; slug: string; }; hostRevoked?: false | true; target?: string }>;
         remove: (args: { id: Id<"projects">; organizationId: Id<"organizations"> }) => Promise<{ destroyed: number; }>;
         rename: (args: { id: Id<"projects">; name: unknown; organizationId: Id<"organizations"> }) => Promise<void>;
@@ -1107,8 +1093,8 @@ export interface Caller {
         authorizeDownload: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ alias: string; createdAt: number; key: string; }>;
         beginBackup: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { backupId: string & { readonly __table: "tenantBackups"; }; key: string }>;
         beginRestore: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { preRestoreBackupId: string & { readonly __table: "tenantBackups"; }; preRestoreKey: string; restoreId: string & { readonly __table: "tenantBackups"; }; sourceKey: string }>;
-        finish: (args: { bytes?: number; error?: unknown; id: Id<"tenantBackups">; organizationId: Id<"organizations">; restoreConflicts?: number; restoreInserted?: number; restoreRowErrors?: number; status: "succeeded" | "failed" }) => Promise<null>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; operation: "backup" | "restore"; restoreConflicts?: number; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
+        finish: (args: { bytes?: number; error?: unknown; id: Id<"tenantBackups">; offsiteError?: unknown; offsiteStatus?: "succeeded" | "failed"; organizationId: Id<"organizations">; restoreConflicts?: number; restoreDeleted?: Record<string, number>; restoreInserted?: number; restoreRowErrors?: number; status: "succeeded" | "failed" }) => Promise<null>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ bytes?: number; organizationId: string & { readonly __table: "organizations"; }; createdAt: number; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; trigger: "manual" | "pre-restore" | "scheduled"; error?: string; projectId: Id<"projects">; _id: string & { readonly __table: "tenantBackups"; }; alias: string; completedAt?: number; offsiteError?: string; offsiteStatus?: "failed" | "succeeded"; operation: "backup" | "restore"; restoreConflicts?: number; restoreDeleted?: Record<string, number>; restoredFrom?: string & { readonly __table: "tenantBackups"; }; restoreInserted?: number; restoreRowErrors?: number }[]>;
     };
     traces: {
         get: (args: { organizationId: Id<"organizations">; traceId: unknown }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "container" | "generation" | "worker"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
