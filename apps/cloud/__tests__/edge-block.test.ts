@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CloudflareApi, CustomHostname } from "../src/cloudflare/api";
 import type { HostList, HostListItem } from "../src/cloudflare/host-list";
 import { createHttpHostList, MAX_LIST_PAGES } from "../src/cloudflare/host-list";
+import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
 import { reconcileEdgeBlocks } from "../src/targets/cloudflare-wfp/edge-block";
 import { memoryStore } from "./support/memory-store";
 
@@ -116,10 +117,39 @@ const audits = (store: ReturnType<typeof memoryStore>): unknown[] =>
         return { action: row["action"], organizationId: row["organizationId"] };
     });
 
-const run = async (store: ReturnType<typeof memoryStore>, ports: { hostList?: HostList; zone?: ReturnType<typeof memoryZone>["zone"] }) =>
-    reconcileEdgeBlocks(store, { appDomain: "lunora.app", log: () => undefined, now: NOW, ...ports });
+/** Deletion is opted in for the suites that exercise it; the default-off behaviour has its own suite below. */
+const run = async (
+    store: ReturnType<typeof memoryStore>,
+    ports: { deleteHostnames?: boolean; hostList?: HostList; zone?: ReturnType<typeof memoryZone>["zone"] },
+) => reconcileEdgeBlocks(store, { appDomain: "lunora.app", deleteHostnames: true, log: () => undefined, now: NOW, ...ports });
 
-describe("edge block — custom hostname removal (no list)", () => {
+describe("edge block — modes", () => {
+    it.each([
+        [{}, "dispatcher"],
+        [{ CLOUDFLARE_ACCOUNT_ID: "a", CLOUDFLARE_API_TOKEN: "t", LUNORA_SAAS_ZONE_ID: ZONE }, "dispatcher"],
+        [{ CLOUDFLARE_ACCOUNT_ID: "a", CLOUDFLARE_API_TOKEN: "t", LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES: "true", LUNORA_SAAS_ZONE_ID: ZONE }, "dispatcher"],
+        [{ CLOUDFLARE_ACCOUNT_ID: "a", CLOUDFLARE_API_TOKEN: "t", LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES: "1", LUNORA_SAAS_ZONE_ID: ZONE }, "delete-hostnames"],
+        [{ CLOUDFLARE_ACCOUNT_ID: "a", CLOUDFLARE_API_TOKEN: "t", LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES: "1", LUNORA_SUSPENDED_HOSTS_LIST_ID: "l" }, "list"],
+        [{ LUNORA_SUSPENDED_HOSTS_LIST_ID: "l" }, "dispatcher"],
+    ])("reads %o as %s", (environment, mode) => {
+        expect(edgeBlockModeOf(environment)).toBe(mode);
+    });
+
+    /** Deletion is destructive to the customer's domains, so without the opt-in it never happens. */
+    it("deletes nothing without the opt-in, and still restores what an earlier opt-in blocked", async () => {
+        const { hostnames, zone } = memoryZone([customHostname("ch_1", "app.example.com")]);
+        const store = memoryStore({
+            domains: [domain(), domain({ _id: "dom_2", customHostnameId: null, edgeBlockedAt: 9, hostname: "two.example.com", organizationId: "org_2" })],
+            organizations: [{ _id: "org_1", suspendedAt: 5 }, { _id: "org_2" }],
+        });
+
+        await expect(run(store, { deleteHostnames: false, zone })).resolves.toStrictEqual({ blocked: 0, failed: 0, unblocked: 1 });
+        expect(hostnames.has("ch_1")).toBe(true);
+        expect(store.tables["domains"]?.[0]).toMatchObject({ customHostnameId: "ch_1", certificateStatus: "active" });
+    });
+});
+
+describe("edge block — custom hostname removal (opted in, no list)", () => {
     it("removes a suspended org's custom hostname, marks the domain, audits it, and leaves the suspension alone", async () => {
         const { hostnames, zone } = memoryZone([customHostname("ch_1", "app.example.com")]);
         const store = memoryStore({ domains: [domain()], organizations: [{ _id: "org_1", suspendedAt: 5, suspendedReason: "spend-cap" }] });

@@ -18,6 +18,16 @@ export const env = defineEnv({
     CLOUDFLARE_API_TOKEN: v.optional(v.string()),
 
     /**
+     * Edge-block suspension settings (plan 365 W8), read here only so the
+     * studio's Domains tab can say which mode this cell runs in
+     * (`domains.edgeBlockMode`, `src/domains/edge-block-mode.ts`); the sweep reads
+     * the Worker env directly.
+     */
+    LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES: v.optional(v.string()),
+    LUNORA_SAAS_ZONE_ID: v.optional(v.string()),
+    LUNORA_SUSPENDED_HOSTS_LIST_ID: v.optional(v.string()),
+
+    /**
      * GitHub App id, and its PKCS#8 private key. The pair authenticates as the App
      * so the build dispatcher can mint an installation token — used both to fetch a
      * repository's source and to write the build's outcome back as a commit status.

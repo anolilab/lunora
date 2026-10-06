@@ -3,10 +3,12 @@ import { LunoraError } from "@lunora/server";
 import type { SpendAccrual } from "../src/billing/spend";
 import { accrualBreached } from "../src/billing/spend";
 import { randomSecret } from "../src/deploy/keys";
+import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
+import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
 import type { TargetId } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
-import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -345,6 +347,21 @@ export const routeForHostname = query
         const project = (await context.db.get(domain.projectId)) as ProjectRow | null;
 
         return project?.activeScriptName ? { scriptName: project.activeScriptName } : null;
+    });
+
+/**
+ * Which edge-block mode this cell runs in (members): how a suspended
+ * organization's domains are blocked (`src/domains/edge-block-mode.ts`). An
+ * action because the settings are Worker vars, which only actions read. Says
+ * nothing about any organization.
+ */
+export const edgeBlockMode = action
+    .use(rateLimit("api"))
+    .input({ organizationId: v.id("organizations") })
+    .action(async ({ ctx: context, args: { organizationId } }): Promise<EdgeBlockMode> => {
+        await assertMember(context, organizationId);
+
+        return edgeBlockModeOf(context.env ?? {});
     });
 
 /** A single domain row (members) — the edge verify route reads the TXT token through this. */

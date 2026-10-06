@@ -15,6 +15,7 @@ import { createHttpCloudflareApi } from "../../cloudflare/api";
 import type { HostList } from "../../cloudflare/host-list";
 import { createHttpHostList } from "../../cloudflare/host-list";
 import type { ControlPlaneStore } from "../../d1-store";
+import { edgeBlockModeOf } from "../../domains/edge-block-mode";
 import { BINDING_SUPPORT } from "../../provision-contract";
 import type { ProgressLine, TargetDriver, TargetFleet, UsageRow } from "../driver";
 import type { ProvisionBox } from "../provision-box/client";
@@ -100,6 +101,8 @@ export interface CloudflareWfpFleetPorts {
     appDomain?: string;
     /** This control plane's cell (`LUNORA_CELL`): the one usage scope, since its Analytics Engine dataset counts every tenant here. */
     cell: string;
+    /** `LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES=1`: the edge block may delete a suspended org's custom hostnames (`delete-hostnames` mode). */
+    deleteHostnames?: boolean;
     /** The bound dispatch namespace (`DISPATCHER`); absent → no in-network fan-out, and backups go over the public URL. */
     dispatcher?: DispatchNamespaceLike;
     /** The SaaS zone this cell issues custom-domain certificates in; absent → nothing to refresh or release. */
@@ -111,7 +114,7 @@ export interface CloudflareWfpFleetPorts {
 }
 
 export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): TargetFleet => {
-    const { appDomain, cell, dispatcher, saasZone, suspendedHostList, usage } = ports;
+    const { appDomain, cell, deleteHostnames, dispatcher, saasZone, suspendedHostList, usage } = ports;
     const dispatch = dispatcher ? (tenant: { adminToken: string; resourceRef: string }) => dispatchTenantSender(dispatcher, tenant) : undefined;
 
     return {
@@ -122,6 +125,7 @@ export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): Target
                   edgeBlock: async (database: ControlPlaneStore, options: { log: (line: string) => void; now: number }) =>
                       reconcileEdgeBlocks(database, {
                           appDomain: appDomain ?? "lunora.app",
+                          deleteHostnames: deleteHostnames === true,
                           ...options,
                           ...(saasZone === undefined ? {} : { zone: saasZone }),
                           ...(suspendedHostList === undefined ? {} : { hostList: suspendedHostList }),
@@ -179,6 +183,13 @@ export type CloudflareWfpEnvironment = {
     LUNORA_DISPATCH_NAMESPACE?: string;
 
     /**
+     * `"1"` opts this cell into deleting a suspended org's custom hostnames
+     * (recreated on recovery) when there is no suspended-hostnames list.
+     * Destructive; see RUNBOOK §6b. Anything else → no deletion.
+     */
+    LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES?: string;
+
+    /**
      * The Cloudflare-for-SaaS zone (the zone of `LUNORA_APP_DOMAIN`, which custom
      * domains CNAME to) whose custom hostnames carry custom-domain certificates.
      * Unset → verified domains record that no certificate could be requested.
@@ -188,7 +199,8 @@ export type CloudflareWfpEnvironment = {
     /**
      * An account custom list of kind `hostname` that one WAF custom rule blocks
      * (`http.host in $&lt;list>`; Enterprise-only) — the edge block for suspended
-     * organizations (plan 365 W8). Unset → custom-hostname removal only.
+     * organizations (plan 365 W8). Unset → the edge block falls back to
+     * `LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES`, or to the dispatcher's 503.
      */
     LUNORA_SUSPENDED_HOSTS_LIST_ID?: string;
     /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
@@ -242,6 +254,7 @@ export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment)
     return createCloudflareWfpFleet({
         appDomain: environment.LUNORA_APP_DOMAIN ?? "lunora.app",
         cell: environment.LUNORA_CELL ?? "default",
+        deleteHostnames: edgeBlockModeOf(environment) === "delete-hostnames",
         ...(accountId && apiToken && listId ? { suspendedHostList: createHttpHostList({ accountId, apiToken, listId }) } : {}),
         ...(environment.DISPATCHER ? { dispatcher: environment.DISPATCHER } : {}),
         ...(saasZone === undefined ? {} : { saasZone }),

@@ -1,6 +1,7 @@
 import type { ReturnOf } from "@lunora/client";
 
 import type { api } from "../../lunora/_generated/api.js";
+import type { EdgeBlockMode } from "../domains/edge-block-mode";
 
 /**
  * Pure helpers for the Domains tab (GAPS.md B1): how a verified domain's
@@ -9,6 +10,17 @@ import type { api } from "../../lunora/_generated/api.js";
  */
 
 export type DomainView = ReturnOf<typeof api.domains.list>[number];
+
+/**
+ * What the Domains tab says about this cell's edge-block mode (plan 365 W8):
+ * what happens to these domains if the organization is suspended.
+ */
+export const EDGE_BLOCK_MODE_NOTE: Record<EdgeBlockMode, string> = {
+    "delete-hostnames":
+        "If this organization is suspended, its custom hostnames are removed at the edge and recreated with a new certificate when it recovers.",
+    dispatcher: "If this organization is suspended, its domains answer 503 from the platform; nothing about them is changed.",
+    list: "If this organization is suspended, its domains are blocked at the edge by a firewall rule; certificates are kept.",
+};
 
 /** The status-chip tones `StatusBadge` knows. */
 type Tone = "danger" | "neutral" | "success" | "warning";

@@ -186,14 +186,26 @@ Unset, verified domains record that no certificate could be requested
 A suspended organization (spend cap, dunning, overage, support) is refused by
 the dispatcher with a 503, but that 503 is itself a billed Workers-for-Platforms
 request. The hourly edge-block sweep moves the stop in front of the Worker
-(`src/targets/cloudflare-wfp/edge-block.ts`):
+(`src/targets/cloudflare-wfp/edge-block.ts`). A cell runs in one of three
+modes (`src/domains/edge-block-mode.ts`), and the Domains tab says which:
 
-- **With the SaaS zone (step 6a), nothing to set up.** A suspended org's
-  custom domains have their custom hostname deleted and recreated when it
-  recovers. Cloudflare has no API to deactivate a custom hostname, so recovery
-  re-issues the certificate (HTTP DV, a few minutes while the CNAME is in
-  place). Platform hostnames (`{alias}.lunora.app`) keep the 503.
-- **Enterprise zone: the suspended-hostnames list.** This covers platform
+- **`dispatcher` (the default): nothing to set up.** With neither setting
+  below, the edge block does nothing and the dispatcher's 503 is the block.
+  Nothing about a customer's domains changes. Every request to a suspended
+  tenant is still billed.
+- **`delete-hostnames`: opt in with `LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES=1`**
+  (needs the SaaS zone, step 6a). A suspended org's custom hostnames are
+  deleted and recreated when it recovers. Cloudflare has no API to deactivate
+  a custom hostname, so deletion is the only edge stop without a WAF list.
+  **The trade-off:** this turns a billing suspension into a destructive change
+  to the customer's domains. Recovery re-issues every certificate (HTTP DV, a
+  few minutes while the CNAME is in place). If the customer moved their CNAME
+  while suspended, or the re-create fails, the domain stays broken until the
+  restore succeeds (retried hourly, shown on the domain). Turn it on only where
+  the requests a 503 costs outweigh that risk. Platform hostnames
+  (`{alias}.lunora.app`) keep the 503. Turning the setting off later stops new
+  deletions; domains it already blocked are still restored on recovery.
+- **`list`: the Enterprise suspended-hostnames list.** This covers platform
   hostnames too, and certificates stay as they are. Once per cell:
     1. Account → Manage Account → Configurations → Lists: create a list of type
        **Hostname**, e.g. `lunora_suspended`. Nothing else may write to it: the
@@ -211,10 +223,14 @@ suspension. It is retried every hour and logged as `[edge-block]` in Workers
 Logs. A failed custom-hostname step is also recorded on the domain row
 (`edgeBlockError`), which the Domains tab shows.
 
-**Check:** suspend a test org with a verified custom domain (support:
-`suspendedAt` set). Within the hour `https://<that domain>` fails at the edge
-and the domain reads "blocked: suspended". Lift the suspension and, within the
-hour, the domain serves again with a fresh certificate.
+The list takes precedence when both are set, and needs no deletion.
+
+**Check:** the Domains tab's note names the mode. In `list` or
+`delete-hostnames` mode, suspend a test org with a verified custom domain
+(support: `suspendedAt` set). Within the hour `https://<that domain>` fails at
+the edge. In `delete-hostnames` mode the domain also reads "blocked:
+suspended". Lift the suspension and, within the hour, the domain serves again
+(in `delete-hostnames` mode, with a fresh certificate).
 
 ## 7. `hostd` release signing key
 

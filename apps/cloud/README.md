@@ -525,15 +525,24 @@ cannot find answers `"suspended"`, and the dispatcher's plan cache keeps
 refusing a tenant last seen suspended when a refresh fails, instead of failing
 open to the free tier.
 
-**Edge block.** A suspension is enforced in front of the Worker as well, so an
-attack on a suspended tenant stops costing a billed request each time. The
-hourly sweep calls `TargetFleet.edgeBlock`, which only `cloudflare-wfp` has.
-With an Enterprise hostname list (`LUNORA_SUSPENDED_HOSTS_LIST_ID`) it lists the
-org's platform hostnames and custom domains for a single WAF Block rule.
-Without one, it deletes the org's custom hostnames and recreates them on
-recovery. Cloudflare cannot deactivate a custom hostname in place, so recovery
-re-issues the certificate. The dispatcher's 503 stays as the fallback. Setup
-and failure handling are in [RUNBOOK.md § 6b](RUNBOOK.md#6b-edge-block-suspension-optional).
+**Edge block.** A cell can also enforce a suspension in front of the Worker, so
+an attack on a suspended tenant stops costing a billed request each time. The
+hourly sweep calls `TargetFleet.edgeBlock`, which only `cloudflare-wfp` has. A
+cell runs in one of three modes (`edgeBlockModeOf`). `domains.edgeBlockMode`
+reports it, and the Domains tab shows it:
+
+- `dispatcher`, the default: the edge block does nothing, and the dispatcher's
+  503 is the block. Customers' domains are never touched.
+- `list`: with an Enterprise hostname list (`LUNORA_SUSPENDED_HOSTS_LIST_ID`),
+  the org's platform hostnames and custom domains are listed for a single WAF
+  Block rule. Certificates are kept.
+- `delete-hostnames`: opt-in only, with `LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES=1`.
+  The org's custom hostnames are deleted and recreated on recovery. Cloudflare
+  cannot deactivate one in place, so recovery re-issues the certificate, which
+  makes this destructive.
+
+Setup, the trade-off and failure handling are in
+[RUNBOOK.md § 6b](RUNBOOK.md#6b-edge-block-suspension-optional).
 
 On `celld-vps` (customer boxes) none of this applies. Box-reported usage is
 display-only (plan 458 D12), so it never moves the cap, and boxes route their

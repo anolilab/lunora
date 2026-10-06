@@ -160,6 +160,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deployments:rollback": lunora_deployments_9.rollback as unknown as RegisteredLunoraFunction,
     "deployments:updateStatus": lunora_deployments_9.updateStatus as unknown as RegisteredLunoraFunction,
     "domains:add": lunora_domains_10.add as unknown as RegisteredLunoraFunction,
+    "domains:edgeBlockMode": lunora_domains_10.edgeBlockMode as unknown as RegisteredLunoraFunction,
     "domains:get": lunora_domains_10.get as unknown as RegisteredLunoraFunction,
     "domains:list": lunora_domains_10.list as unknown as RegisteredLunoraFunction,
     "domains:markVerified": lunora_domains_10.markVerified as unknown as RegisteredLunoraFunction,
@@ -487,6 +488,12 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_domains_10.edgeBlockMode.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_domains_10.get.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -1006,6 +1013,7 @@ export interface Caller {
     };
     domains: {
         add: (args: { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
+        edgeBlockMode: (args: { organizationId: Id<"organizations"> }) => Promise<import("../../src/domains/edge-block-mode.js").EdgeBlockMode>;
         get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
         list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
         markVerified: (args: { id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
@@ -1274,6 +1282,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     domains: {
         add: (args) => callRegistered(context, "domains:add", args),
+        edgeBlockMode: (args) => callRegistered(context, "domains:edgeBlockMode", args),
         get: (args) => callRegistered(context, "domains:get", args),
         list: (args) => callRegistered(context, "domains:list", args),
         markVerified: (args) => callRegistered(context, "domains:markVerified", args),

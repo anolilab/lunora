@@ -8,13 +8,16 @@
  *    suspended organizations' platform hostnames (`{alias}.{appDomain}`) and
  *    custom domains are kept in an account list that one operator-installed
  *    WAF rule blocks. Covers both kinds and keeps certificates intact.
- * 2. **Custom hostname removal** (any plan, needs the SaaS zone): without the
- *    list, a suspended organization's custom domains have their Cloudflare-for-
+ * 2. **Custom hostname removal** (any plan, needs the SaaS zone, and OPT-IN:
+ *    `LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES=1`, see `src/domains/edge-block-mode.ts`):
+ *    without the list, a suspended organization's custom domains have their Cloudflare-for-
  *    SaaS custom hostname deleted, so the edge stops the request with no rule
  *    at all, and recreated on recovery. Cloudflare has no API to deactivate a
  *    custom hostname in place, which is what D11 assumed; deletion is the
  *    nearest equivalent, and costs a certificate re-issue on recovery (HTTP DV,
- *    automatic while the customer's CNAME stays in place).
+ *    automatic while the customer's CNAME stays in place). Destructive to the
+ *    customer's domains, which is why it is never the default: with neither
+ *    the list nor the opt-in, nothing is blocked here and the 503 is the block.
  *
  * The dispatcher's 503 stays as the always-works fallback: platform hostnames
  * without the list, and every request before a block lands.
@@ -54,6 +57,13 @@ const SUSPENDED_CERTIFICATE_ERROR = "the organization is suspended; this hostnam
 export interface EdgeBlockPorts {
     /** The platform apex (`LUNORA_APP_DOMAIN`), for the platform hostnames. */
     appDomain: string;
+
+    /**
+     * Whether a suspended org's custom hostnames may be DELETED (the
+     * `delete-hostnames` mode, opted in with `LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES=1`).
+     * Off, nothing is deleted; rows an earlier opt-in blocked are still restored.
+     */
+    deleteHostnames: boolean;
     /** The suspended-hostnames list, where the operator configured one. */
     hostList?: HostList;
     log: (line: string) => void;
@@ -250,7 +260,9 @@ const reconcileCustomHostnames = async (
 ): Promise<EdgeBlockResult> => {
     const result: EdgeBlockResult = { blocked: 0, failed: 0, unblocked: 0 };
     const toBlock =
-        ports.hostList === undefined ? domains.filter((row) => suspended.has(row.organizationId) && row.customHostnameId != null && inZone(row, zone)) : [];
+        ports.hostList === undefined && ports.deleteHostnames
+            ? domains.filter((row) => suspended.has(row.organizationId) && row.customHostnameId != null && inZone(row, zone))
+            : [];
     // A row blocked before the list was configured is still restored here.
     const toUnblock = domains.filter((row) => !suspended.has(row.organizationId) && row.edgeBlockedAt != null && inZone(row, zone));
     // Blocks first: stopping a billed attack outranks restoring service by a tick.
