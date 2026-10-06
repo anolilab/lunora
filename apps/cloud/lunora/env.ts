@@ -21,7 +21,8 @@ export const env = defineEnv({
      * Edge-block suspension settings (plan 365 W8), read here only so the
      * studio's Domains tab can say which mode this cell runs in
      * (`domains.edgeBlockMode`, `src/domains/edge-block-mode.ts`); the sweep reads
-     * the Worker env directly.
+     * the Worker env directly. `LUNORA_SAAS_ZONE_ID` is also the zone the
+     * firewall-events read queries (plan 365 W7); absent → `edge.firewall` answers unconfigured.
      */
     LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES: v.optional(v.string()),
     LUNORA_SAAS_ZONE_ID: v.optional(v.string()),
@@ -62,9 +63,6 @@ export const env = defineEnv({
      */
     LUNORA_DDOS_OVERRIDE_BUDGET: v.optional(v.string()),
     LUNORA_RATE_LIMIT_RULE_BUDGET: v.optional(v.string()),
-
-    /** The SaaS zone (zone of `LUNORA_APP_DOMAIN`) the firewall-events read queries. Absent → `edge.firewall` answers unconfigured. */
-    LUNORA_SAAS_ZONE_ID: v.optional(v.string()),
 
     /** Bearer token for R2 SQL (archived-span read-back). Absent → the archive read no-ops. A secret. */
     R2_SQL_TOKEN: v.optional(v.string()),

@@ -136,6 +136,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "cells:register": lunora_cells_5.register as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:connect": lunora_cloudflare_accounts_6.connect as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:costs": lunora_cloudflare_accounts_6.costs as unknown as RegisteredLunoraFunction,
+    "cloudflare_accounts:costTarget": lunora_cloudflare_accounts_6.costTarget as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:disconnect": lunora_cloudflare_accounts_6.disconnect as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:list": lunora_cloudflare_accounts_6.list as unknown as RegisteredLunoraFunction,
     "dashboards:create": lunora_dashboards_7.create as unknown as RegisteredLunoraFunction,
@@ -164,6 +165,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deployments:rollback": lunora_deployments_9.rollback as unknown as RegisteredLunoraFunction,
     "deployments:updateStatus": lunora_deployments_9.updateStatus as unknown as RegisteredLunoraFunction,
     "domains:add": lunora_domains_10.add as unknown as RegisteredLunoraFunction,
+    "domains:edgeBlockMode": lunora_domains_10.edgeBlockMode as unknown as RegisteredLunoraFunction,
     "domains:get": lunora_domains_10.get as unknown as RegisteredLunoraFunction,
     "domains:list": lunora_domains_10.list as unknown as RegisteredLunoraFunction,
     "domains:markVerified": lunora_domains_10.markVerified as unknown as RegisteredLunoraFunction,
@@ -171,6 +173,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "domains:removalTarget": lunora_domains_10.removalTarget as unknown as RegisteredLunoraFunction,
     "domains:remove": lunora_domains_10.remove as unknown as RegisteredLunoraFunction,
     "domains:routeForHostname": lunora_domains_10.routeForHostname as unknown as RegisteredLunoraFunction,
+    "domains:verifyTarget": lunora_domains_10.verifyTarget as unknown as RegisteredLunoraFunction,
     "edge:firewall": lunora_edge_11.firewall as unknown as RegisteredLunoraFunction,
     "edge:recordRecursionStop": lunora_edge_11.recordRecursionStop as unknown as RegisteredLunoraFunction,
     "edge:recursionPolicy": lunora_edge_11.recursionPolicy as unknown as RegisteredLunoraFunction,
@@ -254,6 +257,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "uptime:prune": lunora_uptime_31.prune as unknown as RegisteredLunoraFunction,
     "uptime:recent": lunora_uptime_31.recent as unknown as RegisteredLunoraFunction,
     "uptime:summary": lunora_uptime_31.summary as unknown as RegisteredLunoraFunction,
+    "usage:billingSummary": lunora_usage_32.billingSummary as unknown as RegisteredLunoraFunction,
     "usage:enforceSpendCaps": lunora_usage_32.enforceSpendCaps as unknown as RegisteredLunoraFunction,
     "usage:ingest": lunora_usage_32.ingest as unknown as RegisteredLunoraFunction,
     "usage:overageWatermark": lunora_usage_32.overageWatermark as unknown as RegisteredLunoraFunction,
@@ -261,6 +265,8 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "usage:recordOverageDebit": lunora_usage_32.recordOverageDebit as unknown as RegisteredLunoraFunction,
     "usage:rollup": lunora_usage_32.rollup as unknown as RegisteredLunoraFunction,
     "usage:series": lunora_usage_32.series as unknown as RegisteredLunoraFunction,
+    "usage:setSpendWarning": lunora_usage_32.setSpendWarning as unknown as RegisteredLunoraFunction,
+    "usage:spendStatus": lunora_usage_32.spendStatus as unknown as RegisteredLunoraFunction,
     "usage:summary": lunora_usage_32.summary as unknown as RegisteredLunoraFunction,
 };
 
@@ -514,6 +520,12 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["projectId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
 });
+installCompiledValidatorMap(lunora_domains_10.edgeBlockMode.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_domains_10.get.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -544,6 +556,13 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 return { "id": source["id"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_domains_10.remove.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_domains_10.verifyTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["id"] !== "string") return DEFER;
@@ -899,6 +918,12 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
+installCompiledValidatorMap(lunora_usage_32.spendStatus.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_usage_32.summary.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -962,7 +987,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
 export interface Caller {
     alerts: {
         anomalyBaselines: (args: { organizationId: Id<"organizations"> }) => Promise<{ lastBucketStart: number; lastMean: number; lastScore: number; lastValue: number; samples: number; signal: "errors" | "requests"; warmingUp: boolean }[]>;
-        createRule: (args: { baselineWindows?: number; channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; functionPath?: unknown; mode?: "threshold" | "deviation"; name: unknown; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "usage_anomaly" | "error_anomaly"; threshold: number; windowMinutes?: number }) => Promise<Id<"alertRules">>;
+        createRule: (args: { baselineWindows?: number; channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; functionPath?: unknown; mode?: "threshold" | "deviation"; name: unknown; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly"; threshold: number; windowMinutes?: number }) => Promise<Id<"alertRules">>;
         createSilence: (args: { endsAt: number; organizationId: Id<"organizations">; reason: unknown; startsAt?: number; target: "usage_anomaly" | "error_anomaly" }) => Promise<Id<"anomalySilences">>;
         deleteRule: (args: { id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
         deleteSilence: (args: { id: Id<"anomalySilences">; organizationId: Id<"organizations"> }) => Promise<Id<"anomalySilences">>;
@@ -1004,9 +1029,9 @@ export interface Caller {
         complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string; workspacePackages?: Array<unknown> }) => Promise<void>;
         expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; deploymentId?: string; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; deploymentId?: string; fromFork?: false | true; organizationId: Id<"organizations">; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; pathFiltered?: false | true; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
-        recordPush: (args: { before?: unknown; branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; deliveryId?: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string; } | { duplicate: true; }>;
+        recordPush: (args: { before?: unknown; branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; deliveryId?: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string; } | { duplicate: true; pathFiltered?: true; skipped?: string; }>;
         releaseTarget: (args: { buildId: Id<"builds"> }) => Promise<null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: (args: { buildId: Id<"builds"> }) => Promise<{ commitSha: string; installationId: number; repository: string; } | null>;
         reusableRelease: (args: { buildId: Id<"builds"> }) => Promise<null | { bundleHash: string; cronSpecs?: string[]; deploymentId: string }>;
@@ -1018,6 +1043,7 @@ export interface Caller {
     cloudflare_accounts: {
         connect: (args: { accountId: unknown; displayName?: unknown; ciphertext: unknown; iv: unknown; permissions: Array<unknown>; tokenExpiresAt?: number; workersSubdomain: unknown; id?: Id<"cloudflareAccounts">; label: unknown; organizationId: Id<"organizations"> }) => Promise<Id<"cloudflareAccounts">>;
         costs: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<{ status: "error" | "no-permission" | "ok" | "unauthorized" | "unconfigured"; view: null | { currency: string; periodEnd: string | null; periodStart: string | null; products: { costMinor: number; currency: string; product: string; quantity: null | number; unit: null | string; }[]; totalMinor: number } }>;
+        costTarget: (args: { deployKey: unknown; id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<{ accountId: string; ciphertext: string; iv: string; permissions: string[]; }>;
         disconnect: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<void>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"cloudflareAccounts">; accountId: string; createdAt: number; displayName?: string; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
     };
@@ -1054,13 +1080,15 @@ export interface Caller {
     };
     domains: {
         add: (args: { hostname: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: unknown }) => Promise<{ id: Id<"domains">; txtName: string; txtToken: string; }>;
-        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
+        edgeBlockMode: (args: { organizationId: Id<"organizations"> }) => Promise<import("../../src/domains/edge-block-mode.js").EdgeBlockMode>;
+        get: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<null | { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }[]>;
         markVerified: (args: { id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }) => Promise<void>;
         recordCertificate: (args: { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; issuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; organizationId: Id<"organizations">; scope?: unknown; sslStatus: unknown }) => Promise<void>;
         removalTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: string; customHostnameId?: string; hostname: string; projectId: Id<"projects"> }>;
         remove: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<void>;
-        routeForHostname: (args: { hostname: unknown }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
+        routeForHostname: (args: { hostname: unknown }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; suspended?: true; } | null>;
+        verifyTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ domain: { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }; organizationId: Id<"organizations"> }>;
     };
     edge: {
         firewall: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ capabilities: { ddosOverride: boolean; rateLimit: boolean; }; events: import("../../src/edge/protection.js").FirewallEvent[]; hostnames: number; reason?: string; status: "unavailable" | "ok" | "unconfigured"; unsupported: { name: string; reason: string; target: string; }[] }>;
@@ -1188,13 +1216,16 @@ export interface Caller {
         summary: (args: { organizationId: Id<"organizations"> }) => Promise<{ avgLatencyMs?: number; consecutiveFailures: number; deploymentId: Id<"deployments">; lastCheckedAt: number; ok: boolean; sampleCount: number; upFraction: number }[]>;
     };
     usage: {
-        enforceSpendCaps: (args?: {}) => Promise<{ suspended: number; unsuspended: number; }>;
+        billingSummary: (args: { deployKey: unknown; organizationId: Id<"organizations">; periodStart?: number }) => Promise<{ breakdown: import("../../src/billing/spend.js").SpendLine[]; level: import("../../src/billing/spend.js").SpendLevel; periodEnd: number; periodStart: number; projectedSpendMinor: number; spendMinor: number; suspended: boolean; capMinor: number | null; warnMinor: number | null }>;
+        enforceSpendCaps: (args?: {}) => Promise<{ suspended: number; unsuspended: number; warned: number; }>;
         ingest: (args: { deployKey: unknown; deploymentId?: Id<"deployments">; kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths"; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         overageWatermark: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ debitedCredits: number; }>;
         record: (args: { deploymentId?: Id<"deployments">; kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths"; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         recordOverageDebit: (args: { debitedCredits: number; organizationId: Id<"organizations">; periodStart: number }) => Promise<void>;
         rollup: (args?: {}) => Promise<{ compacted: number; }>;
         series: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ costMinor: number; cpuMs: number; day: number; requests: number; }[]>;
+        setSpendWarning: (args: { organizationId: Id<"organizations">; warnMinor: number | null }) => Promise<void>;
+        spendStatus: (args: { organizationId: Id<"organizations"> }) => Promise<{ periodStart: number; warnCustomized: boolean; level: import("../../src/billing/spend.js").SpendLevel; spendMinor: number; capMinor: number | null; warnMinor: number | null }>;
         summary: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<import("../../src/billing/usage.js").UsageTotals>;
     };
 }
@@ -1294,6 +1325,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     cloudflare_accounts: {
         connect: (args) => callRegistered(context, "cloudflare_accounts:connect", args),
         costs: (args) => callRegistered(context, "cloudflare_accounts:costs", args),
+        costTarget: (args) => callRegistered(context, "cloudflare_accounts:costTarget", args),
         disconnect: (args) => callRegistered(context, "cloudflare_accounts:disconnect", args),
         list: (args) => callRegistered(context, "cloudflare_accounts:list", args),
     },
@@ -1330,6 +1362,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     domains: {
         add: (args) => callRegistered(context, "domains:add", args),
+        edgeBlockMode: (args) => callRegistered(context, "domains:edgeBlockMode", args),
         get: (args) => callRegistered(context, "domains:get", args),
         list: (args) => callRegistered(context, "domains:list", args),
         markVerified: (args) => callRegistered(context, "domains:markVerified", args),
@@ -1337,6 +1370,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         removalTarget: (args) => callRegistered(context, "domains:removalTarget", args),
         remove: (args) => callRegistered(context, "domains:remove", args),
         routeForHostname: (args) => callRegistered(context, "domains:routeForHostname", args),
+        verifyTarget: (args) => callRegistered(context, "domains:verifyTarget", args),
     },
     edge: {
         firewall: (args) => callRegistered(context, "edge:firewall", args),
@@ -1464,6 +1498,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         summary: (args) => callRegistered(context, "uptime:summary", args),
     },
     usage: {
+        billingSummary: (args) => callRegistered(context, "usage:billingSummary", args),
         enforceSpendCaps: (args) => callRegistered(context, "usage:enforceSpendCaps", args),
         ingest: (args) => callRegistered(context, "usage:ingest", args),
         overageWatermark: (args) => callRegistered(context, "usage:overageWatermark", args),
@@ -1471,6 +1506,8 @@ export const createCaller = (context: CallerCtx): Caller => ({
         recordOverageDebit: (args) => callRegistered(context, "usage:recordOverageDebit", args),
         rollup: (args) => callRegistered(context, "usage:rollup", args),
         series: (args) => callRegistered(context, "usage:series", args),
+        setSpendWarning: (args) => callRegistered(context, "usage:setSpendWarning", args),
+        spendStatus: (args) => callRegistered(context, "usage:spendStatus", args),
         summary: (args) => callRegistered(context, "usage:summary", args),
     },
 });

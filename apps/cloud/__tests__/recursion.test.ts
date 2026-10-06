@@ -133,7 +133,10 @@ describe("dispatcher recursion protection", () => {
     });
 
     it("terminates a chain at the depth cap with 508, a metric and an audit report", async () => {
-        const reports = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ recorded: true }));
+        // The plan lookup answers a verified plan (admission fails closed on anything else); every other call is the recursion report.
+        const reports = vi.fn(async (url: string, _init?: RequestInit) =>
+            Response.json(new URL(url).pathname === "/v1/tenants/plan" ? { plan: "pro" } : { recorded: true }),
+        );
 
         vi.stubGlobal("fetch", reports);
 

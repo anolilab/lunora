@@ -44,6 +44,10 @@ export interface Doc_organizations {
     plan: "free" | "pro" | "enterprise";
     slug: string;
     spendCapMinor?: number;
+    spendWarnMinor?: number;
+    spendWarnedPeriod?: number;
+    spendNanoCents?: number;
+    spendPeriod?: number;
     suspendedAt?: number;
     suspendedReason?: string;
     paymentFailedAt?: number;
@@ -209,6 +213,7 @@ export interface Doc_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
     trigger?: "push" | "pull_request";
@@ -237,6 +242,8 @@ export interface Doc_domains {
     certificateStatus?: string;
     customHostnameId?: string;
     createdAt: number;
+    edgeBlockedAt?: number;
+    edgeBlockError?: string;
     hostname: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
@@ -313,6 +320,8 @@ export interface Doc_boxes {
     publicKey: string;
     resources?: { diskFreeMb: number; memMb: number };
     revokedAt?: number;
+    routesWithheld?: Array<string>;
+    routesStale?: boolean;
     singleTrust: boolean;
     slug: string;
     status: "pending" | "online" | "offline" | "revoked";
@@ -472,7 +481,7 @@ export interface Doc_alertRules {
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "usage_anomaly" | "error_anomaly";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -503,7 +512,7 @@ export interface Doc_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "usage_anomaly" | "error_anomaly";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly";
     updatedAt: number;
 }
 
@@ -961,6 +970,10 @@ export interface Insert_organizations {
     plan: "free" | "pro" | "enterprise";
     slug: string;
     spendCapMinor?: number;
+    spendWarnMinor?: number;
+    spendWarnedPeriod?: number;
+    spendNanoCents?: number;
+    spendPeriod?: number;
     suspendedAt?: number;
     suspendedReason?: string;
     paymentFailedAt?: number;
@@ -1126,6 +1139,7 @@ export interface Insert_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
     trigger?: "push" | "pull_request";
@@ -1154,6 +1168,8 @@ export interface Insert_domains {
     certificateStatus?: string;
     customHostnameId?: string;
     createdAt: number;
+    edgeBlockedAt?: number;
+    edgeBlockError?: string;
     hostname: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
@@ -1230,6 +1246,8 @@ export interface Insert_boxes {
     publicKey: string;
     resources?: { diskFreeMb: number; memMb: number };
     revokedAt?: number;
+    routesWithheld?: Array<string>;
+    routesStale?: boolean;
     singleTrust: boolean;
     slug: string;
     status: "pending" | "online" | "offline" | "revoked";
@@ -1389,7 +1407,7 @@ export interface Insert_alertRules {
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "usage_anomaly" | "error_anomaly";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -1420,7 +1438,7 @@ export interface Insert_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "usage_anomaly" | "error_anomaly";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly";
     updatedAt: number;
 }
 
