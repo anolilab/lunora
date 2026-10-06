@@ -1,7 +1,8 @@
 import type { Stats } from "node:fs";
-import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { dirname, extname, join, relative, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
+import { FIND_UP_STOP, findUpSync, matcher } from "@visulima/fs";
 import type {
     BindingElement,
     Block,
@@ -19,6 +20,7 @@ import type {
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
+import { readProjectConfigLiterals } from "../project-config-file";
 import { findProjectConfigFile } from "../project-config-path";
 
 /** Strips a trailing `.ts` extension from a relative source path. */
@@ -30,6 +32,49 @@ const lunoraRelativePath = (lunoraDirectory: string, filePath: string): string =
 
 /** Directories under `lunora/` that are never source: codegen's own output, and installed packages. */
 const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set(["_generated", "node_modules"]);
+
+/** The common test / mock / fixture folders, skipped unless a walk asks for tests. */
+const TEST_DIRECTORIES: ReadonlySet<string> = new Set(["__fixtures__", "__mocks__", "__snapshots__", "__tests__", "test", "tests"]);
+
+/**
+ * Test files by the common suffixes (`x.test.ts`, `x.spec.ts`, `x.test-d.ts`,
+ * `x.bench.ts`, `x.e2e-spec.ts`, …) and prefixes (`test-x.ts`, `test_x.ts`).
+ * They seed tables across module boundaries and call functions from module
+ * scope by design, so analysing them as app source buried real advisories and
+ * architecture gaps under fixture noise. `codegen.exclude` in
+ * `lunora.config.*` adds project-specific globs on top.
+ */
+const TEST_FILE_RE: RegExp = /^test[-_]|\.(?:bench|e2e|e2e-spec|spec|spec-d|test|test-d)\.tsx?$/u;
+
+/** True when the walk must skip `entry` (a bare file name) as a test file. */
+const isTestFile = (entry: string): boolean => TEST_FILE_RE.test(entry);
+
+/**
+ * The `codegen.exclude` globs from the `lunora.config.*` nearest above
+ * `lunoraDirectory`. Parsed per walk — the literal reader is synchronous and the
+ * file is tiny — so an edit applies on the next codegen without a cache to
+ * invalidate. An unreadable value is reported, never silently treated as "no
+ * excludes".
+ */
+const configuredExcludes = (lunoraDirectory: string): string[] => {
+    // The project root ends the search: a config above it belongs to another project.
+    const configFile = findUpSync((directory) => findProjectConfigFile(directory) ?? (existsSync(join(directory, "package.json")) ? FIND_UP_STOP : undefined), {
+        cwd: dirname(resolve(lunoraDirectory)),
+    });
+
+    if (configFile === undefined) {
+        return [];
+    }
+
+    const { codegen } = readProjectConfigLiterals(dirname(configFile));
+
+    if (codegen?.unreadable) {
+        // eslint-disable-next-line no-console -- matches the other skip warnings in this package; there is no diagnostic sink here.
+        console.warn("@lunora/codegen: `codegen.exclude` in lunora.config is not an array of string literals — ignoring it.");
+    }
+
+    return codegen?.exclude ?? [];
+};
 
 /**
  * The top-level `lunora/schema.ts` ONLY — `discoverSchema` loads that one
@@ -58,8 +103,9 @@ const statOrReport = (path: string): Stats | undefined => {
 
 /**
  * Recursively collect `.ts` files under a lunora source directory, skipping
- * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
- * migration discovery so both walk the same file set.
+ * {@link SKIPPED_DIRECTORIES}, test files, `codegen.exclude` globs, and the root
+ * `schema.ts`. Shared by function and migration discovery so both walk the same
+ * file set.
  *
  * Symlinks are FOLLOWED (`statSync`, not `lstatSync`): a symlinked file or
  * directory under `lunora/` is ordinary source a team may well share that way,
@@ -72,7 +118,13 @@ const statOrReport = (path: string): Stats | undefined => {
  * ..`) creates, so every directory is visited once by its REAL path: the second
  * arrival at the same target ends that branch instead of recursing forever.
  */
-const walkLunoraSourceFiles = (directory: string, accumulator: string[], root: string, visited: Set<string>): string[] => {
+const walkLunoraSourceFiles = (
+    directory: string,
+    accumulator: string[],
+    root: string,
+    visited: Set<string>,
+    isSkipped: (entry: string, relativePath: string, isDirectory: boolean) => boolean,
+): string[] => {
     let entries: string[];
     let realDirectory: string;
 
@@ -96,14 +148,12 @@ const walkLunoraSourceFiles = (directory: string, accumulator: string[], root: s
         const full = join(directory, entry);
         const info = statOrReport(full);
 
-        if (info === undefined) {
+        if (info === undefined || isSkipped(entry, relative(root, full).split(sep).join("/"), info.isDirectory())) {
             continue;
         }
 
         if (info.isDirectory()) {
-            if (!SKIPPED_DIRECTORIES.has(entry)) {
-                walkLunoraSourceFiles(full, accumulator, root, visited);
-            }
+            walkLunoraSourceFiles(full, accumulator, root, visited, isSkipped);
         } else if (info.isFile() && extname(entry) === ".ts" && !isRootSchemaFile(entry, directory, root)) {
             accumulator.push(full);
         }
@@ -113,13 +163,29 @@ const walkLunoraSourceFiles = (directory: string, accumulator: string[], root: s
 };
 
 /**
- * The exported entry point: every discoverer calls this with a directory and
- * nothing else. {@link walkLunoraSourceFiles}'s accumulator/root/visited stay
- * unexported because they are recursion state — a caller passing a pre-filled
+ * The exported entry point: every discoverer calls this with a directory, and
+ * only secret discovery opts back into test files (`includeTests`) — a vendor
+ * key committed in a test is still a leak. {@link walkLunoraSourceFiles}'s
+ * accumulator/root/visited stay unexported because they are recursion state — a
+ * caller passing a pre-filled
  * accumulator or a stale `visited` silently changes which files are discovered,
  * and an exported signature freezes that hazard into the public API snapshot.
  */
-const listLunoraSourceFiles = (directory: string): string[] => walkLunoraSourceFiles(directory, [], directory, new Set());
+const listLunoraSourceFiles = (directory: string, options: { includeTests?: boolean } = {}): string[] => {
+    const excludes = configuredExcludes(directory);
+    const isExcluded = excludes.length === 0 ? () => false : matcher(excludes);
+
+    return walkLunoraSourceFiles(
+        directory,
+        [],
+        directory,
+        new Set(),
+        (entry, relativePath, isDirectory) =>
+            (isDirectory && SKIPPED_DIRECTORIES.has(entry)) ||
+            (!options.includeTests && (isDirectory ? TEST_DIRECTORIES.has(entry) : isTestFile(entry))) ||
+            isExcluded(relativePath),
+    );
+};
 
 /**
  * Where the worker entry lives, probed relative to the project root when a
@@ -154,7 +220,7 @@ const listEntrySourceFiles = (path: string, accumulator: string[] = []): string[
     }
 
     if (info.isFile()) {
-        if (ENTRY_EXTENSIONS.has(extname(path))) {
+        if (ENTRY_EXTENSIONS.has(extname(path)) && !isTestFile(basename(path))) {
             accumulator.push(path);
         }
 
@@ -166,7 +232,7 @@ const listEntrySourceFiles = (path: string, accumulator: string[] = []): string[
     }
 
     for (const entry of readdirSync(path)) {
-        if (entry === "_generated" || entry === "node_modules") {
+        if (SKIPPED_DIRECTORIES.has(entry) || TEST_DIRECTORIES.has(entry)) {
             continue;
         }
 

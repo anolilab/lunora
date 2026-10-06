@@ -3150,6 +3150,9 @@ importers:
       '@lunora/workflow':
         specifier: workspace:*
         version: link:../workflow
+      '@visulima/fs':
+        specifier: catalog:cli
+        version: 6.0.28(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
       jiti:
         specifier: catalog:tooling
         version: 2.7.0

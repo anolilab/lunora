@@ -70,6 +70,7 @@
         "@lunora/scheduler": "1.0.0-alpha.110",
         "@lunora/values": "1.0.0-alpha.60",
         "@lunora/workflow": "1.0.0-alpha.71",
+        "@visulima/fs": "catalog:cli",
         "jiti": "catalog:tooling",
         "quicktype-core": "catalog:tooling",
         "ts-morph": "catalog:tooling"

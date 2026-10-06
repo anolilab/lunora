@@ -165,7 +165,8 @@ const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): Secr
 const discoverSecrets = (project: Project, lunoraDirectory: string): SecretLiteralIR[] => {
     const secrets: SecretLiteralIR[] = [];
 
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
+    // Tests included: a vendor key committed in a test is still a leak.
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory, { includeTests: true })) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
         secrets.push(...secretsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));

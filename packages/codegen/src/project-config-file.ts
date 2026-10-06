@@ -65,6 +65,13 @@ interface ProjectConfigLiterals {
      * be wrong".
      */
     advisor?: { minSeverity?: string; unreadable?: boolean };
+
+    /**
+     * `codegen.exclude`: extra globs (relative to `lunora/`) the source walk
+     * skips on top of the built-in test-file patterns. `unreadable` when
+     * `codegen` is declared but `exclude` is not an array of string literals.
+     */
+    codegen?: { exclude?: string[]; unreadable?: boolean };
     remote?: boolean;
 
     /**
@@ -99,6 +106,8 @@ interface LunoraProjectConfig {
     advisor?: unknown;
     /** The `app` hook: receives the generated `defineApp()` builder and returns it. Read by `@lunora/vite`, not by the CLI. */
     app?: unknown;
+    /** Codegen source-walk settings (`exclude`). Read through {@link readProjectConfigLiterals}. */
+    codegen?: unknown;
     /** Remote-binding dev preference. */
     remote?: unknown;
     /** Deploy target id. */
@@ -268,9 +277,58 @@ const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
         : { advisor: { unreadable: true } };
 };
 
+/** `codegen.exclude` from the `codegen` object literal: an array of string literals, or `unreadable`. */
+const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    let value = declared;
+
+    while (value !== undefined && (TsNode.isSatisfiesExpression(value) || TsNode.isAsExpression(value) || TsNode.isParenthesizedExpression(value))) {
+        value = value.getExpression();
+    }
+
+    if (value === undefined || !TsNode.isObjectLiteralExpression(value)) {
+        return { codegen: { unreadable: true } };
+    }
+
+    const properties = value.getProperties();
+    const plain = properties.filter(
+        (candidate): candidate is PropertyAssignment | ShorthandPropertyAssignment =>
+            (TsNode.isPropertyAssignment(candidate) && !TsNode.isComputedPropertyName(candidate.getNameNode())) ||
+            TsNode.isShorthandPropertyAssignment(candidate),
+    );
+
+    if (plain.length !== properties.length) {
+        return { codegen: { unreadable: true } };
+    }
+
+    const property = plain.find((candidate) => propertyKeyName(candidate) === "exclude");
+
+    if (property === undefined) {
+        return { codegen: {} };
+    }
+
+    const literal = propertyLiteral(property, sourceFile);
+
+    if (literal === undefined || !TsNode.isArrayLiteralExpression(literal)) {
+        return { codegen: { unreadable: true } };
+    }
+
+    const exclude: string[] = [];
+
+    for (const element of literal.getElements()) {
+        if (!TsNode.isStringLiteral(element) && !TsNode.isNoSubstitutionTemplateLiteral(element)) {
+            return { codegen: { unreadable: true } };
+        }
+
+        exclude.push(element.getLiteralValue());
+    }
+
+    return { codegen: { exclude } };
+};
+
 /** What a getter or method under each key this reader cares about contributes: it declares a value the parser cannot see. */
 const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
     ["advisor", { advisor: { unreadable: true } }],
+    ["codegen", { codegen: { unreadable: true } }],
     ["remote", { unreadable: true }],
     ["target", { unreadable: true }],
 ]);
@@ -386,6 +444,10 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
         return readServices(propertyLiteral(property, sourceFile));
     }
 
+    if (key === "codegen") {
+        return readCodegen(propertyLiteral(property, sourceFile), sourceFile);
+    }
+
     if (key !== "target" && key !== "remote") {
         return {};
     }
@@ -454,6 +516,7 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
 
         return {
             ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
+            ...(declares("codegen") ? { codegen: { unreadable: true } } : {}),
             ...(declares("services") ? { services: { unreadable: true } } : {}),
             unreadable: true,
         };
