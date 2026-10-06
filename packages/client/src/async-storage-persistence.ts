@@ -1,5 +1,5 @@
-import { decodeWire, encodeArgsOrThrow, encodeWire } from "../../../shared/wire-codec";
-import { singleBlobStore } from "./single-blob-store";
+import { encodeArgsOrThrow } from "../../../shared/wire-codec";
+import { CORRUPT_BLOB, singleBlobStore } from "./single-blob-store";
 import type { PersistedMutation, PersistenceAdapter } from "./types";
 
 /**
@@ -30,73 +30,70 @@ const DEFAULT_KEY = "lunora:offline-mutations";
  * order is preserved and `load()` returns freshly-parsed records that callers
  * can't alias.
  *
- * Records pass through the transport's {@link encodeWire}/{@link decodeWire}
- * codec, NOT raw `JSON.stringify`. The outbox holds caller args, which the
- * transport already carries as tagged wire values: raw JSON would throw on a
- * `bigint` (losing the write on reload) and silently mangle a `Date`, `Map`,
- * `Set`, bytes, or `NaN` — the IndexedDB sibling round-trips all of them via
- * structured clone. A value the codec cannot carry (a `RegExp`, a class
- * instance) rejects at `append` instead of persisting mangled; the client's
- * flush path (`encodableOrSettleTerminal`) rejects the same values terminally
- * anyway, so nothing that could ever replay stops being durable. A blob written
- * as plain JSON by an older version decodes unchanged; a malformed one reads as
- * empty rather than wedging every `load()`.
+ * Records round-trip through {@link singleBlobStore}'s wire codec. Args it
+ * cannot carry (a `RegExp`, a class instance) reject at `append`/`replace` — the
+ * flush path rejects them terminally anyway. A blob that exists but can't be
+ * decoded loads as empty, and every write rejects rather than overwrite it and
+ * lose the queued writes it may still hold; `clear()` discards it.
  *
  * AsyncStorage has no transactions, so every read-modify-write runs through
  * {@link singleBlobStore}'s serialized chain — concurrent `append`/`remove`
  * calls run one at a time and can't clobber each other's writes.
  */
 const createAsyncStoragePersistence = (options: AsyncStoragePersistenceOptions): PersistenceAdapter => {
-    const blob = singleBlobStore(options.storage, options.key ?? DEFAULT_KEY);
+    const key = options.key ?? DEFAULT_KEY;
+    const blob = singleBlobStore(options.storage, key);
 
-    const readAll = async (): Promise<PersistedMutation[]> => {
-        let parsed: unknown;
+    const toMutations = (parsed: unknown): PersistedMutation[] => (Array.isArray(parsed) ? (parsed as PersistedMutation[]) : []);
 
-        try {
-            parsed = decodeWire(await blob.read());
-        } catch {
-            // A malformed wire tag is as unrecoverable as unparseable JSON — start clean.
-            return [];
+    /** Read for a read-modify-write: refuses to build on an undecodable blob it would then clobber. */
+    const readForWrite = async (): Promise<PersistedMutation[]> => {
+        const parsed = await blob.read();
+
+        if (parsed === CORRUPT_BLOB) {
+            throw new Error(
+                `createAsyncStoragePersistence: the stored outbox under '${key}' can't be decoded — refusing to overwrite it; call clear() to discard it`,
+            );
         }
 
-        return Array.isArray(parsed) ? (parsed as PersistedMutation[]) : [];
+        return toMutations(parsed);
     };
-
-    /** Encode before writing, so a codec failure leaves the stored blob untouched. */
-    const writeWith = (mutations: PersistedMutation[], incoming: PersistedMutation): Promise<void> =>
-        blob.write(encodeArgsOrThrow("createAsyncStoragePersistence", incoming.functionPath, mutations));
 
     return {
         append: (mutation) =>
             blob.serialize(async () => {
-                const mutations = await readAll();
+                encodeArgsOrThrow("createAsyncStoragePersistence", mutation.functionPath, mutation.args);
+
+                const mutations = await readForWrite();
 
                 mutations.push(mutation);
 
-                await writeWith(mutations, mutation);
+                await blob.write(mutations);
             }),
         clear: blob.clear,
-        load: () => blob.serialize(readAll),
+        load: () => blob.serialize(async () => toMutations(await blob.read())),
         remove: (id) =>
             blob.serialize(async () => {
-                const mutations = await readAll();
+                const mutations = await readForWrite();
                 const remaining = mutations.filter((mutation) => mutation.id !== id);
 
                 if (remaining.length !== mutations.length) {
-                    await blob.write(encodeWire(remaining));
+                    await blob.write(remaining);
                 }
             }),
         // In-place swap inside the serialized chain: one read, one write, so the
         // record never leaves the blob and keeps its index in FIFO order.
         replace: (mutation) =>
             blob.serialize(async () => {
-                const mutations = await readAll();
+                encodeArgsOrThrow("createAsyncStoragePersistence", mutation.functionPath, mutation.args);
+
+                const mutations = await readForWrite();
                 const at = mutations.findIndex((candidate) => candidate.id === mutation.id);
 
                 if (at !== -1) {
                     mutations[at] = mutation;
 
-                    await writeWith(mutations, mutation);
+                    await blob.write(mutations);
                 }
             }),
     };

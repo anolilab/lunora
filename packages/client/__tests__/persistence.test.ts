@@ -354,19 +354,32 @@ describe("createAsyncStoragePersistence", () => {
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([legacy]);
     });
 
-    it("recovers from a malformed wire tag by loading empty, then keeps working", async () => {
-        expect.assertions(2);
+    it("loads empty from an undecodable blob but refuses to overwrite it", async () => {
+        expect.assertions(4);
 
         const storage = createFakeAsyncStorage();
+        const corrupt = JSON.stringify(["$lunora.wire$", "date", "not-a-number"]);
 
-        await storage.setItem("lunora:offline-mutations", JSON.stringify(["$lunora.wire$", "date", "not-a-number"]));
+        await storage.setItem("lunora:offline-mutations", corrupt);
 
         const adapter = createAsyncStoragePersistence({ storage });
 
         await expect(adapter.load()).resolves.toEqual([]);
+        await expect(adapter.append(mutation("a"))).rejects.toThrow(/can't be decoded/);
+        await expect(adapter.remove("a")).rejects.toThrow(/can't be decoded/);
+        await expect(storage.getItem("lunora:offline-mutations")).resolves.toBe(corrupt);
+    });
+
+    it("rejects an over-long bigint at append instead of writing a blob it can't read back", async () => {
+        expect.assertions(2);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
 
         await adapter.append(mutation("a"));
 
+        await expect(adapter.append(mutation("b", { args: { huge: 10n ** 1100n } }))).rejects.toThrow(
+            /cannot encode args for 'posts:create' — wire-codec: over-long bigint/,
+        );
         await expect(adapter.load()).resolves.toEqual([mutation("a")]);
     });
 
