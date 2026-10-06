@@ -322,6 +322,7 @@ type FetchLike = (input: string, init?: {
 ```ts
 interface ImportCommandOptions {
     batchSize?: number;
+    confirm?: (prompt: string) => Promise<boolean>;
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
     file: string;
@@ -329,9 +330,11 @@ interface ImportCommandOptions {
     from?: ImportSourceName;
     logger: Logger;
     prod?: boolean;
+    replace?: boolean;
     scan?: boolean;
     storageDir?: string;
     table?: string;
+    tables?: string;
     token?: string;
     url?: string;
     verify?: boolean;
@@ -1122,6 +1125,7 @@ type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
 ```ts
 interface ImportSummary {
     conflicts: number;
+    deleted?: Record<string, number>;
     errors: ImportRowError[];
     failed?: ImportShardFailure[];
     inserted: Record<string, number>;
