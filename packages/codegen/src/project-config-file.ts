@@ -48,7 +48,7 @@ import { createJiti } from "jiti";
 import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
 import { Node as TsNode, Project } from "ts-morph";
 
-import { propertyKeyName } from "./discover/ast";
+import { propertyKeyName } from "./discover/property-name";
 import { findProjectConfigFile } from "./project-config-path";
 
 /**
@@ -65,6 +65,13 @@ interface ProjectConfigLiterals {
      * be wrong".
      */
     advisor?: { minSeverity?: string; unreadable?: boolean };
+
+    /**
+     * `codegen.exclude`: extra globs (relative to `lunora/`) the source walk
+     * skips on top of the built-in test-file patterns. `unreadable` when
+     * `codegen` is declared but `exclude` is not an array of string literals.
+     */
+    codegen?: { exclude?: string[]; unreadable?: boolean };
     remote?: boolean;
 
     /**
@@ -99,6 +106,8 @@ interface LunoraProjectConfig {
     advisor?: unknown;
     /** The `app` hook: receives the generated `defineApp()` builder and returns it. Read by `@lunora/vite`, not by the CLI. */
     app?: unknown;
+    /** Codegen source-walk settings (`exclude`). Read through {@link readProjectConfigLiterals}. */
+    codegen?: unknown;
     /** Remote-binding dev preference. */
     remote?: unknown;
     /** Deploy target id. */
@@ -231,14 +240,18 @@ const unwrapLiteral = (value: TsNode | undefined): TsNode | undefined => {
 };
 
 /**
- * `advisor.minSeverity` from the `advisor` object literal, or `unreadable` when
- * the object or the key is not something the parser can read as a literal.
+ * The literal under `key` in the plain object literal `declared`, `absent`
+ * when the object does not declare it, or `unreadable` when
+ * `declared` is not an object literal, the key's value cannot be resolved, or a
+ * member is not a plain property. A spread (before or after the literal), a
+ * getter, a method or a computed key may be what sets `key`, or override the
+ * literal this would read, so any of them makes the whole object unreadable.
  */
-const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+const readPlainMember = (declared: TsNode | undefined, sourceFile: SourceFile, key: string): { absent: true } | { literal: TsNode } | { unreadable: true } => {
     const value = unwrapLiteral(declared);
 
     if (value === undefined || !TsNode.isObjectLiteralExpression(value)) {
-        return { advisor: { unreadable: true } };
+        return { unreadable: true };
     }
 
     const properties = value.getProperties();
@@ -248,29 +261,68 @@ const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
             TsNode.isShorthandPropertyAssignment(candidate),
     );
 
-    // A spread (before or after the literal), a getter, a method or a computed
-    // key may be what sets `minSeverity`, or override the literal this would
-    // read. A wrong floor hides findings, so any of them makes it unreadable.
     if (plain.length !== properties.length) {
-        return { advisor: { unreadable: true } };
+        return { unreadable: true };
     }
 
-    const property = plain.find((candidate) => propertyKeyName(candidate) === "minSeverity");
+    const property = plain.find((candidate) => propertyKeyName(candidate) === key);
 
     if (property === undefined) {
-        return { advisor: {} };
+        return { absent: true };
     }
 
     const literal = propertyLiteral(property, sourceFile);
 
-    return literal !== undefined && TsNode.isStringLiteral(literal)
-        ? { advisor: { minSeverity: literal.getLiteralValue() } }
+    return literal === undefined ? { unreadable: true } : { literal };
+};
+
+/**
+ * `advisor.minSeverity` from the `advisor` object literal, or `unreadable` when
+ * it is not a string literal the parser can see — a wrong floor hides findings.
+ */
+const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const member = readPlainMember(declared, sourceFile, "minSeverity");
+
+    if ("absent" in member) {
+        return { advisor: {} };
+    }
+
+    return "literal" in member && TsNode.isStringLiteral(member.literal)
+        ? { advisor: { minSeverity: member.literal.getLiteralValue() } }
         : { advisor: { unreadable: true } };
+};
+
+/** `codegen.exclude` from the `codegen` object literal: an array of non-negated string literals, or `unreadable`. */
+const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const member = readPlainMember(declared, sourceFile, "exclude");
+
+    if ("absent" in member) {
+        return { codegen: {} };
+    }
+
+    if (!("literal" in member) || !TsNode.isArrayLiteralExpression(member.literal)) {
+        return { codegen: { unreadable: true } };
+    }
+
+    const exclude: string[] = [];
+
+    for (const element of member.literal.getElements()) {
+        // A `!` negation would read as "anything but this" to the any-match
+        // matcher and exclude every source file, so it is refused, not honoured.
+        if ((!TsNode.isStringLiteral(element) && !TsNode.isNoSubstitutionTemplateLiteral(element)) || element.getLiteralValue().startsWith("!")) {
+            return { codegen: { unreadable: true } };
+        }
+
+        exclude.push(element.getLiteralValue());
+    }
+
+    return { codegen: { exclude } };
 };
 
 /** What a getter or method under each key this reader cares about contributes: it declares a value the parser cannot see. */
 const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
     ["advisor", { advisor: { unreadable: true } }],
+    ["codegen", { codegen: { unreadable: true } }],
     ["remote", { unreadable: true }],
     ["target", { unreadable: true }],
 ]);
@@ -386,6 +438,10 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
         return readServices(propertyLiteral(property, sourceFile));
     }
 
+    if (key === "codegen") {
+        return readCodegen(propertyLiteral(property, sourceFile), sourceFile);
+    }
+
     if (key !== "target" && key !== "remote") {
         return {};
     }
@@ -411,8 +467,9 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
 };
 
 /**
- * The `target`, `remote` and `advisor.minSeverity` LITERALS declared in the config, without evaluating
- * it — see the module header for what this can and cannot see, and why.
+ * The `target`, `remote`, `advisor.minSeverity`, `codegen.exclude` and
+ * `services` LITERALS declared in the config, without evaluating it — see the
+ * module header for what this can and cannot see, and why.
  */
 const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals => {
     const configPath = findProjectConfigFile(projectRoot);
@@ -454,6 +511,7 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
 
         return {
             ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
+            ...(declares("codegen") ? { codegen: { unreadable: true } } : {}),
             ...(declares("services") ? { services: { unreadable: true } } : {}),
             unreadable: true,
         };

@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import type { Finding, LintContext } from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 import { LunoraError } from "@lunora/errors";
+import { readJsonSync } from "@visulima/fs";
 import { Project } from "ts-morph";
 
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
@@ -181,14 +182,8 @@ const writeIfPresent = (filePath: string, content: string): void => {
  * package.json never breaks codegen.
  */
 const readProjectVersion = (projectRoot: string): string | undefined => {
-    const manifestPath = join(projectRoot, "package.json");
-
-    if (!existsSync(manifestPath)) {
-        return undefined;
-    }
-
     try {
-        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+        const manifest = readJsonSync(join(projectRoot, "package.json")) as Record<string, unknown>;
 
         return typeof manifest["version"] === "string" && manifest["version"] !== "" ? manifest["version"] : undefined;
     } catch {
