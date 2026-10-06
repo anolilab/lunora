@@ -1,3 +1,18 @@
+## @lunora/codegen [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.269...@lunora/codegen@1.0.0-alpha.270) (2026-10-06)
+
+### Bug Fixes
+
+* **codegen:** resolve computed keys in object shapes ([#1008](https://github.com/anolilab/lunora/issues/1008)) ([3435db5](https://github.com/anolilab/lunora/commit/3435db5a25f8bff03a8f5ccbf5c8b0a3c835d597))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.194
+* **@lunora/agent:** upgraded to 1.0.0-alpha.183
+* **@lunora/do:** upgraded to 1.0.0-alpha.198
+* **@lunora/server:** upgraded to 1.0.0-alpha.182
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.115
+
 ## @lunora/codegen [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.268...@lunora/codegen@1.0.0-alpha.269) (2026-10-06)
 
 ### Bug Fixes
