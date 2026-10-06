@@ -133,7 +133,7 @@ export const createRule = mutation
         windowMinutes: v.optional(v.number()),
     })
     .mutation(async ({ ctx: context, args }): Promise<Id<"alertRules">> => {
-        await assertMember(context, args.organizationId, ["owner", "admin"]);
+        const { organizationId } = await assertMember(context, args.organizationId, ["owner", "admin"]);
 
         const family = alertFamily(args.target);
         const isMetric = family === "metric";
@@ -160,7 +160,7 @@ export const createRule = mutation
             destination: args.destination,
             enabled: true,
             name: args.name,
-            organizationId: args.organizationId,
+            organizationId,
             target: args.target,
             // An event rule's threshold is never read, and storing an unvalidated
             // one (a `NaN`, a negative) leaves a number in the row that a future

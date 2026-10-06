@@ -126,7 +126,7 @@ export const ingest = mutation
         points: v.array(metricPointInput),
     })
     .mutation(async ({ ctx: context, args }): Promise<{ ingested: number }> => {
-        await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
+        const key = await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
 
         if (args.points.length > MAX_METRIC_POINTS) {
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_METRIC_POINTS)} points)`);
@@ -143,7 +143,7 @@ export const ingest = mutation
 
         for (const point of args.points) {
             // eslint-disable-next-line no-await-in-loop -- bounded batch; sequential keeps the writer simple
-            await context.db.insert("metricPoints", { ...point, createdAt: now, deploymentId: args.deploymentId, organizationId: args.organizationId });
+            await context.db.insert("metricPoints", { ...point, createdAt: now, deploymentId: args.deploymentId, organizationId: key.organizationId });
         }
 
         return { ingested: args.points.length };

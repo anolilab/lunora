@@ -481,7 +481,7 @@ export const create = mutation
             // Previews are TTL'd; the cleanup cron tears down expired ones (§2.3).
             ...(arguments_.kind === "preview" ? { expiresAt: previewExpiry(now) } : {}),
             kind: arguments_.kind,
-            organizationId: arguments_.organizationId,
+            organizationId: project.organizationId,
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
             queuedAt: now,
             ...(arguments_.bindings === undefined ? {} : { bindings: arguments_.bindings }),

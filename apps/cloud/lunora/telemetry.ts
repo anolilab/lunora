@@ -263,7 +263,7 @@ export const ingest = mutation
             incidents: number;
             issues: number;
         }> => {
-            await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
+            const key = await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
 
             if (args.events.length > MAX_EVENTS) {
                 throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_EVENTS)} events)`);
@@ -291,7 +291,7 @@ export const ingest = mutation
                     ...observation,
                     createdAt: now,
                     deploymentId: args.deploymentId,
-                    organizationId: args.organizationId,
+                    organizationId: key.organizationId,
                 });
             }
             const { page: rulePage } = await context.db.alertRules.findMany({ where: { organizationId: args.organizationId } });
@@ -416,7 +416,7 @@ export const ingest = mutation
                                       firing,
                                       lastEvaluatedAt: now,
                                       lastValue: value,
-                                      organizationId: args.organizationId,
+                                      organizationId: key.organizationId,
                                       ruleId,
                                       updatedAt: now,
                                   }));

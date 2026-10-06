@@ -228,7 +228,7 @@ export const disconnect = mutation
             action: "cloudflare_account.disconnect",
             actorUserId: member.userId,
             createdAt: context.now,
-            organizationId,
+            organizationId: member.organizationId,
             target: row.accountId,
         });
     });

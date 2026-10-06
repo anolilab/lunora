@@ -56,7 +56,7 @@ export const invite = mutation
         role,
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"invitations">; token: string }> => {
-        const { userId } = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
+        const { organizationId: memberOrganizationId, userId } = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
         const { now } = context;
         const token = randomSecret();
 
@@ -65,7 +65,7 @@ export const invite = mutation
             email: arguments_.email,
             expiresAt: now + INVITE_TTL_MS,
             invitedBy: userId,
-            organizationId: arguments_.organizationId,
+            organizationId: memberOrganizationId,
             role: arguments_.role,
             status: "pending",
             tokenHash: await sha256Hex(token),
