@@ -24,7 +24,6 @@ import type { PaymentObserver } from "./observability";
  * instead of materialising the lot. `continueCursor` is REQUIRED here (`ctx.db`
  * always returns it): a double that omitted it would page exactly once and then
  * silently report the rest of the table as absent.
- * @experimental
  */
 export interface LunoraDatabaseLike {
     delete: (id: string) => Promise<void>;
@@ -39,7 +38,6 @@ export interface LunoraDatabaseLike {
 
 /**
  * Structural subset of a Lunora function context used to build payments.
- * @experimental
  */
 export interface PaymentContextLike {
     auth?: { userId?: null | string };
@@ -49,17 +47,12 @@ export interface PaymentContextLike {
 /**
  * Returns whether the caller may act on `referenceId`, given who they are and the request's `db`.
  * Throwing is treated as denial. `userId` is `undefined` for an unauthenticated caller.
- * @experimental
  */
 export type AuthorizeContextReference = (
     referenceId: string,
     caller: { readonly db: LunoraDatabaseLike; readonly userId: string | undefined },
 ) => boolean | Promise<boolean>;
 
-/**
- * `PaymentsFromContextOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface PaymentsFromContextOptions {
     readonly adapter: PaymentAdapter;
     /** Override the default "caller owns the referenceId" authorization. */
@@ -72,7 +65,6 @@ export interface PaymentsFromContextOptions {
 
 /**
  * Adapt a Lunora `ctx.db` to the {@link PaymentDatabase} port the store writes through.
- * @experimental
  */
 export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): PaymentDatabase => {
     return {
@@ -88,10 +80,6 @@ export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): P
     };
 };
 
-/**
- * `paymentsFromContext` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export const paymentsFromContext = (context: PaymentContextLike, options: PaymentsFromContextOptions): LunoraPayment => {
     const userId = context.auth?.userId;
     const { authorize } = options;

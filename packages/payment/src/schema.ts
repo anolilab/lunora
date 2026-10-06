@@ -105,10 +105,6 @@ const usageEvents = defineTable({
     .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
     .index("by_reference_feature", ["referenceId", "featureId"]);
 
-/**
- * `paymentExtension` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 const paymentExtension: SchemaExtension = defineSchemaExtension("payment", {
     tables: { customers, events, sessions, subscriptions, usageEvents },
 });

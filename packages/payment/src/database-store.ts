@@ -26,7 +26,6 @@ const PAYMENT_TABLES = {
 
 /**
  * A stored row, carrying Lunora's document id.
- * @experimental
  */
 interface PaymentRow extends Record<string, unknown> {
     readonly _id: string;
@@ -37,7 +36,6 @@ interface PaymentRow extends Record<string, unknown> {
  * Lunora's `ctx.db.findMany` already accepts. `where` stays equality-only — these
  * are the knobs that let a caller bound the number of rows FETCHED rather than
  * fetching everything and slicing afterwards.
- * @experimental
  */
 interface PaymentPageArgs {
     /** Keyset cursor from a previous page's {@link PaymentPage.cursor}. */
@@ -50,7 +48,6 @@ interface PaymentPageArgs {
 
 /**
  * One page of rows plus the cursor that continues it.
- * @experimental
  */
 interface PaymentPage {
     /** Cursor for the next page, or `undefined` when this was the last one. */
@@ -60,7 +57,6 @@ interface PaymentPage {
 
 /**
  * Minimal write/read surface this store needs; `ctx.db` satisfies it structurally.
- * @experimental
  */
 interface PaymentDatabase {
     delete: (id: string) => Promise<void>;
@@ -235,10 +231,6 @@ const usageEventToRow = (event: UsageEvent): Record<string, unknown> => {
     };
 };
 
-/**
- * `createDatabasePaymentStore` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentStore => {
     const upsert = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>): Promise<void> => {
         const existing = await database.findFirst(table, where);

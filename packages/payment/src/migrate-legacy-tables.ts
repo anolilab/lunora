@@ -38,9 +38,6 @@ const moveRow = async (database: LunoraDatabaseLike, row: Record<string, unknown
  * Moves at most `batchSize` rows (default 100) per call, so it fits one mutation. Call it from an
  * `internalMutation` until `remaining` is `false`. It reads the legacy tables, so the app must still
  * declare them inline — delete them from `lunora/schema.ts` only once it reports `remaining: false`.
- *
- * `migrateLegacyPaymentTables` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
  */
 const migrateLegacyPaymentTables = async (
     database: LunoraDatabaseLike,

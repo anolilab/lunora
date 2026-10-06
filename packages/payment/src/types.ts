@@ -24,13 +24,11 @@ export interface Money {
 
 /**
  * Stable provider identifier (Medusa-style). Ships Stripe/Polar/Autumn/Dodo plus Creem, an EU-friendly MoR.
- * @experimental
  */
 export type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
 
 /**
  * What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge.
- * @experimental
  */
 export interface ProviderCapabilities {
     /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP) and Autumn (runs on your own Stripe). Drives tax/invoice ownership. */
@@ -43,20 +41,14 @@ export interface ProviderCapabilities {
 
 /**
  * Lifecycle state of a one-time payment session.
- * @experimental
  */
 export type PaymentState = "authorized" | "canceled" | "captured" | "failed" | "initiated" | "partially_refunded" | "refunded";
 
 /**
  * Lifecycle state of a subscription.
- * @experimental
  */
 export type SubscriptionState = "active" | "canceled" | "past_due" | "paused" | "trialing";
 
-/**
- * `Customer` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface Customer {
     readonly createdAt: number;
     readonly email?: string;
@@ -67,10 +59,6 @@ export interface Customer {
     readonly referenceId: string;
 }
 
-/**
- * `PaymentSession` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface PaymentSession {
     readonly amount: Money;
     readonly capturedAmount: Money;
@@ -90,10 +78,6 @@ export interface PaymentSession {
     readonly updatedAt: number;
 }
 
-/**
- * `Subscription` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface Subscription {
     readonly cancelAtPeriodEnd: boolean;
     readonly createdAt: number;
@@ -127,10 +111,6 @@ export interface Subscription {
     readonly updatedAt: number;
 }
 
-/**
- * `CustomerRef` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface CustomerRef {
     readonly email?: string;
     readonly metadata?: Record<string, string>;
@@ -140,7 +120,6 @@ export interface CustomerRef {
 /**
  * What the facade's `createCheckout` takes. The provider customer is always derived from the store
  * for the authorized `referenceId`, never supplied by the caller.
- * @experimental
  */
 export interface CheckoutRequest {
     /** Where an abandoned checkout returns to. Creem has no cancel URL, so its adapter ignores it. */
@@ -164,16 +143,11 @@ export interface CheckoutRequest {
 /**
  * What an adapter's `createCheckout` takes: the facade's {@link CheckoutRequest} plus the stored
  * provider customer for the reference.
- * @experimental
  */
 export interface CheckoutInput extends CheckoutRequest {
     readonly customerId?: string;
 }
 
-/**
- * `CheckoutResult` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface CheckoutResult {
     readonly id: string;
     readonly provider: ProviderId;
@@ -184,16 +158,11 @@ export interface CheckoutResult {
  * `attach` input — subscribe a reference to a plan. A thin, plan-oriented skin over
  * {@link CheckoutRequest}: `mode` defaults to `"subscription"` (the common case), so callers pass
  * just `{ referenceId, priceId, successUrl, cancelUrl }`.
- * @experimental
  */
 export interface AttachInput extends Omit<CheckoutRequest, "mode"> {
     readonly mode?: CheckoutRequest["mode"];
 }
 
-/**
- * `PortalInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface PortalInput {
     readonly customerId: string;
     readonly returnUrl: string;
@@ -201,7 +170,6 @@ export interface PortalInput {
 
 /**
  * A single durable usage record — one metered event for a `(referenceId, featureId)` pair.
- * @experimental
  */
 export interface UsageEvent {
     readonly createdAt: number;
@@ -231,7 +199,6 @@ export interface UsageEvent {
 
 /**
  * `track` input — record metered usage for a reference's feature.
- * @experimental
  */
 export interface TrackInput {
     readonly featureId: string;
@@ -264,7 +231,6 @@ export interface TrackInput {
 
 /**
  * Result of a `track` call.
- * @experimental
  */
 export interface TrackResult {
     /** True when this call inserted a new usage event; false when deduplicated by idempotency key. */
@@ -276,7 +242,6 @@ export interface TrackResult {
 /**
  * `check` input — is a reference allowed something right now? Pass `featureId` to check a feature
  * grant/allowance, or `priceId` to check active access to a product (one of the two is required).
- * @experimental
  */
 export interface CheckInput {
     /** Feature to check a grant/allowance for. Provide this **or** `priceId`. */
@@ -290,7 +255,6 @@ export interface CheckInput {
 
 /**
  * Result of a `check` call.
- * @experimental
  */
 export interface CheckResult {
     /** Whether the reference may consume `quantity` units of the feature right now. */
@@ -307,7 +271,6 @@ export interface CheckResult {
 
 /**
  * One feature's resolved allowance for a reference — a {@link CheckResult} tagged with its feature.
- * @experimental
  */
 export interface FeatureBalance extends CheckResult {
     readonly featureId: string;
@@ -315,7 +278,6 @@ export interface FeatureBalance extends CheckResult {
 
 /**
  * Input the adapter forwards to the provider's metering API (Stripe Meter Events / Polar ingestion).
- * @experimental
  */
 export interface ReportUsageInput {
     /** Provider customer id, when known (Stripe meter events key on it). */
@@ -328,10 +290,6 @@ export interface ReportUsageInput {
     readonly timestamp?: number;
 }
 
-/**
- * `CaptureInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface CaptureInput {
     /** Partial capture amount; full capture when omitted. */
     readonly amount?: Money;
@@ -339,10 +297,6 @@ export interface CaptureInput {
     readonly sessionId: string;
 }
 
-/**
- * `RefundInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface RefundInput {
     /** Partial refund amount; full refund when omitted. */
     readonly amount?: Money;
@@ -354,9 +308,6 @@ export interface RefundInput {
 /**
  * What an adapter's `refundPayment` returns: the provider-shaped session, plus the provider's own id
  * for the refund it just issued.
- *
- * `RefundResult` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
  */
 export interface RefundResult extends PaymentSession {
     /**
@@ -389,20 +340,12 @@ export interface RefundResult extends PaymentSession {
     readonly refundId?: string;
 }
 
-/**
- * `CancelSubscriptionOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface CancelSubscriptionOptions {
     /** Cancel at period end instead of immediately. */
     readonly atPeriodEnd?: boolean;
     readonly idempotencyKey?: string;
 }
 
-/**
- * `SubscriptionPatch` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface SubscriptionPatch {
     /**
      * Outbound idempotency key, passed through when given. Honoured by the Stripe adapter only — no
@@ -418,7 +361,6 @@ export interface SubscriptionPatch {
 
 /**
  * Normalized webhook outcome — the *core state transition* a provider event implies.
- * @experimental
  */
 export type WebhookActionType =
     | "payment.authorized"
@@ -442,14 +384,9 @@ export type WebhookActionType =
  * rather than adding, so repeated partial-refund events do not over-count.
  *
  * Omitted means `"delta"`, preserving the original behavior for callers that predate this field.
- * @experimental
  */
 export type RefundAmountKind = "absolute" | "delta";
 
-/**
- * `WebhookAction` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface WebhookAction {
     readonly amount?: Money;
 
@@ -503,7 +440,6 @@ export interface WebhookAction {
 
 /**
  * Result of applying a webhook action to the store.
- * @experimental
  */
 export interface ApplyResult {
     readonly applied: boolean;

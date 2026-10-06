@@ -43,7 +43,6 @@ import stateToEventType from "./subscription-event";
  * The `dodopayments` SDK surface the adapter uses, as a structural type — a real `DodoPayments`
  * instance satisfies it without a cast. Resources are `unknown` (the adapter re-types the client as
  * the real `DodoPayments` internally); this keeps the SDK's full type out of the published declarations.
- * @experimental
  */
 interface DodoPaymentsClientLike {
     readonly checkoutSessions: unknown;
@@ -54,10 +53,6 @@ interface DodoPaymentsClientLike {
     readonly usageEvents: unknown;
 }
 
-/**
- * `DodoPaymentsAdapterOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 interface DodoPaymentsAdapterOptions {
     readonly client: DodoPaymentsClientLike;
     readonly webhookSecret: string;
@@ -313,10 +308,6 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
-/**
- * `createDodoPaymentsAdapter` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the injected client as the real `DodoPayments` internally so every call is checked against the SDK.

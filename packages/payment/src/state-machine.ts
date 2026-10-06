@@ -10,13 +10,11 @@ import type { PaymentState, SubscriptionState } from "./types";
 
 /**
  * Action that may advance a payment session.
- * @experimental
  */
 type PaymentAction = "authorize" | "cancel" | "capture" | "fail" | "partial_refund" | "refund";
 
 /**
  * Action that may advance a subscription.
- * @experimental
  */
 type SubscriptionAction = "activate" | "cancel" | "mark_past_due" | "pause" | "renew" | "resume";
 
@@ -62,40 +60,22 @@ const SUBSCRIPTION_TRANSITIONS: Record<SubscriptionState, Partial<Record<Subscri
     trialing: { activate: "active", cancel: "canceled", mark_past_due: "past_due", pause: "paused", renew: "active" },
 };
 
-/**
- * `PAYMENT_TERMINAL_STATES` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 const PAYMENT_TERMINAL_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["canceled", "refunded"]);
 
-/**
- * `SUBSCRIPTION_TERMINAL_STATES` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 const SUBSCRIPTION_TERMINAL_STATES: ReadonlySet<SubscriptionState> = new Set<SubscriptionState>(["canceled"]);
 
 /**
  * Next payment state for an action, or `undefined` if the transition is illegal from `from`.
- * @experimental
  */
 const nextPaymentState = (from: PaymentState, action: PaymentAction): PaymentState | undefined => PAYMENT_TRANSITIONS[from][action];
 
-/**
- * `canTransitionPayment` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 const canTransitionPayment = (from: PaymentState, action: PaymentAction): boolean => nextPaymentState(from, action) !== undefined;
 
 /**
  * Next subscription state for an action, or `undefined` if the transition is illegal from `from`.
- * @experimental
  */
 const nextSubscriptionState = (from: SubscriptionState, action: SubscriptionAction): SubscriptionState | undefined => SUBSCRIPTION_TRANSITIONS[from][action];
 
-/**
- * `canTransitionSubscription` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 const canTransitionSubscription = (from: SubscriptionState, action: SubscriptionAction): boolean => nextSubscriptionState(from, action) !== undefined;
 
 export { canTransitionPayment, canTransitionSubscription, nextPaymentState, nextSubscriptionState, PAYMENT_TERMINAL_STATES, SUBSCRIPTION_TERMINAL_STATES };

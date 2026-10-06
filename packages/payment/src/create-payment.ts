@@ -87,7 +87,6 @@ const stripReferenceId = (metadata: Record<string, string> | undefined): Record<
 /**
  * What a `processWebhook`-shaped internal action hands back to the HTTP route: the
  * outcome plus the HTTP status the provider must actually see.
- * @experimental
  */
 export interface WebhookOutcome {
     /** Whether the event advanced a row. A verified no-op/duplicate is `false`. */
@@ -106,20 +105,14 @@ export interface WebhookOutcome {
  * including the deliberate `500` on an orphaned (out-of-order) event: the provider
  * stops retrying and that event is lost for good. Call this from the route instead
  * of building the response by hand.
- * @experimental
  */
 export const webhookResponse = (result: WebhookOutcome): Response => jsonResponse({ applied: result.applied }, result.status);
 
 /**
  * Returns whether the current caller may act on `referenceId`. Throwing is also treated as denial.
- * @experimental
  */
 export type AuthorizeReference = (referenceId: string) => boolean | Promise<boolean>;
 
-/**
- * `CreatePaymentOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface CreatePaymentOptions {
     readonly adapter: PaymentAdapter;
 
@@ -135,10 +128,6 @@ export interface CreatePaymentOptions {
     readonly store: PaymentStore;
 }
 
-/**
- * `LunoraPayment` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface LunoraPayment {
     readonly adapter: PaymentAdapter;
 
@@ -195,10 +184,6 @@ export interface LunoraPayment {
     track: (input: TrackInput) => Promise<TrackResult>;
 }
 
-/**
- * `createPayment` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     const { adapter, store } = options;
 

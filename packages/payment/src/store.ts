@@ -11,10 +11,6 @@ const customerKey = (provider: ProviderId, referenceId: string): string => `${pr
 
 const recordKey = (provider: ProviderId, id: string): string => `${provider}:${id}`;
 
-/**
- * `PaymentStore` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface PaymentStore {
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
@@ -106,7 +102,6 @@ export interface PaymentStore {
  * Exported so {@link MemoryPaymentStore} and the database-backed store share ONE
  * definition: a divergence between them would show up as a metered limit that
  * enforces differently in tests than in production.
- * @experimental
  */
 export const foldUsage = (events: ReadonlyArray<Pick<UsageEvent, "createdAt" | "idempotencyKey" | "mode" | "quantity">>): number => {
     const ordered = events.toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
@@ -140,7 +135,6 @@ export const overlayProviderSubscription = (existing: Subscription | undefined, 
 
 /**
  * In-memory {@link PaymentStore} for tests and local development. Not durable.
- * @experimental
  */
 export class MemoryPaymentStore implements PaymentStore {
     private readonly customers = new Map<string, Customer>();

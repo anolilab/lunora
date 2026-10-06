@@ -39,10 +39,6 @@ const latestPeriodStart = (subscriptions: ReadonlyArray<Subscription>, priceIds?
     return start;
 };
 
-/**
- * `PlanDefinition` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface PlanDefinition {
     /** Feature flags this plan grants. */
     readonly features?: ReadonlyArray<string>;
@@ -52,19 +48,11 @@ export interface PlanDefinition {
     readonly priceIds: ReadonlyArray<string>;
 }
 
-/**
- * `EntitlementsConfig` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface EntitlementsConfig {
     /** Plan name → definition. */
     readonly plans: Record<string, PlanDefinition>;
 }
 
-/**
- * `Entitlements` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface Entitlements {
     readonly features: ReadonlySet<string>;
     /** True when an active subscription grants `feature`. */
@@ -85,7 +73,6 @@ export interface Entitlements {
 
 /**
  * Every feature name a config can grant — the union of `features` flags and `limits` keys across all plans, sorted.
- * @experimental
  */
 export const featureNames = (config: EntitlementsConfig): string[] => {
     const names = new Set<string>();
@@ -105,14 +92,12 @@ export const featureNames = (config: EntitlementsConfig): string[] => {
 
 /**
  * Whether the reference holds an entitling (active/trialing) subscription on `priceId` — the basis of a product `check`.
- * @experimental
  */
 export const hasActivePrice = (subscriptions: ReadonlyArray<Subscription>, priceId: string): boolean =>
     subscriptions.some((subscription) => isActive(subscription) && priceIdsOf(subscription).includes(priceId));
 
 /**
  * Derive {@link Entitlements} from a reference's subscriptions. Pure — the basis of `check`.
- * @experimental
  */
 export const resolveEntitlements = (config: EntitlementsConfig, subscriptions: ReadonlyArray<Subscription>): Entitlements => {
     const activePriceIds = new Set(subscriptions.filter((subscription) => isActive(subscription)).flatMap((subscription) => priceIdsOf(subscription)));
@@ -159,13 +144,11 @@ export const resolveEntitlements = (config: EntitlementsConfig, subscriptions: R
 /**
  * Latest billing-period start across every active subscription — the usage window when no
  * entitlements are configured. With a config, use {@link Entitlements.periodStart}.
- * @experimental
  */
 export const usagePeriodStart = (subscriptions: ReadonlyArray<Subscription>): number => latestPeriodStart(subscriptions);
 
 /**
  * Convenience: resolve entitlements straight from the store for a reference.
- * @experimental
  */
 export const entitlementsForReference = async (store: PaymentStore, config: EntitlementsConfig, referenceId: string): Promise<Entitlements> =>
     resolveEntitlements(config, await store.listSubscriptionsByReference(referenceId));

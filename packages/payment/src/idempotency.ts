@@ -69,7 +69,6 @@ const sha256Hex = async (value: string): Promise<string> =>
 
 /**
  * Build a deterministic idempotency key from an operation name and stable parts.
- * @experimental
  */
 export const idempotencyKey = (operation: string, ...parts: ReadonlyArray<number | string>): string => [operation, ...parts.map(String)].join(":");
 

@@ -1,7 +1,7 @@
 # Plan 463 — Graduate the experimental tier to stable
 
 **Baseline:** `f65dd4fbd` (2026-10-06)
-**Status:** IN PROGRESS (A shipped on `feat/stabilize-experimental-exports`)
+**Status:** IN PROGRESS (A shipped in #1002; B1 `payment` graduated in #1001)
 
 ## 0. Headline finding
 
@@ -19,7 +19,6 @@ and whether the package has a `LUNORA_WORKERD_TESTS` vitest project:
 | Package          | Tagged exports | workerd suite            | Notes                                               |
 | ---------------- | -------------- | ------------------------ | --------------------------------------------------- |
 | `agent`          | 183            | no                       | largest surface; needs workerd before anything else |
-| `payment`        | 103            | no                       | in production (neore); full audit on PR #1001       |
 | `x402`           | 83             | yes                      |                                                     |
 | `angular`        | 80             | n/a (browser)            |                                                     |
 | `replica`        | 69             | no                       |                                                     |
@@ -54,8 +53,8 @@ additive options from here on.
 
 **B — per package, in this order** (each graduates independently when all six bar items hold):
 
-1. `payment` — finish the PR #1001 audit; add a workerd suite over the ctx.db store
-   (`database-store.ts`) and webhook apply; triage the 103 tags to an empty or frozen list.
+1. `payment` — DONE in #1001: full audit, thermos review, workerd suite over the real store,
+   tags dropped, moved to `TIER_2`.
 2. `container` — already fully tracked; finish lifecycle/`exec` verification (needs Docker in CI).
 3. `x402`, `browser` — have or are close to a workerd suite; triage tags.
 4. `ai`, `agent`, `replica` — add workerd suites first (bar item 2), then triage.
