@@ -79,11 +79,13 @@ export default {
 
 Codegen reads every `.ts` file under `lunora/` as app source, except test code:
 `*.test.ts`, `*.spec.ts`, `*.test-d.ts`, `*.spec-d.ts`, `*.bench.ts`,
-`*.e2e.ts`, `*.e2e-spec.ts`, `test-*` / `test_*` files, and the `__tests__/`,
-`__mocks__/`, `__fixtures__/`, `__snapshots__/`, `test/` and `tests/` folders.
-Such files cannot register functions, raise advisories, or appear in the
-architecture view. `codegen.exclude` adds more globs, matched against the path
-relative to `lunora/` (`!` negations are not supported). Secret scanning is
+`*.e2e.ts` and `*.e2e-spec.ts` files, and the `__tests__/`, `__mocks__/`,
+`__fixtures__/` and `__snapshots__/` folders. Such files cannot register
+functions, raise advisories, or appear in the architecture view.
+`codegen.exclude` adds more globs, matched against the path relative to
+`lunora/` (`!` negations are not supported) — for example `"tests/**"` or
+`"**/test-*.ts"`, which are not skipped by default because a real feature
+module may carry those names. Secret scanning is
 the one exception: it still reads test and excluded files, because a live
 vendor key committed anywhere is still a leak.
 

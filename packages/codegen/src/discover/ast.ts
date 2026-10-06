@@ -34,16 +34,20 @@ const lunoraRelativePath = (lunoraDirectory: string, filePath: string): string =
 /** Directories under `lunora/` that are never source: codegen's own output, and installed packages. */
 const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set(["_generated", "node_modules"]);
 
-/** The common test / mock / fixture folders. */
-const TEST_DIRECTORIES: ReadonlySet<string> = new Set(["__fixtures__", "__mocks__", "__snapshots__", "__tests__", "test", "tests"]);
+/**
+ * The test / mock / fixture folders. Only the dunder names: a plain `test/` or
+ * `tests/` may be a real feature module, and skipping it would drop its
+ * functions in silence — a project adds those through `codegen.exclude`.
+ */
+const TEST_DIRECTORIES: ReadonlySet<string> = new Set(["__fixtures__", "__mocks__", "__snapshots__", "__tests__"]);
 
 /**
  * A test file name by its common suffix (`x.test.ts`, `x.spec.ts`,
- * `x.test-d.ts`, `x.bench.ts`, `x.e2e-spec.ts`, …) or prefix (`test-x.ts`,
- * `test_x.ts`). The extension is optional so a lunora-relative module path
- * (`chat/x.test`) matches too.
+ * `x.test-d.ts`, `x.bench.ts`, `x.e2e-spec.ts`, …). No prefix rule: a
+ * `test-drive.ts` is as likely a real module as a helper. The extension is
+ * optional so a lunora-relative module path (`chat/x.test`) matches too.
  */
-const TEST_FILE_RE: RegExp = /^test[-_]|\.(?:bench|e2e|e2e-spec|spec|spec-d|test|test-d)(?:\.tsx?)?$/u;
+const TEST_FILE_RE: RegExp = /\.(?:bench|e2e|e2e-spec|spec|spec-d|test|test-d)(?:\.tsx?)?$/u;
 
 /**
  * Whether `relativePath` (POSIX separators, with or without its extension) is

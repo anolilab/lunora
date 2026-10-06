@@ -39,22 +39,12 @@ describe("listLunoraSourceFiles", () => {
     it("skips colocated test files and test/mock/fixture directories", () => {
         expect.assertions(1);
 
-        for (const directory of ["__tests__", "__mocks__", "__fixtures__", "test", "tests"]) {
+        for (const directory of ["__tests__", "__mocks__", "__fixtures__", "__snapshots__"]) {
             mkdirSync(join(lunoraDirectory, "chat", directory), { recursive: true });
             writeFileSync(join(lunoraDirectory, "chat", directory, "helper.ts"), "export const h = 1;\n", "utf8");
         }
 
-        for (const file of [
-            "a.test.ts",
-            "a.spec.ts",
-            "a.test-d.ts",
-            "a.spec-d.ts",
-            "a.bench.ts",
-            "a.e2e.ts",
-            "a.e2e-spec.ts",
-            "test-utils.ts",
-            "test_seed.ts",
-        ]) {
+        for (const file of ["a.test.ts", "a.spec.ts", "a.test-d.ts", "a.spec-d.ts", "a.bench.ts", "a.e2e.ts", "a.e2e-spec.ts"]) {
             writeFileSync(join(lunoraDirectory, "chat", file), "export const t = 1;\n", "utf8");
         }
 
@@ -62,8 +52,19 @@ describe("listLunoraSourceFiles", () => {
         writeFileSync(join(lunoraDirectory, "chat", "latest.ts"), "export const e = 1;\n", "utf8");
         writeFileSync(join(lunoraDirectory, "chat", "contest.ts"), "export const f = 1;\n", "utf8");
         writeFileSync(join(lunoraDirectory, "chat", "testimonials.ts"), "export const g = 1;\n", "utf8");
+        // Ambiguous names a real feature may carry stay source; `codegen.exclude` opts them out.
+        writeFileSync(join(lunoraDirectory, "chat", "test-drive.ts"), "export const d = 1;\n", "utf8");
+        mkdirSync(join(lunoraDirectory, "tests"));
+        writeFileSync(join(lunoraDirectory, "tests", "quiz.ts"), "export const q = 1;\n", "utf8");
 
-        expect(names(listLunoraSourceFiles(lunoraDirectory))).toStrictEqual(["contest.ts", "latest.ts", "messages.ts", "testimonials.ts"]);
+        expect(names(listLunoraSourceFiles(lunoraDirectory))).toStrictEqual([
+            "contest.ts",
+            "latest.ts",
+            "messages.ts",
+            "quiz.ts",
+            "test-drive.ts",
+            "testimonials.ts",
+        ]);
     });
 
     it("skips the globs `codegen.exclude` in lunora.config adds", () => {
@@ -160,8 +161,9 @@ describe(isTestPath, () => {
         ["chat/x.test", true],
         ["chat/x.spec.ts", true],
         ["chat/__tests__/helper", true],
-        ["tests/seed.ts", true],
-        ["test-utils", true],
+        ["chat/__mocks__/db.ts", true],
+        ["tests/seed.ts", false],
+        ["test-utils", false],
         ["chat/latest", false],
         ["chat/contest.ts", false],
         ["testimonials", false],

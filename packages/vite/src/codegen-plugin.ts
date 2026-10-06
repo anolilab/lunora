@@ -733,7 +733,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 }
 
                 // Skip test files — codegen does not read them as source (the
-                // same rule it walks with), so they shouldn't trigger it.
+                // same rule it walks with), so a save there would rerun it for
+                // nothing on every keystroke of a test. The one reader that does
+                // see them is secret discovery: a key pasted into a test is
+                // reported on the next regeneration (another save, `lunora
+                // codegen`, or the deploy gate), not on the test's own save.
                 if (isTestPath(relative(absoluteSchemaDirectory, normalized).split(sep).join("/"))) {
                     return;
                 }
