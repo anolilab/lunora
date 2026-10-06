@@ -39,6 +39,7 @@ interface CloudflareTransportOptions {
 interface FromEnvOptions {
     cloudflareSend?: CloudflareSend;
     jurisdiction?: DurableObjectJurisdiction;
+    queue?: QueueLike;
     rootShard?: string;
 }
 ```

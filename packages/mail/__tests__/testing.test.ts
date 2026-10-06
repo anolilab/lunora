@@ -49,6 +49,14 @@ describe("@lunora/mail/testing", () => {
         expect(found.id).toBe("new");
     });
 
+    it("waitForMail matches a recipient sent with a display name, ignoring case", async () => {
+        expect.assertions(1);
+
+        const found = await waitForMail({ adminToken: "t", baseUrl: "https://h", fetch: stubFetch([mail({ to: "Bob <Bob@x.test>" })]), to: "bob@x.test" });
+
+        expect(found.id).toBe("m1");
+    });
+
     it("waitForMail times out when no message matches", async () => {
         expect.assertions(1);
 
@@ -82,6 +90,24 @@ describe("@lunora/mail/testing", () => {
         const numeric = mail({ html: '<a href="https://x.test/verify?a=1&#x26;b=2">v</a>' });
 
         expect(extractLink(numeric, { match: "/verify" })).toBe("https://x.test/verify?a=1&b=2");
+    });
+
+    it("extractLink skips the DOCTYPE DTD URL @react-email/render emits", () => {
+        expect.assertions(1);
+
+        const rendered = mail({
+            html: '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html><body><a href="https://x.test/reset">r</a></body></html>',
+        });
+
+        expect(extractLink(rendered)).toBe("https://x.test/reset");
+    });
+
+    it("extractLink ignores attributes that merely end in href", () => {
+        expect.assertions(1);
+
+        const html = mail({ html: '<a data-href="https://x.test/tracking" href="https://x.test/reset">r</a>' });
+
+        expect(extractLink(html)).toBe("https://x.test/reset");
     });
 
     it("extractLink throws when no matching link exists", () => {

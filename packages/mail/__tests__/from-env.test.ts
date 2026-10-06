@@ -26,6 +26,13 @@ describe("shouldCaptureMail", () => {
         expect(shouldCaptureMail({})).toBe(false);
     });
 
+    it("does NOT capture when any environment var names a non-dev environment", () => {
+        expect.assertions(2);
+
+        expect(shouldCaptureMail({ ENVIRONMENT: "production", NODE_ENV: "development" })).toBe(false);
+        expect(shouldCaptureMail({ NODE_ENV: "test", WORKER_ENV: "development" })).toBe(true);
+    });
+
     it("treats an unrecognized LUNORA_MAIL_CAPTURE value as unset (falls through to env detection)", () => {
         expect.assertions(3);
 
@@ -187,5 +194,15 @@ describe("createMailerFromEnv", () => {
 
         // Constructing succeeds (the transport is built lazily); a no-op send binding is wired.
         expect(mailer).toHaveProperty("send");
+    });
+
+    it("forwards the queue binding so mailer.queue() works in production", async () => {
+        expect.assertions(2);
+
+        const send = vi.fn<(payload: unknown) => Promise<void>>(async () => undefined);
+        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", RESEND_API_KEY: "k", WORKER_ENV: "production" }, { queue: { send } });
+
+        await expect(mailer.queue({ subject: "Hi", to: "a@x.test" })).resolves.toStrictEqual({ queued: true });
+        expect(send).toHaveBeenCalledWith(expect.objectContaining({ subject: "Hi", to: "a@x.test" }));
     });
 });
