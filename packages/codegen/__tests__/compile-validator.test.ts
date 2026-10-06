@@ -182,9 +182,11 @@ describe("compileArgsValidator — modelled behaviour", () => {
     });
 
     it("aborts on a computed key it cannot resolve instead of dropping the field", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        expect(() => irFromSnippet("{ id: v.string(), [KEY]: v.string() }")).toThrow(/computed property name \[KEY\]/u);
+        expect(() => irFromSnippet("{ id: v.string(), [KEY]: v.string() }")).toThrow(/computed property name \[KEY\] must be a string literal.*:\d+:\d+\)$/u);
+        // A numeric key is a literal too, but not a valid field name.
+        expect(() => irFromSnippet("{ id: v.string(), [0]: v.string() }")).toThrow(/computed property name \[0\] must be a string literal/u);
     });
 
     it("declines to compile records (returns undefined source)", () => {
