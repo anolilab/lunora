@@ -5,9 +5,6 @@
  * {@link memoryStore}. `WebSocketPair` is workerd-only, so a test "accepts" a
  * socket by handing it to the state directly instead of upgrading.
  */
-import type { CloudMessage } from "../../src/hostd/protocol";
-import { challengeSigningPayload, decodeCloudMessage, requestSigningPayload } from "../../src/hostd/protocol";
-
 import { toBase64Url } from "../../src/boxes/encoding";
 import type { SessionAttachment } from "../../src/boxes/session";
 import { openSession } from "../../src/boxes/session";
@@ -15,6 +12,8 @@ import type { BoxSession, BoxSessionNamespace } from "../../src/boxes/session-cl
 import type { BoxSessionEnvironment, SessionSocket } from "../../src/boxes/session-do";
 import { BoxSessionDO } from "../../src/boxes/session-do";
 import type { ControlPlaneStore } from "../../src/d1-store";
+import type { CloudMessage } from "../../src/hostd/protocol";
+import { challengeSigningPayload, decodeCloudMessage, requestSigningPayload } from "../../src/hostd/protocol";
 
 const objectId = (name: string): DurableObjectId => {
     return { equals: (other) => other.name === name, name, toString: () => name };

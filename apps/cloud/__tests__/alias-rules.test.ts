@@ -1,6 +1,7 @@
 import { isReleaseAlias, MAX_RELEASE_ALIAS_LENGTH } from "@lunora/config/celld";
-import { HOSTD_PROTOCOL_LIMITS, isAlias } from "../src/hostd/protocol";
 import { describe, expect, it } from "vitest";
+
+import { HOSTD_PROTOCOL_LIMITS, isAlias } from "../src/hostd/protocol";
 
 /**
  * `lunora-hostd`'s wire protocol must stay dependency-free and run in workerd,

@@ -1,7 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
 
-import type { HostdReleaseManifest } from "../src/hostd/release";
-import { signReleaseManifest } from "./support/release-verify";
 import { describe, expect, it } from "vitest";
 
 import { list, setDesiredRelease } from "../lunora/boxes";
@@ -12,9 +10,11 @@ import type { RolloutTarget } from "../src/boxes/rollout";
 import { planHostdRollout, resumeHostdRollouts, runHostdRollout, withdrawDesiredRelease } from "../src/boxes/rollout";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "../src/deploy/routes/hostd";
 import type { RouterEnv } from "../src/deploy/routes/shared";
+import type { HostdReleaseManifest } from "../src/hostd/release";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
 import { boxKey, boxRow, fakeSessionNamespace, fakeState, handshake, namespaceOver, signedHeaders, TestBoxSession } from "./support/box-session-fakes";
 import { memoryStore } from "./support/memory-store";
+import { signReleaseManifest } from "./support/release-verify";
 
 const artifact = (platform: "linux-arm64" | "linux-x64", component: string) => {
     return { platform, sha256: "a".repeat(64), size: 1024, url: `https://example.com/${component}-${platform}` };

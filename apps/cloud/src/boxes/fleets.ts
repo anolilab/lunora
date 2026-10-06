@@ -11,7 +11,6 @@
  */
 import type { FleetSummary, HostdJob } from "../hostd/protocol";
 import { HOSTD_PROTOCOL_LIMITS } from "../hostd/protocol";
-
 import type { JobOutcome } from "./jobs";
 
 /** Sorted by alias, one entry per alias (the last one wins), capped at the protocol's fleet limit. */

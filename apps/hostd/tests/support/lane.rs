@@ -476,7 +476,7 @@ impl LaneBucket {
 
         let url = self.bucket.create_bucket(&self.credentials).sign(PRESIGN);
         let (status, body) = block_on(async {
-            let response = lunora_hostd::daemon::http::client().put(url).send().await.unwrap();
+            let response = lunora_hostd::daemon::http::client().put(url).header(reqwest::header::CONTENT_LENGTH, "0").send().await.unwrap();
 
             (response.status().as_u16(), response.text().await.unwrap_or_default())
         });

@@ -10,8 +10,6 @@
  */
 import type { D1CtxDbOptions } from "@lunora/d1";
 import { runD1GlobalTableMigrations } from "@lunora/d1";
-import type { CloudMessage } from "../../src/hostd/protocol";
-import { challengeSigningPayload, decodeCloudMessage } from "../../src/hostd/protocol";
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 
@@ -20,6 +18,8 @@ import { toBase64Url } from "../../src/boxes/encoding";
 import { boxSession } from "../../src/boxes/session-client";
 import { buildExec, controlPlaneDatabase } from "../../src/d1-store";
 import { hashDeployKey } from "../../src/deploy/keys";
+import type { CloudMessage } from "../../src/hostd/protocol";
+import { challengeSigningPayload, decodeCloudMessage } from "../../src/hostd/protocol";
 
 const HELLO = {
     fleets: [],

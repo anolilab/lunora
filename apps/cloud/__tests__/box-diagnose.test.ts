@@ -1,5 +1,3 @@
-import type { DeployJob } from "../src/hostd/protocol";
-import { HOSTD_PROTOCOL_LIMITS } from "../src/hostd/protocol";
 import { describe, expect, it } from "vitest";
 
 import { createDiagnoseCollector, DIAGNOSE_TIMEOUT_MS } from "../src/boxes/diagnose";
@@ -7,6 +5,8 @@ import { fleetsAfterJob, jobMovesFleets, normaliseFleets } from "../src/boxes/fl
 import type { BoxSession } from "../src/boxes/session-client";
 import { handleBoxDiagnoseRoute } from "../src/deploy/routes/boxes";
 import type { RouterEnv } from "../src/deploy/routes/shared";
+import type { DeployJob } from "../src/hostd/protocol";
+import { HOSTD_PROTOCOL_LIMITS } from "../src/hostd/protocol";
 import readJson from "./_helpers/read-json";
 import { fakeSessionNamespace } from "./support/box-session-fakes";
 

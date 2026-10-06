@@ -29,11 +29,10 @@
  *   sweep and the reconnect replay carry the flag on; a normal rollout never
  *   sets it.
  */
-import type { BoxVersions, UpgradeJob } from "../hostd/protocol";
-
 import type { ControlPlaneStore } from "../d1-store";
 import type { FleetUpgradePlan, FleetUpgradeResult } from "../fleet/upgrade";
 import { planFleetUpgrade, runFleetUpgrade } from "../fleet/upgrade";
+import type { BoxVersions, UpgradeJob } from "../hostd/protocol";
 import { drainTable } from "../store";
 import { versionKey } from "./hostd-releases";
 import type { JobOutcome } from "./jobs";

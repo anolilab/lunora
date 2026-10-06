@@ -8,10 +8,10 @@
  * moved back to `online` or `offline` — revocation is final.
  */
 import { isReleaseAlias } from "@lunora/config/celld";
-import type { BoxResources, BoxVersions, FleetSummary, RouteEntry } from "../hostd/protocol";
-import { HOSTD_PROTOCOL_LIMITS, isHostname } from "../hostd/protocol";
 
 import type { ControlPlaneStore } from "../d1-store";
+import type { BoxResources, BoxVersions, FleetSummary, RouteEntry } from "../hostd/protocol";
+import { HOSTD_PROTOCOL_LIMITS, isHostname } from "../hostd/protocol";
 import { normaliseFleets } from "./fleets";
 import type { SessionBox } from "./session";
 

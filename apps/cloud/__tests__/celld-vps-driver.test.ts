@@ -1,4 +1,3 @@
-import type { HostdJob } from "../src/hostd/protocol";
 import { describe, expect, it } from "vitest";
 
 import type { BoxSession } from "../src/boxes/session-client";
@@ -7,6 +6,7 @@ import type { DeployBackend } from "../src/deploy/release-core";
 import { startRelease } from "../src/deploy/release-core";
 import { teardownPorts } from "../src/deploy/sweeps";
 import { runTeardownSweep } from "../src/deploy/teardown";
+import type { HostdJob } from "../src/hostd/protocol";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { CelldVpsPorts } from "../src/targets/celld-vps/driver";
 import { celldVpsCanConverge, celldVpsFleet, createCelldVpsDriver } from "../src/targets/celld-vps/driver";

@@ -10,7 +10,6 @@
  *   the response. With `allowDowngrade: true` it is a rollback (audited).
  */
 import type { D1DatabaseLike } from "@lunora/d1";
-import { HOSTD_TRUSTED_RELEASE_KEYS, verifyReleaseManifest } from "../../hostd/release";
 
 import { internal } from "../../../lunora/_generated/api.js";
 import type { RolloutBox } from "../../../lunora/boxes";
@@ -19,6 +18,7 @@ import { versionsOf } from "../../boxes/hostd-releases";
 import { planHostdRollout, runHostdRollout, upgradeDispatch, withdrawDesiredRelease } from "../../boxes/rollout";
 import { manifestUrlOf } from "../../boxes/urls";
 import { controlPlaneDatabase } from "../../d1-store";
+import { HOSTD_TRUSTED_RELEASE_KEYS, verifyReleaseManifest } from "../../hostd/release";
 import type { RouteParameters } from "../route-path";
 import type { BoxRouteEnvironment } from "./boxes";
 import { verifiedBoxRequest } from "./boxes";
