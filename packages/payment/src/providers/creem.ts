@@ -136,7 +136,7 @@ const subscriptionFromCreem = (input: unknown): Subscription => {
         provider: "creem",
         quantity: readNumber(subscription, "units") ?? 1,
         // Never fall back to the customer id: a reference the app does not know entitles nobody and
-        // looks owned. Blank is the explicit orphan the facade / reconcile / checkout webhook heal.
+        // looks owned. Blank is the explicit orphan a later event or `checkout.completed` heals.
         referenceId: referenceFromMetadata(subscription) ?? "",
         // Fail closed: an unrecognized Creem status is treated as non-entitling `past_due`.
         state: SUBSCRIPTION_STATE_BY_CREEM_STATUS[status] ?? "past_due",
@@ -294,12 +294,13 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
-            // No customer id when this reference's email already belongs to another reference's
-            // Creem customer (see `getOrCreateCustomer`): prefill by email and let Creem attach it.
-            const prefill = input.email === undefined ? undefined : { email: input.email };
             const checkout = await client.checkouts.create({
                 // Creem has no cancel URL, so `input.cancelUrl` has nowhere to go.
-                customer: input.customerId ? { id: input.customerId } : prefill,
+                // No customer id means this reference's email already belongs to another reference's
+                // Creem customer (see `getOrCreateCustomer`). Do NOT prefill that email: Creem would
+                // attach the purchase to the other reference's customer, and that reference's billing
+                // portal would then list and manage this subscription. The buyer enters an email.
+                customer: input.customerId ? { id: input.customerId } : undefined,
                 // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
                 metadata: { ...input.metadata, referenceId: input.referenceId },
                 productId: input.priceId,
@@ -360,8 +361,8 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
                     // billing link from `customerId` alone, so adopting it would let one reference's portal
                     // expose another's subscriptions, invoices, and payment methods. But one person paying
                     // under two references (a personal plan and their org's) is normal, so don't throw:
-                    // report "no customer of its own" and the checkout starts unbound (subscriptions are
-                    // attributed by checkout metadata, not by customer).
+                    // report "no customer of its own" and the checkout starts unbound and un-prefilled
+                    // (subscriptions are attributed by checkout metadata, not by customer).
                     if (existingReferenceId !== ref.referenceId) {
                         return undefined;
                     }

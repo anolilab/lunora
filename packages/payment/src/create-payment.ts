@@ -375,10 +375,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             // Keep the stored `referenceId` over the adapter's. The adapter maps a MUTATION response,
             // which is even less likely than a read to echo the checkout metadata the reference is
-            // pinned in: without it Creem and Dodo fall back to the provider's own customer id and
-            // Stripe/Polar resolve to `""`, either of which orphans the row from `by_reference`,
-            // `check`/`hasActivePrice` and the default authorizer — and permanently, because `sync.ts`
-            // never rewrites the field. Same rule `reconcile` applies on its own write.
+            // pinned in: without it Dodo falls back to the provider's own customer id and
+            // Stripe/Polar/Creem resolve to `""`, either of which orphans the row from `by_reference`,
+            // `check`/`hasActivePrice` and the default authorizer — and a customer id permanently,
+            // because `sync.ts` only fills a blank owner. Same rule `reconcile` applies on its own write.
             const synced = { ...updated, referenceId: existing.referenceId === "" ? updated.referenceId : existing.referenceId };
 
             await store.upsertSubscription(synced);

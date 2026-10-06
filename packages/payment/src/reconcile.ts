@@ -125,11 +125,11 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
  *
  * `referenceId` is framework-controlled owner attribution pinned into checkout metadata, not
  * something the provider computes — so a read that does not echo that metadata resolves to `""`
- * (Stripe, Polar) or falls back to the provider's own CUSTOMER id (Creem, Dodo), and a subscription
+ * (Stripe, Polar, Creem) or falls back to the provider's own CUSTOMER id (Dodo), and a subscription
  * created outside a Lunora checkout at all (provider dashboard, migration import) never carries it.
  * Writing either value orphans the row from the `by_reference` index, from `check`/`hasActivePrice`
- * and from the default authorizer, so a paying customer is denied access — and `sync.ts` never
- * rewrites the field on an update, which makes it permanent. Keep what the store has.
+ * and from the default authorizer, so a paying customer is denied access — and `sync.ts` only
+ * fills a blank owner on an update, so a wrong non-blank one is permanent. Keep what the store has.
  */
 const keepReferenceId = (existing: string | undefined, current: string): string => (existing === undefined || existing === "" ? current : existing);
 

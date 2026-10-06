@@ -98,13 +98,16 @@ export const paymentsFromContext = (context: PaymentContextLike, options: Paymen
     // clause in the default authorizer below, so do not drop that clause on the strength of this line.
     const userId = context.auth?.userId ?? undefined;
     const { authorize } = options;
+    // A blank identity is unauthenticated for an app rule too, as `AuthorizeContextReference` promises —
+    // otherwise its `referenceId === userId` would match every orphaned (`""`) row.
+    const caller = { db: context.db, userId: userId === "" ? undefined : userId };
 
     return createPayment({
         adapter: options.adapter,
         // The default authorizer fails closed on an empty/whitespace reference: a missing identity or a
         // blank reference (e.g. webhook-orphaned rows with `referenceId: ""`) is never authorized.
         authorize: authorize
-            ? (referenceId) => authorize(referenceId, { db: context.db, userId })
+            ? (referenceId) => authorize(referenceId, caller)
             : (referenceId) => referenceId.trim() !== "" && userId !== undefined && referenceId === userId,
         entitlements: options.entitlements,
         observability: options.observability,

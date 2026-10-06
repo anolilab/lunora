@@ -41,7 +41,7 @@ Declaring them inline is also what lets you chain `.global()` on a read-heavy ta
 
 ## 2. Wire the adapter
 
-In your Worker entry's `createShardDO({ … })` call. Note that `createStripeAdapter` takes a **single options object** — not positional `(client, webhookSecret)`. The thunk receives `env` and nothing else — there is no `ctx` in scope — and the default authorizer already ties `referenceId` to `ctx.auth.userId`, so pass `authorize` only to express a different rule (an org or workspace key):
+In your Worker entry's `createShardDO({ … })` call. Note that `createStripeAdapter` takes a **single options object** — not positional `(client, webhookSecret)`. The default authorizer already ties `referenceId` to `ctx.auth.userId`, so pass `authorize` only to express a different rule (an org or workspace key) — it runs per request as `(referenceId, { db, userId })`, with the caller's `userId` and the request's `ctx.db`:
 
 ```ts
 import { createStripeAdapter } from "@lunora/payment/stripe";

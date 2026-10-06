@@ -33,6 +33,61 @@ describe("applyWebhookAction", () => {
         await expect(store.getSubscription("creem", "sub_owned")).resolves.toMatchObject({ referenceId: "user_1" });
     });
 
+    it("asks for one retry when the checkout beats its subscription, then adopts on the retry", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const checkout = { ...captureEvent("e1"), provider: "creem", referenceId: "org_1", sessionId: "ch_1", subscriptionId: "sub_1" } as const;
+
+        // The session is booked, but the claim is released so the provider redelivers.
+        await expect(applyWebhookAction(store, checkout)).resolves.toEqual({ applied: true, reason: "orphaned" });
+
+        await applyWebhookAction(store, { eventId: "e2", priceId: "prod_team", provider: "creem", subscriptionId: "sub_1", type: "subscription.active" });
+
+        await expect(applyWebhookAction(store, checkout)).resolves.toEqual({ applied: false, reason: "illegal_transition" });
+        await expect(store.getSubscription("creem", "sub_1")).resolves.toMatchObject({ referenceId: "org_1" });
+    });
+
+    it("adopts an orphan from a checkout whose session reconcile already captured", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const checkout = { ...captureEvent("e2"), provider: "creem", referenceId: "org_1", sessionId: "ch_1", subscriptionId: "sub_orphan" } as const;
+
+        await applyWebhookAction(store, { eventId: "e1", priceId: "prod_team", provider: "creem", subscriptionId: "sub_orphan", type: "subscription.active" });
+        await store.upsertPaymentSession({
+            amount: money(1000, "USD"),
+            capturedAmount: money(1000, "USD"),
+            createdAt: 0,
+            id: "ch_1",
+            provider: "creem",
+            referenceId: "org_1",
+            refundedAmount: money(0, "USD"),
+            state: "captured",
+            updatedAt: 0,
+        });
+        await applyWebhookAction(store, checkout);
+
+        await expect(store.getSubscription("creem", "sub_orphan")).resolves.toMatchObject({ referenceId: "org_1" });
+    });
+
+    it("fills an orphaned subscription's owner from a later subscription event, never moving an owner", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const event = { priceId: "prod_team", provider: "creem", type: "subscription.active" } as const;
+
+        await applyWebhookAction(store, { ...event, eventId: "e1", subscriptionId: "sub_orphan" });
+        await applyWebhookAction(store, { ...event, eventId: "e2", referenceId: "org_1", subscriptionId: "sub_orphan" });
+        await applyWebhookAction(store, { ...event, eventId: "e3", referenceId: "user_1", subscriptionId: "sub_orphan" });
+
+        await expect(store.getSubscription("creem", "sub_orphan")).resolves.toMatchObject({ referenceId: "org_1" });
+
+        await applyWebhookAction(store, { ...event, eventId: "e4", subscriptionId: "sub_orphan", type: "subscription.updated" });
+
+        await expect(store.getSubscription("creem", "sub_orphan")).resolves.toMatchObject({ referenceId: "org_1" });
+    });
+
     it("captures a payment and dedupes by event id", async () => {
         expect.assertions(4);
 

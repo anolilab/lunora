@@ -152,6 +152,22 @@ describe("paymentsFromContext", () => {
         await expect(owner.createCheckout({ ...checkout, referenceId: "org_2" })).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
+    it("hands a custom authorizer an empty-string identity as undefined", async () => {
+        expect.assertions(1);
+
+        let seen: string | undefined = "unset";
+        const authorize = (_referenceId: string, caller: { userId: string | undefined }): boolean => {
+            seen = caller.userId;
+
+            return false;
+        };
+        const payment = paymentsFromContext({ auth: { userId: "" }, db: makeDb() }, { adapter: fakeAdapter, authorize });
+
+        await payment.createCheckout({ mode: "payment", priceId: "price_1", referenceId: "", successUrl: "https://x/o" }).catch(() => undefined);
+
+        expect(seen).toBeUndefined();
+    });
+
     it("treats an empty-string identity as unauthenticated (no empty-reference orphan match)", async () => {
         expect.assertions(1);
 

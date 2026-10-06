@@ -372,8 +372,9 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
 <Callout type="warn">
     **Customer creation errors.** `customers.create` returns `400` when a customer with that email already exists, so it is not idempotent by email. The adapter
     recovers by retrieving the existing customer by email and adopting it only when its `referenceId` metadata matches. On a mismatch (one person paying under a
-    personal and an org reference) it binds no customer: the checkout starts unbound, prefilled by email, and that reference has no portal of its own. If you
-    see the create rejected for another reason, check the API key's store and mode (test vs. live).
+    personal and an org reference) it binds no customer: the checkout starts unbound and is not prefilled, and that reference has no portal of its own. Creem
+    groups customers by email, so a buyer who enters the same address at checkout lands on the existing Creem customer, and that customer's portal shows both
+    purchases. If you see the create rejected for another reason, check the API key's store and mode (test vs. live).
 </Callout>
 
 <Callout type="warn">

@@ -178,14 +178,18 @@ const resolveRefundAction = (existing: PaymentSession | undefined, action: Webho
     return prospective && compareMoney(prospective, existing.capturedAmount) < 0 ? "partial_refund" : "refund";
 };
 
+/** A row stored orphaned (`""`) takes the first reference a later event carries; an owner never moves. */
+const fillOrphanReference = (stored: string, action: WebhookAction): string => (stored === "" ? (action.referenceId ?? "") : stored);
+
 /**
  * A subscription event that arrived without the checkout's `referenceId` metadata is stored
  * orphaned (`""`, entitling nobody). The checkout that started it does carry the reference, so
  * adopt it — only into a blank row, never over an established owner.
+ * @returns `true` when a capture's subscription has no row yet, so there is nothing to adopt into.
  */
-const adoptOrphanSubscription = async (store: PaymentStore, action: WebhookAction, now: number): Promise<void> => {
+const adoptOrphanSubscription = async (store: PaymentStore, action: WebhookAction, paymentAction: PaymentAction, now: number): Promise<boolean> => {
     if (!action.subscriptionId || !action.referenceId) {
-        return;
+        return false;
     }
 
     const subscription = await store.getSubscription(action.provider, action.subscriptionId);
@@ -193,6 +197,8 @@ const adoptOrphanSubscription = async (store: PaymentStore, action: WebhookActio
     if (subscription?.referenceId === "") {
         await store.upsertSubscription({ ...subscription, referenceId: action.referenceId, updatedAt: now });
     }
+
+    return paymentAction === "capture" && subscription === undefined;
 };
 
 const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentAction: PaymentAction): Promise<ApplyResult> => {
@@ -203,6 +209,11 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
     const existing = await store.getPaymentSession(action.provider, action.sessionId);
     const fromState: PaymentState = existing?.state ?? "initiated";
     const now = Date.now();
+
+    // Before the FSM gate: the session's own transition (e.g. a checkout landing on a row reconcile
+    // already marked captured) has no bearing on who owns the subscription it started.
+    const subscriptionPending = await adoptOrphanSubscription(store, action, paymentAction, now);
+
     const currency = action.amount?.currency ?? existing?.amount.currency ?? "USD";
 
     const refund = paymentAction === "refund" ? await foldRefundOnce(store, action, existing) : undefined;
@@ -277,9 +288,11 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         throw error;
     }
 
-    await adoptOrphanSubscription(store, action, now);
-
-    return { applied: true, reason: "ok" };
+    // The checkout beat its subscription's first event here. If that event then lands without the
+    // reference metadata, nothing would ever adopt the orphan — so ask for the one bounded retry: the
+    // session is already booked (the retry is an illegal captured→captured no-op), and it re-runs the
+    // adoption above once the subscription row exists.
+    return subscriptionPending ? { applied: true, reason: "orphaned" } : { applied: true, reason: "ok" };
 };
 
 /**
@@ -338,6 +351,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
             // leaves the stored set standing for the next reconcile sweep to confirm.
             priceIds: action.priceIds ?? existing.priceIds,
             quantity: action.quantity ?? existing.quantity,
+            referenceId: fillOrphanReference(existing.referenceId, action),
             updatedAt: now,
         });
 
@@ -389,6 +403,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
         // Same wholesale-replace-or-preserve rule as the metadata patch above.
         priceIds: action.priceIds ?? existing.priceIds,
         quantity: action.quantity ?? existing.quantity,
+        referenceId: fillOrphanReference(existing.referenceId, action),
         state: nextState,
         updatedAt: now,
     });

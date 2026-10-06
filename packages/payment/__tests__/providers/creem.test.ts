@@ -104,7 +104,7 @@ describe("creem adapter", () => {
         expect((body.metadata as { referenceId?: string }).referenceId).toBe("user_1");
     });
 
-    it("starts an unbound checkout prefilled by email when the reference has no customer of its own", async () => {
+    it("starts an unbound checkout without prefilling a foreign customer's email (security regression)", async () => {
         expect.assertions(1);
 
         const calls: RecordedCall[] = [];
@@ -112,7 +112,9 @@ describe("creem adapter", () => {
 
         await adapter.createCheckout({ email: "a@b.test", mode: "subscription", priceId: "prod_team", referenceId: "org_1", successUrl: "https://x/ok" });
 
-        expect((calls.find((call) => call.name === "checkout")?.args[0] as Record<string, unknown>).customer).toEqual({ email: "a@b.test" });
+        // Prefilling would let Creem attach org_1's purchase to the customer (and portal) of the
+        // reference that already owns this email.
+        expect((calls.find((call) => call.name === "checkout")?.args[0] as Record<string, unknown>).customer).toBeUndefined();
     });
 
     it("opens a hosted billing portal via generateBillingLinks", async () => {
