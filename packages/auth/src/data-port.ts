@@ -56,10 +56,19 @@ type AuthSqlReader = Pick<SqlExecutor, "all">;
 const LIVE_CREDENTIAL_TABLES: ReadonlySet<string> = new Set(["session", "verification"]);
 
 /**
+ * Tables an export never carries and an import never writes: the live
+ * credentials above, and the auth audit log. The audit log is append-only
+ * history of this deployment — a restore must not rewrite it, and an import that
+ * could add rows to it would let whoever holds the admin token forge entries.
+ */
+const isUnmovableAuthTable = (table: string): boolean => LIVE_CREDENTIAL_TABLES.has(table) || table === AUTH_AUDIT_TABLE;
+
+/**
  * The physical table names better-auth creates for `options` (plugin tables
- * included), in its own creation order — `user` first — then the audit log.
+ * included), in their own creation order — `user` first.
  * {@link LIVE_CREDENTIAL_TABLES} are left out, by their logical name so a
- * renamed model is still recognised.
+ * renamed model is still recognised, and so is the audit log (see
+ * {@link isUnmovableAuthTable}).
  * @param options The resolved auth options — a built instance's `auth.options`.
  */
 const authTableNames = (options: LunoraAuthOptions): string[] => [
@@ -68,7 +77,6 @@ const authTableNames = (options: LunoraAuthOptions): string[] => [
         .map(([, table]) => table)
         .toSorted((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.modelName.localeCompare(b.modelName))
         .map((table) => table.modelName),
-    AUTH_AUDIT_TABLE,
 ];
 
 /** A table's columns; empty when it does not exist. `PRAGMA table_info` rather than `pragma_table_info()`: D1's authorizer refuses the function form. */
@@ -137,6 +145,11 @@ const insertAuthRows = async (
     const columns = new Map<string, string[]>();
 
     for (const [index, { doc, table }] of rows.entries()) {
+        if (isUnmovableAuthTable(table)) {
+            result.errors.push({ index, message: `"${table}" is never imported (credentials and the audit log stay with their deployment)`, table });
+            continue;
+        }
+
         if (!isAuthTable(table)) {
             result.errors.push({ index, message: `"${table}" is not an auth table`, table });
             continue;
@@ -186,7 +199,11 @@ const insertAuthRows = async (
  */
 const createSqlAuthDataPort = (executor: SqlExecutor, tables: ReadonlyArray<string>): AuthDataPortLike => {
     return {
-        exportRows: () => readAuthTables(executor, tables),
+        exportRows: () =>
+            readAuthTables(
+                executor,
+                tables.filter((table) => !isUnmovableAuthTable(table)),
+            ),
         importRows: async (rows) => insertAuthRows(executor, rows, (table) => tables.includes(table)),
     };
 };
@@ -215,7 +232,7 @@ const createDoAuthDataPort = (post: (body: Row) => Promise<Response>): AuthDataP
             const { tables } = await call<{ tables: string[] }>({ op: "tables" });
 
             // The DO auth schema keeps better-auth's default model names.
-            for (const table of tables.filter((name) => !LIVE_CREDENTIAL_TABLES.has(name))) {
+            for (const table of tables.filter((name) => !isUnmovableAuthTable(name))) {
                 let after = 0;
 
                 for (;;) {

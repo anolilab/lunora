@@ -24,6 +24,7 @@ const executorOver = (database: DatabaseSync): SqlExecutor => {
 
 const createTables = (database: DatabaseSync): void => {
     database.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE, "avatar" blob)`);
+    database.exec(`CREATE TABLE "account" ("id" text NOT NULL PRIMARY KEY, "userId" text NOT NULL REFERENCES "user" ("id"), "expiresAt" integer)`);
     database.exec(`CREATE TABLE "session" ("id" text NOT NULL PRIMARY KEY, "userId" text NOT NULL REFERENCES "user" ("id"), "expiresAt" integer)`);
 };
 
@@ -48,7 +49,8 @@ describe("auth data port", () => {
         // Signed-in sessions and one-time tokens are working logins, not data.
         expect(names).not.toContain("session");
         expect(names).not.toContain("verification");
-        expect(names.at(-1)).toBe(AUTH_AUDIT_TABLE);
+        // The audit log is this deployment's history: never exported, never imported.
+        expect(names).not.toContain(AUTH_AUDIT_TABLE);
     });
 
     it("never reads the live credential tables off the auth object", async () => {
@@ -90,10 +92,11 @@ describe("auth data port", () => {
                 .run(`u${String(index)}`, `u${String(index)}@example.test`, new Uint8Array([index % 256, 0, 255]));
         }
 
+        source.prepare(`INSERT INTO "account" VALUES ('a1', 'u1', 1700000000)`).run();
         source.prepare(`INSERT INTO "session" VALUES ('s1', 'u1', 1700000000)`).run();
 
-        // The audit table does not exist in either database: skipped, not an error.
-        const tables = ["user", "session", AUTH_AUDIT_TABLE];
+        // Even named, the session table and the audit log are not carried.
+        const tables = ["user", "account", "session", AUTH_AUDIT_TABLE];
         const rows = await collect(createSqlAuthDataPort(executorOver(source), tables));
 
         expect(rows).toHaveLength(151);
@@ -111,7 +114,8 @@ describe("auth data port", () => {
             email: "u7@example.test",
             id: "u7",
         });
-        expect(target.prepare(`SELECT * FROM "session"`).all()).toEqual([{ expiresAt: 1_700_000_000, id: "s1", userId: "u1" }]);
+        expect(target.prepare(`SELECT * FROM "account"`).all()).toEqual([{ expiresAt: 1_700_000_000, id: "a1", userId: "u1" }]);
+        expect(target.prepare(`SELECT * FROM "session"`).all()).toEqual([]);
 
         const second = await port.importRows(wire);
 
@@ -126,15 +130,20 @@ describe("auth data port", () => {
         createTables(database);
         database.exec("PRAGMA foreign_keys = ON");
 
-        const result = await createSqlAuthDataPort(executorOver(database), ["user", "session"]).importRows([
+        const result = await createSqlAuthDataPort(executorOver(database), ["user", "account", "session", AUTH_AUDIT_TABLE]).importRows([
             { doc: { id: "x" }, table: "todos" },
-            { doc: { id: "s1", userId: "nobody@secret.test" }, table: "session" },
+            { doc: { id: "a1", userId: "nobody@secret.test" }, table: "account" },
+            { doc: { id: "s1", userId: "u1" }, table: "session" },
+            { doc: { action: "forged" }, table: AUTH_AUDIT_TABLE },
         ]);
+        const never = (table: string): string => `"${table}" is never imported (credentials and the audit log stay with their deployment)`;
 
         expect(result.inserted).toBe(0);
         expect(result.errors).toStrictEqual([
             { index: 0, message: `"todos" is not an auth table`, table: "todos" },
-            { index: 1, message: `"session": FOREIGN KEY constraint failed`, table: "session" },
+            { index: 1, message: `"account": FOREIGN KEY constraint failed`, table: "account" },
+            { index: 2, message: never("session"), table: "session" },
+            { index: 3, message: never(AUTH_AUDIT_TABLE), table: AUTH_AUDIT_TABLE },
         ]);
     });
 
