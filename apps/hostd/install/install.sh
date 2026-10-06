@@ -45,7 +45,7 @@ MIN_MEMORY_MIB=1900
 
 # BEGIN TRUSTED RELEASE KEYS
 # The release-signing public keys, by key id: the same set as
-# HOSTD_TRUSTED_RELEASE_KEYS in apps/hostd/src/trusted-release-keys.ts (a test
+# apps/hostd/trusted-release-keys.json (a test
 # keeps them equal; scripts/release-public-key.mjs prints both entries).
 trusted_key() {
     case "$1" in

@@ -1,30 +1,52 @@
 /**
- * The `upgrade` job against a test-signed release manifest: what verifies is
- * installed as `{installDir}/{releaseId}/`, `current` switches to it, and the
+ * The `upgrade` job, the Rust binary built to trust a test release key, against
+ * a test-signed release manifest and artifacts served over HTTPS: what verifies
+ * is installed as `{installDir}/{releaseId}/`, `current` switches to it, and the
  * box restarts onto it; what does not verify — unsigned, tampered, a
  * placeholder key, another release, a bad artifact — changes nothing.
+ * (Which directories a release prune removes is tested in
+ * `daemon/src/daemon/release_install.rs`.)
  */
 import { execFileSync } from "node:child_process";
 import type { KeyObject } from "node:crypto";
-import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createPrivateKey, createPublicKey } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, readlinkSync, rmSync } from "node:fs";
+import type { Server } from "node:https";
+import { createServer } from "node:https";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { binaryPaths } from "../../src/daemon/config";
-import { silentLogger } from "../../src/daemon/log";
-import { pruneReleases } from "../../src/daemon/release-install";
-import { Daemon } from "../../src/daemon/run";
 import type { HostdReleaseEnvelope, HostdReleaseManifest } from "../../src/release";
 import { HOSTD_TRUSTED_RELEASE_KEYS } from "../../src/release";
 import { releaseKeyId, signReleaseManifest } from "../../src/release-verify";
+import type { RunningHostd } from "../helpers/hostd-binary";
+import { buildHostd, startHostd } from "../helpers/hostd-binary";
+import { createTestTls } from "../helpers/test-tls";
 import type { TestBox } from "./helpers/box";
-import { createTestBox, INITIAL_RELEASE, unisolatedSystem } from "./helpers/box";
+import { createTestBox, INITIAL_RELEASE } from "./helpers/box";
 import { celldInvocations, writeFakeBinaries } from "./helpers/fake-binaries";
 import { FakeControlPlane } from "./helpers/fake-control-plane";
+
+/**
+ * The release key the test build trusts. Fixed (a PKCS#8 Ed25519 key over a constant seed) so the build that pins
+ * it is the same build every run, and cargo rebuilds nothing.
+ */
+const RELEASE_KEY: KeyObject = createPrivateKey({
+    format: "der",
+    key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.alloc(32, 0x5a)]),
+    type: "pkcs8",
+});
+
+const TRUSTED_KEYS: Record<string, string> = {
+    [releaseKeyId(createPublicKey(RELEASE_KEY))]: createPublicKey(RELEASE_KEY).export({ format: "pem", type: "spki" }),
+};
+
+/** The binary's path under `{installDir}/current`. */
+const currentBinary = (box: TestBox, name: "caddy" | "celld" | "lunora-hostd"): string => join(box.config.installDir, "current", name);
 
 const sha256 = async (bytes: Uint8Array): Promise<string> => Buffer.from(await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes))).toString("hex");
 
@@ -36,15 +58,15 @@ interface Artifacts {
 
 /**
  * New celld (gzipped, as upstream ships it), Caddy and hostd builds, and the
- * manifest pinning them. `hostdVersion` is the version the new hostd reports:
+ * manifest pinning them, served from `origin`. `hostdVersion` is the version the new hostd reports:
  * the running one (`0.0.0` in tests) means hostd itself does not change.
  */
-const buildRelease = async (box: TestBox, releaseId = "hostd-v9_9_9", hostdVersion = "9.9.9"): Promise<Artifacts> => {
+const buildRelease = async (box: TestBox, origin: string, releaseId = "hostd-v9_9_9", hostdVersion = "9.9.9"): Promise<Artifacts> => {
     const fresh = writeFakeBinaries(join(box.root, `new-bin-${releaseId}`), box.records);
     const celld = gzipSync(readFileSync(fresh.celld, "utf8").replace("celld 0.6.0", "celld 0.7.0"));
     const caddy = Buffer.from(readFileSync(fresh.caddy, "utf8").replace("v2.11.6 h1:fake", "v2.12.0 h1:fake"));
     const hostd = Buffer.from(`#!${process.execPath}\nconsole.log(${JSON.stringify(hostdVersion)});\n`);
-    const base = `https://artifacts.test/${releaseId}`;
+    const base = `${origin}/${releaseId}`;
     const files = new Map<string, Uint8Array>([
         [`${base}/caddy.gz`, caddy],
         [`${base}/celld.gz`, celld],
@@ -74,15 +96,21 @@ const buildRelease = async (box: TestBox, releaseId = "hostd-v9_9_9", hostdVersi
 };
 
 describe("the upgrade job", () => {
+    let binary: string;
+    /** The shipped build: no key but the committed placeholder. */
+    let shipped: string;
     let plane: FakeControlPlane;
     let box: TestBox;
-    let daemon: Daemon;
-    let running: Promise<number>;
+    let daemon: RunningHostd;
     let release: Artifacts;
     /** Every artifact a test published, by URL. */
     let published: Map<string, Uint8Array>;
-    let trustedKeys: Record<string, string>;
-    let privateKey: KeyObject;
+    let artifacts: Server;
+    let tlsDirectory: string;
+    let caFile: string;
+    /** Where the artifacts are served: `https://127.0.0.1:{port}`, set once the server listens. */
+    let artifactOrigin: string;
+    const privateKey = RELEASE_KEY;
 
     const publish = (envelope: unknown, releaseId = "hostd-v9_9_9"): void => {
         plane.manifests.set(releaseId, JSON.stringify(envelope));
@@ -91,39 +119,53 @@ describe("the upgrade job", () => {
     const upgrade = async (releaseId = "hostd-v9_9_9") =>
         plane.dispatch({ kind: "upgrade", manifestUrl: `${plane.origin}/v1/hostd/releases/${releaseId}/manifest`, releaseId });
 
+    beforeAll(async () => {
+        binary = buildHostd({ trustedKeys: TRUSTED_KEYS });
+        shipped = buildHostd();
+        tlsDirectory = mkdtempSync(join(tmpdir(), "lunora-hostd-tls-"));
+
+        const tls = createTestTls(tlsDirectory);
+
+        caFile = tls.caFile;
+        artifacts = createServer({ cert: readFileSync(tls.cert), key: readFileSync(tls.key) }, (incoming, outgoing) => {
+            const bytes = published.get(`${artifactOrigin}${incoming.url ?? ""}`);
+
+            if (bytes === undefined) {
+                outgoing.writeHead(404).end();
+
+                return;
+            }
+
+            outgoing.writeHead(200, { "content-type": "application/octet-stream" }).end(Buffer.from(bytes));
+        });
+
+        await new Promise<void>((resolve) => {
+            artifacts.listen(0, "127.0.0.1", resolve);
+        });
+        artifactOrigin = `https://127.0.0.1:${String((artifacts.address() as AddressInfo).port)}`;
+    }, 600_000);
+
     beforeEach(async () => {
         plane = new FakeControlPlane();
         await plane.listen();
         box = await createTestBox(plane);
-        release = await buildRelease(box);
+        release = await buildRelease(box, artifactOrigin);
         published = release.files;
-
-        const keys = generateKeyPairSync("ed25519");
-
-        privateKey = keys.privateKey;
-        trustedKeys = { [releaseKeyId(keys.publicKey)]: keys.publicKey.export({ format: "pem", type: "spki" }) };
-
-        const artifactFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-            const url = input instanceof Request ? input.url : String(input);
-            const bytes = published.get(url);
-
-            if (bytes !== undefined) {
-                return new Response(Uint8Array.from(bytes));
-            }
-
-            return globalThis.fetch(input, init);
-        };
-
-        daemon = new Daemon({ config: box.config, fetch: artifactFetch, isolation: unisolatedSystem(), logger: silentLogger, trustedKeys });
-        running = daemon.run();
+        daemon = startHostd(binary, box.configPath, { LUNORA_HOSTD_PLATFORM: "linux-x64", SSL_CERT_FILE: caFile });
         await plane.authenticated();
     });
 
     afterEach(async () => {
-        daemon.stop();
-        await running;
+        await daemon.stop();
         await plane.close();
         box.cleanup();
+    });
+
+    afterAll(async () => {
+        await new Promise((resolve) => {
+            artifacts.close(resolve);
+        });
+        rmSync(tlsDirectory, { force: true, recursive: true });
     });
 
     const deployApp = async (): Promise<void> => {
@@ -140,7 +182,7 @@ describe("the upgrade job", () => {
 
     const nodeStarts = (): number => celldInvocations(box.records).filter((run) => run.argv[0] === "--bucket").length;
 
-    const versionOf = (binary: string, args: string[]): string => execFileSync(binary, args, { encoding: "utf8" }).trim();
+    const versionOf = (program: string, args: string[]): string => execFileSync(program, args, { encoding: "utf8" }).trim();
 
     it("installs a verified release beside the old one, switches current, then exits for systemd", async () => {
         expect.assertions(9);
@@ -148,7 +190,6 @@ describe("the upgrade job", () => {
         await deployApp();
 
         const nodesBefore = nodeStarts();
-        const binaries = binaryPaths(box.config);
 
         publish(signReleaseManifest(release.manifest, privateKey));
 
@@ -157,17 +198,17 @@ describe("the upgrade job", () => {
         expect(result).toStrictEqual({ jobId: "job_2", ok: true, type: "result" });
         expect(progress.some((line) => line.startsWith("manifest verified"))).toBe(true);
         expect(readlinkSync(join(box.config.installDir, "current"))).toBe("hostd-v9_9_9");
-        expect(versionOf(binaries.celld, ["--version"])).toBe("celld 0.7.0");
-        expect(versionOf(binaries.caddy, ["version"])).toBe("v2.12.0 h1:fake");
-        expect(versionOf(binaries.hostd, [])).toBe("9.9.9");
+        expect(versionOf(currentBinary(box, "celld"), ["--version"])).toBe("celld 0.7.0");
+        expect(versionOf(currentBinary(box, "caddy"), ["version"])).toBe("v2.12.0 h1:fake");
+        expect(versionOf(currentBinary(box, "lunora-hostd"), [])).toBe("9.9.9");
         // The release that ran before stays, for a manual rollback; the manifest is kept with the new one.
         expect(existsSync(join(box.config.installDir, INITIAL_RELEASE, "celld"))).toBe(true);
         expect(JSON.parse(readFileSync(join(box.config.installDir, "hostd-v9_9_9", "manifest.json"), "utf8"))).toMatchObject({
             manifest: { releaseId: "hostd-v9_9_9" },
         });
 
-        // hostd replaced itself: no fleet restarts in place (the new hostd starts them), and run() resolves 0.
-        await expect(running.then((code) => [code, nodeStarts() - nodesBefore])).resolves.toStrictEqual([0, 0]);
+        // hostd replaced itself: no fleet restarts in place (the new hostd starts them), and it exits 0 for systemd.
+        await expect(daemon.exited.then((code) => [code, nodeStarts() - nodesBefore])).resolves.toStrictEqual([0, 0]);
     });
 
     it("restarts the fleets in place when hostd itself is unchanged, and keeps only the previous release", async () => {
@@ -176,8 +217,8 @@ describe("the upgrade job", () => {
         await deployApp();
 
         const nodesBefore = nodeStarts();
-        const first = await buildRelease(box, "hostd-v0_0_1", "0.0.0");
-        const second = await buildRelease(box, "hostd-v0_0_2", "0.0.0");
+        const first = await buildRelease(box, artifactOrigin, "hostd-v0_0_1", "0.0.0");
+        const second = await buildRelease(box, artifactOrigin, "hostd-v0_0_2", "0.0.0");
 
         published = new Map([...first.files, ...second.files]);
         publish(signReleaseManifest(first.manifest, privateKey), "hostd-v0_0_1");
@@ -228,13 +269,13 @@ describe("the upgrade job", () => {
         const { result } = await upgrade();
 
         expect(result.error).toMatchObject({ code: "UPGRADE_REFUSED", message: expect.stringMatching(reason) });
-        expect(versionOf(binaryPaths(box.config).celld, ["--version"])).toBe("celld 0.6.0");
+        expect(versionOf(currentBinary(box, "celld"), ["--version"])).toBe("celld 0.6.0");
     });
 
     it("refuses an older lunora-hostd unless the job allows a downgrade", async () => {
         expect.assertions(4);
 
-        const older = await buildRelease(box, "hostd-v0_0_0-rc_1", "0.0.0-rc.1");
+        const older = await buildRelease(box, artifactOrigin, "hostd-v0_0_0-rc_1", "0.0.0-rc.1");
 
         published = older.files;
         publish(signReleaseManifest(older.manifest, privateKey), "hostd-v0_0_0-rc_1");
@@ -273,18 +314,18 @@ describe("the upgrade job", () => {
 
         publish(signReleaseManifest(release.manifest, privateKey));
         // Same length, different bytes: passes the size check, fails the hash.
-        const caddy = release.files.get("https://artifacts.test/hostd-v9_9_9/caddy.gz") as Uint8Array;
+        const caddy = release.files.get(`${artifactOrigin}/hostd-v9_9_9/caddy.gz`) as Uint8Array;
 
         release.files.set(
-            "https://artifacts.test/hostd-v9_9_9/caddy.gz",
+            `${artifactOrigin}/hostd-v9_9_9/caddy.gz`,
             Uint8Array.from(caddy, (byte, index) => (index === 10 ? (byte + 1) % 256 : byte)),
         );
 
         const { result } = await upgrade();
 
         expect(result.error).toMatchObject({ code: "ARTIFACT_INVALID", message: expect.stringMatching(/HASH_MISMATCH/u) });
-        expect(versionOf(binaryPaths(box.config).celld, ["--version"])).toBe("celld 0.6.0");
-        expect(versionOf(binaryPaths(box.config).caddy, ["version"])).toBe("v2.11.6 h1:fake");
+        expect(versionOf(currentBinary(box, "celld"), ["--version"])).toBe("celld 0.6.0");
+        expect(versionOf(currentBinary(box, "caddy"), ["version"])).toBe("v2.11.6 h1:fake");
         expect(readlinkSync(join(box.config.installDir, "current"))).toBe(INITIAL_RELEASE);
         expect(["hostd-v9_9_9", "hostd-v9_9_9.partial"].map((name) => existsSync(join(box.config.installDir, name)))).toStrictEqual([false, false]);
     });
@@ -314,7 +355,7 @@ describe("the upgrade job", () => {
     it("refuses a download longer than the size the manifest pins, without reading past it", async () => {
         expect.assertions(3);
 
-        const url = "https://artifacts.test/hostd-v9_9_9/caddy.gz";
+        const url = `${artifactOrigin}/hostd-v9_9_9/caddy.gz`;
 
         publish(signReleaseManifest(release.manifest, privateKey));
         release.files.set(url, Buffer.concat([release.files.get(url) as Uint8Array, Buffer.alloc(4096)]));
@@ -358,10 +399,8 @@ describe("the upgrade job", () => {
     it("trusts only the compiled-in keys by default, which verify nothing yet", async () => {
         expect.assertions(3);
 
-        daemon.stop();
-        await running;
-        daemon = new Daemon({ config: box.config, isolation: unisolatedSystem(), logger: silentLogger });
-        running = daemon.run();
+        await daemon.stop();
+        daemon = startHostd(shipped, box.configPath, { LUNORA_HOSTD_PLATFORM: "linux-x64", SSL_CERT_FILE: caFile });
         await plane.authenticated(2);
 
         const envelope = signReleaseManifest(release.manifest, privateKey);
@@ -376,42 +415,5 @@ describe("the upgrade job", () => {
         await expect(upgrade()).resolves.toMatchObject({ result: { error: { code: "UPGRADE_REFUSED", message: expect.stringMatching(/PLACEHOLDER_KEY/u) } } });
 
         expect(Object.keys(HOSTD_TRUSTED_RELEASE_KEYS)).toStrictEqual(["ed25519-placeholder"]);
-    });
-});
-
-describe(pruneReleases, () => {
-    it("removes only other release directories (those holding a manifest), never anything else in the install directory", () => {
-        expect.assertions(1);
-
-        const root = mkdtempSync(join(tmpdir(), "lunora-hostd-prune-"));
-
-        try {
-            for (const release of ["hostd-v1", "hostd-v2", "hostd-v3"]) {
-                mkdirSync(join(root, release));
-                writeFileSync(join(root, release, "manifest.json"), "{}\n");
-            }
-
-            // Not releases: no manifest, a name no release id has, a plain file, the link.
-            mkdirSync(join(root, "hostd-v0"));
-            mkdirSync(join(root, "hostd-v4.partial"));
-            writeFileSync(join(root, "hostd-v4.partial", "manifest.json"), "{}\n");
-            mkdirSync(join(root, "backups"));
-            writeFileSync(join(root, "notes.txt"), "keep\n");
-            symlinkSync("hostd-v3", join(root, "current"));
-
-            pruneReleases(root, new Set(["hostd-v2", "hostd-v3"]));
-
-            expect(readdirSync(root).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
-                "backups",
-                "current",
-                "hostd-v0",
-                "hostd-v2",
-                "hostd-v3",
-                "hostd-v4.partial",
-                "notes.txt",
-            ]);
-        } finally {
-            rmSync(root, { force: true, recursive: true });
-        }
     });
 });

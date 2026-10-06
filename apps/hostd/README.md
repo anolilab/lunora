@@ -112,9 +112,8 @@ the token in shell history and sudo's log; `--token` is now refused.
 ### How install.sh trusts a release
 
 1. **Trust root: the release keys pinned in `install.sh`** (`trusted_key()`, the
-   same set as `HOSTD_TRUSTED_RELEASE_KEYS` in
-   [`src/trusted-release-keys.ts`](./src/trusted-release-keys.ts); a test keeps
-   them equal). `install.sh` itself comes over HTTPS from the GitHub Release,
+   same set as [`trusted-release-keys.json`](./trusted-release-keys.json); a
+   test keeps them equal). `install.sh` itself comes over HTTPS from the GitHub Release,
    with its SHA-256 in the release notes and a provenance attestation.
 2. It downloads `manifest.json`, looks its `keyId` up among the pinned keys
    (never a key the manifest brings), refuses a placeholder, checks that the
@@ -131,7 +130,7 @@ the token in shell history and sudo's log; `--token` is now refused.
 4. It runs that binary's `install-release` **as `lunora-hostd`**: the binary
    validates the manifest strictly and verifies it again with the keys
    compiled into it, then installs the release exactly as the `upgrade` job
-   does (one implementation, `src/daemon/release-install.ts`): each file is
+   does (one implementation, `daemon/src/daemon/release_install.rs`): each file is
    checked against its size and SHA-256, decompressed, run once
    (`--version`), staged in `<releaseId>.partial/`, renamed into place, and
    `current` is switched in one rename. The release that ran before stays, for
@@ -221,9 +220,8 @@ s3://<bucket>/fleets/<alias> [--endpoint] [--region] --listen
   event stream), rate-limited per client, with on-demand TLS that hostd's own
   loopback `ask` endpoint approves only for routed hostnames and the box's own.
 
-Children restart with a 1–30 s backoff (one that cannot be started at all —
-Node emits `error` and never `exit` — counts as one that exited, and is
-logged); a stop is SIGTERM, then SIGKILL past a budget; shutdown drains the
+Children restart with a 1–30 s backoff (one that cannot be started at all
+counts as one that exited, and is logged); a stop is SIGTERM, then SIGKILL past a budget; shutdown drains the
 fleets before Caddy. The control plane is the source of truth: a fleet it
 stops routing is stopped (its data stays), and `hello` reports the fleets on
 every connect. `destroy` with `deleteData` deletes exactly the
@@ -232,7 +230,7 @@ every connect. `destroy` with `deleteData` deletes exactly the
 **Its own logs** go to the journal (stderr), and — once the control plane's
 `config` frame names an OTLP endpoint and the organization's ingest key
 (protocol §5.2) — to Lunora Cloud as OTLP logs (`POST {endpoint}/v1/logs`,
-`src/daemon/log-forwarder.ts`): hostd's warnings and errors, each celld node's
+`daemon/src/daemon/log_forwarder.rs`): hostd's warnings and errors, each celld node's
 stderr (`RUST_LOG=error,celld=warn`; a fleet's stdout, its app's own output,
 stays on the box) and Caddy's warnings and errors, tagged `box:<slug>`,
 `source` and, for a fleet, `alias:<alias>` (its `service.name` is the alias,
@@ -300,32 +298,34 @@ tenant sandbox):
   a fleet runs with no capabilities, Caddy with `net_bind_service` alone.
   None of them is `CAP_DAC_*`, so the daemon is held to plain file
   permissions like any user: it may not enter a fleet's 0700 directory or
-  Caddy's `state/`. Node enters a child's `cwd` before it switches to the
-  child's uid — as the daemon — and would fail with `spawn … EACCES`; so a
-  child started as another user is handed no `cwd`, and enters its own
-  directory after the switch, through `env --chdir` (coreutils 8.28 or later):
-  `setpriv … -- /usr/bin/env --chdir=<dir> -- <binary> …`. A fleet's
-  directory is likewise emptied by `find` as `lunora-fleet`, then removed by
-  the daemon with `rmdir`, which needs only `fleets/`.
-  [`__tests__/access.test.ts`](./__tests__/access.test.ts) computes, from
-  install.sh's layout and the modes hostd sets, what each user can enter,
-  read, write and execute, and checks every child's start against it.
+  Caddy's `state/`. A child started as another user switches to that user
+  (dropping the daemon's supplementary groups, which the self-check verifies)
+  before it enters its working directory, so it enters a directory only it
+  may. A fleet's directory is likewise emptied by `find` as `lunora-fleet`,
+  then removed by the daemon with `rmdir`, which needs only `fleets/`. The
+  access model in `daemon/src/daemon/isolation.rs` computes, from install.sh's
+  layout and the modes hostd sets, what each user can reach.
 - **Environment.** A fleet's environment is built from nothing and held to an
   allowlist (`PATH`, `HOME`/`TMPDIR` = its own directory, `LANG`, celld's
   `RUST_LOG` and `CELLD_DURABILITY`, `AWS_*` for the bucket): never the config
   path, the control plane's origin, the enrolment token or systemd's variables.
 - **Egress.** hostd installs the nftables table `inet lunora_hostd` at start: for
   sockets of the fleet uid only, it accepts replies on established connections,
-  DNS, and the bucket endpoint's resolved addresses on its port (re-resolved
-  every 30 s), and rejects loopback, RFC 1918, link-local (with the
-  `169.254.169.254` metadata service), CGNAT `100.64.0.0/10`, `0.0.0.0/8`,
-  and IPv6 loopback, unspecified, v4-mapped, ULA and link-local. That keeps a
-  fleet from every celld operator API (each node's internal listener is on
-  loopback, siblings' included), hostd's on-demand-TLS `ask` endpoint and
-  Caddy's admin API. hostd hands `nft` each script as a file (0600, in a fresh
-  0700 directory under the data directory, deleted afterwards), never on
-  stdin: Node gives a child a socket for stdin, and nft 1.0.9 (Ubuntu 24.04)
-  refuses `nft -f -` from one with "Not a regular file".
+  DNS to the box's own resolvers (the `nameserver`s of `/etc/resolv.conf`),
+  the bucket endpoint's resolved addresses on its port, and the box's own
+  addresses on Caddy's public ports (all re-read every 30 s); it then rejects
+  every other address of the box itself (`fib daddr type local`: its public
+  IP reaches whatever listens on `0.0.0.0`), loopback, RFC 1918, link-local
+  (with the `169.254.169.254` metadata service), CGNAT `100.64.0.0/10`,
+  `0.0.0.0/8`, the IETF, benchmarking, multicast and reserved ranges, and IPv6
+  loopback, unspecified, v4-mapped, NAT64 (`64:ff9b::/96` embedding a blocked
+  range, and `64:ff9b:1::/48`), ULA, link-local, site-local and multicast.
+  That keeps a fleet from every celld operator API (each node's internal
+  listener is on loopback, siblings' included), hostd's on-demand-TLS `ask`
+  endpoint, Caddy's admin API and anything else the box serves. hostd hands
+  `nft` each script as a file (0600, in a fresh 0700 directory under the data
+  directory, deleted afterwards), never on stdin: nft 1.0.9 (Ubuntu 24.04)
+  refuses `nft -f -` unless stdin is a regular file.
 - **Memory.** With `Delegate=yes`, hostd moves itself into `hostd/` under its
   service cgroup, enables the memory controller, and puts each fleet's node in
   `fleet-<alias>/` with `memory.max` (the box's memory less 512 MiB, at least
@@ -397,8 +397,9 @@ time) and a `SystemCallFilter` (celld's needs are not pinned down yet).
 `LUNORA_HOSTD_TESTS=1`) drives the built daemon against real celld, a Caddy
 built with `caddy-ratelimit`, an S3-compatible bucket and an in-process fake
 control plane. It reads `LUNORA_CELLD_BIN`, `LUNORA_CADDY_BIN`,
-`LUNORA_HOSTD_S3_ENDPOINT` and, optionally, `LUNORA_HOSTD_BIN` (the single
-executable; otherwise `dist/bin.mjs`). Its files run one at a time:
+`LUNORA_HOSTD_S3_ENDPOINT` and `LUNORA_HOSTD_BIN` (the Rust daemon,
+`daemon/target/release/lunora-hostd` after `pnpm run build:daemon`). Its files
+run one at a time:
 
 - [`lane.test.ts`](./__tests__/integration/lane.test.ts): enrol, session,
   deploy, HTTP through Caddy, a usage report, then the **target-driver
@@ -417,10 +418,11 @@ executable; otherwise `dist/bin.mjs`). Its files run one at a time:
   artifacts over HTTPS, celld gzipped); the daemon installs it beside N,
   switches `current`, exits, is started again on N+1 (by systemd, or by the
   lane standing in for it), and the alias answers again. Both releases'
-  `lunora-hostd` are builds of this source trusting a key the test generates
-  ([`__tests__/helpers/test-release.ts`](./__tests__/helpers/test-release.ts)
-  swaps `trusted-release-keys.ts` in an esbuild bundle) — no shipped build can
-  take a key from anywhere but its source.
+  `lunora-hostd` are cargo builds trusting the tests' own release key
+  ([`__tests__/helpers/hostd-binary.ts`](./__tests__/helpers/hostd-binary.ts)
+  points `LUNORA_HOSTD_TRUSTED_KEYS` at it, which the release workflow refuses
+  to build with) — no shipped build trusts anything but
+  `trusted-release-keys.json`.
 
 With `LUNORA_HOSTD_ISOLATION=1`, as root on a systemd host (the `hostd
 integration` CI job, under sudo), each box is set up with `install.sh`'s own
@@ -461,8 +463,11 @@ A box installs `hostd`, celld and Caddy from a **signed release manifest**
 (plan 458 W7, §9 Q2). The manifest pins every binary, per platform
 (`linux-x64`, `linux-arm64`), by URL, SHA-256 and size. It is signed with
 **Ed25519** over its canonical bytes, and the public key that verifies it is
-compiled into `hostd` and the control plane
-([`src/trusted-release-keys.ts`](./src/trusted-release-keys.ts)). Verifying
+pinned in [`trusted-release-keys.json`](./trusted-release-keys.json), the one
+file both the daemon (compiled in by `daemon/build.rs`) and the control plane
+(`HOSTD_TRUSTED_RELEASE_KEYS` from `@lunora/hostd/release`, which
+[`src/trusted-release-keys.ts`](./src/trusted-release-keys.ts) reads from it)
+trust. Verifying
 needs only WebCrypto; nothing like minisign or Sigstore runs on the box.
 GitHub artifact attestations add build provenance on top
 (`gh attestation verify <file> --repo anolilab/lunora`), but a box does not
@@ -488,11 +493,20 @@ the control plane verifies a release with the same function a box does.
 
 ### Building
 
-- `pnpm run build:sea` builds `dist/sea/lunora-hostd-<os>-<arch>` for the
-  machine it runs on: an esbuild bundle of `src/bin.ts`, injected into a copy of
-  the running `node` with postject (Node 24 has no built-in `--build-sea`). The
-  binary embeds that exact Node, so build with the version boxes should run
-  (CI uses the `.nvmrc` line). Linux only.
+- **The daemon is a Rust crate**, [`daemon/`](./daemon) (toolchain pinned by
+  `daemon/rust-toolchain.toml`). `pnpm run build:daemon` runs
+  `cargo build --release --locked` and builds
+  `daemon/target/release/lunora-hostd` for the machine it runs on;
+  `pnpm run test:daemon` runs `cargo test --locked`. `daemon/build.rs` stamps
+  `LUNORA_HOSTD_VERSION` (default `0.0.0`) as the version and compiles in
+  `trusted-release-keys.json`; `LUNORA_HOSTD_TRUSTED_KEYS` names another key
+  file, for test builds only. `.github/workflows/hostd-cargo.yml` runs tests,
+  clippy, `cargo fmt --check` and `cargo deny check` (`daemon/deny.toml`).
+- **Releases are static musl binaries**, cross-built with `cargo zigbuild`
+  (`--release --locked --target <arch>-unknown-linux-musl`) on a runner of
+  each architecture, so each is smoke-tested natively: `--version` must print
+  the released version, and `--help` must succeed. The binary needs no libc,
+  Node or any other runtime from the distribution.
 - **Caddy is built from pinned source.** No upstream Caddy release includes the
   `caddy-ratelimit` module the box edge needs, so the release workflow builds
   it with xcaddy on each platform's runner: the Caddy version and each module's
@@ -509,19 +523,21 @@ the control plane verifies a release with the same function a box does.
   an envelope (and, with `--artifacts-dir`, the hostd and Caddy files). It
   refuses to sign while an input is missing or a placeholder, or when the
   signature does not verify against a key pinned in
-  `src/trusted-release-keys.ts`.
+  `trusted-release-keys.json`.
 - `.github/workflows/hostd-release.yml` does all of it on a `hostd-v<version>`
-  tag or a manual dispatch: build and test, single executables and Caddy on x64
-  and arm64 runners with smoke tests, sign, verify, attest, publish the GitHub
-  Release `hostd-v<version>`. The committed `package.json` version stays
-  `0.0.0`; the workflow stamps the released version before building.
+  tag or a manual dispatch: test and build the daemon and Caddy on x64 and arm64
+  runners with smoke tests, sign, verify, attest, publish the GitHub Release
+  `hostd-v<version>`. The committed `daemon/Cargo.toml` and `package.json`
+  versions stay `0.0.0`; the workflow stamps the released version through
+  `LUNORA_HOSTD_VERSION`, and refuses to build with `LUNORA_HOSTD_TRUSTED_KEYS`
+  set.
 
 celld is pinned to `denoland/celld` v0.6.0, the release the celld CI lane tests.
 Keep the two in step.
 
 ### What is not real yet
 
-- **No release key is committed.** `src/trusted-release-keys.ts` and
+- **No release key is committed.** `trusted-release-keys.json` and
   `install/install.sh` hold a placeholder, which verification, signing and
   `install.sh` refuse. That is the only manual step left before a first
   release: a maintainer generates the key, commits its public half to both and
@@ -536,9 +552,9 @@ Keep the two in step.
    `pnpm --filter @lunora/hostd run build && node apps/hostd/scripts/release-public-key.mjs hostd-release.pem`.
    The key id is `ed25519-` plus the first 16 hex digits of SHA-256 over the
    raw public key, so it cannot drift from the key.
-3. Commit the two printed entries — to `HOSTD_TRUSTED_RELEASE_KEYS` in
-   `src/trusted-release-keys.ts` and to `trusted_key()` in `install/install.sh`
-   — and delete both placeholder entries.
+3. Commit the two printed entries — to `"keys"` in `trusted-release-keys.json`
+   (which the daemon and the control plane both read) and to `trusted_key()` in
+   `install/install.sh` — and delete both placeholder entries.
 4. Create the GitHub Environment `hostd-release` with a required reviewer, and
    store the **whole PEM file** as its secret `HOSTD_RELEASE_SIGNING_KEY`.
 5. Keep an offline backup of `hostd-release.pem`, then delete the local copy.

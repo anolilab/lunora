@@ -873,7 +873,7 @@ from the agent, which owns the edge.
 | A Lunora-operated multi-tenant celld fleet | Still gated by §7.8: celld has no hostile-multi-tenant boundary, and only the latest release is patched.                                                                           |
 | Wait for hosted celld from Deno            | Possible, but it is the same platform risk as Cloudflare. The `TargetDriver` seam keeps that option open at no cost.                                                               |
 
-**Cost.** A new deliverable that is not a Worker: `lunora-hostd`, a Node SEA
+**Cost.** A new deliverable that is not a Worker: `lunora-hostd`, a static Rust
 binary plus an install script. (Not "lunora-agent": `@lunora/agent` is the AI
 agent package.) It lives in `apps/hostd` under the framework's FSL rather than
 in this PolyForm tree, and it has no standalone mode: it only takes jobs from
