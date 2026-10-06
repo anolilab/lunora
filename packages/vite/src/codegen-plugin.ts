@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 
 import {
     CodegenDiagnosticError,
     createCodegenProject,
     findTsconfig,
     fingerprintSchemaSources,
+    isTestPath,
     PROJECT_CONFIG_FILENAMES,
     refreshCodegenProject,
     runCodegen,
@@ -731,9 +732,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
-                // Skip test files — they aren't part of the schema/functions
-                // surface and shouldn't trigger codegen.
-                if (normalized.includes(`${sep}__tests__${sep}`) || normalized.endsWith(".test.ts") || normalized.endsWith(".spec.ts")) {
+                // Skip test files — codegen does not read them as source (the
+                // same rule it walks with), so they shouldn't trigger it.
+                if (isTestPath(relative(absoluteSchemaDirectory, normalized).split(sep).join("/"))) {
                     return;
                 }
 

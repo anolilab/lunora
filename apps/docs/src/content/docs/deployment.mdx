@@ -83,8 +83,9 @@ Codegen reads every `.ts` file under `lunora/` as app source, except test code:
 `__mocks__/`, `__fixtures__/`, `__snapshots__/`, `test/` and `tests/` folders.
 Such files cannot register functions, raise advisories, or appear in the
 architecture view. `codegen.exclude` adds more globs, matched against the path
-relative to `lunora/`. Secret scanning is the one exception: it still reads
-test files, because a live vendor key committed to a test is still a leak.
+relative to `lunora/` (`!` negations are not supported). Secret scanning is
+the one exception: it still reads test and excluded files, because a live
+vendor key committed anywhere is still a leak.
 
 `lunora.config.mts`, `.js` and `.mjs` are read too, so a JS-authored project is
 not forced into TypeScript for one file. `.cts` / `.cjs` are deliberately not:

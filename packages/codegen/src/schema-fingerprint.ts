@@ -36,7 +36,8 @@ const fingerprintSchemaSources = (schemaDirectory: string): string => {
         return "unreadable";
     }
 
-    const paths = listLunoraSourceFiles(schemaDirectory);
+    // Skipped files included: secret discovery still scans them, so an edit there must rerun codegen.
+    const paths = listLunoraSourceFiles(schemaDirectory, { includeSkipped: true });
     const schemaPath = join(schemaDirectory, "schema.ts");
 
     if (existsSync(schemaPath)) {

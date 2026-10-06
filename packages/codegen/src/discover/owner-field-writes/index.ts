@@ -145,7 +145,7 @@ const resolvesToOwnerArgument = (value: TsNode, parameter: ParameterDeclaration,
 const writtenValues = (value: TsNode): TsNode[] => {
     const unwrapped = unwrapExpression(value) ?? value;
 
-    return Node.isConditionalExpression(unwrapped) ? [...writtenValues(unwrapped.getWhenTrue()), ...writtenValues(unwrapped.getWhenFalse())] : [value];
+    return Node.isConditionalExpression(unwrapped) ? [...writtenValues(unwrapped.getWhenTrue()), ...writtenValues(unwrapped.getWhenFalse())] : [unwrapped];
 };
 
 /** Identity columns in one object literal that are written from `args` and not from `ctx`. */

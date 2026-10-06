@@ -1517,6 +1517,12 @@ const isD1GlobalTable: (table: TableIR) => boolean;
 const isHyperdriveGlobalTable: (table: TableIR) => boolean;
 ```
 
+### `isTestPath` (const)
+
+```ts
+const isTestPath: (relativePath: string) => boolean;
+```
+
 ### `isTypedSchema` (const)
 
 ```ts
@@ -1533,7 +1539,7 @@ const lintSchema: (options: LintSchemaOptions) => Finding[];
 
 ```ts
 const listLunoraSourceFiles: (directory: string, options?: {
-    includeTests?: boolean;
+    includeSkipped?: boolean;
 }) => string[];
 ```
 
