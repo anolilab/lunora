@@ -553,12 +553,21 @@ interface ImportFanOutRequest {
      */
     batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
     headers?: Record<string, string>;
+
+    /**
+     * Replace mode: every shard holding any of `tables` (registry discovery, plus
+     * `defaultShardKey`) is sent its batch — an empty one when the import has no
+     * rows for it — so a shard the import does not mention is still emptied of
+     * those tables. Each shard applies its replace in one transaction.
+     */
+    replace?: { defaultShardKey: DefaultShardKey; tables: ReadonlyArray<string> };
 }
 
 interface ShardImportOutcome {
     error?: { message: string; timedOut: boolean };
     result?: {
         conflicts: number;
+        deleted?: Record<string, number>;
         errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
         inserted: Record<string, number>;
     };
@@ -568,6 +577,8 @@ interface ShardImportOutcome {
 interface ImportFanOutResult {
     /** Total conflicts (skipped `_id`s) across shards. */
     conflicts: number;
+    /** Replace mode: per-table summed counts of rows removed because the import did not carry them. */
+    deleted: Record<string, number>;
     /** Errors merged across all per-shard outcomes. */
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     failed: number;
@@ -1133,6 +1144,7 @@ const rollUpShardTraffic = (results: ReadonlyArray<ShardRpcOutcome>): ShardTraff
 const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResult => {
     const shards: ShardImportOutcome[] = [];
     const inserted: Record<string, number> = {};
+    const deleted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;
     let ok = 0;
@@ -1151,6 +1163,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
             | undefined
             | {
                   conflicts?: number;
+                  deleted?: Record<string, number>;
                   errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
                   inserted?: Record<string, number>;
               };
@@ -1158,6 +1171,10 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
 
         for (const [table, count] of Object.entries(shardInserted)) {
             inserted[table] = (inserted[table] ?? 0) + count;
+        }
+
+        for (const [table, count] of Object.entries(payload?.deleted ?? {})) {
+            deleted[table] = (deleted[table] ?? 0) + count;
         }
 
         const payloadErrors = payload?.errors;
@@ -1171,6 +1188,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         shards.push({
             result: {
                 conflicts: payload?.conflicts ?? 0,
+                ...(payload?.deleted === undefined ? {} : { deleted: payload.deleted }),
                 errors: payload?.errors ?? [],
                 inserted: shardInserted,
             },
@@ -1178,7 +1196,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         });
     }
 
-    return { conflicts, errors, failed, inserted, ok, shards };
+    return { conflicts, deleted, errors, failed, inserted, ok, shards };
 };
 
 interface ShardRpcOk {
@@ -1859,14 +1877,32 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // `runBoundedFanOut` because that helper sends the same args to
             // every shard. The structure mirrors it: bounded `Promise.all`
             // workers pulling jobs off a shared cursor.
-            const { batches } = request;
+            const { replace } = request;
+            let { batches } = request;
+
+            if (replace) {
+                // Discovered before any shard is written, so a registry that cannot
+                // list a `.shardBy()` table refuses the replace instead of leaving
+                // the shards it could not name holding their old rows.
+                const keys = withDefaultShard(await unionShardKeys(options.registry, replace.tables, replace.defaultShardKey), replace.defaultShardKey);
+                const named = new Set(batches.map((batch) => batch.shardKey));
+
+                batches = [
+                    ...batches,
+                    ...keys
+                        .filter((key) => !named.has(key))
+                        .map((shardKey) => {
+                            return { rows: [], shardKey };
+                        }),
+                ];
+            }
 
             const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) =>
                 callOneShard(
                     namespace,
                     batch.shardKey,
                     prepareShardRpc({
-                        args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
+                        args: { rows: [...batch.rows], startLine: batch.startLine ?? 1, ...(replace ? { replaceTables: [...replace.tables] } : {}) },
                         functionPath: "__lunora_admin__:importShard",
                         headers: request.headers,
                     }),

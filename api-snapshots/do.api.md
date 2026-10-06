@@ -184,6 +184,7 @@ interface RunShardFindRelatedArgs {
 
 ```ts
 interface RunShardImportArgs {
+    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }

@@ -8697,6 +8697,41 @@ abstract class ShardDO {
     }
 
     /**
+     * The `importShard` admin RPC. An append runs as it always has. A replace
+     * (`replaceTables`) is atomic on this shard: the overwrite-and-prune runs in
+     * one storage transaction, and any per-row error rolls the whole of it back —
+     * a replace that cannot write every row must not leave the shard half
+     * replaced. The refused result keeps its `errors` and reports nothing written.
+     */
+    private async runAdminImport(args: RunShardImportArgs): Promise<ImportShardResult> {
+        if (args.replaceTables === undefined) {
+            return this.runShardImport(args);
+        }
+
+        let refused: ImportShardResult | undefined;
+
+        try {
+            return await this.runInTransaction(async () => {
+                const result = await this.runShardImport(args);
+
+                if (result.errors.length > 0) {
+                    refused = result;
+
+                    throw new LunoraError("IMPORT_REFUSED", "replace import rolled back", { status: 400 });
+                }
+
+                return result;
+            });
+        } catch (error: unknown) {
+            if (refused === undefined) {
+                throw error;
+            }
+
+            return { conflicts: 0, deleted: {}, errors: refused.errors, inserted: {} };
+        }
+    }
+
+    /**
      * Serve the writer-routed BULK row ops — `deleteRows`, `clearTable`,
      * `patchRows`. One seam rather than three arms of {@link handleAdminRpc}'s
      * dispatch chain, because all three share the same shape: parse a predicate,
@@ -8875,7 +8910,7 @@ abstract class ShardDO {
 
             if (functionPath === ADMIN_FUNCTIONS.importShard) {
                 const parsed = parseImportShardArgs(args);
-                const result = await this.runShardImport({ rows: parsed.rows, startLine: parsed.startLine });
+                const result = await this.runAdminImport(parsed);
 
                 // The import inserts rows through the writer, which records
                 // touched tables; flush so live subscribers re-run.

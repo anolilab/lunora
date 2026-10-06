@@ -809,6 +809,7 @@ type GlobalExportFunction = (request: {
 
 ```ts
 type GlobalImportFunction = (request: {
+    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
@@ -817,6 +818,7 @@ type GlobalImportFunction = (request: {
     startLine?: number;
 }) => Promise<{
     conflicts: number;
+    deleted?: Record<string, number>;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1027,6 +1029,10 @@ interface ImportFanOutRequest {
         startLine?: number;
     }>;
     headers?: Record<string, string>;
+    replace?: {
+        defaultShardKey: DefaultShardKey;
+        tables: ReadonlyArray<string>;
+    };
 }
 ```
 
@@ -1035,6 +1041,7 @@ interface ImportFanOutRequest {
 ```ts
 interface ImportFanOutResult {
     conflicts: number;
+    deleted: Record<string, number>;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1961,6 +1968,7 @@ interface ShardImportOutcome {
     };
     result?: {
         conflicts: number;
+        deleted?: Record<string, number>;
         errors: ReadonlyArray<{
             code: string;
             line: number;

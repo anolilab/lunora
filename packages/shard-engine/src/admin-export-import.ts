@@ -50,6 +50,16 @@ interface ExportShardArgs {
 }
 
 interface ImportShardArgs {
+    /**
+     * Replace mode: these tables end up holding exactly `rows` — an existing row
+     * with the same `_id` is overwritten, and every row not in `rows` is deleted.
+     * Absent ⇒ append mode (an existing `_id` is a skipped conflict).
+     *
+     * The helper does not open a transaction; the caller runs a replace inside
+     * one and rolls it back when the result carries any error, so a refused
+     * replace leaves the shard as it was.
+     */
+    replaceTables?: ReadonlyArray<string>;
     /** Inbound NDJSON rows. Order is preserved on disk. */
     rows: ReadonlyArray<ExportRow>;
     /** Starting line number (1-based) for error attribution. Defaults to 1. */
@@ -57,10 +67,12 @@ interface ImportShardArgs {
 }
 
 interface ImportShardResult {
-    /** Skipped rows whose `_id` conflicted with an existing document in the same table. */
+    /** Skipped rows whose `_id` conflicted with an existing document in the same table. Always 0 in replace mode. */
     conflicts: number;
+    /** Replace mode only: rows removed per table because the import did not carry them. */
+    deleted?: Record<string, number>;
     errors: ImportError[];
-    /** Number of rows successfully inserted, per table. */
+    /** Number of rows successfully written, per table (in replace mode, overwritten rows included). */
     inserted: Record<string, number>;
 }
 
@@ -213,8 +225,9 @@ const validateImportRow = (schema: SchemaLike, table: string, record: Record<str
  * Re-insert every row in `args.rows` through the writer, validating each one
  * against the table's declared shape. Rows that fail validation are recorded
  * in the result's `errors` array; rows whose `_id` already exists in the SAME
- * table are counted in `conflicts` and skipped (the v1 mode is `append` — no
- * upsert), and one already held by a different table is an `ID_COLLISION` error.
+ * table are counted in `conflicts` and skipped (append mode) or overwritten
+ * (replace mode, see `ImportShardArgs.replaceTables`), and one already held by a
+ * different table is an `ID_COLLISION` error.
  * All `inserted` counts are bucketed per table.
  *
  * The writer is responsible for invoking this from within the appropriate
@@ -269,8 +282,74 @@ const locateExistingId = async (writer: DatabaseWriterLike, table: string, expli
 const stripDerivedFields = (document: Record<string, unknown>): Record<string, unknown> =>
     COMMIT_SEQ_FIELD in document ? Object.fromEntries(Object.entries(document).filter(([key]) => key !== COMMIT_SEQ_FIELD)) : document;
 
+/**
+ * Run one row's write, turning a throw into a per-row error.
+ *
+ * Routed through `toErrorBody` rather than the naked `error.message`/`.code`: a
+ * recognized `LunoraError` (e.g. the `NOT_UNIQUE` conflict `ctx-db.ts` throws on
+ * an `_id` collision) still surfaces its real code/message, but an
+ * internal-coded or unrecognized throw is redacted instead of leaking raw error
+ * text into the admin import response.
+ */
+const writeRow = async (table: string, line: number, write: () => Promise<void>): Promise<RowOutcome> => {
+    try {
+        await write();
+
+        return { kind: "inserted", table };
+    } catch (error: unknown) {
+        const { body } = toErrorBody(error, { fallbackCode: "INSERT_FAILED" });
+
+        return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
+    }
+};
+
+/**
+ * Replace mode's second half: hard-delete every row of `tables` whose `_id` the
+ * import did not carry. Runs after the writes, so a delete that cascades can
+ * only reach rows the snapshot does not hold either. Ids are collected before
+ * any delete, so the keyset walk never pages over rows it is removing.
+ */
+const pruneTables = async (writer: DatabaseWriterLike, tables: ReadonlyArray<string>, keep: ReadonlySet<string>): Promise<Record<string, number>> => {
+    const deleted: Record<string, number> = {};
+
+    for (const table of tables) {
+        const doomed: string[] = [];
+
+        // eslint-disable-next-line no-await-in-loop -- tables are pruned one at a time through the one writer
+        for await (const { doc } of exportShardTable(writer, table)) {
+            const id = doc["_id"];
+
+            if (typeof id === "string" && !keep.has(id)) {
+                doomed.push(id);
+            }
+        }
+
+        for (const id of doomed) {
+            // eslint-disable-next-line no-await-in-loop -- deletes run in order through the one writer (cascades included)
+            await writer.delete(id, table, { hard: true });
+        }
+
+        deleted[table] = doomed.length;
+    }
+
+    return deleted;
+};
+
+/**
+ * Why a replace import cannot take `row`, or `undefined`. A replace keeps rows by
+ * `_id`, so a row without one would be written and then pruned as "not in the
+ * import".
+ */
+const replaceRefusal = (scope: ReadonlySet<string>, row: ExportRow): string | undefined => {
+    if (!scope.has(row.table)) {
+        return `table "${row.table}" is not in this replace import's tables`;
+    }
+
+    return typeof row.doc["_id"] === "string" ? undefined : "a replace import row must carry its `_id`";
+};
+
 /** Validate, conflict-check and insert one inbound row, returning its outcome. */
-const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ExportRow, line: number): Promise<RowOutcome> => {
+const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row: ExportRow, line: number, overwrite: boolean): Promise<RowOutcome> => {
     const { table } = row;
     let { doc } = row;
 
@@ -291,13 +370,17 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row:
         return { error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" };
     }
 
-    // v1 mode is `append`: when `_id` collides in its own table, skip the row and
-    // count it. The same id under a DIFFERENT table is not a conflict to skip —
+    // When `_id` collides in its own table, append mode skips the row and counts
+    // it; replace mode overwrites it. The same id under a DIFFERENT table is not a conflict to skip —
     // it is unrepresentable (ids resolve per shard, not per table), so say so.
     const explicitId = typeof doc["_id"] === "string" ? doc["_id"] : undefined;
 
     if (explicitId !== undefined) {
         const owner = await locateExistingId(writer, table, explicitId);
+
+        if (owner === table && overwrite) {
+            return writeRow(table, line, () => writer.replace(explicitId, doc, table, { allowExplicitId: true }));
+        }
 
         if (owner === table) {
             return { kind: "conflict" };
@@ -308,24 +391,12 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row:
         }
     }
 
-    try {
-        // Trusted import path: this is a snapshot round-trip, so a `_id`
-        // carried on the row is intentional and must be preserved (the default
-        // mutation path drops client-chosen ids).
+    // Trusted import path: this is a snapshot round-trip, so a `_id` carried on
+    // the row is intentional and must be preserved (the default mutation path
+    // drops client-chosen ids).
+    return writeRow(table, line, async () => {
         await writer.insert(table, doc, { allowExplicitId: true });
-
-        return { kind: "inserted", table };
-    } catch (error: unknown) {
-        // Routed through `toErrorBody` rather than the naked `error.message`/`.code`
-        // this used to embed directly: a recognized `LunoraError` (e.g. the
-        // `NOT_UNIQUE` conflict `ctx-db.ts` throws on an `_id` collision) still
-        // surfaces its real code/message, but an internal-coded or unrecognized
-        // throw is redacted instead of leaking raw error text into the admin
-        // import response.
-        const { body } = toErrorBody(error, { fallbackCode: "INSERT_FAILED" });
-
-        return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
-    }
+    });
 };
 
 const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportShardArgs): Promise<ImportShardResult> => {
@@ -333,12 +404,26 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
     const inserted: Record<string, number> = {};
     let conflicts = 0;
     let line = (args.startLine ?? 1) - 1;
+    // Not `selectExportTables`: it reads an empty list as "every table".
+    const replaceTables = args.replaceTables?.filter((table) => {
+        const definition = schema.tables[table];
+
+        return definition !== undefined && definition.shardMode?.kind !== "global";
+    });
+    const scope = new Set(replaceTables);
 
     for (const row of args.rows) {
         line += 1;
 
+        const refusal = replaceTables === undefined ? undefined : replaceRefusal(scope, row);
+
+        if (refusal !== undefined) {
+            errors.push({ code: "BAD_ROW", line, message: refusal, table: row.table });
+            continue;
+        }
+
         // eslint-disable-next-line no-await-in-loop -- rows are inserted in stream order through one SQLite handle; line-number attribution depends on the sequence
-        const outcome = await importOneRow(writer, schema, row, line);
+        const outcome = await importOneRow(writer, schema, row, line, replaceTables !== undefined);
 
         if (outcome.kind === "error") {
             errors.push(outcome.error);
@@ -349,7 +434,14 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
         }
     }
 
-    return { conflicts, errors, inserted };
+    // A failed replace is rolled back by the caller, so there is no point pruning.
+    if (replaceTables === undefined || errors.length > 0) {
+        return { conflicts, errors, inserted };
+    }
+
+    const keep = new Set(args.rows.flatMap(({ doc }) => (typeof doc["_id"] === "string" ? [doc["_id"]] : [])));
+
+    return { conflicts, deleted: await pruneTables(writer, replaceTables, keep), errors, inserted };
 };
 
 /** Arguments accepted by the `__lunora_admin__:exportShard` admin RPC. */
@@ -360,6 +452,7 @@ interface ExportShardAdminArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface ImportShardAdminArgs {
+    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -399,8 +492,11 @@ const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminAr
     }
 
     const startLine = typeof args["startLine"] === "number" ? args["startLine"] : undefined;
+    const replaceTables = Array.isArray(args["replaceTables"])
+        ? (args["replaceTables"] as unknown[]).filter((entry): entry is string => typeof entry === "string")
+        : undefined;
 
-    return { rows, startLine };
+    return { replaceTables, rows, startLine };
 };
 
 export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };

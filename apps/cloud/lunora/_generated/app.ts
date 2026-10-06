@@ -713,7 +713,7 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
  */
 const buildGlobalImporter =
     (database: D1DatabaseLike, cdc: boolean) =>
-    (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
+    (request: { replaceTables?: ReadonlyArray<string>; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
         // Same reason the PITR applier carries it: a bulk import that skips the
         // changelog restores rows no downstream consumer is ever told about.
@@ -721,6 +721,7 @@ const buildGlobalImporter =
 
         return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
             exec,
+            replaceTables: request.replaceTables,
             rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
             startLine: request.startLine,
         });

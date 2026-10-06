@@ -1206,6 +1206,7 @@ interface ImportError {
 
 ```ts
 interface ImportShardAdminArgs {
+    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -1215,6 +1216,7 @@ interface ImportShardAdminArgs {
 
 ```ts
 interface ImportShardArgs {
+    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -1225,6 +1227,7 @@ interface ImportShardArgs {
 ```ts
 interface ImportShardResult {
     conflicts: number;
+    deleted?: Record<string, number>;
     errors: ImportError[];
     inserted: Record<string, number>;
 }

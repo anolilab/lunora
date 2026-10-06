@@ -743,8 +743,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             // `importShardRows` inserts with `allowExplicitId`, so a source
             // database's `_id`s carry across verbatim and every foreign key
-            // referencing them stays valid without a second remapping pass.
-            return importShardRows(writer, schema as unknown as SchemaLike, { rows: args.rows, startLine: args.startLine });
+            // referencing them stays valid without a second remapping pass. A
+            // replace (`replaceTables`) arrives inside the base class's transaction.
+            return importShardRows(writer, schema as unknown as SchemaLike, { replaceTables: args.replaceTables, rows: args.rows, startLine: args.startLine });
         }
 
         protected override async runShardRankBefore(args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {

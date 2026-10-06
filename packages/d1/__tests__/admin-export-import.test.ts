@@ -586,4 +586,70 @@ describe("d1 admin export/import globals", () => {
             expect(result.errors[0]).toMatchObject({ code: "INSERT_FAILED", message: "Internal error" });
         });
     });
+
+    describe("importGlobalRows — replace mode", () => {
+        const values = async (): Promise<Record<string, unknown>> => {
+            const rows = await harness.exec.all(`SELECT "id", "value" FROM "settings" ORDER BY "id"`, []);
+
+            return Object.fromEntries(rows.map((row) => [row["id"], row["value"]]));
+        };
+
+        beforeEach(async () => {
+            await writer.insert("settings", { _id: "kept", name: "theme", value: "edited since" }, { allowExplicitId: true });
+            await writer.insert("settings", { _id: "created-since", name: "lang", value: "new" }, { allowExplicitId: true });
+        });
+
+        it("overwrites existing rows and deletes the rows the import does not carry", async () => {
+            expect.assertions(2);
+
+            const result = await importGlobalRows(writer, schema, {
+                exec: harness.exec,
+                replaceTables: ["settings"],
+                rows: [
+                    { doc: { _creationTime: 1, _id: "kept", name: "theme", value: "as snapshotted" }, table: "settings" },
+                    { doc: { _creationTime: 2, _id: "deleted-since", name: "tz", value: "back" }, table: "settings" },
+                ],
+            });
+
+            expect(result).toStrictEqual({ conflicts: 0, deleted: { settings: 1 }, errors: [], inserted: { settings: 2 } });
+            await expect(values()).resolves.toStrictEqual({ "deleted-since": "back", kept: "as snapshotted" });
+        });
+
+        it("writes nothing when any row is refused", async () => {
+            expect.assertions(2);
+
+            const result = await importGlobalRows(writer, schema, {
+                exec: harness.exec,
+                replaceTables: ["settings"],
+                rows: [
+                    { doc: { _id: "kept", name: "theme", value: "as snapshotted" }, table: "settings" },
+                    { doc: { _id: "bad", name: 7, value: "x" }, table: "settings" },
+                ],
+            });
+
+            expect(result.errors).toMatchObject([{ code: "VALIDATION_ERROR", line: 2 }]);
+            await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "edited since" });
+        });
+
+        it("deletes nothing when a write fails part-way, leaving a superset rather than a loss", async () => {
+            expect.assertions(2);
+
+            const failingWriter: DatabaseWriterLike = {
+                ...writer,
+                insert: () => Promise.reject(new Error("driver error")),
+            };
+
+            const result = await importGlobalRows(failingWriter, schema, {
+                exec: harness.exec,
+                replaceTables: ["settings"],
+                rows: [
+                    { doc: { _id: "kept", name: "theme", value: "as snapshotted" }, table: "settings" },
+                    { doc: { _id: "deleted-since", name: "tz", value: "back" }, table: "settings" },
+                ],
+            });
+
+            expect(result.errors).toMatchObject([{ code: "INSERT_FAILED", line: 2 }]);
+            await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "as snapshotted" });
+        });
+    });
 });

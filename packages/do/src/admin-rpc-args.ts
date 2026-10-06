@@ -89,6 +89,8 @@ interface RunShardExportArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface RunShardImportArgs {
+    /** Replace mode: these tables end up holding exactly `rows` (see `@lunora/shard-engine`'s `ImportShardArgs`). */
+    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }

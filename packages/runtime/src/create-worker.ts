@@ -268,8 +268,15 @@ type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, 
  * `startLine` field is the line of the FIRST global row, retained only as a
  * backward-compatible fallback for importers that haven't adopted per-row lines.
  */
-type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => Promise<{
+type GlobalImportFunction = (request: {
+    /** Replace mode: these `.global()` tables end up holding exactly `rows` (see `@lunora/d1`'s `importGlobalRows`). */
+    replaceTables?: ReadonlyArray<string>;
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+    startLine?: number;
+}) => Promise<{
     conflicts: number;
+    /** Replace mode only: rows removed per table because the import did not carry them. */
+    deleted?: Record<string, number>;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
 }>;
@@ -3812,7 +3819,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
-        streamingImport: (request, headers) => streamingImport(request, options, queryCoordinator, headers, shardDO),
+        streamingImport: (request, headers, replaceTables) => streamingImport(request, options, queryCoordinator, headers, shardDO, replaceTables),
         syncGlobals: options.syncGlobals,
     });
 

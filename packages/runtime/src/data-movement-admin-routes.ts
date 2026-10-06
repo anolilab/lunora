@@ -104,12 +104,14 @@ interface DataMovementAdminRouteDeps {
 
     /** The shard DO namespace fanned across. */
     shardDO: ShardNamespaceLike;
-    /** Stream-parse + fan-out an NDJSON import body (bound to the worker options). */
+    /** Stream-parse + fan-out an NDJSON import body (bound to the worker options); `replaceTables` selects replace mode. */
     streamingImport: (
         request: Request,
         headers: Record<string, string>,
+        replaceTables?: ReadonlyArray<string>,
     ) => Promise<{
         conflicts: number;
+        deleted?: Record<string, number>;
         errors: ReadonlyArray<ImportRowError>;
         /** Shards the fan-out could not write to at all — a non-empty array means the import was PARTIAL. */
         failed: ReadonlyArray<ImportShardFailure>;
@@ -367,6 +369,46 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         return Response.json({ applied: shardResult.applied + globalApplied, failed: shardResult.failed, ok: shardResult.ok }, { status: 200 });
     };
 
+    /**
+     * Which tables a replace import replaces, or `undefined` for an append.
+     *
+     * `?mode=append` (the default) inserts and skips an `_id` that already exists.
+     * `?mode=replace` makes the import the exact contents of its tables: `?tables=`
+     * (comma-separated) names them, and without it every table in the schema is
+     * in scope — so a table the snapshot holds no rows for is emptied too.
+     */
+    const parseReplaceTables = (request: Request): ReadonlyArray<string> | undefined => {
+        const { searchParams } = new URL(request.url);
+        const mode = searchParams.get("mode") ?? "append";
+
+        if (mode === "append") {
+            return undefined;
+        }
+
+        if (mode !== "replace") {
+            throw new LunoraError("Import `mode` must be `append` or `replace`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const known = knownTables();
+        const named = searchParams
+            .get("tables")
+            ?.split(",")
+            .filter((table) => table.length > 0);
+        const tables = named === undefined || named.length === 0 ? known : named;
+
+        if (tables.length === 0) {
+            throw new LunoraError("A replace import needs `tables`: this worker cannot list its schema's tables", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const unknown = known.length > 0 ? tables.filter((table) => !known.includes(table)) : [];
+
+        if (unknown.length > 0) {
+            throw new LunoraError(`Replace import names unknown table(s): ${unknown.join(", ")}`, { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return tables;
+    };
+
     const handleImport = async (request: Request, env: unknown): Promise<Response> => {
         const wrongMethod = methodGuard(request, ["POST"]);
 
@@ -376,9 +418,10 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         assertAdmin(request);
 
+        const replaceTables = parseReplaceTables(request);
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        const result = await streamingImport(request, forwardedHeaders);
+        const result = await streamingImport(request, forwardedHeaders, replaceTables);
 
         // A shard the fan-out never reached leaves an unknown slice of the batch
         // unwritten, and its rows contribute to neither `inserted` nor `errors`.
