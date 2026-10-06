@@ -241,6 +241,8 @@ export interface Doc_domains {
     certificateStatus?: string;
     customHostnameId?: string;
     createdAt: number;
+    edgeBlockedAt?: number;
+    edgeBlockError?: string;
     hostname: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
@@ -1098,6 +1100,8 @@ export interface Insert_domains {
     certificateStatus?: string;
     customHostnameId?: string;
     createdAt: number;
+    edgeBlockedAt?: number;
+    edgeBlockError?: string;
     hostname: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;

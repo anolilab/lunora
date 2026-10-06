@@ -28,7 +28,9 @@ const PENDING = new Set(["initializing", "pending_deployment", "pending_issuance
  * unverified domain (no certificate is ever requested before it verifies), or
  * one whose target terminates TLS itself and records none (a box).
  */
-export const certificateBadge = (domain: Pick<DomainView, "certificateError" | "certificateStatus" | "verifiedAt">): CertificateBadge | null => {
+export const certificateBadge = (
+    domain: Pick<DomainView, "certificateError" | "certificateStatus" | "edgeBlockError" | "verifiedAt">,
+): CertificateBadge | null => {
     const status = domain.certificateStatus ?? undefined;
 
     if (domain.verifiedAt == null || status === undefined) {
@@ -45,6 +47,15 @@ export const certificateBadge = (domain: Pick<DomainView, "certificateError" | "
         return {
             detail: detail ?? "Cloudflare is validating and issuing the certificate; this takes a few minutes, sometimes longer. The page updates on its own.",
             label: "certificate pending",
+            tone: "warning",
+        };
+    }
+
+    // Edge-block suspension (plan 365 W8): the custom hostname is removed until the organization recovers.
+    if (status === "suspended") {
+        return {
+            detail: domain.edgeBlockError == null ? detail : `Restoring it failed and is retried hourly: ${domain.edgeBlockError}`,
+            label: "blocked: suspended",
             tone: "warning",
         };
     }

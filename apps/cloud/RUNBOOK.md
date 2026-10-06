@@ -181,6 +181,41 @@ Unset, verified domains record that no certificate could be requested
 "certificate pending", then "certificate active" within the hour, and
 `https://<that hostname>` serves the project.
 
+## 6b. Edge-block suspension (optional)
+
+A suspended organization (spend cap, dunning, overage, support) is refused by
+the dispatcher with a 503, but that 503 is itself a billed Workers-for-Platforms
+request. The hourly edge-block sweep moves the stop in front of the Worker
+(`src/targets/cloudflare-wfp/edge-block.ts`):
+
+- **With the SaaS zone (step 6a), nothing to set up.** A suspended org's
+  custom domains have their custom hostname deleted and recreated when it
+  recovers. Cloudflare has no API to deactivate a custom hostname, so recovery
+  re-issues the certificate (HTTP DV, a few minutes while the CNAME is in
+  place). Platform hostnames (`{alias}.lunora.app`) keep the 503.
+- **Enterprise zone: the suspended-hostnames list.** This covers platform
+  hostnames too, and certificates stay as they are. Once per cell:
+    1. Account → Manage Account → Configurations → Lists: create a list of type
+       **Hostname**, e.g. `lunora_suspended`. Nothing else may write to it: the
+       sweep removes every item it did not put there.
+    2. On the zone of `LUNORA_APP_DOMAIN`, add a WAF custom rule
+       `http.host in $lunora_suspended` → **Block**, with a custom JSON response
+       (status 503, e.g. `{"error":"this deployment is suspended — see your billing page"}`).
+    3. Worker var `LUNORA_SUSPENDED_HOSTS_LIST_ID` = the list's id, and give the
+       cell token **Account → Account Filter Lists:Edit**.
+
+Every block and restore writes an audit entry on the organization
+(`domain.edge_block` / `domain.edge_unblock`, or `organization.edge_block` /
+`organization.edge_unblock` for the list). A failed step never changes the
+suspension. It is retried every hour and logged as `[edge-block]` in Workers
+Logs. A failed custom-hostname step is also recorded on the domain row
+(`edgeBlockError`), which the Domains tab shows.
+
+**Check:** suspend a test org with a verified custom domain (support:
+`suspendedAt` set). Within the hour `https://<that domain>` fails at the edge
+and the domain reads "blocked: suspended". Lift the suspension and, within the
+hour, the domain serves again with a fresh certificate.
+
 ## 7. `hostd` release signing key
 
 Exact steps in [`../hostd/README.md`](../hostd/README.md) § Releases & signing:

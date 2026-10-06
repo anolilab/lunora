@@ -525,9 +525,23 @@ cannot find answers `"suspended"`, and the dispatcher's plan cache keeps
 refusing a tenant last seen suspended when a refresh fails, instead of failing
 open to the free tier.
 
+**Edge block.** A suspension is enforced in front of the Worker as well, so an
+attack on a suspended tenant stops costing a billed request each time. The
+hourly sweep calls `TargetFleet.edgeBlock`, which only `cloudflare-wfp` has.
+With an Enterprise hostname list (`LUNORA_SUSPENDED_HOSTS_LIST_ID`) it lists the
+org's platform hostnames and custom domains for a single WAF Block rule.
+Without one, it deletes the org's custom hostnames and recreates them on
+recovery. Cloudflare cannot deactivate a custom hostname in place, so recovery
+re-issues the certificate. The dispatcher's 503 stays as the fallback. Setup
+and failure handling are in [RUNBOOK.md § 6b](RUNBOOK.md#6b-edge-block-suspension-optional).
+
 On `celld-vps` (customer boxes) none of this applies. Box-reported usage is
 display-only (plan 458 D12), so it never moves the cap, and boxes route their
-own traffic without going through the dispatcher.
+own traffic without going through the dispatcher. The box fleet has no
+`edgeBlock`, because a box's hostnames never cross the platform's zone. A
+suspended org's box tenants keep serving: the box routing table does not read
+the suspension today. `cloudflare-workers` tenants run on the customer's own
+account and are not edge-blocked either.
 
 ### Tenant secrets (`lunora/secrets.ts`, `src/secrets/crypto.ts`, §7)
 

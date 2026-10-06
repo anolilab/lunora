@@ -256,6 +256,8 @@ export const domains = sqliteTable("domains", {
     certificateStatus: text("certificateStatus"),
     customHostnameId: text("customHostnameId"),
     createdAt: real("createdAt").notNull(),
+    edgeBlockedAt: real("edgeBlockedAt"),
+    edgeBlockError: text("edgeBlockError"),
     hostname: text("hostname").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),

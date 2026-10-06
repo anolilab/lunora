@@ -405,6 +405,41 @@ describe("the domain routes", () => {
         });
     });
 
+    /** Re-verifying an edge-blocked domain must not put a suspended org back on the edge (plan 365 W8). */
+    it("issues no certificate for a domain the suspension edge-blocked", async () => {
+        const { api } = await import("../lunora/_generated/api.js");
+        const { context, mutations } = contextAnswering(
+            new Map<unknown, unknown>([
+                [api.domains.get, { edgeBlockedAt: 9, hostname: "app.example.com", projectId: "proj_1", txtToken: "tok" }],
+                [internal.projects.placement, placement],
+            ]),
+        );
+        const cloudflare: string[] = [];
+
+        vi.stubGlobal("fetch", (input: FetchInput) => {
+            const url = input instanceof Request ? input.url : input.toString();
+
+            if (url.startsWith("https://cloudflare-dns.com/")) {
+                const answer = url.includes("type=TXT") ? [{ data: '"tok"', type: 16 }] : [{ data: "lunora.test.", type: 5 }];
+
+                return Promise.resolve(Response.json({ Answer: answer }));
+            }
+
+            cloudflare.push(url);
+
+            return Promise.resolve(Response.json({ result: [], success: true }));
+        });
+
+        const response = await handleDomainVerifyRoute(
+            new Request("https://cloud.test/v1/domains/verify", { body: JSON.stringify({ id: "dom_1", organizationId: "org_1" }), method: "POST" }),
+            environment(context),
+        );
+
+        await expect(readJson(response)).resolves.toMatchObject({ verified: true });
+        expect(cloudflare).toStrictEqual([]);
+        expect(mutations.map(({ reference }) => reference)).toStrictEqual([internal.domains.markVerified]);
+    });
+
     it("deletes the domain's custom hostname before the domain, and keeps the domain when that fails", async () => {
         const removal = new Map<unknown, unknown>([
             [
@@ -726,6 +761,17 @@ describe(certificateBadge, () => {
             detail: "CAA forbids it",
             label: "certificate error",
             tone: "danger",
+        });
+    });
+
+    it("reads an edge-blocked domain, and a restore that keeps failing", () => {
+        expect(certificateBadge({ certificateError: "suspended", certificateStatus: "suspended", verifiedAt: 1 })).toStrictEqual({
+            detail: "suspended",
+            label: "blocked: suspended",
+            tone: "warning",
+        });
+        expect(certificateBadge({ certificateStatus: "suspended", edgeBlockError: "HTTP 500", verifiedAt: 1 })).toMatchObject({
+            detail: "Restoring it failed and is retried hourly: HTTP 500",
         });
     });
 });

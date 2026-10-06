@@ -30,6 +30,8 @@ interface DomainRow {
     certificateStatus?: null | string;
     createdAt: number;
     customHostnameId?: null | string;
+    edgeBlockedAt?: null | number;
+    edgeBlockError?: null | string;
     hostname: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;

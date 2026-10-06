@@ -12,6 +12,9 @@
  */
 import { tenantSender } from "../../backup/tenant-transport";
 import { createHttpCloudflareApi } from "../../cloudflare/api";
+import type { HostList } from "../../cloudflare/host-list";
+import { createHttpHostList } from "../../cloudflare/host-list";
+import type { ControlPlaneStore } from "../../d1-store";
 import { BINDING_SUPPORT } from "../../provision-contract";
 import type { ProgressLine, TargetDriver, TargetFleet, UsageRow } from "../driver";
 import type { ProvisionBox } from "../provision-box/client";
@@ -22,6 +25,7 @@ import type { SaasZone } from "./certificates";
 import { issueCertificate, refreshCertificate, removeCertificate } from "./certificates";
 import type { DispatchNamespaceLike } from "./dispatch";
 import { dispatchTenantSender } from "./dispatch";
+import { reconcileEdgeBlocks } from "./edge-block";
 
 /** The tail Worker every tenant ships its console events to (`tail.wrangler.jsonc`). */
 export const TAIL_CONSUMER = "lunora-log-tail";
@@ -92,22 +96,37 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
 };
 
 export interface CloudflareWfpFleetPorts {
+    /** The platform apex (`LUNORA_APP_DOMAIN`), for the platform hostnames the edge block lists. */
+    appDomain?: string;
     /** This control plane's cell (`LUNORA_CELL`): the one usage scope, since its Analytics Engine dataset counts every tenant here. */
     cell: string;
     /** The bound dispatch namespace (`DISPATCHER`); absent → no in-network fan-out, and backups go over the public URL. */
     dispatcher?: DispatchNamespaceLike;
     /** The SaaS zone this cell issues custom-domain certificates in; absent → nothing to refresh or release. */
     saasZone?: SaasZone;
+    /** The suspended-hostnames WAF list (`LUNORA_SUSPENDED_HOSTS_LIST_ID`, Enterprise-only); absent → custom-hostname removal only. */
+    suspendedHostList?: HostList;
     /** The Analytics-Engine request-count reader; absent without account credentials. */
     usage?: AnalyticsUsageReader;
 }
 
 export const createCloudflareWfpFleet = (ports: CloudflareWfpFleetPorts): TargetFleet => {
-    const { cell, dispatcher, saasZone, usage } = ports;
+    const { appDomain, cell, dispatcher, saasZone, suspendedHostList, usage } = ports;
     const dispatch = dispatcher ? (tenant: { adminToken: string; resourceRef: string }) => dispatchTenantSender(dispatcher, tenant) : undefined;
 
     return {
         ...(dispatch ? { dispatch } : {}),
+        ...(saasZone === undefined && suspendedHostList === undefined
+            ? {}
+            : {
+                  edgeBlock: async (database: ControlPlaneStore, options: { log: (line: string) => void; now: number }) =>
+                      reconcileEdgeBlocks(database, {
+                          appDomain: appDomain ?? "lunora.app",
+                          ...options,
+                          ...(saasZone === undefined ? {} : { zone: saasZone }),
+                          ...(suspendedHostList === undefined ? {} : { hostList: suspendedHostList }),
+                      }),
+              }),
         id: "cloudflare-wfp",
         // The dispatch namespace when bound — the call never leaves Cloudflare —
         // else the deployment's public URL (local dev, where namespaces are not emulated).
@@ -165,6 +184,13 @@ export type CloudflareWfpEnvironment = {
      * Unset → verified domains record that no certificate could be requested.
      */
     LUNORA_SAAS_ZONE_ID?: string;
+
+    /**
+     * An account custom list of kind `hostname` that one WAF custom rule blocks
+     * (`http.host in $&lt;list>`; Enterprise-only) — the edge block for suspended
+     * organizations (plan 365 W8). Unset → custom-hostname removal only.
+     */
+    LUNORA_SUSPENDED_HOSTS_LIST_ID?: string;
     /** AE dataset the dispatcher writes tenant request usage to. Defaults to `lunora_tenant_usage`. */
     USAGE_ANALYTICS_DATASET?: string;
 };
@@ -211,8 +237,12 @@ export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment)
     const apiToken = environment.CLOUDFLARE_API_TOKEN;
     const saasZone = saasZoneOf(environment);
 
+    const listId = environment.LUNORA_SUSPENDED_HOSTS_LIST_ID;
+
     return createCloudflareWfpFleet({
+        appDomain: environment.LUNORA_APP_DOMAIN ?? "lunora.app",
         cell: environment.LUNORA_CELL ?? "default",
+        ...(accountId && apiToken && listId ? { suspendedHostList: createHttpHostList({ accountId, apiToken, listId }) } : {}),
         ...(environment.DISPATCHER ? { dispatcher: environment.DISPATCHER } : {}),
         ...(saasZone === undefined ? {} : { saasZone }),
         ...(accountId && apiToken

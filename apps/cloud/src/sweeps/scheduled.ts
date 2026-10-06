@@ -442,6 +442,35 @@ const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Edge-block suspension (plan 365 W8): block suspended organizations' hostnames
+ * in front of the Worker, and restore recovered ones, through every fleet that
+ * can (`cloudflare-wfp` with the SaaS zone or the suspended-hostnames list).
+ * Hourly, after the suspension crons on the same tick; the dispatcher's 503
+ * holds until the block lands.
+ */
+const sweepEdgeBlocks = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const log = (line: string): void => {
+        // eslint-disable-next-line no-console -- a failed block or restore is only visible here and on the domain row
+        console.warn(line);
+    };
+
+    for (const fleet of registeredFleets(env)) {
+        if (fleet.edgeBlock !== undefined) {
+            // eslint-disable-next-line no-await-in-loop -- one fleet at a time keeps the API budget flat
+            const result = await fleet.edgeBlock(database, { log, now: Date.now() });
+
+            // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+            console.log("[edge-block]", fleet.id, JSON.stringify(result));
+        }
+    }
+};
+
+/**
  * Sample the build and deploy queues into the platform's own metrics (GAPS.md
  * E1). Skipped — no D1 read at all — without the `PLATFORM_METRICS` binding.
  */
@@ -495,6 +524,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     { cron: EVERY_HOUR, run: sweepOutdatedBoxes },
     // Custom-domain certificates still validating or deploying (GAPS.md B1).
     { cron: EVERY_HOUR, run: sweepCertificates },
+    // Suspended organizations blocked at the edge, recovered ones restored (plan 365 W8).
+    { cron: EVERY_HOUR, run: sweepEdgeBlocks },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —
