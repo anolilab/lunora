@@ -1,3 +1,14 @@
+## @lunora/studio [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.269...@lunora/studio@1.0.0-alpha.270) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.194
+* **@lunora/client:** upgraded to 1.0.0-alpha.186
+* **@lunora/react:** upgraded to 1.0.0-alpha.198
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.182
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.115
+
 ## @lunora/studio [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.268...@lunora/studio@1.0.0-alpha.269) (2026-10-06)
 
 ### Bug Fixes
