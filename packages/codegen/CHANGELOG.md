@@ -1,3 +1,23 @@
+## @lunora/codegen [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.270...@lunora/codegen@1.0.0-alpha.271) (2026-10-06)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** an app whose only import of a capability package names
+allowlisted helpers no longer gets ctx.<prop> emitted or the binding
+inferred by @lunora/config; import the factory or read ctx.<prop> to keep it.
+
+Plan 447 ships; remove it and its plans/README.md row.
+
+
+Claude-Session: https://claude.ai/code/session_019eqAUAYWECEXnGUUr8A1Fr
+
+Co-authored-by: Daniel Bannert <daniel.bannert@corify.de>
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen:** don't gate binding-free capability helpers ([#1012](https://github.com/anolilab/lunora/issues/1012)) ([79dfe5b](https://github.com/anolilab/lunora/commit/79dfe5b86cf7f647d60e8f0ea7ef32a47e0b9df3))
+
 ## @lunora/codegen [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.269...@lunora/codegen@1.0.0-alpha.270) (2026-10-06)
 
 ### Bug Fixes
