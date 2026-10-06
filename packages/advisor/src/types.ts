@@ -543,7 +543,8 @@ export interface LintContext {
 
     /**
      * Queues declared via `defineQueue` exports in `lunora/queues.ts` — the
-     * declaration-side input for the `queue_*` lints (`queue_without_dlq`).
+     * declaration-side input for `queue_without_dlq` and, through each
+     * subscription's `topic`, `topic_too_many_subscriptions`.
      * Supplied by the codegen feeder; absent for runtime callers, where the
      * queue lints find nothing.
      */

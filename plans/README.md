@@ -21,7 +21,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 | Plan                                         | Title                                                  | Remaining                                                                   |
 | -------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
-| [455](./455-queue-topics-fanout.md)          | Pub/Sub topics over Cloudflare Queues                  | core shipped (#916, #917); the >10-subscription lint and the publish bench  |
 | [456](./456-modules-catalog-architecture.md) | Modules catalog, call graph, architecture diagram      | core shipped (#917); see the plan for what remains                          |
 | [457](./457-service-bindings.md)             | Typed service bindings to sibling Workers              | phases 0–3 shipped (#918); neore-v2 migration                               |
 | [459](./459-ai-search-ga.md)                 | Cloudflare AI Search as a pass-through `ctx.aiSearch`  | A–D shipped (#925); live smoke on a real account                            |
