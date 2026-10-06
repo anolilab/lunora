@@ -136,6 +136,18 @@ const resolvesToOwnerArgument = (value: TsNode, parameter: ParameterDeclaration,
     return hops > 0 && initializer !== undefined && resolvesToOwnerArgument(initializer, parameter, ownerField, hops - 1);
 };
 
+/**
+ * The values `value` can actually write: each branch of a (nested) ternary,
+ * else `value` itself. The condition only picks a branch — `args.share ?
+ * ctx.user.orgId : undefined` can write the caller's own org or nothing, never
+ * one the caller names — so taint is judged per branch, not on the test.
+ */
+const writtenValues = (value: TsNode): TsNode[] => {
+    const unwrapped = unwrapExpression(value) ?? value;
+
+    return Node.isConditionalExpression(unwrapped) ? [...writtenValues(unwrapped.getWhenTrue()), ...writtenValues(unwrapped.getWhenFalse())] : [value];
+};
+
 /** Identity columns in one object literal that are written from `args` and not from `ctx`. */
 const identityWritesInObjectLiteral = (
     objectLiteral: ObjectLiteralExpression,
@@ -168,7 +180,9 @@ const identityWritesInObjectLiteral = (
         // side is. Outside a mutator impl the root is resolved by
         // `isContextRooted`; inside one, by the impl's own taint model
         // (`ImplTaint`).
-        const isTainted = taint === undefined ? isArgumentDerived(value) && !isContextRooted(value) : taint.isTaintedValue(value, true);
+        const isTainted = writtenValues(value).some((written) =>
+            taint === undefined ? isArgumentDerived(written) && !isContextRooted(written) : taint.isTaintedValue(written, true),
+        );
 
         if (isTainted) {
             // Recorded either way — the lint decides what to do with it. Dropping it

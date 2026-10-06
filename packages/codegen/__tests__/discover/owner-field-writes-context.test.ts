@@ -244,4 +244,30 @@ export const create = ${kind}({
 
         expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toBeUndefined();
     });
+
+    // #991: the condition only picks WHICH server-trusted value (or nothing) is
+    // written, so a caller cannot name another tenant. A branch that is itself
+    // caller-chosen is still an IDOR.
+    describe("judges a ternary by its branch values, not its condition", () => {
+        it("does not report an owner picked by an args condition between ctx values", () => {
+            expect.assertions(1);
+
+            const source = `export const create = mutation({ handler: async ({ args, ctx }) => {
+    const organizationId = ctx.user.activeOrganization?.id;
+    await ctx.db.insert("posts", { organizationId: args.share ? organizationId : undefined }); // @write
+} });`;
+
+            expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toBeUndefined();
+        });
+
+        it("reports a ternary with a caller-chosen branch", () => {
+            expect.assertions(2);
+
+            const source = `export const create = mutation({ handler: async ({ args, ctx }) => {
+    await ctx.db.insert("posts", { organizationId: args.share ? args.organizationId : ctx.user.activeOrganization?.id }); // @write
+} });`;
+
+            expectReported(rowAt(discover(source, "posts.ts"), markerLine(source, "write")));
+        });
+    });
 });
