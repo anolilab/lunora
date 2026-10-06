@@ -38,6 +38,7 @@ interface BuildRow {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    pathFiltered?: boolean;
     skipReason?: string;
     status: BuildStatus;
     trigger?: BuildTrigger;
@@ -70,7 +71,8 @@ type BuildTrigger = "pull_request" | "push";
 const pushChangesValidator = v.union(v.object({ files: v.array(v.string()) }), v.object({ unknown: v.string() }));
 
 /** `pathFiltered`: the skip is the path filter's — the commit has no other status, so the webhook posts one. */
-type RecordPushResult = null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string } | { duplicate: true };
+type RecordPushResult =
+    null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string } | { duplicate: true; pathFiltered?: true; skipped?: string };
 
 /**
  * How long a webhook delivery id is remembered. GitHub lets a delivery be
@@ -276,7 +278,13 @@ export const recordPush = internalMutation
             const { now } = context;
 
             if (deliveryId !== undefined && (await isRedelivery(context, deliveryId))) {
-                return { duplicate: true };
+                // The first delivery's skip status may never have reached GitHub (its post is
+                // best-effort): hand the recorded path-filter skip back so the webhook can post
+                // it again. Posting the same success status twice is harmless.
+                const { page: recorded } = await context.db.builds.findMany({ where: { commitSha, projectId: project._id } }); // secret-scanner:allow -- domain field name
+                const skip = recorded.find((row) => row.status === "skipped" && row.pathFiltered === true && (row.trigger ?? "push") === trigger);
+
+                return skip?.skipReason === undefined ? { duplicate: true } : { duplicate: true, pathFiltered: true, skipped: skip.skipReason };
             }
 
             const { rootDirectory, watchPaths } = project;
@@ -315,7 +323,7 @@ export const recordPush = internalMutation
             };
 
             if (!decision.build) {
-                const buildId = await context.db.insert("builds", { ...common, skipReason: decision.reason, status: "skipped" });
+                const buildId = await context.db.insert("builds", { ...common, ...filtered, skipReason: decision.reason, status: "skipped" });
 
                 return { buildId, ...filtered, reused: false, skipped: decision.reason };
             }
@@ -442,13 +450,20 @@ export const complete = internalMutation
 
         const { now } = context;
 
-        if (workspacePackages !== undefined && workspacePackages.length <= MAX_WORKSPACE_PACKAGES && build.trigger === "push") {
-            const project = (await context.db.get(build.projectId)) as null | { workspacePackages?: { builtAt: number } };
+        if (build.trigger === "push") {
+            const project = (await context.db.get(build.projectId)) as null | { workspacePackages?: { builtAt: number } | null };
 
             if (project && (project.workspacePackages?.builtAt ?? -1) <= build.createdAt) {
-                await context.db.patch(build.projectId, {
-                    workspacePackages: { builtAt: build.createdAt, paths: workspacePackages, rootDirectory: build.rootDirectory ?? "" },
-                });
+                const recorded = workspacePackages !== undefined && workspacePackages.length <= MAX_WORKSPACE_PACKAGES;
+
+                // A newer build that could not record its set (no walk, or past the cap) clears
+                // the older one: a stale set reads as complete, and a change to a package it
+                // misses would skip a deploy. With no set, every push builds.
+                if (recorded || project.workspacePackages) {
+                    await context.db.patch(build.projectId, {
+                        workspacePackages: recorded ? { builtAt: build.createdAt, paths: workspacePackages, rootDirectory: build.rootDirectory ?? "" } : null,
+                    });
+                }
             }
         }
 

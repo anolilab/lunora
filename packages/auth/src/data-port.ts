@@ -91,13 +91,60 @@ const isUnmovableAuthTable = (table: string): boolean => {
  * {@link isUnmovableAuthTable}).
  * @param options The resolved auth options — a built instance's `auth.options`.
  */
-const authTableNames = (options: LunoraAuthOptions): string[] => [
-    ...Object.entries(getAuthTables(options))
+/** The slice of a better-auth table definition {@link parentsFirst} orders by. */
+interface OrderableAuthTable {
+    fields: Record<string, { references?: { model: string } }>;
+    modelName: string;
+    order?: number;
+}
+
+/**
+ * `tables` (better-auth's, keyed by logical name) with every table after the
+ * tables it references, as `[logical, physical]` pairs. better-auth's `order`
+ * covers its core tables and plugin tables carry none — alphabetically,
+ * `invitation` would land before `organization` — so a copy or an import in
+ * that order would insert a child before its parent. `order`, then the physical
+ * name, breaks ties; a reference cycle falls back to the tie-break.
+ * @param tables better-auth's tables, as `getAuthTables` returns them.
+ */
+const parentsFirst = (tables: Readonly<Record<string, OrderableAuthTable>>): [string, string][] => {
+    const entries = Object.entries(tables);
+    const byLogical = new Map(entries);
+    const rank = (logical: string): number => byLogical.get(logical)?.order ?? Number.MAX_SAFE_INTEGER;
+    const tieBreak = (a: string, b: string): number => rank(a) - rank(b) || (byLogical.get(a)?.modelName ?? a).localeCompare(byLogical.get(b)?.modelName ?? b);
+    const parents = new Map(
+        entries.map(([logical, table]) => [
+            logical,
+            new Set(
+                Object.values(table.fields)
+                    .map((field) => field.references?.model)
+                    .filter((model): model is string => model !== undefined && model !== logical && byLogical.has(model)),
+            ),
+        ]),
+    );
+    const ordered: [string, string][] = [];
+    const placed = new Set<string>();
+
+    while (placed.size < entries.length) {
+        const waiting = entries.map(([logical]) => logical).filter((logical) => !placed.has(logical));
+        const ready = waiting.filter((logical) => [...(parents.get(logical) ?? [])].every((parent) => placed.has(parent)));
+        const next = (ready.length > 0 ? ready : waiting).toSorted(tieBreak)[0];
+
+        if (next === undefined) {
+            break;
+        }
+
+        placed.add(next);
+        ordered.push([next, byLogical.get(next)?.modelName ?? next]);
+    }
+
+    return ordered;
+};
+
+const authTableNames = (options: LunoraAuthOptions): string[] =>
+    parentsFirst(getAuthTables(options))
         .filter(([logical]) => !LIVE_CREDENTIAL_TABLES.has(logical))
-        .map(([, table]) => table)
-        .toSorted((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.modelName.localeCompare(b.modelName))
-        .map((table) => table.modelName),
-];
+        .map(([, physical]) => physical);
 
 /**
  * The physical names of the {@link LIVE_CREDENTIAL_TABLES} — never exported, and
@@ -435,5 +482,6 @@ export {
     createSqlAuthDataPort,
     insertAuthRows,
     isUnmovableAuthTable,
+    parentsFirst,
     replaceAuthRows,
 };

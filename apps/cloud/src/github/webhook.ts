@@ -253,7 +253,8 @@ export const parseInstallationEvent = (payload: unknown): InstallationIntent | n
  * when nothing is built (the path filter matched nothing — `pathFiltered` — or
  * a stale push); `duplicate` for a delivery already recorded.
  */
-export type BuildRecordResult = null | { buildId: string; pathFiltered?: true; reused: boolean; skipped?: string } | { duplicate: true };
+export type BuildRecordResult =
+    null | { buildId: string; pathFiltered?: true; reused: boolean; skipped?: string } | { duplicate: true; pathFiltered?: true; skipped?: string };
 
 /** A delivery's `X-GitHub-Delivery` id, which a redelivery repeats — what dedupes it. */
 interface Delivery {
@@ -345,7 +346,8 @@ const reportSkip = async (
     target: { commitSha: string; installationId: number; repository: string },
     options: GitHubWebhookHooks,
 ): Promise<void> => {
-    if (!build || "duplicate" in build || build.pathFiltered !== true || build.skipped === undefined || !options.postCommitStatus) {
+    // A duplicate still carries its recorded skip, so a redelivery recovers a status the first delivery failed to post.
+    if (!build || build.pathFiltered !== true || build.skipped === undefined || !options.postCommitStatus) {
         return;
     }
 
@@ -421,11 +423,11 @@ const handlePushEvent = async (
         return Response.json({ ignored: true, reason: "repository not connected to a project" }, { status: 202 });
     }
 
+    await reportSkip(build, push, options);
+
     if ("duplicate" in build) {
         return Response.json({ duplicate: true, ignored: true }, { status: 200 });
     }
-
-    await reportSkip(build, push, options);
 
     return Response.json({ accepted: true, ...build }, { status: 200 });
 };

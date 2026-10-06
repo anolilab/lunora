@@ -218,6 +218,28 @@ describe("builds.recordPush path filter", () => {
         expect(redelivered.ops.filter((op) => op.kind === "insert" && op.table !== "rateLimits")).toStrictEqual([]);
     });
 
+    it("hands a redelivery its recorded path-filter skip, so the webhook can post the status again", async () => {
+        const skipped = {
+            _id: "bld_s",
+            commitSha: "abc123",
+            pathFiltered: true,
+            projectId: "prj_1",
+            skipReason: "no changes under apps/web/",
+            status: "skipped",
+            trigger: "push",
+        };
+        const stale = { ...skipped, _id: "bld_t", pathFiltered: undefined, skipReason: "not re-released: stale" };
+        const withSkip = makeCtx({ ...world(project(), [skipped]), githubDeliveries: [{ _id: "gd_1", deliveryId: "guid-1", receivedAt: 1 }] });
+        const withStale = makeCtx({ ...world(project(), [stale]), githubDeliveries: [{ _id: "gd_1", deliveryId: "guid-1", receivedAt: 1 }] });
+
+        await expect(recordPush.handler(withSkip.ctx, { ...push, changes: { files: [] }, deliveryId: "guid-1" })).resolves.toStrictEqual({
+            duplicate: true,
+            pathFiltered: true,
+            skipped: "no changes under apps/web/",
+        });
+        await expect(recordPush.handler(withStale.ctx, { ...push, changes: { files: [] }, deliveryId: "guid-1" })).resolves.toStrictEqual({ duplicate: true });
+    });
+
     it("forgets delivery ids past GitHub's redelivery window as it records new ones", async () => {
         const now = 10 * DELIVERY_TTL_MS;
         const { ctx, ops } = makeCtx(
@@ -347,6 +369,25 @@ describe("builds.complete workspace packages", () => {
         const { ctx, ops } = makeCtx(world(project(), [claimed({ trigger: "pull_request" })]));
 
         await complete.handler(ctx, args);
+
+        expect(projectPatch(ops)).toBeUndefined();
+    });
+
+    it.each([
+        ["no set", { workspacePackages: undefined }],
+        ["a set past the cap", { workspacePackages: Array.from({ length: 201 }, (_, index) => `packages/p${String(index)}`) }],
+    ])("clears an older set when a newer push build records %s: a stale set would read as complete", async (_label, over) => {
+        const { ctx, ops } = makeCtx(world(project({ workspacePackages: { builtAt: 1, paths: ["packages/ui"], rootDirectory: "apps/web" } }), [claimed()]));
+
+        await complete.handler(ctx, { ...args, ...over });
+
+        expect(projectPatch(ops)).toMatchObject({ patch: { workspacePackages: null } });
+    });
+
+    it("writes nothing when there is neither a set to record nor one to clear", async () => {
+        const { ctx, ops } = makeCtx(world(project(), [claimed()]));
+
+        await complete.handler(ctx, { ...args, workspacePackages: undefined });
 
         expect(projectPatch(ops)).toBeUndefined();
     });

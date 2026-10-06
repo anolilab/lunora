@@ -362,6 +362,18 @@ describe("skipped build commit status", () => {
         ]);
     });
 
+    it("reposts a recorded path-filter skip on a redelivery, so a failed first post recovers", async () => {
+        const posted: CommitStatus[] = [];
+        const response = await deliver("push", { duplicate: true, pathFiltered: true, skipped: filtered.skipped }, (status) => {
+            posted.push(status);
+
+            return Promise.resolve();
+        });
+
+        await expect(response.json()).resolves.toStrictEqual({ duplicate: true, ignored: true });
+        expect(posted.map((status) => status.description)).toStrictEqual([`Skipped: ${String(filtered.skipped)}`]);
+    });
+
     it("posts nothing for a stale push's skip or a queued build", async () => {
         const posted: CommitStatus[] = [];
         const post = (status: CommitStatus) => {

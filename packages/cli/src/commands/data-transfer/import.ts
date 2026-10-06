@@ -312,6 +312,19 @@ const openSourceStream = (
 /** Section lines a scoped replace leaves out; the `$lunora` header still goes through. */
 const SECTION_TABLES = new Set(["$auth", "$kv", "$storage"]);
 
+/** The `table` of a serialised import row, or `undefined` when it is not one (the endpoint then reports the line). */
+const tableOf = (row: string): string | undefined => {
+    try {
+        const parsed: unknown = JSON.parse(row);
+
+        return typeof parsed === "object" && parsed !== null && typeof (parsed as { table?: unknown }).table === "string"
+            ? (parsed as { table: string }).table
+            : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
 /**
  * Narrow a row transform to the `--tables` of a scoped replace, counting what
  * it skips: anything else in the file is not part of the replace, and the
@@ -333,7 +346,11 @@ const scopeRows = (
             return undefined;
         }
 
-        const { table } = JSON.parse(row) as { table: string };
+        const table = tableOf(row);
+
+        if (table === undefined) {
+            return row;
+        }
 
         if (tables.has(table) || (table.startsWith("$") && !SECTION_TABLES.has(table))) {
             return row;

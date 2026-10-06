@@ -15,6 +15,9 @@
 import { access, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
+/** A path with a `node_modules` segment: an installed copy, never a workspace package. */
+const IN_NODE_MODULES = /(?:^|[\\/])node_modules(?:[\\/]|$)/u;
+
 /**
  * An error whose message is written FOR the person who pushed the commit.
  *
@@ -271,7 +274,7 @@ const workspacePackages = async (project, workspaceRoot, repo) => {
             // eslint-disable-next-line no-await-in-loop -- see above
             const target = await installedPath(directory, name, workspaceRoot);
 
-            if (target === undefined || seen.has(target) || !isInside(repo, target) || relative(repo, target).split(sep).includes("node_modules")) {
+            if (target === undefined || seen.has(target) || !isInside(repo, target) || IN_NODE_MODULES.test(relative(repo, target))) {
                 continue;
             }
 

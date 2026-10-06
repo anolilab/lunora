@@ -103,8 +103,10 @@ export const foldPlatformMetrics = (rows: {
         };
     });
 
+    const byCell = new Map(dispatch.map((entry) => [entry.cell, entry]));
+
     for (const row of rows.dispatchOutcomes) {
-        const cell = dispatch.find((entry) => entry.cell === asString(row.cell));
+        const cell = byCell.get(asString(row.cell));
 
         if (cell) {
             cell.outcomes[asString(row.outcome)] = asNumber(row.requests);

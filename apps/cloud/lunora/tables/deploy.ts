@@ -213,6 +213,8 @@ export const deployTables = {
         // pushed for, and dedup never reuses a bundle built from another root.
         rootDirectory: v.optional(v.string()),
         // Why a push was not built — set only on `skipped` rows (path filter).
+        /** The skip is the path filter's: the commit has no other status, so a redelivery may repost one. */
+        pathFiltered: v.optional(v.boolean()),
         skipReason: v.optional(v.string()),
         status: v.union(v.literal("pending"), v.literal("building"), v.literal("successful"), v.literal("failed"), v.literal("skipped")),
         // What recorded the build, which decides how it releases: a push to the

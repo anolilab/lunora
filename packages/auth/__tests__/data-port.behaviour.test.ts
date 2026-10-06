@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
+import { organization } from "better-auth/plugins";
 import { describe, expect, it } from "vitest";
 
 import { AUTH_AUDIT_TABLE } from "../src/audit";
@@ -61,7 +62,19 @@ const collect = async (port: AuthDataPortLike): Promise<{ doc: Record<string, un
 };
 
 describe("auth data port", () => {
-    it("lists better-auth's tables user-first with the audit log last, never the live credentials", () => {
+    it("orders plugin tables after the tables they reference", () => {
+        expect.hasAssertions();
+
+        const names = authTableNames({ plugins: [organization()], secret: SECRET });
+        const at = (table: string): number => names.indexOf(table);
+
+        expect(at("organization")).toBeGreaterThan(-1);
+        expect(at("organization")).toBeLessThan(at("member"));
+        expect(at("organization")).toBeLessThan(at("invitation"));
+        expect(at("user")).toBeLessThan(at("member"));
+    });
+
+    it("lists better-auth's tables user-first, never the live credentials or the audit log", () => {
         expect.hasAssertions();
 
         const names = authTableNames({ secret: SECRET });
