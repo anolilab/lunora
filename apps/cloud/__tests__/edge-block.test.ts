@@ -229,6 +229,121 @@ describe("edge block — custom hostname removal (no list)", () => {
     });
 });
 
+/**
+ * The mapping a tick planned from (domain → org → Cloudflare id) is re-confirmed
+ * against the current rows and Cloudflare at the moment of each write. These
+ * change the world between the tick's read and its write.
+ */
+describe("edge block — stale mappings fail closed", () => {
+    /** Run `change` on the store the first time the sweep re-reads `dom_1` — after it planned, before it writes. */
+    const changingOnReread = (store: ReturnType<typeof memoryStore>, change: () => void): ReturnType<typeof memoryStore> => {
+        let changed = false;
+
+        return {
+            ...store,
+            get: async (id, table) => {
+                if (id === "dom_1" && !changed) {
+                    changed = true;
+                    change();
+                }
+
+                return store.get(id, table);
+            },
+        };
+    };
+
+    it("does not delete when Cloudflare maps the recorded id to another hostname", async () => {
+        const { hostnames, zone } = memoryZone([customHostname("ch_1", "someone-else.example.com")]);
+        const store = memoryStore({ domains: [domain()], organizations: [{ _id: "org_1", suspendedAt: 5 }] });
+
+        await expect(run(store, { zone })).resolves.toStrictEqual({ blocked: 0, failed: 1, unblocked: 0 });
+        expect(hostnames.has("ch_1")).toBe(true);
+        expect(store.tables["domains"]?.[0]).toMatchObject({ customHostnameId: "ch_1", edgeBlockError: expect.stringContaining("refusing to delete") });
+    });
+
+    it("does not block a domain reassigned to a serving org between plan and write", async () => {
+        const { hostnames, zone } = memoryZone([customHostname("ch_1", "app.example.com")]);
+        const base = memoryStore({
+            domains: [domain()],
+            organizations: [
+                { _id: "org_1", suspendedAt: 5 },
+                { _id: "org_2", suspendedAt: null },
+            ],
+        });
+        const store = changingOnReread(base, () => {
+            const rows = base.tables["domains"] ?? [];
+
+            rows[0] = { ...rows[0], organizationId: "org_2" };
+        });
+
+        await expect(run(store, { zone })).resolves.toMatchObject({ blocked: 0, failed: 1 });
+        expect(hostnames.has("ch_1")).toBe(true);
+        expect(base.tables["auditLog"]?.some((row) => row["organizationId"] === "org_2")).toBe(false);
+    });
+
+    it("does not block when the recorded custom hostname id changed under the row", async () => {
+        const { hostnames, zone } = memoryZone([customHostname("ch_1", "app.example.com"), customHostname("ch_2", "app.example.com")]);
+        const base = memoryStore({ domains: [domain()], organizations: [{ _id: "org_1", suspendedAt: 5 }] });
+        const store = changingOnReread(base, () => {
+            const rows = base.tables["domains"] ?? [];
+
+            rows[0] = { ...rows[0], customHostnameId: "ch_2" };
+        });
+
+        await expect(run(store, { zone })).resolves.toMatchObject({ blocked: 0, failed: 1 });
+        expect(hostnames.size).toBe(2);
+    });
+
+    it("does not restore a hostname that was removed and re-added by another org between plan and write", async () => {
+        const { hostnames, zone } = memoryZone();
+        const base = memoryStore({
+            domains: [domain({ customHostnameId: null, edgeBlockedAt: 9 })],
+            organizations: [{ _id: "org_1" }, { _id: "org_2", suspendedAt: 5 }],
+        });
+        const store = changingOnReread(base, () => {
+            base.tables["domains"] = [domain({ _id: "dom_2", customHostnameId: null, organizationId: "org_2" })];
+        });
+
+        await expect(run(store, { zone })).resolves.toMatchObject({ failed: 1, unblocked: 0 });
+        expect(hostnames.size).toBe(0);
+    });
+
+    it("does not adopt a custom hostname another domain row records", async () => {
+        const { hostnames, zone } = memoryZone([customHostname("ch_theirs", "app.example.com")]);
+        const store = memoryStore({
+            domains: [
+                domain({ customHostnameId: null, edgeBlockedAt: 9 }),
+                domain({ _id: "dom_other", customHostnameId: "ch_theirs", hostname: "other.example.com", organizationId: "org_2" }),
+            ],
+            organizations: [{ _id: "org_1" }, { _id: "org_2" }],
+        });
+
+        await expect(run(store, { zone })).resolves.toMatchObject({ failed: 1, unblocked: 0 });
+        expect(hostnames.size).toBe(1);
+        expect(store.tables["domains"]?.[0]).toMatchObject({ edgeBlockedAt: 9, edgeBlockError: expect.stringContaining("not adopting") });
+    });
+
+    it("leaves a hostname two organizations' rows name off the list", async () => {
+        const { hostnames, list } = memoryList();
+        const store = memoryStore({
+            deployments: [
+                { _id: "d1", alias: "acme", organizationId: "org_1", scriptName: "acme", status: "live" },
+                { _id: "d2", alias: "acme", organizationId: "org_2", scriptName: "acme", status: "live" },
+                { _id: "d3", alias: "solo", organizationId: "org_1", scriptName: "solo", status: "live" },
+            ],
+            domains: [],
+            organizations: [
+                { _id: "org_1", suspendedAt: 5 },
+                { _id: "org_2", suspendedAt: null },
+            ],
+        });
+
+        await run(store, { hostList: list });
+
+        expect(hostnames()).toStrictEqual(["solo.lunora.app"]);
+    });
+});
+
 describe("edge block — suspended-hostnames list", () => {
     const seed = (suspendedAt: null | number) =>
         memoryStore({

@@ -1,9 +1,11 @@
 import { LunoraError } from "@lunora/server";
 
+import type { SpendAccrual } from "../src/billing/spend";
+import { accrualBreached } from "../src/billing/spend";
 import { randomSecret } from "../src/deploy/keys";
 import type { TargetId } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext } from "./_generated/server.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
@@ -61,6 +63,22 @@ const isRedirectTarget = (value: string): boolean => {
     }
 };
 
+/**
+ * Refuse a domain write that would put an organization back on the edge while
+ * it is suspended or its running spend already breaches its cap (plan 365
+ * W8/W3) — adding a domain, verifying one, or issuing its certificate. Read from
+ * the organization row; a missing row is refused too.
+ * @throws {LunoraError} `FORBIDDEN` while the organization is suspended or over its cap.
+ */
+const assertServing = async (context: QueryContext, organizationId: Id<"organizations">): Promise<void> => {
+    const organization = (await context.db.get(organizationId)) as
+        null | (SpendAccrual & { plan: string; spendCapMinor?: null | number; suspendedAt?: null | number });
+
+    if (organization === null || organization.suspendedAt != null || accrualBreached(organization, context.now)) {
+        throw new LunoraError("FORBIDDEN", "this organization is suspended; custom domains cannot be added or verified until it recovers");
+    }
+};
+
 export const add = mutation
     .use(rateLimit("provision"))
     .input({
@@ -74,6 +92,7 @@ export const add = mutation
         const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
         await assertRowInOrg(context, arguments_.projectId, arguments_.organizationId, "project");
+        await assertServing(context, member.organizationId);
 
         // Custom domains are a plan feature (GAPS.md B1) — enforce the
         // entitlement, not just the flag on the pricing page.
@@ -131,6 +150,24 @@ export const list = query
         const { page } = await context.db.domains.findMany({ where: { organizationId, projectId } });
 
         return page;
+    });
+
+/**
+ * The domain the verify route checks and may request a certificate for
+ * (owner/admin, under the caller's session; SYSTEM only). Refused while the
+ * organization is suspended or over its cap, so verifying cannot undo an edge
+ * block. Returns the organization from the verified membership, which the
+ * route's later writes are scoped by.
+ */
+export const verifyTarget = internalQuery
+    .input({ id: v.id("domains"), organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { id, organizationId } }): Promise<{ domain: DomainRow; organizationId: Id<"organizations"> }> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, id, member.organizationId, "domain");
+        await assertServing(context, member.organizationId);
+
+        return { domain: (await context.db.get(id)) as DomainRow, organizationId: member.organizationId };
     });
 
 /**

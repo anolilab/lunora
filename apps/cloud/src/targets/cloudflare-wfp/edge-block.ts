@@ -112,9 +112,59 @@ const recordFailure = async (database: ControlPlaneStore, ports: EdgeBlockPorts,
     }
 };
 
-/** Remove a suspended organization's custom hostname. Done when it is already gone. */
-const blockHostname = async (database: ControlPlaneStore, ports: EdgeBlockPorts, zone: SaasZone, row: DomainRow): Promise<void> => {
-    await zone.api.deleteCustomHostname({ id: row.customHostnameId as string, zoneId: zone.zoneId });
+/**
+ * Re-read the domain and its organization at the moment of the call, and
+ * confirm the mapping the tick planned from still holds: the row still exists
+ * with the same hostname and organization, it is still the ONLY row for that
+ * hostname, the organization is still in the state the step acts on, and the
+ * certificate is still this zone's. Anything else — the domain removed and
+ * re-added, moved to another org, the suspension lifted mid-tick — throws, so
+ * the step writes nothing and the next tick plans again from fresh rows.
+ */
+const confirmedRow = async (database: ControlPlaneStore, zone: SaasZone, planned: DomainRow, suspended: boolean): Promise<DomainRow> => {
+    const current = (await database.get(planned._id, "domains")) as DomainRow | null;
+    const organization = current === null ? null : ((await database.get(current.organizationId, "organizations")) as OrganizationRow | null);
+    const { page: owners } = await database.findMany("domains", { where: { hostname: planned.hostname } });
+
+    if (
+        current?.hostname !== planned.hostname ||
+        current.organizationId !== planned.organizationId ||
+        organization === null ||
+        (organization.suspendedAt != null) !== suspended ||
+        owners.length !== 1 ||
+        (owners[0] as DomainRow)._id !== planned._id ||
+        !inZone(current, zone)
+    ) {
+        throw new Error(`domain ${planned._id} changed since this tick read it (removed, re-added, reassigned or recovered); nothing was written`);
+    }
+
+    return current;
+};
+
+/**
+ * Remove a suspended organization's custom hostname. The id is confirmed twice
+ * before the delete: it is still the one on the current row, and Cloudflare
+ * still maps it to this row's hostname — a recycled or reassigned id is never
+ * deleted. Done when it is already gone.
+ */
+const blockHostname = async (database: ControlPlaneStore, ports: EdgeBlockPorts, zone: SaasZone, planned: DomainRow): Promise<void> => {
+    const row = await confirmedRow(database, zone, planned, true);
+    const id = row.customHostnameId;
+
+    if (id == null || id !== planned.customHostnameId) {
+        throw new Error(`domain ${row._id}'s custom hostname changed since this tick read it; nothing was written`);
+    }
+
+    const live = await zone.api.getCustomHostname({ id, zoneId: zone.zoneId });
+
+    if (live !== null && live.hostname.toLowerCase() !== row.hostname) {
+        throw new Error(`custom hostname ${id} serves ${live.hostname}, not ${row.hostname}; refusing to delete it`);
+    }
+
+    if (live !== null) {
+        await zone.api.deleteCustomHostname({ id, zoneId: zone.zoneId });
+    }
+
     // The issuer and scope stay recorded: they are where the restore recreates it.
     await database.patch(
         row._id,
@@ -128,29 +178,45 @@ const blockHostname = async (database: ControlPlaneStore, ports: EdgeBlockPorts,
         },
         "domains",
     );
-    await audit(database, ports.now, row.organizationId, "domain.edge_block", row.hostname);
+    await audit(database, ports.now, row.organizationId, "domain.edge_block", `${row.hostname} (custom hostname ${id})`);
 };
 
 /**
  * Recreate a recovered organization's custom hostname, adopting one an earlier
- * half-finished restore created — unless that one is queued for release (a
- * removed domain's), which would pull it from under this row.
+ * half-finished restore created — only when no other domain row names it and
+ * it is not queued for release (a removed domain's), either of which would put
+ * one tenant's certificate under another's row.
  */
-const unblockHostname = async (database: ControlPlaneStore, ports: EdgeBlockPorts, zone: SaasZone, row: DomainRow): Promise<void> => {
+const unblockHostname = async (database: ControlPlaneStore, ports: EdgeBlockPorts, zone: SaasZone, planned: DomainRow): Promise<void> => {
+    const row = await confirmedRow(database, zone, planned, false);
+
+    if (row.edgeBlockedAt == null) {
+        throw new Error(`domain ${row._id} is no longer edge-blocked; nothing was written`);
+    }
+
     let certificate: DomainCertificate | undefined;
 
     if (row.verifiedAt != null) {
         const existing = await zone.api.findCustomHostname({ hostname: row.hostname, zoneId: zone.zoneId });
 
         if (existing !== null) {
-            const { page } = await database.findMany("certificateReleases", { where: { customHostnameId: existing.id } });
+            const [{ page: queued }, { page: claimed }] = await Promise.all([
+                database.findMany("certificateReleases", { where: { customHostnameId: existing.id } }),
+                database.findMany("domains", { where: { customHostnameId: existing.id } }),
+            ]);
 
-            if (page.length > 0) {
-                throw new Error(`a custom hostname for ${row.hostname} is queued for release; the certificate sweep releases it first`);
+            if (queued.length > 0 || claimed.some((other) => (other as DomainRow)._id !== row._id)) {
+                throw new Error(`custom hostname ${existing.id} for ${row.hostname} belongs to another domain row or is queued for release; not adopting it`);
             }
         }
 
-        certificate = certificateOf(zone, existing ?? (await zone.api.createCustomHostname({ hostname: row.hostname, zoneId: zone.zoneId })));
+        const restored = existing ?? (await zone.api.createCustomHostname({ hostname: row.hostname, zoneId: zone.zoneId }));
+
+        if (restored.hostname.toLowerCase() !== row.hostname) {
+            throw new Error(`Cloudflare answered custom hostname ${restored.id} for ${restored.hostname}, not ${row.hostname}; not recording it`);
+        }
+
+        certificate = certificateOf(zone, restored);
     }
 
     await database.patch(
@@ -165,7 +231,13 @@ const unblockHostname = async (database: ControlPlaneStore, ports: EdgeBlockPort
         },
         "domains",
     );
-    await audit(database, ports.now, row.organizationId, "domain.edge_unblock", row.hostname);
+    await audit(
+        database,
+        ports.now,
+        row.organizationId,
+        "domain.edge_unblock",
+        certificate?.customHostnameId === undefined ? row.hostname : `${row.hostname} (custom hostname ${certificate.customHostnameId})`,
+    );
 };
 
 /** Rung 2: remove suspended organizations' custom hostnames (only without the list), restore recovered ones (always). */
@@ -206,24 +278,40 @@ const reconcileCustomHostnames = async (
     return result;
 };
 
-/** Every hostname each organization serves through this zone: its live platform aliases and its verified custom domains. */
+/**
+ * Every hostname each organization serves through this zone: its live platform
+ * aliases and its verified custom domains, read this tick. A hostname that
+ * more than one organization's rows name is left out entirely: listing it
+ * could block a tenant that is not suspended, and the dispatcher's 503 still
+ * holds for the one that is.
+ */
 const hostnamesByOrganization = (domains: ReadonlyArray<DomainRow>, deployments: ReadonlyArray<DeploymentRow>, appDomain: string): Map<string, string> => {
     const owner = new Map<string, string>();
+    const ambiguous = new Set<string>();
+    const claim = (hostname: string, organizationId: string): void => {
+        const known = owner.get(hostname);
+
+        if (known !== undefined && known !== organizationId) {
+            ambiguous.add(hostname);
+        }
+
+        owner.set(hostname, organizationId);
+    };
 
     for (const row of deployments) {
         if (row.status !== "destroyed" && storedTarget(row.target) === "cloudflare-wfp") {
-            owner.set(`${row.alias ?? row.scriptName}.${appDomain}`.toLowerCase(), row.organizationId);
+            claim(`${row.alias ?? row.scriptName}.${appDomain}`.toLowerCase(), row.organizationId);
         }
     }
 
     for (const row of domains) {
         if (row.verifiedAt != null && row.certificateIssuer === "cloudflare-wfp") {
-            owner.set(row.hostname.toLowerCase(), row.organizationId);
+            claim(row.hostname.toLowerCase(), row.organizationId);
         }
     }
 
     for (const hostname of owner.keys()) {
-        if (!HOSTNAME.test(hostname)) {
+        if (ambiguous.has(hostname) || !HOSTNAME.test(hostname)) {
             owner.delete(hostname);
         }
     }
