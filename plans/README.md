@@ -39,7 +39,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [449](./449-client-outbox-wire-codec.md)          | How the offline mutation outbox serializes caller args      | P2, S                                                    |
 | [451](./451-private-package-workspace-pins.md)    | `workspace:*` pins for private packages, enforced           | P2, S                                                    |
 | [306](./306-pluggable-queue-drivers.md)           | Pluggable queue-driver package                              | P2                                                       |
-| [314](./314-compromise-in-every-worker.md)        | Stop shipping an English NLP library in every Worker        | P2                                                       |
 | [315](./315-durable-companion-backfill-marker.md) | Make the aggregate-companion backfill marker durable        | P2                                                       |
 | [453](./453-embedded-runtime.md)                  | In-process runtime as an embedded (browser / device) target | design ratified, not started                             |
 | [332](./332-payment-conformance-spike.md)         | Spike: what a payment-provider conformance suite asserts    | spike; deliverable is a decision                         |
