@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Not part of codegen's public API: only this drift guard needs the whole-project probe.
 import { discoverFeatureUsage } from "../../codegen/src/discover/feature-usage";
 import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { validateWranglerProject } from "../src/cloudflare/wrangler-project";
 import type { InferredBindings } from "../src/infer-bindings";
 import { inferLunoraBindings, packageNamesFromBindings } from "../src/infer-bindings";
 
@@ -521,6 +522,41 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "LunoraDO" }]);
+    });
+
+    it("reconciles a fresh merged app into a config the validator accepts", async () => {
+        expect.assertions(3);
+
+        // End to end, the path `lunora dev` runs: infer → reconcile → validate.
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/schema.ts", 'import { defineSchema } from "@lunora/server";\nexport default defineSchema({});\n');
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        reconcileWranglerBindings(root, await inferLunoraBindings({ projectRoot: root }));
+
+        const wrangler = parseJsonc(readFileSync(join(root, "wrangler.jsonc"), "utf8")) as {
+            durable_objects?: { bindings?: unknown[] };
+            migrations?: { new_sqlite_classes?: string[] }[];
+        };
+
+        expect(wrangler.durable_objects?.bindings).toStrictEqual([{ class_name: "LunoraDO", name: "SHARD" }]);
+        expect(wrangler.migrations?.flatMap((migration) => migration.new_sqlite_classes ?? [])).toStrictEqual(["LunoraDO"]);
+        expect(
+            validateWranglerProject({ projectRoot: root }).report.errors.filter((error) => error.includes("LunoraDO") || error.includes("ShardDO")),
+        ).toStrictEqual([]);
+    });
+
+    it("hints that the merge changed nothing for a hand-written entry without LunoraDO", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.signals.join(" ")).toContain("exports no LunoraDO");
     });
 
     it("collapses a hand-written entry that exports LunoraDO onto one SHARD binding", async () => {

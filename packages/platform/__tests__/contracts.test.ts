@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, SocketHost } from "../src";
-import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
+import { CLOUDFLARE_CAPABILITIES, LUNORA_ROLE_PREFIX, NODE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
 
 describe("@lunora/platform contracts", () => {
     it("exports the Cloudflare capability matrix", () => {
@@ -146,6 +146,19 @@ describe("@lunora/platform contracts", () => {
         };
 
         expect(scheduler.schedule).toBeDefined();
+    });
+
+    it("refuses a shard key carrying the reserved role prefix on every host", () => {
+        expect.assertions(1);
+
+        const directory: ShardDirectory = {
+            get: () => {
+                return { fetch: async () => new Response("reached") };
+            },
+            idForName: (name) => name,
+        };
+
+        expect(() => resolveShard(directory, `${LUNORA_ROLE_PREFIX}scheduler:default`)).toThrow(/reserved/u);
     });
 
     it("structurally types a two-step shard directory", async () => {

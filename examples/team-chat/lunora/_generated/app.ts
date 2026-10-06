@@ -874,7 +874,7 @@ interface LunoraConfig<Env extends object = object> {
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
     /** Codegen's source walk. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as `target`. */
     codegen?: { exclude?: string[] };
-    /** Host the shard, scheduler and shard registry in ONE Durable Object class (`merge: true`), so the app spends one of the account's classes instead of three. For apps whose `SHARD` binding has never been deployed — existing shard data does not move. A literal, for the same reason as `target`. */
+    /** Host the shard, scheduler and shard registry in ONE Durable Object class (`merge: true`, plan 462) — before the first deploy only. A literal, for the same reason as `target`. */
     durableObjects?: { merge?: boolean };
     /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */
     remote?: boolean;

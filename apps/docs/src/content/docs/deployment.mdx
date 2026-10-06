@@ -346,23 +346,41 @@ shard registry. Only the `SHARD` binding remains, bound to `LunoraDO`. The
 scheduler and registry instances live in the same namespace under the reserved
 `__lunora_do__:` name prefix, which a client-chosen shard key cannot use.
 
-The merge does not move data. A `ShardDO`, `SchedulerDO` or `ShardRegistryDO`
-namespace that was ever deployed keeps its data in that class, so
-`lunora verify` refuses a merged app whose `wrangler.jsonc` still binds them.
-Leave the merge off for an app that is already live.
+Starter templates list `ShardDO` (and `ShardRegistryDO`) in their `v1`
+migration. Before the first deploy, replace them with `LunoraDO` in
+`new_sqlite_classes`, so the migration creates only the merged class.
+`lunora verify` reports any migration or binding that still names a per-role
+class.
+
+The merge does not move data, in either direction. A `ShardDO`, `SchedulerDO`
+or `ShardRegistryDO` namespace that was ever deployed keeps its data in that
+class, so leave the merge off for an app that is already live. Once a merged app
+is deployed, its data lives in `LunoraDO`, and turning the merge off again would
+leave it behind — so `lunora verify` refuses that too.
 
 A hand-written worker entry merges the same way:
 
 ```ts
+import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
+import type { ShardNamespaceLike } from "@lunora/runtime";
+
+import { defineApp } from "./lunora/_generated/app";
 import { mergeDurableObjects, roleNamespace } from "./lunora/_generated/durableObjects";
 import { SchedulerDO } from "./lunora/_generated/scheduler";
+import { ShardRegistryDO } from "./lunora/_generated/shardRegistry";
 
-const app = defineApp()
+// One binding serves every role, so it carries the scheduler's namespace shape too.
+interface Env {
+    SHARD: DurableObjectNamespaceLike & ShardNamespaceLike;
+}
+
+const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     .scheduler({ namespace: (env) => roleNamespace(env.SHARD, "scheduler") })
+    .shardRegistry((env) => roleNamespace(env.SHARD, "shardRegistry"))
     .build();
 
-export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO });
+export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, shardRegistry: ShardRegistryDO });
 export default app;
 ```
 

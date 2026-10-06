@@ -506,8 +506,15 @@ const SCHEDULER_ORIGIN_VAR = "LUNORA_ORIGIN_URL";
  * A binding carrying `script_name` names a class in ANOTHER Worker, whose env
  * owns the var; same carve-out as the migration and unexported-class checks.
  */
-const validateSchedulerOrigin = (wrangler: WranglerConfig, environment: string | undefined, warnings: string[]): void => {
-    if (!declaresSchedulerDurableObject(wrangler) || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
+const validateSchedulerOrigin = (
+    wrangler: WranglerConfig,
+    environment: string | undefined,
+    warnings: string[],
+    // A merged app hosts the scheduler in `LunoraDO`, which the config alone
+    // cannot tell from a shard-only app — the project validator decides it.
+    declaresScheduler: boolean = declaresSchedulerDurableObject(wrangler),
+): void => {
+    if (!declaresScheduler || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
         return;
     }
 

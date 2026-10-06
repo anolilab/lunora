@@ -48,16 +48,14 @@ import type { QueueIR } from "./queue-info";
 import { discoverQueueInfo } from "./queue-info";
 import type { SchemaInfo } from "./schema-info";
 import { discoverSchemaInfo } from "./schema-info";
-import type { DurableObjectClass, DurableObjectSpec } from "./worker-entry";
+import type { DurableObjectSpec } from "./worker-entry";
 import {
-    COMPOSED_ENTRY_DURABLE_OBJECTS,
+    composedEntryDurableObjects,
     detectClassExports,
     detectExportedDurableObjects,
     DURABLE_OBJECT_BINDINGS,
     GENERATED_DIRECTORY,
-    GENERATED_MODULE_DURABLE_OBJECTS,
-    MERGED_DURABLE_OBJECT,
-    MERGED_DURABLE_OBJECTS_MODULE,
+    isMergedProject,
     resolveWorkerEntry,
 } from "./worker-entry";
 import type { WorkflowIR } from "./workflow-info";
@@ -612,18 +610,8 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         // `reconcile-bindings` telling a correctly-wired class-A app to
         // "export it so the SCHEDULER binding can be provisioned" — advice that is
         // both wrong and impossible to follow, on every `lunora dev`.
-        //
-        // An app that merges its Durable Objects (codegen wrote the merge module)
-        // exports `LunoraDO` instead, which hosts all three roles behind `SHARD`.
-        const generated = (module: string): boolean => existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, `${module}.ts`));
-        const composedClasses: DurableObjectClass[] = generated(MERGED_DURABLE_OBJECTS_MODULE)
-            ? [MERGED_DURABLE_OBJECT]
-            : [
-                  ...COMPOSED_ENTRY_DURABLE_OBJECTS,
-                  ...Object.entries(GENERATED_MODULE_DURABLE_OBJECTS)
-                      .filter(([module]) => generated(module))
-                      .map(([, className]) => className),
-              ];
+        // A merging app exports `LunoraDO` instead.
+        const composedClasses = composedEntryDurableObjects(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY));
 
         durableObjects = composedClasses.map((className) => {
             return { binding: DURABLE_OBJECT_BINDINGS[className], className };
@@ -649,6 +637,18 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
+
+    // A hand-written entry opts in by exporting `LunoraDO` itself; with the merge
+    // module written and no such export, `durableObjects.merge` changed nothing.
+    if (
+        !entry.composed &&
+        isMergedProject(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY)) &&
+        !durableObjects.some((object) => object.className === "LunoraDO")
+    ) {
+        signals.push(
+            "hint: durableObjects.merge is set, but the worker entry exports no LunoraDO — export one built with mergeDurableObjects, or the classes stay separate",
+        );
+    }
 
     if (flagshipBinding !== undefined) {
         signals.push(

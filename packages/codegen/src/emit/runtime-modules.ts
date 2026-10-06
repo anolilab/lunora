@@ -98,33 +98,24 @@ export { ShardRegistryDO } from "${baseSpecifiers(useUmbrella).do}";
 };
 
 /**
- * `_generated/durableObjects.ts` — written only when `lunora.config` sets
- * `durableObjects: { merge: true }` (plan 462). The composed class-A entry
- * builds one `LunoraDO` class from it in place of `ShardDO` /
- * `SchedulerDO` / `ShardRegistryDO`, and binding inference provisions the
- * single `SHARD` binding off the same file — so the entry, the builder wiring
- * and wrangler cannot disagree about whether the app merges.
+ * `_generated/durableObjects.ts`, written when `lunora.config` sets
+ * `durableObjects: { merge: true }` (plan 462). Its existence is the signal the
+ * composed entry, binding inference and the validator all read.
  */
-const emitDurableObjects = (merge: boolean, useUmbrella: boolean): string => {
-    if (!merge) {
-        return "";
-    }
-
-    return `${GENERATED_HEADER}/**
+const emitDurableObjects = (useUmbrella: boolean): string => `${GENERATED_HEADER}/**
  * Host the shard, the scheduler and the shard registry in ONE Durable Object
  * class, so the app spends one of the account's classes instead of three. A
  * Vite-first (class-A) app needs nothing more: its generated worker entry builds
  * \`LunoraDO\` from these. A hand-written entry does the same by hand:
  *
- * \`export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, registry: ShardRegistryDO });\`
+ * \`export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, shardRegistry: ShardRegistryDO });\`
  *
- * and passes \`roleNamespace(env.SHARD, "scheduler")\` / \`roleNamespace(env.SHARD, "registry")\`
- * to \`.scheduler()\` / \`.shardRegistry()\`. For apps whose \`SHARD\` binding has
- * never been deployed: existing \`ShardDO\` data does not move into the merged class.
+ * and passes \`roleNamespace(env.SHARD, "scheduler")\` / \`roleNamespace(env.SHARD, "shardRegistry")\`
+ * to \`.scheduler()\` / \`.shardRegistry()\`. Merge before the first deploy only:
+ * data already in \`ShardDO\` does not move, and a deployed merge cannot be undone.
  */
 export { mergeDurableObjects, roleNamespace } from "${baseSpecifiers(useUmbrella).do}";
 `;
-};
 
 const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     const byExpression = new Map<string, CronJobIR[]>();

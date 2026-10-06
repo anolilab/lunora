@@ -1013,6 +1013,9 @@ describe("runDoctor", () => {
         it.each([
             [40, "do-class-budget-ok"],
             [95, "do-class-budget-near"],
+            // Exactly the Free cap: a Free account cannot add another class.
+            [100, "do-class-budget-near"],
+            [101, "do-class-budget-ok"],
             [250, "do-class-budget-ok"],
             [495, "do-class-budget-near"],
             [500, "do-class-budget-full"],
@@ -1020,6 +1023,30 @@ describe("runDoctor", () => {
             expect.assertions(1);
 
             await expect(budgetFinding(namespacesApi(total), credentials)).resolves.toMatchObject({ code });
+        });
+
+        it("warns rather than fails at the Paid cap — the count is an account fact, not this project's", async () => {
+            expect.assertions(1);
+
+            await expect(budgetFinding(namespacesApi(500), credentials)).resolves.toMatchObject({ code: "do-class-budget-full", level: "warn" });
+        });
+
+        it("skips the check for a non-Cloudflare target", async () => {
+            expect.assertions(2);
+
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-budget-"));
+            const fetchImpl = namespacesApi(40);
+
+            try {
+                writeFileSync(join(cwd, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+                const result = await runDoctor({ cwd, environment: credentials, fetch: fetchImpl, logger: makeLogger().logger });
+
+                expect(result.findings.some((finding) => finding.code.startsWith("do-class-budget"))).toBe(false);
+                expect(fetchImpl).not.toHaveBeenCalled();
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
         });
 
         it("stays offline without credentials", async () => {

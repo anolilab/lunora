@@ -1280,12 +1280,6 @@ interface KeyRange {
 }
 ```
 
-### `LUNORA_ROLE_PREFIX` (const)
-
-```ts
-const LUNORA_ROLE_PREFIX = "__lunora_do__:";
-```
-
 ### `LifecycleDispatchInfo` (interface)
 
 ```ts

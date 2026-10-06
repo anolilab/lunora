@@ -178,6 +178,14 @@ export {
     STEP_BADGE_NAMES,
 } from "./tui-theme";
 export type { GeneratedClassModule } from "./worker-entry";
-export { COMPOSED_WORKER_ENTRY, GENERATED_CLASS_MODULES, MERGED_CLASS_MODULES, MERGED_DURABLE_OBJECTS_MODULE } from "./worker-entry";
+export {
+    COMPOSED_WORKER_ENTRY,
+    DURABLE_OBJECT_BINDINGS,
+    GENERATED_CLASS_MODULES,
+    GENERATED_MODULE_DURABLE_OBJECTS,
+    isMergedProject,
+    isMergedRoleModule,
+    MERGED_DURABLE_OBJECTS_MODULE,
+} from "./worker-entry";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";
 export { discoverWorkflowInfo } from "./workflow-info";

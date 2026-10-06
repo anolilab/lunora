@@ -8,13 +8,11 @@ import { emitDurableObjects } from "../src/emit/runtime-modules";
 import { readProjectConfigLiterals } from "../src/project-config-file";
 
 describe(emitDurableObjects, () => {
-    it("re-exports the merge helpers only when the app opts in", () => {
-        expect.assertions(3);
+    it("re-exports the merge helpers from the package the app installs", () => {
+        expect.assertions(2);
 
-        expect(emitDurableObjects(true, false)).toContain('export { mergeDurableObjects, roleNamespace } from "@lunora/do";');
-        expect(emitDurableObjects(true, true)).toContain('export { mergeDurableObjects, roleNamespace } from "lunorash/do";');
-        // No module, so nothing downstream composes a merged class.
-        expect(emitDurableObjects(false, false)).toBe("");
+        expect(emitDurableObjects(false)).toContain('export { mergeDurableObjects, roleNamespace } from "@lunora/do";');
+        expect(emitDurableObjects(true)).toContain('export { mergeDurableObjects, roleNamespace } from "lunorash/do";');
     });
 });
 

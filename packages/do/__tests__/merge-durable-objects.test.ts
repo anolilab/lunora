@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import type { RoleNamespaceTarget } from "../src/merge-durable-objects";
 import { mergeDurableObjects, roleNamespace } from "../src/merge-durable-objects";
 import { ShardRegistryDO } from "../src/shard-registry-do";
 
@@ -22,8 +21,8 @@ const stateNamed = (name: string | undefined): DurableObjectState => ({ id: { na
 
 describe(mergeDurableObjects, () => {
     const LunoraDO = mergeDurableObjects({
-        registry: recordingRole("registry"),
         scheduler: recordingRole("scheduler"),
+        shardRegistry: recordingRole("shardRegistry"),
         shard: recordingRole("shard"),
     });
 
@@ -31,13 +30,13 @@ describe(mergeDurableObjects, () => {
         ["__root__", "shard:__root__"],
         ["user-42", "shard:user-42"],
         ["__lunora_do__:scheduler:default", "scheduler:__lunora_do__:scheduler:default"],
-        ["__lunora_do__:registry:__lunora_shard_registry__", "registry:__lunora_do__:registry:__lunora_shard_registry__"],
+        ["__lunora_do__:shardRegistry:__lunora_shard_registry__", "shardRegistry:__lunora_do__:shardRegistry:__lunora_shard_registry__"],
     ])("routes instance %s to its role", async (name, expected) => {
         expect.assertions(1);
 
-        const response = await new LunoraDO(stateNamed(name), {}).fetch?.(new Request("https://do.internal/"));
+        const response = await new LunoraDO(stateNamed(name), {}).fetch(new Request("https://do.internal/"));
 
-        await expect(response?.text()).resolves.toBe(expected);
+        await expect(response.text()).resolves.toBe(expected);
     });
 
     it("refuses a role the app did not merge in", () => {
@@ -45,44 +44,76 @@ describe(mergeDurableObjects, () => {
 
         const ShardOnly = mergeDurableObjects({ shard: recordingRole("shard") });
 
-        expect(() => new ShardOnly(stateNamed("__lunora_do__:scheduler:default"), {})).toThrow(/no "scheduler" role/u);
+        expect(() => new ShardOnly(stateNamed("__lunora_do__:scheduler:default"), {})).toThrow(/names no role/u);
+    });
+
+    it("refuses an unknown or inherited role name rather than constructing it", () => {
+        expect.assertions(2);
+
+        // `constructor` is on every object's prototype; a lookup that reached it
+        // would `new Object(state, env)` instead of failing.
+        expect(() => new LunoraDO(stateNamed("__lunora_do__:constructor:x"), {})).toThrow(/names no role/u);
+        expect(() => new LunoraDO(stateNamed("__lunora_do__:nope"), {})).toThrow(/names no role/u);
     });
 
     it("accepts the framework's own role classes", () => {
         expect.assertions(1);
 
-        expect(mergeDurableObjects({ registry: ShardRegistryDO, shard: recordingRole("shard") })).toBeTypeOf("function");
+        expect(mergeDurableObjects({ shard: recordingRole("shard"), shardRegistry: ShardRegistryDO })).toBeTypeOf("function");
     });
 });
 
 describe(roleNamespace, () => {
-    it("prefixes every name it resolves, jurisdiction views included", () => {
-        expect.assertions(3);
+    /** A namespace double whose methods check their receiver, as workerd's native ones do. */
+    interface FakeNamespace {
+        get: (id: string) => string;
+        getByName: (name: string) => string;
+        idFromName: (name: string) => string;
+        jurisdiction: (jurisdiction: string) => FakeNamespace;
+    }
+
+    const createNamespace = (seen: string[]): FakeNamespace => {
+        const namespace: FakeNamespace = {
+            get(id) {
+                seen.push(`${this === namespace ? "bound" : "detached"} get:${id}`);
+
+                return id;
+            },
+            getByName(name) {
+                seen.push(`${this === namespace ? "bound" : "detached"} getByName:${name}`);
+
+                return name;
+            },
+            idFromName(name) {
+                seen.push(`${this === namespace ? "bound" : "detached"} id:${name}`);
+
+                return name;
+            },
+            jurisdiction() {
+                return namespace;
+            },
+        };
+
+        return namespace;
+    };
+
+    it("prefixes every name it resolves, jurisdiction views included, and keeps the receiver", () => {
+        expect.assertions(1);
 
         const seen: string[] = [];
-        const namespace: RoleNamespaceTarget = {
-            get: () => ({}) as DurableObjectStub,
-            getByName(name: string) {
-                // A detached call would lose `this`, as workerd's native methods do.
-                seen.push(`${this === namespace ? "bound" : "detached"}:${name}`);
+        const scheduler = roleNamespace(createNamespace(seen), "scheduler");
 
-                return {} as DurableObjectStub;
-            },
-            idFromName: (name: string) => {
-                seen.push(`id:${name}`);
-
-                return {} as DurableObjectId;
-            },
-            jurisdiction: () => namespace,
-        };
-        const scheduler = roleNamespace(namespace, "scheduler");
-
-        scheduler.getByName?.("default");
+        scheduler.getByName("default");
         scheduler.idFromName("default");
-        scheduler.jurisdiction?.("eu").idFromName("nightly");
+        scheduler.jurisdiction("eu").idFromName("nightly");
+        // Members the framework does not name by pass through unprefixed.
+        scheduler.get("opaque-id");
 
-        expect(seen[0]).toBe("bound:__lunora_do__:scheduler:default");
-        expect(seen[1]).toBe("id:__lunora_do__:scheduler:default");
-        expect(seen[2]).toBe("id:__lunora_do__:scheduler:nightly");
+        expect(seen).toStrictEqual([
+            "bound getByName:__lunora_do__:scheduler:default",
+            "bound id:__lunora_do__:scheduler:default",
+            "bound id:__lunora_do__:scheduler:nightly",
+            "bound get:opaque-id",
+        ]);
     });
 });

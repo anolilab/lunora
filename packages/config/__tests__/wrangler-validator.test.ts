@@ -2105,6 +2105,94 @@ export const schema = defineSchema({
                     expect(reported).toContain("never been deployed");
                 });
 
+                describe("a merged app (durableObjects.merge)", () => {
+                    /** A class-A project whose codegen wrote the merge module (and, optionally, the scheduler module). */
+                    const writeMergedProject = (durableObjects: string, migrations: string, extraModules: string[] = []): void => {
+                        writeSchema(SCHEMA_NO_GLOBAL);
+                        mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                        writeFileSync(join(workdir, "lunora", "_generated", "durableObjects.ts"), "export {};\n", "utf8");
+
+                        for (const module of extraModules) {
+                            writeFileSync(join(workdir, "lunora", "_generated", `${module}.ts`), "export {};\n", "utf8");
+                        }
+
+                        writeFileSync(
+                            join(workdir, "wrangler.jsonc"),
+                            `{
+    "name": "x",
+    "main": "virtual:lunora/worker",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [${durableObjects}] },
+    "migrations": [${migrations}]
+}
+`,
+                            "utf8",
+                        );
+                    };
+
+                    it("accepts SHARD bound to LunoraDO with a LunoraDO migration", () => {
+                        expect.assertions(2);
+
+                        writeMergedProject(`{ "name": "SHARD", "class_name": "LunoraDO" }`, `{ "tag": "v1", "new_sqlite_classes": ["LunoraDO"] }`);
+
+                        const result = validateWranglerProject({ projectRoot: workdir });
+
+                        expect(result.report.errors).toStrictEqual([]);
+                        expect(result.report.valid).toBe(true);
+                    });
+
+                    it("refuses a template migration that still creates a per-role class", () => {
+                        expect.assertions(1);
+
+                        // Every starter's `v1` lists ShardDO; reconcile only appends LunoraDO.
+                        writeMergedProject(
+                            `{ "name": "SHARD", "class_name": "LunoraDO" }`,
+                            `{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }, { "tag": "v2", "new_sqlite_classes": ["LunoraDO"] }`,
+                        );
+
+                        const result = validateWranglerProject({ projectRoot: workdir });
+
+                        expect(result.report.errors.join("\n")).toContain('replace "ShardDO" with "LunoraDO" in new_sqlite_classes');
+                    });
+
+                    it("warns about a missing LUNORA_ORIGIN_URL when LunoraDO hosts the scheduler", () => {
+                        expect.assertions(1);
+
+                        writeMergedProject(`{ "name": "SHARD", "class_name": "LunoraDO" }`, `{ "tag": "v1", "new_sqlite_classes": ["LunoraDO"] }`, [
+                            "scheduler",
+                        ]);
+
+                        const result = validateWranglerProject({ projectRoot: workdir });
+
+                        expect(result.report.warnings.some((warning) => warning.includes("LUNORA_ORIGIN_URL"))).toBe(true);
+                    });
+
+                    it("tells an app that turned the merge off that it cannot be undone after deploy", () => {
+                        expect.assertions(2);
+
+                        // No merge module any more, but SHARD still names the merged class.
+                        writeSchema(SCHEMA_NO_GLOBAL);
+                        mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                        writeFileSync(
+                            join(workdir, "wrangler.jsonc"),
+                            `{
+    "name": "x",
+    "main": "virtual:lunora/worker",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "LunoraDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LunoraDO"] }]
+}
+`,
+                            "utf8",
+                        );
+
+                        const reported = validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n");
+
+                        expect(reported).toContain("Turn `durableObjects.merge` back on");
+                        expect(reported).not.toContain("drop the binding");
+                    });
+                });
+
                 it("accepts a class the composed entry star-re-exports from a generated module", () => {
                     expect.assertions(1);
 

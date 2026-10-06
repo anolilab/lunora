@@ -13,6 +13,7 @@
  */
 
 import type { SchemaInfo } from "../schema-info";
+import { MERGED_DURABLE_OBJECT } from "../worker-entry";
 import {
     HINT_BINDING_RULES,
     objectBindingEntries,
@@ -150,11 +151,15 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     }
 
     const durableObjectBindings = objectBindingEntries(wrangler.durable_objects?.bindings);
-    const shardBinding = durableObjectBindings.find((binding) => binding.name === "SHARD" && binding.class_name === "ShardDO");
+    // `LunoraDO` when the app merges its Durable Objects (plan 462); whether the
+    // entry really exports that class is the project validator's export check.
+    const shardBinding = durableObjectBindings.find(
+        (binding) => binding.name === "SHARD" && (binding.class_name === "ShardDO" || binding.class_name === MERGED_DURABLE_OBJECT),
+    );
 
     if (!shardBinding) {
         errors.push(
-            'durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" } — your dev server auto-reconciles this on startup, or add the binding manually',
+            `durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" } (or "${MERGED_DURABLE_OBJECT}" when the app merges its Durable Objects) — your dev server auto-reconciles this on startup, or add the binding manually`,
         );
     }
 

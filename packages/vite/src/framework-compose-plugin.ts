@@ -3,7 +3,14 @@ import { join, resolve } from "node:path";
 
 import { findProjectConfigFile, loadProjectConfig } from "@lunora/codegen";
 import type { GeneratedClassModule } from "@lunora/config";
-import { GENERATED_CLASS_MODULES, MERGED_CLASS_MODULES, MERGED_DURABLE_OBJECTS_MODULE } from "@lunora/config";
+import {
+    DURABLE_OBJECT_BINDINGS,
+    GENERATED_CLASS_MODULES,
+    GENERATED_MODULE_DURABLE_OBJECTS,
+    isMergedProject,
+    isMergedRoleModule,
+    MERGED_DURABLE_OBJECTS_MODULE,
+} from "@lunora/config";
 import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
@@ -144,31 +151,49 @@ interface WorkerEntryComposition {
     shard?: LunoraShardConfig;
 }
 
+/** How the composed entry wires the framework Durable Objects. */
+interface DurableObjectWiring {
+    /** `export const ShardDO = …`, or the merged `LunoraDO`. */
+    classExport: string;
+    /** Extra imports the class export needs (none unless the app merges). */
+    imports: string;
+    /** The namespace expression a role module's builder call receives. */
+    namespace: (module: "scheduler" | "shardRegistry") => string;
+    /** Whether a generated class module is star-re-exported for wrangler. */
+    reexported: (module: GeneratedClassModule) => boolean;
+}
+
 /**
- * The imports and the Durable Object class export of the composed entry: the
- * plain `ShardDO`, or — when the app merges — one `LunoraDO` built from the
- * shard and whichever of the scheduler / registry classes the app has.
+ * The framework Durable Object wiring: the plain per-class bindings, or — when
+ * the app merges (plan 462) — one `LunoraDO` hosting the shard and each role
+ * module the app has, named after that module. A merged role's class is
+ * imported into `LunoraDO`, not re-exported, so wrangler binds one class.
  */
-const mergeDurableObjectsSource = (
-    base: string,
-    classModules: ReadonlyArray<GeneratedClassModule>,
-    merge: boolean,
-): { classExport: string; imports: string } => {
+const durableObjectWiring = (base: string, classModules: ReadonlyArray<GeneratedClassModule>, merge: boolean): DurableObjectWiring => {
     if (!merge) {
-        return { classExport: "export const ShardDO = app.ShardDO;", imports: "" };
+        return {
+            classExport: "export const ShardDO = app.ShardDO;",
+            imports: "",
+            namespace: (module) => `env.${module === "scheduler" ? DURABLE_OBJECT_BINDINGS.SchedulerDO : DURABLE_OBJECT_BINDINGS.ShardRegistryDO}`,
+            reexported: () => true,
+        };
     }
 
-    const roles = [
-        ...(classModules.includes("shardRegistry") ? [{ className: "ShardRegistryDO", module: "shardRegistry", role: "registry" }] : []),
-        ...(classModules.includes("scheduler") ? [{ className: "SchedulerDO", module: "scheduler", role: "scheduler" }] : []),
-    ];
-    const imports = [
-        `\nimport { mergeDurableObjects, roleNamespace } from "${base}/${MERGED_DURABLE_OBJECTS_MODULE}";`,
-        ...roles.map(({ className, module }) => `\nimport { ${className} } from "${base}/${module}";`),
-    ].join("");
-    const roleEntries = roles.map(({ className, role }) => `, ${role}: ${className}`).join("");
+    const roles = classModules.flatMap((module) => {
+        const className = GENERATED_MODULE_DURABLE_OBJECTS[module];
 
-    return { classExport: `export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO${roleEntries} });`, imports };
+        return className === undefined ? [] : [{ className, module }];
+    });
+
+    return {
+        classExport: `export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO${roles.map(({ className, module }) => `, ${module}: ${className}`).join("")} });`,
+        imports: [
+            `\nimport { mergeDurableObjects, roleNamespace } from "${base}/${MERGED_DURABLE_OBJECTS_MODULE}";`,
+            ...roles.map(({ className, module }) => `\nimport { ${className} } from "${base}/${module}";`),
+        ].join(""),
+        namespace: (module) => `roleNamespace(env.SHARD, "${module}")`,
+        reexported: (module) => !isMergedRoleModule(module),
+    };
 };
 
 const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBase: string, composition: WorkerEntryComposition = {}): string => {
@@ -196,11 +221,9 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
     // forward every generated class itself. Emitted per module that actually
     // exists (codegen only writes the file when the project declares that kind),
     // otherwise the import would fail to resolve.
-    //
-    // A merging app imports the scheduler and registry classes into `LunoraDO`
-    // instead: re-exporting them too would hand wrangler two more classes to bind.
+    const durableObjects = durableObjectWiring(base, classModules, mergeDurableObjects);
     const classReexports = classModules
-        .filter((module) => !mergeDurableObjects || !MERGED_CLASS_MODULES.has(module))
+        .filter((module) => durableObjects.reexported(module))
         .map((module) => `\nexport * from "${base}/${module}";\n`)
         .join("");
 
@@ -216,14 +239,11 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
     // plugin hard-codes. Keying it on the `wrangler.jsonc` binding instead let a
     // project declare the binding with no scheduler code and get
     // `TypeError: ….scheduler is not a function` at worker boot.
-    const schedulerNamespace = mergeDurableObjects ? `roleNamespace(env.SHARD, "scheduler")` : "env.SCHEDULER";
-    const schedulerCall = classModules.includes("scheduler") ? `\n    .scheduler({ namespace: (env) => ${schedulerNamespace} })` : "";
+    const schedulerCall = classModules.includes("scheduler") ? `\n    .scheduler({ namespace: (env) => ${durableObjects.namespace("scheduler")} })` : "";
     // The shard registry's twin of the above: keyed on the generated
     // `shardRegistry` module (a schema with `.shardBy()` tables), whose star
     // re-export forwards `ShardRegistryDO`.
-    const shardRegistryNamespace = mergeDurableObjects ? `roleNamespace(env.SHARD, "registry")` : "env.SHARD_REGISTRY";
-    const shardRegistryCall = classModules.includes("shardRegistry") ? `\n    .shardRegistry((env) => ${shardRegistryNamespace})` : "";
-    const merged = mergeDurableObjectsSource(base, classModules, mergeDurableObjects);
+    const shardRegistryCall = classModules.includes("shardRegistry") ? `\n    .shardRegistry((env) => ${durableObjects.namespace("shardRegistry")})` : "";
 
     // `configureApp` receives the builder and returns it, so the framework wiring
     // below (`.httpRouter`, `.build`) stays ours and the app's own capabilities
@@ -276,14 +296,14 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
 // Do not edit: emitted from the detected framework (${framework}). Point your
 // wrangler \`main\` here (or re-export it) instead of hand-wiring createWorker.
 ${wiring.imports}
-import { defineApp } from "${base}/app";${merged.imports}${appConfigImport}
+import { defineApp } from "${base}/app";${durableObjects.imports}${appConfigImport}
 
 const app = ${configureOpen}defineApp()
     .shard((env) => env.SHARD)${schedulerCall}${shardRegistryCall}${configureClose}
     .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
     .build();
 
-${merged.classExport}
+${durableObjects.classExport}
 ${classReexports}
 export default app;
 `;
@@ -365,7 +385,7 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
                 // time, so these fs checks decide which star re-exports the composed
                 // entry carries.
                 const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
-                const mergeDurableObjects = existsSync(join(generatedImportBase, `${MERGED_DURABLE_OBJECTS_MODULE}.ts`));
+                const mergeDurableObjects = isMergedProject(generatedImportBase);
 
                 const { error, specifier } = await appConfigSpecifier(options.projectRoot);
 

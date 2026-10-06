@@ -118,6 +118,14 @@ export interface TwoStepShardDirectory {
 export type ShardDirectory = DirectShardDirectory | TwoStepShardDirectory;
 
 /**
+ * The instance-name prefix reserved for framework roles that share the shard
+ * directory when an app merges its Durable Object classes (plan 462): the
+ * scheduler lives at `__lunora_do__:scheduler:<name>`. No shard key may carry
+ * it, so {@link resolveShard} refuses one on every host.
+ */
+export const LUNORA_ROLE_PREFIX = "__lunora_do__:";
+
+/**
  * Resolve a shard key to a stub against either directory shape. Uses direct
  * name lookup when the provider has it, and falls back to the two-step
  * `idForName` + `get` dance otherwise.
@@ -128,6 +136,10 @@ export type ShardDirectory = DirectShardDirectory | TwoStepShardDirectory;
  * signature does.
  */
 export const resolveShard = (directory: ShardDirectory, name: string, locationHint?: ShardRegionHint): ShardStub => {
+    if (name.startsWith(LUNORA_ROLE_PREFIX)) {
+        throw new Error(`shard key "${name}" uses the reserved "${LUNORA_ROLE_PREFIX}" prefix`);
+    }
+
     if (directory.getByName !== undefined) {
         return directory.getByName(name, locationHint);
     }

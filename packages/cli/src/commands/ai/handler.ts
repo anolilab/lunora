@@ -20,6 +20,7 @@ import { writeFileSync } from "node:fs";
 import { applyModify, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { capErrorBody } from "../../../../../shared/cap-error-body";
+import { nonEmpty, resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE, exitCodeForStatus } from "../../util/exit-code";
@@ -83,8 +84,6 @@ interface AiCommandResult {
     data?: AiGatewayData;
     error?: string;
 }
-
-const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined);
 
 const fail = (logger: Logger, code: number, message: string): AiCommandResult => {
     logger.error(message);
@@ -275,9 +274,8 @@ const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult>
     }
 
     const { gatewayId, parsed, text, wranglerPath } = project;
-    const environment = options.environment ?? process.env;
     const collectLogs = options.logs !== false;
-    const accountId = nonEmpty(environment.CLOUDFLARE_ACCOUNT_ID) ?? nonEmpty(parsed.account_id);
+    const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, parsed.account_id);
     // The account id is only read by bring-your-own providers (`resolveAiGateway`'s
     // `baseURL`); the binding path needs the gateway id alone.
     const variables: Record<string, string> = {
@@ -289,8 +287,6 @@ const runAiGateway = async (options: AiCommandOptions): Promise<AiCommandResult>
     if (options.dryRun === true) {
         return reportDryRun(logger, { accountId, action: "planned", collectLogs, dryRun: true, gatewayId, varsWritten: written.changed, wranglerPath });
     }
-
-    const token = nonEmpty(environment.CLOUDFLARE_API_TOKEN);
 
     if (token === undefined || accountId === undefined) {
         const missing = [

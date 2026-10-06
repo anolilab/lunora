@@ -354,7 +354,6 @@ export {
     reprojectionTables,
 } from "./reprojection-backfill";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
-export { default as LUNORA_ROLE_PREFIX } from "./role-name";
 export { readSchemaHistory, readSchemaVersion, recordSchemaVersion, SCHEMA_HISTORY_MAX_VERSIONS } from "./schema-history";
 export type {
     AggregateIndexDefinitionLike,

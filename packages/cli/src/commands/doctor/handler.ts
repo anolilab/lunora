@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
+import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import {
     DEV_VARS_FILE,
     discoverSchemaInfo,
@@ -24,6 +25,7 @@ import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import type { DurableObjectBudget } from "../../util/durable-object-budget";
 import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
@@ -748,25 +750,34 @@ const checkCliShadow = (cwd: string, executablePath: string | undefined, finding
     });
 };
 
-/** The doctor code for each budget verdict. */
-const DURABLE_OBJECT_BUDGET_CODES = {
-    fail: "do-class-budget-full",
-    info: "do-class-budget-unchecked",
-    pass: "do-class-budget-ok",
-    warn: "do-class-budget-near",
-} as const satisfies Record<FindingLevel, DoctorCode>;
+/** The doctor code and level for each budget verdict. A full account warns: it is a fact about the account, not this project. */
+const DURABLE_OBJECT_BUDGET_FINDINGS = {
+    full: { code: "do-class-budget-full", level: "warn" },
+    near: { code: "do-class-budget-near", level: "warn" },
+    ok: { code: "do-class-budget-ok", level: "pass" },
+    unchecked: { code: "do-class-budget-unchecked", level: "info" },
+} as const satisfies Record<DurableObjectBudget["verdict"], { code: DoctorCode; level: FindingLevel }>;
 
 /**
  * How close the Cloudflare account is to its Durable Object class cap (plan
  * 462). The one doctor check that goes online, and only with credentials in the
  * environment; without them it says it did not check.
  */
-const checkDurableObjectClassBudget = async (parsed: WranglerConfig | undefined, options: RunDoctorOptions, findings: Finding[]): Promise<void> => {
+const checkDurableObjectClassBudget = async (
+    cwd: string,
+    parsed: WranglerConfig | undefined,
+    options: RunDoctorOptions,
+    findings: Finding[],
+): Promise<void> => {
+    // A Cloudflare account limit: a celld / node target has none to check.
+    if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "cloudflare") {
+        return;
+    }
+
     const budget = await checkDurableObjectBudget({ accountId: parsed?.account_id, environment: options.environment, fetch: options.fetch });
 
     findings.push({
-        code: DURABLE_OBJECT_BUDGET_CODES[budget.level],
-        level: budget.level,
+        ...DURABLE_OBJECT_BUDGET_FINDINGS[budget.verdict],
         message: budget.message,
         ...(budget.fix === undefined ? {} : { fix: budget.fix }),
     });
@@ -806,7 +817,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     }
 
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
-    await checkDurableObjectClassBudget(parsed, options, findings);
+    await checkDurableObjectClassBudget(cwd, parsed, options, findings);
     checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);
 
     const summary: Record<FindingLevel, number> = { fail: 0, info: 0, pass: 0, warn: 0 };

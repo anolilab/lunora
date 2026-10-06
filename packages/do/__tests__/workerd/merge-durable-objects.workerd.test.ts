@@ -33,18 +33,36 @@ describe("mergeDurableObjects (workerd)", () => {
         const scheduler = roleNamespace(env.MERGED, "scheduler");
 
         await expect(env.MERGED.getByName("default").fetch("https://do.internal/fired").then(text)).resolves.toBe("shard:default");
-        await expect(scheduler.getByName?.("default").fetch("https://do.internal/fired").then(text)).resolves.toBe("pending");
+        await expect(scheduler.getByName("default").fetch("https://do.internal/fired").then(text)).resolves.toBe("pending");
+    });
+
+    it("hosts the real ShardRegistryDO behind the shardRegistry role", async () => {
+        expect.assertions(2);
+
+        // The framework class, not a stand-in: its constructor runs
+        // `blockConcurrencyWhile` over storage, which must work through the merge.
+        const registry = roleNamespace(env.MERGED, "shardRegistry").getByName("__lunora_shard_registry__");
+        const registered = await registry.fetch(
+            new Request("https://do.internal/register", { body: JSON.stringify({ shardKey: "user-42", table: "posts" }), method: "POST" }),
+        );
+
+        await registered.arrayBuffer();
+
+        expect(registered.ok).toBe(true);
+        await expect(registry.fetch("https://do.internal/list?table=posts").then(async (response) => await response.json())).resolves.toStrictEqual({
+            shardKeys: ["user-42"],
+        });
     });
 
     it("wakes the scheduler role for its alarm after eviction", async () => {
         expect.assertions(1);
 
-        const stub = roleNamespace(env.MERGED, "scheduler").getByName?.("nightly");
+        const stub = roleNamespace(env.MERGED, "scheduler").getByName("nightly");
 
-        await stub?.fetch("https://do.internal/arm").then(text);
+        await stub.fetch("https://do.internal/arm").then(text);
         await evictAllDurableObjects();
 
-        const fired = await pollFired(async () => (await stub?.fetch("https://do.internal/fired").then(text)) ?? "pending", 50);
+        const fired = await pollFired(async () => (await stub.fetch("https://do.internal/fired").then(text)) ?? "pending", 50);
 
         expect(fired).toBe("scheduler:__lunora_do__:scheduler:nightly");
     });

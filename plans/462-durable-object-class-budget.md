@@ -50,8 +50,9 @@ Nothing in Lunora knows the cap exists: `lunora deploy` would simply fail there.
 - An app that does not opt in produces byte-identical generated output, entry and
   wrangler config.
 - No data moves: the merged mode is for apps whose `SHARD` binding has never been
-  deployed against `ShardDO`. An existing app that flips the flag gets a doctor
-  FAIL, not a silent class swap that would orphan its shard data.
+  deployed against `ShardDO`. An existing app that flips the flag gets the export
+  validator's error (`verify`, `doctor`), not a silent class swap that would
+  orphan its shard data.
 
 ## 4. Design decisions
 
@@ -83,20 +84,31 @@ Nothing in Lunora knows the cap exists: `lunora deploy` would simply fail there.
 - **Budget check is advisory and online-only.** `doctor` and `deploy` call
   `GET /accounts/{id}/workers/durable_objects/namespaces` only when
   `CLOUDFLARE_API_TOKEN` and an account id are present; the plan tier is not
-  exposed, so the message names both caps. Warn at 90% of a cap, fail at the
-  Paid cap.
+  exposed, so the message names both caps. Warn within 10 classes of a cap
+  (exactly 100 included — a Free account cannot add another), fail at the Paid
+  cap, and give up after 5s rather than stall a deploy.
 
 ## 5. Workstreams
 
 1. **Budget check (S). Done.** `cli/src/util/durable-object-budget.ts`, doctor codes
-   `do-class-budget-ok` / `do-class-budget-near` / `do-class-budget-unchecked`,
-   a warning in `deploy` before wrangler runs.
-2. **Reserved role names (S). Done.** `LUNORA_ROLE_PREFIX` in `@lunora/shard-engine`;
-   `resolveShard` rejects shard keys carrying it.
+   `do-class-budget-ok` / `-near` / `-full` / `-unchecked`, a warning in `deploy`
+   before wrangler runs. The REST call goes through `shared/cloudflare-rest.ts`;
+   credentials through `cli/src/util/cloudflare-credentials.ts` (shared with `ai`).
+2. **Reserved role names (S). Done.** `LUNORA_ROLE_PREFIX` in `@lunora/platform`,
+   next to the shard-directory contract: the contract's `resolveShard` refuses a
+   key carrying it on every host, and the runtime's wrapper answers 400 first.
 3. **Merged class (M). Done.** `mergeDurableObjects` + `roleNamespace` in `@lunora/do`.
-4. **Codegen + entry + inference (M). Done** — the doctor FAIL landed as the export validator's error (what `verify`/`doctor` already run) with a merge-specific remedy, rather than a new doctor code. Config literal, `_generated/durableObjects.ts`,
-   the merged Vite entry, `LunoraDO` in binding inference, reconcile de-duplication,
-   a doctor FAIL when `SHARD` is still bound to `ShardDO`.
+   Roles are named after their generated modules (`scheduler`, `shardRegistry`);
+   config derives the merged-role classes from `GENERATED_MODULE_DURABLE_OBJECTS`
+   rather than keeping a second table, and `isMergedProject` is the one "does
+   this app merge" test. `roleNamespace` is a `Proxy`, so it keeps the caller's
+   namespace type.
+4. **Codegen + entry + inference (M). Done.** Config literal,
+   `_generated/durableObjects.ts`, the merged Vite entry, `LunoraDO` in binding
+   inference. An app that merges while `wrangler.jsonc` still binds a per-role
+   class gets the export validator's `wrangler-class-unexported` error (what
+   `verify` and `doctor` already run) with a merge-specific remedy — not a new
+   doctor code.
 5. **Docs (S). Done.** Deployment page section; doctor table rows.
 
 ## 6. Platform parity

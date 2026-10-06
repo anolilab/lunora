@@ -96,7 +96,7 @@ export type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost }
 
 // Shard directory
 export type { DirectShardDirectory, ShardDirectory, ShardJurisdiction, ShardRegionHint, ShardStub, TwoStepShardDirectory } from "./shard-directory";
-export { resolveShard } from "./shard-directory";
+export { LUNORA_ROLE_PREFIX, resolveShard } from "./shard-directory";
 // Shard host
 export type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "./shard-host";
 

@@ -2409,15 +2409,23 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `MERGED_ROLES` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `MaskPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `MergedDurableObject` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `MergedRole` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `MergedRoles` (interface)
+### `MergedRoles` (type)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -3622,6 +3630,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `KvValueType` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `LUNORA_ROLE_PREFIX` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 

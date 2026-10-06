@@ -366,8 +366,10 @@ describe("framework-compose-plugin", () => {
             });
 
             expect(code).toContain('.scheduler({ namespace: (env) => roleNamespace(env.SHARD, "scheduler") })');
-            expect(code).toContain('.shardRegistry((env) => roleNamespace(env.SHARD, "registry"))');
-            expect(code).toContain("export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, registry: ShardRegistryDO, scheduler: SchedulerDO });");
+            expect(code).toContain('.shardRegistry((env) => roleNamespace(env.SHARD, "shardRegistry"))');
+            expect(code).toContain(
+                "export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, shardRegistry: ShardRegistryDO });",
+            );
             expect(code).not.toContain("export const ShardDO");
             expect(code).not.toContain(`export * from "./lunora/_generated/scheduler";`);
             expect(code).toContain(`import { mergeDurableObjects, roleNamespace } from "./lunora/_generated/durableObjects";`);

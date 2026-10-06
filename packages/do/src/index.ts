@@ -1,5 +1,5 @@
-export type { DurableObjectHandlers, MergedRole, MergedRoles, RoleClass, RoleNamespaceTarget } from "./merge-durable-objects";
-export { mergeDurableObjects, roleNamespace } from "./merge-durable-objects";
+export type { DurableObjectHandlers, MergedDurableObject, MergedRole, MergedRoles, RoleClass, RoleNamespaceTarget } from "./merge-durable-objects";
+export { MERGED_ROLES, mergeDurableObjects, roleNamespace } from "./merge-durable-objects";
 // `external-source-cursor` is an internal ingest detail (the durable watermark
 // codec + reserved-table helpers), consumed only by `external-source-pull` and its
 // own tests — not re-exported, mirroring `external-source-diff`'s module-private

@@ -21,6 +21,7 @@ import { mergeDurableObjects } from "../../src/merge-durable-objects";
 import { SessionDO } from "../../src/session-do";
 import type { ShardDOState } from "../../src/shard-do";
 import { ShardDO } from "../../src/shard-do";
+import { ShardRegistryDO } from "../../src/shard-registry-do";
 import messagesSchema from "../_helpers/messages-schema";
 
 interface Env {
@@ -528,7 +529,7 @@ class MergedSchedulerRole {
     }
 }
 
-const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole });
+const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole, shardRegistry: ShardRegistryDO });
 
 const handler = {
     async fetch(_request: Request, _env: Env): Promise<Response> {

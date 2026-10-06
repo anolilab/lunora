@@ -554,6 +554,22 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
     return literals;
 };
 
+/**
+ * `lunora.config`'s `durableObjects.merge` (plan 462). An unreadable value is
+ * said out loud and treated as off: merging changes which classes wrangler binds,
+ * so it is never switched on by a value the parser could not prove.
+ */
+const readMergeDurableObjects = (projectRoot: string): boolean => {
+    const { durableObjects } = readProjectConfigLiterals(projectRoot);
+
+    if (durableObjects?.unreadable) {
+        // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `codegen.exclude`'s warning.
+        console.warn("@lunora/codegen: `durableObjects.merge` in lunora.config is not a boolean literal — the Durable Object classes stay separate.");
+    }
+
+    return durableObjects?.merge === true;
+};
+
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral };
 export { findProjectConfigFile, PROJECT_CONFIG_FILENAMES } from "./project-config-path";
-export { loadProjectConfig, readProjectConfigLiterals };
+export { loadProjectConfig, readMergeDurableObjects, readProjectConfigLiterals };

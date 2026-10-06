@@ -12,11 +12,13 @@ import { discoverSchemaInfo } from "../schema-info";
 import {
     COMPOSED_ENTRY_DURABLE_OBJECTS,
     GENERATED_CLASS_MODULES,
+    GENERATED_DIRECTORY,
     isFrameworkDurableObject,
     MERGED_DURABLE_OBJECT,
     MERGED_ROLE_DURABLE_OBJECTS,
 } from "../worker-entry";
-import { objectBindingEntries } from "./validate-bindings";
+import { foldMigrationClasses, objectBindingEntries } from "./validate-bindings";
+import { validateSchedulerOrigin } from "./validate-settings";
 import type { CapabilityMethod, WorkerEntry, WorkerEntryLocation } from "./worker-entry-checks";
 import { locateWorkerEntry, readWorkerEntry, scanAppChains } from "./worker-entry-checks";
 import type { WranglerConfig, WranglerContainerEntry, WranglerValidationReport } from "./wrangler-config";
@@ -230,6 +232,17 @@ const remedyFor = (className: string, entry: WorkerEntry): string => {
         );
     }
 
+    // The merge was switched off after `SHARD` was bound to the merged class.
+    // Once deployed, the shard data lives in that class and nothing moves it
+    // back, so rebinding `SHARD` — or dropping it, as the generic advice below
+    // would say — orphans all of it.
+    if (className === MERGED_DURABLE_OBJECT) {
+        return (
+            `${MERGED_DURABLE_OBJECT} is the merged class (\`durableObjects.merge\` in lunora.config), and merging cannot be undone once deployed: ` +
+            `the shard data lives in ${MERGED_DURABLE_OBJECT}. Turn \`durableObjects.merge\` back on. Only a Worker that has never been deployed may rebind SHARD to "ShardDO".`
+        );
+    }
+
     if (entry.kind !== "composed") {
         return (
             `Re-export it from the module that defines it (\`export { ${className} } from "./…";\`), ` +
@@ -321,6 +334,23 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, entry: WorkerEnt
             `wrangler refuses to bundle a Worker whose ${missed.label === "workflows" ? "Workflow" : "Durable Object"} classes are not exported. ${remedyFor(missed.className, entry)}`,
     );
 };
+
+/**
+ * Migrations that still create a per-role class in an app that merges its
+ * Durable Objects. Every template's `v1` lists `ShardDO`, and reconcile only
+ * appends, so an app that opts in before its first deploy would otherwise
+ * create classes its entry no longer exports — and spend the account classes
+ * the merge exists to save.
+ */
+const collectMergedMigrationErrors = (wrangler: WranglerConfig): string[] =>
+    [...foldMigrationClasses(wrangler.migrations)]
+        .filter((className) => MERGED_ROLE_DURABLE_OBJECTS.has(className))
+        .map(
+            (className) =>
+                `migrations create class "${className}", which this app hosts in ${MERGED_DURABLE_OBJECT} because it merges its Durable Objects (\`durableObjects.merge\`). ` +
+                `Before the first deploy, replace "${className}" with "${MERGED_DURABLE_OBJECT}" in new_sqlite_classes; ` +
+                `a Worker already deployed with "${className}" keeps its data there and cannot merge — turn \`durableObjects.merge\` off.`,
+        );
 
 /**
  * `main` names a file `wrangler` will not find. {@link locateWorkerEntry} has
@@ -424,6 +454,17 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
 
     if (workerEntry !== undefined) {
         report.errors.push(...collectUnexportedClassErrors(resolvedWrangler, workerEntry));
+    }
+
+    if (workerEntry?.exports?.has(MERGED_DURABLE_OBJECT) === true) {
+        report.errors.push(...collectMergedMigrationErrors(resolvedWrangler));
+
+        // `LunoraDO` hosts the scheduler whenever codegen wrote its module, and
+        // the config-only check above cannot see that — it looks for a
+        // `SchedulerDO` binding a merged app never has.
+        if (existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "scheduler.ts"))) {
+            validateSchedulerOrigin(resolvedWrangler, options.environment, report.warnings, true);
+        }
     }
 
     // Deliberately outside that guard: it reads the project, and an unresolvable

@@ -1,6 +1,5 @@
 import type { ShardDirectory, ShardJurisdiction } from "@lunora/platform";
-import { resolveShard as resolveShardStub } from "@lunora/platform";
-import { LUNORA_ROLE_PREFIX } from "@lunora/shard-engine";
+import { LUNORA_ROLE_PREFIX, resolveShard as resolveShardStub } from "@lunora/platform";
 
 import type { RegionHint } from "../../../shared/region-hint";
 import { LunoraError } from "./errors";
@@ -221,9 +220,10 @@ export const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: 
  * pass on every call and never safe to depend on: callers must behave
  * identically when the shard turns out to live somewhere else entirely.
  *
- * A key carrying {@link LUNORA_ROLE_PREFIX} is refused: in an app that merges
- * its Durable Object classes, those names belong to the scheduler and the shard
- * registry, and a shard route must never reach them.
+ * A key carrying {@link LUNORA_ROLE_PREFIX} is refused with a 400 (the platform
+ * contract refuses it too): in an app that merges its Durable Object classes,
+ * those names belong to the scheduler and the shard registry. Every caller's key
+ * is checked — the framework's own role names reach here unprefixed.
  */
 export const resolveShard = (namespace: ShardNamespaceInput, shardKey: string, locationHint?: RegionHint): ResolvedShard => {
     if (shardKey.startsWith(LUNORA_ROLE_PREFIX)) {

@@ -78,24 +78,37 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `MERGED_ROLES` (const)
+
+```ts
+const MERGED_ROLES: readonly [
+    "scheduler",
+    "shardRegistry"
+];
+```
+
 ### `MaskPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `MergedDurableObject` (type)
+
+```ts
+type MergedDurableObject<Env> = new (state: DurableObjectState, env: Env) => Required<DurableObjectHandlers>;
+```
+
 ### `MergedRole` (type)
 
 ```ts
-type MergedRole = "registry" | "scheduler";
+type MergedRole = (typeof MERGED_ROLES)[number];
 ```
 
-### `MergedRoles` (interface)
+### `MergedRoles` (type)
 
 ```ts
-interface MergedRoles<Env> {
-    registry?: RoleClass<Env>;
-    scheduler?: RoleClass<Env>;
-    shard: RoleClass<Env>;
-}
+type MergedRoles = Partial<Record<MergedRole, RoleClass>> & {
+    shard: RoleClass;
+};
 ```
 
 ### `MigrationRunResult` (interface)
@@ -151,17 +164,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `RoleClass` (type)
 
 ```ts
-type RoleClass<Env> = new (state: DurableObjectState, env: Env) => DurableObjectHandlers;
+type RoleClass = new (state: never, env: never) => DurableObjectHandlers;
 ```
 
 ### `RoleNamespaceTarget` (interface)
 
 ```ts
 interface RoleNamespaceTarget {
-    get: (id: DurableObjectId, options?: DurableObjectNamespaceGetDurableObjectOptions) => DurableObjectStub;
-    getByName?: (name: string, options?: DurableObjectNamespaceGetDurableObjectOptions) => DurableObjectStub;
-    idFromName: (name: string) => DurableObjectId;
-    jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => RoleNamespaceTarget;
+    idFromName: (name: string) => unknown;
 }
 ```
 
@@ -789,7 +799,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `mergeDurableObjects` (const)
 
 ```ts
-const mergeDurableObjects: <Env>(roles: MergedRoles<Env>) => RoleClass<Env>;
+const mergeDurableObjects: <Env = unknown>(roles: MergedRoles) => MergedDurableObject<Env>;
 ```
 
 ### `pullExternalSourceIncrementalTick` (const)
@@ -811,7 +821,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `roleNamespace` (const)
 
 ```ts
-const roleNamespace: (namespace: RoleNamespaceTarget, role: MergedRole) => RoleNamespaceTarget;
+const roleNamespace: <Namespace extends RoleNamespaceTarget>(namespace: Namespace, role: MergedRole) => Namespace;
 ```
 
 ### `runDataMigration` (const)
