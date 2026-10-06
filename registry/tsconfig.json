@@ -32,6 +32,8 @@
         "auth-ui-solid/**",
         "auth-ui-solid-v2/**",
         "auth-ui-angular/**",
+        "saas-ui-react/**",
+        "saas-ui-svelte/**",
         "crons/crons.ts"
     ],
     "include": [

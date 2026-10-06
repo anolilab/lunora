@@ -151,6 +151,64 @@ describe("insertSchemaExtension", () => {
         expect(second.text).toContain(".extend(presence.extension)");
     });
 
+    it("stacks blocks side by side rather than nesting each inside the last", () => {
+        expect.assertions(1);
+
+        let text = DEFAULT_EXPORT_SCHEMA;
+
+        for (const key of ["ratelimit", "saas", "presence"]) {
+            const result = insertSchemaExtension(text, key);
+
+            if (!result.ok) {
+                throw new Error(`merge failed for ${key}: ${result.reason}`);
+            }
+
+            text = result.text;
+        }
+
+        expect(text.slice(text.lastIndexOf("})\n"))).toBe(`})
+    // lunora:add:ratelimit:start
+    .extend(ratelimit.extension)
+    // lunora:add:ratelimit:end
+    // lunora:add:saas:start
+    .extend(saas.extension)
+    // lunora:add:saas:end
+    // lunora:add:presence:start
+    .extend(presence.extension)
+    // lunora:add:presence:end
+;
+`);
+    });
+
+    it("does not nest a block inside one whose end marker Prettier moved past the `;`", () => {
+        expect.assertions(1);
+
+        const prettierFormatted = `import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    messages: defineTable({ text: v.string() }),
+})
+    // lunora:add:ratelimit:start
+    .extend(ratelimit.extension);
+// lunora:add:ratelimit:end
+`;
+        const result = insertSchemaExtension(prettierFormatted, "presence");
+
+        if (!result.ok) {
+            throw new Error(result.reason);
+        }
+
+        expect(result.text.slice(result.text.lastIndexOf("})\n"))).toBe(`})
+    // lunora:add:ratelimit:start
+    .extend(ratelimit.extension)
+    // lunora:add:ratelimit:end
+    // lunora:add:presence:start
+    .extend(presence.extension)
+    // lunora:add:presence:end
+;
+`);
+    });
+
     it("reports no-define-schema when there is no defineSchema call", () => {
         expect.assertions(1);
 

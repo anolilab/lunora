@@ -1799,6 +1799,31 @@ originally reported.
 | 450  | Remove the `workflow_duplicate_step_name` lint — its premise is false       | P2  | bug       | TODO   |
 | 451  | Make private packages use `workspace:*` for intra-repo deps, and enforce it | P2  | release   | TODO   |
 
+## SaaS Kit (2026-09-08)
+
+A competitive audit of 24 SaaS starter kits — read first-hand from their own
+repositories, across JS/TS (`LubomirGeorgiev/cloudflare-workers-nextjs-saas-template`,
+`wasp-lang/open-saas`, `boxyhq`, `ixartz`, `saasfly`, `nextacular`,
+`Kiranism/next-shadcn-dashboard-starter` and others), Laravel
+(`laravel/{react,vue,livewire}-starter-kit` plus `laravel/maestro` and
+`laravel/chisel`, and `thedevdojo/wave`), Rails (`bullet_train`), Go
+(`go-saas/kit`) and Django (`apptension/saas-boilerplate`) — against what this
+repo already ships.
+
+Two findings set the shape. Every ingredient exists as a registry item or package
+and **none of them are composed** — the richest template is `templates/expo` at 26
+files. And the kit has to work across every meta-framework we template, which
+Laravel solves by building three flavours from one orchestrator repo: **we already
+own the better half of that mechanism**, in `packages/auth-ui` (61 framework-agnostic
+core files against 15–18 per view) mirrored into six registry items by
+`scripts/sync-auth-ui-registry.mjs` under a `lint:registry:sync` drift gate. Six
+views cover eleven of the thirteen templates. No kit surveyed makes live data the
+default read path, and six payment providers is a breadth none of them match.
+
+| Plan | Title                                                                | Pri | Cat     | Status                                                                                                                                                                                                                                                                    |
+| ---- | -------------------------------------------------------------------- | --- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 454  | Ship a Lunora SaaS Kit (`templates/saas`) composed from the registry | P2  | product | IN PROGRESS — the registry item, `packages/saas-ui` core, the React and Svelte views, `templates/saas`, billing and presence have landed; app admin, the four remaining view ports, the public API surface, React Native, the docs/demo surface and the last gates remain |
+
 ## Reference — Convex primitives gap analysis (2026-08-21)
 
 `convex-primitives-gap-analysis.md` — verifies, against `get-convex/convex-backend`
