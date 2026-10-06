@@ -1,4 +1,4 @@
-import type { HostdJob } from "@lunora/hostd/protocol";
+import type { HostdJob } from "../src/hostd/protocol";
 import { describe, expect, it } from "vitest";
 
 import type { BoxSession } from "../src/boxes/session-client";

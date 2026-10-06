@@ -9,8 +9,8 @@
  * aliases; {@link normaliseFleets} keeps the stored list to that bound and one
  * entry per alias whatever reaches it.
  */
-import type { FleetSummary, HostdJob } from "@lunora/hostd/protocol";
-import { HOSTD_PROTOCOL_LIMITS } from "@lunora/hostd/protocol";
+import type { FleetSummary, HostdJob } from "../hostd/protocol";
+import { HOSTD_PROTOCOL_LIMITS } from "../hostd/protocol";
 
 import type { JobOutcome } from "./jobs";
 

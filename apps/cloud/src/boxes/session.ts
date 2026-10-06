@@ -3,7 +3,7 @@
  * (plan 458 G11, `protocol/hostd/README.md` §2).
  *
  * Every frame a box sends is untrusted input (plan 458 §8): it is size-capped
- * and strictly decoded by `@lunora/hostd/protocol`, rate-limited per socket,
+ * and strictly decoded by the hostd protocol (`../hostd/protocol.ts`), rate-limited per socket,
  * and only accepted in the phase the protocol allows it. The handshake is:
  *
  * 1. the box sends `hello` — its protocol version is negotiated BEFORE the rest
@@ -24,8 +24,8 @@
  * ({@link SessionEffect} `hello`), and the session keeps them in memory until
  * the box authenticates.
  */
-import type { BoxResources, BoxVersions, FleetSummary, HostdFrame, ProgressMessage, ReportMessage, ResultMessage } from "@lunora/hostd/protocol";
-import { challengeSigningPayload, decodeBoxMessage, negotiateProtocolVersion, peekProtocolVersion } from "@lunora/hostd/protocol";
+import type { BoxResources, BoxVersions, FleetSummary, HostdFrame, ProgressMessage, ReportMessage, ResultMessage } from "../hostd/protocol";
+import { challengeSigningPayload, decodeBoxMessage, negotiateProtocolVersion, peekProtocolVersion } from "../hostd/protocol";
 
 import { randomBase64Url, verifyBoxSignature } from "./encoding";
 

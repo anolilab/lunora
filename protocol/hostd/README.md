@@ -7,13 +7,14 @@ connection.
 
 This document is normative. The golden frames in
 [`fixtures/messages.json`](./fixtures/messages.json) are its machine-checkable
-form: the reference implementation is tested against them
-(`apps/hostd/__tests__/protocol.test.ts`), and an implementation in any other
-language should run the same file.
+form: both implementations are tested against them, and an implementation in
+any other language should run the same file.
 
-- Reference implementation: `apps/hostd/src/protocol.ts`, published inside the
-  workspace as `@lunora/hostd/protocol` (zero dependencies; runs in Node and
-  workerd).
+- The control plane's: `apps/cloud/src/hostd/protocol.ts` (TypeScript, zero
+  dependencies; runs in workerd), tested by
+  `apps/cloud/__tests__/hostd/protocol.test.ts`.
+- The box's: `lunora-hostd`, in Rust (`apps/hostd/src/wire/`), tested by
+  `apps/hostd/src/wire/codec.rs` and `signing.rs`.
 - Unrelated to the client↔server protocol in [`../README.md`](../README.md):
   different peers, different endpoint, no shared frames.
 
@@ -367,10 +368,11 @@ An implementation conforms when, against `fixtures/messages.json`:
 A release is the set of binaries a box installs: `hostd`, celld and Caddy, one
 artifact per platform each. An `upgrade` job names it by `releaseId` and points
 at its signed manifest with `manifestUrl` (§5.2); `install.sh` starts from the
-same file. Reference implementation: `@lunora/hostd/release` (types, validator,
-canonical bytes and signature verification on WebCrypto; runs in Node and
-workerd alike) and `@lunora/hostd/release/verify` (signing and artifact
-hashing; Node only).
+same file. Implementations: the control plane's `apps/cloud/src/hostd/release.ts`
+(types, validator, canonical bytes and signature verification on WebCrypto, in
+workerd), and the box's `apps/hostd/src/release.rs` (the same, plus artifact
+checks), which the release tooling (`hostd-release`) signs with. The keys both
+pin are `protocol/hostd/trusted-release-keys.json`.
 
 ### 8.1 Envelope
 

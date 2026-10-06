@@ -23,8 +23,8 @@
  *   (`GET /v1/boxes/connect`) — so none of the rest is reachable from outside.
  */
 import type { D1DatabaseLike } from "@lunora/d1";
-import type { BoxVersions, CloudMessage, FleetSummary, HostdJob, ReportMessage } from "@lunora/hostd/protocol";
-import { encodeMessage, HOSTD_PROTOCOL_LIMITS, isErrorCode, isNonce, isProtocolId } from "@lunora/hostd/protocol";
+import type { BoxVersions, CloudMessage, FleetSummary, HostdJob, ReportMessage } from "../hostd/protocol";
+import { encodeMessage, HOSTD_PROTOCOL_LIMITS, isErrorCode, isNonce, isProtocolId } from "../hostd/protocol";
 import { DurableObject } from "cloudflare:workers";
 
 import type { ControlPlaneStore } from "../d1-store";

@@ -1,5 +1,5 @@
-import type { HostdFrame } from "@lunora/hostd/protocol";
-import { decodeBoxMessage } from "@lunora/hostd/protocol";
+import type { HostdFrame } from "../src/hostd/protocol";
+import { decodeBoxMessage } from "../src/hostd/protocol";
 import { bench, describe } from "vitest";
 
 import type { BoxKey } from "../__tests__/support/box-session-fakes";

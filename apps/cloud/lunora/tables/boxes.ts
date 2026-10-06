@@ -15,10 +15,10 @@ import { defineTable, v } from "@lunora/server";
  */
 const boxStatus = v.union(v.literal("pending"), v.literal("online"), v.literal("offline"), v.literal("revoked"));
 
-/** The three binaries on a box, as its `hostd` reports them (`@lunora/hostd/protocol` `BoxVersions`). Displayed, never parsed. */
+/** The three binaries on a box, as its `hostd` reports them (`BoxVersions` in `src/hostd/wire/types.ts`). Displayed, never parsed. */
 const boxVersions = v.object({ caddy: v.string(), celld: v.string(), hostd: v.string() });
 
-/** One celld fleet on a box, as its `hostd` reports it (`@lunora/hostd/protocol` `FleetSummary`). */
+/** One celld fleet on a box, as its `hostd` reports it (`FleetSummary` in `src/hostd/wire/types.ts`). */
 const boxFleet = v.object({
     alias: v.string(),
     deploymentId: v.optional(v.string()),

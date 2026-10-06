@@ -372,8 +372,8 @@
               "run": |
                   pnpm --filter "@lunora/platform-celld" run test --project celld
 
-    # The `@lunora/hostd` lane (`pnpm run test:hostd`, project `integration`, gated
-    # behind LUNORA_HOSTD_TESTS=1): the Rust daemon (apps/hostd/daemon), built in
+    # The hostd lane (apps/hostd/tests/lane.rs and lane_upgrade.rs, `#[ignore]`d and gated
+    # behind LUNORA_HOSTD_TESTS=1): the Rust daemon (apps/hostd), built in
     # release mode, against the pinned celld release, a Caddy built from the pinned
     # source exactly as hostd-release.yml builds it, moto, and an in-process fake control
     # plane — enrol, session, deploy, HTTP through Caddy, a usage report, the target-
@@ -411,17 +411,6 @@
 
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
-
-            - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
-              "with":
-                  "node-version": "24.16"
-                  "cache-prefix": "test-hostd"
-                  "install-node-gyp": "false"
-                  "skip-playwright": "true"
-                  "enable-nx-cache": "false"
-                  "run-npm-audit": "false"
-                  "run-signatures-audit": "false"
 
             - "name": "Setup go"
               "uses": "actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00" # v6.0.0
@@ -464,7 +453,7 @@
                   cat "${RUNNER_TEMP}/moto.log" >&2
                   exit 1
 
-            # apps/hostd/daemon/rust-toolchain.toml pins the same channel.
+            # apps/hostd/rust-toolchain.toml pins the same channel.
             - "name": "Install Rust stable toolchain"
               "uses": "dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9" # v1
               "with":
@@ -479,28 +468,28 @@
                   "path": |
                       ~/.cargo/registry
                       ~/.cargo/git
-                      apps/hostd/daemon/target
-                  "key": "hostd-cargo-test-${{ hashFiles('apps/hostd/daemon/Cargo.lock', 'apps/hostd/daemon/rust-toolchain.toml') }}"
+                      apps/hostd/target
+                  "key": "hostd-cargo-test-${{ hashFiles('apps/hostd/Cargo.lock', 'apps/hostd/rust-toolchain.toml') }}"
                   "restore-keys": |
                       hostd-cargo-test-
 
-            - "name": "Build @lunora/hostd and the daemon"
+            # The daemon as hostd-release.yml builds it, and the lane's test binaries, as the
+            # runner's user: the root step below then only runs them.
+            - "name": "Build the daemon and the lane"
+              "working-directory": "apps/hostd"
               "run": |
-                  pnpm exec vis run build --query "project=hostd"
-                  pnpm --filter "@lunora/hostd" run build:daemon
-                  echo "LUNORA_HOSTD_BIN=${GITHUB_WORKSPACE}/apps/hostd/daemon/target/release/lunora-hostd" >> "$GITHUB_ENV"
+                  cargo build --release --locked
+                  cargo test --locked --features test-fakes --test lane --test lane_upgrade --no-run
+                  echo "LUNORA_HOSTD_BIN=${GITHUB_WORKSPACE}/apps/hostd/target/release/lunora-hostd" >> "$GITHUB_ENV"
 
             - "name": "Shellcheck install.sh"
               "run": "shellcheck -x apps/hostd/install/install.sh"
 
-            # Root, for install.sh's functions, the unit, nft and the probes; the
-            # lane's own environment (and the runner's node) carried over. vitest
-            # runs directly, never through pnpm: as root, pnpm's pre-run deps check
-            # sees a foreign store and config, decides to reinstall, and aborts the
-            # modules purge for want of a TTY (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY)
-            # before a test starts. RUSTUP_HOME and CARGO_HOME point root at the runner's
-            # Rust toolchain: the upgrade test builds lunora-hostd variants with cargo, and
-            # root's own rustup has no default toolchain.
+            # Root, for install.sh's functions, the unit, nft and the probes; the lane's own
+            # environment carried over. RUSTUP_HOME and CARGO_HOME point root at the runner's
+            # Rust toolchain: cargo runs the lane, and lane_upgrade builds lunora-hostd variants
+            # with it, and root's own rustup has no default toolchain. One box at a time: the
+            # systemd box takes the real paths, the unit and port 80.
             - "name": "Run the hostd lane"
               "working-directory": "apps/hostd"
               "env":
@@ -510,7 +499,7 @@
               "run": |
                   sudo --preserve-env=LUNORA_HOSTD_TESTS,LUNORA_HOSTD_ISOLATION,LUNORA_HOSTD_S3_ENDPOINT,LUNORA_HOSTD_BIN,LUNORA_CELLD_BIN,LUNORA_CADDY_BIN \
                       env "PATH=${PATH}" "RUSTUP_HOME=${RUSTUP_HOME:-${HOME}/.rustup}" "CARGO_HOME=${CARGO_HOME:-${HOME}/.cargo}" \
-                      ./node_modules/.bin/vitest run --project integration
+                      cargo test --locked --features test-fakes --test lane --test lane_upgrade -- --ignored --test-threads=1 --nocapture
 
             - "name": "Show hostd's journal"
               "if": "failure()"

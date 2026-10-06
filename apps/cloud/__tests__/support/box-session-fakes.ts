@@ -5,8 +5,8 @@
  * {@link memoryStore}. `WebSocketPair` is workerd-only, so a test "accepts" a
  * socket by handing it to the state directly instead of upgrading.
  */
-import type { CloudMessage } from "@lunora/hostd/protocol";
-import { challengeSigningPayload, decodeCloudMessage, requestSigningPayload } from "@lunora/hostd/protocol";
+import type { CloudMessage } from "../../src/hostd/protocol";
+import { challengeSigningPayload, decodeCloudMessage, requestSigningPayload } from "../../src/hostd/protocol";
 
 import { toBase64Url } from "../../src/boxes/encoding";
 import type { SessionAttachment } from "../../src/boxes/session";

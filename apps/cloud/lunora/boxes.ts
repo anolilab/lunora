@@ -1,5 +1,5 @@
-import type { BoxVersions, FleetSummary } from "@lunora/hostd/protocol";
-import { isVersion } from "@lunora/hostd/protocol";
+import type { BoxVersions, FleetSummary } from "../src/hostd/protocol";
+import { isVersion } from "../src/hostd/protocol";
 import { LunoraError } from "@lunora/server";
 
 import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";

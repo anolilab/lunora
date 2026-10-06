@@ -13,9 +13,9 @@
  * markers are written; the prose around them is hand-authored.
  *
  * The contract is read as SOURCE and evaluated from its AST rather than
- * imported. Importing it would pull `@lunora/hostd/protocol` (a built `dist/`)
- * into the docs build and test, and `apps/docs` has no dependency edge on
- * `apps/cloud` for a build to follow. The evaluator below handles exactly:
+ * imported. Importing it would pull `apps/cloud`'s modules into the docs build
+ * and test, and `apps/docs` has no dependency edge on `apps/cloud` for a build
+ * to follow. The evaluator below handles exactly:
  * literals; `as` / `as const` / `satisfies` wrappers; object spreads; references
  * to top-level constants — of the contract, or imported from a module listed in
  * {@link MODULE_SOURCES} (the `celld-vps` row is `@lunora/config/celld`'s
