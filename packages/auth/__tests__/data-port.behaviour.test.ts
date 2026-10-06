@@ -135,6 +135,9 @@ describe("auth data port", () => {
             { doc: { id: "a1", userId: "nobody@secret.test" }, table: "account" },
             { doc: { id: "s1", userId: "u1" }, table: "session" },
             { doc: { action: "forged" }, table: AUTH_AUDIT_TABLE },
+            // SQLite resolves names case-insensitively: a respelling is the same table.
+            { doc: { id: "s2", userId: "u1" }, table: "SESSION" },
+            { doc: { action: "forged" }, table: AUTH_AUDIT_TABLE.toUpperCase() },
         ]);
         const never = (table: string): string => `"${table}" is never imported (credentials and the audit log stay with their deployment)`;
 
@@ -144,6 +147,8 @@ describe("auth data port", () => {
             { index: 1, message: `"account": FOREIGN KEY constraint failed`, table: "account" },
             { index: 2, message: never("session"), table: "session" },
             { index: 3, message: never(AUTH_AUDIT_TABLE), table: AUTH_AUDIT_TABLE },
+            { index: 4, message: never("SESSION"), table: "SESSION" },
+            { index: 5, message: never(AUTH_AUDIT_TABLE.toUpperCase()), table: AUTH_AUDIT_TABLE.toUpperCase() },
         ]);
     });
 

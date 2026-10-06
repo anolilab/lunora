@@ -75,5 +75,15 @@ describe("auth data port on Durable Object SQLite", () => {
         const again = await target.importRows(rows);
 
         expect(again).toStrictEqual({ conflicts: rows.length, errors: [], inserted: 0 });
+
+        // Only the object's own movable tables, spelled as SQLite stores them: a respelled
+        // session table or one of the move's own bookkeeping tables is refused, not written.
+        const forged = await target.importRows([
+            { doc: { createdAt: 0, expiresAt: 0, id: "s9", token: "t9", updatedAt: 0, userId: "u1" }, table: "SESSION" },
+            { doc: { id: "x" }, table: "_LUNORA_NOT_A_TABLE" },
+        ]);
+
+        expect(forged.inserted).toBe(0);
+        expect(forged.errors).toHaveLength(2);
     });
 });

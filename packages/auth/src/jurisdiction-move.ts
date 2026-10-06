@@ -54,7 +54,7 @@ import { LunoraError } from "@lunora/errors";
 import { contentDigest } from "../../../shared/content-digest";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { insertAuthRows } from "./data-port";
+import { insertAuthRows, isUnmovableAuthTable } from "./data-port";
 import type { DoStorageLike } from "./do-store";
 
 /** The internal route both halves of the move are served on. Not part of `/api/auth/*`. */
@@ -735,10 +735,15 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
         case "import": {
             context.prepare();
 
+            // An allow-list of this object's own tables, matched exactly as `sqlite_master`
+            // spells them: SQLite resolves names case-insensitively, so a deny-list
+            // (`!isReservedTable`) let `"SESSION"` or `"_LUNORA_MOVE"` through to the real table.
+            const importable = new Set(tableNames(storage).filter((name) => !isUnmovableAuthTable(name)));
+
             return insertAuthRows(
                 { all: (query, parameters) => Promise.resolve(all(storage, query, ...parameters)) },
                 (body["rows"] ?? []) as { doc: Row; table: string }[],
-                (table) => !isReservedTable(table),
+                (table) => importable.has(table),
             );
         }
         case "manifest": {

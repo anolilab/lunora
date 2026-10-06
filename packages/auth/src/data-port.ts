@@ -61,7 +61,12 @@ const LIVE_CREDENTIAL_TABLES: ReadonlySet<string> = new Set(["session", "verific
  * history of this deployment — a restore must not rewrite it, and an import that
  * could add rows to it would let whoever holds the admin token forge entries.
  */
-const isUnmovableAuthTable = (table: string): boolean => LIVE_CREDENTIAL_TABLES.has(table) || table === AUTH_AUDIT_TABLE;
+const isUnmovableAuthTable = (table: string): boolean => {
+    // SQLite resolves identifiers case-insensitively, so `"SESSION"` names the session table.
+    const name = table.toLowerCase();
+
+    return LIVE_CREDENTIAL_TABLES.has(name) || name === AUTH_AUDIT_TABLE.toLowerCase();
+};
 
 /**
  * The physical table names better-auth creates for `options` (plugin tables
@@ -256,4 +261,4 @@ const createDoAuthDataPort = (post: (body: Row) => Promise<Response>): AuthDataP
 };
 
 export type { AuthDataPortLike, AuthImportResult, AuthSqlReader };
-export { PAGE_ROWS as AUTH_DATA_PAGE_ROWS, authTableNames, createDoAuthDataPort, createSqlAuthDataPort, insertAuthRows };
+export { PAGE_ROWS as AUTH_DATA_PAGE_ROWS, authTableNames, createDoAuthDataPort, createSqlAuthDataPort, insertAuthRows, isUnmovableAuthTable };
