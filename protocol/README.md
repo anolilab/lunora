@@ -117,7 +117,9 @@ Notes that a port MUST honour:
   present.
 - **Depth** is capped at 64 levels (throw beyond). On decode, a `bigint` digit
   string is rejected beyond 1024 digits, and `__proto__` keys are assigned as
-  plain data properties (never via the prototype setter).
+  plain data properties (never via the prototype setter). The reference encoder
+  refuses the same over-long `bigint` and counts an `Error`'s `ownProps` fields
+  at the depth they decode at, so it never emits a frame its decoder rejects.
 - **Map entries** are exactly two elements. A shorter or LONGER entry is
   refused — a decoder that reads slots 0 and 1 out of a 3-element entry accepts
   a frame the reference throws on.
