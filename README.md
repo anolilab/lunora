@@ -34,9 +34,9 @@
 
 ## What is Lunora?
 
-Lunora is **Convex DX on your own Cloudflare account**. You write type-safe queries, mutations, and actions in TypeScript; Lunora turns them into Cloudflare Workers backed by Durable Objects for real-time state, D1 for SQL, R2 for blobs, and Queues for jobs. There are no proprietary servers in the loop — only the Cloudflare account you already pay for.
+Lunora gives you Convex-style DX on your own Cloudflare account. You write type-safe queries, mutations, and actions in TypeScript, and Lunora deploys them as Cloudflare Workers. Durable Objects hold real-time state, D1 handles SQL, R2 stores blobs, and Queues run jobs. Nothing runs on servers we operate; everything lives in the Cloudflare account you already pay for.
 
-It is **Vite-first**: the dev loop, codegen, and client bindings plug into a Vite project via `@cloudflare/vite-plugin`, so dev runs on workerd (the same runtime as production). A standalone CLI fallback exists for non-Vite users.
+Lunora is Vite-first. The dev loop, codegen, and client bindings plug into a Vite project through `@cloudflare/vite-plugin`, so local dev runs on workerd, the same runtime as production. Rsbuild and Rspack projects get the same loop through `@lunora/rspack`, and a standalone CLI covers everything else.
 
 ## Quick start
 
@@ -47,11 +47,11 @@ pnpm install
 pnpm dev
 ```
 
-> **Alpha:** the npm package is **`lunorash`** (the unscoped `lunora` name is taken on npm); the CLI binary it installs is still **`lunora`**. Install from the `@alpha` dist-tag and expect breaking changes until the first stable release. `npm view <pkg> version` reports a `0.0.x` placeholder on `latest` for every Lunora package — the real version lives on the `alpha` dist-tag (`npm view <pkg> dist-tags`).
+> **Alpha.** The npm package is `lunorash` because the unscoped `lunora` name is taken; the CLI it installs is still called `lunora`. Install from the `@alpha` dist-tag and expect breaking changes until the first stable release (see [Status](#status)).
 
 > Prefer managed hosting, or just want one email when v1 is stable? **[Join the Lunora Cloud waitlist →](https://lunora.sh/cloud)**
 
-Three visible files in a fresh app:
+A fresh app has three files you edit:
 
 ```ts
 // lunora/schema.ts
@@ -83,38 +83,51 @@ import { useQuery, useMutation } from "@lunora/react";
 import { api } from "../lunora/_generated/api";
 
 export default function App() {
-    const messages = useQuery(api.messages.list) ?? [];
-    const send = useMutation(api.messages.send);
+    const messages = useQuery(api.messages.list, {}) ?? [];
+    const { mutate: send } = useMutation(api.messages.send);
     return (
-        <ul>
-            {messages.map((m) => (
-                <li key={m._id}>
-                    {m.author}: {m.body}
-                </li>
-            ))}
-        </ul>
+        <>
+            <button onClick={() => send({ author: "me", body: "hello" })}>Send</button>
+            <ul>
+                {messages.map((m) => (
+                    <li key={m._id}>
+                        {m.author}: {m.body}
+                    </li>
+                ))}
+            </ul>
+        </>
     );
 }
 ```
 
-`pnpm dev` boots workerd, generates the client types, opens the Vite dev server, and live-reloads on every save.
+`pnpm dev` boots workerd, generates the client types, starts the Vite dev server, and reloads on every save. Click the button and the list updates in every open tab; the query re-runs on the server and pushes the new result.
+
+`lunora init` asks which framework to use and defaults to a React SPA. Pass `-t` to pick one directly: `next`, `nuxt`, `sveltekit`, `astro`, `analog`, `react-router`, `tanstack-start-react`, `tanstack-start-solid`, `solid-v2`, `expo`, `vinext`, `rspack-react`, `standalone`, and a few more (`lunora init --help` lists them). Use `--vite <framework>` for a plain React, Vue, Solid, or Svelte SPA, and `lunora init --here` to add Lunora to an app you already have.
 
 ## Why Lunora
 
-- **End-to-end type safety.** Server schema, validators, query results, and React hooks all share one source of truth. No client codegen step you forget to re-run.
-- **Real-time by default.** Queries are reactive over WebSocket subscriptions; mutations push deltas to subscribed clients without manual cache invalidation.
-- **Your data, your account.** Everything runs on your Cloudflare resources (Workers, Durable Objects, D1, R2, Queues, KV). No vendor lock-in beyond Cloudflare itself.
-- **Scales past the single-DO ceiling.** Start simple with one Durable Object; opt into `.shardBy(key)` per function when you need tenant-level isolation, or `.global()` for geo-replicated reads, without rewriting your app.
-- **Host-neutral core.** The reactive engine (`@lunora/shard-engine`) talks to a small set of host contracts (`@lunora/platform`) rather than to Cloudflare APIs directly; `@lunora/platform-cloudflare` is one implementation of them. A capability matrix records, per target, what is native, emulated, or unsupported.
+**Types run end to end.** The schema, validators, query results, and client hooks come from one source of truth. The dev server regenerates client types on save, so there is no codegen step to forget.
+
+**Queries are live.** Clients subscribe over WebSocket, and a mutation pushes the change to every subscriber. You don't write cache invalidation.
+
+**It runs on your account.** Workers, Durable Objects, D1, R2, Queues, and KV all live in your Cloudflare account. The only lock-in is Cloudflare itself.
+
+**It grows past one Durable Object.** Every app starts on a single Durable Object. When one tenant needs its own, add `.shardBy(key)` to the function; for geo-replicated reads, add `.global()`. The rest of the app stays the same.
+
+**Features come as add-ons.** Auth, mail, storage, scheduling, queues and pub/sub topics, workflows, AI agents, payments, feature flags, rate limiting, and notifications ship as `@lunora/*` packages or as items you copy in with `lunora registry add`. Other packages add typed access to Cloudflare Containers, Browser Rendering, Hyperdrive, AI Search, and service bindings to sibling Workers.
+
+**Clients aren't limited to JavaScript.** There are adapters for React, Vue, Solid, Svelte, Angular, and React Native, and `lunora sdk generate` writes typed clients for Python, Go, Ruby, Rust, Swift, Java, Kotlin, and Dart (see [`sdks/`](./sdks/README.md)).
+
+**The core doesn't depend on Cloudflare.** The reactive engine (`@lunora/shard-engine`) talks to a small set of host contracts in `@lunora/platform`, not to Cloudflare APIs. `@lunora/platform-cloudflare` implements those contracts for production and `@lunora/platform-node` for dev and test. A capability matrix marks each feature as native, emulated, or unsupported per host; codegen leaves out what a host can't run and tells you why.
 
 ## Lunora Studio
 
-Every app ships with **Lunora Studio** — a local admin UI for your schema, data, functions, logs, and advisors, served automatically by `pnpm dev`. Browse and edit data, run SQL, inspect live connections and function metrics, replay state with Time Travel, and read the security & performance advisories generated from your schema.
+`pnpm dev` also serves Lunora Studio, a local admin UI for your app. In it you can browse and edit data, run SQL, watch live connections and function metrics, follow logs and traces, and see errors grouped into Issues. Time Travel replays past state, the architecture view draws a diagram from your code's call graph, and the advisors flag security and performance problems in your schema.
 
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./.github/assets/studio-home-dark.png" />
-    <img src="./.github/assets/studio-home-light.png" alt="Lunora Studio — the local admin UI for your schema, data, functions, and advisors" width="900" />
+    <img src="./.github/assets/studio-home-light.png" alt="Lunora Studio, the local admin UI for your schema, data, functions, and advisors" width="900" />
   </picture>
 </div>
 
@@ -132,7 +145,7 @@ Every app ships with **Lunora Studio** — a local admin UI for your schema, dat
 | Feature breadth (auth, mail, storage, scheduler) | Add-ons (alpha)        | Broad (built-in)  | Broad (built-in)  | DIY              |
 | Cost at idle                                     | ≈ $0 (CF free tier)    | Paid              | ≈ $0 (Spark tier) | ≈ $0             |
 
-Lunora has fewer batteries-included features than Convex today. The trade you make is **infrastructure ownership and cost** — at idle, Lunora is free; at scale, you pay Cloudflare prices, not SaaS prices.
+Convex still has more built in than Lunora. What you get in exchange is ownership of the infrastructure and its cost: an idle Lunora app costs nothing, and at scale you pay Cloudflare's prices rather than a SaaS markup.
 
 ## Architecture
 
@@ -144,8 +157,9 @@ Lunora has fewer batteries-included features than Convex today. The trade you ma
                                           │  HTTPS + WebSocket (RPC envelope)
                                           ▼
                         ┌────────────────────────────────────┐
-                        │  Vite dev (workerd)  or  Standalone │
-                        │  @lunora/vite        │  @lunora/cli │
+                        │  Vite / Rspack dev (workerd)        │
+                        │  @lunora/vite · @lunora/rspack      │
+                        │  or standalone: @lunora/cli         │
                         └─────────────────┬──────────────────┘
                                           │
                                           ▼
@@ -289,35 +303,39 @@ All packages are published under the [`@lunora`](https://www.npmjs.com/org/lunor
 
 <!-- END_TABLE_PLACEHOLDER -->
 
+## Examples
+
+Runnable apps live in [`examples/`](./examples): a [todo app](./examples/todo-app), [team chat](./examples/team-chat), a [kanban board](./examples/kanban-board), [realtime cursors](./examples/realtime-cursors), [chess](./examples/chess), a [blog](./examples/blog), a [feedback board](./examples/feedback-board), [TanStack Start](./examples/tanstack-start), [Expo](./examples/expo), and focused demos for [auth](./examples/auth-playground), [payments](./examples/payment-demo), [notifications](./examples/notify-demo), [offline rejections](./examples/offline-rejections), and [service bindings](./examples/services).
+
 ## Documentation
 
-Full documentation lives at **[lunora.sh/docs](https://lunora.sh/docs)** — guides, core concepts, framework adapters, and per-package reference:
+The full docs are at [lunora.sh/docs](https://lunora.sh/docs): guides, concepts, framework adapters, and a reference for each package. Good places to start:
 
-- [Getting started](https://lunora.sh/docs/getting-started) — scaffold an app and run the dev loop in under a minute
-- [Queries, mutations & actions](https://lunora.sh/docs/concepts/queries-mutations) — the core authoring model
-- [Real-time](https://lunora.sh/docs/concepts/realtime) · [Sharding](https://lunora.sh/docs/concepts/sharding) · [RLS](https://lunora.sh/docs/concepts/rls) — the concepts that make it scale
-- [Architecture](https://lunora.sh/docs/architecture) — how the Worker, Durable Objects, and storage fit together
-- [Design boundaries](https://lunora.sh/docs/non-goals) — what Lunora deliberately does not do, and the escape hatch for each
-- [Deployment](https://lunora.sh/docs/deployment) — ship to your own Cloudflare account
-- [Packages](https://lunora.sh/packages) — every `@lunora/*` adapter and add-on
+- [Getting started](https://lunora.sh/docs/getting-started): scaffold an app and run the dev loop.
+- [Queries, mutations & actions](https://lunora.sh/docs/concepts/queries-mutations): how you write backend code.
+- [Real-time](https://lunora.sh/docs/concepts/realtime), [sharding](https://lunora.sh/docs/concepts/sharding), and [RLS](https://lunora.sh/docs/concepts/rls): how data reaches clients, scales out, and stays scoped to the right user.
+- [Architecture](https://lunora.sh/docs/architecture): how the Worker, Durable Objects, and storage fit together.
+- [Design boundaries](https://lunora.sh/docs/non-goals): what Lunora deliberately doesn't do, and the escape hatch for each.
+- [Deployment](https://lunora.sh/docs/deployment): shipping to your own Cloudflare account.
+- [Packages](https://lunora.sh/packages): every `@lunora/*` adapter and add-on.
 
 ## Status
 
-**Alpha — APIs WILL break.** Packages publish continuously to the **`alpha`** dist-tag on npm (`pnpm add lunorash@alpha`); each package versions independently, so their alpha numbers do not line up. The `latest` tag holds a `0.0.x` placeholder — read `alpha` instead. The surface area, package boundaries, and on-disk layout will all shift before the first non-alpha tag.
+Lunora is in alpha, and the APIs will break. Every package publishes continuously to the `alpha` dist-tag on npm (`pnpm add lunorash@alpha`). Each package has its own version, so the alpha numbers don't line up across packages. The `latest` tag only holds a `0.0.x` placeholder; run `npm view <pkg> dist-tags` to see the real version. The API, the package boundaries, and the on-disk layout will all change before the first stable release.
 
-Releases are frequent enough to fight pnpm's `minimumReleaseAge`; if you use it, add `"@lunora/*"` and `lunorash` to `minimumReleaseAgeExclude` rather than resolving a set of packages that no longer agree.
+New versions ship often enough to trip pnpm's `minimumReleaseAge`. If you use that setting, add `"@lunora/*"` and `lunorash` to `minimumReleaseAgeExclude`; otherwise pnpm can resolve a mix of packages that no longer match.
 
-You are welcome to read, file issues, and open PRs against the [`alpha`](https://github.com/anolilab/lunora/tree/alpha) branch. Just don't build a production system on it yet.
+Read the code, file issues, and open PRs against the [`alpha`](https://github.com/anolilab/lunora/tree/alpha) branch. Just don't build a production system on it yet.
 
 ## Contributing
 
-See [`.github/CONTRIBUTING.md`](./.github/CONTRIBUTING.md). The default branch is **`alpha`**; PRs target `alpha` unless explicitly cutting a release.
+Start with [`.github/CONTRIBUTING.md`](./.github/CONTRIBUTING.md). The default branch is `alpha`, and PRs go there unless you are cutting a release.
 
 For security reports, see [`SECURITY.md`](./SECURITY.md). For community guidelines, see [`.github/CODE_OF_CONDUCT.md`](./.github/CODE_OF_CONDUCT.md). For brand assets and usage rules, see [`marketing/BRAND.md`](./marketing/BRAND.md).
 
 ## License
 
-[FSL-1.1-Apache-2.0](./LICENSE.md) © 2026 anolilab and contributors. Source-available; each release converts to Apache-2.0 two years after it ships.
+[FSL-1.1-Apache-2.0](./LICENSE.md) © 2026 anolilab and contributors. The source is available now, and each release becomes Apache-2.0 two years after it ships.
 
 <!-- badges -->
 
