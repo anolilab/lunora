@@ -165,6 +165,22 @@ describe("createAsyncStorageQueryCache", () => {
         await expect(adapter.load()).resolves.toEqual([]);
     });
 
+    it("a malformed wire tag loads as empty, and the next put starts clean", async () => {
+        expect.assertions(2);
+
+        const storage = createFakeAsyncStorage();
+
+        storage.set("lunora:query-cache", JSON.stringify(["$lunora.wire$", "date", "not-a-number"]));
+
+        const adapter = createAsyncStorageQueryCache({ storage });
+
+        await expect(adapter.load()).resolves.toEqual([]);
+
+        await adapter.put("q", entry());
+
+        await expect(adapter.load()).resolves.toEqual([{ ...entry(), key: "q" }]);
+    });
+
     it("concurrent puts serialize instead of clobbering each other", async () => {
         expect.assertions(1);
 

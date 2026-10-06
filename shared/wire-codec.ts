@@ -80,7 +80,8 @@ const MAX_DEPTH = 64;
  * parsing is superlinear, so a multi-megabyte digit string from an untrusted peer
  * would block the event loop (Cap'n Web #184/#185). A real `v.bigint()` is a
  * handful of digits; 1024 (a ~3400-bit integer) is far beyond any legitimate use
- * yet nowhere near the DoS range. Applied only on decode (the untrusted path).
+ * yet nowhere near the DoS range. Enforced on decode (the untrusted path) and
+ * mirrored on encode, so nothing is written that its own decoder refuses.
  */
 const MAX_BIGINT_DIGITS = 1024;
 
@@ -261,7 +262,15 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
     const kind = typeof value;
 
     if (kind === "bigint") {
-        return [TAG, "bigint", (value as bigint).toString()];
+        const digits = (value as bigint).toString();
+
+        // Same bound `decodeWire` enforces — an over-long bigint would encode
+        // fine and then fail every read, which for a stored blob loses it.
+        if (digits.length > MAX_BIGINT_DIGITS) {
+            throw new RangeError(`wire-codec: over-long bigint (max ${MAX_BIGINT_DIGITS} digits)`);
+        }
+
+        return [TAG, "bigint", digits];
     }
 
     if (kind === "number") {
@@ -305,27 +314,14 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
         // and a server stack in a payload would be an internal-detail leak (the RPC
         // error path already redacts stacks separately).
         const error = value as Error & Record<string, unknown>;
-        const properties: Record<string, unknown> = {};
 
-        for (const key of Object.keys(error)) {
-            if (error[key] === undefined) {
-                continue;
-            }
-
-            const encoded = encodeWire(error[key], depth + 1);
-
-            // Same `UNSAFE_KEY` guard as the plain-object branch below and both
-            // decode branches: a plain `properties[key] = …` for `"__proto__"`
-            // fires the prototype SETTER, so the field never becomes an own
-            // property (it re-encodes as `{}`, silently dropped) and `properties`
-            // itself ends up with an attacker-chosen prototype. `defineProperty`
-            // installs it as an own data property instead (Cap'n Web #190).
-            if (key === UNSAFE_KEY) {
-                Object.defineProperty(properties, key, { configurable: true, enumerable: true, value: encoded, writable: true });
-            } else {
-                properties[key] = encoded;
-            }
-        }
+        // Encode the props as the plain object they decode as, at the depth
+        // `decodeWire` decodes them (the object at depth+1, its fields at
+        // depth+2) — so the nesting cap rejects on both sides alike. The
+        // plain-object branch skips `undefined` fields and installs a literal
+        // `__proto__` key with `defineProperty`; `Object.fromEntries` creates it
+        // as an own data property rather than firing the prototype setter.
+        const properties = encodeWire(Object.fromEntries(Object.keys(error).map((key) => [key, error[key]])), depth + 1);
 
         // Coerced, because `decodeWire` now REFUSES a non-string in either slot
         // and an encoder must not emit a frame its own decoder rejects. Both are
