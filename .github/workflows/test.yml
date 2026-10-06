@@ -300,8 +300,8 @@
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20
         "env":
-            "CELLD_VERSION": "v0.6.0"
-            "CELLD_SHA256": "8f1e18072c234ab75459d4da104c13cebc9b29a3e4a4772086bf985829bea8aa"
+            "CELLD_VERSION": "v0.6.1"
+            "CELLD_SHA256": "79a8253cff5d4e8a4a9f7a2611e393390f7fe9025f00e88467875b007c44866b"
             "MOTO_VERSION": "5.2.3"
         "steps":
             - "name": "Harden Runner"
