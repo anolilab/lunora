@@ -991,6 +991,55 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("durable object class budget", () => {
+        /** A Cloudflare namespaces response reporting `total` classes on the account. */
+        const namespacesApi = (total: number): typeof globalThis.fetch =>
+            vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: [], result_info: { total_count: total }, success: true }));
+
+        const budgetFinding = async (fetchImpl: typeof globalThis.fetch, environment: Record<string, string>) => {
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-budget-"));
+
+            try {
+                const result = await runDoctor({ cwd, environment, fetch: fetchImpl, logger: makeLogger().logger });
+
+                return result.findings.find((finding) => finding.code.startsWith("do-class-budget"));
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
+        };
+
+        const credentials = { CLOUDFLARE_ACCOUNT_ID: "acc", CLOUDFLARE_API_TOKEN: "token" };
+
+        it.each([
+            [40, "do-class-budget-ok"],
+            [95, "do-class-budget-near"],
+            [250, "do-class-budget-ok"],
+            [495, "do-class-budget-near"],
+            [500, "do-class-budget-full"],
+        ])("judges %i classes as %s", async (total, code) => {
+            expect.assertions(1);
+
+            await expect(budgetFinding(namespacesApi(total), credentials)).resolves.toMatchObject({ code });
+        });
+
+        it("stays offline without credentials", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = namespacesApi(0);
+
+            await expect(budgetFinding(fetchImpl, {})).resolves.toMatchObject({ code: "do-class-budget-unchecked", level: "info" });
+            expect(fetchImpl).not.toHaveBeenCalled();
+        });
+
+        it("reports a refused API call as unchecked, never as a failure", async () => {
+            expect.assertions(1);
+
+            const refused = vi.fn<typeof globalThis.fetch>(async () => Response.json({ errors: [{ message: "auth" }], success: false }, { status: 403 }));
+
+            await expect(budgetFinding(refused, credentials)).resolves.toMatchObject({ code: "do-class-budget-unchecked", level: "info" });
+        });
+    });
+
     /**
      * The codes are the machine-readable contract, so adding or renaming one has
      * to be a deliberate act rather than a side effect of editing a check. The

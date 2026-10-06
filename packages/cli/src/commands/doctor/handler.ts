@@ -24,6 +24,7 @@ import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import isInsideDirectory from "../../util/path-containment";
@@ -61,6 +62,10 @@ const DOCTOR_CODES = [
     "declared-export-ok",
     "declared-export-unchecked",
     "dev-vars-missing-secret",
+    "do-class-budget-full",
+    "do-class-budget-near",
+    "do-class-budget-ok",
+    "do-class-budget-unchecked",
     "email-destination-placeholder",
     "observability-full-sampling",
     "r2-lifecycle-unset",
@@ -108,12 +113,18 @@ interface DoctorResult {
 interface RunDoctorOptions {
     cwd?: string;
 
+    /** Where the Cloudflare credentials for the account checks are read from (defaults to `process.env`). */
+    environment?: Readonly<Record<string, string | undefined>>;
+
     /**
      * Path of the running `lunora` executable (defaults to `process.argv[1]`).
      * Overridable so the CLI-shadow check is testable without re-launching the
      * process, the same seam `cwd` provides for the filesystem checks.
      */
     executablePath?: string;
+
+    /** The `fetch` the account checks call the Cloudflare API with — injectable so tests stay offline. */
+    fetch?: typeof globalThis.fetch;
     logger: Logger;
 }
 
@@ -737,6 +748,30 @@ const checkCliShadow = (cwd: string, executablePath: string | undefined, finding
     });
 };
 
+/** The doctor code for each budget verdict. */
+const DURABLE_OBJECT_BUDGET_CODES = {
+    fail: "do-class-budget-full",
+    info: "do-class-budget-unchecked",
+    pass: "do-class-budget-ok",
+    warn: "do-class-budget-near",
+} as const satisfies Record<FindingLevel, DoctorCode>;
+
+/**
+ * How close the Cloudflare account is to its Durable Object class cap (plan
+ * 462). The one doctor check that goes online, and only with credentials in the
+ * environment; without them it says it did not check.
+ */
+const checkDurableObjectClassBudget = async (parsed: WranglerConfig | undefined, options: RunDoctorOptions, findings: Finding[]): Promise<void> => {
+    const budget = await checkDurableObjectBudget({ accountId: parsed?.account_id, environment: options.environment, fetch: options.fetch });
+
+    findings.push({
+        code: DURABLE_OBJECT_BUDGET_CODES[budget.level],
+        level: budget.level,
+        message: budget.message,
+        ...(budget.fix === undefined ? {} : { fix: budget.fix }),
+    });
+};
+
 /**
  * Pure, testable preflight core: run the read-only project checks against `cwd`
  * and return the aggregated findings + the exit code (1 if any hard FAIL). Does
@@ -771,6 +806,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     }
 
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
+    await checkDurableObjectClassBudget(parsed, options, findings);
     checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);
 
     const summary: Record<FindingLevel, number> = { fail: 0, info: 0, pass: 0, warn: 0 };

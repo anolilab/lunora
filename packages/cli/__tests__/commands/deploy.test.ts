@@ -446,6 +446,35 @@ describe("lunora deploy", () => {
             });
         });
 
+        describe("durable object class budget", () => {
+            afterEach(() => {
+                vi.unstubAllEnvs();
+                vi.unstubAllGlobals();
+            });
+
+            it("warns when the account is near its class cap, and still deploys", async () => {
+                expect.assertions(3);
+
+                // Plan 462: wrangler's own error at the cap does not name the
+                // limit, so the deploy says it first — without blocking.
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+                vi.stubGlobal(
+                    "fetch",
+                    vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: [], result_info: { total_count: 495 }, success: true })),
+                );
+
+                const { logger, warns } = silentLogger();
+                const recording = createRecordingSpawner();
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
+
+                expect(result.code).toBe(0);
+                expect(recording.calls).toHaveLength(1);
+                expect(warns.some((message) => message.includes("495 of 500 Durable Object classes"))).toBe(true);
+            });
+        });
+
         it("runs codegen, validates wrangler, then spawns `pnpm exec wrangler deploy`", async () => {
             expect.assertions(5);
 

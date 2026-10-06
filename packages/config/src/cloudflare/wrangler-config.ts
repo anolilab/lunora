@@ -146,6 +146,8 @@ interface WranglerQueueConsumer {
 }
 
 interface WranglerConfig {
+    // The Cloudflare account the Worker deploys to. Parsed from untrusted JSONC.
+    account_id?: unknown;
     // Workers AI binding (`env.AI`). Self-describing { binding }; parsed from
     // untrusted JSONC, so it may be `null`.
     ai?: { binding?: unknown } | null;
