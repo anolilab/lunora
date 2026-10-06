@@ -18,6 +18,21 @@ const captureEvent = (eventId: string): WebhookAction => {
 };
 
 describe("applyWebhookAction", () => {
+    it("lets the checkout adopt a subscription that arrived without reference metadata, never an owned one", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const subscriptionEvent = { priceId: "prod_team", provider: "creem", type: "subscription.active" } as const;
+
+        await applyWebhookAction(store, { ...subscriptionEvent, eventId: "e1", subscriptionId: "sub_orphan" });
+        await applyWebhookAction(store, { ...subscriptionEvent, eventId: "e2", referenceId: "user_1", subscriptionId: "sub_owned" });
+        await applyWebhookAction(store, { ...captureEvent("e3"), provider: "creem", referenceId: "org_1", sessionId: "ch_1", subscriptionId: "sub_orphan" });
+        await applyWebhookAction(store, { ...captureEvent("e4"), provider: "creem", referenceId: "org_1", sessionId: "ch_2", subscriptionId: "sub_owned" });
+
+        await expect(store.getSubscription("creem", "sub_orphan")).resolves.toMatchObject({ referenceId: "org_1" });
+        await expect(store.getSubscription("creem", "sub_owned")).resolves.toMatchObject({ referenceId: "user_1" });
+    });
+
     it("captures a payment and dedupes by event id", async () => {
         expect.assertions(4);
 

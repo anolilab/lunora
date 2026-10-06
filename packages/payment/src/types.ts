@@ -129,7 +129,8 @@ export interface CustomerRef {
  * @experimental
  */
 export interface CheckoutInput {
-    readonly cancelUrl: string;
+    /** Where an abandoned checkout returns to. Creem has no cancel URL, so its adapter ignores it. */
+    readonly cancelUrl?: string;
 
     /**
      * Ignored at runtime (kept for backward-compat). The provider customer is always derived from the store for the

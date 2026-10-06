@@ -135,7 +135,9 @@ const subscriptionFromCreem = (input: unknown): Subscription => {
         priceId: idOf(subscription.product) ?? "",
         provider: "creem",
         quantity: readNumber(subscription, "units") ?? 1,
-        referenceId: referenceFromMetadata(subscription) ?? idOf(subscription.customer) ?? "",
+        // Never fall back to the customer id: a reference the app does not know entitles nobody and
+        // looks owned. Blank is the explicit orphan the facade / reconcile / checkout webhook heal.
+        referenceId: referenceFromMetadata(subscription) ?? "",
         // Fail closed: an unrecognized Creem status is treated as non-entitling `past_due`.
         state: SUBSCRIPTION_STATE_BY_CREEM_STATUS[status] ?? "past_due",
         updatedAt: now,
@@ -251,7 +253,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 currentPeriodStart: parseTimestamp(readAny(object, "current_period_start_date", "currentPeriodStartDate")),
                 customerId: idOf(object.customer),
                 priceId: idOf(object.product),
-                referenceId: referenceFromMetadata(object) ?? idOf(object.customer),
+                // Creem copies the checkout's metadata onto the subscription it creates. Without it the
+                // row is stored orphaned and `checkout.completed` (which carries both the reference and
+                // the subscription id) adopts it — never the customer id, which no app reference matches.
+                referenceId: referenceFromMetadata(object),
                 subscriptionId: readString(object, "id"),
                 // Fail closed before `stateToEventType` — an unmapped status must not degrade to a
                 // state-preserving metadata patch.
@@ -289,8 +294,12 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
+            // No customer id when this reference's email already belongs to another reference's
+            // Creem customer (see `getOrCreateCustomer`): prefill by email and let Creem attach it.
+            const prefill = input.email === undefined ? undefined : { email: input.email };
             const checkout = await client.checkouts.create({
-                customer: input.customerId ? { id: input.customerId } : undefined,
+                // Creem has no cancel URL, so `input.cancelUrl` has nowhere to go.
+                customer: input.customerId ? { id: input.customerId } : prefill,
                 // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
                 metadata: { ...input.metadata, referenceId: input.referenceId },
                 productId: input.priceId,
@@ -308,7 +317,7 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
             return { url: readAny(link, "customer_portal_link", "customerPortalLink") ?? "" };
         },
 
-        getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
+        getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer | undefined> => {
             const toCustomer = (record: Record<string, unknown>): Customer => {
                 return {
                     createdAt: Date.now(),
@@ -347,15 +356,14 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
 
                     // SECURITY: never bind this reference to a Creem customer minted for a DIFFERENT
                     // reference just because they share an email (two orgs/users can legitimately share
-                    // one inbox). `createPortalSession` builds the hosted billing link from `customerId`
-                    // alone, so adopting the wrong customer here would let one reference's portal expose
-                    // another's subscriptions, invoices, and payment methods. Only the same-reference retry
-                    // (the case this recovery path exists for) is adopted; anything else fails closed.
+                    // one inbox, and the email is caller-supplied). `createPortalSession` builds the hosted
+                    // billing link from `customerId` alone, so adopting it would let one reference's portal
+                    // expose another's subscriptions, invoices, and payment methods. But one person paying
+                    // under two references (a personal plan and their org's) is normal, so don't throw:
+                    // report "no customer of its own" and the checkout starts unbound (subscriptions are
+                    // attributed by checkout metadata, not by customer).
                     if (existingReferenceId !== ref.referenceId) {
-                        throw new Error(
-                            `Creem customer for email "${ref.email}" already belongs to a different reference; refusing to bind it to "${ref.referenceId}".`,
-                            { cause: error },
-                        );
+                        return undefined;
                     }
 
                     return toCustomer(existing);

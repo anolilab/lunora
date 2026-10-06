@@ -73,7 +73,12 @@ export interface PaymentAdapter {
      */
     getBalances?: (referenceId: string) => Promise<FeatureBalance[]>;
 
-    getOrCreateCustomer: (ref: CustomerRef) => Promise<Customer>;
+    /**
+     * `undefined` means the provider cannot give this reference a customer of its own (Creem: one
+     * customer per email, already bound to another reference). The checkout then starts unbound,
+     * prefilled by email, and the reference has no portal until it gets a customer of its own.
+     */
+    getOrCreateCustomer: (ref: CustomerRef) => Promise<Customer | undefined>;
     /** Fetch the provider's current truth for a payment session — the basis for reconciliation. */
     getPaymentStatus: (sessionId: string) => Promise<PaymentSession>;
     /** Fetch the provider's current truth for a subscription — the basis for reconciliation. */

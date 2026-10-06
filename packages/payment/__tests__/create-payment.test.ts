@@ -277,6 +277,27 @@ describe("createPayment", () => {
         expect(forwarded).not.toBe("cus_victim");
     });
 
+    it("starts an unbound checkout, storing no customer, when the adapter can't give the reference one", async () => {
+        expect.assertions(2);
+
+        let forwarded: string | undefined = "unset";
+        const store = new MemoryPaymentStore();
+        const adapter = fakeAdapter({
+            createCheckout: async (input) => {
+                forwarded = input.customerId;
+
+                return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
+            },
+            getOrCreateCustomer: async () => undefined,
+        });
+        const payment = createPayment({ adapter, authorize: () => true, store });
+
+        await payment.createCheckout({ email: "a@x.test", mode: "subscription", priceId: "price_1", referenceId: "org_1", successUrl: "https://x/ok" });
+
+        expect(forwarded).toBeUndefined();
+        await expect(store.getCustomerByReference("stripe", "org_1")).resolves.toBeUndefined();
+    });
+
     it("rejects cancelling another caller's subscription as NOT_FOUND (no existence oracle)", async () => {
         expect.assertions(2);
 

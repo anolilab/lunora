@@ -178,6 +178,23 @@ const resolveRefundAction = (existing: PaymentSession | undefined, action: Webho
     return prospective && compareMoney(prospective, existing.capturedAmount) < 0 ? "partial_refund" : "refund";
 };
 
+/**
+ * A subscription event that arrived without the checkout's `referenceId` metadata is stored
+ * orphaned (`""`, entitling nobody). The checkout that started it does carry the reference, so
+ * adopt it — only into a blank row, never over an established owner.
+ */
+const adoptOrphanSubscription = async (store: PaymentStore, action: WebhookAction, now: number): Promise<void> => {
+    if (!action.subscriptionId || !action.referenceId) {
+        return;
+    }
+
+    const subscription = await store.getSubscription(action.provider, action.subscriptionId);
+
+    if (subscription?.referenceId === "") {
+        await store.upsertSubscription({ ...subscription, referenceId: action.referenceId, updatedAt: now });
+    }
+};
+
 const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentAction: PaymentAction): Promise<ApplyResult> => {
     if (!action.sessionId) {
         return { applied: false, reason: "unhandled" };
@@ -259,6 +276,8 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
 
         throw error;
     }
+
+    await adoptOrphanSubscription(store, action, now);
 
     return { applied: true, reason: "ok" };
 };

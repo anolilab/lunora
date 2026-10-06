@@ -224,16 +224,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         // reference's checkout to an arbitrary provider customer. Always derive the customer from the
         // store for the authorized reference — mirroring `createPortalSession` — minting one only the
         // first time. `input.customerId` is intentionally ignored (kept on the type for back-compat).
-        let customerId: string;
-        const existing = await store.getCustomerByReference(adapter.identifier, input.referenceId);
+        let customer = await store.getCustomerByReference(adapter.identifier, input.referenceId);
 
-        if (existing) {
-            customerId = existing.id;
-        } else {
-            const customer = await adapter.getOrCreateCustomer({ email: input.email, referenceId: input.referenceId });
+        if (!customer) {
+            customer = await adapter.getOrCreateCustomer({ email: input.email, referenceId: input.referenceId });
 
-            customerId = customer.id;
-            await store.upsertCustomer(customer);
+            if (customer) {
+                await store.upsertCustomer(customer);
+            }
         }
 
         // Derive a key over every request-shaping field, not just (reference, price, mode): a second
@@ -251,11 +249,11 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 input.mode,
                 String(input.quantity ?? 1),
                 input.successUrl,
-                input.cancelUrl,
+                input.cancelUrl ?? "",
                 metadata ? JSON.stringify(metadata) : "",
             ));
 
-        return adapter.createCheckout({ ...input, customerId, idempotencyKey: key, metadata });
+        return adapter.createCheckout({ ...input, customerId: customer?.id, idempotencyKey: key, metadata });
     };
 
     // Resolve one feature's allowance — shared by `check` and `listBalances`. A metered feature

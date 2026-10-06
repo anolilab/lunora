@@ -104,6 +104,17 @@ describe("creem adapter", () => {
         expect((body.metadata as { referenceId?: string }).referenceId).toBe("user_1");
     });
 
+    it("starts an unbound checkout prefilled by email when the reference has no customer of its own", async () => {
+        expect.assertions(1);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+        await adapter.createCheckout({ email: "a@b.test", mode: "subscription", priceId: "prod_team", referenceId: "org_1", successUrl: "https://x/ok" });
+
+        expect((calls.find((call) => call.name === "checkout")?.args[0] as Record<string, unknown>).customer).toEqual({ email: "a@b.test" });
+    });
+
     it("opens a hosted billing portal via generateBillingLinks", async () => {
         expect.assertions(2);
 
@@ -189,6 +200,28 @@ describe("creem adapter", () => {
         expect(action.referenceId).toBe("user_1");
         expect(action.subscriptionId).toBe("sub_1");
         expect(action.amount?.minorUnits).toBe(2500n);
+    });
+
+    it("reads the reference from the metadata Creem copies onto the subscription, never from the customer id", async () => {
+        expect.assertions(2);
+
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        // Shape of Creem's documented `subscription.active` payload: the checkout's metadata rides along.
+        const copied = JSON.stringify({
+            eventType: "subscription.active",
+            id: "evt_2",
+            object: { customer: { id: "cust_1" }, id: "sub_1", metadata: { referenceId: "org_1" }, product: { id: "prod_team" }, status: "active" },
+        });
+        const missing = JSON.stringify({
+            eventType: "subscription.active",
+            id: "evt_3",
+            object: { customer: { id: "cust_1" }, id: "sub_2", product: { id: "prod_team" }, status: "active" },
+        });
+
+        await expect(adapter.parseWebhook({ headers: headersFor(sign(copied)), payload: copied })).resolves.toMatchObject({ referenceId: "org_1" });
+        // Left unattributed (stored orphaned until `checkout.completed` adopts it) — the customer id
+        // is not an app reference and would silently grant nothing to anyone.
+        await expect(adapter.parseWebhook({ headers: headersFor(sign(missing)), payload: missing })).resolves.toMatchObject({ referenceId: undefined });
     });
 
     it("maps subscription events, failing closed on unpaid (regression)", async () => {
@@ -351,13 +384,13 @@ describe("creem adapter", () => {
 
         const customer = await adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" });
 
-        expect(customer.id).toBe("cust_existing");
+        expect(customer?.id).toBe("cust_existing");
         expect(calls.some((call) => call.name === "create")).toBe(true);
         // Creem's retrieve is positional `(customerId?, email?)` — the email lands in the second arg.
         expect(calls.find((call) => call.name === "retrieve")?.args[1]).toBe("a@b.test");
     });
 
-    it("refuses to bind a foreign reference's Creem customer on a shared-email conflict (security regression)", async () => {
+    it("never binds a foreign reference's Creem customer on a shared-email conflict, reporting none instead (security regression)", async () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
@@ -382,7 +415,9 @@ describe("creem adapter", () => {
         };
         const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
 
-        await expect(adapter.getOrCreateCustomer({ email: "shared@b.test", referenceId: "org_b" })).rejects.toThrow(/different reference/);
+        // One person paying under two references is normal, so this is not an error — but org_b gets
+        // no customer (and so no portal onto org_a's billing); its checkout starts unbound.
+        await expect(adapter.getOrCreateCustomer({ email: "shared@b.test", referenceId: "org_b" })).resolves.toBeUndefined();
 
         // The lookup must still happen (to check the reference), but its result is never adopted.
         expect(calls.some((call) => call.name === "retrieve")).toBe(true);
