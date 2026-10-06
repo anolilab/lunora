@@ -974,8 +974,8 @@ describe("observability-sinks", () => {
             expect(record.body.stringValue).not.toContain("buyer@example.com");
         });
 
-        it("puts a logged error on the record as OTel exception attributes, its message redacted", () => {
-            expect.assertions(3);
+        it("puts a logged error on the record as OTel exception attributes, its message and stack redacted", () => {
+            expect.assertions(4);
 
             const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
             vi.stubGlobal("fetch", fetchMock);
@@ -984,7 +984,11 @@ describe("observability-sinks", () => {
 
             sink.onLog!({
                 args: [],
-                error: { message: "no user buyer@example.com", name: "TypeError", stack: "TypeError: no user\n    at charge (orders.ts:4:2)" },
+                error: {
+                    message: "no user buyer@example.com",
+                    name: "TypeError",
+                    stack: "TypeError: no user buyer@example.com\n    at charge (orders.ts:4:2)",
+                },
                 functionPath: "orders:place",
                 level: "error",
                 message: "charge failed",
@@ -994,7 +998,9 @@ describe("observability-sinks", () => {
             const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
 
             expect(attrValue(record.attributes, "exception.type")).toStrictEqual({ stringValue: "TypeError" });
-            expect(attrValue(record.attributes, "exception.stacktrace")).toStrictEqual({ stringValue: "TypeError: no user\n    at charge (orders.ts:4:2)" });
+            // The stack's first line repeats the message, so it is redacted too.
+            expect(JSON.stringify(attrValue(record.attributes, "exception.stacktrace"))).not.toContain("buyer@example.com");
+            expect(JSON.stringify(attrValue(record.attributes, "exception.stacktrace"))).toContain("at charge (orders.ts:4:2)");
             expect(JSON.stringify(attrValue(record.attributes, "exception.message"))).not.toContain("buyer@example.com");
         });
 

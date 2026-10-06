@@ -185,6 +185,26 @@ const postProcess = <T, R = T>(event: T, hook: ((event: T) => null | R | undefin
  */
 
 /**
+ * Redact a logged error's `message`, and the stack's header with it: V8's stack
+ * opens with `Name: message` verbatim (multi-line if the message is), so
+ * redacting only `message` would still ship it. The header is rebuilt from the
+ * redacted message rather than redacting the whole stack, because the redactor
+ * reads a frame's `file.ts:4:2` as a URL and would erase every location.
+ */
+const redactLoggedError = (error: NonNullable<LogEvent["error"]>): NonNullable<LogEvent["error"]> => {
+    const message = redactArgs(error.message) as string;
+
+    if (error.stack === undefined) {
+        return { ...error, message };
+    }
+
+    // The frames are the `    at …` lines; everything above them is the header.
+    const frames = error.stack.split("\n").filter((line) => line.trimStart().startsWith("at "));
+
+    return { ...error, message, stack: [`${error.name}: ${message}`, ...frames].join("\n") };
+};
+
+/**
  * Apply the default redaction to one `ctx.log` event before it leaves for a
  * collector: the structured `fields` bag and the rendered `message`, through the
  * SAME `redactArgs` (`@visulima/redact` standard rules) the console/Logpush line
@@ -197,7 +217,7 @@ const postProcess = <T, R = T>(event: T, hook: ((event: T) => null | R | undefin
 const redactLogEvent = (event: LogEvent): LogEvent => {
     return {
         ...event,
-        ...(event.error === undefined ? {} : { error: { ...event.error, message: redactArgs(event.error.message) as string } }),
+        ...(event.error === undefined ? {} : { error: redactLoggedError(event.error) }),
         ...(event.fields === undefined ? {} : { fields: redactArgs(event.fields) as LogEvent["fields"] }),
         message: redactArgs(event.message) as string,
     };
