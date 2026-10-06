@@ -7,7 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 
 import { api } from "../../lunora/_generated/api.js";
-import { effectiveWatchPaths, normalizeRootDirectory, normalizeWatchPaths } from "../builds/paths";
+import type { RecordedWorkspacePackages } from "../builds/paths";
+import { normalizeRootDirectory, normalizeWatchPaths, watchPathsPreview } from "../builds/paths";
 import { Field, FormError } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
@@ -35,18 +36,23 @@ export const BuildSettingsCard = ({
     projectId,
     rootDirectory = "",
     watchPaths = NO_WATCH_PATHS,
+    workspacePackages,
 }: {
     organizationId: OrgId;
     projectId: ProjectId;
     rootDirectory?: string;
     watchPaths?: string[];
+    workspacePackages?: RecordedWorkspacePackages;
 }): ReactElement => {
     const update = useMutation(api.projects.updateBuildSettings);
     const [root, setRoot] = useState(rootDirectory);
     const [paths, setPaths] = useState(() => watchPaths.join("\n"));
     const [error, setError] = useState<null | string>(null);
     const problem = validate(root, paths);
-    const preview = problem === null ? effectiveWatchPaths(normalizeRootDirectory(root) || undefined, normalizeWatchPaths(paths.split("\n"))) : [];
+    const preview =
+        problem === null
+            ? watchPathsPreview(normalizeRootDirectory(root) || undefined, normalizeWatchPaths(paths.split("\n")), workspacePackages)
+            : { patterns: [] };
 
     const save = async (): Promise<void> => {
         setError(null);
@@ -98,8 +104,8 @@ export const BuildSettingsCard = ({
                     {problem === null ? (
                         <p className="text-muted-foreground text-xs">
                             A push to the default branch (or a pull request) builds only when it changes one of:{" "}
-                            <span className="font-mono">{preview.join(", ")}</span>. Pushes that cannot be checked (force pushes, new branches, very large
-                            pushes) always build.
+                            <span className="font-mono">{preview.patterns.join(", ")}</span>. Pushes that cannot be checked (force pushes, new branches, very
+                            large pushes) always build.{preview.note === undefined ? null : ` ${preview.note}`}
                         </p>
                     ) : (
                         <p className="text-destructive text-xs" id="build-settings-problem" role="alert">

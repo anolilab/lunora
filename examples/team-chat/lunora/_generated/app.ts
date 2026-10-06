@@ -2,9 +2,9 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
+import { abortStagedGlobalRows, applyCdcChanges, commitStagedGlobalRows, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, stageGlobalRows } from "@lunora/d1";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
@@ -462,11 +462,12 @@ class AppBuilder<Env extends object> {
             storageDelete: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).delete(key),
             storageDownload: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).download(key),
             storageList: (prefix?: string, opts?: { bucket?: string; cursor?: string; limit?: number }) => pick(opts?.bucket).list(prefix, opts),
+            storageMultipartUpload: (key: string, opts?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string> }) => pick(opts?.bucket).createMultipartUpload(key, opts),
             storageSignedUrl: hasSigning
                 ? (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT"; origin?: string }) =>
                       pick(opts?.bucket, opts?.origin).getSignedUrl(key, { contentType: opts?.contentType, expiresInSeconds: opts?.expiresInSeconds, method: opts?.method })
                 : undefined,
-            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
+            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string>; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
         };
     }
 
@@ -511,6 +512,7 @@ class AppBuilder<Env extends object> {
                 // plane: the rows `resolveTableSharding` classifies as `.global()`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
+                options.importGlobalsStaging = buildGlobalImportStaging(database, this.cdcEnabled);
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -565,6 +567,9 @@ class AppBuilder<Env extends object> {
             // Set only once auth is pinned to a jurisdiction: copies the users left in the
             // un-pinned object across (`__lunora_admin__:copyAuthToJurisdiction`).
             options.authJurisdictionMove = authWiring.jurisdictionMove;
+            // Every table of the object, for the admin export / import (`$auth`), so a
+            // backup, restore or eject carries users and sessions with the app's data.
+            options.authData = authWiring.dataPort;
             // `authAdmin` stays D1-only: its ~30 methods read the auth tables directly
             // from the worker, which DO storage does not allow. The studio's auth pages
             // therefore report "not configured" in this mode rather than silently
@@ -627,6 +632,15 @@ class AppBuilder<Env extends object> {
 
             options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
             options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
+            // better-auth's tables for the admin export / import (`$auth`). A table the
+            // schema declares (`authTables(...)`) already travels as a `.global()` row.
+            options.authData = authInstance
+                ? createSqlAuthDataPort(
+                      d1Executor(authD1(env) as never),
+                      authTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
+                      authCredentialTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
+                  )
+                : undefined;
         }
 
         for (const fn of this.extendFns) {
@@ -787,6 +801,32 @@ const buildGlobalImporter =
             startLine: request.startLine,
         });
     };
+
+/**
+ * `importGlobalsStaging` for a staged replace import: the `.global()` rows wait
+ * in D1's staging table until the commit writes them through the same writer
+ * `importGlobals` uses (changelog included), then prunes. See `@lunora/d1`'s
+ * `import-staging` for what the commit guarantees without a transaction.
+ */
+const buildGlobalImportStaging = (database: D1DatabaseLike, cdc: boolean) => {
+    const globalSchema = schema as unknown as D1CtxDbOptions["schema"];
+
+    return {
+        abort: (request: { generation: string; session: string }) => abortStagedGlobalRows(buildExec(database), request.session, request.generation),
+        commit: (request: { generation: string; session: string; staged: boolean; tables: ReadonlyArray<string> }) => {
+            const exec = buildExec(database);
+
+            return commitStagedGlobalRows(createD1CtxDb({ cdc, exec, schema: globalSchema }), exec, globalSchema, request);
+        },
+        stage: (request: {
+            generation: string;
+            rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+            session: string;
+            tables: ReadonlyArray<string>;
+        }) =>
+            stageGlobalRows(buildExec(database), globalSchema, request),
+    };
+};
 
 /**
  * `exportGlobals` for the admin export endpoint (and the scheduled R2 backup,

@@ -65,6 +65,15 @@ const ADMIN_PATH = /^[\w-]+(?:\/[\w-]+)*$/iu;
 /** Verbs the studio's admin surface uses. Anything else is a write nobody asked for. */
 const ADMIN_METHODS = new Set(["GET", "POST"]);
 
+/**
+ * The tenant's bulk data-movement routes: `export` reads every row (and, asked
+ * for, every end user's auth data), `import` rewrites them. The proxy resolves
+ * their admin target for owners and admins only.
+ */
+const DATA_MOVEMENT_PATH = /^(?:export|import)(?:\/|$)/iu;
+
+export const isDataMovementPath = (path: string): boolean => DATA_MOVEMENT_PATH.test(path);
+
 /** Whether a caller-supplied admin path is safe to append to the tenant's admin base. */
 const isAdminPath = (path: string): boolean => path.length > 0 && path.length <= 200 && ADMIN_PATH.test(path);
 

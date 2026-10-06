@@ -14,16 +14,22 @@
  * `wrangler d1 execute --file` restores from, so the recovery path is the
  * documented one rather than something invented here — see `docs/RESTORE.md`.
  *
- * The copy is same-account: a Worker's R2 binding cannot reach another
- * Cloudflare account, so this survives losing the *database* but not losing the
- * account*. Getting the dump into a second cell needs R2's S3 API and a
- * credential for that account, which is the remaining half of D1 — it is a
- * deliberate first increment, not an oversight.
+ * The primary copy is same-account: a Worker's R2 binding cannot reach another
+ * Cloudflare account, so it survives losing the database but not losing the
+ * account. When `BACKUP_OFFSITE_*` is configured (`./offsite.ts`), each dump is
+ * then copied to a bucket in a second account over R2's S3 API and pruned there
+ * on the same schedule. That copy is best effort by design: its failure is in
+ * the result (and the tick's log line), never a reason to fail the primary.
  */
+
+import type { CopyOutcome } from "./multipart";
+import { copyObject } from "./multipart";
+import type { OffsiteBucket } from "./offsite";
 
 /** The subset of an R2 bucket binding this sweep uses. */
 export interface BackupBucket {
     delete: (keys: string[]) => Promise<void>;
+    get: (key: string) => Promise<null | { body: ReadableStream<Uint8Array> }>;
     list: (options: { cursor?: string; prefix: string }) => Promise<BackupListing>;
     put: (key: string, value: ReadableStream | null, options?: { httpMetadata?: { contentType?: string } }) => Promise<unknown>;
 }
@@ -41,16 +47,22 @@ export interface BackupSweepDeps {
     /** Injected for tests; defaults to the global. */
     fetch?: typeof globalThis.fetch;
     now: number;
+    /** The off-site copy (`./offsite.ts`); absent → primary only, exactly as before it existed. */
+    offsite?: OffsiteBucket;
     /** Starts the export and answers a presigned URL for the dump. */
     startExport: () => Promise<{ signedUrl: string }>;
 }
 
 export interface BackupSweepResult {
+    /** The off-site copy and its prune; absent when no off-site bucket is configured. */
+    offsite?: CopyOutcome & { pruned: number };
     /** Objects deleted because they aged past the retention window. */
     pruned: number;
     /** The key written, or null when the sweep did not write one. */
     written: null | string;
 }
+
+const SQL_CONTENT_TYPE = "application/sql";
 
 /** How long a dump is kept before the prune pass removes it. */
 export const BACKUP_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -78,7 +90,7 @@ export const backupKey = (cell: string, now: number): string => `${backupPrefix(
  * actually holds the bytes, and an object whose upload was retried carries the
  * later time.
  */
-const prune = async (bucket: BackupBucket, cell: string, now: number): Promise<number> => {
+const prune = async (bucket: Pick<BackupBucket, "delete" | "list">, cell: string, now: number): Promise<number> => {
     const cutoff = now - BACKUP_RETENTION_MS;
     const prefix = backupPrefix(cell);
     let cursor: string | undefined;
@@ -127,7 +139,32 @@ export const runBackupSweep = async (deps: BackupSweepDeps): Promise<BackupSweep
 
     // Streamed rather than buffered: the dump is the whole control plane, and a
     // Worker that reads it into memory first is one growth spurt from OOM.
-    await bucket.put(key, dump.body, { httpMetadata: { contentType: "application/sql" } });
+    await bucket.put(key, dump.body, { httpMetadata: { contentType: SQL_CONTENT_TYPE } });
 
-    return { pruned: await prune(bucket, cell, now), written: key };
+    const pruned = await prune(bucket, cell, now);
+
+    if (!deps.offsite) {
+        return { pruned, written: key };
+    }
+
+    // Read back from the primary rather than teeing the download, so a slow or
+    // failing off-site account cannot touch the primary write at all.
+    const copied = await copyObject(bucket, deps.offsite, key, SQL_CONTENT_TYPE);
+    let offsitePruned = 0;
+
+    // Pruned only after a good copy, so a run of failed copies never ages out the
+    // last good off-site dump while writing nothing in its place.
+    if (copied.status === "succeeded") {
+        try {
+            offsitePruned = await prune(deps.offsite, cell, now);
+        } catch (error) {
+            return {
+                offsite: { error: `off-site prune: ${error instanceof Error ? error.message : "failed"}`, pruned: 0, status: "failed" },
+                pruned,
+                written: key,
+            };
+        }
+    }
+
+    return { offsite: { ...copied, pruned: offsitePruned }, pruned, written: key };
 };

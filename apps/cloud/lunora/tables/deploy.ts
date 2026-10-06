@@ -213,6 +213,8 @@ export const deployTables = {
         // pushed for, and dedup never reuses a bundle built from another root.
         rootDirectory: v.optional(v.string()),
         // Why a push was not built — set only on `skipped` rows (path filter).
+        /** The skip is the path filter's: the commit has no other status, so a redelivery may repost one. */
+        pathFiltered: v.optional(v.boolean()),
         skipReason: v.optional(v.string()),
         status: v.union(v.literal("pending"), v.literal("building"), v.literal("successful"), v.literal("failed"), v.literal("skipped")),
         // What recorded the build, which decides how it releases: a push to the
@@ -336,12 +338,22 @@ export const deployTables = {
         error: v.optional(v.string()),
         // R2 key of the snapshot (backup rows); the source snapshot's key (restore rows).
         key: v.string(),
+        // Off-site copy of a backup row's snapshot (`src/backup/offsite.ts`), set
+        // only when an off-site bucket is configured. A failed copy never fails
+        // the snapshot; the bounded reason carries a status, never data.
+        offsiteError: v.optional(v.string()),
+        offsiteStatus: v.optional(v.union(v.literal("succeeded"), v.literal("failed"))),
         operation: v.union(v.literal("backup"), v.literal("restore")),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
-        // Restore rows: the snapshot restored, and what the append-only import did.
+        // Restore rows: the snapshot restored, and what the import wrote.
+        // `restoreDeleted` is per table (`$auth` / `$kv` / `$storage` for the
+        // sections): the rows the rewind removed. `restoreConflicts` and
+        // `restoreRowErrors` are only on restores from before the staged import,
+        // which settles a restore with errors as failed.
         restoredFrom: v.optional(v.id("tenantBackups")),
         restoreConflicts: v.optional(v.number()),
+        restoreDeleted: v.optional(v.record(v.string(), v.number())),
         restoreInserted: v.optional(v.number()),
         restoreRowErrors: v.optional(v.number()),
         status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed")),

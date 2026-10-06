@@ -10,6 +10,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { fromBase64, toBase64 } from "../../../../shared/base64";
 import { assertMetadataWithinLimit, assertOneExpirationForm, validateKey } from "./create-kv";
 import type { KVNamespaceLike } from "./types";
 
@@ -44,10 +45,18 @@ interface KvValueResultLike {
  */
 interface KvIntrospectorLike {
     deleteKey: (options: { key: string; namespace: string }) => Promise<void>;
-    getValue: (options: { key: string; namespace: string }) => Promise<KvValueResultLike>;
+    getValue: (options: { encoding?: "base64"; key: string; namespace: string }) => Promise<KvValueResultLike>;
     listKeys: (options: { cursor?: string; limit?: number; namespace: string; prefix?: string }) => Promise<KvKeyListResultLike>;
     listNamespaces: () => Promise<KvNamespaceSummaryLike[]>;
-    putValue: (options: { expiration?: number; expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => Promise<void>;
+    putValue: (options: {
+        encoding?: "base64";
+        expiration?: number;
+        expirationTtl?: number;
+        key: string;
+        metadata?: unknown;
+        namespace: string;
+        value: string;
+    }) => Promise<void>;
 }
 
 /** Construction options for {@link createKvIntrospector}. */
@@ -121,10 +130,20 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
         };
     };
 
-    const getValue = async (getOptions: { key: string; namespace: string }): Promise<KvValueResultLike> => {
+    const getValue = async (getOptions: { encoding?: "base64"; key: string; namespace: string }): Promise<KvValueResultLike> => {
         const ns = resolveNamespace(getOptions.namespace);
 
         validateKey(getOptions.key);
+
+        if (getOptions.encoding === "base64") {
+            // Raw bytes, so a binary value (an image, a serialised buffer) survives an
+            // export round trip that reading it as text would corrupt.
+            const result = await ns.getWithMetadata(getOptions.key, "arrayBuffer");
+            const bytes = result.value as ArrayBuffer | null;
+
+            // eslint-disable-next-line unicorn/no-null -- mirrors KV API: null when absent
+            return { metadata: result.metadata ?? null, value: bytes === null ? null : toBase64(new Uint8Array(bytes)) };
+        }
 
         const result = await ns.getWithMetadata(getOptions.key, "text");
 
@@ -133,6 +152,7 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
     };
 
     const putValue = async (putOptions: {
+        encoding?: "base64";
         expiration?: number;
         expirationTtl?: number;
         key: string;
@@ -159,7 +179,7 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
             assertMetadataWithinLimit(putOptions.metadata);
         }
 
-        await ns.put(putOptions.key, putOptions.value, {
+        await ns.put(putOptions.key, putOptions.encoding === "base64" ? fromBase64(putOptions.value) : putOptions.value, {
             expiration: putOptions.expiration,
             expirationTtl: putOptions.expirationTtl,
             metadata: putOptions.metadata,

@@ -30,10 +30,13 @@ interface BackupRow {
     deploymentId: Id<"deployments">;
     error?: string;
     key: string;
+    offsiteError?: string;
+    offsiteStatus?: "failed" | "succeeded";
     operation: "backup" | "restore";
     organizationId: OrgId;
     projectId: Id<"projects">;
     restoreConflicts?: number;
+    restoreDeleted?: Record<string, number>;
     restoredFrom?: BackupId;
     restoreInserted?: number;
     restoreRowErrors?: number;
@@ -92,8 +95,11 @@ const toView = (row: BackupRow): BackupView => {
         ...(row.bytes == null ? {} : { bytes: row.bytes }),
         ...(row.completedAt == null ? {} : { completedAt: row.completedAt }),
         ...(row.error == null ? {} : { error: row.error }),
+        ...(row.offsiteError == null ? {} : { offsiteError: row.offsiteError }),
+        ...(row.offsiteStatus == null ? {} : { offsiteStatus: row.offsiteStatus }),
         ...(row.restoredFrom == null ? {} : { restoredFrom: row.restoredFrom }),
         ...(row.restoreConflicts == null ? {} : { restoreConflicts: row.restoreConflicts }),
+        ...(row.restoreDeleted == null ? {} : { restoreDeleted: row.restoreDeleted }),
         ...(row.restoreInserted == null ? {} : { restoreInserted: row.restoreInserted }),
         ...(row.restoreRowErrors == null ? {} : { restoreRowErrors: row.restoreRowErrors }),
     };
@@ -264,8 +270,11 @@ export const finish = internalMutation
         bytes: v.optional(v.number()),
         error: v.optional(boundedString(LIMITS.url)),
         id: v.id("tenantBackups"),
+        offsiteError: v.optional(boundedString(LIMITS.url)),
+        offsiteStatus: v.optional(v.union(v.literal("succeeded"), v.literal("failed"))),
         organizationId: v.id("organizations"),
         restoreConflicts: v.optional(v.number()),
+        restoreDeleted: v.optional(v.record(v.string(), v.number())),
         restoreInserted: v.optional(v.number()),
         restoreRowErrors: v.optional(v.number()),
         status: v.union(v.literal("succeeded"), v.literal("failed")),

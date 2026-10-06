@@ -2162,7 +2162,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             expect(result.generated.app).toContain("public auth(");
             expect(result.generated.app).toContain(
-                'import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
+                'import { authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
             );
             expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));");
             // The OAuth discovery documents (plan 461 B): served by the auth instance

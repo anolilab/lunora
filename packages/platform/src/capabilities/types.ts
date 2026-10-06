@@ -37,7 +37,7 @@
  * `scheduler`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
- * Every other key here — `authJurisdictionMove`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * Every other key here — `authJurisdictionMove`, `dataExportSections`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
  * `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`,
  * `serverReactors`,
@@ -285,6 +285,17 @@ export interface PlatformCapabilities {
         cronTriggers?: Capability;
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
+
+        /**
+         * The admin export's non-table sections — auth tables outside the
+         * schema, KV namespaces, storage objects — and their import half
+         * (`/_lunora/admin/export` / `import`, format 2). Advisory by nature:
+         * an admin data path over bindings the app already rates (`objectStorage`,
+         * `keyValueStore`), nothing an app declares for codegen to gate. Its note
+         * is where a host says which sections carry data there, and why
+         * Vectorize is not one.
+         */
+        dataExportSections?: Capability;
 
         /**
          * Durable streams: a `.stream()` run whose chunks are persisted and

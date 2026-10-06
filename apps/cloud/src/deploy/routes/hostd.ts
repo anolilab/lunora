@@ -8,6 +8,9 @@
  * - `POST /v1/hostd/rollout` — `adminToken`: point boxes (named, or all) at a
  *   release and roll it out over their sessions, canary first — 202, run after
  *   the response. With `allowDowngrade: true` it is a rollback (audited).
+ *
+ * The two `adminToken` routes are gated by the router's admin table
+ * (`withAdminToken` in `./tenant-admin`), not here — call them only through it.
  */
 import type { D1DatabaseLike } from "@lunora/d1";
 
@@ -24,7 +27,6 @@ import type { BoxRouteEnvironment } from "./boxes";
 import { verifiedBoxRequest } from "./boxes";
 import type { RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext } from "./shared";
-import { requireAdminToken } from "./tenant-admin";
 
 type HostdRouterEnv = BoxRouteEnvironment & RouterEnv & { LUNORA_ORIGIN_URL?: string };
 
@@ -34,12 +36,6 @@ type HostdRouterEnv = BoxRouteEnvironment & RouterEnv & { LUNORA_ORIGIN_URL?: st
  * exactly as a box would verify it; a placeholder key verifies nothing.
  */
 export const handleHostdReleaseRoute = async (request: Request, environment: HostdRouterEnv): Promise<Response> => {
-    const unauthorized = requireAdminToken(request, environment);
-
-    if (unauthorized) {
-        return unauthorized;
-    }
-
     const context = requireContext(environment);
     const body = (await request.json().catch(() => null)) as null | { channel?: unknown; envelope?: unknown };
 
@@ -116,12 +112,6 @@ const positiveInteger = (value: unknown): number | undefined => (typeof value ==
  * the operator asks for it, and each box it reaches gets an audit-log entry.
  */
 export const handleHostdRolloutRoute = async (request: Request, environment: HostdRouterEnv): Promise<Response> => {
-    const unauthorized = requireAdminToken(request, environment);
-
-    if (unauthorized) {
-        return unauthorized;
-    }
-
     const context = requireContext(environment);
     const namespace = environment.BOX_SESSION;
     const origin = environment.LUNORA_ORIGIN_URL;

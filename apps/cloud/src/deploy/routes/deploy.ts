@@ -22,6 +22,8 @@ import type { Placement, StoredPlacement } from "../../targets/placement";
 import { resolvePlacement, targetOf } from "../../targets/placement";
 import { resolveTargetDriver } from "../../targets/registry";
 import { resolveTelemetryConfig } from "../../telemetry/ingest-key";
+import type { ProvisionStep } from "../../telemetry/platform-metrics";
+import { recordProvisionFailure } from "../../telemetry/platform-metrics";
 import type { StoredAdminToken } from "../admin-token";
 import { resolveAdminToken, sealAdminToken } from "../admin-token";
 import { handleDeployRequest } from "../handler";
@@ -32,7 +34,6 @@ import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../release-
 import { createReleaseStore } from "../release-store";
 import type { LunoraActionContext, RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext, strictBearer } from "./shared";
-import { requireAdminToken } from "./tenant-admin";
 
 interface EncryptedSecretRow {
     ciphertext: string;
@@ -202,7 +203,11 @@ export const deployDeps = (context: LunoraActionContext, environment: RouterEnv,
         verifyKey: (key) => context.runMutation<DeployTarget | null>(api.deploy_keys.verify, { key }),
     };
 
-    return { ...release, analytics, backend, healthCheck };
+    const provisionFailed = (step: ProvisionStep, reason: string): void => {
+        recordProvisionFailure(environment.PLATFORM_METRICS, { cell, reason, step });
+    };
+
+    return { ...release, analytics, backend, healthCheck, provisionFailed };
 };
 
 type RouteHandler = (request: Request, environment: RouterEnv) => Promise<Response>;
@@ -266,33 +271,20 @@ export const createDeployRoutes = (
          * its build runner (GAPS.md A3). Called in-process by the Worker's own
          * every-minute `scheduled()` (`drainBuildQueue` in
          * `src/sweeps/scheduled.ts`), which is what hands it the request-scoped
-         * Lunora context every route runs on. Admin-token gated like every other
-         * platform-internal route.
+         * Lunora context every route runs on. Admin-token gated by the router's
+         * admin table, like every other platform-internal route.
          */
-        handleBuildDispatchRoute: async (request, environment) => {
-            const unauthorized = requireAdminToken(request, environment);
-
-            if (unauthorized) {
-                return unauthorized;
-            }
-
-            return Response.json(await dispatchBuilds({ context: requireContext(environment), environment }));
-        },
+        handleBuildDispatchRoute: async (_request, environment) => Response.json(await dispatchBuilds({ context: requireContext(environment), environment })),
 
         /**
          * `POST /v1/builds/run` — run one half of a build (`{ job, stage }`),
          * called in-process by its build runner's alarm (`src/builds/runner-do.ts`).
          * A route, and not code in the runner, because a build's mutations and
          * its release need the Lunora context and this Worker's bindings, which
-         * a route is handed. Admin-token gated; the body is the runner's own.
+         * a route is handed. Admin-token gated by the router's admin table; the
+         * body is the runner's own.
          */
         handleBuildRunRoute: async (request, environment) => {
-            const unauthorized = requireAdminToken(request, environment);
-
-            if (unauthorized) {
-                return unauthorized;
-            }
-
             const body = (await request.json().catch(() => null)) as null | { job?: BuildJob; stage?: BuildStage };
 
             if (!body?.job || (body.stage !== "build" && body.stage !== "release" && body.stage !== "interrupted")) {

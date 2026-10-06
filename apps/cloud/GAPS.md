@@ -19,6 +19,46 @@ needed) · 🌐 needs live Cloudflare/Creem/GitHub credentials · 🧭 decision,
 
 ---
 
+## Gap close-out — 2026-10-06
+
+Every 🔨 item still open below was built in one pass (branch `feat/cloud-gaps`):
+
+- **Off-site backups (D1).** Control-plane dumps and tenant snapshots are copied
+  to an R2 bucket in a second Cloudflare account over the S3 API when the four
+  `BACKUP_OFFSITE_*` secrets are set (a partial set warns). A failed copy never
+  fails the backup; the studio shows it per snapshot. Setting the secrets is 🌐.
+- **Snapshots past 64 MiB.** Streamed as an R2 multipart upload in 8 MiB parts,
+  capped at 4 GiB compressed — the export is the tenant's own code.
+- **Point-in-time restore, atomic.** A replace import is a staged session —
+  batches stage invisibly (`?mode=replace&stage=<id>`), then one commit swaps each
+  shard in a single transaction after a dry run of all of them; D1, KV and
+  storage are ordered and retry-safe. Every unknown session state refuses the
+  commit. The tenant restore and `lunora import --replace` both use it, a
+  failure leaves the tenant untouched, and the pre-restore snapshot undoes a
+  restore.
+- **Export coverage.** Export format 2 carries the auth tables (never live
+  sessions or one-time tokens, and only when asked for by name), KV namespaces
+  and storage objects, large KV values and objects over 32 MiB included; staged
+  restore chunks are AES-GCM sealed under the admin token. Vectorize stays out:
+  the binding cannot enumerate an index.
+- **Export/import authorization.** The studio's admin proxy resolves export and
+  import targets for owners and admins only, decided inside the internal
+  `adminTarget` from the forwarded path.
+- **Audit.** Global (D1) and section imports are audited on the default shard.
+- **Monorepo builds.** A path-filtered skip posts a `success` commit status, and
+  the default watch set includes the workspace packages the last production
+  build recorded (shown in the watch-path preview).
+- **`adminToken` routes.** Their own guarded route table; the admin token
+  authorizes that table and nothing else, and MCP can never reach it.
+- **Platform self-metrics (E1).** Dispatcher latency/outcome, queue depth and
+  provisioning failures go to the `PLATFORM_METRICS` dataset;
+  `GET /v1/platform/metrics` reads them back (admin token).
+- **CLI.** `lunora import --replace [--tables …]`.
+
+Still open after it: Yarn PnP (refused by design), the deploy-key scope ceiling
+(a product call), and the 🌐 halves — secrets, SLOs, the status page, on-call,
+the restore drill.
+
 ## Tenant data backups — 2026-09-30
 
 `src/backup/sweep.ts` only ever backed up the control plane's own D1. Tenant
@@ -55,10 +95,10 @@ eject` reads, now through one shared helper (`src/backup/tenant-transport.ts`)
 - **Also fixed:** `POST /v1/eject` called the export with `GET`, which the
   runtime answers 405 — every eject failed. It now shares the backup path.
 
-Still open: snapshots are same-account (as D1 below); objects over 64 MiB
-compressed are refused (in-memory assembly — multipart upload is the upgrade);
-R2 objects, KV, Vectorize and auth tables outside the schema are not in the
-export; a true point-in-time rewind needs a replace-mode import in the runtime.
+~~Still open: snapshots are same-account; objects over 64 MiB are refused; R2,
+KV, Vectorize and auth tables are not in the export; no point-in-time rewind.~~
+Closed 2026-10-06 (see the close-out above), except Vectorize, which the binding
+cannot enumerate.
 
 ## Monorepo builds — 2026-10-01
 
@@ -71,9 +111,8 @@ escape. Pushes and PR previews whose changed files match nothing are recorded as
 new branch, 20+ commits, missing lists, 1000+ files, compare failure/300+ files)
 builds. See README → Monorepos.
 
-Still open: Yarn PnP stays refused; a `skipped` push posts no commit status; the
-watch-path default covers ancestor lockfiles but not a workspace package the app
-imports from outside its root (list it in `watchPaths`).
+Still open: Yarn PnP stays refused. (The `skipped` commit status and workspace
+packages in the watch-path default were closed 2026-10-06.)
 
 ---
 
@@ -252,8 +291,8 @@ fix landed with the double that can catch it regressing. Coverage is measurable
 for the first time (`test:coverage` existed nowhere in this app): 41% overall,
 **24% across `lunora/`**, which is where the money and authorization live.
 
-**Still open:** the dispatcher-facing `adminToken` routes are a real second
-router seam, deferred to its own diff. Deploy-key `type` is now enforced as a
+**Still open:** ~~the dispatcher-facing `adminToken` routes are a real second
+router seam~~ (closed 2026-10-06: their own guarded table). Deploy-key `type` is now enforced as a
 ceiling, which will 403 a tenant currently deploying production with a lower
 scope — a product call, flagged rather than assumed.
 
@@ -699,7 +738,7 @@ enforcement + recovery engine above already reacts to whatever balance exists.
 
 ## D. Data & trust
 
-### D1. Control-plane + tenant backups, PITR, restore runbook (✅ same-account control-plane + tenant backups and restore shipped; 🔨 cross-account copy, point-in-time rewind)
+### D1. Control-plane + tenant backups, PITR, restore runbook (✅ backups, off-site copy and point-in-time restore shipped; 🌐 off-site secrets, restore drill)
 
 Tenant data now has daily snapshots, per-plan retention and a studio restore —
 see "Tenant data backups — 2026-09-30" above. The notes below are about the
@@ -712,11 +751,9 @@ is the runbook, and it separates the two layers that fail differently: Time
 Travel already covers a bad write in place, so the dump exists for losing the
 database itself.
 
-**Still open, and it is the half that motivated the row:** the copy is
-same-account. A Worker's R2 binding cannot address another Cloudflare account,
-so a second copy in another cell needs R2's S3 API and a credential for that
-account. Until then an account-level loss is uncovered — this is 🔨 (code
-tractable) rather than 🌐.
+**Closed 2026-10-06:** the copy to a second account goes through R2's S3 API
+(`src/backup/offsite.ts`) once the `BACKUP_OFFSITE_*` credential for that account
+is set — until then (🌐) an account-level loss is still uncovered.
 
 The runbook's quarterly restore drill has **not been run**. A backup nobody has
 restored is a hypothesis, and the recovery-time number an incident is judged on
@@ -767,7 +804,8 @@ token so a cell with no PostHog runs exactly as before:
   Analytics for the `data-ph-unmask` contract and the event table.
 
 **Still open, and all of it 🌐.** Deploy queue depth, dispatcher latency and
-provisioning failures are Worker-side counters nobody emits yet; SLOs need a
+provisioning failures are emitted and readable since 2026-10-06 (README →
+Platform self-metrics); SLOs need a
 target and an alerting destination; the external status page has to live off our
 own infrastructure to be worth anything, and on-call needs a rota. The
 app-semantic alerting engine (Ring 3 item 1) covers _tenants_ and does not watch

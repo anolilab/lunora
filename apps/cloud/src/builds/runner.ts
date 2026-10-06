@@ -44,6 +44,8 @@ export interface BuildExecution {
     manifest?: Record<string, unknown>;
     /** The wrangler `name`, a hint for a project's first production alias. */
     scriptName?: string;
+    /** Repo-relative directories of the workspace packages the app imports from outside its root (the path filter's input). */
+    workspacePackages?: string[];
 }
 
 /** What the release port reports: the deployment it recorded, and how it ended. */
@@ -63,8 +65,8 @@ export interface BuildReleaseSkipped {
 export interface BuildRunnerPorts {
     /** Stream one output line into `buildLogs` (lease-checked upstream). */
     appendLog: (buildId: string, level: "error" | "info", line: string) => Promise<void>;
-    /** Mark the build successful with its bundle hash, linking the deployment it fed when there is one. */
-    complete: (buildId: string, bundleHash: string, deploymentId?: string) => Promise<void>;
+    /** Mark the build successful with its bundle hash, linking the deployment it fed and recording its workspace packages when there are some. */
+    complete: (buildId: string, bundleHash: string, deploymentId?: string, workspacePackages?: string[]) => Promise<void>;
     /** Run the build over the fetched source in `rootDirectory`, streaming output via `onLine`. 🌐 in production. */
     execute: (source: ArrayBuffer, rootDirectory: string | undefined, onLine: (line: string) => Promise<void>) => Promise<BuildExecution>;
     /** Mark the build failed. */
@@ -258,9 +260,11 @@ export const executeBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts)
 
 /** The second half: release an executed build (when there is a release port) and complete it. Never throws. */
 export const finishBuild = async (build: ClaimedBuild, result: BuildExecution, ports: BuildRunnerPorts): Promise<BuildOutcome> => {
+    const complete = (deploymentId?: string): Promise<void> => ports.complete(build.buildId, result.bundleHash, deploymentId, result.workspacePackages);
+
     try {
         if (!ports.release) {
-            await ports.complete(build.buildId, result.bundleHash);
+            await complete();
             await report(ports, build, "success", "Built on Lunora Cloud.");
 
             return { bundleHash: result.bundleHash, status: "successful" };
@@ -277,7 +281,7 @@ export const finishBuild = async (build: ClaimedBuild, result: BuildExecution, p
             const message = error instanceof Error ? error.message : String(error);
 
             await ports.appendLog(build.buildId, "error", `release failed: ${message}`).catch(() => {});
-            await ports.complete(build.buildId, result.bundleHash);
+            await complete();
             await reportReleaseFailure(ports, build, message);
 
             return { bundleHash: result.bundleHash, status: "successful" };
@@ -285,7 +289,7 @@ export const finishBuild = async (build: ClaimedBuild, result: BuildExecution, p
 
         if ("skipped" in released) {
             await ports.appendLog(build.buildId, "info", `release skipped: ${released.skipped}`).catch(() => {});
-            await ports.complete(build.buildId, result.bundleHash);
+            await complete();
             await report(ports, build, "success", `Built on Lunora Cloud; ${released.skipped}.`);
 
             return { bundleHash: result.bundleHash, status: "successful" };
@@ -298,7 +302,7 @@ export const finishBuild = async (build: ClaimedBuild, result: BuildExecution, p
                 ? ports.appendLog(build.buildId, "info", `released as deployment ${released.deploymentId}`)
                 : ports.appendLog(build.buildId, "error", `release failed: deployment ${released.deploymentId} ended failed: ${released.error}`)
         ).catch(() => {});
-        await ports.complete(build.buildId, result.bundleHash, released.deploymentId);
+        await complete(released.deploymentId);
 
         if (released.error !== undefined) {
             await reportReleaseFailure(ports, build, released.error, released.url);

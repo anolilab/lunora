@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { RecordedWorkspacePackages } from "../builds/paths";
 import type { TargetId } from "../provision-contract";
 import { BackupsSection } from "./BackupsSection";
 import { BuildSettingsCard } from "./BuildSettingsCard";
@@ -47,6 +48,8 @@ interface DeploymentsSectionProps {
     /** Where the project deploys; gates what the view offers (plan 458 W9). */
     target: TargetId;
     watchPaths?: string[];
+    /** What the last production build recorded the app importing (`projects.workspacePackages`). */
+    workspacePackages?: RecordedWorkspacePackages;
 }
 
 type Deployment = ReturnOf<typeof api.deployments.listByProject>[number];
@@ -495,6 +498,7 @@ export const DeploymentsSection = ({
     rootDirectory,
     target,
     watchPaths,
+    workspacePackages,
 }: DeploymentsSectionProps): ReactElement => {
     const deployments = useQuery(api.deployments.listByProject, { organizationId, projectId });
     const builds = useQuery(api.builds.listByProject, { organizationId, projectId });
@@ -515,6 +519,7 @@ export const DeploymentsSection = ({
             projectId={projectId}
             rootDirectory={rootDirectory}
             watchPaths={watchPaths}
+            workspacePackages={workspacePackages}
         />
     );
 

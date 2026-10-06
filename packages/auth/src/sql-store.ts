@@ -166,6 +166,8 @@ const whereSuffix = (fragment: SqlFragment): string => (fragment.sql ? ` WHERE $
 
 /** A D1 prepared-statement chain — the slice of `D1Database` {@link d1Executor} needs. */
 interface D1Like {
+    /** D1's `batch()`: the statements run as one transaction. Optional so a test double without it still builds an executor. */
+    batch?: (statements: unknown[]) => Promise<unknown>;
     prepare: (sql: string) => {
         bind: (...values: unknown[]) => {
             all: () => Promise<{ results?: Record<string, unknown>[] }>;
@@ -182,6 +184,8 @@ interface D1Like {
  */
 export interface SqlExecutor {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    /** Run the statements as one atomic unit (D1's `batch()`); absent ⇒ the store has no such unit, and callers needing one say so. */
+    batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
 }
 
@@ -406,6 +410,8 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
  * binding Lunora's `.global()` tables use.
  */
 export const d1Executor = (database: D1Like): SqlExecutor => {
+    const batch = database.batch?.bind(database);
+
     return {
         all: async (sql, parameters) => {
             const result = await database
@@ -415,6 +421,13 @@ export const d1Executor = (database: D1Like): SqlExecutor => {
 
             return result.results ?? [];
         },
+        ...(batch === undefined
+            ? {}
+            : {
+                  batch: async (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => {
+                      await batch(statements.map(({ params, sql }) => database.prepare(sql).bind(...params)));
+                  },
+              }),
         run: async (sql, parameters) => {
             await database
                 .prepare(sql)

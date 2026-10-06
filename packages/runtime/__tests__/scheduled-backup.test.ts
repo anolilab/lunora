@@ -30,11 +30,13 @@ const coordinatorWithExport = (rows: ExportRows): QueryCoordinator => {
         orchestrateCdcSync: vi.fn<() => never>(),
         orchestrateExport,
         orchestrateImport: vi.fn<() => never>(),
+        orchestrateImportSession: vi.fn<() => never>(),
         orchestrateMigration: vi.fn<() => never>(),
         orchestrateRank: vi.fn<() => never>(),
         orchestrateRankPage: vi.fn<() => never>(),
         orchestrateShardTraffic: vi.fn<() => never>(),
         registry: {} as never,
+        shardKeysForTables: vi.fn<() => never>(),
     };
 };
 
@@ -253,11 +255,13 @@ describe("createWorker — scheduled backup", () => {
                 };
             }),
             orchestrateImport: vi.fn<() => never>(),
+            orchestrateImportSession: vi.fn<() => never>(),
             orchestrateMigration: vi.fn<() => never>(),
             orchestrateRank: vi.fn<() => never>(),
             orchestrateRankPage: vi.fn<() => never>(),
             orchestrateShardTraffic: vi.fn<() => never>(),
             registry: {} as never,
+            shardKeysForTables: vi.fn<() => never>(),
         } as unknown as QueryCoordinator;
 
         const worker = createWorker({

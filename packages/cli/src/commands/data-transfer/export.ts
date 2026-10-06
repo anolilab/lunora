@@ -409,4 +409,4 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
 };
 
 export type { ExportCommandData, ExportCommandOptions, ExportCommandResult };
-export { runExportCommand };
+export { resolveTables, runExportCommand };

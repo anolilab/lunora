@@ -31,7 +31,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * `releaseFailure`), since a build that can never be released must not read green.
  */
 const toExecution = (payload: Record<string, unknown> & { bundle: string; bundleHash: string }): BuildExecution => {
-    const { assets, cronSpecs, manifest, scriptName } = payload;
+    const { assets, cronSpecs, manifest, scriptName, workspacePackages } = payload;
     const crons = Array.isArray(cronSpecs) ? cronSpecs.filter((cron): cron is string => typeof cron === "string") : [];
 
     return {
@@ -41,6 +41,8 @@ const toExecution = (payload: Record<string, unknown> & { bundle: string; bundle
         ...(crons.length > 0 ? { cronSpecs: crons } : {}),
         ...(isRecord(manifest) ? { manifest } : {}),
         ...(typeof scriptName === "string" && scriptName !== "" ? { scriptName } : {}),
+        // All or nothing: a list with a malformed entry is not the whole set, and a partial set skips deploys.
+        ...(Array.isArray(workspacePackages) && workspacePackages.every((path) => typeof path === "string") ? { workspacePackages } : {}),
     };
 };
 
@@ -90,7 +92,7 @@ const consumeBuildLine = async (line: string, onLine: (line: string) => Promise<
  *
  * The container answers `200` as soon as it starts, then writes one JSON object
  * per line: `{"line"}` while the build runs, and a final release
- * (`{"bundle","bundleHash","manifest","assets"?,"cronSpecs"?,"scriptName"?}`) or
+ * (`{"bundle","bundleHash","manifest","assets"?,"cronSpecs"?,"scriptName"?,"workspacePackages"?}`) or
  * `{"error"}`. Streaming rather than a buffered reply is what puts a build's
  * output in `buildLogs` while it is still running — the live tail the Studio's
  * Builds tab is built around — and it sidesteps the exec contract's 1MB

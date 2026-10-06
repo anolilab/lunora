@@ -78,6 +78,7 @@ export interface Doc_projects {
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     watchPaths?: Array<string>;
+    workspacePackages?: { builtAt: number; paths: Array<string>; rootDirectory: string };
 }
 
 export interface Doc_invitations {
@@ -207,6 +208,7 @@ export interface Doc_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
     trigger?: "push" | "pull_request";
@@ -280,11 +282,14 @@ export interface Doc_tenantBackups {
     deploymentId: Id<"deployments">;
     error?: string;
     key: string;
+    offsiteError?: string;
+    offsiteStatus?: "succeeded" | "failed";
     operation: "backup" | "restore";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     restoredFrom?: Id<"tenantBackups">;
     restoreConflicts?: number;
+    restoreDeleted?: Record<string, number>;
     restoreInserted?: number;
     restoreRowErrors?: number;
     status: "running" | "succeeded" | "failed";
@@ -926,6 +931,7 @@ export interface Insert_projects {
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     watchPaths?: Array<string>;
+    workspacePackages?: { builtAt: number; paths: Array<string>; rootDirectory: string };
 }
 
 export interface Insert_invitations {
@@ -1055,6 +1061,7 @@ export interface Insert_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
     trigger?: "push" | "pull_request";
@@ -1128,11 +1135,14 @@ export interface Insert_tenantBackups {
     deploymentId: Id<"deployments">;
     error?: string;
     key: string;
+    offsiteError?: string;
+    offsiteStatus?: "succeeded" | "failed";
     operation: "backup" | "restore";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     restoredFrom?: Id<"tenantBackups">;
     restoreConflicts?: number;
+    restoreDeleted?: Record<string, number>;
     restoreInserted?: number;
     restoreRowErrors?: number;
     status: "running" | "succeeded" | "failed";

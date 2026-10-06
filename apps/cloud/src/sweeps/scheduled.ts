@@ -9,6 +9,7 @@ import type { ExecutionContextLike, LunoraWorker, ScheduledControllerLike } from
 import { Creem } from "creem";
 
 import { controlPlaneExport } from "../backup/control-plane-export";
+import { offsiteBucket } from "../backup/offsite";
 import { runBackupSweep } from "../backup/sweep";
 import { runTenantBackupSweep } from "../backup/tenant-sweep";
 import type { CreemCreditsClientLike } from "../billing/creem-credits";
@@ -41,6 +42,7 @@ import { storeRowReader } from "../targets/placement";
 import { registeredFleet, registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
 import { runAlertDrain } from "../telemetry/alert-drain";
 import type { AlertDelivery } from "../telemetry/alerts";
+import { readQueueDepth, recordQueueDepth } from "../telemetry/platform-metrics";
 import { runAlertSweep } from "../telemetry/sweep";
 import { runUptimeSweep } from "../uptime/sweep";
 
@@ -283,12 +285,28 @@ const sweepBackup = async (env: ControlPlaneEnv): Promise<void> => {
         return;
     }
 
-    await runBackupSweep({
+    const offsite = offsiteBucket(env);
+    const result = await runBackupSweep({
         bucket: env.BACKUPS,
         cell: env.LUNORA_CELL ?? "default",
         now: Date.now(),
+        ...(offsite ? { offsite } : {}),
         startExport,
     });
+
+    // The control plane keeps no row for its own dumps, so this line is the record
+    // of the off-site copy — and a failed one is a warning, never a failed tick.
+    if (!result.offsite) {
+        return;
+    }
+
+    if (result.offsite.status === "failed") {
+        // eslint-disable-next-line no-console -- keys, counts and a bounded reason only
+        console.warn("[control-plane-backup]", JSON.stringify(result));
+    } else {
+        // eslint-disable-next-line no-console -- keys and counts only
+        console.log("[control-plane-backup]", JSON.stringify(result));
+    }
 };
 
 /**
@@ -302,6 +320,7 @@ const sweepTenantBackups = async (env: ControlPlaneEnv): Promise<void> => {
         return;
     }
 
+    const offsite = offsiteBucket(env);
     const result = await runTenantBackupSweep({
         bucket: env.TENANT_BACKUPS,
         database: controlPlaneDatabase(env.DB as D1DatabaseLike),
@@ -310,6 +329,7 @@ const sweepTenantBackups = async (env: ControlPlaneEnv): Promise<void> => {
             console.warn(line);
         },
         now: Date.now(),
+        ...(offsite ? { offsite } : {}),
         senderFor: async (deployment) => {
             const adminToken = await resolveAdminToken(deployment, env.SECRET_ENCRYPTION_KEY);
             const target = storedTarget(deployment.target);
@@ -422,6 +442,20 @@ const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Sample the build and deploy queues into the platform's own metrics (GAPS.md
+ * E1). Skipped — no D1 read at all — without the `PLATFORM_METRICS` binding.
+ */
+const sampleQueueDepth = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB || !env.PLATFORM_METRICS) {
+        return;
+    }
+
+    const depth = await readQueueDepth(controlPlaneDatabase(env.DB as D1DatabaseLike));
+
+    recordQueueDepth(env.PLATFORM_METRICS, { ...depth, cell: env.LUNORA_CELL ?? "default" });
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -470,6 +504,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     // cannot be delivered where they are fired — plus anything an earlier
     // delivery dropped. Rides the existing every-minute trigger.
     { cron: EVERY_MINUTE, run: sweepAlertDrain },
+    // Queue depth for the platform's own metrics (GAPS.md E1), sampled once a minute.
+    { cron: EVERY_MINUTE, run: sampleQueueDepth },
 ];
 
 /**

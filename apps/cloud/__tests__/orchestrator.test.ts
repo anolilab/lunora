@@ -92,7 +92,7 @@ describe(runDeployment, () => {
 
         expect(progress.map((p) => p.phase)).toStrictEqual(["queued", "provisioning", "failed"]);
         // The box never reached the Worker, so there is nothing live to revert.
-        expect(outcome).toStrictEqual({ error: "dispatch upload rejected", provisioned: false, status: "failed" });
+        expect(outcome).toStrictEqual({ error: "dispatch upload rejected", provisioned: false, reason: "unknown", status: "failed" });
     });
 
     it("reports a failed health check as provisioned — the release is already on the Worker", async () => {
@@ -102,6 +102,6 @@ describe(runDeployment, () => {
 
         const outcome = await runDeployment(spec, { driver: provisioner, scheduler: ampleScheduler(), verify: () => Promise.resolve(false) });
 
-        expect(outcome).toStrictEqual({ error: "health check failed", provisioned: true, status: "failed" });
+        expect(outcome).toStrictEqual({ error: "health check failed", provisioned: true, reason: "health_check", status: "failed" });
     });
 });

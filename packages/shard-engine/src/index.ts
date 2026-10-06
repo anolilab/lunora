@@ -18,7 +18,15 @@ export type {
     ImportShardArgs,
     ImportShardResult,
 } from "./admin-export-import";
-export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow } from "./admin-export-import";
+export {
+    exportShardRows,
+    importShardRows,
+    parseExportShardArgs,
+    parseImportShardArgs,
+    replaceRefusal,
+    selectExportTables,
+    validateImportRow,
+} from "./admin-export-import";
 export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 export type { AggregateTally } from "./aggregate-tally";
 export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
@@ -185,6 +193,24 @@ export { ftsCompanionDdl, ftsPurgeDocument, ftsRowidMapName, ftsUnmappedPage, ft
 export type { GeoBoundingBox, GeoPoint } from "./geo";
 export { boundingBoxCenter, boundingBoxGeohashes, coveringGeohashes, encodeGeohash, GEO_DEFAULT_PRECISION, haversineMeters, pointInBoundingBox } from "./geo";
 export { default as GlobalPollTick } from "./global-poll-tick";
+export type { ImportManifest, ImportStepResult, ManifestChange, ManifestTouch, StagedImportRow } from "./import-staging";
+export {
+    advanceImportManifest,
+    assertImportSessionId,
+    dropImportManifest,
+    dropImportSession,
+    IMPORT_MANIFEST_TTL_MS,
+    IMPORT_STAGE_TTL_MS,
+    markShardImportCommitted,
+    readImportManifest,
+    readShardImportSession,
+    stagedImportIds,
+    stagedImportPage,
+    stageImportRows,
+    sweepImportStaging,
+    touchImportManifest,
+    touchShardImportSession,
+} from "./import-staging";
 export type {
     AdvisoriesResult,
     AdvisorProcedure,

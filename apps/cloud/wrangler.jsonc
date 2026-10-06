@@ -143,6 +143,14 @@
             "binding": "TELEMETRY",
             "dataset": "TELEMETRY",
         },
+        {
+            // The platform's OWN metrics (GAPS.md E1): queue depth and provisioning
+            // failures from here, dispatcher latency from dispatcher.wrangler.jsonc —
+            // both bind the same dataset. Separate from the billing meter on purpose.
+            // Read back by `GET /v1/platform/metrics`; unbound → nothing is recorded.
+            "binding": "PLATFORM_METRICS",
+            "dataset": "lunora_platform_metrics",
+        },
     ],
     // Durable archive for raw decoded telemetry events (Pipeline → R2, read back
     // with R2 SQL). The bucket is bound here; the `TELEMETRY_PIPELINE` producer is
@@ -298,6 +306,8 @@
                 "LUNORA_BOX_DOMAIN": "boxes.staging.lunora.app",
                 "LUNORA_CELL": "staging",
                 "LUNORA_DISPATCH_NAMESPACE": "lunora-staging",
+                // The dataset `PLATFORM_METRICS` is bound to below, for the read-back.
+                "PLATFORM_METRICS_DATASET": "lunora_platform_metrics_staging",
                 "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud-staging",
                 "LUNORA_OTLP_ENDPOINT": "<replace-with-staging-control-plane-url>",
                 // Same origin as above — `SchedulerDO` dispatches its job
@@ -311,6 +321,7 @@
             "analytics_engine_datasets": [
                 { "binding": "ANALYTICS", "dataset": "ANALYTICS_STAGING" },
                 { "binding": "TELEMETRY", "dataset": "TELEMETRY_STAGING" },
+                { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics_staging" },
             ],
             "r2_buckets": [
                 { "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry-staging" },
@@ -387,6 +398,7 @@
             "analytics_engine_datasets": [
                 { "binding": "ANALYTICS", "dataset": "ANALYTICS" },
                 { "binding": "TELEMETRY", "dataset": "TELEMETRY" },
+                { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics" },
             ],
             "r2_buckets": [
                 { "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry" },

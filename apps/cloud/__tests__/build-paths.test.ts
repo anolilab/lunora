@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decideBuild, effectiveWatchPaths, normalizeRootDirectory, normalizeWatchPaths } from "../src/builds/paths";
+import { decideBuild, effectiveWatchPaths, normalizeRootDirectory, normalizeWatchPaths, watchPathsPreview } from "../src/builds/paths";
 
 /**
  * Monorepo build settings. The root directory ends up as a path the build box
@@ -70,6 +70,35 @@ describe(effectiveWatchPaths, () => {
     });
 });
 
+describe(watchPathsPreview, () => {
+    const recorded = { paths: ["packages/ui", "packages/db"], rootDirectory: "apps/web" };
+
+    it("adds the recorded workspace packages to the default watch set", () => {
+        expect(watchPathsPreview("apps/web", undefined, recorded)).toStrictEqual({
+            patterns: [...effectiveWatchPaths("apps/web", undefined), "packages/ui/**", "packages/db/**"],
+        });
+    });
+
+    it("says so when no production build has recorded them yet", () => {
+        expect(watchPathsPreview("apps/web", undefined, undefined)).toStrictEqual({
+            note: expect.stringContaining("recorded by its next production build"),
+            patterns: effectiveWatchPaths("apps/web", undefined),
+        });
+    });
+
+    it("leaves out packages recorded for another root directory, and names it", () => {
+        expect(watchPathsPreview("apps/admin", undefined, recorded)).toStrictEqual({
+            note: expect.stringContaining("are for apps/web"),
+            patterns: effectiveWatchPaths("apps/admin", undefined),
+        });
+    });
+
+    it("has nothing to add when explicit watch paths replace the default, or the project is the repository root", () => {
+        expect(watchPathsPreview("apps/web", ["apps/web/src/**"], recorded)).toStrictEqual({ patterns: effectiveWatchPaths("apps/web", ["apps/web/src/**"]) });
+        expect(watchPathsPreview(undefined, undefined, undefined)).toStrictEqual({ patterns: effectiveWatchPaths(undefined, undefined) });
+    });
+});
+
 describe(decideBuild, () => {
     it("builds when a changed file is under the root directory", () => {
         expect(decideBuild({ files: ["README.md", "apps/web/src/index.ts"] }, "apps/web", undefined)).toStrictEqual({
@@ -83,10 +112,33 @@ describe(decideBuild, () => {
     });
 
     it("skips, with a reason naming the watched paths, when nothing matches", () => {
-        expect(decideBuild({ files: ["apps/docs/index.md", "apps/web-admin/x.ts"] }, "apps/web", undefined)).toStrictEqual({
+        expect(decideBuild({ files: ["apps/docs/index.md", "apps/web-admin/x.ts"] }, "apps/web", undefined, [])).toStrictEqual({
             build: false,
             reason: "no changes under apps/web/ or the lockfile (2 files changed)",
         });
+    });
+
+    it("builds on a change to a workspace package the app imports, matched as a path prefix", () => {
+        expect(decideBuild({ files: ["packages/ui/button.tsx"] }, "apps/web", undefined, ["packages/ui"])).toStrictEqual({
+            build: true,
+            reason: "packages/ui/button.tsx changed",
+        });
+        expect(decideBuild({ files: ["packages/ui-kit/x.ts"] }, "apps/web", undefined, ["packages/ui"])).toStrictEqual({
+            build: false,
+            reason: "no changes under apps/web/, packages/ui/ or the lockfile (1 files changed)",
+        });
+    });
+
+    it("fails open while the app's workspace packages are unknown", () => {
+        expect(decideBuild({ files: ["packages/ui/button.tsx"] }, "apps/web", undefined)).toMatchObject({
+            build: true,
+            reason: expect.stringContaining("not known") as unknown,
+        });
+    });
+
+    it("lets explicit watch paths replace the workspace packages too", () => {
+        expect(decideBuild({ files: ["packages/ui/button.tsx"] }, "apps/web", ["apps/web/**"], ["packages/ui"]).build).toBe(false);
+        expect(decideBuild({ files: ["packages/ui/button.tsx"] }, "apps/web", ["apps/web/**"]).build).toBe(false);
     });
 
     it("builds on a root lockfile change even when no app file changed", () => {

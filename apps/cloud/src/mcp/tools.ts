@@ -12,8 +12,12 @@
  */
 import type { RegisteredRoute, RouteAuth } from "../deploy/route-registry";
 
-/** Bearer-callable auth kinds — the only ones an agent (holding a deploy key or admin token) can drive. */
-const TOOLABLE_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["adminToken", "deployKey"]);
+/**
+ * The only auth kind an agent can drive: the surface admits a deploy key and
+ * nothing else. `adminToken` is deliberately absent — the admin routes sit in the
+ * router's own guarded table, never in the tool-eligible list.
+ */
+const TOOLABLE_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["deployKey"]);
 
 /**
  * Paths that must NEVER be exposed as tools regardless of annotation — the

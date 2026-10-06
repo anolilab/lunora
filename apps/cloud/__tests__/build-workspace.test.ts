@@ -16,11 +16,12 @@ interface WorkspaceModule {
     resolveLunoraBin: (project: string, workspaceRoot: string) => Promise<string>;
     resolveProjectDirectory: (repo: string, rootDirectory: string) => Promise<{ project: string; repo: string }>;
     validateRootDirectory: (value: string) => string;
+    workspacePackages: (project: string, workspaceRoot: string, repo: string) => Promise<string[] | undefined>;
 }
 
 // Loaded by URL: the module is plain `.mjs` shipped into the image, with no
 // declaration file for the type checker to resolve.
-const { findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory } = (await import(
+const { findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory, workspacePackages } = (await import(
     new URL("../containers/build/workspace.mjs", import.meta.url).href
 )) as WorkspaceModule;
 
@@ -152,6 +153,33 @@ describe("build box workspace", () => {
             await layout({ "apps/web/package.json": "{}" });
 
             await expect(resolveLunoraBin(join(repo, "apps/web"), repo)).rejects.toThrow(/node_modules\/\.bin\/lunora is missing/u);
+        });
+    });
+
+    describe("workspacePackages", () => {
+        it("follows installed workspace links transitively, ignoring registry packages and links out of the repo", async () => {
+            await layout({
+                "apps/web/package.json": JSON.stringify({ dependencies: { "@acme/ui": "workspace:*", react: "^19" }, devDependencies: { escape: "1" } }),
+                "node_modules/.pnpm/react@19/node_modules/react/package.json": "{}",
+                "packages/tokens/package.json": "{}",
+                "packages/ui/package.json": JSON.stringify({ dependencies: { "@acme/tokens": "workspace:*" } }),
+            });
+            await mkdir(join(repo, "apps/web/node_modules/@acme"), { recursive: true });
+            // pnpm links a workspace package from the app's own node_modules…
+            await symlink(join(repo, "packages/ui"), join(repo, "apps/web/node_modules/@acme/ui"));
+            await symlink(join(repo, "node_modules/.pnpm/react@19/node_modules/react"), join(repo, "apps/web/node_modules/react"));
+            await symlink(sandbox, join(repo, "apps/web/node_modules/escape"));
+            // …and a hoisting manager from the root's.
+            await mkdir(join(repo, "node_modules/@acme"), { recursive: true });
+            await symlink(join(repo, "packages/tokens"), join(repo, "node_modules/@acme/tokens"));
+
+            await expect(workspacePackages(join(repo, "apps/web"), repo, repo)).resolves.toStrictEqual(["packages/tokens", "packages/ui"]);
+        });
+
+        it("answers an empty set for an app with no workspace dependencies", async () => {
+            await layout({ "apps/web/package.json": JSON.stringify({ dependencies: { missing: "1" } }) });
+
+            await expect(workspacePackages(join(repo, "apps/web"), repo, repo)).resolves.toStrictEqual([]);
         });
     });
 });

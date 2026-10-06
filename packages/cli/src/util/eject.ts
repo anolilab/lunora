@@ -158,7 +158,12 @@ platform holds nothing back.
   same tool Lunora Cloud provisions with. Generated from your \`wrangler.jsonc\`.
 - \`wrangler.jsonc\` — your project's config with the old account's ids replaced
   by \`<create with: …>\` placeholders.
-- \`export.ndjson\` — your full data snapshot (shards + global tables).
+- \`export.ndjson\` — your data snapshot: every shard and \`.global()\` table, the
+  auth tables (users and accounts — signed-in sessions and one-time tokens are
+  never exported, so users sign in again), every bound KV namespace, and the
+  objects in your storage buckets. Vectorize indexes are not in it — the binding
+  cannot list an index's vectors — so re-embed them after the import
+  (\`backfillVectors\`).
 
 Pick one of the two deploy paths below.
 
@@ -184,7 +189,13 @@ ${creates}
 
 ## Restore your data
 
-Import the snapshot: \`lunora import ${outputDirectory}/export.ndjson\` against your new deployment.
+Import the snapshot: \`lunora import ${outputDirectory}/export.ndjson\` against your new deployment,
+once it is deployed with its KV namespaces and buckets bound — the KV entries and
+storage objects are written through them. A KV value over 512 KiB, or a storage
+object of more than one chunk, waits under \`_lunora/restore/\` in its bucket (KV
+values in the default one) until its last chunk lands; one over 32 MiB is written
+with a multipart upload. Anything a stopped import left there is deleted by the
+next import once it is a day old.
 
 Your managed deployment at ${target.url} keeps serving until you delete it.
 `;

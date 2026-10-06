@@ -15,9 +15,11 @@ import { isLunoraError } from "@lunora/errors";
 import type { AssetsUpload, DeployKind, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
 import type { Placement } from "../targets/placement";
+import type { ProvisionStep } from "../telemetry/platform-metrics";
+import { failureReason } from "../telemetry/platform-metrics";
 import { randomSecret } from "./keys";
 import { parsePayload } from "./manifest-parse";
-import type { DeployProgress } from "./orchestrator";
+import type { DeployOutcome, DeployProgress } from "./orchestrator";
 import { runDeployment } from "./orchestrator";
 import type { ReleaseBackend, ReleaseDeps } from "./release";
 import { decodeBundle, reprovision, resolveReleaseSpec } from "./release";
@@ -78,6 +80,13 @@ export interface DeployHandlerDeps extends ReleaseDeps {
      * Omit to skip health gating.
      */
     healthCheck?: (url: string) => Promise<boolean>;
+
+    /**
+     * Count a failed release by the step it failed at and a bounded reason, for
+     * the platform's own provisioning-failure rate (GAPS.md E1). Fire-and-forget
+     * like `analytics`: it must not throw and is never awaited.
+     */
+    provisionFailed?: (step: ProvisionStep, reason: string) => void;
 }
 
 /**
@@ -109,6 +118,23 @@ const revertFailedRelease = async (
         write({ deploymentId, event: "reverted", to: previousDeploymentId });
     } catch (error) {
         write({ deploymentId, error: error instanceof Error ? error.message : String(error), event: "revert_failed", to: previousDeploymentId });
+    }
+};
+
+/**
+ * Count a release that failed to converge or failed its health check, and
+ * revert the one that failed after cutover ({@link revertFailedRelease}).
+ */
+const settleFailedConverge = async (
+    outcome: Extract<DeployOutcome, { status: "failed" }>,
+    input: Parameters<typeof revertFailedRelease>[0],
+    deps: DeployHandlerDeps,
+    write: (frame: ReleaseFrame) => void,
+): Promise<void> => {
+    deps.provisionFailed?.(outcome.provisioned ? "verify" : "converge", outcome.reason);
+
+    if (outcome.provisioned) {
+        await revertFailedRelease(input, deps, write);
     }
 };
 
@@ -225,10 +251,13 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
      * The one terminal-failure path: emit the failed phase + done frames and
      * best-effort mark the row failed. Extracted because three call sites had to
      * do every step in order, and a missed one strands the row mid-flight with
-     * the client still hanging.
+     * the client still hanging. `cause` is what the reason is read from when
+     * `error` is a wrapper around it.
      */
-    const fail = async (error: unknown, fallback: string): Promise<ReleaseOutcome> => {
+    const fail = async (step: ProvisionStep, error: unknown, fallback: string, cause: unknown = error): Promise<ReleaseOutcome> => {
         const message = error instanceof Error ? error.message : fallback;
+
+        deps.provisionFailed?.(step, failureReason(cause));
 
         write({ deploymentId, error: message, phase: "failed" });
 
@@ -252,7 +281,7 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
     try {
         await deps.releases.put(deploymentId, { ...(assets ? { assets } : {}), bundle: release.encodedBundle, manifest });
     } catch (error) {
-        return fail(new Error(`failed to store the release: ${error instanceof Error ? error.message : String(error)}`), "");
+        return fail("store", new Error(`failed to store the release: ${error instanceof Error ? error.message : String(error)}`), "", error);
     }
 
     // A decrypt failure (e.g. a corrupt secret or a rotated master key) must
@@ -277,7 +306,7 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
             deps,
         );
     } catch (error) {
-        return fail(error, "failed to resolve tenant secrets");
+        return fail("secrets", error, "failed to resolve tenant secrets");
     }
 
     const { healthCheck } = deps;
@@ -303,11 +332,11 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
         // threw — an `updateStatus` write that failed, most likely. Without
         // this the row is stranded mid-flight in `accepted`/`provisioning`
         // forever, and an HTTP client hangs instead of seeing a failure.
-        return fail(error, "deployment failed");
+        return fail("status", error, "deployment failed");
     }
 
-    if (outcome.status === "failed" && outcome.provisioned) {
-        await revertFailedRelease({ deploymentId, key, organizationId, previousDeploymentId: release.previousDeploymentId }, deps, write);
+    if (outcome.status === "failed") {
+        await settleFailedConverge(outcome, { deploymentId, key, organizationId, previousDeploymentId: release.previousDeploymentId }, deps, write);
     }
 
     // Health-checked release: record it live and supersede the previous
@@ -318,7 +347,7 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
             await deps.backend.activateDeployment({ deploymentId, key });
             write({ deploymentId, event: "released" });
         } catch (error) {
-            return fail(error, "activation failed");
+            return fail("activate", error, "activation failed");
         }
     }
 

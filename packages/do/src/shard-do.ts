@@ -328,6 +328,7 @@ import {
     parseRankPageArgs,
     parseRecordAuthEventArgs,
     parseRecordContainerEventArgs,
+    parseRecordImportAuditArgs,
     parseRecordMailArgs,
     parseRecordQueueMessageArgs,
     parseReleaseShardRegistrationArgs,
@@ -349,6 +350,7 @@ import {
 } from "./admin-rpc-args";
 import { buildBatchEntryRequest } from "./batch";
 import { CdcRetentionRunner } from "./cdc-retention";
+import { handleImportSessionRpc } from "./import-session-rpc";
 import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
@@ -1527,6 +1529,24 @@ const nonEmptyTallies = (entry: DispatchSpanEntry | undefined): [TallySurface, D
  */
 const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
     entry !== undefined && (entry.collector !== undefined || nonEmptyTallies(entry).length > 0);
+
+/**
+ * The `importShard` audit detail. The RPC only appends — a replace is staged and
+ * audited as `importStage` / `importCommit` (`./import-session-rpc`) — so the
+ * entry says `mode: "append"` beside the counts.
+ */
+const importAuditDetail = (result: ImportShardResult): Record<string, unknown> => {
+    return { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted, mode: "append" };
+};
+
+/** The staged-import session RPCs, served by {@link handleImportSessionRpc}. */
+const IMPORT_SESSION_FUNCTIONS: ReadonlySet<string> = new Set([
+    ADMIN_FUNCTIONS.importAbort,
+    ADMIN_FUNCTIONS.importCommit,
+    ADMIN_FUNCTIONS.importManifest,
+    ADMIN_FUNCTIONS.importStage,
+    ADMIN_FUNCTIONS.importStagedRows,
+]);
 
 /**
  * Base class for shard Durable Objects.
@@ -8913,14 +8933,33 @@ abstract class ShardDO {
             }
 
             if (functionPath === ADMIN_FUNCTIONS.importShard) {
-                const parsed = parseImportShardArgs(args);
-                const result = await this.runShardImport({ rows: parsed.rows, startLine: parsed.startLine });
+                const result = await this.runShardImport(parseImportShardArgs(args));
 
                 // The import inserts rows through the writer, which records
                 // touched tables; flush so live subscribers re-run.
                 await this.flushChangedTables();
 
-                this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
+                this.recordAudit("importShard", { detail: importAuditDetail(result) });
+
+                return adminResponse(result);
+            }
+
+            if (IMPORT_SESSION_FUNCTIONS.has(functionPath)) {
+                const result = await handleImportSessionRpc(
+                    {
+                        recordAudit: (op, fields) => {
+                            this.recordAudit(op, fields);
+                        },
+                        runInTransaction: async (handler) => this.runInTransaction(handler),
+                        runShardImport: async (importArgs) => this.runShardImport(importArgs),
+                        sql: this.shardHost.sql,
+                    },
+                    functionPath,
+                    args,
+                );
+
+                // A commit swaps rows through the writer; flush so live subscribers re-run.
+                await this.flushChangedTables();
 
                 return adminResponse(result);
             }
@@ -9242,6 +9281,21 @@ abstract class ShardDO {
         } catch {
             // Best-effort: a metrics write must never fail the call.
         }
+
+        return adminResponse({ recorded: true });
+    }
+
+    /**
+     * Audit the halves of an admin import that never reach a shard — the
+     * `.global()` rows and the `$auth`/`$kv`/`$storage` sections — into this
+     * shard's log. The worker sends them to the default shard under the
+     * importer's own headers, so the entry sits beside that shard's
+     * `importShard` entry, attributed to the same user, in the Studio Audit tab.
+     */
+    private handleRecordImportAudit(args: Record<string, unknown>): Response {
+        const parsed = parseRecordImportAuditArgs(args);
+
+        this.recordAudit(parsed.op, { detail: parsed.detail });
 
         return adminResponse({ recorded: true });
     }
@@ -9928,6 +9982,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.rebuildCompanions]: () => this.handleRebuildCompanions(),
             [ADMIN_FUNCTIONS.recordAuthEvent]: (args) => this.handleRecordAuthEvent(args),
             [ADMIN_FUNCTIONS.recordContainerEvent]: (args) => this.handleRecordContainerEvent(args),
+            [ADMIN_FUNCTIONS.recordImportAudit]: (args) => this.handleRecordImportAudit(args),
             [ADMIN_FUNCTIONS.recordMail]: (args) => this.handleRecordMail(args),
             [ADMIN_FUNCTIONS.recordQueueMessage]: (args) => this.handleRecordQueueMessage(args),
             [ADMIN_FUNCTIONS.releaseShardRegistration]: (args) => this.handleReleaseShardRegistration(args),

@@ -37,7 +37,7 @@ const buildGlobalImports = (hasGlobal: boolean): string[] =>
     hasGlobal
         ? [
               `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-              `import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
+              `import { abortStagedGlobalRows, applyCdcChanges, commitStagedGlobalRows, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, stageGlobalRows } from "@lunora/d1";`,
           ]
         : [];
 
@@ -123,7 +123,7 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
         ...(hasAuth
             ? [
                   `import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
-                  `import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
+                  `import { authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),

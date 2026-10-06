@@ -98,6 +98,37 @@ describe("createKvIntrospectorFromEnv", () => {
         await expect(introspector.getValue({ key: "k", namespace: "CACHE" })).resolves.toStrictEqual({ metadata: null, value: null });
     });
 
+    it("round-trips raw bytes under the base64 encoding the admin export uses", async () => {
+        expect.assertions(2);
+
+        const store = new Map<string, Uint8Array>();
+        const namespace: KVNamespaceLike = {
+            delete: async () => {},
+            get: async () => null,
+            // Only the `arrayBuffer` read is exercised here.
+            getWithMetadata: async (key) => {
+                const value = store.get(key);
+
+                return { metadata: null, value: value === undefined ? null : new Uint8Array(value).buffer };
+            },
+            list: async () => {
+                return { keys: [], list_complete: true };
+            },
+            put: async (key, value) => {
+                store.set(key, value as Uint8Array);
+            },
+        };
+        const introspector = createKvIntrospector({ namespaces: { CACHE: namespace } });
+
+        await introspector.putValue({ encoding: "base64", key: "bin", namespace: "CACHE", value: "AP8BgA==" });
+
+        expect(store.get("bin")).toStrictEqual(new Uint8Array([0, 255, 1, 128]));
+        await expect(introspector.getValue({ encoding: "base64", key: "bin", namespace: "CACHE" })).resolves.toStrictEqual({
+            metadata: null,
+            value: "AP8BgA==",
+        });
+    });
+
     it("returns an empty-but-usable introspector when env holds no KV bindings", async () => {
         expect.assertions(4);
 
