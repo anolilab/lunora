@@ -11,9 +11,9 @@ import type { PlatformCapabilities } from "./types";
  * differs is which primitives exist, and that difference is exactly this
  * matrix.
  *
- * Ratings track celld **v0.6.0** and derive from its documented compatibility
+ * Ratings track celld **v0.6.1** and derive from its documented compatibility
  * surface (`docs/cloudflare-compat.md`, `docs/services/*.md`,
- * `docs/limitations.md` in the celld repo; v0.6.0 is celld's first beta). The host contracts
+ * `docs/limitations.md` in the celld repo; v0.6.0 was celld's first beta). The host contracts
  * behind `shardedState`, `localSql`, `shardAlarms`, `commitOrderedTables` and
  * `websocketHibernation` are also exercised by the conformance TCK against a
  * live single-node celld (`@lunora/platform-celld`'s `celld` vitest project),
