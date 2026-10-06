@@ -54,6 +54,10 @@ export type RouterEnv = {
     LUNORA_TAIL_SECRET?: string;
     /** Sender address for invitation email; the mailer reads the rest of env too. */
     MAIL_FROM?: string;
+    /** Platform self-metrics dataset (GAPS.md E1, `src/telemetry/platform-metrics.ts`); unbound → not recorded. */
+    PLATFORM_METRICS?: AnalyticsEngineDatasetLike;
+    /** AE dataset name `PLATFORM_METRICS` writes to, for the read-back (`GET /v1/platform/metrics`). */
+    PLATFORM_METRICS_DATASET?: string;
     /** Private R2 bucket holding every deployment's payload for rollback (`src/deploy/release-store.ts`). */
     RELEASES?: ReleaseBucket;
     /** 32-byte hex master key for tenant-secret envelope encryption (§7). */

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { handleDeployRequest } from "../src/deploy/handler";
 import { createDeployPacer } from "../src/deploy/pacing";
@@ -182,6 +182,20 @@ describe(handleDeployRequest, () => {
 
         expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
         expect(statuses).toStrictEqual(["provisioning", "failed"]);
+    });
+
+    it("counts a failed converge by step and bounded reason, never the message", async () => {
+        const provisionFailed = vi.fn<NonNullable<DeployHandlerDeps["provisionFailed"]>>();
+        const failing: Provisioner = { deploy: () => Promise.reject(new TypeError("fetch failed: acme.example.com")), destroy: () => Promise.resolve() };
+
+        const response = await handleDeployRequest(request("k", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }), {
+            ...deps(backendWith({}), failing),
+            provisionFailed,
+        });
+
+        await readLines(response);
+
+        expect(provisionFailed.mock.calls).toStrictEqual([["converge", "TypeError"]]);
     });
 });
 

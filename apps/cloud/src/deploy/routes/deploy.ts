@@ -22,6 +22,8 @@ import type { Placement, StoredPlacement } from "../../targets/placement";
 import { resolvePlacement, targetOf } from "../../targets/placement";
 import { resolveTargetDriver } from "../../targets/registry";
 import { resolveTelemetryConfig } from "../../telemetry/ingest-key";
+import type { ProvisionStep } from "../../telemetry/platform-metrics";
+import { recordProvisionFailure } from "../../telemetry/platform-metrics";
 import type { StoredAdminToken } from "../admin-token";
 import { resolveAdminToken, sealAdminToken } from "../admin-token";
 import { handleDeployRequest } from "../handler";
@@ -201,7 +203,11 @@ export const deployDeps = (context: LunoraActionContext, environment: RouterEnv,
         verifyKey: (key) => context.runMutation<DeployTarget | null>(api.deploy_keys.verify, { key }),
     };
 
-    return { ...release, analytics, backend, healthCheck };
+    const provisionFailed = (step: ProvisionStep, reason: string): void => {
+        recordProvisionFailure(environment.PLATFORM_METRICS, { cell, reason, step });
+    };
+
+    return { ...release, analytics, backend, healthCheck, provisionFailed };
 };
 
 type RouteHandler = (request: Request, environment: RouterEnv) => Promise<Response>;

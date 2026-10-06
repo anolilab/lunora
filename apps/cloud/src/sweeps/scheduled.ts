@@ -41,6 +41,7 @@ import { storeRowReader } from "../targets/placement";
 import { registeredFleet, registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
 import { runAlertDrain } from "../telemetry/alert-drain";
 import type { AlertDelivery } from "../telemetry/alerts";
+import { readQueueDepth, recordQueueDepth } from "../telemetry/platform-metrics";
 import { runAlertSweep } from "../telemetry/sweep";
 import { runUptimeSweep } from "../uptime/sweep";
 
@@ -422,6 +423,20 @@ const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Sample the build and deploy queues into the platform's own metrics (GAPS.md
+ * E1). Skipped — no D1 read at all — without the `PLATFORM_METRICS` binding.
+ */
+const sampleQueueDepth = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB || !env.PLATFORM_METRICS) {
+        return;
+    }
+
+    const depth = await readQueueDepth(controlPlaneDatabase(env.DB as D1DatabaseLike));
+
+    recordQueueDepth(env.PLATFORM_METRICS, { ...depth, cell: env.LUNORA_CELL ?? "default" });
+};
+
+/**
  * Which sweeps ride which cron bucket — declarative, so "what runs on which
  * tick" is one table, not scattered conditionals. Each sweep no-ops when its own
  * env isn't configured. Teardown + usage rollback ride the *hourly* expression
@@ -470,6 +485,8 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     // cannot be delivered where they are fired — plus anything an earlier
     // delivery dropped. Rides the existing every-minute trigger.
     { cron: EVERY_MINUTE, run: sweepAlertDrain },
+    // Queue depth for the platform's own metrics (GAPS.md E1), sampled once a minute.
+    { cron: EVERY_MINUTE, run: sampleQueueDepth },
 ];
 
 /**

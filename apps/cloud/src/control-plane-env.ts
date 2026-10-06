@@ -3,6 +3,7 @@
  * scheduled sweeps (`src/sweeps/scheduled.ts`) and its queue consumer
  * (`src/fanout/platform-queue.ts`) read it.
  */
+import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 import type { ShardNamespaceLike } from "@lunora/runtime";
 
 import type { BackupBucket } from "./backup/sweep";
@@ -58,6 +59,8 @@ export type ControlPlaneEnv = TargetEnvironment & {
     LUNORA_ADMIN_TOKEN?: string;
     /** Sender address for auth (verification / reset) email; captured in dev. */
     MAIL_FROM?: string;
+    /** Platform self-metrics dataset (GAPS.md E1); absent → the queue-depth sample no-ops. */
+    PLATFORM_METRICS?: AnalyticsEngineDatasetLike;
     /** Private R2 bucket of stored releases (`src/deploy/release-store.ts`); absent → the teardown sweep no-ops. */
     RELEASES?: ReleaseBucket;
     /** 32-byte hex master key that seals admin tokens at rest (§7); absent → dev plaintext fallback. */

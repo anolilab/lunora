@@ -12,7 +12,13 @@
     "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
     // Per-request metering source (§4): the dispatcher writes one data point per
     // tenant request; the control-plane rollup reads it back via the AE SQL API.
-    "analytics_engine_datasets": [{ "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage" }],
+    //
+    // `PLATFORM_METRICS` is the platform's own latency/outcome stream (GAPS.md
+    // E1) — the same dataset the control plane binds, never the billing meter.
+    "analytics_engine_datasets": [
+        { "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage" },
+        { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics" },
+    ],
     "vars": {
         "LUNORA_APP_DOMAIN": "lunora.app",
         // Control-plane base URL — enables per-plan runtime limits (GET /v1/tenants/plan).
@@ -31,7 +37,10 @@
             // reachable on workers.dev and routes no tenant hostnames.
             "workers_dev": true,
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-staging" }],
-            "analytics_engine_datasets": [{ "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage_staging" }],
+            "analytics_engine_datasets": [
+                { "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage_staging" },
+                { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics_staging" },
+            ],
             "vars": {
                 "CONTROL_PLANE_URL": "<replace-with-staging-control-plane-url>",
                 "LUNORA_APP_DOMAIN": "staging.lunora.app",
@@ -40,7 +49,10 @@
         "production": {
             "routes": [{ "pattern": "*/*", "zone_name": "lunora.app" }],
             "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
-            "analytics_engine_datasets": [{ "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage" }],
+            "analytics_engine_datasets": [
+                { "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage" },
+                { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics" },
+            ],
             "vars": {
                 "CONTROL_PLANE_URL": "<replace-with-production-control-plane-url>",
                 "LUNORA_APP_DOMAIN": "lunora.app",

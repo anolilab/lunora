@@ -34,6 +34,7 @@ import { createDeployRoutes } from "./routes/deploy";
 import { handleDomainAddRoute, handleDomainRemoveRoute, handleDomainVerifyRoute } from "./routes/domains";
 import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "./routes/hostd";
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
+import { handlePlatformMetricsRoute } from "./routes/platform-metrics";
 import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, withContext } from "./routes/shared";
 import {
@@ -772,6 +773,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         // lunora-hostd releases (plan 458 G17): stored and rolled out by the operator.
         { handler: handleHostdReleaseRoute, method: "POST", path: "/v1/hostd/releases", spec: { auth: "adminToken" } },
         { handler: handleHostdRolloutRoute, method: "POST", path: "/v1/hostd/rollout", spec: { auth: "adminToken" } },
+        // The platform's own metrics (GAPS.md E1): operator-only, never an MCP tool.
+        { handler: handlePlatformMetricsRoute, method: "GET", path: "/v1/platform/metrics", spec: { auth: "adminToken" } },
     ];
 
     // A route's classification must match the table it sits in, or its guard would be the wrong one.

@@ -941,6 +941,57 @@ Use a **separate project** from `apps/docs`. That one is a public marketing
 site with a cookie banner and a different legal basis; this one carries
 authenticated control-plane usage, and mixing them makes both harder to read.
 
+## Platform self-metrics (GAPS.md E1)
+
+The studio observes tenants; these observe the platform itself. They are the
+inputs for SLOs and alerts, which are configured outside this repo.
+
+They go to their own Analytics Engine dataset, bound as `PLATFORM_METRICS` on
+both the control plane and the dispatcher (`lunora_platform_metrics`, or
+`lunora_platform_metrics_staging` on staging). The billing meter
+(`USAGE_ANALYTICS`) and the tenant metrics stream (`TELEMETRY`) are never
+touched. A Worker without the binding records nothing and behaves exactly as
+before. The cron sample does not even read D1.
+
+Each row's `blob1` and `index1` hold its metric kind, so AE samples each kind
+separately and dispatch volume cannot sample away the one queue row a minute.
+The row layouts are documented in `src/telemetry/platform-metrics.ts`.
+
+| Metric              | Emitted from                                                             | Dimensions                                                                          | Value                                                 |
+| ------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `dispatch`          | the dispatcher's `fetch`, on every request                               | cell, outcome (`2xx`–`5xx`, or `exception` for a throw)                             | end-to-end duration in ms                             |
+| `queue`             | the every-minute cron (`src/sweeps/scheduled.ts`)                        | cell                                                                                | pending builds, running builds, in-flight deployments |
+| `provision_failure` | the deploy core (`src/deploy/release-core.ts`), for API and git releases | cell, step (`store`, `secrets`, `converge`, `verify`, `status`, `activate`), reason | `1` per failed release                                |
+
+`reason` is a catalogued `LunoraError` code, the error's class name
+(`TypeError`, `TimeoutError`), `health_check`, or `unknown`. It is never the
+error message, because messages carry hostnames, script names and provider
+response text. No tenant hostname, script name or secret goes into this dataset.
+
+Limits worth knowing:
+
+- Dispatch duration uses `Date.now()`, which on Workers advances only across
+  I/O. It measures time spent waiting, not CPU time.
+- Queue depth counts one page per status, so a value above 1000 is reported as 1000.
+
+**Read path.** `GET /v1/platform/metrics?hours=24` (1 to 744 hours) is
+bearer-gated with `LUNORA_ADMIN_TOKEN`. It is operator-only and is never exposed
+to a session or as an MCP tool. It returns:
+
+- `dispatch[]`: per cell, request count, p50/p95 ms (`quantileWeighted` over
+  `sampleInterval`) and counts by outcome
+- `queue[]`: per cell, the peak depth in each 15-minute bucket
+- `provisionFailures[]`: the top 50 (cell, step, reason) counts
+
+It reads through the AE SQL API with `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN`, and answers 501 when either is missing.
+`PLATFORM_METRICS_DATASET` names the dataset; it defaults to
+`lunora_platform_metrics`, and staging sets it.
+
+```bash
+curl -H "authorization: Bearer $LUNORA_ADMIN_TOKEN" "https://<cell>/v1/platform/metrics?hours=6"
+```
+
 ## Deploy
 
 The ordered, once-per-cell setup checklist (resources, tokens, GitHub App,
