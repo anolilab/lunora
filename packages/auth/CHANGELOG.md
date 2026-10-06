@@ -1,3 +1,16 @@
+## @lunora/auth [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.193...@lunora/auth@1.0.0-alpha.194) (2026-10-06)
+
+### Features
+
+* stabilize the experimental exports of core and stable packages ([#1002](https://github.com/anolilab/lunora/issues/1002)) ([4938687](https://github.com/anolilab/lunora/commit/4938687662d8be5af5a1e138ce7c6a007dc078b4))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.312
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.180
+* **@lunora/server:** upgraded to 1.0.0-alpha.180
+
 ## @lunora/auth [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.192...@lunora/auth@1.0.0-alpha.193) (2026-10-05)
 
 
