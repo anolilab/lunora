@@ -1,7 +1,8 @@
 /**
  * Reading every auth table out, and writing rows back, for the runtime's admin
  * export / import (`$auth` section) — so a backup, a restore and an eject carry
- * users, accounts and sessions along with the app's own tables.
+ * users and accounts along with the app's own tables. Signed-in sessions,
+ * one-time tokens and the auth audit log never leave their deployment.
  *
  * The auth tables are outside the schema: better-auth's tables in the auth D1
  * database ({@link createSqlAuthDataPort}), or every table of the DO-backed auth
@@ -11,8 +12,8 @@
  *
  * Import is append-only, matching the table import: a row whose key, or any
  * unique value, already exists is skipped and counted as a conflict. Rows are
- * written in the order they arrive, and the export writes parents first (`user`,
- * then `account` and `session`), so foreign keys hold.
+ * written in the order they arrive, and the export writes parents first (every
+ * table after the tables it references, see {@link parentsFirst}), so foreign keys hold.
  *
  * Replace (a staged replace import's commit) makes the auth tables hold exactly
  * the rows given, in one transaction of the auth store — D1's `batch()`, or the

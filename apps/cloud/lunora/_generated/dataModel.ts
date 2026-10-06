@@ -208,6 +208,7 @@ export interface Doc_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
     trigger?: "push" | "pull_request";
@@ -1060,6 +1061,7 @@ export interface Insert_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
     trigger?: "push" | "pull_request";

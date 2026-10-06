@@ -105,7 +105,12 @@ export const offsiteBucket = (environment: OffsiteEnvironment, fetchImpl: typeof
 
             return {
                 abort: async () => {
-                    await send(uploadUrl, { method: "DELETE" });
+                    const aborted = await send(uploadUrl, { method: "DELETE" });
+
+                    // A failed abort leaves the parts stored (and billed): say so. 404 is already gone.
+                    if (!aborted.ok && aborted.status !== 404) {
+                        throw await failure("upload abort", aborted);
+                    }
                 },
                 complete: async (parts: UploadedPart[]) => {
                     const body = `<CompleteMultipartUpload>${parts

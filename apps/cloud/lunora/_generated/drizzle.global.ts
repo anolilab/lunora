@@ -217,6 +217,7 @@ export const builds = sqliteTable("builds", {
     pullRequest: real("pullRequest"),
     reusesBuildId: text("reusesBuildId").references((): AnySQLiteColumn => builds._id),
     rootDirectory: text("rootDirectory"),
+    pathFiltered: integer("pathFiltered", { mode: "boolean" }),
     skipReason: text("skipReason"),
     status: text("status", { mode: "json" }).$type<"pending" | "building" | "successful" | "failed" | "skipped">().notNull(),
     trigger: text("trigger", { mode: "json" }).$type<"push" | "pull_request">(),

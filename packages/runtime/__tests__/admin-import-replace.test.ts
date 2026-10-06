@@ -700,6 +700,48 @@ describe("admin import — staged replace of chunked sections", () => {
         expect([...bucket.keys()].filter((key) => key.startsWith("_lunora/"))).toStrictEqual([appendKey]);
     }, 60_000);
 
+    it("keeps the staged chunks until the commit is recorded, so a retry after a lost step record re-assembles", async () => {
+        expect.assertions(3);
+
+        await seed();
+
+        const source = createStores();
+        const object = randomBytes(1024 * 1024 + 7);
+
+        source.buckets.get("default")!.set("doc.bin", { bytes: object, contentType: "application/octet-stream" });
+
+        const lines = await exportLines(workerWith({ ...source.options }), { sections: ["storage"], tables: [] });
+        const target = createStores();
+        const bucket = target.buckets.get("default")!;
+        const worker = workerWith({ ...target.options });
+
+        await stageLines(worker, "lost-record", lines);
+
+        // The storage step runs, then recording it on the manifest fails once.
+        let refused = false;
+
+        cluster.hooks.refuse = (_key, functionPath, args) => {
+            if (!refused && functionPath.endsWith(":importManifest") && args["op"] === "advance" && args["step"] === "storage") {
+                refused = true;
+
+                return true;
+            }
+
+            return false;
+        };
+
+        const lost = await postSession(worker, "commit", "lost-record");
+
+        expect(lost.status).not.toBe(200);
+
+        cluster.hooks.refuse = undefined;
+
+        const retried = await postSession(worker, "commit", "lost-record");
+
+        expect(retried.status).toBe(200);
+        expect(Buffer.from(bucket.get("doc.bin")!.bytes).equals(Buffer.from(object))).toBe(true);
+    }, 60_000);
+
     it("refuses a session whose chunked value does not hash to its export's sha256, before any commit", async () => {
         expect.assertions(3);
 

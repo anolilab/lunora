@@ -576,8 +576,9 @@ const commitStorage = async (options: WorkerOptions, ref: SessionRef, records: A
         deleted += doomed.length;
     }
 
-    await dropStagedObjects(options, ref);
-
+    // The staged chunks stay until the session is committed (`commitImport` drops
+    // them then): if recording this step fails, a retried commit runs it again and
+    // needs them to assemble the objects.
     return { deleted: { [STORAGE_TABLE]: deleted }, inserted: { [STORAGE_TABLE]: inserted } };
 };
 

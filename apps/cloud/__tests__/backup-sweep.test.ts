@@ -96,6 +96,34 @@ const sweepWithOffsite = async (remote: ReturnType<typeof fakeS3>, objects: { ke
 };
 
 describe("control-plane backup off-site copy", () => {
+    it("reports an abort the off-site account refused, but not one for an upload already gone", async () => {
+        expect.hasAssertions();
+
+        const abortWith = async (status: number): Promise<unknown> => {
+            const remote = fakeS3({
+                accessKeyId: "offsite-key-id",
+                bucket: "dr-backups",
+                intercept: (request) =>
+                    request.method === "DELETE" && new URL(request.url).searchParams.has("uploadId") ? new Response("", { status }) : undefined,
+            });
+            const bucket = offsiteBucket(OFFSITE_ENV, remote.fetch);
+
+            if (!bucket) {
+                throw new Error("the off-site bucket should be configured");
+            }
+
+            const upload = await bucket.createMultipartUpload("k");
+
+            return upload.abort().then(
+                () => "ok",
+                (error: unknown) => error,
+            );
+        };
+
+        await expect(abortWith(500)).resolves.toBeInstanceOf(Error);
+        await expect(abortWith(404)).resolves.toBe("ok");
+    });
+
     it("stays inert unless every off-site value is set, and warns on a partial set", () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 

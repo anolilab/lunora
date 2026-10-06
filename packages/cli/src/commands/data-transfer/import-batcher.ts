@@ -296,6 +296,9 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         // A staged batch that refused a row or missed a shard: the session can never commit.
         if (totals.errors.length > 0 || totals.failed.length > 0) {
             await abort();
+            // The counts above describe what was staged, not written: say so, or the
+            // summary reads "imported N rows" for a run that changed nothing.
+            totals.warnings.push("the replace was aborted because rows were refused or a shard was unreachable — nothing was written");
 
             return;
         }

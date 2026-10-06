@@ -626,10 +626,10 @@ const commitImport = async (context: ImportSessionContext, session: string): Pro
 
     manifest = await advance(context, session, { state: "committed" });
 
-    if (manifest.storage) {
-        // Chunks of a snapshot whose header did not declare their section were staged and are not needed.
-        await dropStagedObjects(options, refOf(manifest)).catch(() => undefined);
-    }
+    // Only now that the commit is recorded are the staged chunks unneeded: the
+    // storage step keeps them so a retry can re-assemble. Best effort — what this
+    // misses, the expiry sweep drops by generation.
+    await dropStagedObjects(options, refOf(manifest)).catch(() => undefined);
 
     return committed(manifest);
 };

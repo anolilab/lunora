@@ -541,7 +541,8 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const session = await readSession(request);
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
         const result = await importSession.commit(forwardedHeaders, session);
-        const status = { committed: 200, partial: 502, refused: 409 }[result.status];
+        // An outcome outside the three is a bug, never a success: 500, not `Response.json`'s default 200.
+        const status: number = ({ committed: 200, partial: 502, refused: 409 } as Record<string, number | undefined>)[result.status] ?? 500;
 
         return Response.json(result, { status });
     };

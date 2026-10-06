@@ -927,7 +927,9 @@ interface WorkerOptions {
      * The auth tables that live outside the schema (better-auth's tables in the auth
      * D1 database, or the DO-backed auth object's), read and written by the admin
      * export / import as the `$auth` section — so a backup, restore and eject carry
-     * users, accounts and sessions with the app's own tables. Codegen wires it for
+     * users and accounts with the app's own tables. Never signed-in sessions,
+     * one-time tokens or the auth audit log: users sign in again after a restore,
+     * and a replace clears the sessions and tokens. Codegen wires it for
      * both auth modes. Omit it and the export has no auth section, and an import's
      * `$auth` rows are reported as `AUTH_NOT_CONFIGURED`.
      */
