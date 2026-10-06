@@ -1039,9 +1039,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             facade["usageEvents"] = bindTableFacade(db, "usageEvents");
             facade["ratelimit_buckets"] = bindTableFacade(db, "ratelimit_buckets");
 
-            const payments: LunoraPayment = config.payment
-                ? paymentsFromContext({ auth: { userId: userId ?? null }, db: db as unknown as LunoraPaymentDbLike }, config.payment(env))
-                : paymentStub;
+            let payments: LunoraPayment | undefined;
 
 
             // `ctx.trace` / `ctx.metrics`: spans and measurements to the same sink.
@@ -1100,7 +1098,13 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 storage: contextStorage,
                 trace,
                 secrets,
-                payments,
+                get payments(): LunoraPayment {
+                    payments ??= config.payment
+                        ? paymentsFromContext({ auth: { userId: userId ?? null }, db: db as unknown as LunoraPaymentDbLike }, config.payment(env))
+                        : paymentStub;
+
+                    return payments;
+                },
             };
 
             const installRun = (target: Record<string, unknown>, kind: typeof contextKind): void => {

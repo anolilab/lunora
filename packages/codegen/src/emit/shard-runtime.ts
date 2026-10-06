@@ -593,8 +593,8 @@ const emitQueuesMetadataFragments = (queues: ReadonlyArray<QueueIR>): { constant
 /**
  * The `ctx.payments` code fragments woven into the generated ShardDO, or empty strings when the
  * project doesn't use payments. Unlike `ctx.ai` (a stateless binding), the facade is stateful —
- * its store rides the request's `ctx.db` — so `build` is emitted *after* `db` is constructed and
- * uses `paymentsFromContext` (the per-context wiring lives in `@lunora/payment`, not this string).
+ * its store rides the request's `ctx.db` — so it is a getter on the ctx literal (built on first read)
+ * via `paymentsFromContext` (the per-context wiring lives in `@lunora/payment`, not this string).
  */
 const emitPaymentFragments = (
     hasPayments: boolean,
@@ -608,16 +608,23 @@ const emitPaymentFragments = (
             `import type { LunoraDatabaseLike as LunoraPaymentDbLike, LunoraPayment, PaymentsFromContextOptions } from "@lunora/payment";`,
             `import { paymentsFromContext } from "@lunora/payment";`,
         ],
-        // Built after `db` (the store rides ctx.db) and `userId` (the default authorizer ties a
-        // referenceId to the caller). The adapter — which carries provider secrets — comes from
-        // the `config.payment` thunk over env. Falls back to `paymentStub`.
+        // Built LAZILY, on the first `ctx.payments` read, and memoised for the context: the
+        // `config.payment` thunk (adapter + SDK client, carrying provider secrets) costs nothing for
+        // a handler that never touches payments, and a thunk that throws on a missing key fails
+        // only the handlers that use it. The facade rides `db` (the store) and `userId` (the
+        // default authorizer ties a referenceId to the caller). Falls back to `paymentStub`.
         build: `
-            const payments: LunoraPayment = config.payment
-                ? paymentsFromContext({ auth: { userId: userId ?? null }, db: db as unknown as LunoraPaymentDbLike }, config.payment(env))
-                : paymentStub;
+            let payments: LunoraPayment | undefined;
 `,
         configField: `\n    payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;`,
-        contextField: `\n                payments,`,
+        contextField: `
+                get payments(): LunoraPayment {
+                    payments ??= config.payment
+                        ? paymentsFromContext({ auth: { userId: userId ?? null }, db: db as unknown as LunoraPaymentDbLike }, config.payment(env))
+                        : paymentStub;
+
+                    return payments;
+                },`,
         stub: renderThrowingStub(
             "paymentStub: LunoraPayment",
             "ctx.payments: no payment configured. Pass `payment` to createShardDO().",
