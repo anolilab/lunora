@@ -102,6 +102,14 @@ describe("@lunora/mail/testing", () => {
         expect(extractLink(rendered)).toBe("https://x.test/reset");
     });
 
+    it("extractLink ignores attributes that merely end in href", () => {
+        expect.assertions(1);
+
+        const html = mail({ html: '<a data-href="https://x.test/tracking" href="https://x.test/reset">r</a>' });
+
+        expect(extractLink(html)).toBe("https://x.test/reset");
+    });
+
     it("extractLink throws when no matching link exists", () => {
         expect.assertions(1);
 

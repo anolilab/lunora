@@ -126,9 +126,10 @@ const URL_PATTERN = /https?:\/\/[^\s"'<>)]+/g;
 /**
  * An http(s) `href` value. Html is searched by `href` only: `@react-email/render`
  * opens every document with an XHTML DOCTYPE whose `w3.org` DTD URL would
- * otherwise be the first link in every message.
+ * otherwise be the first link in every message. The lookbehind keeps `data-href`
+ * and similar attribute names out.
  */
-const HREF_PATTERN = /href\s*=\s*["']?(https?:\/\/[^\s"'<>]+)/giu;
+const HREF_PATTERN = /(?<![\w-])href\s*=\s*["']?(https?:\/\/[^\s"'<>]+)/giu;
 
 /** Ampersand entity (named + numeric decimal/hex forms) an HTML renderer escapes `&` to. */
 const AMPERSAND_ENTITY = /&(?:amp|#0*38|#x0*26);/giu;
