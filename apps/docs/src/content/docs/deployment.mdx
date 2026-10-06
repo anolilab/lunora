@@ -73,8 +73,21 @@ export default {
     target: "cloudflare",
     remote: true,
     advisor: { minSeverity: "warn" },
+    codegen: { exclude: ["seed/**", "**/*.fixture.ts"] },
 } satisfies LunoraConfig;
 ```
+
+Codegen reads every `.ts` file under `lunora/` as app source, except test code:
+`*.test.ts`, `*.spec.ts`, `*.test-d.ts`, `*.spec-d.ts`, `*.bench.ts`,
+`*.e2e.ts` and `*.e2e-spec.ts` files, and the `__tests__/`, `__mocks__/`,
+`__fixtures__/` and `__snapshots__/` folders. Such files cannot register
+functions, raise advisories, or appear in the architecture view.
+`codegen.exclude` adds more globs, matched against the path relative to
+`lunora/` (`!` negations are not supported) — for example `"tests/**"` or
+`"**/test-*.ts"`, which are not skipped by default because a real feature
+module may carry those names. Secret scanning is
+the one exception: it still reads test and excluded files, because a live
+vendor key committed anywhere is still a leak.
 
 `lunora.config.mts`, `.js` and `.mjs` are read too, so a JS-authored project is
 not forced into TypeScript for one file. `.cts` / `.cjs` are deliberately not:
@@ -132,11 +145,12 @@ Three things are worth knowing about this file:
   will throw, and the build warns that the hook was not composed. `import type`
   is erased on both counts, which is why the shape above uses `satisfies` rather
   than a `defineConfig()` call.
-- **Write `target`, `remote` and `advisor.minSeverity` as literals.** `lunora codegen` resolves the
+- **Write `target`, `remote`, `advisor.minSeverity` and `codegen.exclude` as literals.** `lunora codegen` resolves the
   target synchronously, by parsing this file rather than running it, so a computed
   value, a getter or a spread is not seen. It is not silently defaulted either —
   `lunora verify` reports `platform_unreadable_target`, and an unreadable
-  `minSeverity` reports `advisor_min_severity_invalid` and filters nothing. A
+  `minSeverity` reports `advisor_min_severity_invalid` and filters nothing, and an
+  unreadable `codegen.exclude` logs a warning and excludes nothing extra. A
   `const` in the same file and a shorthand property both work.
 
 A config that throws, or whose `app` is not a function, is ignored rather than

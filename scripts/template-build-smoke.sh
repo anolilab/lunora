@@ -996,7 +996,7 @@ for tname in "${TEMPLATES[@]}"; do
     authui_detect_status=0
     authui_view="$(node -e "
         const p = require('$scaffold_dir/package.json');
-        const d = { ...p.dependencies, ...p.devDependencies };
+        const d = { ...p.devDependencies, ...p.dependencies };
         const has = (n) => Object.hasOwn(d, n);
         // Mirrors \`minimumMajor\`: the lowest major the range admits, not its
         // first digit — \`>1\` floors at 2 and \`2 || 1\` floors at 1.

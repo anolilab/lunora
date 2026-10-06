@@ -8,6 +8,7 @@
  */
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
+import { projectUsesUmbrella } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
 import { dirname, join, relative } from "@visulima/path";
@@ -17,7 +18,7 @@ import type { Logger } from "../../util/logger";
 import type { RegistryLock } from "../../util/registry-lock";
 import { hashContent, readLock, recordedHash, recordFile, writeLock } from "../../util/registry-lock";
 import renderDiff from "../../util/text-diff";
-import { applyItemResources, projectUsesUmbrella, rewriteUmbrellaImports } from "./apply";
+import { applyItemResources, rewriteUmbrellaImports } from "./apply";
 import type { EntrypointReexport, ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } from "./types";
 
 /** Code files whose `@lunora/*` base imports are rewritten to `lunorash/*` for umbrella projects. */

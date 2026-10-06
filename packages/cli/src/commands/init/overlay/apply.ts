@@ -12,6 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { CLOUDFLARE_TOOLCHAIN_VERSIONS, DEFAULT_OBSERVABILITY } from "@lunora/config/cloudflare";
+import { readJsonSync } from "@visulima/fs";
 import { dirname, join } from "@visulima/path";
 
 import type { Logger } from "../../../util/logger";
@@ -323,7 +324,7 @@ const restampLunora = (map: Record<string, string>, distTag: string, versions: R
  */
 const patchPackageJson = async (target: string, name: string, adapter: FrameworkAdapter, distTag: string): Promise<void> => {
     const path = join(target, "package.json");
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> & {
+    const parsed = readJsonSync(path) as Record<string, unknown> & {
         dependencies?: Record<string, string>;
         devDependencies?: Record<string, string>;
         imports?: Record<string, string>;

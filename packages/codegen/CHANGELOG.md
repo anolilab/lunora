@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.265...@lunora/codegen@1.0.0-alpha.266) (2026-10-06)
+
+### Bug Fixes
+
+* **codegen:** skip test files and judge ternary owner values by branch ([#993](https://github.com/anolilab/lunora/issues/993)) ([12f3a7a](https://github.com/anolilab/lunora/commit/12f3a7abeb7ff4e79b437b54a9b4530b70a0c3e0))
+
 ## @lunora/codegen [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.264...@lunora/codegen@1.0.0-alpha.265) (2026-10-05)
 
 

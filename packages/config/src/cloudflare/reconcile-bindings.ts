@@ -14,12 +14,13 @@
  * exported — are returned as warnings rather than written, since a binding
  * referencing an unexported class would make `wrangler deploy` fail.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
 import type { DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } from "@lunora/codegen";
 import { containerBuildTag } from "@lunora/container";
+import { readJsonSync } from "@visulima/fs";
 
 import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
@@ -598,7 +599,7 @@ const WORKFLOW_EXPORTS_UPGRADE: string = WORKFLOW_EXPORTS_TOOLCHAIN.map(({ minim
 const installedVersion = (projectRoot: string, name: string): readonly [number, number] | undefined => {
     try {
         const manifest = createRequire(join(projectRoot, "package.json")).resolve(`${name}/package.json`);
-        const [major = 0, minor = 0] = String((JSON.parse(readFileSync(manifest, "utf8")) as { version?: unknown }).version)
+        const [major = 0, minor = 0] = String((readJsonSync(manifest) as { version?: unknown }).version)
             .split(".")
             .map(Number);
 

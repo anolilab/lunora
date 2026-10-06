@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.265",
+    "version": "1.0.0-alpha.266",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -70,6 +70,7 @@
         "@lunora/scheduler": "1.0.0-alpha.110",
         "@lunora/values": "1.0.0-alpha.60",
         "@lunora/workflow": "1.0.0-alpha.71",
+        "@visulima/fs": "catalog:cli",
         "jiti": "catalog:tooling",
         "quicktype-core": "catalog:tooling",
         "ts-morph": "catalog:tooling"

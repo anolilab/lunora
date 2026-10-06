@@ -33,6 +33,7 @@ import {
     readDevServerState,
     readLiveDevServerState,
     readProjectDependencyNames,
+    readProjectManifest,
     resolveProjectTarget,
     targetRunsOwnDevServer,
     updateDevServerState,
@@ -132,17 +133,11 @@ const detectDevFlavor = (cwd: string): DevFlavor => {
  */
 const viteDevCommand = (cwd: string): { args: ReadonlyArray<string>; command: string } => {
     const manager = detectPackageManager(cwd);
-    let script: string | undefined;
+    // A missing / malformed package.json falls through to the vite default.
+    const scripts = readProjectManifest(cwd)?.["scripts"];
+    const script = typeof scripts === "object" && scripts !== null ? (scripts as Record<string, unknown>)["dev"] : undefined;
 
-    try {
-        const raw = readFileSync(join(cwd, "package.json"), "utf8");
-
-        script = (JSON.parse(raw) as { scripts?: Record<string, string> }).scripts?.dev;
-    } catch {
-        // Missing / malformed package.json — fall through to the vite default.
-    }
-
-    if (script === undefined || script.trim() === "" || script.includes("lunora")) {
+    if (typeof script !== "string" || script.trim() === "" || script.includes("lunora")) {
         const exec = execArgsFor(manager, "vite", ["dev"]);
 
         return { args: exec.args, command: exec.command };

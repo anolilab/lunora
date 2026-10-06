@@ -205,7 +205,7 @@ const checkCliVersion = () => {
 
     if (!reported.includes(version)) {
         console.error(`❌ The built CLI reports "${reported}" but its package.json says "${version}".`);
-        console.error("   `readCliVersion` in packages/cli/src/cli.ts can no longer find the manifest from the built module.");
+        console.error("   `resolveCliVersion` in packages/cli/src/util/cli-manifest.ts can no longer find the manifest from the built module.");
 
         return false;
     }
