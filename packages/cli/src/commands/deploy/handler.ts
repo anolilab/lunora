@@ -3,9 +3,18 @@ import { dirname } from "node:path";
 import type { CodegenResult } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
 import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/config";
-import { discoverContainerInfo, inferLunoraBindings, planToolchainInvocation, resolveDeployDriver, resolveSchemaDirectory } from "@lunora/config";
+import {
+    discoverContainerInfo,
+    discoverSchemaInfo,
+    inferLunoraBindings,
+    planToolchainInvocation,
+    resolveDeployDriver,
+    resolveSchemaDirectory,
+} from "@lunora/config";
+import type { WranglerConfig } from "@lunora/config/cloudflare";
 import {
     describePreservedCrons,
+    mergeWranglerEnvironment,
     readWranglerJsonc,
     reconcileWranglerBindings,
     reconcileWranglerCompatibilityDate,
@@ -17,6 +26,7 @@ import { Spinner } from "@visulima/spinner";
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
+import { checkArtifactsJurisdiction } from "../../util/artifacts-jurisdiction";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -721,6 +731,53 @@ const warnDurableObjectBudget = async (wranglerPath: string | undefined, target:
     }
 };
 
+/**
+ * Refuse a Cloudflare deploy that binds an Artifacts namespace outside the
+ * schema's `.jurisdiction("…")`, or one that does not exist yet (plan 460 D).
+ * Warns, and lets the deploy go on, when the lookup cannot be made. Returns the
+ * error that stops the deploy, if any.
+ */
+const checkArtifactsNamespaces = async (
+    cwd: string,
+    wranglerPath: string | undefined,
+    target: string,
+    environment: string | undefined,
+    logger: Logger,
+): Promise<string | undefined> => {
+    const parsed = target === "cloudflare" && wranglerPath !== undefined ? readWranglerJsonc<WranglerConfig>(wranglerPath).parsed : undefined;
+
+    if (parsed === undefined) {
+        return undefined;
+    }
+
+    // `artifacts` is non-inheritable, so `--env` reads only that environment's entries.
+    const entries = (mergeWranglerEnvironment(parsed, environment).merged.artifacts ?? []).flatMap((entry) =>
+        typeof entry?.binding === "string" && typeof entry.namespace === "string" ? [{ binding: entry.binding, namespace: entry.namespace }] : [],
+    );
+    // Parsed only once something is bound: the schema scan is the slow half.
+    const jurisdiction = entries.length === 0 ? undefined : discoverSchemaInfo(cwd, resolveSchemaDirectory(cwd)).info?.jurisdiction;
+
+    if (jurisdiction === undefined) {
+        return undefined;
+    }
+
+    const accountId = (environment === undefined ? undefined : parsed.env?.[environment]?.account_id) ?? parsed.account_id;
+    const checks = await Promise.all(entries.map(async (entry) => checkArtifactsJurisdiction({ ...entry, accountId, jurisdiction })));
+    const failures: string[] = [];
+
+    for (const check of checks) {
+        const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
+
+        if (check.verdict === "unchecked") {
+            logger.warn(line);
+        } else if (check.verdict !== "ok") {
+            failures.push(line);
+        }
+    }
+
+    return failures.length === 0 ? undefined : failures.join("\n");
+};
+
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
@@ -742,10 +799,13 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     const { reblessSchemaBaseline, validation } = pipeline;
     const driver = resolveDeployDriver(pipeline.target);
 
-    const migratePreflightError = validateMigrateDeployPreflight(options);
+    // The Artifacts lookup is read-only, so it runs on `--dry-run` too: a dry run
+    // reports what a real deploy would refuse.
+    const preflightError =
+        validateMigrateDeployPreflight(options) ?? (await checkArtifactsNamespaces(cwd, validation.wranglerPath, pipeline.target, options.env, options.logger));
 
-    if (migratePreflightError !== undefined) {
-        return abortResult(migratePreflightError);
+    if (preflightError !== undefined) {
+        return abortResult(preflightError);
     }
 
     // The build half of the pre-deploy gates. The read-only checks already ran in

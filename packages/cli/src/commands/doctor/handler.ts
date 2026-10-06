@@ -23,6 +23,8 @@ import {
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
+import type { ArtifactsJurisdictionCheck } from "../../util/artifacts-jurisdiction";
+import { checkArtifactsJurisdiction } from "../../util/artifacts-jurisdiction";
 import { nonEmpty } from "../../util/cloudflare-credentials";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -56,6 +58,10 @@ const DOCTOR_CODES = [
     "ai-binding-missing",
     "ai-gateway-default",
     "ai-gateway-token-unused",
+    "artifacts-jurisdiction-mismatch",
+    "artifacts-jurisdiction-ok",
+    "artifacts-jurisdiction-unchecked",
+    "artifacts-namespace-missing",
     "cf-config-present",
     "cimd-fetch-not-strictly-public",
     "cli-shadowed",
@@ -821,6 +827,65 @@ const checkDurableObjectClassBudget = async (
     }
 };
 
+/** The doctor code and level for each Artifacts jurisdiction verdict. Unchecked warns: residency is not best-effort. */
+const ARTIFACTS_JURISDICTION_FINDINGS = {
+    mismatch: { code: "artifacts-jurisdiction-mismatch", level: "fail" },
+    missing: { code: "artifacts-namespace-missing", level: "fail" },
+    ok: { code: "artifacts-jurisdiction-ok", level: "pass" },
+    unchecked: { code: "artifacts-jurisdiction-unchecked", level: "warn" },
+} as const satisfies Record<ArtifactsJurisdictionCheck["verdict"], { code: DoctorCode; level: FindingLevel }>;
+
+/**
+ * Whether every bound Artifacts namespace lives in the schema's
+ * `.jurisdiction("…")` (plan 460 D) — the check `lunora deploy` gates on. Doctor
+ * takes no `--env`, so it reads the top level and every `env.*` block
+ * (`artifacts` is non-inheritable; `account_id` falls back to the top level).
+ */
+const checkArtifactsJurisdictions = async (
+    cwd: string,
+    parsed: WranglerConfig | undefined,
+    jurisdiction: InferredBindings["jurisdiction"],
+    options: RunDoctorOptions,
+    findings: Finding[],
+): Promise<void> => {
+    if (jurisdiction === undefined || parsed === undefined || (readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "cloudflare") {
+        return;
+    }
+
+    const blocks: [string, WranglerConfig][] = [
+        ["", parsed],
+        ...Object.entries(parsed.env ?? {}).map(([name, block]): [string, WranglerConfig] => [`env.${name}: `, block]),
+    ];
+    // One lookup per account + namespace, however many blocks bind it.
+    const lookups = new Map<string, { accountId: unknown; binding: string; label: string; namespace: string }>();
+
+    for (const [label, block] of blocks) {
+        const accountId = block.account_id ?? parsed.account_id;
+
+        for (const entry of block.artifacts ?? []) {
+            const key = `${String(accountId)}/${String(entry?.namespace)}`;
+
+            if (typeof entry?.binding === "string" && typeof entry.namespace === "string" && !lookups.has(key)) {
+                lookups.set(key, { accountId, binding: entry.binding, label, namespace: entry.namespace });
+            }
+        }
+    }
+
+    const results = await Promise.all(
+        [...lookups.values()].map(async ({ label, ...lookup }) => {
+            return { check: await checkArtifactsJurisdiction({ ...lookup, environment: options.environment, fetch: options.fetch, jurisdiction }), label };
+        }),
+    );
+
+    for (const { check, label } of results) {
+        findings.push({
+            ...ARTIFACTS_JURISDICTION_FINDINGS[check.verdict],
+            message: `${label}${check.message}`,
+            ...(check.fix === undefined ? {} : { fix: check.fix }),
+        });
+    }
+};
+
 /**
  * Pure, testable preflight core: run the read-only project checks against `cwd`
  * and return the aggregated findings + the exit code (1 if any hard FAIL). Does
@@ -856,6 +921,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
 
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
     await checkDurableObjectClassBudget(cwd, parsed, options, findings);
+    await checkArtifactsJurisdictions(cwd, parsed, inferred?.jurisdiction, options, findings);
     checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);
 
     const summary: Record<FindingLevel, number> = { fail: 0, info: 0, pass: 0, warn: 0 };

@@ -1,7 +1,7 @@
 # Plan 460 — Cloudflare Artifacts: an action-only `ctx.artifacts` and nothing deeper yet
 
 **Baseline:** `f79680910` (2026-10-02)
-**Status:** IN PROGRESS (A, B and C shipped on `feat/artifacts-binding`; D blocked on undocumented API; the live probes need a Workers Paid account)
+**Status:** IN PROGRESS (A–D shipped; only the live probes remain, and they need a Workers Paid account: the C smoke and open question 2)
 
 ## 0. Headline finding
 
@@ -343,12 +343,39 @@ If `wrangler artifacts namespaces get --json` reports the jurisdiction,
 for a pinned app. If the API doesn't expose it, drop D and leave the decision-5
 hint as the only control.
 
-**TODO (blocked).** Open question 1 is unresolved: the REST reference documents
-`GET /artifacts/namespaces/:namespace` and `wrangler artifacts namespaces get
---json` but publishes no response schema, and the shared types list `Jurisdiction`
-only as a create-time input. Nothing shows the jurisdiction coming back, so D is
-not built; the decision-5 hint is the only control. Revisit with one call against
-a real account.
+**Done.** Open question 1 is answered by Cloudflare's own Fern-generated SDK
+in `cloudflare/cf` (`packages/cli/src/sdk/sdk/api/resources/artifacts/resources/namespaces/types/GetNamespacesResponse.ts`,
+checked 2026-10-07): `GET /accounts/{account_id}/artifacts/namespaces/{namespace}`
+returns `{ created_at, jurisdiction, namespace, repo_count, updated_at }` with
+`jurisdiction: "unrestricted" | "us" | "eu" | "fedramp"`. The create and list
+responses carry the same item, and the SDK's `core/fetcher/unwrapCloudflareEnvelope.ts`
+shows the wire body is the usual v4 envelope with the namespace under `result`.
+Wrangler's `ArtifactsNamespace` type has no `jurisdiction`, so the check calls
+REST instead of parsing `wrangler artifacts namespaces get --json`.
+`checkArtifactsJurisdiction` (`packages/cli/src/util/artifacts-jurisdiction.ts`)
+makes the call through `shared/cloudflare-rest.ts` with the
+`resolveCloudflareCredentials` lookup and a 5 s timeout, the same path as the
+plan-462 class-budget check.
+The rule is exact equality. A namespace passes only when its jurisdiction equals
+the schema's `.jurisdiction()`. `unrestricted`, any other jurisdiction, and a
+404 (the first repo `create()` would make it unrestricted) all fail, and the
+message gives the `POST …/artifacts/namespaces` call with the account id and
+jurisdiction filled in. An unpinned schema checks nothing.
+`lunora deploy` checks every namespace in the `--env`-scoped `artifacts[]`
+(non-inheritable). It runs before images are built or anything is pushed, and
+on `--dry-run` too, because the lookup is read-only. A mismatch or missing
+namespace aborts with `USAGE`. With no token or account id, or on a 401/403,
+5xx, network error or timeout, the check warns and the deploy continues. The
+401/403 warning names the missing token scope. Failing there would block every
+deploy that authenticates through `wrangler login` alone. `lunora doctor`
+reports the same four outcomes (`artifacts-jurisdiction-ok` / `-mismatch` /
+`-unchecked`, `artifacts-namespace-missing`) for the top level and every
+`env.*` block. Both skip non-Cloudflare targets.
+_Deviations:_ Lunora still creates no namespaces (out of scope below), so there
+is no create call to thread `jurisdiction` into. The SDK lists `fedramp` as a
+namespace jurisdiction, but the public docs still say `eu` / `us`. Decision 6's
+codegen refusal stays until a live probe shows a FedRAMP namespace can be
+created. The equality rule already handles one if it shows up.
 
 **Explicitly out of scope** (each one waits for a real request): an
 Artifacts-backed agent fs tool, a `backups: { artifacts }` container mode, a
@@ -377,7 +404,7 @@ unsupported.
 | -------------------------------------- | ------------ | --------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `artifacts` (`ctx.artifacts`)          | native       | unsupported                 | unsupported | Cloudflare: Artifacts binding, open beta, Workers Paid only, and remote-only even in `lunora dev`. celld has no Artifacts binding type. node has no equivalent; a host would need a Git server with repo-scoped tokens, which no host contract (`ShardHost` … `SchedulerHost`) carries |
 | Artifacts events (`ArtifactsEvent`)    | native       | unsupported                 | unsupported | types only. Delivery rides the existing `queues` row; the subscription source exists only on Cloudflare                                                                                                                                                                                |
-| namespace jurisdiction (`eu` / `us`)   | native       | unsupported                 | unsupported | covered by the `artifacts` row. `fedramp` is unsupported on every target (decision 6)                                                                                                                                                                                                  |
+| namespace jurisdiction (`eu` / `us`)   | native       | unsupported                 | unsupported | covered by the `artifacts` row. `fedramp` is unsupported on every target (decision 6). The deploy / doctor check (D) runs only for `target: "cloudflare"`; no new capability key                                                                                                       |
 | container ↔ repo recipe (workstream C) | native       | (existing `containers` row) | unsupported | no new surface. It is `exec` + `fetch`-reachable Git, already rated                                                                                                                                                                                                                    |
 
 `packages/platform-node/docs/index.mdx`'s capability table gets the new row in
@@ -390,7 +417,7 @@ gate-bearing key list gains `artifacts`.
 | ----- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 0     | A (bindings subpath, types, fake, error mapping) + B | `pnpm --filter "@lunora/bindings..." run build`, unit tests against `createArtifactsFake` (error mapping per code, `withRepo` disposes on throw, `authenticatedRemote` strips `?expires=`), `api:check`, `dist:check`, `lint:package-json` |
 | 1     | A (codegen + platform row + inference)               | new golden for an `@lunora/bindings/artifacts`-importing app; existing goldens byte-identical; `target: "node"` app gets `platform_unsupported_feature`; fedramp schema + import → codegen error; `lint:node-capabilities-docs` green      |
-| 2     | C (after 458 B), D if open question 1 resolves       | live deploy smoke on a Workers Paid account: create → token → container clone/commit/push → `readFile` returns the pushed content → `revokeToken` → push now fails                                                                         |
+| 2     | C (after 458 B), D (done, unit-tested)               | live deploy smoke on a Workers Paid account: create → token → container clone/commit/push → `readFile` returns the pushed content → `revokeToken` → push now fails                                                                         |
 
 ## 8. Risks & STOP conditions
 
@@ -421,7 +448,9 @@ gate-bearing key list gains `artifacts`.
 
 ## 9. Open questions (answer during execution)
 
-_Status 2026-10-02:_ 1 open (see D); 2 answered from the docs and
+_Status 2026-10-07:_ 1 answered: REST returns `jurisdiction`
+(`unrestricted | us | eu | fedramp`) per Cloudflare's generated SDK, and wrangler's
+`--json` type omits it (see D). _Status 2026-10-02:_ 2 answered from the docs and
 `workers-types@5.20261002.1`, which agree (`info()`, `Disposable`, no metadata
 properties); the docs' sandbox example reading `repo.defaultBranch` is stale,
 but no live probe has confirmed the runtime yet; 3 answered for `node:22-slim`
