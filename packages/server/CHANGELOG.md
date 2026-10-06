@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.179...@lunora/server@1.0.0-alpha.180) (2026-10-06)
+
+### Features
+
+* stabilize the experimental exports of core and stable packages ([#1002](https://github.com/anolilab/lunora/issues/1002)) ([4938687](https://github.com/anolilab/lunora/commit/4938687662d8be5af5a1e138ce7c6a007dc078b4))
+
 ## @lunora/server [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.178...@lunora/server@1.0.0-alpha.179) (2026-10-06)
 
 

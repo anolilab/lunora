@@ -1,6 +1,6 @@
 {
     "name": "@lunora/seed",
-    "version": "1.0.0-alpha.193",
+    "version": "1.0.0-alpha.194",
     "description": "Schema-driven, deterministic database seeding for Lunora: realistic fake data from defineSchema",
     "keywords": [
         "cloudflare",
@@ -65,8 +65,8 @@
         "@lunora/errors": "1.0.0-alpha.50"
     },
     "devDependencies": {
-        "@lunora/server": "1.0.0-alpha.178",
-        "@lunora/testing": "1.0.0-alpha.236",
+        "@lunora/server": "1.0.0-alpha.180",
+        "@lunora/testing": "1.0.0-alpha.237",
         "@lunora/values": "1.0.0-alpha.60",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

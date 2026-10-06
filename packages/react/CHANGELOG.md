@@ -1,3 +1,15 @@
+## @lunora/react [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.195...@lunora/react@1.0.0-alpha.196) (2026-10-06)
+
+### Features
+
+* stabilize the experimental exports of core and stable packages ([#1002](https://github.com/anolilab/lunora/issues/1002)) ([4938687](https://github.com/anolilab/lunora/commit/4938687662d8be5af5a1e138ce7c6a007dc078b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.184
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.113
+
 ## @lunora/react [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.194...@lunora/react@1.0.0-alpha.195) (2026-10-06)
 
 
