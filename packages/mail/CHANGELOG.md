@@ -1,3 +1,9 @@
+## @lunora/mail [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.99...@lunora/mail@1.0.0-alpha.100) (2026-10-06)
+
+### Bug Fixes
+
+* **mail:** fix extractLink, waitForMail, queue and capture detection ([#1004](https://github.com/anolilab/lunora/issues/1004)) ([f01e4ff](https://github.com/anolilab/lunora/commit/f01e4ff55da15f8bcef232f4c9b237487f7798aa))
+
 ## @lunora/mail [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.98...@lunora/mail@1.0.0-alpha.99) (2026-10-05)
 
 
