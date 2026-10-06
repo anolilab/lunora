@@ -394,6 +394,10 @@ const isZeroMoney: (a: Money) => boolean;
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `migrateLegacyPaymentTables` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `money` (const)
 
 ```ts
@@ -414,7 +418,7 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `paymentTables` (const)
+### `paymentExtension` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

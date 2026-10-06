@@ -9,8 +9,8 @@
  *
  * The `ctx.db` is built exactly as the generated ShardDO builds it
  * (`runShardMigrations` + `createShardCtxDb` over `state.storage.sql`, with the
- * same hand-off to `lunoraDatabaseToPaymentDatabase`), over the canonical
- * `paymentTables` the app mirrors inline.
+ * same hand-off to `lunoraDatabaseToPaymentDatabase`), over a schema composed the
+ * way an app composes it: `defineSchema({ ... }).extend(paymentExtension)`.
  */
 import { defineSchema } from "@lunora/server";
 import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
@@ -18,29 +18,31 @@ import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import type { LunoraDatabaseLike } from "../../src/context";
 import { lunoraDatabaseToPaymentDatabase } from "../../src/context";
 import { createDatabasePaymentStore } from "../../src/database-store";
+import migrateLegacyPaymentTables from "../../src/migrate-legacy-tables";
 import { money } from "../../src/money";
-import paymentTables from "../../src/schema";
+import paymentExtension from "../../src/schema";
 import type { PaymentStore } from "../../src/store";
 import applyWebhookAction from "../../src/sync";
 import type { PaymentSession, Subscription, UsageEvent } from "../../src/types";
 
-const schema = defineSchema(paymentTables) as unknown as SchemaLike;
+const schema = defineSchema({}).extend(paymentExtension) as unknown as SchemaLike;
 
 /** What workerd's SQLite raises when a unique index refuses a row. */
 const UNIQUE_VIOLATION = /unique constraint/iu;
 
 /** Run `body` inside a fresh Durable Object, with the payment store over its own SQLite. */
-const withStore = async (body: (store: PaymentStore, db: DatabaseWriterLike) => Promise<void>): Promise<void> => {
+const withStore = async (body: (store: PaymentStore, db: DatabaseWriterLike) => Promise<void>, storeSchema: SchemaLike = schema): Promise<void> => {
     const stub = env.PAYMENT_DO.get(env.PAYMENT_DO.newUniqueId());
 
     await runInDurableObject(stub, async (_instance, state) => {
         const sql = state.storage.sql as unknown as Parameters<typeof runShardMigrations>[0];
 
-        runShardMigrations(sql, schema);
+        runShardMigrations(sql, storeSchema);
 
-        const db = createShardCtxDb({ broadcast: () => undefined, schema, sql });
+        const db = createShardCtxDb({ broadcast: () => undefined, schema: storeSchema, sql });
 
         await body(createDatabasePaymentStore(lunoraDatabaseToPaymentDatabase(db)), db);
     });
@@ -209,9 +211,9 @@ describe("database payment store on workerd", () => {
 
             // The find-then-insert above is not the guard; the unique index is. A raw duplicate
             // insert — what a racing claim would issue — must be refused by workerd's SQLite.
-            await expect(db.insert("events", { processedAt: 1, provider: "stripe", providerEventId: "evt_1", type: "payment.captured" })).rejects.toThrow(
-                UNIQUE_VIOLATION,
-            );
+            await expect(
+                db.insert("payment_events", { processedAt: 1, provider: "stripe", providerEventId: "evt_1", type: "payment.captured" }),
+            ).rejects.toThrow(UNIQUE_VIOLATION);
         });
     });
 
@@ -241,7 +243,7 @@ describe("database payment store on workerd", () => {
             await expect(store.recordUsage(usage({ createdAt: 100, idempotencyKey: "k1", quantity: 5 }))).resolves.toBe(false);
             await expect(store.recordUsage(usage({ createdAt: 100, idempotencyKey: "k1", provider: "polar", quantity: 5 }))).resolves.toBe(true);
             await expect(
-                db.insert("usageEvents", {
+                db.insert("payment_usageEvents", {
                     createdAt: 1,
                     featureId: "api_calls",
                     idempotencyKey: "k1",
@@ -334,5 +336,48 @@ describe("database payment store on workerd", () => {
             });
             await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 2000, state: "active" });
         });
+    });
+
+    it("moves the legacy inline tables into the extension's tables", async () => {
+        expect.assertions(5);
+
+        // An app mid-upgrade: still declaring the old inline tables, and the extension beside them.
+        // The legacy names were the bare ones, except `sessions`, which was `paymentSessions`.
+        const legacyTables = Object.fromEntries(
+            Object.entries(paymentExtension.tables).map(([name, table]) => [name === "sessions" ? "paymentSessions" : name, table]),
+        );
+        const upgrading = defineSchema(legacyTables).extend(paymentExtension) as unknown as SchemaLike;
+
+        await withStore(async (store, db) => {
+            const legacyDb = db as unknown as LunoraDatabaseLike;
+
+            await legacyDb.insert("paymentSessions", {
+                amountMinor: 1000n,
+                capturedMinor: 0n,
+                createdAt: 1,
+                currency: "EUR",
+                provider: "stripe",
+                providerSessionId: "cs_1",
+                referenceId: "org_1",
+                refundedMinor: 0n,
+                state: "initiated",
+                updatedAt: 1,
+            });
+            await legacyDb.insert("events", { processedAt: 1, provider: "stripe", providerEventId: "evt_1", type: "payment.captured" });
+            await legacyDb.insert("events", { processedAt: 1, provider: "stripe", providerEventId: "evt_2", type: "payment.captured" });
+            // Already moved (the store claimed it after the deploy): the legacy copy is dropped, not duplicated.
+            await store.markEventProcessed("stripe", "evt_2", "payment.captured");
+
+            await expect(migrateLegacyPaymentTables(legacyDb, { batchSize: 2 })).resolves.toStrictEqual({ moved: 2, remaining: true });
+            await expect(migrateLegacyPaymentTables(legacyDb, { batchSize: 2 })).resolves.toStrictEqual({ moved: 1, remaining: false });
+
+            // The bigint money survived the copy through workerd's column codec.
+            await expect(store.getPaymentSession("stripe", "cs_1")).resolves.toMatchObject({ amount: money(1000, "EUR"), referenceId: "org_1" });
+
+            const moved = await db.findMany("payment_events", {});
+
+            expect(moved.page.map((row) => row["providerEventId"]).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["evt_1", "evt_2"]);
+            await expect(db.findMany("events", {})).resolves.toMatchObject({ page: [] });
+        }, upgrading);
     });
 });

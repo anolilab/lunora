@@ -250,7 +250,7 @@ const checkoutSessionAction = ({ base, currency, object }: StripeEvent): Webhook
     //
     // Only when an intent is actually coming, though: a fully discounted session settles as
     // `no_payment_required` and Stripe creates NO PaymentIntent for it, so deferring would drop the
-    // order entirely and an app fulfilling off `paymentSessions` would silently stop serving free
+    // order entirely and an app fulfilling off `payment_sessions` would silently stop serving free
     // orders. Those keep the cs_… id — the only id that payment ever has.
     if (paymentIntentId === undefined && paymentStatus !== "no_payment_required") {
         return { ...base, type: "unhandled" };

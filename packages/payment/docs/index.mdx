@@ -3,7 +3,7 @@ title: "@lunora/payment"
 description: Provider-agnostic payments for Lunora — Stripe/Polar/Autumn/Dodo/Creem adapters, webhook sync, and a payment/subscription state machine.
 related:
     - to: /docs/packages/server
-      note: "`ctx.payments`, mirror tables into your schema"
+      note: "`ctx.payments`, schema extensions"
     - to: /docs/packages/scheduler
       note: "drive the reconciliation sweep"
     - to: /docs/packages/studio
@@ -45,6 +45,18 @@ bun add @lunora/payment stripe
 </Tabs>
 
 ## Configure
+
+Merge the store's tables into your schema with one `.extend`:
+
+```ts
+// lunora/schema.ts
+import { paymentExtension } from "@lunora/payment";
+import { defineSchema } from "@lunora/server";
+
+export default defineSchema({
+    // ... your app tables
+}).extend(paymentExtension);
+```
 
 `ctx.payments` is wired by codegen onto `ActionCtx` whenever a `lunora/` source
 imports `@lunora/payment` or reads `ctx.payments`. The adapter, which carries
@@ -410,29 +422,28 @@ rows with `reconcile` as below.
 
 ## Data it stores
 
-Codegen discovers tables by parsing your `lunora/schema.ts` AST, so it **cannot**
-resolve a cross-package `defineSchema({ ...paymentTables })` spread. Declare the
-tables you use **inline** in your own `lunora/schema.ts`, mirroring the columns
-in `@lunora/payment`'s exported `paymentTables` (the canonical column reference
-the store reads/writes). Declaring them locally also lets you chain `.global()`
-on read-heavy tables (e.g. `subscriptions`) for cross-region reads from D1.
+`paymentExtension` ships the store's five tables with the package. `.extend()`
+namespaces them with the `payment` key, and codegen reads them from the
+installed package, so a new column or index reaches your app when you upgrade
+`@lunora/payment`: there is nothing to copy into your schema.
 
-`paymentTables` is exactly **five** tables — mirror only these:
-
-| Table             | Holds                                                                                   |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| `customers`       | one row per `(provider, referenceId)`, carrying the provider's customer id              |
-| `subscriptions`   | one row per provider subscription: price, quantity, state, current period               |
-| `paymentSessions` | one row per payment: `amountMinor`, `capturedMinor`, `refundedMinor`, `currency`, state |
-| `events`          | the append-only webhook log — inbound idempotency, audit, debugging                     |
-| `usageEvents`     | the append-only metered-usage ledger `check` folds over                                 |
+| Table                   | Holds                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------- |
+| `payment_customers`     | one row per `(provider, referenceId)`, carrying the provider's customer id              |
+| `payment_subscriptions` | one row per provider subscription: price, quantity, state, current period               |
+| `payment_sessions`      | one row per payment: `amountMinor`, `capturedMinor`, `refundedMinor`, `currency`, state |
+| `payment_events`        | the append-only webhook log — inbound idempotency, audit, debugging                     |
+| `payment_usageEvents`   | the append-only metered-usage ledger `check` folds over                                 |
 
 Money is stored as `(amountMinor: bigint, currency: string)` columns; every row
 carries a `provider` discriminator so multiple providers can coexist during a
 migration. A **capture or refund is not its own table**: both fold into the
-payment's `paymentSessions` row as `capturedMinor` / `refundedMinor` plus a
+payment's `payment_sessions` row as `capturedMinor` / `refundedMinor` plus a
 state (`refunded` / `partially_refunded`). Products, prices, checkouts and
 invoices stay with the provider — the store does not mirror them.
+
+Extension tables live on the shard. Chaining `.global()` on one of them is not
+available, so the per-table D1 opt-in an inline table had does not carry over.
 
 ### Upgrading
 
@@ -440,56 +451,42 @@ invoices stay with the provider — the store does not mirror them.
   the provider. A retry that spans the deploy reaches the provider under a new
   key, so it is not deduplicated against the attempt made before it — avoid
   retrying a payment operation across the deploy.
-- **Two new optional columns**: `subscriptions.lastEventAt` (the stale-event
-  guard) and `paymentSessions.subscriptionId`, plus the `paymentSessions` index
-  `by_provider_subscription` on `["provider", "subscriptionId"]` (how a
-  subscription that arrives without owner metadata finds its checkout's owner).
-  Apps that copied the tables into their own `lunora/schema.ts` must add them.
-  On a `.global()` table an undeclared column is **silently dropped**, so a
-  missing `lastEventAt` leaves the subscription with no stale protection.
 
-### Backfilling money columns written before the storage fix
+### Upgrading from inline tables
 
-Rows written between 2026-08-03 and the `v.bigint()` storage fix stored their
-money columns in a form SQL could not read. Such a row **reads back correctly**
-(`ctx.db.get` returns the right `bigint`) but is invisible to comparison:
+Earlier versions had you declare `customers`, `events`, `paymentSessions`,
+`subscriptions` and `usageEvents` inline in `lunora/schema.ts`. The store now
+reads the `payment_*` tables only, so existing rows have to move:
 
-```ts
-// A settled session whose amountMinor was written in the affected window.
-await ctx.db
-    .query("paymentSessions")
-    .filter((q) => q.gte("amountMinor", 1000n))
-    .collect();
-// ^ silently omits it. `ORDER BY amountMinor` mis-sorts it, and `sum` counts it as 0.
-```
+1. Keep the inline tables declared, add `.extend(paymentExtension)`, and deploy.
+   New writes go to the `payment_*` tables from here on.
+2. Call `migrateLegacyPaymentTables` from an `internalMutation` until it reports
+   `remaining: false`. Each call moves up to `batchSize` rows (default 100),
+   copying each one and deleting the original. A row whose natural key the
+   target already holds (the store wrote it after the deploy) is not copied
+   again, so it is safe to re-run.
 
-Any write heals the row, so the exposure is the rows nobody writes again, which
-for `paymentSessions` is precisely the **settled** sessions, the ones most likely
-to be queried by amount and least likely to be touched.
+    ```ts
+    // lunora/payment-upgrade.ts
+    import type { LunoraDatabaseLike } from "@lunora/payment";
+    import { migrateLegacyPaymentTables } from "@lunora/payment";
+    import { internalMutation } from "./_generated/server";
 
-A reserved data migration re-projects them, one per affected table. Preview it
-first:
+    // The table-name-keyed `ctx.db` view, as codegen hands it to `ctx.payments`.
+    export const movePaymentRows = internalMutation.mutation(async ({ ctx }) => migrateLegacyPaymentTables(ctx.db as unknown as LunoraDatabaseLike));
+    ```
 
-```bash
-lunora migrate up __lunora_reproject__paymentSessions --dry-run
-lunora migrate up __lunora_reproject__paymentSessions
-lunora migrate status __lunora_reproject__paymentSessions
-```
+    Run it once per shard that holds payment rows, repeating until `remaining` is `false`.
 
-It runs through the normal writer path, so triggers fire and live subscribers are
-notified; it is resumable and safe to interrupt, and rows already in the current
-form are skipped rather than rewritten. Repeat for any other **shard-local**
-table of yours declaring a `v.bigint()` or `v.bytes()` column; the id is always
-`__lunora_reproject__<table>`.
+3. Delete the inline tables from `lunora/schema.ts` and deploy. The schema-drift
+   gate reports the removed tables as breaking; with the move done, accept it
+   with `--update-schema-baseline`.
 
-`.global()` tables were never affected: their rows live in the D1/Hyperdrive
-store, which has always had a per-column codec. Running the migration against one
-returns `MIGRATION_NOT_FOUND`, which is the expected answer, not a problem to
-work around.
-
-**Confirming it is complete**: a second `--dry-run` reporting `0` rows to change
-means nothing is left in the old form. Apps that only ever ran on the fixed
-version have nothing to do and the dry run reports `0` on the first try.
+The move reads the legacy tables, so it only works while step 1's inline
+declarations are still in place. Rows it copies are written in the current
+storage form, which also heals any money column left unqueryable by the
+pre-fix `v.bigint()` storage (see
+[the re-projection backfill](/docs/concepts/migrations#the-built-in-re-projection-backfill)).
 
 ## Studio
 

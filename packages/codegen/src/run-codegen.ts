@@ -891,9 +891,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         dependencies,
         // Payments gates on the store tables the panel reads being declared, not on a
         // bare `@lunora/payment` dependency (which may be present only to reuse the
-        // package's pure webhook helpers). Matched by the tables' *signature columns*
-        // (not their generic names), so an unrelated `subscriptions`/`events` table
-        // does not spuriously show the page — see `hasPaymentStoreTables`.
+        // package's pure webhook helpers) — see `hasPaymentStoreTables`.
         hasPaymentTables: hasPaymentStoreTables(schema.tables),
         queueCount: queues.length,
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,

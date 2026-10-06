@@ -1,11 +1,9 @@
 /**
  * A {@link PaymentStore} backed by Lunora's own data layer.
  *
- * Rather than ship a bespoke `PaymentDO`, payment state rides the app's existing ShardDO: the
- * payment tables are declared INLINE in the app's own `lunora/schema.ts` (codegen discovers tables
- * by parsing that file, so it cannot resolve a cross-package `...paymentTables` spread — `./schema`
- * is the canonical column reference to mirror), and this store reads/writes them through a small
- * `PaymentDb` port that `ctx.db` satisfies. That inherits Lunora's OCC, reactivity, sharding, and
+ * Rather than ship a bespoke `PaymentDO`, payment state rides the app's existing ShardDO: the app
+ * merges `paymentExtension` (`./schema`) into its `lunora/schema.ts`, and this store reads/writes
+ * those tables through a small `PaymentDatabase` port that `ctx.db` satisfies. That inherits Lunora's OCC, reactivity, sharding, and
  * `.global()`/D1 read path for free. The codecs below are the single source of truth for the
  * domain ⇄ row mapping (money split into `amountMinor` + `currency`, id ⇄ `provider<Thing>Id`).
  */
@@ -13,6 +11,18 @@ import { money } from "./money";
 import type { PaymentStore } from "./store";
 import { foldUsage } from "./store";
 import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
+
+/**
+ * The physical table names `paymentExtension` merges into an app's schema — its `payment` key
+ * prefixed onto each bare table name. Every store read and write goes through this map.
+ */
+const PAYMENT_TABLES = {
+    customers: "payment_customers",
+    events: "payment_events",
+    sessions: "payment_sessions",
+    subscriptions: "payment_subscriptions",
+    usageEvents: "payment_usageEvents",
+} as const;
 
 /**
  * A stored row, carrying Lunora's document id.
@@ -244,33 +254,33 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
     return {
         getCustomerByReference: async (provider, referenceId) => {
-            const row = await database.findFirst("customers", { provider, referenceId });
+            const row = await database.findFirst(PAYMENT_TABLES.customers, { provider, referenceId });
 
             return row ? rowToCustomer(row) : undefined;
         },
 
         getPaymentSession: async (provider, id) => {
-            const row = await database.findFirst("paymentSessions", { provider, providerSessionId: id });
+            const row = await database.findFirst(PAYMENT_TABLES.sessions, { provider, providerSessionId: id });
 
             return row ? rowToSession(row) : undefined;
         },
 
         getPaymentSessionBySubscription: async (provider, subscriptionId) => {
             // Unbounded by design: one subscription's checkout plus its renewals.
-            const { rows } = await database.findMany("paymentSessions", { provider, subscriptionId });
+            const { rows } = await database.findMany(PAYMENT_TABLES.sessions, { provider, subscriptionId });
 
             return rows.map((row) => rowToSession(row)).find((session) => session.referenceId.trim() !== "");
         },
 
         getSubscription: async (provider, id) => {
-            const row = await database.findFirst("subscriptions", { provider, providerSubscriptionId: id });
+            const row = await database.findFirst(PAYMENT_TABLES.subscriptions, { provider, providerSubscriptionId: id });
 
             return row ? rowToSubscription(row) : undefined;
         },
 
         listSubscriptionsByReference: async (referenceId) => {
             // Unbounded by design: one reference holds a handful of subscriptions.
-            const { rows } = await database.findMany("subscriptions", { referenceId });
+            const { rows } = await database.findMany(PAYMENT_TABLES.subscriptions, { referenceId });
 
             return rows.map((row) => rowToSubscription(row));
         },
@@ -299,7 +309,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             do {
                 // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently serial: the next cursor is only known once this page returns
-                const page = await database.findMany("usageEvents", { provider, reportedToProvider: false }, { cursor, limit: wanted, orderBy });
+                const page = await database.findMany(PAYMENT_TABLES.usageEvents, { provider, reportedToProvider: false }, { cursor, limit: wanted, orderBy });
 
                 for (const row of page.rows) {
                     const event = rowToUsageEvent(row);
@@ -326,7 +336,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         },
 
         markEventProcessed: async (provider, eventId, type) => {
-            const existing = await database.findFirst("events", { provider, providerEventId: eventId });
+            const existing = await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId });
 
             if (existing) {
                 return false;
@@ -334,7 +344,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             // The unique `by_provider_event` index is the real race guard in the DO; a concurrent
             // insert of the same event id fails its OCC commit, so at most one caller wins.
-            await database.insert("events", { processedAt: Date.now(), provider, providerEventId: eventId, type });
+            await database.insert(PAYMENT_TABLES.events, { processedAt: Date.now(), provider, providerEventId: eventId, type });
 
             return true;
         },
@@ -343,7 +353,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             // Roll back a claim whose apply threw, so the provider's retry re-processes it. The
             // delete races nothing the insert-claim doesn't already serialize: only the caller that
             // won the claim reaches the failing apply, and only it releases its own row.
-            const existing = await database.findFirst("events", { provider, providerEventId: eventId });
+            const existing = await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId });
 
             if (existing) {
                 await database.delete(existing._id);
@@ -351,7 +361,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         },
 
         markUsageReported: async (provider, idempotencyKey) => {
-            const existing = await database.findFirst("usageEvents", { idempotencyKey, provider });
+            const existing = await database.findFirst(PAYMENT_TABLES.usageEvents, { idempotencyKey, provider });
 
             if (existing) {
                 await database.patch(existing._id, { reportedToProvider: true });
@@ -359,7 +369,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         },
 
         recordUsage: async (event) => {
-            const existing = await database.findFirst("usageEvents", { idempotencyKey: event.idempotencyKey, provider: event.provider });
+            const existing = await database.findFirst(PAYMENT_TABLES.usageEvents, { idempotencyKey: event.idempotencyKey, provider: event.provider });
 
             if (existing) {
                 return false;
@@ -367,7 +377,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             // The unique `by_idempotency` index is the real race guard in the DO: a concurrent
             // insert of the same key fails its OCC commit, so at most one caller wins.
-            await database.insert("usageEvents", usageEventToRow(event));
+            await database.insert(PAYMENT_TABLES.usageEvents, usageEventToRow(event));
 
             return true;
         },
@@ -376,7 +386,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             // NOTE: this reads the full lifetime ledger for the pair and filters in memory — O(events)
             // per call. Fine for typical volumes; for hot metered features, add a per-period rollup row
             // (or a createdAt-range query) so old periods aren't re-scanned on every check/track.
-            const { rows } = await database.findMany("usageEvents", { featureId, referenceId });
+            const { rows } = await database.findMany(PAYMENT_TABLES.usageEvents, { featureId, referenceId });
             const window = rows
                 .filter((row) => readNumber(row, "createdAt") >= since)
                 .map((row) => {
@@ -398,7 +408,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             // memory — O(events) total instead of O(events) per feature. For hot metered features,
             // add a per-period rollup row (or a createdAt-range query) so old periods aren't
             // re-scanned on every read.
-            const { rows } = await database.findMany("usageEvents", { referenceId });
+            const { rows } = await database.findMany(PAYMENT_TABLES.usageEvents, { referenceId });
             const buckets = new Map<string, { createdAt: number; idempotencyKey: string; mode: "add" | "set"; quantity: number }[]>(
                 featureIds.map((featureId) => [featureId, []]),
             );
@@ -422,14 +432,16 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         // Keyed on `(provider, referenceId)` — the same key `getCustomerByReference` reads and the
         // memory store writes — so a re-mint (race or provider-side customer replacement) updates the
         // reference's row in place instead of forking a second row the read path can never find.
-        upsertCustomer: async (customer) => upsert("customers", { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer)),
+        upsertCustomer: async (customer) =>
+            upsert(PAYMENT_TABLES.customers, { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer)),
 
         upsertPaymentSession: async (session) =>
-            upsert("paymentSessions", { provider: session.provider, providerSessionId: session.id }, sessionToRow(session)),
+            upsert(PAYMENT_TABLES.sessions, { provider: session.provider, providerSessionId: session.id }, sessionToRow(session)),
 
         upsertSubscription: async (subscription) =>
-            upsert("subscriptions", { provider: subscription.provider, providerSubscriptionId: subscription.id }, subscriptionToRow(subscription)),
+            upsert(PAYMENT_TABLES.subscriptions, { provider: subscription.provider, providerSubscriptionId: subscription.id }, subscriptionToRow(subscription)),
     };
 };
 
+export { PAYMENT_TABLES };
 export type { PaymentDatabase, PaymentPage, PaymentPageArgs, PaymentRow };

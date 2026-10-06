@@ -1449,7 +1449,7 @@ const MESSAGE_IDS: readonly [
     "{total} total",
     "No subscriptions yet",
     "No payments configured",
-    "No @lunora/payment tables found in this deployment. Declare the store tables (subscriptions, events, …) in lunora/schema.ts and wire `payment` on createShardDO() to sync customers and subscriptions.",
+    "No @lunora/payment tables found in this deployment. Add `.extend(paymentExtension)` to lunora/schema.ts and wire `payment` on createShardDO() to sync customers and subscriptions.",
     "Payments",
     "Plan",
     "Provider",

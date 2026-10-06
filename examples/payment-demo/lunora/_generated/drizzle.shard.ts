@@ -3,7 +3,7 @@
 
 import { blob, index, integer, real, sqliteTable, text, uniqueIndex } from "lunorash/server/drizzle";
 
-export const customers = sqliteTable("customers", {
+export const payment_customers = sqliteTable("payment_customers", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     createdAt: real("createdAt").notNull(),
@@ -12,11 +12,11 @@ export const customers = sqliteTable("customers", {
     providerCustomerId: text("providerCustomerId").notNull(),
     referenceId: text("referenceId").notNull(),
 }, (t) => ({
-    by_reference: index("by_reference").on(t.referenceId),
     by_provider_customer: uniqueIndex("by_provider_customer").on(t.provider, t.providerCustomerId),
+    by_reference: index("by_reference").on(t.referenceId),
 }));
 
-export const events = sqliteTable("events", {
+export const payment_events = sqliteTable("payment_events", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     processedAt: real("processedAt").notNull(),
@@ -27,7 +27,7 @@ export const events = sqliteTable("events", {
     by_provider_event: uniqueIndex("by_provider_event").on(t.provider, t.providerEventId),
 }));
 
-export const paymentSessions = sqliteTable("paymentSessions", {
+export const payment_sessions = sqliteTable("payment_sessions", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     amountMinor: blob("amountMinor", { mode: "bigint" }).notNull(),
@@ -42,12 +42,12 @@ export const paymentSessions = sqliteTable("paymentSessions", {
     subscriptionId: text("subscriptionId"),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_reference: index("by_reference").on(t.referenceId),
-    by_provider_subscription: index("by_provider_subscription").on(t.provider, t.subscriptionId),
     by_provider_session: uniqueIndex("by_provider_session").on(t.provider, t.providerSessionId),
+    by_provider_subscription: index("by_provider_subscription").on(t.provider, t.subscriptionId),
+    by_reference: index("by_reference").on(t.referenceId),
 }));
 
-export const subscriptions = sqliteTable("subscriptions", {
+export const payment_subscriptions = sqliteTable("payment_subscriptions", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     cancelAtPeriodEnd: integer("cancelAtPeriodEnd", { mode: "boolean" }).notNull(),
@@ -64,11 +64,11 @@ export const subscriptions = sqliteTable("subscriptions", {
     state: text("state").notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_reference: index("by_reference").on(t.referenceId),
     by_provider_subscription: uniqueIndex("by_provider_subscription").on(t.provider, t.providerSubscriptionId),
+    by_reference: index("by_reference").on(t.referenceId),
 }));
 
-export const usageEvents = sqliteTable("usageEvents", {
+export const payment_usageEvents = sqliteTable("payment_usageEvents", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     createdAt: real("createdAt").notNull(),
@@ -80,8 +80,8 @@ export const usageEvents = sqliteTable("usageEvents", {
     referenceId: text("referenceId").notNull(),
     reportedToProvider: integer("reportedToProvider", { mode: "boolean" }).notNull(),
 }, (t) => ({
-    by_reference_feature: index("by_reference_feature").on(t.referenceId, t.featureId),
     by_idempotency: uniqueIndex("by_idempotency").on(t.provider, t.idempotencyKey),
+    by_reference_feature: index("by_reference_feature").on(t.referenceId, t.featureId),
 }));
 
 export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {

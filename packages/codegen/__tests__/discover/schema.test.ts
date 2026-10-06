@@ -1330,6 +1330,43 @@ describe("discoverSchema", () => {
         }
     });
 
+    it("resolves a package extension whose exports carry only an `import` condition", () => {
+        expect.assertions(1);
+
+        // Every `@lunora/*` package (`@lunora/payment`, `@lunora/agent`) exports
+        // `{ types, import }` with no `require`/`default`, which `require.resolve`
+        // refuses — so their extensions were skipped with a warning.
+        const root = mkdtempSync(join(tmpdir(), "lunora-pkgext-esm-"));
+
+        try {
+            const pkgDir = join(root, "node_modules", "test-esm-ext");
+
+            mkdirSync(pkgDir, { recursive: true });
+            writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ exports: { ".": { import: "./index.mjs" } }, name: "test-esm-ext", type: "module" }));
+            writeFileSync(
+                join(pkgDir, "index.mjs"),
+                `export const paymentExtension = { key: "payment", tables: { events: { shape: { type: { kind: "string", _meta: {} } }, indexes: [] } } };`,
+            );
+
+            mkdirSync(join(root, "lunora"), { recursive: true });
+            const schemaPath = join(root, "lunora", "schema.ts");
+
+            writeFileSync(
+                schemaPath,
+                `import { defineSchema } from "@lunora/server";
+                 import { paymentExtension } from "test-esm-ext";
+                 export const schema = defineSchema({}).extend(paymentExtension);
+                `,
+            );
+
+            const schema = discoverSchema(new Project({ skipAddingFilesFromTsConfig: true }), schemaPath, root);
+
+            expect(schema.tables.map((table) => table.name)).toStrictEqual(["payment_events"]);
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
+    });
+
     it("throws a located diagnostic for a package extension whose table name is not an identifier", () => {
         expect.assertions(3);
 
@@ -1767,7 +1804,6 @@ describe("discoverSchema", () => {
 
         // Skipped in silence before: every table behind the spread was absent
         // from the generated data model while the schema still declared it.
-        // `registry/payment` ships `paymentTables` as exactly this shape.
         const { project, schemaPath } = projectWith(`
             import { defineSchema, defineTable, v } from "@lunora/server";
 

@@ -11,6 +11,7 @@ export { entitlementsForReference, featureNames, hasActivePrice, resolveEntitlem
 export type { PaymentErrorCode } from "./errors";
 export { LunoraPaymentError } from "./errors";
 export { idempotencyKey } from "./idempotency";
+export { default as migrateLegacyPaymentTables } from "./migrate-legacy-tables";
 export type { MoneyJSON } from "./money";
 export {
     addMoney,
@@ -32,7 +33,7 @@ export type { PaymentEvent, PaymentObserver } from "./observability";
 // importing one adapter never loads the others (or their SDKs). They are NOT re-exported here.
 export type { ReconcileInput, ReconcileResult } from "./reconcile";
 export { reconcile } from "./reconcile";
-export { default as paymentTables } from "./schema";
+export { default as paymentExtension } from "./schema";
 export type { PaymentAction, SubscriptionAction } from "./state-machine";
 export {
     canTransitionPayment,

@@ -200,8 +200,8 @@ The adapter options:
 />
 
 <Callout type="info">
-    Pin the store's read-heavy tables (e.g. `subscriptions`) with `.global()` in your own `lunora/schema.ts` for cross-region reads; see [Data it
-    stores](/docs/packages/payment#data-it-stores). The provider is stateless; the store owns all state.
+    Merge the store's tables into your `lunora/schema.ts` with `.extend(paymentExtension)`; see [Data it stores](/docs/packages/payment#data-it-stores). The
+    provider is stateless; the store owns all state.
 </Callout>
 
 ## First checkout / subscription

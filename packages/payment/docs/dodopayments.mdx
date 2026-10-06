@@ -153,9 +153,8 @@ export const ShardDO = createShardDO({
 </Step>
 <Step>
 
-**Mirror the payment tables into your `lunora/schema.ts`.** Codegen resolves
-tables from your schema AST, so declare the columns inline mirroring
-`@lunora/payment`'s exported `paymentTables` (see
+**Merge the payment tables into your `lunora/schema.ts`** with
+`.extend(paymentExtension)` (see
 [Data it stores](/docs/packages/payment#data-it-stores)). The store, built per
 request from `ctx.db`, owns all synced state; Dodo stays a stateless
 translator.
