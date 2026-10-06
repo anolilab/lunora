@@ -1,3 +1,9 @@
+## @lunora/shard-engine [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.114...@lunora/shard-engine@1.0.0-alpha.115) (2026-10-06)
+
+### Performance Improvements
+
+* **shard-engine:** make the aggregate backfill marker durable ([#1009](https://github.com/anolilab/lunora/issues/1009)) ([8d418a6](https://github.com/anolilab/lunora/commit/8d418a60a7fadf0e613e3480e908bc18c56054ef))
+
 ## @lunora/shard-engine [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.113...@lunora/shard-engine@1.0.0-alpha.114) (2026-10-06)
 
 ### Bug Fixes
