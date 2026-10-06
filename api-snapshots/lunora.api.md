@@ -2381,6 +2381,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `DurableObjectHandlers` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `ExportRow` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2408,6 +2412,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `MaskPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `MergedRole` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `MergedRoles` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `MigrationRunResult` (interface)
 
@@ -2448,6 +2460,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `RlsPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `RoleClass` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `RoleNamespaceTarget` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `RunShardApplyCdcArgs` (interface)
 
@@ -2701,6 +2721,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `mergeDurableObjects` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `pullExternalSourceIncrementalTick` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2716,6 +2740,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `reprojectionTables` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `roleNamespace` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `runDataMigration` (const)
 

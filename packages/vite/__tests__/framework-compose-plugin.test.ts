@@ -353,6 +353,35 @@ describe("framework-compose-plugin", () => {
             expect(code).toContain(`export * from "./lunora/_generated/shardRegistry";`);
         });
 
+        it("exports one merged LunoraDO hosting the shard, scheduler and registry when the app merges", async () => {
+            expect.assertions(6);
+
+            // Plan 462: the merge spends one of the account's Durable Object
+            // classes instead of three. The scheduler and registry are reached
+            // through role-prefixed names on the shard namespace, and their
+            // classes are imported into `LunoraDO`, not re-exported for wrangler.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", {
+                classModules: ["scheduler", "shardRegistry"],
+                mergeDurableObjects: true,
+            });
+
+            expect(code).toContain('.scheduler({ namespace: (env) => roleNamespace(env.SHARD, "scheduler") })');
+            expect(code).toContain('.shardRegistry((env) => roleNamespace(env.SHARD, "registry"))');
+            expect(code).toContain("export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, registry: ShardRegistryDO, scheduler: SchedulerDO });");
+            expect(code).not.toContain("export const ShardDO");
+            expect(code).not.toContain(`export * from "./lunora/_generated/scheduler";`);
+            expect(code).toContain(`import { mergeDurableObjects, roleNamespace } from "./lunora/_generated/durableObjects";`);
+        });
+
+        it("keeps the plain ShardDO entry when the app does not merge", async () => {
+            expect.assertions(2);
+
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: ["scheduler"] });
+
+            expect(code).toContain("export const ShardDO = app.ShardDO;");
+            expect(code).not.toContain("mergeDurableObjects");
+        });
+
         it("composes nothing scheduler-shaped when the binding is absent", async () => {
             expect.assertions(2);
 

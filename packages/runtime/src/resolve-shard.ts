@@ -1,7 +1,9 @@
 import type { ShardDirectory, ShardJurisdiction } from "@lunora/platform";
 import { resolveShard as resolveShardStub } from "@lunora/platform";
+import { LUNORA_ROLE_PREFIX } from "@lunora/shard-engine";
 
 import type { RegionHint } from "../../../shared/region-hint";
+import { LunoraError } from "./errors";
 
 /**
  * The Cloudflare-binding members {@link toDirectory} reads.
@@ -218,6 +220,15 @@ export const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: 
  * advisory and only the *creating* resolution can honour it, so it is safe to
  * pass on every call and never safe to depend on: callers must behave
  * identically when the shard turns out to live somewhere else entirely.
+ *
+ * A key carrying {@link LUNORA_ROLE_PREFIX} is refused: in an app that merges
+ * its Durable Object classes, those names belong to the scheduler and the shard
+ * registry, and a shard route must never reach them.
  */
-export const resolveShard = (namespace: ShardNamespaceInput, shardKey: string, locationHint?: RegionHint): ResolvedShard =>
-    resolveShardStub(toDirectory(namespace), shardKey, locationHint);
+export const resolveShard = (namespace: ShardNamespaceInput, shardKey: string, locationHint?: RegionHint): ResolvedShard => {
+    if (shardKey.startsWith(LUNORA_ROLE_PREFIX)) {
+        throw new LunoraError(`shard key "${shardKey}" uses the reserved "${LUNORA_ROLE_PREFIX}" prefix`, { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return resolveShardStub(toDirectory(namespace), shardKey, locationHint);
+};

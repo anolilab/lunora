@@ -37,6 +37,18 @@ interface DispatchBookmark {
 }
 ```
 
+### `DurableObjectHandlers` (interface)
+
+```ts
+interface DurableObjectHandlers {
+    alarm?: (alarmInfo?: AlarmInvocationInfo) => Promise<void> | void;
+    fetch?: (request: Request) => Promise<Response> | Response;
+    webSocketClose?: (ws: WebSocket, code: number, reason: string, wasClean: boolean) => Promise<void> | void;
+    webSocketError?: (ws: WebSocket, error: unknown) => Promise<void> | void;
+    webSocketMessage?: (ws: WebSocket, message: ArrayBuffer | string) => Promise<void> | void;
+}
+```
+
 ### `ExportRow` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -69,6 +81,22 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `MaskPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `MergedRole` (type)
+
+```ts
+type MergedRole = "registry" | "scheduler";
+```
+
+### `MergedRoles` (interface)
+
+```ts
+interface MergedRoles<Env> {
+    registry?: RoleClass<Env>;
+    scheduler?: RoleClass<Env>;
+    shard: RoleClass<Env>;
+}
+```
 
 ### `MigrationRunResult` (interface)
 
@@ -119,6 +147,23 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `RlsPoliciesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `RoleClass` (type)
+
+```ts
+type RoleClass<Env> = new (state: DurableObjectState, env: Env) => DurableObjectHandlers;
+```
+
+### `RoleNamespaceTarget` (interface)
+
+```ts
+interface RoleNamespaceTarget {
+    get: (id: DurableObjectId, options?: DurableObjectNamespaceGetDurableObjectOptions) => DurableObjectStub;
+    getByName?: (name: string, options?: DurableObjectNamespaceGetDurableObjectOptions) => DurableObjectStub;
+    idFromName: (name: string) => DurableObjectId;
+    jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => RoleNamespaceTarget;
+}
+```
 
 ### `RunShardApplyCdcArgs` (interface)
 
@@ -741,6 +786,12 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `mergeDurableObjects` (const)
+
+```ts
+const mergeDurableObjects: <Env>(roles: MergedRoles<Env>) => RoleClass<Env>;
+```
+
 ### `pullExternalSourceIncrementalTick` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -756,6 +807,12 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `reprojectionTables` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `roleNamespace` (const)
+
+```ts
+const roleNamespace: (namespace: RoleNamespaceTarget, role: MergedRole) => RoleNamespaceTarget;
+```
 
 ### `runDataMigration` (const)
 

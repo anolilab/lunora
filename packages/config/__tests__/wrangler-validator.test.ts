@@ -2086,6 +2086,25 @@ export const schema = defineSchema({
                     expect(reported).not.toContain("export { SessionDO } from");
                 });
 
+                it("tells a merging app with a ShardDO binding that the merge does not move deployed data", () => {
+                    expect.assertions(3);
+
+                    // Plan 462: with the merge module written, the composed entry
+                    // exports `LunoraDO`, not `ShardDO`. The binding still naming
+                    // `ShardDO` is either an app mid-adoption (rename it) or one
+                    // already deployed (whose data the merged class cannot reach).
+                    writeClassAProject("");
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                    writeFileSync(join(workdir, "lunora", "_generated", "durableObjects.ts"), "export {};\n", "utf8");
+
+                    const result = validateWranglerProject({ projectRoot: workdir });
+                    const reported = result.report.errors.filter((error) => error.includes("does not export it")).join("\n");
+
+                    expect(result.report.valid).toBe(false);
+                    expect(reported).toContain('bind only `SHARD` to "LunoraDO"');
+                    expect(reported).toContain("never been deployed");
+                });
+
                 it("accepts a class the composed entry star-re-exports from a generated module", () => {
                     expect.assertions(1);
 

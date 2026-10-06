@@ -9,7 +9,13 @@ import { dirname } from "node:path";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
-import { COMPOSED_ENTRY_DURABLE_OBJECTS, GENERATED_CLASS_MODULES, isFrameworkDurableObject } from "../worker-entry";
+import {
+    COMPOSED_ENTRY_DURABLE_OBJECTS,
+    GENERATED_CLASS_MODULES,
+    isFrameworkDurableObject,
+    MERGED_DURABLE_OBJECT,
+    MERGED_ROLE_DURABLE_OBJECTS,
+} from "../worker-entry";
 import { objectBindingEntries } from "./validate-bindings";
 import type { CapabilityMethod, WorkerEntry, WorkerEntryLocation } from "./worker-entry-checks";
 import { locateWorkerEntry, readWorkerEntry, scanAppChains } from "./worker-entry-checks";
@@ -210,8 +216,21 @@ const UNEXPORTED_CLASS_MARKER = "does not export it";
  * remedy. `SessionDO` still has no route on class-A, which is what this branch
  * now says.
  */
-const remedyFor = (className: string, kind: WorkerEntry["kind"]): string => {
-    if (kind !== "composed") {
+const remedyFor = (className: string, entry: WorkerEntry): string => {
+    // The app merges its Durable Objects, so this binding still names a class
+    // `LunoraDO` now hosts. A namespace that was ever deployed keeps its data in
+    // that class — the merge does not move it — so "rename the class_name" is
+    // only safe before the first deploy.
+    if (entry.exports?.has(MERGED_DURABLE_OBJECT) === true && MERGED_ROLE_DURABLE_OBJECTS.has(className)) {
+        return (
+            `This app merges its Durable Objects (\`durableObjects.merge\` in lunora.config), so ${MERGED_DURABLE_OBJECT} hosts ${className}: ` +
+            `bind only \`SHARD\` to "${MERGED_DURABLE_OBJECT}" and drop the SCHEDULER / SHARD_REGISTRY bindings. ` +
+            `Do that only if this Worker has never been deployed — a deployed ${className} namespace keeps its data, which the merged class cannot reach; ` +
+            `turn \`durableObjects.merge\` off to keep it.`
+        );
+    }
+
+    if (entry.kind !== "composed") {
         return (
             `Re-export it from the module that defines it (\`export { ${className} } from "./…";\`), ` +
             `or add it to the app builder's own export (\`export const { ${className} } = app;\`).`
@@ -299,7 +318,7 @@ const collectUnexportedClassErrors = (wrangler: WranglerConfig, entry: WorkerEnt
             // The noun follows the LABEL, not the check: `workflows[]` names a
             // WorkflowEntrypoint, and calling it a Durable Object sent readers
             // looking for a migration entry that does not apply to it.
-            `wrangler refuses to bundle a Worker whose ${missed.label === "workflows" ? "Workflow" : "Durable Object"} classes are not exported. ${remedyFor(missed.className, entry.kind)}`,
+            `wrangler refuses to bundle a Worker whose ${missed.label === "workflows" ? "Workflow" : "Durable Object"} classes are not exported. ${remedyFor(missed.className, entry)}`,
     );
 };
 

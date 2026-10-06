@@ -72,6 +72,13 @@ interface ProjectConfigLiterals {
      * `codegen` is declared but `exclude` is not an array of string literals.
      */
     codegen?: { exclude?: string[]; unreadable?: boolean };
+
+    /**
+     * `durableObjects.merge`: host the shard, scheduler and shard registry in one
+     * Durable Object class (plan 462). `unreadable` when `durableObjects` is
+     * declared but `merge` is not a boolean literal.
+     */
+    durableObjects?: { merge?: boolean; unreadable?: boolean };
     remote?: boolean;
 
     /**
@@ -108,6 +115,8 @@ interface LunoraProjectConfig {
     app?: unknown;
     /** Codegen source-walk settings (`exclude`). Read through {@link readProjectConfigLiterals}. */
     codegen?: unknown;
+    /** Durable Object packaging (`merge`). Read through {@link readProjectConfigLiterals}. */
+    durableObjects?: unknown;
     /** Remote-binding dev preference. */
     remote?: unknown;
     /** Deploy target id. */
@@ -319,10 +328,24 @@ const readCodegen = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
     return { codegen: { exclude } };
 };
 
+/** `durableObjects.merge` from the `durableObjects` object literal: a boolean literal, or `unreadable`. */
+const readDurableObjects = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
+    const member = readPlainMember(declared, sourceFile, "merge");
+
+    if ("absent" in member) {
+        return { durableObjects: {} };
+    }
+
+    return "literal" in member && (TsNode.isTrueLiteral(member.literal) || TsNode.isFalseLiteral(member.literal))
+        ? { durableObjects: { merge: member.literal.getLiteralValue() } }
+        : { durableObjects: { unreadable: true } };
+};
+
 /** What a getter or method under each key this reader cares about contributes: it declares a value the parser cannot see. */
 const UNREADABLE_ACCESSOR: ReadonlyMap<string, ProjectConfigLiterals> = new Map([
     ["advisor", { advisor: { unreadable: true } }],
     ["codegen", { codegen: { unreadable: true } }],
+    ["durableObjects", { durableObjects: { unreadable: true } }],
     ["remote", { unreadable: true }],
     ["target", { unreadable: true }],
 ]);
@@ -442,6 +465,10 @@ const readProperty = (property: ObjectLiteralElementLike, sourceFile: SourceFile
         return readCodegen(propertyLiteral(property, sourceFile), sourceFile);
     }
 
+    if (key === "durableObjects") {
+        return readDurableObjects(propertyLiteral(property, sourceFile), sourceFile);
+    }
+
     if (key !== "target" && key !== "remote") {
         return {};
     }
@@ -512,6 +539,7 @@ const readProjectConfigLiterals = (projectRoot: string): ProjectConfigLiterals =
         return {
             ...(declares("advisor") ? { advisor: { unreadable: true } } : {}),
             ...(declares("codegen") ? { codegen: { unreadable: true } } : {}),
+            ...(declares("durableObjects") ? { durableObjects: { unreadable: true } } : {}),
             ...(declares("services") ? { services: { unreadable: true } } : {}),
             unreadable: true,
         };

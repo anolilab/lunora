@@ -97,6 +97,35 @@ export { ShardRegistryDO } from "${baseSpecifiers(useUmbrella).do}";
 `;
 };
 
+/**
+ * `_generated/durableObjects.ts` — written only when `lunora.config` sets
+ * `durableObjects: { merge: true }` (plan 462). The composed class-A entry
+ * builds one `LunoraDO` class from it in place of `ShardDO` /
+ * `SchedulerDO` / `ShardRegistryDO`, and binding inference provisions the
+ * single `SHARD` binding off the same file — so the entry, the builder wiring
+ * and wrangler cannot disagree about whether the app merges.
+ */
+const emitDurableObjects = (merge: boolean, useUmbrella: boolean): string => {
+    if (!merge) {
+        return "";
+    }
+
+    return `${GENERATED_HEADER}/**
+ * Host the shard, the scheduler and the shard registry in ONE Durable Object
+ * class, so the app spends one of the account's classes instead of three. A
+ * Vite-first (class-A) app needs nothing more: its generated worker entry builds
+ * \`LunoraDO\` from these. A hand-written entry does the same by hand:
+ *
+ * \`export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, registry: ShardRegistryDO });\`
+ *
+ * and passes \`roleNamespace(env.SHARD, "scheduler")\` / \`roleNamespace(env.SHARD, "registry")\`
+ * to \`.scheduler()\` / \`.shardRegistry()\`. For apps whose \`SHARD\` binding has
+ * never been deployed: existing \`ShardDO\` data does not move into the merged class.
+ */
+export { mergeDurableObjects, roleNamespace } from "${baseSpecifiers(useUmbrella).do}";
+`;
+};
+
 const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     const byExpression = new Map<string, CronJobIR[]>();
 
@@ -234,4 +263,4 @@ export const LUNORA_VECTOR_INDEXES: ReadonlyArray<LunoraVectorIndex> = [${body}]
  */
 const emitWranglerCronTriggers = (crons: ReadonlyArray<CronJobIR>): string[] => [...new Set(crons.map((cron) => cron.cron))];
 
-export { emitCrons, emitScheduler, emitShardRegistry, emitVectors, emitWranglerCronTriggers };
+export { emitCrons, emitDurableObjects, emitScheduler, emitShardRegistry, emitVectors, emitWranglerCronTriggers };

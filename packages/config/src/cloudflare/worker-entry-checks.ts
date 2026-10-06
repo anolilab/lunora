@@ -27,6 +27,9 @@ import {
     GENERATED_DIRECTORY,
     isGeneratedOutput,
     LUNORA_WORKER_VIRTUAL_ID,
+    MERGED_CLASS_MODULES,
+    MERGED_DURABLE_OBJECT,
+    MERGED_DURABLE_OBJECTS_MODULE,
     NON_SOURCE_DIRECTORIES,
     SOURCE_DOT_DIRECTORIES,
     WORKER_ENTRY_FALLBACKS,
@@ -450,12 +453,15 @@ const readComposedEntry = (projectRoot: string, schemaDirectory: string): Worker
         return opaque;
     }
 
-    const names = new Set<string>(COMPOSED_ENTRY_DURABLE_OBJECTS);
+    // A merging app exports `LunoraDO` in place of `ShardDO`, and imports the
+    // scheduler and registry classes into it rather than re-exporting them.
+    const merged = existsSync(join(generatedDirectory, `${MERGED_DURABLE_OBJECTS_MODULE}.ts`));
+    const names = new Set<string>(merged ? [MERGED_DURABLE_OBJECT] : COMPOSED_ENTRY_DURABLE_OBJECTS);
 
     for (const module of GENERATED_CLASS_MODULES) {
         const modulePath = join(generatedDirectory, `${module}.ts`);
 
-        if (!existsSync(modulePath)) {
+        if (!existsSync(modulePath) || (merged && MERGED_CLASS_MODULES.has(module))) {
             continue;
         }
 

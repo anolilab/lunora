@@ -96,6 +96,7 @@ import {
     emitContainers,
     emitCrons,
     emitDrizzleSchema,
+    emitDurableObjects,
     emitFunctions,
     emitQueues,
     emitScheduler,
@@ -126,6 +127,7 @@ import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import { setStandardTypeResolver } from "./parse-validator";
 import type { PlatformDiagnostic } from "./platform-target";
 import { resolveCodegenTarget } from "./platform-target";
+import { readProjectConfigLiterals } from "./project-config-file";
 import { buildSchemaSnapshot } from "./schema-drift";
 
 /**
@@ -189,6 +191,22 @@ const readProjectVersion = (projectRoot: string): string | undefined => {
     } catch {
         return undefined;
     }
+};
+
+/**
+ * `lunora.config`'s `durableObjects.merge` (plan 462). An unreadable value is
+ * said out loud and treated as off: merging changes which classes wrangler binds,
+ * so it is never switched on by a value the parser could not prove.
+ */
+const readMergeDurableObjects = (projectRoot: string): boolean => {
+    const { durableObjects } = readProjectConfigLiterals(projectRoot);
+
+    if (durableObjects?.unreadable) {
+        // eslint-disable-next-line no-console -- codegen has no diagnostic sink for config literals; matches `codegen.exclude`'s warning.
+        console.warn("@lunora/codegen: `durableObjects.merge` in lunora.config is not a boolean literal — the Durable Object classes stay separate.");
+    }
+
+    return durableObjects?.merge === true;
 };
 
 /**
@@ -977,6 +995,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
     const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella);
+    const durableObjectsContent = emitDurableObjects(readMergeDurableObjects(options.projectRoot), useUmbrella);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
     // Only emit the project-bound seed client when `@lunora/seed` is a declared
@@ -1174,6 +1193,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         emitOptional("queues.ts", queuesContent);
         emitOptional("scheduler.ts", schedulerContent);
         emitOptional("shardRegistry.ts", shardRegistryContent);
+        emitOptional("durableObjects.ts", durableObjectsContent);
         emitOptional("seed.ts", seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
         emitOptional("collections.ts", collectionsContent);

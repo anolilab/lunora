@@ -314,6 +314,58 @@ build. A rebuild, a dev-server restart or a child process `lunora dev` spawned
 stays quiet. `lunora doctor` reports it on every run as `cf-config-present`.
 The warning never blocks: nothing `lunora deploy` runs reads the file.
 
+## Durable Object class limit
+
+Cloudflare caps an account at
+[**100 Durable Object classes on Workers Free and 500 on Workers Paid**](https://developers.cloudflare.com/durable-objects/platform/limits/).
+Every Worker that binds a class spends its own, so each environment of an app
+(production, staging, previews) counts separately. A Lunora app spends up to
+three framework classes: `ShardDO` always, `SchedulerDO` with a scheduler, and
+`ShardRegistryDO` with `.shardBy()` tables. Each container and voice agent adds
+one more.
+
+`lunora doctor` reports how close the account is (`do-class-budget-*`), and
+`lunora deploy` warns within 10 classes of a cap. Both read the count from the
+Cloudflare API only when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (or
+`account_id` in `wrangler.jsonc`) are set. The API does not say which plan an
+account is on, so the check judges the count against both caps.
+
+To spend one class instead of three, merge the framework classes **before the
+app's first deploy**:
+
+```ts
+// lunora.config.ts
+export default {
+    durableObjects: { merge: true },
+} satisfies LunoraConfig;
+```
+
+Codegen then writes `_generated/durableObjects.ts`, and the generated worker
+entry exports one `LunoraDO` class that hosts the shard, the scheduler and the
+shard registry. Only the `SHARD` binding remains, bound to `LunoraDO`. The
+scheduler and registry instances live in the same namespace under the reserved
+`__lunora_do__:` name prefix, which a client-chosen shard key cannot use.
+
+The merge does not move data. A `ShardDO`, `SchedulerDO` or `ShardRegistryDO`
+namespace that was ever deployed keeps its data in that class, so
+`lunora verify` refuses a merged app whose `wrangler.jsonc` still binds them.
+Leave the merge off for an app that is already live.
+
+A hand-written worker entry merges the same way:
+
+```ts
+import { mergeDurableObjects, roleNamespace } from "./lunora/_generated/durableObjects";
+import { SchedulerDO } from "./lunora/_generated/scheduler";
+
+const app = defineApp()
+    .shard((env) => env.SHARD)
+    .scheduler({ namespace: (env) => roleNamespace(env.SHARD, "scheduler") })
+    .build();
+
+export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO });
+export default app;
+```
+
 ## Worker size
 
 Cloudflare caps a Worker at

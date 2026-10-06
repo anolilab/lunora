@@ -103,6 +103,7 @@ const isGeneratedOutput = (relativeMain: string): boolean =>
  * to export a class of this exact name, so detection keys on the class name.
  */
 const DURABLE_OBJECT_BINDINGS = {
+    LunoraDO: "SHARD",
     SchedulerDO: "SCHEDULER",
     SessionDO: "SESSION",
     ShardDO: "SHARD",
@@ -112,6 +113,29 @@ const DURABLE_OBJECT_BINDINGS = {
 type DurableObjectClass = keyof typeof DURABLE_OBJECT_BINDINGS;
 
 const DURABLE_OBJECT_CLASSES = Object.keys(DURABLE_OBJECT_BINDINGS) as DurableObjectClass[];
+
+/**
+ * The class an app that merges its Durable Objects (`durableObjects.merge`,
+ * plan 462) exports in place of the per-role classes it hosts, bound as `SHARD`.
+ */
+const MERGED_DURABLE_OBJECT: DurableObjectClass = "LunoraDO";
+
+/** The per-role classes {@link MERGED_DURABLE_OBJECT} hosts — never bound alongside it. */
+const MERGED_ROLE_DURABLE_OBJECTS: ReadonlySet<string> = new Set(["SchedulerDO", "ShardDO", "ShardRegistryDO"]);
+
+/**
+ * The `_generated/` module codegen writes when `lunora.config` opts in to the
+ * merge — the one signal the composed entry, binding inference and the export
+ * validator all key off, the same way the scheduler and registry modules work.
+ */
+const MERGED_DURABLE_OBJECTS_MODULE: string = "durableObjects";
+
+/** The generated class modules whose class the merged class hosts — imported into it, not re-exported. */
+const MERGED_CLASS_MODULES: ReadonlySet<string> = new Set(["scheduler", "shardRegistry"]);
+
+/** `classes` with the per-role classes dropped when the merged class is among them: one `SHARD` binding, not four. */
+const collapseMergedDurableObjects = (classes: ReadonlyArray<DurableObjectClass>): DurableObjectClass[] =>
+    classes.includes(MERGED_DURABLE_OBJECT) ? classes.filter((className) => !MERGED_ROLE_DURABLE_OBJECTS.has(className)) : [...classes];
 
 /** Whether `className` is one of Lunora's own Durable Object classes rather than a project's generated or hand-written one. */
 const isFrameworkDurableObject = (className: string): className is DurableObjectClass => Object.hasOwn(DURABLE_OBJECT_BINDINGS, className);
@@ -349,7 +373,7 @@ const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] =>
         );
     }
 
-    return DURABLE_OBJECT_CLASSES.filter((className) => exportedNames.has(className)).map((className) => {
+    return collapseMergedDurableObjects(DURABLE_OBJECT_CLASSES.filter((className) => exportedNames.has(className))).map((className) => {
         return {
             binding: DURABLE_OBJECT_BINDINGS[className],
             className,
@@ -469,6 +493,7 @@ export type { DurableObjectClass, DurableObjectSpec, GeneratedClassModule, Worke
 // and "what class-A composition is allowed to bind" cannot drift.
 
 export {
+    collapseMergedDurableObjects,
     COMPOSED_ENTRY_DURABLE_OBJECTS,
     COMPOSED_WORKER_ENTRY,
     detectClassExports,
@@ -480,6 +505,10 @@ export {
     isFrameworkDurableObject,
     isGeneratedOutput,
     LUNORA_WORKER_VIRTUAL_ID,
+    MERGED_CLASS_MODULES,
+    MERGED_DURABLE_OBJECT,
+    MERGED_DURABLE_OBJECTS_MODULE,
+    MERGED_ROLE_DURABLE_OBJECTS,
     NON_SOURCE_DIRECTORIES,
     resolveWorkerEntry,
     SOURCE_DOT_DIRECTORIES,

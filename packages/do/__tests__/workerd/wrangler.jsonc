@@ -17,10 +17,12 @@
             { "name": "SYNC", "class_name": "TestSyncDO" },
             { "name": "ECHO", "class_name": "TestEchoDO" },
             { "name": "COUNTER", "class_name": "TestCounterDO" },
+            { "name": "MERGED", "class_name": "TestMergedDO" },
         ],
     },
     "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["TestShardDO", "TestSessionDO", "TestSyncDO", "TestEchoDO"] },
         { "tag": "v2", "new_sqlite_classes": ["TestCounterDO"] },
+        { "tag": "v3", "new_sqlite_classes": ["TestMergedDO"] },
     ],
 }

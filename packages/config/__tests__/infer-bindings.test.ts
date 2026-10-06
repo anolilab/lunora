@@ -508,6 +508,35 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.signals.join(" ")).not.toContain("not exported by the worker entry");
     });
 
+    it("binds only SHARD to the merged LunoraDO when codegen wrote the merge module", async () => {
+        expect.assertions(1);
+
+        // Plan 462: the composed entry exports `LunoraDO` in place of the
+        // per-role classes, so SCHEDULER and SHARD_REGISTRY must not be bound.
+        write("wrangler.jsonc", `{\n    "name": "app",\n    "main": "virtual:lunora/worker",\n    "compatibility_date": "2026-04-07"\n}\n`);
+        write("lunora/_generated/durableObjects.ts", "export {};\n");
+        write("lunora/_generated/scheduler.ts", 'export { SchedulerDO } from "@lunora/scheduler";\n');
+        write("lunora/_generated/shardRegistry.ts", 'export { ShardRegistryDO } from "@lunora/do";\n');
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "LunoraDO" }]);
+    });
+
+    it("collapses a hand-written entry that exports LunoraDO onto one SHARD binding", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_AND_SCHEDULER}export const LunoraDO = mergeDurableObjects({ shard: ShardDO });\nexport default { fetch() { return new Response("ok"); } };\n`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.durableObjects).toEqual([{ binding: "SHARD", className: "LunoraDO" }]);
+    });
+
     it("reports no workflows for a project without lunora/workflows.ts", async () => {
         expect.assertions(1);
 

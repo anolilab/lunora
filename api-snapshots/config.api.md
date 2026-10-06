@@ -862,6 +862,18 @@ class LunoraReporter {
 }
 ```
 
+### `MERGED_CLASS_MODULES` (const)
+
+```ts
+const MERGED_CLASS_MODULES: ReadonlySet<string>;
+```
+
+### `MERGED_DURABLE_OBJECTS_MODULE` (const)
+
+```ts
+const MERGED_DURABLE_OBJECTS_MODULE: string;
+```
+
 ### `MultiSelectOption` (type)
 
 ```ts
@@ -2204,6 +2216,7 @@ interface WranglerCacheShape {
 
 ```ts
 interface WranglerConfig {
+    account_id?: unknown;
     ai?: {
         binding?: unknown;
     } | null;
