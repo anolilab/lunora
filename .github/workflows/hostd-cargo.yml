@@ -109,11 +109,17 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            - "name": "Install Rust toolchain"
-              "uses": "oxc-project/setup-rust@3d6fb132fbe7cdcb66bf8ec193911c2945369d12" # v1.0.17
+            # Not oxc-project/setup-rust (visulima's choice): it rewrites a rust-toolchain.toml at the
+            # repository root, and this repository keeps the crate's in apps/hostd/daemon.
+            - "name": "Install Rust stable toolchain"
+              "uses": "dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9" # v1
               "with":
-                  "restore-cache": false
-                  "tools": "cargo-deny"
+                  "toolchain": "stable"
+
+            - "name": "Install cargo-deny"
+              "uses": "taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853" # v2.83.2
+              "with":
+                  "tool": "cargo-deny"
 
             - "name": "Run cargo deny"
               "working-directory": "apps/hostd/daemon"
