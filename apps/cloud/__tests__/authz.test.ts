@@ -45,7 +45,7 @@ describe(assertMember, () => {
     it("resolves the member and enforces allowedRoles", async () => {
         const context = makeCtx("u1", { members: [{ _id: "m1", organizationId: "org_1", role: "admin", userId: "u1" }] });
 
-        await expect(assertMember(context, org, ["admin"])).resolves.toStrictEqual({ role: "admin", userId: "u1" });
+        await expect(assertMember(context, org, ["admin"])).resolves.toStrictEqual({ organizationId: org, role: "admin", userId: "u1" });
         await expect(assertMember(context, org, ["owner"])).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 });

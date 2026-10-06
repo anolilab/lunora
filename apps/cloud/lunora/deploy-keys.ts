@@ -68,7 +68,7 @@ export const issue = mutation
         type: v.union(v.literal("production"), v.literal("dev"), v.literal("preview")),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"deployKeys">; key: string }> => {
-        await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
+        const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
         // A project-scoped key must name one of THIS org's projects. Without the
         // check the key is minted against a foreign project id — not an
@@ -94,7 +94,7 @@ export const issue = mutation
             createdAt: context.now,
             hashedKey,
             name: arguments_.name,
-            organizationId: arguments_.organizationId,
+            organizationId: member.organizationId,
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name
             type: arguments_.type,
         });
@@ -168,7 +168,7 @@ export const roll = mutation
     .use(rateLimit("sensitive"))
     .input({ id: v.id("deployKeys"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ id: Id<"deployKeys">; key: string }> => {
-        await assertMember(context, organizationId, ["owner", "admin"]);
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "deploy key");
 
         const existing = (await context.db.get(id)) as DeployKeyRow | null;
@@ -195,7 +195,7 @@ export const roll = mutation
             createdAt: context.now,
             hashedKey,
             name: existing.name,
-            organizationId,
+            organizationId: member.organizationId,
             projectId: existing.projectId, // secret-scanner:allow -- domain field name
             type: existing.type,
         });

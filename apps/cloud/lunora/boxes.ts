@@ -189,13 +189,13 @@ export const createEnrolment = action
             expiresAt,
             hashedToken: await sha256Hex(token),
             name: name.trim(),
-            organizationId,
+            organizationId: member.organizationId,
         });
         await context.db.insert("auditLog", {
             action: "box.enrolment.create",
             actorUserId: member.userId,
             createdAt: context.now,
-            organizationId,
+            organizationId: member.organizationId,
             target: name.trim(),
         });
 
@@ -253,7 +253,13 @@ export const rename = mutation
         }
 
         await context.db.patch(id, { name: name.trim() });
-        await context.db.insert("auditLog", { action: "box.rename", actorUserId: member.userId, createdAt: context.now, organizationId, target: name.trim() });
+        await context.db.insert("auditLog", {
+            action: "box.rename",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId: member.organizationId,
+            target: name.trim(),
+        });
     });
 
 /**

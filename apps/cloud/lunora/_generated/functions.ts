@@ -190,7 +190,6 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "logs:list": lunora_logs_17.list as unknown as RegisteredLunoraFunction,
     "logs:orgForScript": lunora_logs_17.orgForScript as unknown as RegisteredLunoraFunction,
     "logs:prune": lunora_logs_17.prune as unknown as RegisteredLunoraFunction,
-    "members:add": lunora_members_18.add as unknown as RegisteredLunoraFunction,
     "members:list": lunora_members_18.list as unknown as RegisteredLunoraFunction,
     "members:remove": lunora_members_18.remove as unknown as RegisteredLunoraFunction,
     "members:setRole": lunora_members_18.setRole as unknown as RegisteredLunoraFunction,
@@ -1049,7 +1048,6 @@ export interface Caller {
         prune: (args?: {}) => Promise<{ pruned: number; }>;
     };
     members: {
-        add: (args: { organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer"; userId: unknown }) => Promise<Id<"members">>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"members">; createdAt: number; organizationId: Id<"organizations">; role: "admin" | "member" | "owner" | "viewer"; userId: string }[]>;
         remove: (args: { id: Id<"members">; organizationId: Id<"organizations"> }) => Promise<void>;
         setRole: (args: { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }) => Promise<void>;
@@ -1313,7 +1311,6 @@ export const createCaller = (context: CallerCtx): Caller => ({
         prune: (args) => callRegistered(context, "logs:prune", args),
     },
     members: {
-        add: (args) => callRegistered(context, "members:add", args),
         list: (args) => callRegistered(context, "members:list", args),
         remove: (args) => callRegistered(context, "members:remove", args),
         setRole: (args) => callRegistered(context, "members:setRole", args),

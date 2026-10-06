@@ -98,7 +98,6 @@ export interface ApiTypes {
         list: FunctionReference<"query", { afterCreatedAt?: number; from?: number; functionPath?: unknown; levels?: Array<"trace" | "debug" | "info" | "log" | "warn" | "error" | "fatal">; limit?: number; organizationId: Id<"organizations">; scriptName: unknown; search?: unknown; to?: number; traceId?: unknown }, { createdAt: number; fields?: Record<string, unknown>; functionPath?: string; level: "log" | "trace" | "info" | "error" | "debug" | "warn" | "fatal"; message: string; shardKey?: string; spanId?: string; traceId?: string; userId?: string }[]>;
     };
     members: {
-        add: FunctionReference<"mutation", { organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer"; userId: unknown }, Id<"members">>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"members">; createdAt: number; organizationId: Id<"organizations">; role: "admin" | "member" | "owner" | "viewer"; userId: string }[]>;
         remove: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations"> }, void>;
         setRole: FunctionReference<"mutation", { id: Id<"members">; organizationId: Id<"organizations">; role: "owner" | "admin" | "member" | "viewer" }, void>;

@@ -37,7 +37,8 @@ export const store = mutation
         projectId: v.id("projects"),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"secrets">> => {
-        await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
+        const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
+
         await assertRowInOrg(context, arguments_.projectId, arguments_.organizationId, "project");
 
         const environment = arguments_.environment ?? "all";
@@ -59,7 +60,7 @@ export const store = mutation
             environment,
             iv: arguments_.iv,
             name: arguments_.name,
-            organizationId: arguments_.organizationId,
+            organizationId: member.organizationId,
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name
             updatedAt: now,
         });

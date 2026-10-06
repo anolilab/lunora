@@ -54,7 +54,7 @@ export const claim = mutation
     .use(rateLimit("sensitive"))
     .input({ installationId: v.number(), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { installationId, organizationId } }): Promise<void> => {
-        const { userId } = await assertMember(context, organizationId, ["owner", "admin"]);
+        const { organizationId: memberOrganizationId, userId } = await assertMember(context, organizationId, ["owner", "admin"]);
 
         const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
         const installation = page[0];
@@ -67,12 +67,12 @@ export const claim = mutation
             throw new LunoraError("CONFLICT", "installation is already claimed by another organization");
         }
 
-        await context.db.patch(installation._id, { claimedAt: context.now, organizationId });
+        await context.db.patch(installation._id, { claimedAt: context.now, organizationId: memberOrganizationId });
         await context.db.insert("auditLog", {
             action: "github.installation.claim",
             actorUserId: userId,
             createdAt: context.now,
-            organizationId,
+            organizationId: memberOrganizationId,
             target: `${installation.accountLogin}#${String(installationId)}`,
         });
     });
@@ -99,7 +99,7 @@ export const unclaim = mutation
     .use(rateLimit("sensitive"))
     .input({ installationId: v.number(), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { installationId, organizationId } }): Promise<void> => {
-        const { userId } = await assertMember(context, organizationId, ["owner", "admin"]);
+        const { organizationId: memberOrganizationId, userId } = await assertMember(context, organizationId, ["owner", "admin"]);
 
         const { page } = await context.db.githubInstallations.findMany({ where: { installationId } });
         const installation = page[0];
@@ -115,7 +115,7 @@ export const unclaim = mutation
             action: "github.installation.unclaim",
             actorUserId: userId,
             createdAt: context.now,
-            organizationId,
+            organizationId: memberOrganizationId,
             target: `${installation.accountLogin}#${String(installationId)}`,
         });
     });

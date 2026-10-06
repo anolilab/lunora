@@ -100,7 +100,7 @@ export const add = mutation
         const id = await context.db.insert("domains", {
             createdAt: now,
             hostname,
-            organizationId: arguments_.organizationId,
+            organizationId: member.organizationId,
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name
             ...(arguments_.redirectStatusCode === undefined ? {} : { redirectStatusCode: arguments_.redirectStatusCode }),
             ...(arguments_.redirectTo === undefined ? {} : { redirectTo: arguments_.redirectTo }),
@@ -112,7 +112,7 @@ export const add = mutation
             action: "domain.add",
             actorUserId: member.userId,
             createdAt: now,
-            organizationId: arguments_.organizationId,
+            organizationId: member.organizationId,
             target: hostname,
         });
 

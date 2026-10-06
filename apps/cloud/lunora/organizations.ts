@@ -112,7 +112,7 @@ export const getBySlug = query.input({ slug: boundedString(LIMITS.id) }).query(a
  * already have cleared better-auth's sign-up + email verification — which is
  * where the human check belongs, and where better-auth's own `rateLimit` runs.
  * The abuse ceiling here is the `provision` bucket. Same reasoning applies to
- * `members.add` and `invitations.accept`.
+ * `invitations.accept`.
  */
 export const create = mutation
     .use(rateLimit("provision"))
@@ -187,7 +187,13 @@ export const rename = mutation
         const { now } = context;
 
         await context.db.patch(organizationId, { name });
-        await context.db.insert("auditLog", { action: "organization.rename", actorUserId: member.userId, createdAt: now, organizationId, target: name });
+        await context.db.insert("auditLog", {
+            action: "organization.rename",
+            actorUserId: member.userId,
+            createdAt: now,
+            organizationId: member.organizationId,
+            target: name,
+        });
     });
 
 /**
@@ -203,7 +209,12 @@ export const requestDeletion = mutation
         const { now } = context;
 
         await context.db.patch(organizationId, { deletionRequestedAt: now });
-        await context.db.insert("auditLog", { action: "organization.deletion.request", actorUserId: member.userId, createdAt: now, organizationId });
+        await context.db.insert("auditLog", {
+            action: "organization.deletion.request",
+            actorUserId: member.userId,
+            createdAt: now,
+            organizationId: member.organizationId,
+        });
     });
 
 /** Cancel a pending deletion request (owner only). */
@@ -215,7 +226,12 @@ export const cancelDeletion = mutation
         const { now } = context;
 
         await context.db.patch(organizationId, { deletionRequestedAt: null });
-        await context.db.insert("auditLog", { action: "organization.deletion.cancel", actorUserId: member.userId, createdAt: now, organizationId });
+        await context.db.insert("auditLog", {
+            action: "organization.deletion.cancel",
+            actorUserId: member.userId,
+            createdAt: now,
+            organizationId: member.organizationId,
+        });
     });
 
 /** Organizations one purge tick erases. Bounds a single mutation; a backlog drains over ticks. */

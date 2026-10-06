@@ -3,9 +3,7 @@ import { LunoraError } from "@lunora/server";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
-import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
-import { boundedString, LIMITS } from "./validators";
 
 interface MemberRow {
     _id: Id<"members">;
@@ -17,8 +15,6 @@ interface MemberRow {
     userId: string;
 }
 
-const role = v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer"));
-
 /** List an organization's members. Any member may view the roster. */
 export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<MemberRow[]> => {
     await assertMember(context, organizationId);
@@ -27,39 +23,6 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
     return page;
 });
-
-/** Add a member to an organization (owners/admins only). Idempotent per user. */
-export const add = mutation
-    .use(rateLimit("api"))
-    .input({
-        organizationId: v.id("organizations"),
-        role,
-        userId: boundedString(LIMITS.name),
-    })
-    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"members">> => {
-        await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
-
-        const { page } = await context.db.members.findMany({
-            where: { organizationId: arguments_.organizationId, userId: arguments_.userId },
-        });
-
-        const existing = page[0];
-
-        if (existing) {
-            throw new LunoraError("CONFLICT", "user is already a member");
-        }
-
-        const all = await context.db.members.findMany({ where: { organizationId: arguments_.organizationId } });
-
-        await assertWithinQuota(context, arguments_.organizationId, "members", all.page.length);
-
-        return context.db.insert("members", {
-            createdAt: context.now,
-            organizationId: arguments_.organizationId,
-            role: arguments_.role,
-            userId: arguments_.userId,
-        });
-    });
 
 /** Remove a member (owners/admins only). */
 export const remove = mutation
@@ -105,7 +68,7 @@ export const setRole = mutation
             action: "member.set-role",
             actorUserId: caller.userId,
             createdAt: context.now,
-            organizationId,
+            organizationId: caller.organizationId,
             target: `${target.userId} → ${newRole}`,
         });
     });
