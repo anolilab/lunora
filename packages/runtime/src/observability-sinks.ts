@@ -198,10 +198,22 @@ const redactLoggedError = (error: NonNullable<LogEvent["error"]>): NonNullable<L
         return { ...error, message };
     }
 
-    // The frames are the `    at …` lines; everything above them is the header.
-    const frames = error.stack.split("\n").filter((line) => line.trimStart().startsWith("at "));
+    // V8's header is `<name>: <message>`, so the frames start right after the
+    // message's first occurrence — exact even when the message itself has lines
+    // that look like frames, and when a subclass renamed itself after `super()`
+    // (its header still says `Error:`). A hand-built stack without the message
+    // keeps only its `at …` lines.
+    const end = error.stack.indexOf(error.message);
+    const frames =
+        end === -1
+            ? error.stack
+                  .split("\n")
+                  .filter((line) => line.trimStart().startsWith("at "))
+                  .map((line) => `\n${line}`)
+                  .join("")
+            : error.stack.slice(end + error.message.length);
 
-    return { ...error, message, stack: [`${error.name}: ${message}`, ...frames].join("\n") };
+    return { ...error, message, stack: `${error.name}: ${message}${frames}` };
 };
 
 /**

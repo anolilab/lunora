@@ -1004,6 +1004,29 @@ describe("observability-sinks", () => {
             expect(JSON.stringify(attrValue(record.attributes, "exception.message"))).not.toContain("buyer@example.com");
         });
 
+        it("redacts a multi-line message out of the stack even when a line of it looks like a frame", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+            const message = "lookup failed\n    at buyer@example.com";
+
+            sink.onLog!({
+                args: [],
+                error: { message, name: "TypeError", stack: `Error: ${message}\n    at charge (orders.ts:4:2)` },
+                functionPath: "orders:place",
+                level: "error",
+                message: "charge failed",
+                ts: 1,
+            });
+
+            const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(JSON.stringify(attrValue(record.attributes, "exception.stacktrace"))).not.toContain("buyer@example.com");
+        });
+
         it("ships the raw log record when redactLogs is opted out", () => {
             expect.assertions(2);
 
