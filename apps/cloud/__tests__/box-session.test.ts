@@ -335,6 +335,174 @@ describe("boxSessionDO", () => {
             expect(routed(reconnected)).toStrictEqual(["shop"]);
         });
 
+        it("withholds an org whose row cannot be read, and records it as withheld", async () => {
+            const { key, session, state, store } = await twoOrgs({});
+            const { get } = store;
+
+            store.get = async (id, table) => (id === "org_1" ? Promise.reject(new Error("D1 timeout")) : get(id, table));
+
+            expect(routed(await handshake(session, state, key, "box_1"))).toStrictEqual(["shop"]);
+            expect(store.tables["boxes"]?.[0]).toMatchObject({ routesWithheld: ["org_1"] });
+        });
+
+        /**
+         * Pushes race: a routine push, the suspension sweep's, a reconnect's. The
+         * routes frame carries no version, so the session serialises them — the
+         * later push always reads and sends later. Each test holds the first
+         * push's org read (taken from the OLD state) until the state has changed.
+         */
+        describe("racing pushes", () => {
+            /**
+             * Delay the next `org_1` read, returning the row as it was when read.
+             * `reached` settles once that read has taken its snapshot; `release` lets it finish.
+             */
+            const holdNextOrgRead = (store: ReturnType<typeof memoryStore>): { reached: Promise<void>; release: () => void } => {
+                const { get } = store;
+                let release = (): void => undefined;
+                let reach = (): void => undefined;
+                const reached = new Promise<void>((resolve) => {
+                    reach = resolve;
+                });
+                const gate = new Promise<void>((resolve) => {
+                    release = resolve;
+                });
+                let armed = true;
+
+                Object.assign(store, {
+                    get: async (id: string, table?: string): Promise<unknown> => {
+                        if (armed && id === "org_1") {
+                            armed = false;
+
+                            const snapshot = structuredClone(await get(id, table));
+
+                            reach();
+                            await gate;
+
+                            return snapshot;
+                        }
+
+                        return get(id, table);
+                    },
+                });
+
+                return {
+                    reached,
+                    release: () => {
+                        release();
+                    },
+                };
+            };
+            /** Let every pending microtask and timer run, so an unserialised push would finish here. */
+            const settle = async (ms = 0): Promise<void> => {
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, ms);
+                });
+            };
+            const setOrg1 = (store: ReturnType<typeof memoryStore>, over: Record<string, unknown>): void => {
+                Object.assign(store.tables, {
+                    organizations: [
+                        { _id: "org_1", plan: "free", ...over },
+                        { _id: "org_2", plan: "free" },
+                    ],
+                });
+            };
+
+            it("a routine push read before a suspension never lands after the suspension's push", async () => {
+                const { key, session, state, store } = await twoOrgs({});
+                const socket = await handshake(session, state, key, "box_1");
+                const held = holdNextOrgRead(store);
+                const routine = session.pushRoutes();
+
+                await held.reached;
+
+                setOrg1(store, { suspendedAt: 1 });
+
+                const suspension = session.pushRoutes();
+
+                // Give the later push every chance to finish first; only ordering stops the stale one landing last.
+                await settle();
+                held.release();
+                await Promise.all([routine, suspension]);
+
+                expect(routed(socket)).toStrictEqual(["shop"]);
+                expect(store.tables["boxes"]?.[0]).toMatchObject({ routesWithheld: ["org_1"] });
+            });
+
+            it("a suspend then an unsuspend racing end on the current state", async () => {
+                const { key, session, state, store } = await twoOrgs({});
+                const socket = await handshake(session, state, key, "box_1");
+                const held = holdNextOrgRead(store);
+
+                setOrg1(store, { suspendedAt: 1 });
+
+                const suspendPush = session.pushRoutes();
+
+                await held.reached;
+
+                setOrg1(store, { suspendedAt: null });
+
+                const recoverPush = session.pushRoutes();
+
+                await settle();
+                held.release();
+                await Promise.all([suspendPush, recoverPush]);
+
+                expect(routed(socket)).toStrictEqual(["shop", "web"]);
+                expect(store.tables["boxes"]?.[0]).toMatchObject({ routesWithheld: [] });
+            });
+
+            it("a reconnect during a suspension change gets the current table", async () => {
+                const { key, session, state, store } = await twoOrgs({});
+
+                await handshake(session, state, key, "box_1");
+
+                const held = holdNextOrgRead(store);
+                const inFlight = session.pushRoutes();
+
+                await held.reached;
+
+                setOrg1(store, { suspendedAt: 1 });
+
+                const reconnecting = handshake(session, state, key, "box_1");
+
+                await settle(50);
+                held.release();
+
+                const reconnected = await reconnecting;
+
+                await inFlight;
+
+                expect(routed(reconnected)).toStrictEqual(["shop"]);
+                expect(store.tables["boxes"]?.[0]).toMatchObject({ routesWithheld: ["org_1"] });
+            });
+        });
+
+        /** A push that does not finish is never recorded as done: it rejects and marks the box for the sweep. */
+        it("rejects a push whose record could not be written, marks it stale, and the retry clears it", async () => {
+            const { key, session, state, store } = await twoOrgs({ suspendedAt: 1 });
+
+            await handshake(session, state, key, "box_1");
+
+            const { patch } = store;
+            let failOnce = true;
+
+            store.patch = async (id, document, table) => {
+                if (failOnce && "routesWithheld" in document) {
+                    failOnce = false;
+
+                    throw new Error("D1 write failed");
+                }
+
+                return patch(id, document, table);
+            };
+
+            await expect(session.pushRoutes()).rejects.toThrow("D1 write failed");
+            expect(store.tables["boxes"]?.[0]).toMatchObject({ routesStale: true });
+
+            await expect(session.pushRoutes()).resolves.toBe(true);
+            expect(store.tables["boxes"]?.[0]).toMatchObject({ routesStale: null, routesWithheld: ["org_1"] });
+        });
+
         it("withholds an org whose row is missing — unknown state fails closed", async () => {
             const { key, session, state, store } = await twoOrgs({});
 

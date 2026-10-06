@@ -571,7 +571,19 @@ afresh: deploys, domain changes, reconnects, and the every-minute suspension
 sweep (`src/boxes/suspension-sweep.ts`). The sweep pushes to any online box
 whose last push (`boxes.routesWithheld`) no longer matches, so a suspension or
 recovery reaches a connected box within a minute. Other orgs' projects on the
-same box are unaffected. `cloudflare-workers` tenants run on the customer's own
+same box are unaffected.
+
+The session serialises its pushes. Each one reads the rows and sends only after
+the previous push has finished, so an earlier in-flight push can never land on
+top of a newer table. The routes frame carries no version the box could
+compare, so ordering is the only guarantee.
+
+A push is recorded only once it has been sent. One that fails marks the box
+`routesStale`, and the sweep pushes it again until a push finishes. An org row
+that cannot be read counts as withheld. If a box's projects cannot be read at
+all, the push fails and the box keeps its last table; the sweep retries every
+minute. An empty table would stop every fleet on the box, so it is never sent
+in that case. `cloudflare-workers` tenants run on the customer's own
 account and are not edge-blocked.
 
 **Billing for agents** (plan 365 W6). Two read-only, deploy-key routes are

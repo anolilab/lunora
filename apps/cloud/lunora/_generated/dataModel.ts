@@ -320,6 +320,7 @@ export interface Doc_boxes {
     resources?: { diskFreeMb: number; memMb: number };
     revokedAt?: number;
     routesWithheld?: Array<string>;
+    routesStale?: boolean;
     singleTrust: boolean;
     slug: string;
     status: "pending" | "online" | "offline" | "revoked";
@@ -1180,6 +1181,7 @@ export interface Insert_boxes {
     resources?: { diskFreeMb: number; memMb: number };
     revokedAt?: number;
     routesWithheld?: Array<string>;
+    routesStale?: boolean;
     singleTrust: boolean;
     slug: string;
     status: "pending" | "online" | "offline" | "revoked";

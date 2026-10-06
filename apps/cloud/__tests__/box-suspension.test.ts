@@ -34,7 +34,7 @@ describe(runBoxSuspensionSweep, () => {
         const { push, result } = await sweep(world({ routesWithheld: [] }, { suspendedAt: 1 }));
 
         expect(push).toHaveBeenCalledWith("box_1");
-        expect(result).toStrictEqual({ failed: 0, pushed: 1 });
+        expect(result).toStrictEqual({ failed: 0, pushed: 1, skipped: 0 });
     });
 
     it("pushes a box whose org recovered since its last push", async () => {
@@ -62,6 +62,44 @@ describe(runBoxSuspensionSweep, () => {
         const failing = vi.fn<(boxId: string) => Promise<boolean>>(() => Promise.reject(new Error("session unreachable")));
 
         await expect(sweep(store, failing)).resolves.toMatchObject({ result: { failed: 1, pushed: 0 } });
+        expect(store.tables["boxes"]?.[0]).toMatchObject({ routesStale: true });
         await expect(sweep(store)).resolves.toMatchObject({ result: { pushed: 1 } });
+    });
+
+    /** A push that did not finish is never counted done, even when the record it left happens to match. */
+    it("pushes a box marked stale whatever its record says", async () => {
+        const { push } = await sweep(world({ routesStale: true, routesWithheld: ["org_1"] }, { suspendedAt: 1 }));
+
+        expect(push).toHaveBeenCalledWith("box_1");
+    });
+
+    it("counts a box the session found not connected as skipped, and tries again next tick", async () => {
+        const store = world({ routesWithheld: [] }, { suspendedAt: 1 });
+        const notConnected = vi.fn<(boxId: string) => Promise<boolean>>(() => Promise.resolve(false));
+
+        await expect(sweep(store, notConnected)).resolves.toMatchObject({ result: { pushed: 0, skipped: 1 } });
+        await expect(sweep(store, notConnected)).resolves.toMatchObject({ result: { skipped: 1 } });
+    });
+
+    it("treats an org row it cannot read as withheld, and pushes", async () => {
+        const store = world({ routesWithheld: [] }, {});
+        const { get } = store;
+
+        store.get = async (id, table) => (id === "org_1" ? Promise.reject(new Error("D1 timeout")) : get(id, table));
+
+        const { push } = await sweep(store);
+
+        expect(push).toHaveBeenCalledWith("box_1");
+    });
+
+    it("pushes when it cannot read a box's projects at all, rather than skipping it", async () => {
+        const store = world({ routesWithheld: [] }, {});
+        const { findMany } = store;
+
+        store.findMany = async (table, args) => (table === "projects" ? Promise.reject(new Error("D1 timeout")) : findMany(table, args));
+
+        const { push } = await sweep(store);
+
+        expect(push).toHaveBeenCalledWith("box_1");
     });
 });

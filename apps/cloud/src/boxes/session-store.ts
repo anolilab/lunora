@@ -169,7 +169,9 @@ export const boxProjects = async (database: ControlPlaneStore, boxId: string, no
     const { page } = await database.findMany("projects", { where: { placementRef: boxId } });
     const projects = page as ProjectRow[];
     const organizationIds = [...new Set(projects.map((project) => project.organizationId))];
-    const rows = await Promise.all(organizationIds.map(async (id) => (await database.get(id, "organizations")) as AdmissionRow | null));
+    // An organization whose row cannot be read is treated as not serving: unknown state fails closed,
+    // and the next push (the suspension sweep retries every minute) reads it again.
+    const rows = await Promise.all(organizationIds.map(async (id) => (await database.get(id, "organizations").catch(() => null)) as AdmissionRow | null));
     const withheld = new Set(organizationIds.filter((_id, index) => !organizationServing(rows[index] ?? null, now)));
 
     return { serving: projects.filter((project) => !withheld.has(project.organizationId)), withheld: [...withheld].toSorted((a, b) => a.localeCompare(b)) };
