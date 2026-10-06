@@ -1,3 +1,15 @@
+## @lunora/react [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.196...@lunora/react@1.0.0-alpha.197) (2026-10-06)
+
+### Bug Fixes
+
+* **payment:** lazy ctx.payments, context-aware authorize, multi-reference creem ([#1001](https://github.com/anolilab/lunora/issues/1001)) ([b7d6285](https://github.com/anolilab/lunora/commit/b7d6285cad41b9a6c8f64ef048362360a6c478d0))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.185
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.114
+
 ## @lunora/react [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.195...@lunora/react@1.0.0-alpha.196) (2026-10-06)
 
 ### Features

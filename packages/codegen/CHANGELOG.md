@@ -1,3 +1,18 @@
+## @lunora/codegen [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.268...@lunora/codegen@1.0.0-alpha.269) (2026-10-06)
+
+### Bug Fixes
+
+* **payment:** lazy ctx.payments, context-aware authorize, multi-reference creem ([#1001](https://github.com/anolilab/lunora/issues/1001)) ([b7d6285](https://github.com/anolilab/lunora/commit/b7d6285cad41b9a6c8f64ef048362360a6c478d0))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.193
+* **@lunora/agent:** upgraded to 1.0.0-alpha.182
+* **@lunora/do:** upgraded to 1.0.0-alpha.197
+* **@lunora/server:** upgraded to 1.0.0-alpha.181
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.114
+
 ## @lunora/codegen [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.267...@lunora/codegen@1.0.0-alpha.268) (2026-10-06)
 
 

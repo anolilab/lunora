@@ -1,3 +1,21 @@
+## @lunora/cli [1.0.0-alpha.355](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.354...@lunora/cli@1.0.0-alpha.355) (2026-10-06)
+
+### Bug Fixes
+
+* **payment:** lazy ctx.payments, context-aware authorize, multi-reference creem ([#1001](https://github.com/anolilab/lunora/issues/1001)) ([b7d6285](https://github.com/anolilab/lunora/commit/b7d6285cad41b9a6c8f64ef048362360a6c478d0))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.193
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.269
+* **@lunora/config:** upgraded to 1.0.0-alpha.313
+* **@lunora/d1:** upgraded to 1.0.0-alpha.165
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.219
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.181
+* **@lunora/seed:** upgraded to 1.0.0-alpha.195
+* **@lunora/testing:** upgraded to 1.0.0-alpha.238
+
 ## @lunora/cli [1.0.0-alpha.354](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.353...@lunora/cli@1.0.0-alpha.354) (2026-10-06)
 
 
