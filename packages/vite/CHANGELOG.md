@@ -1,3 +1,15 @@
+## @lunora/vite [1.0.0-alpha.308](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.307...@lunora/vite@1.0.0-alpha.308) (2026-10-06)
+
+### Bug Fixes
+
+* **codegen:** skip test files and judge ternary owner values by branch ([#993](https://github.com/anolilab/lunora/issues/993)) ([12f3a7a](https://github.com/anolilab/lunora/commit/12f3a7abeb7ff4e79b437b54a9b4530b70a0c3e0))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.266
+* **@lunora/config:** upgraded to 1.0.0-alpha.310
+
 ## @lunora/vite [1.0.0-alpha.307](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.306...@lunora/vite@1.0.0-alpha.307) (2026-10-05)
 
 
