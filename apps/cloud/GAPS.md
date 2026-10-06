@@ -29,9 +29,13 @@ Every 🔨 item still open below was built in one pass (branch `feat/cloud-gaps`
   fails the backup; the studio shows it per snapshot. Setting the secrets is 🌐.
 - **Snapshots past 64 MiB.** Streamed as an R2 multipart upload in 8 MiB parts,
   capped at 4 GiB compressed — the export is the tenant's own code.
-- **Point-in-time restore.** The runtime import has a replace mode
-  (`?mode=replace`), audited as a replace; a restore is a rewind, and the
-  pre-restore snapshot undoes it.
+- **Point-in-time restore, atomic.** A replace import is a staged session —
+  batches stage invisibly (`?mode=replace&stage=<id>`), then one commit swaps each
+  shard in a single transaction after a dry run of all of them; D1, KV and
+  storage are ordered and retry-safe. Every unknown session state refuses the
+  commit. The tenant restore and `lunora import --replace` both use it, a
+  failure leaves the tenant untouched, and the pre-restore snapshot undoes a
+  restore.
 - **Export coverage.** Export format 2 carries the auth tables (never live
   sessions or one-time tokens, and only when asked for by name), KV namespaces
   and storage objects, large KV values and objects over 32 MiB included; staged
