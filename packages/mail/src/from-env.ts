@@ -21,7 +21,7 @@ import type { CloudflareSend } from "./cloudflare-transport";
 import createMailer from "./create-mailer";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./inbound/shard";
 import { applyJurisdiction, DEFAULT_ROOT_SHARD, postShardRpc } from "./inbound/shard";
-import type { Mailer, SendPayload } from "./types";
+import type { Mailer, QueueLike, SendPayload } from "./types";
 
 /** A Worker `env` projected as a plain record (vars, secrets, and bindings are `unknown`-valued). */
 type MailEnv = Record<string, unknown>;
@@ -45,6 +45,8 @@ interface FromEnvOptions {
      * that contradicts the schema's throws.
      */
     jurisdiction?: DurableObjectJurisdiction;
+    /** Cloudflare Queue binding backing `mailer.queue()`; without it `queue()` throws outside capture mode. */
+    queue?: QueueLike;
     /** Shard the captured-mail inbox lives on; override if your worker sets a custom `defaultShardKey`. */
     rootShard?: string;
 }
@@ -62,7 +64,8 @@ const requireStringEnv = (env: MailEnv, name: string): string => {
 /**
  * Whether outbound mail should be captured (into the studio inbox) rather than
  * delivered. Explicit `LUNORA_MAIL_CAPTURE` (`"1"`/`"true"` vs `"0"`/`"false"`)
- * always wins; unset, capture is on only in a development environment. It does
+ * always wins; unset, capture is on only when every set environment var (`CF_ENV`,
+ * `ENVIRONMENT`, `NODE_ENV`, `WORKER_ENV`) names a development one. It does
  * NOT fall back to "no SEND_EMAIL binding ⇒ capture" — a production deploy that
  * forgot the binding must fail loudly on send, not silently swallow mail.
  */
@@ -89,11 +92,12 @@ const shouldCaptureMail = (env: MailEnv): boolean => {
         );
     }
 
-    return ENVIRONMENT_VARS.some((key) => {
-        const value = env[key];
+    // Every environment var that is set must look like dev. `some` captured a
+    // production deploy that also carried a leftover dev `NODE_ENV`,
+    // swallowing its password resets and OTPs; a non-dev value vetoes capture.
+    const values = ENVIRONMENT_VARS.map((key) => env[key]).filter((value): value is string => typeof value === "string" && value !== "");
 
-        return typeof value === "string" && DEV_ENVIRONMENT_PATTERN.test(value);
-    });
+    return values.length > 0 && values.every((value) => DEV_ENVIRONMENT_PATTERN.test(value));
 };
 
 /**
@@ -178,17 +182,17 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
     const from = requireStringEnv(env, "MAIL_FROM");
 
     if (shouldCaptureMail(env)) {
-        return createMailer({ from, transport: createCaptureTransport(createCaptureSink(env, options.rootShard, options.jurisdiction)) });
+        return createMailer({ from, queue: options.queue, transport: createCaptureTransport(createCaptureSink(env, options.rootShard, options.jurisdiction)) });
     }
 
     if (options.cloudflareSend) {
-        return createMailer({ cloudflareSend: options.cloudflareSend, from });
+        return createMailer({ cloudflareSend: options.cloudflareSend, from, queue: options.queue });
     }
 
     const apiKey = typeof env["RESEND_API_KEY"] === "string" ? env["RESEND_API_KEY"] : undefined;
 
     if (apiKey !== undefined && apiKey !== "") {
-        return createMailer({ apiKey, from });
+        return createMailer({ apiKey, from, queue: options.queue });
     }
 
     throw new LunoraError(

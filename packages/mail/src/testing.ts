@@ -55,7 +55,16 @@ const sleep = async (ms: number): Promise<void> =>
         setTimeout(resolve, ms);
     });
 
-const recipients = (mail: CapturedMail): string[] => (Array.isArray(mail.to) ? mail.to : [mail.to]);
+/** The angle-bracketed mailbox of a `Name <addr>` recipient. */
+const MAILBOX = /<([^<>]*)>\s*$/u;
+
+/**
+ * Bare, lowercased mailbox of a recipient, so `waitForMail({ to: "bob@x.test" })`
+ * matches a message sent to `Bob <Bob@x.test>`.
+ */
+const mailbox = (address: string): string => (MAILBOX.exec(address)?.[1] ?? address).trim().toLowerCase();
+
+const recipients = (mail: CapturedMail): string[] => (Array.isArray(mail.to) ? mail.to : [mail.to]).map((address) => mailbox(address));
 
 /** Read the captured-mail inbox (newest first). */
 const listCapturedMail = async (options: InboxOptions): Promise<CapturedMail[]> => {
@@ -90,8 +99,9 @@ const waitForMail = async (options: WaitForMailOptions): Promise<CapturedMail> =
     for (;;) {
         // eslint-disable-next-line no-await-in-loop -- polling: each round must read, then wait, before the next read.
         const entries = await listCapturedMail(options);
+        const to = mailbox(options.to);
         const match = entries.find(
-            (mail) => recipients(mail).includes(options.to) && (options.subjectMatch === undefined || mail.subject.includes(options.subjectMatch)),
+            (mail) => recipients(mail).includes(to) && (options.subjectMatch === undefined || mail.subject.includes(options.subjectMatch)),
         );
 
         if (match) {
@@ -113,6 +123,13 @@ const waitForMail = async (options: WaitForMailOptions): Promise<CapturedMail> =
 // http(s) URL up to the first whitespace, quote, or angle bracket.
 const URL_PATTERN = /https?:\/\/[^\s"'<>)]+/g;
 
+/**
+ * An http(s) `href` value. Html is searched by `href` only: `@react-email/render`
+ * opens every document with an XHTML DOCTYPE whose `w3.org` DTD URL would
+ * otherwise be the first link in every message.
+ */
+const HREF_PATTERN = /href\s*=\s*["']?(https?:\/\/[^\s"'<>]+)/giu;
+
 /** Ampersand entity (named + numeric decimal/hex forms) an HTML renderer escapes `&` to. */
 const AMPERSAND_ENTITY = /&(?:amp|#0*38|#x0*26);/giu;
 
@@ -131,12 +148,10 @@ const decodeUrlEntities = (url: string): string => url.replaceAll(AMPERSAND_ENTI
  * which disambiguates the action link from a logo/footer URL.
  */
 const extractLink = (mail: CapturedMail, options: { match?: string } = {}): string => {
-    for (const source of [mail.html, mail.text]) {
-        if (source === undefined) {
-            continue;
-        }
+    const htmlLinks = [...(mail.html ?? "").matchAll(HREF_PATTERN)].map((match) => match[1] ?? "");
+    const textLinks = mail.text?.match(URL_PATTERN) ?? [];
 
-        const matches = source.match(URL_PATTERN) ?? [];
+    for (const matches of [htmlLinks, textLinks]) {
         const link = matches.find((candidate) => options.match === undefined || candidate.includes(options.match));
 
         if (link !== undefined) {
