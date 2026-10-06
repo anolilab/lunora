@@ -1,3 +1,15 @@
+## @lunora/runtime [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.178...@lunora/runtime@1.0.0-alpha.179) (2026-10-06)
+
+### Features
+
+* **runtime:** report shard errors with their stack to any tracker ([#1000](https://github.com/anolilab/lunora/issues/1000)) ([a178d5a](https://github.com/anolilab/lunora/commit/a178d5a6bb1f3134b897e9237377734f0348ea5d))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.123
+* **@lunora/do:** upgraded to 1.0.0-alpha.196
+
 ## @lunora/runtime [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.177...@lunora/runtime@1.0.0-alpha.178) (2026-10-06)
 
 ### Features
