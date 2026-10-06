@@ -1,5 +1,3 @@
-import type { HostdFrame } from "../src/hostd/protocol";
-import { decodeBoxMessage } from "../src/hostd/protocol";
 import { bench, describe } from "vitest";
 
 import type { BoxKey } from "../__tests__/support/box-session-fakes";
@@ -8,6 +6,8 @@ import { memoryStore } from "../__tests__/support/memory-store";
 import { JobRegistry, MAX_JOBS_IN_FLIGHT } from "../src/boxes/jobs";
 import type { SessionAttachment, SessionPorts } from "../src/boxes/session";
 import { FRAME_BUCKET, livenessOf, openSession, receiveFrame } from "../src/boxes/session";
+import type { HostdFrame } from "../src/hostd/protocol";
+import { decodeBoxMessage } from "../src/hostd/protocol";
 
 /**
  * `BoxSessionDO`'s hot paths (plan 458 §8 perf watch), in plain node — no

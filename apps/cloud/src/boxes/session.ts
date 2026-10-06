@@ -26,7 +26,6 @@
  */
 import type { BoxResources, BoxVersions, FleetSummary, HostdFrame, ProgressMessage, ReportMessage, ResultMessage } from "../hostd/protocol";
 import { challengeSigningPayload, decodeBoxMessage, negotiateProtocolVersion, peekProtocolVersion } from "../hostd/protocol";
-
 import { randomBase64Url, verifyBoxSignature } from "./encoding";
 
 /** Where a socket is in the handshake. */

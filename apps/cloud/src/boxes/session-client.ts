@@ -5,7 +5,6 @@
  * but the box's own WebSocket upgrade (`fetch`) to the object.
  */
 import type { HostdJob } from "../hostd/protocol";
-
 import type { JobOutcome } from "./jobs";
 
 /** What the control plane calls on a box's session. `BoxSessionDO` implements it; a stub of it answers it over RPC. */

@@ -1,4 +1,3 @@
-import type { CloudMessage, DeployJob } from "../src/hostd/protocol";
 import { describe, expect, it, vi } from "vitest";
 
 import { randomBase64Url } from "../src/boxes/encoding";
@@ -8,6 +7,7 @@ import { FRAME_BUCKET, HANDSHAKE_TIMEOUT_MS, livenessOf, openSession, receiveFra
 import { boxSession } from "../src/boxes/session-client";
 import { CONFIG_REFRESH_MS, TICK_MS } from "../src/boxes/session-do";
 import { hashDeployKey } from "../src/deploy/keys";
+import type { CloudMessage, DeployJob } from "../src/hostd/protocol";
 import { decryptSecret, encryptSecret } from "../src/secrets/crypto";
 import type { BoxKey, FakeSocket, FakeState } from "./support/box-session-fakes";
 import { authFrame, boxKey, boxRow, fakeSocket, fakeState, handshake, helloFrame, namespaceOver, TestBoxSession } from "./support/box-session-fakes";

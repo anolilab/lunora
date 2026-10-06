@@ -18,12 +18,11 @@
  * conformance suite drives it with a fake box. {@link celldVpsDriverFromEnv} is
  * the one place those ports are read off the Worker env.
  */
-import type { DeployJob, HostdJob } from "../../hostd/protocol";
-
 import { tenantSender } from "../../backup/tenant-transport";
 import type { BoxSession, BoxSessionNamespace } from "../../boxes/session-client";
 import { boxSession } from "../../boxes/session-client";
 import { boxDomainOf, boxReleaseUrlOf } from "../../boxes/urls";
+import type { DeployJob, HostdJob } from "../../hostd/protocol";
 import type { ConvergeOptions, TargetDriver, TargetFleet } from "../driver";
 import type { BoxHost } from "../placement";
 import type { BoxDnsEnvironment } from "./dns";
