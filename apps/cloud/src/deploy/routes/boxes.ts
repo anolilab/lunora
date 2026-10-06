@@ -12,8 +12,6 @@
  * - `GET /v1/boxes/releases/:deploymentId` — `boxKey`: a box downloads a stored
  *   release, with a request signed by its key (plan 458 D6).
  */
-import { isProtocolId } from "../../hostd/protocol";
-
 import { internal } from "../../../lunora/_generated/api.js";
 import type { EnrolResult } from "../../../lunora/boxes";
 import { createDiagnoseCollector, DIAGNOSE_TIMEOUT_MS } from "../../boxes/diagnose";
@@ -24,6 +22,7 @@ import { boxSession, retireBox } from "../../boxes/session-client";
 import type { VerifiedBoxRequest } from "../../boxes/signed-request";
 import { verifyBoxRequest } from "../../boxes/signed-request";
 import { boxDomainOf } from "../../boxes/urls";
+import { isProtocolId } from "../../hostd/protocol";
 import type { BoxDnsEnvironment } from "../../targets/celld-vps/dns";
 import { boxDnsFromEnv, MAX_DNS_ERROR, removeBoxDns, syncBoxDns } from "../../targets/celld-vps/dns";
 import { sha256Hex } from "../keys";

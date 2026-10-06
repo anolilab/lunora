@@ -16,7 +16,6 @@
  * longer than it has existed.
  */
 import type { BoxVersions } from "../hostd/protocol";
-
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { AlertChannel, DeployRule } from "../telemetry/alerts";

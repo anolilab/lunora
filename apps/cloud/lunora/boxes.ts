@@ -1,5 +1,3 @@
-import type { BoxVersions, FleetSummary } from "../src/hostd/protocol";
-import { isVersion } from "../src/hostd/protocol";
 import { LunoraError } from "@lunora/server";
 
 import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
@@ -9,6 +7,8 @@ import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
 import { newestStableRelease } from "../src/boxes/hostd-releases";
 import { boxDomainOf } from "../src/boxes/urls";
 import { sha256Hex } from "../src/deploy/keys";
+import type { BoxVersions, FleetSummary } from "../src/hostd/protocol";
+import { isVersion } from "../src/hostd/protocol";
 import { storedTarget } from "../src/provision-contract";
 import { placedOnOf } from "../src/targets/placement";
 import type { Id } from "./_generated/dataModel.js";
