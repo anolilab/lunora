@@ -1,0 +1,133 @@
+"name": "hostd Cargo"
+
+# The Rust daemon `lunora-hostd` (apps/hostd/daemon): tests, clippy and rustfmt, and
+# `cargo deny` over Cargo.lock. Path-filtered on what the crate builds from: its own
+# sources, the release keys build.rs compiles in, and the golden protocol frames its
+# tests decode. The integration lane (test.yml `test-hostd`) and the release build
+# (hostd-release.yml) build the same crate.
+#
+# `push` runs only to warm the Cargo cache from trusted refs; pull requests restore it
+# and never save, so a fork cannot poison it.
+"on": # yamllint disable-line rule:truthy
+    "pull_request":
+        "types": ["opened", "synchronize", "reopened"]
+        "branches": ["main", "alpha", "next", "beta", "feat/**", "fix/**"]
+        "paths":
+            - "apps/hostd/daemon/**"
+            - "apps/hostd/trusted-release-keys.json"
+            - "protocol/hostd/fixtures/**"
+            - ".github/workflows/hostd-cargo.yml"
+    "push":
+        "branches": ["main", "alpha"]
+        "paths":
+            - "apps/hostd/daemon/**"
+            - "apps/hostd/trusted-release-keys.json"
+            - "protocol/hostd/fixtures/**"
+            - ".github/workflows/hostd-cargo.yml"
+    "workflow_dispatch": # yamllint disable-line rule:empty-values
+
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}"
+    "cancel-in-progress": true
+
+"permissions": {}
+
+"env":
+    "CARGO_INCREMENTAL": "0"
+    "CARGO_TERM_COLOR": "always"
+
+"jobs":
+    "test":
+        "name": "Test, clippy and rustfmt"
+        "runs-on": "ubuntu-24.04"
+        "timeout-minutes": 20
+        "permissions":
+            "contents": "read" # for checkout
+        "defaults":
+            "run":
+                "working-directory": "apps/hostd/daemon"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # apps/hostd/daemon/rust-toolchain.toml pins the same channel and components.
+            - "name": "Install Rust stable toolchain"
+              "uses": "dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9" # v1
+              "with":
+                  "toolchain": "stable"
+                  "components": "rustfmt, clippy"
+
+            - "name": "Restore Cargo cache"
+              "id": "cargo-cache"
+              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+              "with":
+                  "path": |
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                      apps/hostd/daemon/target
+                  "key": "hostd-cargo-test-${{ hashFiles('apps/hostd/daemon/Cargo.lock', 'apps/hostd/daemon/rust-toolchain.toml') }}"
+                  "restore-keys": |
+                      hostd-cargo-test-
+
+            - "name": "Check formatting"
+              "run": "cargo fmt --check"
+
+            - "name": "Run cargo clippy"
+              "run": "cargo clippy --all-targets --locked -- -D warnings"
+
+            - "name": "Run cargo test"
+              "run": "cargo test --locked"
+
+            - "name": "Save Cargo cache"
+              "if": "github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true'"
+              "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+              "with":
+                  "path": |
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                      apps/hostd/daemon/target
+                  "key": "${{ steps.cargo-cache.outputs.cache-primary-key }}"
+
+    # Licenses (deny.toml says why each is allowed), RustSec advisories, bans and sources.
+    "deny":
+        "name": "Cargo Deny"
+        "runs-on": "ubuntu-24.04"
+        "timeout-minutes": 15
+        "permissions":
+            "contents": "read" # for checkout
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Install Rust toolchain"
+              "uses": "oxc-project/setup-rust@3d6fb132fbe7cdcb66bf8ec193911c2945369d12" # v1.0.17
+              "with":
+                  "restore-cache": false
+                  "tools": "cargo-deny"
+
+            - "name": "Run cargo deny"
+              "working-directory": "apps/hostd/daemon"
+              "run": "cargo deny check"
+
+    # Single required check: green when both jobs passed.
+    "hostd-cargo-required-check":
+        "name": "Check hostd Cargo Run"
+        "needs": ["test", "deny"]
+        "if": "always()"
+        "runs-on": "ubuntu-24.04"
+        "timeout-minutes": 1
+        "permissions": {}
+        "steps":
+            - "name": "Fail if a dependency failed or was cancelled"
+              "if": "contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')"
+              "run": "echo 'A dependent job failed or was cancelled.' && exit 1"

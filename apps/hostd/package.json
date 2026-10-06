@@ -23,9 +23,6 @@
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "apps/hostd"
     },
-    "bin": {
-        "lunora-hostd": "./dist/bin.mjs"
-    },
     "files": [
         "./dist",
         "README.md",
@@ -58,26 +55,24 @@
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "build:sea": "node scripts/build-sea.mjs",
+        "build:daemon": "cargo build --release --locked --manifest-path daemon/Cargo.toml",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
         "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
-    },
-    "dependencies": {
-        "@lunora/config": "workspace:*",
-        "aws4fetch": "catalog:storage"
+        "test:coverage": "vitest run --coverage",
+        "test:daemon": "cargo test --locked --manifest-path daemon/Cargo.toml"
     },
     "devDependencies": {
+        "@lunora/config": "workspace:*",
         "@types/node": "catalog:types",
         "@types/ws": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "aws4fetch": "catalog:storage",
         "esbuild": "catalog:build",
-        "postject": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "ws": "catalog:test"

@@ -6,8 +6,8 @@
  * - `LUNORA_CELLD_BIN` — celld (the pinned v0.6.0 release asset);
  * - `LUNORA_CADDY_BIN` — Caddy built with `caddy-ratelimit`;
  * - `LUNORA_HOSTD_S3_ENDPOINT` — an S3-compatible endpoint (moto in CI);
- * - `LUNORA_HOSTD_BIN` — the `lunora-hostd` single executable; without it the
- * lane runs `node dist/bin.mjs` (build the package first);
+ * - `LUNORA_HOSTD_BIN` — the `lunora-hostd` binary (CI: the cargo release
+ * build); without it the lane builds the debug one (`helpers/hostd-binary.ts`);
  * - `LUNORA_HOSTD_ISOLATION=1` — root on a systemd host (the CI runner, under
  * sudo): the box is set up with install.sh's own functions at the real paths
  * (`/opt`, `/etc`, `/var/lib/lunora-hostd`), hostd runs under the real unit,
@@ -22,6 +22,8 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { buildHostd } from "../helpers/hostd-binary";
 
 const PACKAGE_DIRECTORY = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -133,7 +135,7 @@ const writeJson = (path: string, value: unknown): void => {
  * which keeps each binary at the path a workstation's application firewall
  * already knows.
  */
-const installRelease = (installDirectory: string, hostd: string | undefined, place: "copy" | "link"): void => {
+const installRelease = (installDirectory: string, place: "copy" | "link"): void => {
     const release = join(installDirectory, LANE_RELEASE);
     const put = (source: string, name: string): void => {
         if (place === "copy") {
@@ -147,16 +149,7 @@ const installRelease = (installDirectory: string, hostd: string | undefined, pla
     mkdirSync(release, { recursive: true });
     put(required("LUNORA_CELLD_BIN"), "celld");
     put(required("LUNORA_CADDY_BIN"), "caddy");
-
-    if (hostd === undefined) {
-        // No single executable: the built bundle on this machine's node.
-        writeFileSync(join(release, "lunora-hostd"), `#!/bin/sh\nexec "${process.execPath}" "${join(PACKAGE_DIRECTORY, "dist", "bin.mjs")}" "$@"\n`, {
-            mode: 0o755,
-        });
-    } else {
-        put(hostd, "lunora-hostd");
-    }
-
+    put(process.env["LUNORA_HOSTD_BIN"] ?? buildHostd(), "lunora-hostd");
     writeFileSync(join(release, "manifest.json"), "{}\n");
     symlinkSync(LANE_RELEASE, join(installDirectory, "current"));
 };
@@ -175,7 +168,7 @@ const localBox = async (options: LaneBoxOptions): Promise<LaneBox> => {
     mkdirSync(installDirectory, { recursive: true });
 
     if (options.layout === undefined) {
-        installRelease(installDirectory, process.env["LUNORA_HOSTD_BIN"], "link");
+        installRelease(installDirectory, "link");
     } else {
         await options.layout(installDirectory);
     }
@@ -279,7 +272,7 @@ const systemdBox = async (options: LaneBoxOptions): Promise<LaneBox> => {
     mustSucceed(await installFunctions("install_packages; create_users; create_directories"), "install_packages / create_users / create_directories");
 
     if (options.layout === undefined) {
-        installRelease("/opt/lunora-hostd", required("LUNORA_HOSTD_BIN"), "copy");
+        installRelease("/opt/lunora-hostd", "copy");
     } else {
         await options.layout("/opt/lunora-hostd");
     }

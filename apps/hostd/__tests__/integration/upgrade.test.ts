@@ -10,12 +10,13 @@
  * `LUNORA_HOSTD_ISOLATION=1`, the lane itself otherwise) to start N+1, which
  * brings the fleet and Caddy back.
  *
- * Both releases' `lunora-hostd` are builds of this source that trust a key
- * the test generates (`helpers/test-release.ts`) — a shipped binary trusts
- * only the keys compiled into it — each run on this machine's node. celld
- * and Caddy are the real binaries the lane runs.
+ * Both releases' `lunora-hostd` are debug builds of the Rust daemon that
+ * trust the test release key (`helpers/test-release.ts`) — a shipped binary
+ * trusts only the keys compiled into it. celld and Caddy are the real
+ * binaries the lane runs. The artifact server's CA (`helpers/test-tls.ts`)
+ * reaches the daemon as `SSL_CERT_FILE`, which rustls-platform-verifier
+ * reads on Linux in place of the system store.
  */
-import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import type { Server } from "node:https";
@@ -28,14 +29,18 @@ import { gzipSync } from "node:zlib";
 import { AwsClient } from "aws4fetch";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { currentPlatform } from "../../src/daemon/release-install";
 import type { HelloMessage } from "../../src/wire/types";
 import { freePort } from "../daemon/helpers/box";
 import { FakeControlPlane } from "../daemon/helpers/fake-control-plane";
+import { buildHostd } from "../helpers/hostd-binary";
 import type { TestReleaseKey } from "../helpers/test-release";
-import { buildTestHostd, createTestReleaseKey, signTestRelease } from "../helpers/test-release";
+import { createTestReleaseKey, signTestRelease } from "../helpers/test-release";
+import { createTestTls } from "../helpers/test-tls";
 import type { LaneBox } from "./lane";
 import { createLaneBox, ISOLATED, LANE_CREDENTIALS, patchConfig, required, run, SYSTEM_PATH, tool } from "./lane";
+
+/** This machine's release platform, when it is one. */
+const PLATFORM = process.platform === "linux" ? ({ arm64: "linux-arm64", x64: "linux-x64" } as Record<string, string>)[process.arch] : undefined;
 
 const ALIAS = "lane-live";
 
@@ -97,7 +102,7 @@ const pollUntil = async <T>(read: () => Promise<T> | T, done: (value: T) => bool
 
 describe.sequential("lunora-hostd upgrades a live box from release N to N+1", () => {
     const endpoint = required("LUNORA_HOSTD_S3_ENDPOINT");
-    const platform = currentPlatform() ?? "linux-x64";
+    const platform = PLATFORM ?? "linux-x64";
     let plane: FakeControlPlane;
     let box: LaneBox;
     let key: TestReleaseKey;
@@ -115,54 +120,26 @@ describe.sequential("lunora-hostd upgrades a live box from release N to N+1", ()
         work = ISOLATED ? "/opt/lunora-hostd-lane" : mkdtempSync(join(tmpdir(), "lunora-hostd-upgrade-"));
         rmSync(work, { force: true, recursive: true });
         mkdirSync(join(work, "n"), { recursive: true });
-        mkdirSync(join(work, "n1"), { recursive: true });
         chmodSync(work, 0o755);
 
         // Two builds of this source, N and N+1, trusting the test's key.
-        for (const [directory, version] of [
-            ["n", VERSION_N],
-            ["n1", VERSION_N1],
-        ] as const) {
-            // eslint-disable-next-line no-await-in-loop -- two builds, one after the other
-            await buildTestHostd({
-                bundlePath: join(work, directory, "lunora-hostd.cjs"),
-                launcherPath: join(work, directory, "launcher"),
-                trustedKeys: key.trustedKeys,
-                version,
-            });
-        }
+        const hostdN = buildHostd({ trustedKeys: key.trustedKeys, version: VERSION_N });
+        const hostdN1 = buildHostd({ trustedKeys: key.trustedKeys, version: VERSION_N1 });
 
-        // N+1's artifacts, over HTTPS from a certificate the daemon is told to trust.
-        execFileSync(tool("openssl"), [
-            "req",
-            "-x509",
-            "-newkey",
-            "ec",
-            "-pkeyopt",
-            "ec_paramgen_curve:prime256v1",
-            "-nodes",
-            "-keyout",
-            join(work, "tls.key"),
-            "-out",
-            join(work, "tls.pem"),
-            "-days",
-            "1",
-            "-subj",
-            "/CN=127.0.0.1",
-            "-addext",
-            "subjectAltName=IP:127.0.0.1",
-        ]);
-        chmodSync(join(work, "tls.pem"), 0o644);
+        // N+1's artifacts, over HTTPS from a certificate signed by a CA the daemon is told to trust.
+        const tls = createTestTls(work, tool("openssl"));
+
+        chmodSync(tls.caFile, 0o644);
 
         const celld = readFileSync(required("LUNORA_CELLD_BIN"));
         const caddy = readFileSync(required("LUNORA_CADDY_BIN"));
         const served = new Map<string, Buffer>([
             ["/n1/caddy", caddy],
             ["/n1/celld", gzipSync(celld)],
-            ["/n1/lunora-hostd", readFileSync(join(work, "n1", "launcher"))],
+            ["/n1/lunora-hostd", readFileSync(hostdN1)],
         ]);
 
-        const server = createHttpsServer({ cert: readFileSync(join(work, "tls.pem")), key: readFileSync(join(work, "tls.key")) }, (incoming, outgoing) => {
+        const server = createHttpsServer({ cert: readFileSync(tls.cert), key: readFileSync(tls.key) }, (incoming, outgoing) => {
             const bytes = served.get(incoming.url ?? "");
 
             outgoing.writeHead(bytes === undefined ? 404 : 200).end(bytes);
@@ -184,15 +161,15 @@ describe.sequential("lunora-hostd upgrades a live box from release N to N+1", ()
         plane.manifests.set(RELEASE_N1, JSON.stringify(envelopeN1));
 
         box = await createLaneBox({
-            environment: { NODE_EXTRA_CA_CERTS: join(work, "tls.pem") },
+            environment: { SSL_CERT_FILE: tls.caFile },
             // Release N, installed as install.sh installs one: by its own install-release.
             layout: async (installDirectory) => {
                 const from = join(work, "n", "download");
                 const manifestN = join(work, "n", "manifest.json");
-                const launcherN = readFileSync(join(work, "n", "launcher"));
+                const bytesN = readFileSync(hostdN);
 
                 mkdirSync(from, { recursive: true });
-                writeFileSync(join(from, "lunora-hostd"), launcherN);
+                writeFileSync(join(from, "lunora-hostd"), bytesN);
                 copyFileSync(required("LUNORA_CELLD_BIN"), join(from, "celld"));
                 copyFileSync(required("LUNORA_CADDY_BIN"), join(from, "caddy"));
                 writeFileSync(
@@ -201,16 +178,14 @@ describe.sequential("lunora-hostd upgrades a live box from release N to N+1", ()
                         signTestRelease(key, RELEASE_N, "https://artifacts.invalid/n", {
                             caddy: { bytes: caddy, version: "v2.11.6" },
                             celld: { bytes: celld, version: "v0.6.0" },
-                            hostd: { bytes: launcherN, version: VERSION_N },
+                            hostd: { bytes: bytesN, version: VERSION_N },
                         }),
                     ),
                 );
 
-                const installed = await run(
-                    join(work, "n", "launcher"),
-                    ["install-release", manifestN, "--from", from, "--install-dir", installDirectory, "--platform", platform],
-                    { PATH: SYSTEM_PATH },
-                );
+                const installed = await run(hostdN, ["install-release", manifestN, "--from", from, "--install-dir", installDirectory, "--platform", platform], {
+                    PATH: SYSTEM_PATH,
+                });
 
                 if (installed.code !== 0) {
                     throw new Error(`install-release of release N failed:\n${installed.output}`);

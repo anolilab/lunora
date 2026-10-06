@@ -4,6 +4,6 @@
  *
  * This entry re-exports the wire protocol (`@lunora/hostd/protocol`). The
  * daemon itself — enrolment, the session, the supervisor and the jobs — is the
- * `lunora-hostd` binary (`src/bin.ts`), not a library surface.
+ * `lunora-hostd` binary, written in Rust (`daemon/`), not a library surface.
  */
 export * from "./protocol";

@@ -36,6 +36,8 @@ export default createConfig(
             "**/README.md",
             "**/prettier.config.js",
             "**/eslint.config.js",
+            // The Rust daemon: cargo's own toolchain (clippy, rustfmt) lints it, and its target/ is build output.
+            "daemon/**",
         ],
     },
     // Scoped framework / Web-platform allowances (NOT blanket rule-off):

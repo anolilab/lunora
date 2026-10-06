@@ -1,40 +1,41 @@
 /**
- * `lunora-hostd enrol` through the binary's own entry point, against the fake
- * control plane: what it sends, what it writes, and that the token never
- * appears in anything it prints.
+ * `lunora-hostd enrol`, the Rust binary, against the fake control plane: what
+ * it sends, what it writes, and that the token never appears in anything it
+ * prints. (Picking the public addresses is tested in `daemon/src/daemon/enrol.rs`.)
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { loadHostdConfig, permissionsOf } from "../../src/daemon/config";
-import { publicAddresses } from "../../src/daemon/enrol";
-import { runBin } from "../../src/run-bin";
+import { buildHostd, execHostd } from "../helpers/hostd-binary";
 import { writeFakeBinaries } from "./helpers/fake-binaries";
 import { FakeControlPlane } from "./helpers/fake-control-plane";
 
 const TOKEN = `lbe_${"a1".repeat(32)}`;
 
+/** A file's permission bits. */
+const permissionsOf = (mode: number): number => mode % 0o1000;
+
 describe("lunora-hostd enrol", () => {
+    let binary: string;
     let plane: FakeControlPlane;
     let root: string;
     let output: { stderr: string; stdout: string };
 
-    const run = async (argv: string[], environment: NodeJS.ProcessEnv = {}): Promise<number> =>
-        runBin(
-            argv,
-            {
-                stderr: (text) => {
-                    output.stderr += text;
-                },
-                stdout: (text) => {
-                    output.stdout += text;
-                },
-            },
-            { environment: { AWS_ACCESS_KEY_ID: "AKIATEST", AWS_SECRET_ACCESS_KEY: "s3cr3t", ...environment } },
-        );
+    const run = async (argv: string[], environment: Record<string, string> = {}): Promise<number | null> => {
+        const result = await execHostd(binary, argv, { AWS_ACCESS_KEY_ID: "AKIATEST", AWS_SECRET_ACCESS_KEY: "s3cr3t", ...environment });
+
+        output.stderr += result.stderr;
+        output.stdout += result.stdout;
+
+        return result.code;
+    };
+
+    beforeAll(() => {
+        binary = buildHostd();
+    }, 600_000);
 
     const enrolArgs = (...extra: string[]): string[] => [
         "enrol",
@@ -81,7 +82,7 @@ describe("lunora-hostd enrol", () => {
         expect(request).toMatchObject({ ipv4: "203.0.113.7", singleTrust: false, token: TOKEN, versions: { caddy: "v2.11.6", celld: "0.6.0" } });
         expect(request?.["publicKey"]).toMatch(/^[\w-]{43}$/u);
 
-        const config = loadHostdConfig(join(root, "etc", "config.json"));
+        const config = JSON.parse(readFileSync(join(root, "etc", "config.json"), "utf8")) as { credentialsFile: string; keyFile: string };
 
         expect(config).toMatchObject({
             boxId: plane.boxId,
@@ -161,23 +162,5 @@ describe("lunora-hostd enrol", () => {
 
         await expect(run(["enrol", TOKEN])).resolves.toBe(1);
         expect(output.stderr).not.toContain(TOKEN);
-    });
-});
-
-describe(publicAddresses, () => {
-    it("picks the first public IPv4 and global IPv6, never a private or loopback one", () => {
-        expect.assertions(1);
-
-        const entry = (address: string, family: "IPv4" | "IPv6", internal = false) => {
-            return { address, cidr: null, family, internal, mac: "00:00:00:00:00:00", netmask: "" };
-        };
-
-        expect(
-            publicAddresses({
-                // eslint-disable-next-line sonarjs/no-hardcoded-ip -- private and link-local fixtures the detection must skip
-                eth0: [entry("10.0.0.4", "IPv4"), entry("fe80::1", "IPv6"), entry("198.51.100.20", "IPv4"), entry("2001:db8::20", "IPv6")],
-                lo: [entry("127.0.0.1", "IPv4", true)],
-            } as never),
-        ).toStrictEqual({ ipv4: "198.51.100.20", ipv6: "2001:db8::20" });
     });
 });

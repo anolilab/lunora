@@ -1,0 +1,3 @@
+# This repository's code style uses long lines, so rustfmt keeps them instead of wrapping at 100.
+max_width = 160
+use_small_heuristics = "Max"

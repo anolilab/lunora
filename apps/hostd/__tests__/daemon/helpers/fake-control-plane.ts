@@ -476,10 +476,14 @@ class FakeControlPlane {
     }
 
     private async s3(request: IncomingMessage, url: { pathname: string; searchParams: URLSearchParams }): Promise<{ body: string; status: number }> {
-        const bucket = decodeURIComponent(url.pathname.slice("/s3/".length));
+        // `/s3/{bucket}` or `/s3/{bucket}/`: path-style S3 answers both.
+        const bucket = decodeURIComponent(url.pathname.slice("/s3/".length)).replace(/\/$/u, "");
         const keys = this.objects.get(bucket) ?? new Set<string>();
 
-        if (request.headers.authorization?.startsWith("AWS4-HMAC-SHA256") !== true) {
+        // SigV4 in a header, or presigned in the query (as the daemon signs): either names the algorithm.
+        const signed = request.headers.authorization?.startsWith("AWS4-HMAC-SHA256") === true || url.searchParams.get("X-Amz-Algorithm") === "AWS4-HMAC-SHA256";
+
+        if (!signed) {
             return { body: "<Error><Code>AccessDenied</Code></Error>", status: 403 };
         }
 
