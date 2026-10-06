@@ -1,6 +1,6 @@
 {
     "name": "@lunora/do",
-    "version": "1.0.0-alpha.197",
+    "version": "1.0.0-alpha.198",
     "description": "Lunora Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO",
     "keywords": [
         "cloudflare",
@@ -62,10 +62,10 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.50",
-        "@lunora/observability": "1.0.0-alpha.124",
+        "@lunora/observability": "1.0.0-alpha.125",
         "@lunora/platform": "1.0.0-alpha.56",
         "@lunora/platform-cloudflare": "1.0.0-alpha.75",
-        "@lunora/shard-engine": "1.0.0-alpha.114",
+        "@lunora/shard-engine": "1.0.0-alpha.115",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
