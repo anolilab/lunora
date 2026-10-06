@@ -6,6 +6,7 @@
  * `LUNORA_ADMIN_TOKEN`. `--prod` (with an explicit `--url`) is the guardrail
  * against accidentally targeting localhost in production scripts.
  */
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
@@ -18,7 +19,7 @@ import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { tuiConfirm } from "../../util/tui-prompts";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
 import { resolveTables } from "./export";
-import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
+import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportStagedReplace, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
@@ -379,15 +380,15 @@ const confirmReplace = async (
 };
 
 /**
- * Resolve a `--replace` run: confirm it, then name the URL its first request
- * goes to and the tables it is scoped to (`undefined`: the whole schema). An
- * append run resolves to neither.
+ * Resolve a `--replace` run: confirm it, then name its staged session's URLs
+ * and the tables it is scoped to (`undefined`: the whole schema). An append run
+ * resolves to neither.
  */
 const planReplace = async (
     options: ImportCommandOptions,
     baseUrl: string,
     requestUrl: string,
-): Promise<{ refused: ImportCommandResult } | { replaceUrl?: string; scope?: ReadonlySet<string> }> => {
+): Promise<{ refused: ImportCommandResult } | { replace?: ImportStagedReplace; scope?: ReadonlySet<string> }> => {
     if (options.replace !== true) {
         return {};
     }
@@ -399,9 +400,16 @@ const planReplace = async (
         return { refused };
     }
 
-    return tables === undefined
-        ? { replaceUrl: `${requestUrl}?mode=replace` }
-        : { replaceUrl: `${requestUrl}?mode=replace&tables=${encodeURIComponent(tables.join(","))}`, scope: new Set(tables) };
+    const session = `cli-${randomUUID()}`;
+    const scoped = tables === undefined ? "" : `&tables=${encodeURIComponent(tables.join(","))}`;
+    const replace: ImportStagedReplace = {
+        abortUrl: `${requestUrl}/abort`,
+        commitUrl: `${requestUrl}/commit`,
+        session,
+        stageUrl: `${requestUrl}?mode=replace${scoped}&stage=${session}`,
+    };
+
+    return tables === undefined ? { replace } : { replace, scope: new Set(tables) };
 };
 
 /**
@@ -786,6 +794,39 @@ const scanOnly = async (source: ImportSource, cwd: string, options: ImportComman
     return { body: undefined, code: 0, inserted: 0 };
 };
 
+/**
+ * Run the drain inside a replace's staged session: refuse a worker without one
+ * first, commit once every batch staged, abort when the drain failed. A plain
+ * append is just the drain. Returns the failure, as the drain does.
+ */
+const drainReplace = async (batcher: ImportBatcher, drain: () => Promise<unknown>, logger: Logger): Promise<unknown> => {
+    try {
+        await batcher.start();
+    } catch (error: unknown) {
+        logger.error(`import: ${error instanceof Error ? error.message : String(error)}`);
+
+        return error;
+    }
+
+    const failure = await drain();
+
+    if (failure !== undefined) {
+        await batcher.abort();
+
+        return failure;
+    }
+
+    try {
+        await batcher.finish();
+
+        return undefined;
+    } catch (error: unknown) {
+        logger.error(`import: ${error instanceof Error ? error.message : String(error)}`);
+
+        return error;
+    }
+};
+
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     // Route the human/progress channel once, here: every helper below is handed
@@ -849,12 +890,11 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // parity check after the run compares that against what the endpoint says it
     // inserted.
     const sourceRows = new Map<string, number>();
-    const stream = openSourceStream(source, options, storageIdMap !== undefined, sourceRows);
     const batcher = createImportBatcher({
         batchSize,
         fetchImpl,
         maxBatchBytes: MAX_IMPORT_BATCH_BYTES,
-        replaceUrl: replace.replaceUrl,
+        replace: replace.replace,
         requestUrl,
         token,
     });
@@ -870,7 +910,12 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const skippedRows = new Map<string, number>();
     const toRow = scopeRows(transform, replace.scope, skippedRows);
 
-    const streamFailure = await drainIntoBatcher(stream, toRow, batcher, options.logger);
+    // The source is opened only once a replace's worker check passed, so a refused run reads nothing.
+    const streamFailure = await drainReplace(
+        batcher,
+        async () => drainIntoBatcher(openSourceStream(source, options, storageIdMap !== undefined, sourceRows), toRow, batcher, options.logger),
+        options.logger,
+    );
 
     const { conflicts, deleted, errors, failed: failedShards, inserted, received, warnings } = batcher.totals;
 

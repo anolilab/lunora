@@ -360,11 +360,15 @@ a terminal to ask on, `--yes` is required. With `--tables`, rows of other tables
 in the file are skipped and counted, and so are the `$auth` / `$kv` / `$storage`
 records. The summary lists how many rows were deleted from each table.
 
-The first request is the replace. Each shard swaps to that batch in one
-transaction, and any further batches are appended after it, so an import larger
-than one request goes through a window where only part of the file is back. The
-command warns when that happens. Raise `--batch-size` to keep a small dataset to
-one request (the body cap of about 1 MiB still applies).
+Every batch is staged into one import session first
+(`/_lunora/admin/import?mode=replace&stage=…`), which changes nothing readers
+see, and the whole file is then swapped in by one commit: each shard after a dry
+run on all of them, in one transaction per shard, then the `.global()` tables and
+the sections. A batch that refuses a row, a shard the import cannot reach, or a
+file that fails to read aborts the session and leaves the data as it was. A
+commit that fails part-way is sent again; one that still does not finish says
+so, and re-running the import finishes the job. A worker from before staged
+import is refused before a row is sent.
 
 ## Streaming data out continuously
 

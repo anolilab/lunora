@@ -580,29 +580,39 @@ describe("lunora data-transfer", () => {
         });
 
         describe("--replace", () => {
-            /** A worker that answers each POST with what a replace-aware endpoint reports, recording the call. */
+            /**
+             * A worker with staged replace import: stages each batch, commits with one
+             * deletion, recording the calls. `stageErrors` makes every batch refuse a
+             * row; `staged: false` is a worker without staged import.
+             */
             const replaceFetch =
-                (calls: { body: string; url: string }[], replaceAware = true): StreamingFetchLike =>
+                (calls: { body: string; url: string }[], worker: { staged?: boolean; stageErrors?: boolean } = {}): StreamingFetchLike =>
                 async (url, init) => {
                     calls.push({ body: bodyText(init?.body), url });
 
                     const rows = bodyText(init?.body)
                         .split("\n")
                         .filter((line) => line.trim().length > 0);
+                    let payload: Record<string, unknown> = {
+                        errors: worker.stageErrors === true ? [{ code: "VALIDATION_ERROR", line: 1, message: "bad", table: "users" }] : [],
+                        failed: [],
+                        received: rows.length,
+                        staged: { users: rows.length },
+                    };
+
+                    if (url.endsWith("/abort")) {
+                        payload = { aborted: false };
+                    } else if (url.endsWith("/commit")) {
+                        payload = { deleted: { users: 2 }, inserted: { users: 2 }, status: "committed" };
+                    }
+
+                    const ok = worker.staged !== false || !url.endsWith("/abort");
 
                     return {
                         body: null,
-                        json: async () => {
-                            return {
-                                conflicts: 0,
-                                errors: [],
-                                inserted: rows.length === 0 ? {} : { users: rows.length },
-                                ...(url.includes("mode=replace") && replaceAware ? { deleted: { users: 2 } } : {}),
-                                received: rows.length,
-                            };
-                        },
-                        ok: true,
-                        status: 200,
+                        json: async () => payload,
+                        ok,
+                        status: ok ? 200 : 404,
                         text: async () => "",
                     };
                 };
@@ -615,7 +625,7 @@ describe("lunora data-transfer", () => {
                 return file;
             };
 
-            it("replaces only --tables with the first request, appends the rest, and reports what it deleted", async () => {
+            it("stages every batch of --tables into one session, commits it once, and reports what it deleted", async () => {
                 expect.assertions(5);
 
                 const file = writeRows([
@@ -641,19 +651,18 @@ describe("lunora data-transfer", () => {
                 });
 
                 expect(result.code).toBe(0);
-                expect(calls.map((call) => call.url)).toStrictEqual([
-                    "http://localhost:8787/_lunora/admin/import?mode=replace&tables=users",
-                    "http://localhost:8787/_lunora/admin/import",
+                expect(calls.map((call) => call.url.replace(/stage=cli-[\da-f-]+/u, "stage=<session>"))).toStrictEqual([
+                    "http://localhost:8787/_lunora/admin/import/abort",
+                    "http://localhost:8787/_lunora/admin/import?mode=replace&tables=users&stage=<session>",
+                    "http://localhost:8787/_lunora/admin/import?mode=replace&tables=users&stage=<session>",
+                    "http://localhost:8787/_lunora/admin/import/commit",
                 ]);
                 expect(result.body?.deleted).toStrictEqual({ users: 2 });
                 expect(infos).toContain("replace: deleted 2 row(s) from users");
-                expect(warnings).toStrictEqual(
-                    expect.arrayContaining([
-                        expect.stringContaining("did not fit one request"),
-                        "replace: skipped 1 row(s) of messages, which is not in --tables",
-                        "replace: skipped 1 row(s) of $kv, which is not in --tables",
-                    ]),
-                );
+                expect(warnings).toStrictEqual([
+                    "replace: skipped 1 row(s) of messages, which is not in --tables",
+                    "replace: skipped 1 row(s) of $kv, which is not in --tables",
+                ]);
             });
 
             it("sends an empty replace, since an empty file empties the tables", async () => {
@@ -672,7 +681,13 @@ describe("lunora data-transfer", () => {
                 });
 
                 expect(result.code).toBe(0);
-                expect(calls).toStrictEqual([{ body: "", url: "http://localhost:8787/_lunora/admin/import?mode=replace" }]);
+                expect(
+                    calls.map((call) => [call.url.replace(/stage=cli-[\da-f-]+/u, "stage=<session>"), call.url.endsWith("/abort") ? "" : call.body]),
+                ).toStrictEqual([
+                    ["http://localhost:8787/_lunora/admin/import/abort", ""],
+                    ["http://localhost:8787/_lunora/admin/import?mode=replace&stage=<session>", ""],
+                    ["http://localhost:8787/_lunora/admin/import/commit", calls[2]?.body],
+                ]);
             });
 
             it("asks first, and writes nothing when the prompt is declined", async () => {
@@ -734,11 +749,12 @@ describe("lunora data-transfer", () => {
                 expect(result.code).toBe(EXIT_CODE.USAGE);
             });
 
-            it("fails when the worker appended instead of replacing", async () => {
-                expect.assertions(1);
+            it("refuses a worker without staged import before it sends a row", async () => {
+                expect.assertions(2);
 
+                const calls: { body: string; url: string }[] = [];
                 const result = await runImportCommand({
-                    fetchImpl: replaceFetch([], false),
+                    fetchImpl: replaceFetch(calls, { staged: false }),
                     file: writeRows([{ doc: { _id: "u1" }, table: "users" }]),
                     logger: silentLogger(),
                     replace: true,
@@ -748,6 +764,29 @@ describe("lunora data-transfer", () => {
                 });
 
                 expect(result.code).toBe(1);
+                expect(calls.map((call) => call.url)).toStrictEqual(["http://localhost:8787/_lunora/admin/import/abort"]);
+            });
+
+            it("aborts, and never commits, when a staged batch refuses a row", async () => {
+                expect.assertions(2);
+
+                const calls: { body: string; url: string }[] = [];
+                const result = await runImportCommand({
+                    fetchImpl: replaceFetch(calls, { stageErrors: true }),
+                    file: writeRows([{ doc: { _id: "u1" }, table: "users" }]),
+                    logger: silentLogger(),
+                    replace: true,
+                    token: "t",
+                    url: "http://localhost:8787",
+                    yes: true,
+                });
+
+                expect(result.code).toBe(1);
+                expect(calls.map((call) => call.url.split("?")[0])).toStrictEqual([
+                    "http://localhost:8787/_lunora/admin/import/abort",
+                    "http://localhost:8787/_lunora/admin/import",
+                    "http://localhost:8787/_lunora/admin/import/abort",
+                ]);
             });
         });
 

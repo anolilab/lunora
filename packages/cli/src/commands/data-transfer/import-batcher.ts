@@ -65,35 +65,62 @@ interface ImportTotals {
     warnings: string[];
 }
 
+/**
+ * A replace run's staged session (`packages/runtime/src/import-session.ts`):
+ * every POST stages into it (`?mode=replace…&stage=<session>`), and `finish`
+ * commits the whole file in one swap — or aborts, leaving the data untouched.
+ */
+interface ImportStagedReplace {
+    /** `…/import/abort`. */
+    abortUrl: string;
+    /** `…/import/commit`. */
+    commitUrl: string;
+    session: string;
+    /** `…/import?mode=replace[&tables=…]&stage=<session>`. */
+    stageUrl: string;
+}
+
 interface ImportBatcherConfig {
     /** Row ceiling per POST. */
     batchSize: number;
     fetchImpl: StreamingFetchLike;
     /** Byte ceiling per POST, so wide rows do not exceed the endpoint's body cap. */
     maxBatchBytes: number;
-
-    /**
-     * Replace mode: the first POST goes here (`?mode=replace…`) and the rest to
-     * `requestUrl`, appending — so the end state is exactly the file. The first
-     * POST goes out even with no rows, since an empty replace empties the tables.
-     */
-    replaceUrl?: string;
+    /** Replace mode: stage every batch into one session, then commit it. The first POST goes out even with no rows, since an empty replace empties the tables. */
+    replace?: ImportStagedReplace;
     requestUrl: string;
     token: string;
 }
 
 interface ImportBatcher {
+    /** Replace mode: drop the staged session, best effort — the data was never touched. */
+    abort: () => Promise<void>;
+
+    /**
+     * Replace mode: commit the staged session (or abort it when a batch reported
+     * a refused row or an unreachable shard). Throws when the commit cannot
+     * finish. A no-op for an append run.
+     */
+    finish: () => Promise<void>;
     /** POST whatever is queued. A no-op when the batch is empty. */
     flush: () => Promise<void>;
     /** Queue one wire row, POSTing first if it would overflow either ceiling. */
     push: (row: string) => Promise<void>;
+    /** Replace mode: refuse a worker without staged import before anything is sent. */
+    start: () => Promise<void>;
     totals: ImportTotals;
 }
+
+/** Commit attempts before a replace gives up on a session whose commit began. */
+const COMMIT_ATTEMPTS = 3;
+
+/** 409 codes that mean "send the commit again" rather than "refused". */
+const RETRY_CODES: ReadonlySet<string> = new Set(["IMPORT_SESSION_CHANGED", "IMPORT_SESSION_COMMITTING"]);
 
 const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
     const totals: ImportTotals = {
         conflicts: 0,
-        deleted: config.replaceUrl === undefined ? undefined : {},
+        deleted: config.replace === undefined ? undefined : {},
         errors: [],
         failed: [],
         inserted: {},
@@ -132,10 +159,12 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         }
     };
 
-    const flush = async (): Promise<void> => {
-        const replaceUrl = requests === 0 ? config.replaceUrl : undefined;
+    const post = async (url: string, body: string, contentType: string) =>
+        config.fetchImpl(url, { body, headers: { authorization: `Bearer ${config.token}`, "content-type": contentType }, method: "POST" });
 
-        if (batch.length === 0 && replaceUrl === undefined) {
+    const flush = async (): Promise<void> => {
+        // The first staged POST goes out even when empty: it opens the session.
+        if (batch.length === 0 && (config.replace === undefined || requests > 0)) {
             return;
         }
 
@@ -145,14 +174,7 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         batchBytes = 0;
         requests += 1;
 
-        // Only the first request replaces — each shard swaps atomically to that
-        // batch — and the rest append onto it, so readers see a partial dataset
-        // in between.
-        if (config.replaceUrl !== undefined && requests === 2) {
-            totals.warnings.push("the replace did not fit one request: the first batch replaced the tables and the rest were appended after it");
-        }
-
-        const response = await config.fetchImpl(replaceUrl ?? config.requestUrl, {
+        const response = await config.fetchImpl(config.replace?.stageUrl ?? config.requestUrl, {
             body,
             headers: { authorization: `Bearer ${config.token}`, "content-type": "application/x-ndjson" },
             method: "POST",
@@ -175,11 +197,6 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         }
 
         const json = (await response.json()) as AdminImportResponse;
-
-        // A worker from before replace mode ignores `?mode=` and appends.
-        if (replaceUrl !== undefined && json.deleted === undefined) {
-            throw new LunoraError("INTERNAL", "the worker predates replace-mode import, so it appended instead of replacing — redeploy it and re-run");
-        }
 
         merge(json);
 
@@ -219,8 +236,91 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         }
     };
 
-    return { flush, push, totals };
+    const start = async (): Promise<void> => {
+        if (config.replace === undefined) {
+            return;
+        }
+
+        // A worker without staged import has no abort route — and one that predates
+        // it would read each staged batch as a replace of its own.
+        const response = await post(config.replace.abortUrl, JSON.stringify({ session: config.replace.session }), "application/json");
+
+        if (!response.ok) {
+            throw new LunoraError("INTERNAL", `the worker predates staged replace import (HTTP ${String(response.status)}) — redeploy it and re-run`);
+        }
+    };
+
+    const abort = async (): Promise<void> => {
+        if (config.replace !== undefined) {
+            await post(config.replace.abortUrl, JSON.stringify({ session: config.replace.session }), "application/json").catch(() => undefined);
+        }
+    };
+
+    /** One commit attempt: `true` once committed, a reason to send it again, or a thrown refusal (aborted first). */
+    const attemptCommit = async (replace: ImportStagedReplace): Promise<string | true> => {
+        const response = await post(replace.commitUrl, JSON.stringify({ session: replace.session }), "application/json");
+
+        if (response.ok) {
+            const json = (await response.json()) as AdminImportResponse;
+
+            merge({ deleted: json.deleted, inserted: json.inserted, warnings: json.warnings });
+
+            return true;
+        }
+
+        const json = (await response.json().catch(() => {
+            return {};
+        })) as AdminImportResponse & { error?: { code?: string; message?: string } };
+
+        if (response.status === 409 && !RETRY_CODES.has(json.error?.code ?? "")) {
+            await abort();
+            totals.errors.push(...(json.errors ?? []));
+            totals.failed.push(...(json.failed ?? []));
+
+            throw new LunoraError(
+                "INTERNAL",
+                `the replace was refused before anything was written: ${json.error?.message ?? "its dry run found rows that would not land"}`,
+            );
+        }
+
+        return `HTTP ${String(response.status)}`;
+    };
+
+    const finish = async (): Promise<void> => {
+        const { replace } = config;
+
+        if (replace === undefined) {
+            return;
+        }
+
+        // A staged batch that refused a row or missed a shard: the session can never commit.
+        if (totals.errors.length > 0 || totals.failed.length > 0) {
+            await abort();
+
+            return;
+        }
+
+        let lastFailure = "";
+
+        for (let attempt = 1; attempt <= COMMIT_ATTEMPTS; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- retries are sequential by design
+            const outcome = await attemptCommit(replace);
+
+            if (outcome === true) {
+                return;
+            }
+
+            lastFailure = outcome;
+        }
+
+        throw new LunoraError(
+            "INTERNAL",
+            `the replace's commit did not finish after ${String(COMMIT_ATTEMPTS)} attempts (${lastFailure}); some tables may already hold the file — re-run the import`,
+        );
+    };
+
+    return { abort, finish, flush, push, start, totals };
 };
 
-export type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals };
+export type { ImportBatcher, ImportRowError, ImportShardFailure, ImportStagedReplace, ImportTotals };
 export { createImportBatcher };
