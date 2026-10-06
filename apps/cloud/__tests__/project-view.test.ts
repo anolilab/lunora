@@ -64,4 +64,11 @@ describe(toProjectView, () => {
         expect(view.githubRepo).toBe("acme/web");
         expect(toProjectView(row)).not.toHaveProperty("framework");
     });
+
+    it("carries the recorded workspace packages for the build settings preview, and drops a SQL NULL", () => {
+        const workspacePackages = { builtAt: 1, paths: ["packages/ui"], rootDirectory: "apps/web" };
+
+        expect(toProjectView({ ...row, workspacePackages }).workspacePackages).toStrictEqual(workspacePackages);
+        expect(toProjectView({ ...row, workspacePackages: null })).not.toHaveProperty("workspacePackages");
+    });
 });

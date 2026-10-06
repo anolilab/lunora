@@ -126,6 +126,7 @@ export const ProjectsSection = ({ organizationId, preloaded }: ProjectsSectionPr
                 rootDirectory={project?.rootDirectory}
                 target={project?.target ?? DEFAULT_TARGET}
                 watchPaths={project?.watchPaths}
+                workspacePackages={project?.workspacePackages}
             />
         );
     }

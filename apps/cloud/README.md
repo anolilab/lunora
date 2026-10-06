@@ -786,6 +786,11 @@ a set for the current root directory (a new project, a changed root directory,
 an over-cap repo), a push that touches nothing under the root directory builds
 anyway, with the reason in its log.
 
+The Build settings preview lists the recorded packages alongside the root
+directory and lockfiles. When none are recorded yet, or they were recorded for
+a different root directory than the one in the form, it says so instead: until
+a production build records them for that root, every push builds.
+
 The build box installs at the **workspace root** — the nearest directory at or
 above the root directory holding `pnpm-lock.yaml`, `package-lock.json` or
 `yarn.lock`, never above the repository — then runs the project's own

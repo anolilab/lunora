@@ -135,6 +135,46 @@ export const effectiveWatchPaths = (rootDirectory: string | undefined, watchPath
     return [...new Set([...own, ...lockfiles])];
 };
 
+/** The workspace packages a production build recorded, and the root directory it recorded them for. */
+export interface RecordedWorkspacePackages {
+    paths: ReadonlyArray<string>;
+    rootDirectory: string;
+}
+
+/**
+ * What the build settings preview shows: the patterns a push is checked
+ * against, the recorded workspace packages included the way {@link decideBuild}
+ * includes them, and a note when they cannot be — none recorded yet, or
+ * recorded for another root directory. Either way every push builds until a
+ * production build records them for this root.
+ */
+export const watchPathsPreview = (
+    rootDirectory: string | undefined,
+    watchPaths: ReadonlyArray<string> | undefined,
+    workspacePackages: RecordedWorkspacePackages | undefined,
+): { note?: string; patterns: string[] } => {
+    const patterns = effectiveWatchPaths(rootDirectory, watchPaths);
+    const recordedRoot = workspacePackages?.rootDirectory;
+
+    // Explicit watch paths replace the packages, and a repository-root project watches everything already.
+    if ((watchPaths !== undefined && watchPaths.length > 0) || patterns.includes("**")) {
+        return { patterns };
+    }
+
+    if (recordedRoot === undefined) {
+        return { note: "The workspace packages the app imports are recorded by its next production build; until then every push builds.", patterns };
+    }
+
+    if (recordedRoot !== (rootDirectory ?? "")) {
+        return {
+            note: `The recorded workspace packages are for ${recordedRoot === "" ? "the repository root" : recordedRoot}; until a production build records them for this root directory, every push builds.`,
+            patterns,
+        };
+    }
+
+    return { patterns: [...new Set([...patterns, ...(workspacePackages?.paths ?? []).map((directory) => (directory === "" ? "**" : `${directory}/**`))])] };
+};
+
 /** What a push can tell us about the files it changed. */
 export type PushChanges = { files: string[] } | { unknown: string };
 
