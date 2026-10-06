@@ -208,7 +208,9 @@ whose key or unique value exists, a KV key that exists (or has expired since), o
 an object key that exists is left alone and counted as already present. A KV
 value or object of more than one chunk is staged under
 `_lunora/restore/<target>/<session>/` (in the object's bucket; a KV value's in
-the default bucket) and assembled when its last chunk arrives, checked against
+the default bucket), each chunk sealed with AES-GCM under a key derived from the
+deployment's admin token so a staged KV value never sits in a bucket in the
+clear, and assembled when its last chunk arrives, checked against
 the SHA-256 the export wrote: a KV value (at most 25 MiB) in memory, an object up
 to 32 MiB in memory with one checksummed put, and a larger one through an R2
 multipart upload in equal 5 MiB parts, one in memory at a time, aborted with

@@ -3863,7 +3863,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         streamingImport: (request, headers, replaceTables) =>
             streamingImport(
                 request,
-                options,
+                // The effective admin token (option or env): restore staging seals its chunks under it.
+                { ...options, adminToken: effectiveAdminToken() },
                 queryCoordinator,
                 headers,
                 shardDO,

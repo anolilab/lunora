@@ -13,6 +13,13 @@
  * later chunk finds its session with one `list(limit: 1)`. A restore that
  * stops partway leaves its session behind; the next import sweeps every
  * session older than {@link STAGING_TTL_MS} when its header line lands.
+ *
+ * Every staged chunk is sealed with AES-GCM under a key derived from the
+ * deployment's admin token, its own object key bound in as associated data. A
+ * staging object sits in the app's bucket, which may be public, and a `$kv`
+ * value is whatever the app keeps in KV — sessions, tokens — so what lands there
+ * is ciphertext only, and a chunk cannot be moved to another position or target.
+ * No admin token, no staging: a chunked record then fails as not configured.
  */
 import type { R2MultipartUploadLike, R2UploadedPartLike } from "@lunora/platform";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -41,13 +48,72 @@ const LIST_PAGE_SIZE = 1000;
 
 type Where = { bucket?: string };
 
-/** The storage ops staging needs; all four, or none. */
+/** The storage ops staging needs, all four, and the secret its chunks are sealed under. */
 interface StagingStore {
     delete: NonNullable<WorkerOptions["storageDelete"]>;
     download: NonNullable<WorkerOptions["storageDownload"]>;
     list: NonNullable<WorkerOptions["storageList"]>;
+    /** The admin token the sealing key is derived from. */
+    secret: string;
     upload: NonNullable<WorkerOptions["storageUpload"]>;
 }
+
+const IV_BYTES = 12;
+
+const sealingKeys = new Map<string, Promise<CryptoKey>>();
+
+/** AES-256-GCM key for staged chunks, HKDF-SHA-256 over the admin token; one derivation per token per isolate. */
+const sealingKey = async (secret: string): Promise<CryptoKey> => {
+    let key = sealingKeys.get(secret);
+
+    if (key === undefined) {
+        key = (async () => {
+            const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), "HKDF", false, ["deriveKey"]);
+
+            return crypto.subtle.deriveKey(
+                { hash: "SHA-256", info: new TextEncoder().encode("restore-staging"), name: "HKDF", salt: new TextEncoder().encode("lunora") },
+                material,
+                { length: 256, name: "AES-GCM" },
+                false,
+                ["encrypt", "decrypt"],
+            );
+        })();
+        sealingKeys.set(secret, key);
+    }
+
+    return key;
+};
+
+/** `iv || ciphertext`, bound to `objectKey`. */
+const seal = async (secret: string, objectKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<ArrayBuffer> => {
+    const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+    const sealed = await crypto.subtle.encrypt({ additionalData: new TextEncoder().encode(objectKey), iv, name: "AES-GCM" }, await sealingKey(secret), bytes);
+    const out = new Uint8Array(IV_BYTES + sealed.byteLength);
+
+    out.set(iv);
+    out.set(new Uint8Array(sealed), IV_BYTES);
+
+    return out.buffer;
+};
+
+/** The plaintext of a {@link seal}ed chunk, or `undefined` when it is not one sealed for `objectKey` under this secret. */
+const unseal = async (secret: string, objectKey: string, sealed: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer> | undefined> => {
+    if (sealed.byteLength <= IV_BYTES) {
+        return undefined;
+    }
+
+    try {
+        const plain = await crypto.subtle.decrypt(
+            { additionalData: new TextEncoder().encode(objectKey), iv: sealed.subarray(0, IV_BYTES), name: "AES-GCM" },
+            await sealingKey(secret),
+            sealed.subarray(IV_BYTES),
+        );
+
+        return new Uint8Array(plain);
+    } catch {
+        return undefined;
+    }
+};
 
 /** One validated chunk record: `data` decoded, plus what only the last chunk carries. */
 interface ChunkRecord {
@@ -60,10 +126,10 @@ interface ChunkRecord {
 }
 
 const stagingStore = (options: WorkerOptions): StagingStore | undefined => {
-    const { storageDelete, storageDownload, storageList, storageUpload } = options;
+    const { adminToken: secret, storageDelete, storageDownload, storageList, storageUpload } = options;
 
-    return storageDelete && storageDownload && storageList && storageUpload
-        ? { delete: storageDelete, download: storageDownload, list: storageList, upload: storageUpload }
+    return storageDelete && storageDownload && storageList && storageUpload && secret
+        ? { delete: storageDelete, download: storageDownload, list: storageList, secret, upload: storageUpload }
         : undefined;
 };
 
@@ -153,7 +219,9 @@ const stageChunk = async (store: StagingStore, root: string, where: Where, chunk
         return false;
     }
 
-    await store.upload(chunkKey(session, chunk.offset), chunk.bytes.buffer, where);
+    const key = chunkKey(session, chunk.offset);
+
+    await store.upload(key, await seal(store.secret, key, chunk.bytes), where);
 
     return true;
 };
@@ -189,15 +257,20 @@ const stagedChunks = async function* stagedChunks(
     }
 
     while (position < last.offset) {
+        const key = chunkKey(session, position);
         // eslint-disable-next-line no-await-in-loop -- chunks are read back in order
-        const part = await store.download(chunkKey(session, position), where);
+        const part = await store.download(key, where);
 
         if (!part?.body) {
             throw incomplete(`the chunk at byte ${String(position)} never arrived`);
         }
 
         // eslint-disable-next-line no-await-in-loop -- chunks are read back in order
-        const bytes = new Uint8Array(await new Response(part.body).arrayBuffer());
+        const bytes = await unseal(store.secret, key, new Uint8Array(await new Response(part.body).arrayBuffer()));
+
+        if (bytes === undefined) {
+            throw incomplete(`the chunk at byte ${String(position)} was not staged by this deployment`);
+        }
 
         if (bytes.byteLength === 0 || position + bytes.byteLength > last.offset) {
             throw incomplete(`the chunk at byte ${String(position)} overlaps the last chunk`);

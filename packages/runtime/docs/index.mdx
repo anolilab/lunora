@@ -217,7 +217,8 @@ object the `storage*` ops list, in 512 KiB pieces). The last chunk of a value or
 object carries its size and SHA-256. `/_lunora/admin/import` reads format 1 and 2
 and writes the sections append-only. Chunks in front of the last are staged under
 `_lunora/restore/<target>/<session>/` (a storage object's in its own bucket, a KV
-value's in the default one) and assembled when the last one lands, checked
+value's in the default one), each chunk sealed with AES-GCM under a key derived
+from the admin token — no admin token, no staging — and assembled when the last one lands, checked
 against the SHA-256 before anything is written: a KV value (up to KV's 25 MiB) in
 memory, since `kvIntrospector.putValue` takes a string; an object up to 32 MiB in
 memory with one checksummed put; a larger one through `storageMultipartUpload`
