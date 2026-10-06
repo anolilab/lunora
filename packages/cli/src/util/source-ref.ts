@@ -10,12 +10,9 @@
  * their branch (e.g. `1.0.0-alpha.1` → `alpha`), stable versions to `main`, and
  * the unpublished dev version (`0.0.0`) to the `alpha` channel.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { LunoraError } from "@lunora/errors";
-import { dirname, join } from "@visulima/path";
 
+import { resolveCliVersion } from "./cli-manifest";
 import type { Logger } from "./logger";
 
 /** Branch used when the CLI is unpublished (`0.0.0`) or its package.json can't be read. */
@@ -45,42 +42,6 @@ const SAFE_REF = /^[\w./@-]+$/;
 
 /** True when `ref` is a safe git ref: allowed charset only, and no `..` segment. */
 const isSafeRef = (ref: string): boolean => !ref.includes("..") && SAFE_REF.test(ref);
-
-/**
- * Read the running `@lunora/cli`'s own version. Walks up from this module's
- * directory to find the package.json whose `name` is `@lunora/cli` — works
- * whether the file is the built `dist/*.mjs` or the source under `src/`. Returns
- * `"0.0.0"` (the unpublished sentinel) when it can't be determined.
- */
-const resolveCliVersion = (): string => {
-    try {
-        let directory = dirname(fileURLToPath(import.meta.url));
-
-        for (let index = 0; index < 6; index += 1) {
-            const candidate = join(directory, "package.json");
-
-            if (existsSync(candidate)) {
-                const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { name?: string; version?: string };
-
-                if (parsed.name === "@lunora/cli" && typeof parsed.version === "string") {
-                    return parsed.version;
-                }
-            }
-
-            const parent = dirname(directory);
-
-            if (parent === directory) {
-                break;
-            }
-
-            directory = parent;
-        }
-    } catch {
-        // Fall through to the sentinel.
-    }
-
-    return "0.0.0";
-};
 
 /**
  * Map a CLI version string to the git ref it should fetch. The unpublished
@@ -364,7 +325,6 @@ const resolveTagVersions = async (names: Iterable<string>, tag: string): Promise
 
 export {
     isImmutableRef,
-    resolveCliVersion,
     resolveCliVersionRef,
     resolveDistTag,
     resolvePinnedRepoRef,

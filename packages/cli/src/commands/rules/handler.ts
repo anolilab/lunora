@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { AGENT_RULES_DIR, detectAgentRules, LUNORA_SKILL_NAMES } from "@lunora/config";
 import { dirname, join, relative, resolve } from "@visulima/path";
 
+import { findCliPackageRoot } from "../../util/cli-manifest";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
@@ -30,42 +31,15 @@ interface RunRulesResult {
 }
 
 /**
- * Resolve the `skills/` directory bundled with `@lunora/cli`. Walks up from
- * `startDirectory` (this module by default — works from both `dist/*.mjs` and
- * `src/`, and from the published `node_modules/@lunora/cli/dist/...` layout) to
- * the package root, then appends `skills`. Returns `undefined` when it can't be
+ * Resolve the `skills/` directory bundled with `@lunora/cli`: the package root
+ * (see `findCliPackageRoot`) plus `skills`. Returns `undefined` when it can't be
  * located. `startDirectory` is injectable so the walk is unit-testable.
  */
 const resolveBundledSkillsDirectory = (startDirectory: string = dirname(fileURLToPath(import.meta.url))): string | undefined => {
-    let directory = startDirectory;
+    const root = findCliPackageRoot(startDirectory);
+    const skills = root === undefined ? undefined : join(root, "skills");
 
-    for (let index = 0; index < 6; index += 1) {
-        const packageJson = join(directory, "package.json");
-
-        if (existsSync(packageJson)) {
-            try {
-                const parsed = JSON.parse(readFileSync(packageJson, "utf8")) as { name?: string };
-
-                if (parsed.name === "@lunora/cli") {
-                    const skills = join(directory, "skills");
-
-                    return existsSync(skills) ? skills : undefined;
-                }
-            } catch {
-                // keep walking
-            }
-        }
-
-        const parent = dirname(directory);
-
-        if (parent === directory) {
-            break;
-        }
-
-        directory = parent;
-    }
-
-    return undefined;
+    return skills !== undefined && existsSync(skills) ? skills : undefined;
 };
 
 /** List the skill directories (those containing a `SKILL.md`) under the bundled `skills/` dir. */

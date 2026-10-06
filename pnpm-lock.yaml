@@ -3226,6 +3226,9 @@ importers:
       '@visulima/find-ai-runner':
         specifier: catalog:cli
         version: 1.0.2
+      '@visulima/fs':
+        specifier: catalog:cli
+        version: 6.0.28(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
       '@visulima/package':
         specifier: catalog:cli
         version: 5.0.41(@visulima/yaml@1.0.0)(ini@7.0.0)(jsonc-parser@3.3.1)(smol-toml@1.9.0)

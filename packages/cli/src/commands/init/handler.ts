@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { applyLintIgnores, BADGES, detectLintTools, isInteractive } from "@lunora/config";
+import { applyLintIgnores, BADGES, detectLintTools, isInteractive, readProjectDependencies, readProjectManifest } from "@lunora/config";
 import { walkSync } from "@visulima/fs";
 import { basename, dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
@@ -316,18 +316,11 @@ const resolveLunoraVersions = async (files: ReadonlyArray<string>, distTag: stri
             continue;
         }
 
-        try {
-            const parsed = JSON.parse(readFileSync(file, "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-
-            for (const section of ["dependencies", "devDependencies"] as const) {
-                for (const name of Object.keys(parsed[section] ?? {})) {
-                    if (isLunoraDep(name)) {
-                        names.add(name);
-                    }
-                }
+        // An unparseable package.json contributes nothing; stamping leaves it untouched too.
+        for (const name of Object.keys(readProjectDependencies(dirname(file)))) {
+            if (isLunoraDep(name)) {
+                names.add(name);
             }
-        } catch {
-            // Unparseable package.json — skip; stamping leaves it untouched too.
         }
     }
 
@@ -645,18 +638,8 @@ const isWorkspaceRoot = (directory: string): boolean => {
         return true;
     }
 
-    const packagePath = join(directory, "package.json");
-
-    if (!existsSync(packagePath)) {
-        return false;
-    }
-
-    try {
-        return (JSON.parse(readFileSync(packagePath, "utf8")) as { workspaces?: unknown }).workspaces !== undefined;
-    } catch {
-        // Unreadable / invalid package.json — not a workspace root we can trust.
-        return false;
-    }
+    // An unreadable / invalid package.json is not a workspace root we can trust.
+    return readProjectManifest(directory)?.["workspaces"] !== undefined;
 };
 
 /**
@@ -1420,18 +1403,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         projectName: basename(projectDirectory),
         // Detect the per-framework auth-UI item from the scaffolded template's deps.
         resolveAuthUiItem: () => {
-            let dependencies: Record<string, string>;
-
-            try {
-                const pkg = JSON.parse(readFileSync(join(projectDirectory, "package.json"), "utf8")) as {
-                    dependencies?: Record<string, string>;
-                    devDependencies?: Record<string, string>;
-                };
-
-                dependencies = { ...pkg.dependencies, ...pkg.devDependencies };
-            } catch {
-                return "auth-ui-react";
-            }
+            const dependencies = readProjectDependencies(projectDirectory);
 
             // The same gate `lunora add auth-ui` applies, and for the same reason:
             // every auth-UI port renders DOM, so there is no item that fits an Expo

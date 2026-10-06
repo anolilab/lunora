@@ -104,32 +104,6 @@ const UMBRELLA_REEXPORTED_DEPS = new Set(["@lunora/client", "@lunora/do", "@luno
 const UMBRELLA_IMPORT_RE = /(['"])@lunora\/(client|do|ratelimit|runtime|server|values)(\/[^'"]*)?\1/gu;
 
 /**
- * True when the project at `projectRoot` depends on the `lunorash` umbrella
- * (in either dependency section). Drives the umbrella-aware add path: such a
- * project gets base imports/deps routed through `lunorash/*` instead of the
- * granular `@lunora/*` packages. Returns false when package.json is absent or
- * unreadable (the safe granular default).
- */
-const projectUsesUmbrella = (projectRoot: string): boolean => {
-    const packageJsonPath = join(projectRoot, "package.json");
-
-    if (!existsSync(packageJsonPath)) {
-        return false;
-    }
-
-    try {
-        const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
-            dependencies?: Record<string, string>;
-            devDependencies?: Record<string, string>;
-        };
-
-        return parsed.dependencies?.lunorash !== undefined || parsed.devDependencies?.lunorash !== undefined;
-    } catch {
-        return false;
-    }
-};
-
-/**
  * Rewrite a registry item's `@lunora/{server,values,runtime,do,client}` import
  * specifiers to the matching `lunorash/*` umbrella subpath, preserving any
  * subpath (`@lunora/server/types` → `lunorash/server/types`) and quote style.
@@ -640,13 +614,4 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     return { ok: true };
 };
 
-export {
-    applyDeps,
-    applyItemResources,
-    confirmDepMutation,
-    isCustomRegistrySource,
-    projectUsesUmbrella,
-    resolveDepRange,
-    resolvePinnedDepVersions,
-    rewriteUmbrellaImports,
-};
+export { applyDeps, applyItemResources, confirmDepMutation, isCustomRegistrySource, resolveDepRange, resolvePinnedDepVersions, rewriteUmbrellaImports };

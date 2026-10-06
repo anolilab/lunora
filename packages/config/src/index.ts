@@ -38,7 +38,7 @@ export type {
     ToolchainCommand,
 } from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
-export { detectFramework, projectUsesUmbrella, readProjectDependencyNames } from "./detect-framework";
+export { detectFramework, projectUsesUmbrella } from "./detect-framework";
 export type { DevProcess, DevProcessOptions, DevProcessSpawner } from "./dev-process";
 export { acceptsConnection, startDevProcess } from "./dev-process";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
@@ -108,6 +108,7 @@ export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResul
 export { runPostCodegenHook } from "./post-codegen-hook";
 export type { RemotePreference } from "./project-config";
 export { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow } from "./project-config";
+export { readProjectDependencies, readProjectDependencyNames, readProjectManifest } from "./project-manifest";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";
 export { default as resolveSchemaDirectory } from "./resolve-schema-directory";

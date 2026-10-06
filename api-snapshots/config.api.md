@@ -1562,10 +1562,22 @@ const readLinkedProject: (projectRoot: string) => LinkedProject | undefined;
 const readLiveDevServerState: (projectRoot: string) => DevServerState | undefined;
 ```
 
+### `readProjectDependencies` (const)
+
+```ts
+const readProjectDependencies: (root: string) => Readonly<Record<string, string>>;
+```
+
 ### `readProjectDependencyNames` (const)
 
 ```ts
 const readProjectDependencyNames: (root: string) => ReadonlySet<string>;
+```
+
+### `readProjectManifest` (const)
+
+```ts
+const readProjectManifest: (root: string) => Readonly<Record<string, unknown>> | undefined;
 ```
 
 ### `readProjectRemotePreference` (const)
