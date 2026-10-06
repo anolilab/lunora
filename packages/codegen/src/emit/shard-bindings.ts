@@ -38,17 +38,19 @@ const emitRelationFanout = (hasGlobalTables: boolean): { importFragment: string;
  * Render a module-level throwing stub for the generated shard: a `const`
  * (`declaration` is its head, e.g. `"kvStub: Kv"`) whose every method throws an
  * `Error` carrying `message` — plain text, rendered with `JSON.stringify`, so
- * write it unescaped. Methods are `async` unless listed in `sync`; `cast`
- * appends an `as unknown as …` tail after the closing brace.
+ * write it unescaped. Methods are `async` unless listed in `sync` (`true`: all
+ * of them); `cast` appends an `as unknown as …` tail after the closing brace.
  */
 const renderThrowingStub = (
     declaration: string,
     message: string,
     methods: ReadonlyArray<string>,
-    { cast = "", sync = [] }: { cast?: string; sync?: ReadonlyArray<string> } = {},
+    { cast = "", sync = [] }: { cast?: string; sync?: ReadonlyArray<string> | true } = {},
 ): string => {
     const missing = `throw new Error(${JSON.stringify(message)});`;
-    const members = methods.map((method) => `    ${method}: ${sync.includes(method) ? "" : "async "}() => {\n        ${missing}\n    },`).join("\n");
+    const members = methods
+        .map((method) => `    ${method}: ${sync === true || sync.includes(method) ? "" : "async "}() => {\n        ${missing}\n    },`)
+        .join("\n");
 
     return `\nconst ${declaration} = {\n${members}\n}${cast};\n`;
 };

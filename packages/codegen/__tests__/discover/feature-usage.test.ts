@@ -540,10 +540,9 @@ describe("discover/feature-usage", () => {
         const table = (name: string, columns: ReadonlyArray<string>): TableIR =>
             ({ name, shape: Object.fromEntries(columns.map((column) => [column, {}])) }) as unknown as TableIR;
 
-        // The `@lunora/payment` store's canonical `subscriptions` / `events` columns
-        // (mirrored by any real payment app — so this is the back-compat path too).
-        const paymentSubscriptions = table("subscriptions", ["providerSubscriptionId", "state", "priceId", "referenceId"]);
-        const paymentEvents = table("events", ["providerEventId", "processedAt", "type", "provider"]);
+        // The `@lunora/payment` store's tables as `.extend(paymentExtension)` merges them.
+        const paymentSubscriptions = table("payment_subscriptions", ["providerSubscriptionId", "state", "priceId", "referenceId"]);
+        const paymentEvents = table("payment_events", ["providerEventId", "processedAt", "type", "provider"]);
 
         it("detects the payment store by its signature columns", () => {
             expect.assertions(1);
@@ -551,15 +550,24 @@ describe("discover/feature-usage", () => {
             expect(hasPaymentStoreTables([paymentSubscriptions, paymentEvents])).toBe(true);
         });
 
-        it("does not fire on generically-named tables that lack the payment columns", () => {
+        it("does not fire on same-named tables that lack the payment columns", () => {
             expect.assertions(1);
 
-            // A newsletter `subscriptions` table and a domain `events` table — same names,
-            // wrong shape — must not spuriously show the Payments page.
-            const newsletter = table("subscriptions", ["email", "topic", "confirmedAt"]);
-            const domainEvents = table("events", ["title", "startsAt", "venue"]);
+            const newsletter = table("payment_subscriptions", ["email", "topic", "confirmedAt"]);
+            const domainEvents = table("payment_events", ["title", "startsAt", "venue"]);
 
             expect(hasPaymentStoreTables([newsletter, domainEvents])).toBe(false);
+        });
+
+        it("does not fire on the bare names the store no longer reads", () => {
+            expect.assertions(1);
+
+            expect(
+                hasPaymentStoreTables([
+                    { ...paymentSubscriptions, name: "subscriptions" },
+                    { ...paymentEvents, name: "events" },
+                ]),
+            ).toBe(false);
         });
 
         it("requires both store tables to be present", () => {

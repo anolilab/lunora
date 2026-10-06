@@ -298,8 +298,8 @@ left is whatever nobody rewrites.
 `--dry-run` answers whether you need it, per shard, without rewriting anything:
 
 ```bash
-lunora migrate up __lunora_reproject__paymentSessions --dry-run
-lunora migrate up __lunora_reproject__paymentSessions
+lunora migrate up __lunora_reproject__payment_sessions --dry-run
+lunora migrate up __lunora_reproject__payment_sessions
 ```
 
 The transform skips a row already in the current projection, and the runner

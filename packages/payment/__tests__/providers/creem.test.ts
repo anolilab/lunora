@@ -19,7 +19,14 @@ interface RecordedCall {
     name: string;
 }
 
-const makeClient = (calls: RecordedCall[] = []): CreemClientLike => {
+/** Pages of a customer's subscriptions, as `customers.listSubscriptions` returns them. */
+const subscriptionPages =
+    (...pages: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+    async (_customerId: string, page = 1) => {
+        return { items: pages[page - 1] ?? [], pagination: { nextPage: page < pages.length ? page + 1 : null } };
+    };
+
+const makeClient = (calls: RecordedCall[] = [], subscriptions = subscriptionPages([])): CreemClientLike => {
     return {
         checkouts: {
             create: async (request: Record<string, unknown>) => {
@@ -42,6 +49,7 @@ const makeClient = (calls: RecordedCall[] = []): CreemClientLike => {
 
                 return { customer_portal_link: "https://creem.test/portal" };
             },
+            listSubscriptions: subscriptions,
         },
         subscriptions: {
             cancel: async (id: string, request?: Record<string, unknown>) => {
@@ -104,16 +112,54 @@ describe("creem adapter", () => {
         expect((body.metadata as { referenceId?: string }).referenceId).toBe("user_1");
     });
 
+    it("starts an unbound checkout without prefilling a foreign customer's email (security regression)", async () => {
+        expect.assertions(1);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+        await adapter.createCheckout({ email: "a@b.test", mode: "subscription", priceId: "prod_team", referenceId: "org_1", successUrl: "https://x/ok" });
+
+        // Prefilling would let Creem attach org_1's purchase to the customer (and portal) of the
+        // reference that already owns this email.
+        expect((calls.find((call) => call.name === "checkout")?.args[0] as Record<string, unknown>).customer).toBeUndefined();
+    });
+
     it("opens a hosted billing portal via generateBillingLinks", async () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
         const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
 
-        const portal = await adapter.createPortalSession({ customerId: "cust_1", returnUrl: "https://x/back" });
+        const portal = await adapter.createPortalSession({ customerId: "cust_1", referenceId: "user_1", returnUrl: "https://x/back" });
 
         expect(portal).toEqual({ url: "https://creem.test/portal" });
         expect(calls.find((call) => call.name === "billing")?.args[0]).toEqual({ customerId: "cust_1" });
+    });
+
+    it("refuses the hosted portal when the customer holds another reference's subscription (security)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        // Page 2 holds org_b's subscription: the same person pays for a second org with one email.
+        const subscriptions = subscriptionPages([{ id: "sub_a", metadata: { referenceId: "org_a" } }], [{ id: "sub_b", metadata: { referenceId: "org_b" } }]);
+        const adapter = createCreemAdapter({ client: makeClient(calls, subscriptions), webhookSecret: SECRET });
+
+        await expect(adapter.createPortalSession({ customerId: "cust_1", referenceId: "org_a", returnUrl: "https://x/back" })).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+        expect(calls.some((call) => call.name === "billing")).toBe(false);
+    });
+
+    it("opens the portal when every subscription is this reference's or unattributed", async () => {
+        expect.assertions(1);
+
+        const subscriptions = subscriptionPages([{ id: "sub_a", metadata: { referenceId: "org_a" } }, { id: "sub_dashboard" }]);
+        const adapter = createCreemAdapter({ client: makeClient([], subscriptions), webhookSecret: SECRET });
+
+        await expect(adapter.createPortalSession({ customerId: "cust_1", referenceId: "org_a", returnUrl: "https://x/back" })).resolves.toEqual({
+            url: "https://creem.test/portal",
+        });
     });
 
     it("cancels at period end via mode=scheduled and reflects the scheduled-cancel state", async () => {
@@ -191,6 +237,28 @@ describe("creem adapter", () => {
         expect(action.amount?.minorUnits).toBe(2500n);
     });
 
+    it("reads the reference from the metadata Creem copies onto the subscription, never from the customer id", async () => {
+        expect.assertions(2);
+
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        // Shape of Creem's documented `subscription.active` payload: the checkout's metadata rides along.
+        const copied = JSON.stringify({
+            eventType: "subscription.active",
+            id: "evt_2",
+            object: { customer: { id: "cust_1" }, id: "sub_1", metadata: { referenceId: "org_1" }, product: { id: "prod_team" }, status: "active" },
+        });
+        const missing = JSON.stringify({
+            eventType: "subscription.active",
+            id: "evt_3",
+            object: { customer: { id: "cust_1" }, id: "sub_2", product: { id: "prod_team" }, status: "active" },
+        });
+
+        await expect(adapter.parseWebhook({ headers: headersFor(sign(copied)), payload: copied })).resolves.toMatchObject({ referenceId: "org_1" });
+        // Left unattributed (stored orphaned until `checkout.completed` adopts it) — the customer id
+        // is not an app reference and would silently grant nothing to anyone.
+        await expect(adapter.parseWebhook({ headers: headersFor(sign(missing)), payload: missing })).resolves.toMatchObject({ referenceId: undefined });
+    });
+
     it("maps subscription events, failing closed on unpaid (regression)", async () => {
         expect.assertions(3);
 
@@ -211,6 +279,50 @@ describe("creem adapter", () => {
         const canceled = await adapter.parseWebhook({ headers: headersFor(sign(canceledBody)), payload: canceledBody });
 
         expect(canceled.type).toBe("subscription.canceled");
+    });
+
+    it("maps subscription.expired to canceled whatever status it carries, with occurredAt (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        // Creem's `SubscriptionStatus` has no `expired` member, so the payload can still read `active`.
+        const body = JSON.stringify({
+            created_at: 1_767_323_045_000,
+            eventType: "subscription.expired",
+            id: "e9",
+            object: { id: "sub_1", product: "prod_pro", status: "active" },
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor(sign(body)), payload: body });
+
+        expect(action.type).toBe("subscription.canceled");
+        expect(action.occurredAt).toBe(1_767_323_045_000);
+    });
+
+    it("reads the SDK's Date fields and items[].units on subscription responses (regression)", async () => {
+        expect.assertions(4);
+
+        const client = makeClient();
+
+        // The real SDK zod-parses date fields into `Date`s and carries units on `items[]`.
+        (client as { subscriptions: { get: unknown } }).subscriptions = {
+            get: async (id: string) => {
+                return {
+                    canceledAt: new Date("2026-07-05T00:00:00Z"),
+                    currentPeriodEndDate: new Date("2026-08-01T00:00:00Z"),
+                    currentPeriodStartDate: new Date("2026-07-01T00:00:00Z"),
+                    id,
+                    items: [{ id: "item_1", productId: "prod_pro", units: 5 }],
+                    product: "prod_pro",
+                    status: "active",
+                };
+            },
+        };
+        const subscription = await createCreemAdapter({ client, webhookSecret: SECRET }).getSubscriptionStatus("sub_1");
+
+        expect(subscription.currentPeriodEnd).toBe(Date.parse("2026-08-01T00:00:00Z"));
+        expect(subscription.currentPeriodStart).toBe(Date.parse("2026-07-01T00:00:00Z"));
+        expect(subscription.cancelAtPeriodEnd).toBe(true);
+        expect(subscription.quantity).toBe(5);
     });
 
     it("normalizes a refund.created webhook from Creem's flat refund fields (regression)", async () => {
@@ -310,8 +422,8 @@ describe("creem adapter", () => {
         expect(action.amount?.minorUnits).toBe(2501n);
     });
 
-    it("pins the reference into the new customer's metadata", async () => {
-        expect.assertions(1);
+    it("pins the reference into the new customer's metadata and externalId", async () => {
+        expect.assertions(2);
 
         const calls: RecordedCall[] = [];
         const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
@@ -321,6 +433,7 @@ describe("creem adapter", () => {
         const body = calls.find((call) => call.name === "customer")?.args[0] as Record<string, unknown>;
 
         expect((body.metadata as { referenceId?: string }).referenceId).toBe("user_1");
+        expect(body.externalId).toBe("user_1");
     });
 
     it("reuses the existing customer on a same-reference retry after a duplicate-email conflict (regression)", async () => {
@@ -351,13 +464,13 @@ describe("creem adapter", () => {
 
         const customer = await adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" });
 
-        expect(customer.id).toBe("cust_existing");
+        expect(customer?.id).toBe("cust_existing");
         expect(calls.some((call) => call.name === "create")).toBe(true);
         // Creem's retrieve is positional `(customerId?, email?)` — the email lands in the second arg.
         expect(calls.find((call) => call.name === "retrieve")?.args[1]).toBe("a@b.test");
     });
 
-    it("refuses to bind a foreign reference's Creem customer on a shared-email conflict (security regression)", async () => {
+    it("never binds a foreign reference's Creem customer on a shared-email conflict, reporting none instead (security regression)", async () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
@@ -382,7 +495,9 @@ describe("creem adapter", () => {
         };
         const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
 
-        await expect(adapter.getOrCreateCustomer({ email: "shared@b.test", referenceId: "org_b" })).rejects.toThrow(/different reference/);
+        // One person paying under two references is normal, so this is not an error — but org_b gets
+        // no customer (and so no portal onto org_a's billing); its checkout starts unbound.
+        await expect(adapter.getOrCreateCustomer({ email: "shared@b.test", referenceId: "org_b" })).resolves.toBeUndefined();
 
         // The lookup must still happen (to check the reference), but its result is never adopted.
         expect(calls.some((call) => call.name === "retrieve")).toBe(true);

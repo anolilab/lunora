@@ -63,6 +63,13 @@ export const money = (minorUnits: bigint | number, currency: CurrencyCode): Mone
 };
 
 /**
+ * Money from a provider's numeric minor-unit amount, rounded first: providers document integers, but
+ * a stray fractional value must not throw out of a parse path. Non-finite input still throws
+ * `VALIDATION_ERROR` via {@link money}.
+ */
+export const moneyFromMinor = (minorUnits: number, currency: CurrencyCode): Money => money(Math.round(minorUnits), currency);
+
+/**
  * Zero in the given currency.
  */
 export const zeroMoney = (currency: CurrencyCode): Money => money(0n, currency);
@@ -108,6 +115,9 @@ export const compareMoney = (a: Money, b: Money): -1 | 0 | 1 => {
 
     return compare(toDinero(a), toDinero(b));
 };
+
+/** The larger of two same-currency amounts. */
+export const maxMoney = (a: Money, b: Money): Money => (compareMoney(a, b) > 0 ? a : b);
 
 /**
  * Split an amount across integer ratios, distributing the remainder to the smallest unit so the

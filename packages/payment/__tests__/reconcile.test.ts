@@ -70,6 +70,31 @@ describe("reconcile", () => {
         expect(repaired?.createdAt).toBe(100);
     });
 
+    it("repairs a missed add-on removal and a missed period roll, keeping the stored event time", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const truth = { ...subscription("active"), currentPeriodStart: 2000, priceIds: ["price_1"] };
+        const adapter = { ...truthAdapter(), getSubscriptionStatus: async () => truth } as PaymentAdapter;
+
+        // Same primary price, but the add-on is still on the row — and with it, its entitlement.
+        await store.upsertSubscription({ ...truth, lastEventAt: 900, priceIds: ["price_1", "price_addon"] });
+
+        await expect(reconcile({ adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({ updatedSubscriptions: 1 });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 900, priceIds: ["price_1"] });
+
+        await store.upsertSubscription({ ...truth, currentPeriodStart: 1000 });
+
+        await expect(reconcile({ adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({ updatedSubscriptions: 1 });
+
+        // An unknown set (`undefined`) is not drift.
+        const unknownSet = { ...truth, priceIds: undefined };
+
+        await expect(
+            reconcile({ adapter: { ...adapter, getSubscriptionStatus: async () => unknownSet }, store, subscriptionIds: ["sub_1"] }),
+        ).resolves.toMatchObject({ updatedSubscriptions: 0 });
+    });
+
     it("is a no-op when the store already matches the provider", async () => {
         expect.assertions(1);
 

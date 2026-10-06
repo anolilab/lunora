@@ -159,7 +159,7 @@ describe("createDatabasePaymentStore", () => {
         await memory.upsertCustomer(customer);
         await memory.upsertCustomer({ ...customer, id: "cus_2" });
 
-        await expect(db.findMany("customers", { provider: "stripe", referenceId: "user_1" }).then((page) => page.rows)).resolves.toHaveLength(1);
+        await expect(db.findMany("payment_customers", { provider: "stripe", referenceId: "user_1" }).then((page) => page.rows)).resolves.toHaveLength(1);
         await expect(store.getCustomerByReference("stripe", "user_1")).resolves.toMatchObject({ id: "cus_2" });
         // Parity: the memory store lands on the same surviving row.
         await expect(memory.getCustomerByReference("stripe", "user_1")).resolves.toMatchObject({ id: "cus_2" });
@@ -167,7 +167,7 @@ describe("createDatabasePaymentStore", () => {
         // A second provider's customer for the same reference stays a separate row.
         await store.upsertCustomer({ ...customer, id: "pcus_1", provider: "polar" });
 
-        await expect(db.findMany("customers", { referenceId: "user_1" }).then((page) => page.rows)).resolves.toHaveLength(2);
+        await expect(db.findMany("payment_customers", { referenceId: "user_1" }).then((page) => page.rows)).resolves.toHaveLength(2);
         await expect(store.getCustomerByReference("polar", "user_1")).resolves.toMatchObject({ id: "pcus_1" });
     });
 
@@ -252,6 +252,30 @@ describe("createDatabasePaymentStore", () => {
         expect(legacy?.priceId).toBe("price_1");
     });
 
+    it("round-trips the last applied event time, and reads an absent column as undefined", async () => {
+        expect.assertions(2);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertSubscription({ ...subscription, lastEventAt: 3000 });
+        await store.upsertSubscription({ ...subscription, id: "sub_2" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 3000 });
+        await expect(store.getSubscription("stripe", "sub_2").then((row) => row?.lastEventAt)).resolves.toBeUndefined();
+    });
+
+    it("finds a subscription's owning payment session, skipping unowned ones", async () => {
+        expect.assertions(2);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertPaymentSession({ ...session, id: "renewal", referenceId: "", subscriptionId: "sub_1" });
+        await store.upsertPaymentSession({ ...session, id: "checkout", subscriptionId: "sub_1" });
+
+        await expect(store.getPaymentSessionBySubscription("stripe", "sub_1")).resolves.toMatchObject({ id: "checkout", subscriptionId: "sub_1" });
+        await expect(store.getPaymentSessionBySubscription("stripe", "sub_2")).resolves.toBeUndefined();
+    });
+
     it("dedupes events via markEventProcessed", async () => {
         expect.assertions(3);
 
@@ -274,8 +298,12 @@ describe("createDatabasePaymentStore", () => {
         await store.markEventProcessed("stripe", "evt_1", "subscription.active");
         await store.markEventProcessed("stripe", "evt_2", "payment.refunded");
 
-        await expect(database.findFirst("events", { provider: "stripe", providerEventId: "evt_1" })).resolves.toMatchObject({ type: "subscription.active" });
-        await expect(database.findFirst("events", { provider: "stripe", providerEventId: "evt_2" })).resolves.toMatchObject({ type: "payment.refunded" });
+        await expect(database.findFirst("payment_events", { provider: "stripe", providerEventId: "evt_1" })).resolves.toMatchObject({
+            type: "subscription.active",
+        });
+        await expect(database.findFirst("payment_events", { provider: "stripe", providerEventId: "evt_2" })).resolves.toMatchObject({
+            type: "payment.refunded",
+        });
     });
 
     it("sumUsage folds a `set` marker the same way the in-memory store does", async () => {

@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { PaymentAdapter } from "../src/adapter";
 import type { WebhookOutcome } from "../src/create-payment";
 import { createPayment, webhookResponse } from "../src/create-payment";
+import { derivedIdempotencyKey } from "../src/idempotency";
 import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
-import type { PaymentSession, Subscription, WebhookAction } from "../src/types";
+import type { CheckoutRequest, PaymentSession, Subscription, WebhookAction } from "../src/types";
 
 const subscription = (referenceId: string, state: Subscription["state"]): Subscription => {
     return {
@@ -236,15 +237,15 @@ describe("createPayment", () => {
 
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
 
+        // An untyped caller's attacker-chosen victim customer — dropped in favor of the store-derived one.
         await payment.createCheckout({
             cancelUrl: "https://x/cancel",
-            // Attacker-chosen victim customer — must be dropped in favor of the store-derived one.
             customerId: "cus_victim",
             mode: "payment",
             priceId: "price_1",
             referenceId: "user_1",
             successUrl: "https://x/ok",
-        });
+        } as CheckoutRequest);
 
         expect(forwarded).toBe("cus_legit");
         expect(forwarded).not.toBe("cus_victim");
@@ -271,10 +272,31 @@ describe("createPayment", () => {
             priceId: "price_1",
             referenceId: "user_1",
             successUrl: "https://x/ok",
-        });
+        } as CheckoutRequest);
 
         expect(forwarded).toBe("cus_1");
         expect(forwarded).not.toBe("cus_victim");
+    });
+
+    it("starts an unbound checkout, storing no customer, when the adapter can't give the reference one", async () => {
+        expect.assertions(2);
+
+        let forwarded: string | undefined = "unset";
+        const store = new MemoryPaymentStore();
+        const adapter = fakeAdapter({
+            createCheckout: async (input) => {
+                forwarded = input.customerId;
+
+                return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
+            },
+            getOrCreateCustomer: async () => undefined,
+        });
+        const payment = createPayment({ adapter, authorize: () => true, store });
+
+        await payment.createCheckout({ email: "a@x.test", mode: "subscription", priceId: "price_1", referenceId: "org_1", successUrl: "https://x/ok" });
+
+        expect(forwarded).toBeUndefined();
+        await expect(store.getCustomerByReference("stripe", "org_1")).resolves.toBeUndefined();
     });
 
     it("rejects cancelling another caller's subscription as NOT_FOUND (no existence oracle)", async () => {
@@ -395,7 +417,7 @@ describe("createPayment", () => {
             refundPayment: async () => {
                 calls += 1;
 
-                return paymentSession("user_1");
+                return { ...paymentSession("user_1"), refundedAmount: money(1000, "USD") };
             },
         });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
@@ -419,7 +441,11 @@ describe("createPayment", () => {
 
         await store.upsertPaymentSession(paymentSession("user_1"));
 
-        const adapter = fakeAdapter({ refundPayment: async () => paymentSession("user_1") });
+        const adapter = fakeAdapter({
+            refundPayment: async () => {
+                return { ...paymentSession("user_1"), refundedAmount: money(1000, "USD") };
+            },
+        });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
 
         await payment.refundPayment({ sessionId: "pi_1" });
@@ -451,7 +477,12 @@ describe("createPayment", () => {
 
         await store.upsertPaymentSession(polarSession);
 
-        const adapter = fakeAdapter({ identifier: "polar", refundPayment: async () => polarSession });
+        const adapter = fakeAdapter({
+            identifier: "polar",
+            refundPayment: async (input) => {
+                return { ...polarSession, refundedAmount: input.amount ?? money(1000, "USD") };
+            },
+        });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
         const refundEvent = (eventId: string, minorUnits: number): WebhookAction => {
             return { amount: money(minorUnits, "USD"), eventId, provider: "polar", sessionId: "ord_1", type: "payment.refunded" };
@@ -501,10 +532,10 @@ describe("createPayment", () => {
         let issued = 0;
         const adapter = fakeAdapter({
             identifier: "polar",
-            refundPayment: async () => {
+            refundPayment: async (input) => {
                 issued += 1;
 
-                return { ...polarSession, refundId: `ref_${String(issued)}` };
+                return { ...polarSession, refundedAmount: input.amount ?? money(1000, "USD"), refundId: `ref_${String(issued)}` };
             },
         });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
@@ -556,7 +587,7 @@ describe("createPayment", () => {
                 const replayed = byKey.get(key);
 
                 if (replayed) {
-                    return { ...captured, refundId: replayed.refundId };
+                    return { ...captured, refundedAmount: money(replayed.amount, "USD"), refundId: replayed.refundId };
                 }
 
                 const amount = input.amount?.minorUnits ?? captured.capturedAmount.minorUnits;
@@ -564,7 +595,7 @@ describe("createPayment", () => {
                 issued.push(amount);
                 byKey.set(key, { amount, refundId: `re_${String(issued.length)}` });
 
-                return { ...captured, refundId: `re_${String(issued.length)}` };
+                return { ...captured, refundedAmount: money(amount, "USD"), refundId: `re_${String(issued.length)}` };
             },
         });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
@@ -583,6 +614,63 @@ describe("createPayment", () => {
         await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(10_000n);
     });
 
+    it("books the amount the provider reports refunding, not the amount asked for", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        // Polar caps the refund at the order's refundable amount and adds tax, so it can differ.
+        const adapter = fakeAdapter({
+            identifier: "polar",
+            refundPayment: async () => {
+                return { ...polarSession, refundedAmount: money(250, "USD"), refundId: "ref_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(250n);
+
+        // The confirming webhook for the same refund id adds nothing on top.
+        await applyWebhookAction(store, {
+            amount: money(250, "USD"),
+            eventId: "evt_1",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "ord_1",
+            type: "payment.refunded",
+        });
+
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(250n);
+    });
+
+    it("books the amount asked for when the provider reports a zero amount (security regression)", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const dodoSession = { ...paymentSession("user_1"), id: "pay_1", provider: "dodopayments" as const };
+
+        await store.upsertPaymentSession(dodoSession);
+
+        // Dodo's response can omit the amount, which the adapter reads as 0. Booking that would claim
+        // the refund id's marker for nothing, and the confirming webhook would then be a duplicate.
+        const adapter = fakeAdapter({
+            identifier: "dodopayments",
+            refundPayment: async () => {
+                return { ...dodoSession, refundedAmount: money(0, "USD"), refundId: "ref_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.refundPayment({ sessionId: "pay_1" });
+
+        await expect(store.getPaymentSession("dodopayments", "pay_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(1000n);
+    });
+
     it("asks the provider for the remainder when a full refund follows a partial one", async () => {
         expect.assertions(4);
 
@@ -597,7 +685,7 @@ describe("createPayment", () => {
             refundPayment: async (input) => {
                 forwarded.push(input.amount?.minorUnits);
 
-                return { ...polarSession, refundId: `ref_${String(forwarded.length)}` };
+                return { ...polarSession, refundedAmount: input.amount ?? money(1000, "USD"), refundId: `ref_${String(forwarded.length)}` };
             },
         });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
@@ -923,7 +1011,7 @@ describe("createPayment", () => {
 
         await payment.cancelPayment("pi_1");
 
-        expect(forwardedKey).toBe("cancel_payment:stripe:pi_1");
+        expect(forwardedKey).toBe(await derivedIdempotencyKey("cancel_payment", "stripe", "pi_1"));
 
         const stored = await store.getPaymentSession("stripe", "pi_1");
 
@@ -1475,5 +1563,215 @@ describe("createPayment — attach / check / track", () => {
         // N metered features cost one batched read, not N per-feature scans.
         expect(sumUsage).not.toHaveBeenCalled();
         expect(sumUsageByFeature).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("createPayment — bug-hunt regressions", () => {
+    const entitlements = { plans: { pro: { features: ["export"], limits: { api_calls: 100 }, priceIds: ["price_1"] } } };
+
+    const owned = { authorize: (referenceId: string) => referenceId === "user_1" };
+
+    it("windows metered usage on the granting plan, so an unrelated subscription's fresh period does not reset it", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), currentPeriodStart: 1000 });
+
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), entitlements, store });
+
+        await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
+        // An add-on bought later — it grants nothing metered, and its period starts after the usage.
+        await store.upsertSubscription({
+            ...subscription("user_1", "active"),
+            currentPeriodStart: Date.now() + 1_000_000,
+            id: "sub_addon",
+            priceId: "price_addon",
+        });
+
+        await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ used: 30 });
+        await expect(payment.listBalances("user_1")).resolves.toContainEqual(expect.objectContaining({ featureId: "api_calls", used: 30 }));
+    });
+
+    it("check rejects a negative / non-integer quantity like track does", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), currentPeriodStart: 1000 });
+
+        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+
+        await payment.track({ featureId: "api_calls", quantity: 150, referenceId: "user_1" });
+
+        // Over the cap, a negative `need` made `balance >= need` true.
+        await expect(payment.check({ featureId: "api_calls", quantity: -100, referenceId: "user_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(payment.check({ featureId: "api_calls", quantity: 0.5, referenceId: "user_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("namespaces a caller's track key per reference, so one tenant cannot claim another's", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), store });
+
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "k1", quantity: 5, referenceId: "user_a" })).resolves.toMatchObject({
+            recorded: true,
+        });
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "k1", quantity: 7, referenceId: "user_b" })).resolves.toMatchObject({
+            recorded: true,
+        });
+        await expect(store.sumUsage("user_b", "api_calls", 0)).resolves.toBe(7);
+    });
+
+    it("namespaces a caller's checkout key per reference before it reaches the provider", async () => {
+        expect.assertions(2);
+
+        const keys: string[] = [];
+        const payment = createPayment({
+            adapter: fakeAdapter({
+                createCheckout: async (input) => {
+                    keys.push(input.idempotencyKey ?? "");
+
+                    return { id: "cs_1", provider: "stripe", url: "https://pay.test" };
+                },
+            }),
+            store: new MemoryPaymentStore(),
+        });
+        const checkout = { idempotencyKey: "k1", mode: "payment", priceId: "price_1", successUrl: "https://x/ok" } as const;
+
+        await payment.createCheckout({ ...checkout, referenceId: "user_a" });
+        await payment.createCheckout({ ...checkout, referenceId: "user_b" });
+
+        expect(keys[0]).not.toBe("k1");
+        expect(keys[0]).not.toBe(keys[1]);
+    });
+
+    it("keys a subscription cancel by mode and by the row's version", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const keys: string[] = [];
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id, cancelOptions) => {
+                keys.push(cancelOptions?.idempotencyKey ?? "");
+
+                return { ...subscription("user_1", "active"), cancelAtPeriodEnd: true, id };
+            },
+        });
+        const payment = createPayment({ adapter, ...owned, store });
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+        await store.upsertSubscription(subscription("user_1", "active"));
+        await payment.cancelSubscription("sub_1");
+        // Resumed (a later write moved `updatedAt`), then cancelled at period end again.
+        await store.upsertSubscription({ ...subscription("user_1", "active"), updatedAt: 50 });
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+
+        expect(keys[0]).not.toBe(keys[1]);
+        expect(keys[0]).not.toBe(keys[2]);
+        expect(keys[0]).toBe(await derivedIdempotencyKey("cancel_subscription", "stripe", "sub_1", "period_end", 0));
+    });
+
+    it("returns a subscription already in the requested end state without calling the provider", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        let calls = 0;
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id, cancelOptions) => {
+                calls += 1;
+
+                return cancelOptions?.atPeriodEnd
+                    ? { ...subscription("user_1", "active"), cancelAtPeriodEnd: true, id, updatedAt: 10 }
+                    : { ...subscription("user_1", "canceled"), id, updatedAt: 20 };
+            },
+        });
+        const payment = createPayment({ adapter, ...owned, store });
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+        // A client retry after the first cancel succeeded: the row's `updatedAt` moved, so a new key.
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+
+        expect(calls).toBe(1);
+
+        await payment.cancelSubscription("sub_1");
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "canceled" });
+
+        expect(calls).toBe(2);
+    });
+
+    it("books a refund onto the row as it is after the provider call, keeping a concurrent refund", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_1"));
+
+        const adapter = fakeAdapter({
+            identifier: "stripe",
+            refundPayment: async (input) => {
+                // A second refund of 30 lands while the provider is answering this one.
+                await store.upsertPaymentSession({ ...paymentSession("user_1"), refundedAmount: money(30, "USD"), state: "partially_refunded" });
+
+                return { ...paymentSession("user_1"), refundedAmount: input.amount ?? money(1000, "USD"), refundId: `re_${String(input.amount?.minorUnits)}` };
+            },
+        });
+        const payment = createPayment({ adapter, ...owned, store });
+
+        await payment.refundPayment({ amount: money(40, "USD"), sessionId: "pi_1" });
+
+        const stored = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(stored?.refundedAmount.minorUnits).toBe(70n);
+        expect(stored?.state).toBe("partially_refunded");
+    });
+
+    it("takes an absolute provider's cumulative total instead of adding to a row its webhook already booked", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_1"));
+
+        const adapter = fakeAdapter({
+            refundPayment: async () => {
+                // `charge.refunded` (cumulative 30, THIS refund) lands mid-call.
+                await store.upsertPaymentSession({ ...paymentSession("user_1"), refundedAmount: money(30, "USD"), state: "partially_refunded" });
+
+                return { ...paymentSession("user_1"), refundedTotal: money(30, "USD"), refundId: "re_1" };
+            },
+        });
+        const payment = createPayment({ adapter, ...owned, store });
+
+        await payment.refundPayment({ amount: money(30, "USD"), sessionId: "pi_1" });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ refundedAmount: money(30, "USD") });
+    });
+
+    it("acknowledges a stale subscription event with 200 and leaves the row alone", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const payment = createPayment({ adapter: fakeAdapter(), store });
+        const deliver = async (action: Partial<WebhookAction>): Promise<Response> =>
+            payment.handleWebhook(
+                new Request("https://x/webhook", {
+                    body: JSON.stringify({ provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1", ...action }),
+                    method: "POST",
+                }),
+            );
+
+        await deliver({ eventId: "e1", occurredAt: 1000, type: "subscription.active" });
+        await deliver({ eventId: "e2", occurredAt: 3000, type: "subscription.past_due" });
+
+        // The earlier `active`, redelivered after a 5xx.
+        const response = await deliver({ eventId: "e3", occurredAt: 2000, type: "subscription.active" });
+
+        expect(response.status).toBe(200);
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "past_due" });
     });
 });

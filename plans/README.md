@@ -1865,6 +1865,6 @@ API), and jurisdiction-aware KV / R2 checks for `.jurisdiction()` schemas (KV ju
 
 ## Experimental → stable (baseline `f65dd4fbd`, 2026-10-06)
 
-| Plan | Title                                                                      | Status                                                                                                        |
-| ---- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| 463  | [Graduate the experimental tier to stable](463-experimental-graduation.md) | IN PROGRESS (A: stable-tier `@experimental` tags dropped and gated, on `feat/stabilize-experimental-exports`) |
+| Plan | Title                                                                      | Status                                                                                                     |
+| ---- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 463  | [Graduate the experimental tier to stable](463-experimental-graduation.md) | IN PROGRESS (A: stable-tier `@experimental` tags dropped and gated, #1002; B1: `payment` graduated, #1001) |

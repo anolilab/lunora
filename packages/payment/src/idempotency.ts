@@ -43,15 +43,11 @@
  * `customers.create` type-checks and never leaves the process. Dodo's only working idempotency in
  * this SDK version is body-level (`event_id` on usage ingestion), which we do use.
  *
- * **A key is stable for the logical OPERATION, not fresh per attempt.** A plan change is keyed on
- * the subscription AND the target plan/quantity, so an identical retry replays while a different
- * target is a different key — one key across two parameter sets is a provider-side mismatch error.
- * The cost of that stability is a toggle: re-issuing a target that was applied and then changed
- * away from, inside the provider's idempotency window (24h on Stripe), replays the first response
- * instead of acting. Pass an explicit key (`SubscriptionPatch.idempotencyKey`,
- * `CancelSubscriptionOptions.idempotencyKey`, `resumeSubscription`'s `options`) for that case.
- * Those overrides are honoured by the Stripe adapter only — per the list above, no other
- * provider's plan-change endpoint accepts a key at all.
+ * **A key is stable for the logical OPERATION, not fresh per attempt**, and changes when the
+ * operation does: captures and refunds key on their amount, a subscription cancel on its mode and the
+ * row's `updatedAt`. Plan changes and resumes derive no key (they set absolute state, so a retry is a
+ * no-op). Every key the facade forwards is hashed and namespaced to the object it acts on, a
+ * caller-supplied one included, so one tenant's key never claims another's.
  */
 import type { Money, ProviderId } from "./types";
 
@@ -73,7 +69,6 @@ const sha256Hex = async (value: string): Promise<string> =>
 
 /**
  * Build a deterministic idempotency key from an operation name and stable parts.
- * @experimental
  */
 export const idempotencyKey = (operation: string, ...parts: ReadonlyArray<number | string>): string => [operation, ...parts.map(String)].join(":");
 

@@ -11,37 +11,28 @@ lunora registry add payment
 This:
 
 1. Adds `@lunora/payment`, `@lunora/server`, and `stripe` to your `package.json` (run `pnpm install` afterwards).
-2. Copies `lunora/payment/schema.ts` (the payment tables to declare) and `lunora/payment/index.ts` (the `checkout` / `track` / `check` / `portal` / `mySubscriptions` / `processWebhook` functions) into your project — these are **yours** to edit.
+2. Copies `lunora/payment/index.ts` (the `checkout` / `track` / `check` / `portal` / `mySubscriptions` / `processWebhook` functions) into your project — these are **yours** to edit.
 3. Scaffolds `APP_BASE_URL`, `STRIPE_SECRET_KEY`, and `STRIPE_WEBHOOK_SECRET` into `.dev.vars`.
 4. Declares `APP_BASE_URL` in your `wrangler.jsonc` `vars` (an empty value you fill in — see §4). Your existing `vars` are kept; a key you already set is left alone and the skip is reported.
 
-## 1. Declare the payment tables — do this first
+## 1. Merge the payment tables — do this first
 
-**Copy the five table declarations from `lunora/payment/schema.ts` into your own `lunora/schema.ts`, inline.** Until you do, the first `ctx.payments.*` call — and `mySubscriptions` — fails with `UNKNOWN_TABLE`.
+Add one `.extend` to your `lunora/schema.ts`. Until you do, the first `ctx.payments.*` call — and `mySubscriptions` — fails with `UNKNOWN_TABLE`.
 
 ```ts
 // lunora/schema.ts
+import { paymentExtension } from "@lunora/payment";
+
 export default defineSchema({
     // ... your app tables
-
-    customers: defineTable({ … }).index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true }).index("by_reference", ["referenceId"]),
-    events: defineTable({ … }).index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
-    paymentSessions: defineTable({ … }),
-    subscriptions: defineTable({ … }),
-    usageEvents: defineTable({ … }),
-});
+}).extend(paymentExtension);
 ```
 
-Two shortcuts that look like they should work and don't:
-
-- **`defineSchema({ ...paymentTables })`** — codegen discovers tables by parsing `lunora/schema.ts` as an AST. A spread is not a property assignment, so it is skipped in silence and you get a schema with no payment tables at all.
-- **`.extend(payment.extension)`** — the schema-extension merge auto-prefixes extension tables with the plugin key (`payment_subscriptions`), while `@lunora/payment`'s store reads the bare names. A prefixed merge leaves `ctx.payments` reading tables that don't exist.
-
-Declaring them inline is also what lets you chain `.global()` on a read-heavy table (`subscriptions`) so cross-region reads are served from D1.
+The tables ship with `@lunora/payment` and merge namespaced as `payment_customers`, `payment_events`, `payment_sessions`, `payment_subscriptions` and `payment_usageEvents`. Codegen reads them from the installed package, so upgrading `@lunora/payment` brings new columns and indexes with no schema edit.
 
 ## 2. Wire the adapter
 
-In your Worker entry's `createShardDO({ … })` call. Note that `createStripeAdapter` takes a **single options object** — not positional `(client, webhookSecret)`. The thunk receives `env` and nothing else — there is no `ctx` in scope — and the default authorizer already ties `referenceId` to `ctx.auth.userId`, so pass `authorize` only to express a different rule (an org or workspace key):
+In your Worker entry's `createShardDO({ … })` call. Note that `createStripeAdapter` takes a **single options object** — not positional `(client, webhookSecret)`. The default authorizer already ties `referenceId` to `ctx.auth.userId`, so pass `authorize` only to express a different rule (an org or workspace key) — it runs per request as `(referenceId, { db, userId })`, with the caller's `userId` and the request's `ctx.db`:
 
 ```ts
 import { createStripeAdapter } from "@lunora/payment/stripe";

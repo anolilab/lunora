@@ -59,7 +59,9 @@ develop against it first, then flip to production.
 **An access token.** In the Polar dashboard, open your organization
 **Settings → General → Developers** and create an **Organization Access Token**.
 This is the `POLAR_ACCESS_TOKEN` the SDK authenticates with. See
-[Authentication](https://polar.sh/docs/integrate/authentication).
+[Authentication](https://polar.sh/docs/integrate/authentication). To issue refunds
+through `refundPayment`, the token needs `refunds:write` **and** `orders:read`:
+every refund, full or partial, first reads the order to convert the amount to net.
 
 </Step>
 <Step>
@@ -150,9 +152,8 @@ export const ShardDO = createShardDO({
 </Step>
 <Step>
 
-**Mirror the payment tables into your `lunora/schema.ts`.** Codegen resolves
-tables from your schema AST, so declare the columns inline mirroring
-`@lunora/payment`'s exported `paymentTables` (see
+**Merge the payment tables into your `lunora/schema.ts`** with
+`.extend(paymentExtension)` (see
 [Data it stores](/docs/packages/payment#data-it-stores)). The store, built per
 request from `ctx.db`, owns all synced state; Polar stays a stateless
 translator.
@@ -368,17 +369,17 @@ idempotency key backing the append-only `events` log.
 
 The adapter translates these Polar events into normalized transitions:
 
-| Polar event                                   | Normalized action                                             | Notes                                                                                                                                                                                               |
-| --------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `order.created`, `order.paid`                 | `payment.captured`                                            | `order.created` maps only when the order's `status` is already paid, otherwise it is `unhandled` until `order.paid`. Amount from `total_amount` (falls back to `amount`); currency from `currency`. |
-| `refund.created`                              | `payment.refunded` (delta)                                    | `amount` is this single refund; `sessionId` from `order_id`.                                                                                                                                        |
-| `subscription.created`, `subscription.active` | `subscription.active`                                         | Routed by the subscription's `status` field.                                                                                                                                                        |
-| `subscription.updated`                        | `subscription.active` / `.past_due` / `.paused` / `.canceled` | Derived from `status`; an unrecognized `status` fails closed to `subscription.past_due`.                                                                                                            |
-| `subscription.canceled`                       | derived from `status`                                         | Status-driven.                                                                                                                                                                                      |
-| `subscription.revoked`                        | `subscription.canceled`                                       | Access revoked → terminal cancel.                                                                                                                                                                   |
-| anything else                                 | `unhandled`                                                   | Verified and logged (idempotency), but no state change.                                                                                                                                             |
+| Polar event                                                               | Normalized action                                             | Notes                                                                                                                                                                                               |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `order.created`, `order.paid`                                             | `payment.captured`                                            | `order.created` maps only when the order's `status` is already paid, otherwise it is `unhandled` until `order.paid`. Amount from `total_amount` (falls back to `amount`); currency from `currency`. |
+| `refund.created`, `refund.updated`                                        | `payment.refunded` (delta)                                    | Only once `status` is `succeeded`. `amount + tax_amount` (tax-inclusive, like the capture); `sessionId` from `order_id`.                                                                            |
+| `subscription.created`, `subscription.active`                             | `subscription.active`                                         | Routed by the subscription's `status` field.                                                                                                                                                        |
+| `subscription.updated`, `.paused`, `.resumed`, `.past_due`, `.uncanceled` | `subscription.active` / `.past_due` / `.paused` / `.canceled` | Derived from `status`; an unrecognized `status` fails closed to `subscription.past_due`.                                                                                                            |
+| `subscription.canceled`                                                   | derived from `status`                                         | Status-driven.                                                                                                                                                                                      |
+| `subscription.revoked`                                                    | `subscription.canceled`                                       | Access revoked → terminal cancel.                                                                                                                                                                   |
+| anything else                                                             | `unhandled`                                                   | Verified and logged (idempotency), but no state change.                                                                                                                                             |
 
-Polar's subscription `status` values (`active`, `trialing`, `past_due`,
+Polar's subscription `status` values (`active`, `trialing`, `past_due`, `paused`,
 `canceled`, `incomplete`, `incomplete_expired`, `unpaid`) map onto Lunora's
 subscription states. For safety, `incomplete` (first payment not completed) maps
 to non-entitling `past_due`, **not** an entitling state; only a genuine
@@ -397,10 +398,13 @@ which matches the payment session created from `order.paid`.
 ```ts
 import { money } from "@lunora/payment";
 
-// Full refund; omit `reason` and the adapter sends Polar's `customer_request`.
+// Full refund of what is still refundable; omit `reason` and the adapter sends Polar's
+// `customer_request` (a reason outside Polar's enum is sent as `other`).
 await ctx.payments.refundPayment({ sessionId: orderId });
 
-// Partial refund — amount is Money (integer minor units + currency).
+// Partial refund — amount is Money (integer minor units + currency), tax-inclusive like the
+// captured total. Polar refunds NET amounts plus the matching tax, so the adapter converts at the
+// order's net:tax ratio (can land a cent off Polar's own tax rounding).
 await ctx.payments.refundPayment({ sessionId: orderId, amount: money(500n, "USD") });
 ```
 

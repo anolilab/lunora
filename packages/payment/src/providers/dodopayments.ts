@@ -17,8 +17,8 @@ import type DodoPayments from "dodopayments";
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import { idempotencyKey } from "../idempotency";
-import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
-import { money, zeroMoney } from "../money";
+import { asRecord, readBoolean, readEpochMs, readNumber, readString, referenceFromMetadata } from "../json";
+import { money, moneyFromMinor, zeroMoney } from "../money";
 import type {
     CaptureInput,
     CheckoutInput,
@@ -43,7 +43,6 @@ import stateToEventType from "./subscription-event";
  * The `dodopayments` SDK surface the adapter uses, as a structural type — a real `DodoPayments`
  * instance satisfies it without a cast. Resources are `unknown` (the adapter re-types the client as
  * the real `DodoPayments` internally); this keeps the SDK's full type out of the published declarations.
- * @experimental
  */
 interface DodoPaymentsClientLike {
     readonly checkoutSessions: unknown;
@@ -54,10 +53,6 @@ interface DodoPaymentsClientLike {
     readonly usageEvents: unknown;
 }
 
-/**
- * `DodoPaymentsAdapterOptions` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 interface DodoPaymentsAdapterOptions {
     readonly client: DodoPaymentsClientLike;
     readonly webhookSecret: string;
@@ -87,6 +82,7 @@ const SUBSCRIPTION_STATE_BY_DODO_STATUS: Record<string, SubscriptionState> = {
     // Treat them as non-entitling `past_due`; Dodo has no trial status in this enum.
     failed: "past_due",
     on_hold: "past_due",
+    past_due: "past_due",
     // A paused subscription is non-entitling until it resumes, but distinct from dunning — it maps to
     // the `paused` state so a `subscription.paused` webhook routes to `subscription.paused` (not the
     // generic `subscription.updated`) and stays consistent with `subscriptionFromDodo`.
@@ -118,7 +114,7 @@ const readMinorUnits = (object: Record<string, unknown>, key: string): bigint | 
     const value = object[key];
 
     if (typeof value === "number") {
-        // Round before BigInt, as elsewhere in this adapter: a stray fractional number would throw a
+        // Round before BigInt, as `moneyFromMinor` does: a stray fractional number would throw a
         // RangeError out of the parse path (a webhook 400 → provider retry loop).
         return Number.isFinite(value) ? BigInt(Math.round(value)) : undefined;
     }
@@ -137,13 +133,14 @@ const subscriptionFromDodo = (input: unknown): Subscription => {
     return {
         cancelAtPeriodEnd: readBoolean(subscription, "cancel_at_next_billing_date") ?? false,
         createdAt: now,
-        currentPeriodEnd: parseTimestamp(readString(subscription, "next_billing_date")),
-        currentPeriodStart: parseTimestamp(readString(subscription, "previous_billing_date")),
+        currentPeriodEnd: readEpochMs(subscription, "next_billing_date"),
+        currentPeriodStart: readEpochMs(subscription, "previous_billing_date"),
         id: readString(subscription, "subscription_id") ?? "",
         priceId: readString(subscription, "product_id") ?? "",
         provider: "dodopayments",
         quantity: readNumber(subscription, "quantity") ?? 1,
-        referenceId: referenceFromMetadata(subscription) ?? customerIdOf(subscription) ?? "",
+        // Never the customer id: `sync.ts` adopts an orphan row only while its referenceId is "".
+        referenceId: referenceFromMetadata(subscription) ?? "",
         // Fail closed: an unrecognized Dodo status is treated as non-entitling `past_due`.
         state: SUBSCRIPTION_STATE_BY_DODO_STATUS[status] ?? "past_due",
         updatedAt: now,
@@ -182,9 +179,7 @@ const paymentFromDodo = (input: unknown): PaymentSession => {
     const payment = asRecord(input);
     const now = Date.now();
     const currency = readString(payment, "currency") ?? "usd";
-    // Round before BigInt: Dodo documents integer minor units, but a stray fractional amount would
-    // throw a RangeError out of the parse path (a webhook 400 → provider retry loop). Match Autumn.
-    const amount = money(BigInt(Math.round(readNumber(payment, "total_amount") ?? 0)), currency);
+    const amount = moneyFromMinor(readNumber(payment, "total_amount") ?? 0, currency);
     const captured = PAYMENT_STATE_BY_DODO_STATUS[readString(payment, "status") ?? ""] ?? "initiated";
     const capturedAmount = captured === "captured" ? amount : zeroMoney(currency);
 
@@ -253,7 +248,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "payment.succeeded": {
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "total_amount") ?? 0)), currency),
+                amount: moneyFromMinor(readNumber(object, "total_amount") ?? 0, currency),
                 customerId: customerIdOf(object),
                 referenceId: referenceFromMetadata(object),
                 sessionId: readString(object, "payment_id"),
@@ -267,13 +262,15 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.expired":
         case "subscription.failed":
         case "subscription.on_hold":
+        case "subscription.past_due":
         case "subscription.paused":
         case "subscription.plan_changed":
         case "subscription.renewed":
+        case "subscription.unpaused":
         case "subscription.updated": {
-            // The event name is authoritative for a pause: Dodo's `SubscriptionStatus` is
-            // pending|active|on_hold|cancelled|failed|expired, with no `paused` member, so a
-            // `subscription.paused` payload cannot say so itself. Read from the status alone, a
+            // The event name is authoritative for a pause: older Dodo `SubscriptionStatus` generations
+            // (pending|active|on_hold|cancelled|failed|expired) have no `paused` member, so a
+            // `subscription.paused` payload cannot always say so itself. Read from the status alone, a
             // deliberate pause landed on the fail-closed `past_due` and raised the dunning alert
             // `sync.ts` emits for it. `paused` is non-entitling either way — this only stops a
             // customer-initiated pause from being reported as a failed payment.
@@ -291,12 +288,12 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             return {
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_next_billing_date"),
-                currentPeriodEnd: parseTimestamp(readString(object, "next_billing_date")),
-                currentPeriodStart: parseTimestamp(readString(object, "previous_billing_date")),
+                currentPeriodEnd: readEpochMs(object, "next_billing_date"),
+                currentPeriodStart: readEpochMs(object, "previous_billing_date"),
                 customerId: customerIdOf(object),
                 priceId: readString(object, "product_id"),
                 quantity: readNumber(object, "quantity"),
-                referenceId: referenceFromMetadata(object) ?? customerIdOf(object),
+                referenceId: referenceFromMetadata(object),
                 subscriptionId: readString(object, "subscription_id"),
                 // Fail closed before `stateToEventType` — an unmapped status must not degrade to a
                 // state-preserving metadata patch.
@@ -311,10 +308,6 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
-/**
- * `createDodoPaymentsAdapter` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the injected client as the real `DodoPayments` internally so every call is checked against the SDK.
@@ -401,7 +394,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             const event = asRecord(JSON.parse(payload));
 
             // Standard Webhooks carries no body id, so the `webhook-id` header is our idempotency key.
-            return mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data));
+            // `timestamp` is the body's ISO-8601 "when the event occurred" — the ordering key for sync.
+            return { ...mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data)), occurredAt: readEpochMs(event, "timestamp") };
         },
 
         refundPayment: async (input: RefundInput) => {
@@ -417,7 +411,7 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
 
             const refund = asRecord(await client.refunds.create({ payment_id: input.sessionId, reason: input.reason }));
             const currency = readString(refund, "currency") ?? "usd";
-            const refundedAmount = money(BigInt(Math.round(readNumber(refund, "amount") ?? 0)), currency);
+            const refundedAmount = moneyFromMinor(readNumber(refund, "amount") ?? 0, currency);
 
             // Dodo refunds can settle asynchronously (`pending`/`review` → later `refund.succeeded` or
             // `refund.failed`). Reflect the refund's real status instead of optimistically claiming

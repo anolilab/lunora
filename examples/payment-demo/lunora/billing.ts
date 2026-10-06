@@ -99,7 +99,7 @@ export const portal = action
  */
 export const mySubscriptions = query.query(async ({ ctx }): Promise<SubscriptionRow[]> => {
     const rows = await ctx.db
-        .query("subscriptions")
+        .query("payment_subscriptions")
         .withIndex("by_reference", (q) => q.eq("referenceId", DEMO_REFERENCE))
         .collect();
 

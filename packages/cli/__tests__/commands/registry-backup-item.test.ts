@@ -5,7 +5,7 @@
  * `registry/tsconfig.json`, which type-checks the items and cannot catch a
  * serialiser that throws on a `bigint`. That is exactly what shipped here — the
  * item wrote its NDJSON with a bare `JSON.stringify`, so a `v.bigint()` column
- * (the `payment` item ships three) made every scheduled run throw and write
+ * (`@lunora/payment` declares three) made every scheduled run throw and write
  * nothing, while a `v.bytes()` column flattened to `{}` and reported healthy
  * counts. `packages/cli/vitest.config.ts` aliases the three specifiers the item
  * imports so it can be invoked here with a stub `ctx`.

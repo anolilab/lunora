@@ -16,12 +16,10 @@
  * `PaymentAdapter` contract.
  *
  * **Post-add wiring** (see `docs` in registry.json):
- *   0. **Declare the payment tables in your own `lunora/schema.ts`.** Copy the
- *      block from `lunora/payment/schema.ts` (shipped by this item) into your
- *      `defineSchema({ … })` call. Codegen parses that file as an AST, so a
- *      spread (`defineSchema({ ...paymentTables })`) is silently skipped, and a
- *      `.extend(...)` merge would prefix the names the store reads. Skip this
- *      and the first `ctx.payments.*` call fails with `UNKNOWN_TABLE`.
+ *   0. **Merge the payment tables into your `lunora/schema.ts`**:
+ *      `defineSchema({ … }).extend(paymentExtension)`, with `paymentExtension`
+ *      imported from `@lunora/payment`. Skip this and the first `ctx.payments.*`
+ *      call fails with `UNKNOWN_TABLE`.
  *   1. Wire `payment: (env) => ({ adapter: ..., ... })` in your worker entry
  *      `createShardDO({ ... })` call — the adapter reads `STRIPE_SECRET_KEY`
  *      and `STRIPE_WEBHOOK_SECRET` from env.
@@ -58,8 +56,6 @@ import { LunoraError } from "@lunora/errors";
 import type { SubscriptionState } from "@lunora/payment";
 import { action, internalAction, query, v } from "#lunora/_generated/server.js";
 import type { CloudflareBindings } from "#lunora/_generated/server.js";
-
-import { SUBSCRIPTIONS_TABLE } from "./schema.js";
 
 /**
  * The Worker's bindings, narrowed so they can be looked up by name.
@@ -205,7 +201,7 @@ const readOptionalStringArray = (row: Record<string, unknown>, column: string): 
  * What a billing screen reads. A hand-rolled projection rather than
  * `@lunora/payment`'s `Subscription` because this is a `query` and the canonical
  * decoder sits behind `ctx.payments`, which is ActionCtx-only — so the field set
- * here has to be kept in step with `packages/payment/src/schema.ts` by hand.
+ * here has to be kept in step with `@lunora/payment`'s `paymentExtension` by hand.
  */
 interface SubscriptionRow {
     /** Outranks `state` in the UI: a subscription can be `active` AND ending. */
@@ -240,8 +236,8 @@ interface SubscriptionRow {
  *
  * A `query` rather than an action because this is the one payment read that
  * should stay live — `ctx.payments` is ActionCtx-only, so it reads the
- * `subscriptions` table directly. That table has to exist: declare it in your
- * `lunora/schema.ts` from `lunora/payment/schema.ts` (see the file header).
+ * `payment_subscriptions` table directly. That table exists once your
+ * `lunora/schema.ts` merges `paymentExtension` (see the file header).
  *
  * The `by_reference` index is given its `.eq()` predicate, so the scan is bounded
  * to this caller's rows. Without it `withIndex("by_reference")` collects EVERY
@@ -256,7 +252,7 @@ export const mySubscriptions = query.query(async ({ ctx }): Promise<Subscription
     }
 
     const rows = await ctx.db
-        .query(SUBSCRIPTIONS_TABLE)
+        .query("payment_subscriptions")
         .withIndex("by_reference", (q) => q.eq("referenceId", referenceId))
         .collect();
 

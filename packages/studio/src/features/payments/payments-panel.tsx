@@ -24,7 +24,9 @@ type Row = Record<string, unknown>;
 
 // The `@lunora/payment` store tables this panel reads — used as the runtime
 // read-safety guard (a `readTablePage` on a missing table errors).
-const PAYMENT_STORE_TABLES = ["subscriptions", "events"] as const;
+const SUBSCRIPTIONS_TABLE = "payment_subscriptions";
+const EVENTS_TABLE = "payment_events";
+const PAYMENT_STORE_TABLES = [SUBSCRIPTIONS_TABLE, EVENTS_TABLE] as const;
 
 /** Stable empty args for the no-argument `listTables` presence probe (avoids a fresh object each render). */
 const NO_ARGS: Record<string, unknown> = {};
@@ -39,7 +41,7 @@ const ALERT_STATES = new Set(["past_due", "unpaid"]);
  *
  * Goes through the shared {@link decodeDocument}, so this reader can't disagree
  * with the writer about what a stored value means. No visible change today —
- * the payment schema's only `v.bigint()` columns are on `paymentSessions`, which
+ * the payment schema's only `v.bigint()` columns are on `payment_sessions`, which
  * this panel never reads — but it keeps the surface honest if it ever does.
  */
 const readField = (row: Row, key: string): unknown => {
@@ -83,9 +85,8 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
     // hides a working page.
     const features = useStudioFeatures();
 
-    // Presence probe: the payment store tables only exist when the app hand-declares
-    // them in its schema (codegen can't resolve `@lunora/payment`'s cross-package table
-    // spread), so a bare `readTablePage` on a missing table errors. Nav gating already
+    // Presence probe: the payment store tables only exist when the app's schema merges
+    // `paymentExtension`, so a bare `readTablePage` on a missing table errors. Nav gating already
     // hides this page for an app that never declares them, but a worker predating the
     // `studioFeatures` RPC falls back to "show everything" — so gate the reads on the
     // codegen flag AND confirm the tables are actually present, rendering a helpful
@@ -109,7 +110,7 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
             offset: 0,
             orderBy: { column: "updatedAt", direction: "desc" },
             search: "",
-            table: "subscriptions",
+            table: SUBSCRIPTIONS_TABLE,
         },
         { enabled: hasPaymentTables },
     );
@@ -121,13 +122,13 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
             offset: 0,
             orderBy: { column: "processedAt", direction: "desc" },
             search: "",
-            table: "events",
+            table: EVENTS_TABLE,
         },
         { enabled: hasPaymentTables },
     );
     // Per-state counts over the WHOLE table, so "N active" is not capped at the
     // page the list shows.
-    const statesQuery = useAdminQuery<FacetResult>(ADMIN_FUNCTIONS.facetColumn, { column: "state", table: "subscriptions" }, { enabled: hasPaymentTables });
+    const statesQuery = useAdminQuery<FacetResult>(ADMIN_FUNCTIONS.facetColumn, { column: "state", table: SUBSCRIPTIONS_TABLE }, { enabled: hasPaymentTables });
 
     // The payment sync store has no client-observable write event to push on, so
     // poll (skipped while the tab is hidden by `useAutoRefresh`). Skip the poll when
@@ -162,7 +163,7 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
             <div className="flex flex-col gap-4" data-testid="payments-panel">
                 <EmptyState
                     description={t(
-                        "No @lunora/payment tables found in this deployment. Declare the store tables (subscriptions, events, …) in lunora/schema.ts and wire `payment` on createShardDO() to sync customers and subscriptions.",
+                        "No @lunora/payment tables found in this deployment. Add `.extend(paymentExtension)` to lunora/schema.ts and wire `payment` on createShardDO() to sync customers and subscriptions.",
                     )}
                     testId="payments-unconfigured"
                     title={t("No payments configured")}

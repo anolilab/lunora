@@ -11,7 +11,7 @@
  *
  * Any write through the writer heals a row, because `encodeDocJson` re-encodes
  * the whole document. **So what is left is the rows nobody rewrites** — for
- * `@lunora/payment`'s `paymentSessions`, precisely the settled sessions, which
+ * `@lunora/payment`'s `payment_sessions`, precisely the settled sessions, which
  * are the ones most likely to be queried by amount and least likely to be
  * written again.
  *

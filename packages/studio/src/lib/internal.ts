@@ -145,7 +145,7 @@ export const formatBytes = (bytes: null | number | undefined): string => {
  * reaches the studio as a real `bigint` and a `v.bytes()` column as an
  * `ArrayBuffer`. `JSON.stringify` **throws** on the former and flattens the
  * latter to `{}` — so any surface that serializes a row (the JSON view, the JSON
- * export) dies or loses data on a table like `paymentSessions`. Both render
+ * export) dies or loses data on a table like `payment_sessions`. Both render
  * exactly as {@link formatCell} renders them; JSON has no bigint, so a decimal
  * string is the honest form.
  *

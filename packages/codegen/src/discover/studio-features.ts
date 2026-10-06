@@ -20,15 +20,13 @@ interface StudioFeatureSignals {
     dependencies: ReadonlySet<string>;
 
     /**
-     * The app declares the `@lunora/payment` store's `subscriptions` **and** `events` tables — the
-     * two the Payments panel reads — identified by their *signature columns*, not merely their
-     * (generic) names (see `hasPaymentStoreTables`). Unlike every other feature, payments has
-     * no fail-open dependency arm: the panel queries these tables directly, so merely depending on
-     * `@lunora/payment` (e.g. to reuse its pure webhook-verification / idempotency-key helpers)
-     * without hand-declaring the store's tables would show a page that errors with `unknown table:
-     * subscriptions`. Gating on the tables' presence makes the page appear exactly when it can
-     * actually render — and gating on their *shape* keeps an unrelated newsletter `subscriptions`
-     * or domain `events` table from spuriously flipping it on.
+     * The app merges the `@lunora/payment` store's `payment_subscriptions` **and** `payment_events`
+     * tables — the two the Payments panel reads — identified by name and *signature columns* (see
+     * `hasPaymentStoreTables`). Unlike every other feature, payments has no fail-open dependency
+     * arm: the panel queries these tables directly, so merely depending on `@lunora/payment` (e.g.
+     * to reuse its pure webhook-verification / idempotency-key helpers) without
+     * `.extend(paymentExtension)` would show a page that errors with `unknown table`. Gating on the
+     * tables' presence makes the page appear exactly when it can actually render.
      */
     hasPaymentTables: boolean;
     /** Number of declared queues — any `defineQueue` means the queues page is relevant. */
@@ -95,10 +93,9 @@ interface StudioFeatureSignals {
  * hidden page.
  *
  * `payments` is the lone exception: it has no dependency arm. Its panel reads the
- * `subscriptions`/`events` tables directly, which the app must hand-declare in its
- * schema (codegen can't resolve `@lunora/payment`'s cross-package table spread), so
- * a dependency-only signal would fail *open into an error* rather than an empty
- * page. It gates on {@link StudioFeatureSignals.hasPaymentTables} — the store tables'
+ * `payment_subscriptions`/`payment_events` tables directly, which exist only once
+ * the app's schema merges `paymentExtension`, so a dependency-only signal would
+ * fail *open into an error* rather than an empty page. It gates on {@link StudioFeatureSignals.hasPaymentTables} — the store tables'
  * actual presence, matched by their signature columns (`hasPaymentStoreTables`)
  * — instead, so the page shows exactly when it can render.
  */

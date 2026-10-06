@@ -21,11 +21,11 @@ const EVENTS: Row[] = [
 ];
 
 // Table names the `listTables` presence probe reports — the panel gates its reads
-// on `subscriptions` showing up here. `undefined` means "deployment declares no
+// on `payment_subscriptions` showing up here. `undefined` means "deployment declares no
 // payment tables" (the unconfigured case).
 const PAYMENT_TABLES = [
-    { name: "subscriptions", rowCount: 0 },
-    { name: "events", rowCount: 0 },
+    { name: "payment_subscriptions", rowCount: 0 },
+    { name: "payment_events", rowCount: 0 },
 ];
 
 const createClient = (subscriptions: Row[] = SUBSCRIPTIONS, events: Row[] = EVENTS, tables: Row[] | undefined = PAYMENT_TABLES): MockClientHooks =>
@@ -38,11 +38,11 @@ const createClient = (subscriptions: Row[] = SUBSCRIPTIONS, events: Row[] = EVEN
             if (reference === ADMIN_FUNCTIONS.readTablePage) {
                 const { table } = args as { table?: string };
 
-                if (table === "subscriptions") {
+                if (table === "payment_subscriptions") {
                     return { columns: [], rows: subscriptions, total: subscriptions.length };
                 }
 
-                if (table === "events") {
+                if (table === "payment_events") {
                     return { columns: [], rows: events, total: events.length };
                 }
             }
@@ -94,7 +94,7 @@ describe("paymentsPanel", () => {
 
         // A worker predating the `studioFeatures` RPC shows every page; without the
         // store tables the panel must guide the user rather than surface an
-        // "unknown table: subscriptions" error.
+        // "unknown table: payment_subscriptions" error.
         render(renderPanel(createClient([], [], [])));
 
         const unconfigured = await screen.findByTestId("payments-unconfigured");
@@ -147,7 +147,7 @@ describe("paymentsPanel — past the first page", () => {
         const mock = createMockClient({
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.listTables) {
-                    return [{ name: "subscriptions" }, { name: "events" }];
+                    return [{ name: "payment_subscriptions" }, { name: "payment_events" }];
                 }
 
                 if (reference === ADMIN_FUNCTIONS.facetColumn) {
@@ -163,7 +163,7 @@ describe("paymentsPanel — past the first page", () => {
                 reads.push(args as Record<string, unknown>);
 
                 // 150 subscriptions, of which the panel loads one page.
-                return (args as { table: string }).table === "subscriptions"
+                return (args as { table: string }).table === "payment_subscriptions"
                     ? { columns: [], rows: SUBSCRIPTIONS, total: 150 }
                     : { columns: [], rows: EVENTS, total: 60 };
             },
@@ -178,7 +178,7 @@ describe("paymentsPanel — past the first page", () => {
         await screen.findByText("150 total");
 
         expect(screen.getByTestId("payments-summary").textContent).toContain("140 active");
-        expect(reads.find((args) => args["table"] === "subscriptions")?.["orderBy"]).toStrictEqual({ column: "updatedAt", direction: "desc" });
-        expect(reads.find((args) => args["table"] === "events")?.["orderBy"]).toStrictEqual({ column: "processedAt", direction: "desc" });
+        expect(reads.find((args) => args["table"] === "payment_subscriptions")?.["orderBy"]).toStrictEqual({ column: "updatedAt", direction: "desc" });
+        expect(reads.find((args) => args["table"] === "payment_events")?.["orderBy"]).toStrictEqual({ column: "processedAt", direction: "desc" });
     });
 });

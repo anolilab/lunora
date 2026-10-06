@@ -211,8 +211,8 @@ The adapter options:
 />
 
 <Callout type="info">
-    Pin the store's read-heavy tables (e.g. `subscriptions`) with `.global()` in your own `lunora/schema.ts` for cross-region reads; see [Data it
-    stores](/docs/packages/payment#data-it-stores). The provider is stateless; the store owns all state.
+    Merge the store's tables into your `lunora/schema.ts` with `.extend(paymentExtension)`; see [Data it stores](/docs/packages/payment#data-it-stores). The
+    provider is stateless; the store owns all state.
 </Callout>
 
 ### Autumn-native features
@@ -381,10 +381,13 @@ export const processWebhook = internalAction
 In the Autumn dashboard → **webhook settings** → add an endpoint pointing at your
 deployed route (e.g. `https://your-worker.example.com/payment/webhook`), then copy
 its signing secret into `AUTUMN_WEBHOOK_SECRET`. Autumn's event catalog is
-dashboard-configured; the events it can emit are
-`billing.updated`, `balances.limit_reached`, `balances.usage_alert_triggered`, and
-`billing.auto_topup_succeeded`
-([webhooks docs](https://docs.useautumn.com/documentation/webhooks)).
+dashboard-configured; the events it can emit include
+`customer.products.updated`, `billing.updated`, `balances.limit_reached`,
+`balances.usage_alert_triggered`, and `billing.auto_topup_succeeded`
+([webhooks docs](https://docs.useautumn.com/documentation/webhooks)). The adapter
+maps `customer.products.updated` and `billing.updated` to subscription
+transitions and `billing.auto_topup_succeeded` to a captured payment; the rest
+are verified and recorded as `unhandled`.
 
 ### The signature scheme
 

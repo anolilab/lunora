@@ -791,8 +791,8 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
  * Parse the base `defineSchema({ table: defineTable(...) })` object literal into
  * {@link TableIR}s.
  *
- * A spread is followed when it names a readable table map — `registry/payment`
- * exports `paymentTables` as exactly that — so those tables reach the data model
+ * A spread is followed when it names a readable table map (a local
+ * `const sharedTables = { ... }`), so those tables reach the data model
  * instead of vanishing from it. One built by a CALL (`...authTables(options)`,
  * the documented `@lunora/auth` wiring) has no literal to read and is skipped,
  * exactly as every spread was before. Not an error: that path has no inline form

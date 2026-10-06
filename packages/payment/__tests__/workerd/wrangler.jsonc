@@ -1,0 +1,14 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin` to boot the
+// test Worker in real workerd. Not deployed. The one SQLite-backed Durable Object
+// hosts the payment tables, so the store runs on the storage an app's ShardDO uses.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-payment-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "class_name": "PaymentStoreDO", "name": "PAYMENT_DO" }],
+    },
+    "migrations": [{ "new_sqlite_classes": ["PaymentStoreDO"], "tag": "v1" }],
+}

@@ -1009,7 +1009,7 @@ export const mySubs = action({ args: { reference: v.string() }, handler: async (
             const result = runCodegen({ projectRoot: workdir });
 
             expect(result.generated.shard).toContain('import { paymentsFromContext } from "@lunora/payment"');
-            expect(result.generated.shard).toContain("payments,");
+            expect(result.generated.shard).toContain("get payments(): LunoraPayment {");
             expect(result.generated.shard).toContain("paymentStub");
             expect(result.generated.server).toContain('readonly payments: import("@lunora/payment").LunoraPayment;');
         });
@@ -4626,7 +4626,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("wires ctx.payments into the ShardDO when payments are used", () => {
-            expect.assertions(5);
+            expect.assertions(8);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
@@ -4636,7 +4636,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;");
             expect(output).toContain("const paymentStub: LunoraPayment");
             expect(output).toContain("config.payment");
-            expect(output).toContain("payments,");
+            expect(output).toContain("payments ??= config.payment");
+
+            // The money-moving facade methods are stubbed too — not left as `undefined` behind the cast.
+            for (const method of ["cancelPayment", "capturePayment", "refundPayment"]) {
+                expect(output).toContain(`    ${method}: () => {`);
+            }
         });
 
         it("omits @lunora/payment entirely when payments are not used", () => {

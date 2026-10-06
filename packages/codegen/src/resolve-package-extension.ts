@@ -23,7 +23,9 @@
  */
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+import { createJiti } from "jiti";
 import type { Node as TsNode } from "ts-morph";
 import { Node } from "ts-morph";
 
@@ -379,10 +381,14 @@ const resolvePackageExtension = (argument: TsNode, projectRoot: string): Resolve
 
     try {
         // Resolve + load the package from the PROJECT's node_modules (not codegen's).
-        // `require()` of ESM is supported on the Node versions Lunora targets.
-        const projectRequire = createRequire(join(projectRoot, "noop.cjs"));
-        const resolved = projectRequire.resolve(access.moduleSpecifier);
-        const loadedModule = projectRequire(resolved) as Record<string, unknown>;
+        // Resolved with ESM conditions: `require.resolve` honours only `require`/`default`,
+        // so it refuses every `@lunora/*` package (their `exports` carry `import` only).
+        // `require()` of the resolved ESM file is supported on the Node versions Lunora targets.
+        const resolved = createJiti(join(projectRoot, "noop.js")).esmResolve(access.moduleSpecifier);
+        const loadedModule = createRequire(join(projectRoot, "noop.cjs"))(resolved.startsWith("file:") ? fileURLToPath(resolved) : resolved) as Record<
+            string,
+            unknown
+        >;
         const value = readExtensionValue(loadedModule, access);
 
         if (typeof value !== "object" || value === null) {

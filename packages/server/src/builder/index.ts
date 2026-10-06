@@ -15,6 +15,7 @@ import type {
     QueryCtx as QueryContext,
     X402ProcedureConfig,
 } from "../types";
+import extendContext from "./extend-context";
 import { isPerDispatchMiddleware } from "./per-dispatch-tag";
 import runMiddlewareChain from "./run-middleware";
 import type {
@@ -89,7 +90,7 @@ const withCallContext = (context: unknown, meta: Record<string, unknown> | undef
         return context;
     }
 
-    return Object.assign(Object.create(Object.getPrototypeOf(context) as object | null) as object, context, {
+    return extendContext(context, {
         args: Object.freeze({ ...args }),
         ...(meta === undefined ? {} : { meta }),
     });

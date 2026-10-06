@@ -3200,7 +3200,7 @@ describe("dataBrowser — wire-tagged columns in the JSON editor", () => {
         createMockClient({
             query: (reference, args): unknown => {
                 if (reference === ADMIN_FUNCTIONS.listTables) {
-                    return [{ name: "paymentSessions", rowCount: 1 }];
+                    return [{ name: "payment_sessions", rowCount: 1 }];
                 }
 
                 if (reference === ADMIN_FUNCTIONS.writeRow) {
@@ -3222,7 +3222,7 @@ describe("dataBrowser — wire-tagged columns in the JSON editor", () => {
             </LunoraProvider>,
         );
 
-        fireEvent.click(await screen.findByTestId("db-table-paymentSessions"));
+        fireEvent.click(await screen.findByTestId("db-table-payment_sessions"));
         await screen.findByTestId("db-page");
     };
 

@@ -201,7 +201,7 @@ export const subscribe = action.input({ productId: v.string() }).action(async ({
 
 <Callout type="info">
     Creem checkout only has a **success URL** (there is no separate cancel URL in Creem's checkout model), so the adapter forwards `successUrl` and drops
-    `cancelUrl`. Keep passing `cancelUrl` for cross-provider portability; it's simply unused here. The framework-controlled `referenceId` is pinned into
+    `cancelUrl`. `cancelUrl` is optional; pass it for cross-provider portability, it's simply unused here. The framework-controlled `referenceId` is pinned into
     checkout metadata and can never be overridden by caller-supplied metadata.
 </Callout>
 
@@ -260,6 +260,15 @@ export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
 
 The adapter reads the portal URL from Creem's `customer_portal_link` response
 field. See [Customer Portal](https://docs.creem.io/features/customer-portal).
+
+Creem's portal is customer-wide, and Creem keeps one customer per email, so a
+customer can also hold another reference's subscription (see
+[One customer per email](#limitations)). Before opening the portal the adapter
+lists the customer's subscriptions, and if any belongs to a different reference
+`createPortalSession` throws `FORBIDDEN` instead of handing out a link that could
+see and cancel it. Manage those subscriptions in-app with the facade's
+per-reference calls (`cancelSubscription`, `listSubscriptions`, …). Subscriptions
+created outside your app (no recorded reference) do not block the portal.
 
 ## Webhooks
 
@@ -359,6 +368,7 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
 
 - **Refunds are dashboard-only.** Creem exposes no SDK/API endpoint to _initiate_ a refund, so `refundPayment` throws. Issue refunds from the Creem dashboard; the resulting `refund.created` webhook syncs the refunded amount back into the store.
 - **No usage metering.** `usageMetering` is `false`. `track` still records to Lunora's own durable ledger (and `check` reads it), but nothing is forwarded to Creem.
+- **One customer per email.** Creem keys customers by email. When the same person pays under two references with the same email (a personal plan and their org's), Creem files the second purchase under the first reference's customer. Entitlement is unaffected, because subscriptions are attributed by checkout metadata, not by customer. The hosted portal is guarded: it is refused for a customer that holds another reference's subscription (see [Billing portal](#billing-portal)), so those references manage billing in-app. To give every reference its own Creem customer and portal instead, pass a distinct billing email per reference at checkout, e.g. `billing+org_b@acme.com` (plus-addressing, where the mailbox supports it); receipts then go to that address.
 - **No manual capture / payment cancellation.** `capturePayment` and `cancelPayment` throw, because Creem captures at checkout and owns the payment lifecycle.
 
 ## Troubleshooting
@@ -371,8 +381,10 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
 
 <Callout type="warn">
     **Customer creation errors.** `customers.create` returns `400` when a customer with that email already exists, so it is not idempotent by email. The adapter
-    recovers by retrieving the existing customer by email and adopting it only when its `referenceId` metadata matches; a mismatch fails closed. If you see the
-    create rejected for another reason, check the API key's store and mode (test vs. live).
+    recovers by retrieving the existing customer by email and adopting it only when its `referenceId` metadata matches. On a mismatch (one person paying under a
+    personal and an org reference) it binds no customer: the checkout starts unbound and is not prefilled, and that reference has no portal of its own. Creem
+    groups customers by email, so a buyer who enters the same address at checkout lands on the existing Creem customer; that customer's portal is then refused
+    (see Billing portal). If you see the create rejected for another reason, check the API key's store and mode (test vs. live).
 </Callout>
 
 <Callout type="warn">
@@ -393,11 +405,13 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
 ## Customers and `getOrCreateCustomer`
 
 The facade only calls `getOrCreateCustomer` when the store holds no Creem customer
-for the `referenceId`, i.e. the first checkout (a caller-supplied `customerId` is
-ignored — the customer is always derived from the store for the authorized
-reference). The adapter tries `customers.create` first, then (on the
-duplicate-email error Creem returns for an existing email) falls back to
-`customers.retrieve` by email, an idempotent get-or-create.
+for the `referenceId`, i.e. the first checkout (the customer is always derived
+from the store for the authorized reference). The adapter tries `customers.create`
+first, then (on the duplicate-email error Creem returns for an existing email)
+falls back to `customers.retrieve` by email, an idempotent get-or-create. A
+reference whose email belongs to another reference's customer stores no customer
+of its own, so each of its checkouts repeats those two calls: Creem can look a
+customer up only by id or email, not by the `externalId` the adapter sets.
 
 ## Related
 

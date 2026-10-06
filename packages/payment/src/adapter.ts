@@ -23,16 +23,11 @@ import type {
 
 /**
  * A read-only header bag; the platform `Headers` object satisfies it.
- * @experimental
  */
 export interface WebhookHeaders {
     get: (name: string) => null | string;
 }
 
-/**
- * `WebhookInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export interface WebhookInput {
     /** Request headers (signature schemes read provider-specific headers from here). */
     readonly headers: WebhookHeaders;
@@ -45,7 +40,6 @@ export interface WebhookInput {
  *
  * Adapters never own state — they make provider calls and normalize provider events into a
  * `WebhookAction`. All durable state lives in the payment store.
- * @experimental
  */
 export interface PaymentAdapter {
     cancelPayment: (sessionId: string, options?: { idempotencyKey?: string }) => Promise<PaymentSession>;
@@ -73,7 +67,12 @@ export interface PaymentAdapter {
      */
     getBalances?: (referenceId: string) => Promise<FeatureBalance[]>;
 
-    getOrCreateCustomer: (ref: CustomerRef) => Promise<Customer>;
+    /**
+     * `undefined` means the provider cannot give this reference a customer of its own (Creem: one
+     * customer per email, already bound to another reference). The checkout then starts unbound,
+     * and the reference has no portal until it gets a customer of its own.
+     */
+    getOrCreateCustomer: (ref: CustomerRef) => Promise<Customer | undefined>;
     /** Fetch the provider's current truth for a payment session — the basis for reconciliation. */
     getPaymentStatus: (sessionId: string) => Promise<PaymentSession>;
     /** Fetch the provider's current truth for a subscription — the basis for reconciliation. */
@@ -102,7 +101,6 @@ export interface PaymentAdapter {
 
 /**
  * Registry of adapters keyed by provider id — supports dual-register during provider migration.
- * @experimental
  */
 export interface AdapterRegistry {
     all: () => PaymentAdapter[];
@@ -110,10 +108,6 @@ export interface AdapterRegistry {
     has: (provider: ProviderId) => boolean;
 }
 
-/**
- * `createAdapterRegistry` is part of the experimental `@lunora/payment` API and may change without a major version bump.
- * @experimental
- */
 export const createAdapterRegistry = (adapters: ReadonlyArray<PaymentAdapter>): AdapterRegistry => {
     const byId = new Map<ProviderId, PaymentAdapter>();
 

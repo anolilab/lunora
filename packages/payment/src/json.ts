@@ -40,9 +40,31 @@ export const readAnyNumber = (object: Record<string, unknown>, ...keys: Readonly
 /** Read the framework-controlled `referenceId` string an adapter pins into an object's nested `metadata` on checkout. */
 export const referenceFromMetadata = (object: Record<string, unknown>): string | undefined => readString(asRecord(object.metadata), "referenceId");
 
-/** Parse a `Date`-parseable string field (e.g. ISO-8601) into epoch milliseconds; `undefined` when absent or unparseable. */
-export const parseTimestamp = (value: null | string | undefined): number | undefined => {
-    const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
+/**
+ * Epoch milliseconds from the first of `keys` holding a usable time: a `Date` (SDK responses parsed
+ * by zod), an epoch-ms number, or a `Date`-parseable string (ISO-8601 in raw webhook bodies). Reading
+ * all three here keeps an adapter's SDK path and webhook path from diverging. `undefined` when none parses.
+ */
+export const readEpochMs = (object: Record<string, unknown>, ...keys: ReadonlyArray<string>): number | undefined => {
+    for (const key of keys) {
+        const value = object[key];
+        let ms = Number.NaN;
 
-    return Number.isNaN(parsed) ? undefined : parsed;
+        if (value instanceof Date) {
+            ms = value.getTime();
+        } else if (typeof value === "number") {
+            ms = value;
+        } else if (typeof value === "string") {
+            ms = Date.parse(value);
+        }
+
+        if (Number.isFinite(ms)) {
+            return ms;
+        }
+    }
+
+    return undefined;
 };
+
+/** Unix seconds (Stripe's unit for every timestamp) to epoch milliseconds. */
+export const secondsToMs = (seconds: number | undefined): number | undefined => (seconds === undefined ? undefined : seconds * 1000);
