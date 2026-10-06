@@ -42,8 +42,8 @@ const DEFAULT_MAX_ENTRIES = 50;
  * `bigint`, and nothing would ever repair it: a `resume` frame keeps the
  * hydrated value as-is, so the damage would survive every reconnect and every
  * delta merged onto it. The IndexedDB sibling gets this for free via structured
- * clone; here it is explicit. (This is what separates the read cache from the
- * outbox, which stores JSON-safe args the caller chose.)
+ * clone; here it is explicit. (The outbox, `createAsyncStoragePersistence`,
+ * encodes the same way for the same reason.)
  *
  * AsyncStorage has no transactions, so every read-modify-write runs through
  * {@link singleBlobStore}'s serialized chain — concurrent `put`/`remove` calls
