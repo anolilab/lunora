@@ -32,12 +32,17 @@ interface DeployKeyRow {
  * `UNAUTHORIZED` if not signed in, `FORBIDDEN` if not a member (or, when
  * `allowedRoles` is given, if the member's role isn't permitted). Works in both
  * queries and mutations (the reader facade is shared).
+ *
+ * Returns the organization from the verified membership row: a write stamps its
+ * `organizationId` from that, never from the request's `args`, so the
+ * ownership column only ever holds an organization the caller is a member of
+ * (the `owner_field_from_args_not_auth` advisor rule).
  */
 export const assertMember = async (
     context: QueryContext,
     organizationId: Id<"organizations">,
     allowedRoles?: ReadonlyArray<MemberRole>,
-): Promise<{ role: MemberRole; userId: string }> => {
+): Promise<{ organizationId: Id<"organizations">; role: MemberRole; userId: string }> => {
     const { userId } = context.auth;
 
     if (!userId) {
@@ -55,7 +60,7 @@ export const assertMember = async (
         throw new LunoraError("FORBIDDEN", `requires one of: ${allowedRoles.join(", ")}`);
     }
 
-    return { role: member.role, userId };
+    return { organizationId: member.organizationId, role: member.role, userId };
 };
 
 /** Match a key by SHA-256 to its (non-revoked, org-matching) row, or throw `FORBIDDEN`. */
@@ -89,12 +94,12 @@ const resolveKeyRow = async (context: QueryContext, organizationId: Id<"organiza
  * accepts both key kinds. This function is the deploy/admin gate that keeps an
  * ingest token from deploying (alongside `deploy_keys.verify` at the entrypoint).
  */
-export const authorizeDeployKey = async (
+export const authorizeDeployKeyRow = async (
     context: QueryContext,
     organizationId: Id<"organizations">,
     key: string,
     scope: "org-wide" | Id<"projects">,
-): Promise<Id<"deployKeys">> => {
+): Promise<DeployKeyRow> => {
     const row = await resolveKeyRow(context, organizationId, key);
 
     // An ingest key is telemetry-only — it must never authorize a deploy/admin write.
@@ -106,6 +111,19 @@ export const authorizeDeployKey = async (
         throw new LunoraError("FORBIDDEN", "deploy key is not authorized for this project");
     }
 
+    // The key's row: its `organizationId` is the one a write stamps, never the request's.
+    return row;
+};
+
+/** The id of the deploy key {@link authorizeDeployKeyRow} authorizes. */
+export const authorizeDeployKey = async (
+    context: QueryContext,
+    organizationId: Id<"organizations">,
+    key: string,
+    scope: "org-wide" | Id<"projects">,
+): Promise<Id<"deployKeys">> => {
+    const row = await authorizeDeployKeyRow(context, organizationId, key, scope);
+
     return row._id;
 };
 
@@ -116,11 +134,9 @@ export const authorizeDeployKey = async (
  * is exactly what an ingest key is for. Rejects only a missing/revoked/wrong-org
  * key. Used by `telemetry.ingest` / `logs.ingest`.
  */
-export const authorizeTelemetryKey = async (context: QueryContext, organizationId: Id<"organizations">, key: string): Promise<Id<"deployKeys">> => {
-    const row = await resolveKeyRow(context, organizationId, key);
-
-    return row._id;
-};
+export const authorizeTelemetryKey = async (context: QueryContext, organizationId: Id<"organizations">, key: string): Promise<DeployKeyRow> =>
+    // The key's row: its `organizationId` is the one a write stamps, never the request's.
+    resolveKeyRow(context, organizationId, key);
 
 /**
  * Resolve a deploy key to its owning org from the key ALONE (no org supplied) —

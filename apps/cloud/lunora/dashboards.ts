@@ -145,7 +145,7 @@ export const create = mutation
         panels: v.optional(v.array(panel)),
     })
     .mutation(async ({ ctx: context, args }): Promise<Id<"dashboards">> => {
-        await assertMember(context, args.organizationId, ["owner", "admin"]);
+        const member = await assertMember(context, args.organizationId, ["owner", "admin"]);
 
         const name = requireName(args.name);
         const panels = (args.panels ?? []) as DashboardPanel[];
@@ -157,7 +157,7 @@ export const create = mutation
         return context.db.insert("dashboards", {
             createdAt: now,
             name,
-            organizationId: args.organizationId,
+            organizationId: member.organizationId,
             panels,
             updatedAt: now,
         });

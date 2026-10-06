@@ -210,7 +210,7 @@ export const create = mutation
         slug: boundedString(LIMITS.id),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"projects">> => {
-        await assertMember(context, arguments_.organizationId, ["owner", "admin", "member"]);
+        const member = await assertMember(context, arguments_.organizationId, ["owner", "admin", "member"]);
 
         const { page } = await context.db.projects.findMany({ where: { organizationId: arguments_.organizationId } });
 
@@ -221,7 +221,7 @@ export const create = mutation
             framework: arguments_.framework,
             githubRepo: arguments_.githubRepo,
             name: arguments_.name,
-            organizationId: arguments_.organizationId,
+            organizationId: member.organizationId,
             slug: arguments_.slug,
         });
 
@@ -284,7 +284,7 @@ export const setTarget = mutation
             action: "project.target.set",
             actorUserId: member.userId,
             createdAt: context.now,
-            organizationId,
+            organizationId: member.organizationId,
             target: placementRef === undefined ? target : `${target}:${placementRef}`,
         });
     });
@@ -302,7 +302,13 @@ export const rename = mutation
 
         await assertRowInOrg(context, id, organizationId, "project");
         await context.db.patch(id, { name });
-        await context.db.insert("auditLog", { action: "project.rename", actorUserId: member.userId, createdAt: context.now, organizationId, target: name });
+        await context.db.insert("auditLog", {
+            action: "project.rename",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId: member.organizationId,
+            target: name,
+        });
     });
 
 /**
@@ -343,7 +349,7 @@ export const updateBuildSettings = mutation
             action: "project.build_settings.update",
             actorUserId: member.userId,
             createdAt: context.now,
-            organizationId,
+            organizationId: member.organizationId,
             target: root === "" ? "/" : root,
         });
 
@@ -413,7 +419,7 @@ export const remove = mutation
             action: "project.delete",
             actorUserId: member.userId,
             createdAt: now,
-            organizationId,
+            organizationId: member.organizationId,
             target: id,
         });
 
@@ -454,7 +460,7 @@ export const setPreviewProtection = mutation
                 action: "project.preview_protection.disable",
                 actorUserId: member.userId,
                 createdAt: context.now,
-                organizationId,
+                organizationId: member.organizationId,
             });
 
             return { protected: false };
@@ -473,7 +479,7 @@ export const setPreviewProtection = mutation
             action: "project.preview_protection.enable",
             actorUserId: member.userId,
             createdAt: context.now,
-            organizationId,
+            organizationId: member.organizationId,
         });
 
         return { protected: true };

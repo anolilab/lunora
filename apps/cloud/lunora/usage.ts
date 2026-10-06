@@ -6,7 +6,7 @@ import type { UsageTotals } from "../src/billing/usage";
 import { aggregateUsage, isBillableUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
-import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
+import { assertMember, assertRowInOrg, authorizeDeployKeyRow } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
@@ -104,7 +104,7 @@ export const ingest = mutation
         quantity: v.number(),
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> => {
-        await authorizeDeployKey(context, arguments_.organizationId, arguments_.deployKey, "org-wide");
+        const key = await authorizeDeployKeyRow(context, arguments_.organizationId, arguments_.deployKey, "org-wide");
 
         // The deploy key is tenant-held (CI), so a tenant could otherwise POST a
         // NEGATIVE quantity to deflate its own metered usage and defeat spend-cap
@@ -131,7 +131,7 @@ export const ingest = mutation
             createdAt: context.now,
             deploymentId: arguments_.deploymentId,
             kind: arguments_.kind,
-            organizationId: arguments_.organizationId,
+            organizationId: key.organizationId,
             periodStart: arguments_.periodStart,
             quantity: arguments_.quantity,
         });
