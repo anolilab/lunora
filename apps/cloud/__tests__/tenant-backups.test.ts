@@ -682,9 +682,13 @@ describe(restoreTenantSnapshot, () => {
         const send: TenantSend = async (path) =>
             path === ABORT_PATH ? Response.json({ aborted: false }) : Response.json({ error: { message: "m".repeat(100_000) } }, { status: 500 });
 
-        const failure = await restoreTenantSnapshot(send, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION).catch((error: unknown) => error as Error);
+        const failure: unknown = await restoreTenantSnapshot(send, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
 
-        expect(failure.message.length).toBeLessThan(500);
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message.length).toBeLessThan(500);
     });
 
     it("refuses a runtime without staged import before sending it a row", async () => {

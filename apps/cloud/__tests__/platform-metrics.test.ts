@@ -1,8 +1,8 @@
 import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
-import { handlePlatformMetricsRoute } from "../src/deploy/routes/platform-metrics";
 import { createDeployRouter } from "../src/deploy/router";
+import { handlePlatformMetricsRoute } from "../src/deploy/routes/platform-metrics";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import dispatcher from "../src/dispatcher/worker";
 import type { ControlPlaneDatabase } from "../src/store";

@@ -389,6 +389,54 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Export tap not configured";
     };
+    readonly AUTH_DATA_FAILED: {
+        readonly status: 502;
+        readonly title: "Auth data call to the auth object failed";
+    };
+    readonly AUTH_IMPORT_FAILED: {
+        readonly status: 409;
+        readonly title: "Auth row could not be imported";
+    };
+    readonly IMPORT_FORMAT_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "Export format newer than this runtime reads";
+    };
+    readonly IMPORT_REFUSED: {
+        readonly status: 400;
+        readonly title: "Replace import refused on a shard";
+    };
+    readonly IMPORT_SESSION_COMMITTED: {
+        readonly status: 409;
+        readonly title: "Import session already committed";
+    };
+    readonly IMPORT_SESSION_CORRUPT: {
+        readonly status: 409;
+        readonly title: "Import session state unreadable";
+    };
+    readonly IMPORT_SESSION_EXPIRED: {
+        readonly status: 410;
+        readonly title: "Import session expired";
+    };
+    readonly IMPORT_SESSION_MISMATCH: {
+        readonly status: 400;
+        readonly title: "Import session does not match this request";
+    };
+    readonly IMPORT_SESSION_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Import session not found";
+    };
+    readonly IMPORT_SESSION_STALE: {
+        readonly status: 409;
+        readonly title: "Import session belongs to an earlier session of the same id";
+    };
+    readonly SECTION_COMMIT_FAILED: {
+        readonly status: 502;
+        readonly title: "Export section could not be committed";
+    };
+    readonly SECTION_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Export section not configured on this worker";
+    };
     readonly FUNCTIONS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Functions registry not configured";
