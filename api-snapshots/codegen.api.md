@@ -488,6 +488,7 @@ interface LoadedProjectConfig {
 interface LunoraProjectConfig {
     advisor?: unknown;
     app?: unknown;
+    codegen?: unknown;
     remote?: unknown;
     target?: unknown;
 }
@@ -636,6 +637,10 @@ interface PlatformDiagnostic {
 interface ProjectConfigLiterals {
     advisor?: {
         minSeverity?: string;
+        unreadable?: boolean;
+    };
+    codegen?: {
+        exclude?: string[];
         unreadable?: boolean;
     };
     remote?: boolean;
@@ -1512,6 +1517,12 @@ const isD1GlobalTable: (table: TableIR) => boolean;
 const isHyperdriveGlobalTable: (table: TableIR) => boolean;
 ```
 
+### `isTestPath` (const)
+
+```ts
+const isTestPath: (relativePath: string) => boolean;
+```
+
 ### `isTypedSchema` (const)
 
 ```ts
@@ -1527,7 +1538,9 @@ const lintSchema: (options: LintSchemaOptions) => Finding[];
 ### `listLunoraSourceFiles` (const)
 
 ```ts
-const listLunoraSourceFiles: (directory: string) => string[];
+const listLunoraSourceFiles: (directory: string, options?: {
+    includeSkipped?: boolean;
+}) => string[];
 ```
 
 ### `loadProjectConfig` (const)
