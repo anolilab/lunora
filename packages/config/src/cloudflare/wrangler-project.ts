@@ -463,7 +463,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
         // the config-only check above cannot see that — it looks for a
         // `SchedulerDO` binding a merged app never has.
         if (existsSync(join(options.projectRoot, schemaDirectory, GENERATED_DIRECTORY, "scheduler.ts"))) {
-            validateSchedulerOrigin(resolvedWrangler, options.environment, report.warnings, true);
+            validateSchedulerOrigin(resolvedWrangler, options.environment, report.warnings, "the merged LunoraDO hosts the scheduler");
         }
     }
 

@@ -2155,8 +2155,8 @@ export const schema = defineSchema({
                         expect(result.report.errors.join("\n")).toContain('replace "ShardDO" with "LunoraDO" in new_sqlite_classes');
                     });
 
-                    it("warns about a missing LUNORA_ORIGIN_URL when LunoraDO hosts the scheduler", () => {
-                        expect.assertions(1);
+                    it("warns about a missing LUNORA_ORIGIN_URL when LunoraDO hosts the scheduler, naming LunoraDO", () => {
+                        expect.assertions(3);
 
                         writeMergedProject(`{ "name": "SHARD", "class_name": "LunoraDO" }`, `{ "tag": "v1", "new_sqlite_classes": ["LunoraDO"] }`, [
                             "scheduler",
@@ -2164,7 +2164,12 @@ export const schema = defineSchema({
 
                         const result = validateWranglerProject({ projectRoot: workdir });
 
-                        expect(result.report.warnings.some((warning) => warning.includes("LUNORA_ORIGIN_URL"))).toBe(true);
+                        const warning = result.report.warnings.find((entry) => entry.includes("LUNORA_ORIGIN_URL"));
+
+                        expect(warning).toContain("the merged LunoraDO hosts the scheduler");
+                        // A merged app has no SchedulerDO binding to point at.
+                        expect(warning).not.toContain("SchedulerDO");
+                        expect(warning).toContain("ORIGIN_NOT_CONFIGURED");
                     });
 
                     it("tells an app that turned the merge off that it cannot be undone after deploy", () => {

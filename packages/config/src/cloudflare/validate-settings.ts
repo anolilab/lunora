@@ -510,11 +510,14 @@ const validateSchedulerOrigin = (
     wrangler: WranglerConfig,
     environment: string | undefined,
     warnings: string[],
-    // A merged app hosts the scheduler in `LunoraDO`, which the config alone
-    // cannot tell from a shard-only app — the project validator decides it.
-    declaresScheduler: boolean = declaresSchedulerDurableObject(wrangler),
+    // What hosts the scheduler, as the warning's subject — `undefined` when
+    // nothing does. A merged app hosts it in `LunoraDO`, which the config alone
+    // cannot tell from a shard-only app, so the project validator passes that
+    // subject itself; the warning must not name a `SchedulerDO` binding the
+    // merged app never has.
+    host: string | undefined = declaresSchedulerDurableObject(wrangler) ? "durable_objects.bindings declares the SchedulerDO" : undefined,
 ): void => {
-    if (!declaresScheduler || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
+    if (host === undefined || isNonEmptyString(wrangler.vars?.[SCHEDULER_ORIGIN_VAR])) {
         return;
     }
 
@@ -528,7 +531,7 @@ const validateSchedulerOrigin = (
     const secretPut = environment === undefined ? "" : ` --env ${environment}`;
 
     warnings.push(
-        `durable_objects.bindings declares the SchedulerDO but ${scope}.${SCHEDULER_ORIGIN_VAR} is unset — the DO reads its dispatch origin from its own env and refuses to schedule without it, so every ctx.scheduler.runAfter/runAt fails with ORIGIN_NOT_CONFIGURED. Set ${scope}.${SCHEDULER_ORIGIN_VAR} to the worker's public URL, or \`wrangler secret put ${SCHEDULER_ORIGIN_VAR}${secretPut}\` (ignore this if it is already set as a secret or in the dashboard).`,
+        `${host} but ${scope}.${SCHEDULER_ORIGIN_VAR} is unset — the DO reads its dispatch origin from its own env and refuses to schedule without it, so every ctx.scheduler.runAfter/runAt fails with ORIGIN_NOT_CONFIGURED. Set ${scope}.${SCHEDULER_ORIGIN_VAR} to the worker's public URL, or \`wrangler secret put ${SCHEDULER_ORIGIN_VAR}${secretPut}\` (ignore this if it is already set as a secret or in the dashboard).`,
     );
 };
 

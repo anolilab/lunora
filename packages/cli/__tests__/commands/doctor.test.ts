@@ -1065,6 +1065,61 @@ describe("runDoctor", () => {
 
             await expect(budgetFinding(refused, credentials)).resolves.toMatchObject({ code: "do-class-budget-unchecked", level: "info" });
         });
+
+        describe("with accounts set per environment", () => {
+            /** Run doctor over `wrangler` with only a token in the environment; returns the budget findings and the accounts the API was asked about. */
+            const tokenOnly = { CLOUDFLARE_API_TOKEN: "token" };
+
+            const budgetFindings = async (wrangler: Record<string, unknown>, environment: Record<string, string> = tokenOnly) => {
+                const fetchImpl = namespacesApi(40);
+
+                seed(workdir, JSON.stringify(wrangler));
+
+                const result = await runDoctor({ cwd: workdir, environment, fetch: fetchImpl, logger: makeLogger().logger });
+                const asked = vi
+                    .mocked(fetchImpl)
+                    .mock.calls.map(([url]) => /accounts\/([^/]+)\//u.exec(url instanceof Request ? url.url : url.toString())?.[1]);
+
+                return { asked, findings: result.findings.filter((finding) => finding.code.startsWith("do-class-budget")) };
+            };
+
+            it("checks an account that only a named environment sets", async () => {
+                expect.assertions(2);
+
+                const { asked, findings } = await budgetFindings({ env: { staging: { account_id: "staging-acc" } }, name: "app" });
+
+                expect(asked).toStrictEqual(["staging-acc"]);
+                expect(findings).toMatchObject([{ code: "do-class-budget-ok" }]);
+            });
+
+            it("checks each distinct account once, naming the blocks it came from", async () => {
+                expect.assertions(3);
+
+                const { asked, findings } = await budgetFindings({
+                    account_id: "main-acc",
+                    env: { production: { account_id: "main-acc" }, staging: { account_id: "staging-acc" } },
+                    name: "app",
+                });
+
+                expect(asked.toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["main-acc", "staging-acc"]);
+                expect(findings.map((finding) => finding.message.split(":")[0])).toStrictEqual([
+                    "account main-acc (top level, env.production)",
+                    "account staging-acc (env.staging)",
+                ]);
+                expect(findings.every((finding) => finding.code === "do-class-budget-ok")).toBe(true);
+            });
+
+            it("checks only CLOUDFLARE_ACCOUNT_ID when it is set, as wrangler does", async () => {
+                expect.assertions(1);
+
+                const { asked } = await budgetFindings(
+                    { account_id: "main-acc", env: { staging: { account_id: "staging-acc" } }, name: "app" },
+                    { CLOUDFLARE_ACCOUNT_ID: "override-acc", CLOUDFLARE_API_TOKEN: "token" },
+                );
+
+                expect(asked).toStrictEqual(["override-acc"]);
+            });
+        });
     });
 
     /**
