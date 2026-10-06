@@ -41,8 +41,17 @@ export type MetricTarget = "error_rate" | "latency_p95" | "llm_cost";
  */
 export type EventAlertTarget = "deploy" | "spend";
 
-/** What a rule watches — a count-crossing counter, a metric window, or a one-off event. */
-export type AlertTarget = CountTarget | EventAlertTarget | MetricTarget;
+/**
+ * Anomaly targets (plan 365 D5) — threshold a derived **anomaly score**, not a raw
+ * metric. The score is an online z-score of one hourly signal against the org's
+ * own rolling baseline (`src/telemetry/anomaly.ts`): `usage_anomaly` scores
+ * requests, `error_anomaly` scores error spans. `threshold` is read in standard
+ * deviations: `gt 4` is "four sigma above normal", `lt -4` "traffic fell away".
+ */
+export type AnomalyTarget = "error_anomaly" | "usage_anomaly";
+
+/** What a rule watches — a count-crossing counter, a metric window, an anomaly score, or a one-off event. */
+export type AlertTarget = AnomalyTarget | CountTarget | EventAlertTarget | MetricTarget;
 
 /**
  * Which family a target belongs to, and the membership tests that decide it.
@@ -59,19 +68,26 @@ export const METRIC_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["e
 /** Event targets carry no threshold: the rule is "tell me when this happens". */
 export const EVENT_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["deploy", "spend"]);
 
-/** A rule target's family — the three shapes a rule's condition can take. */
-export type AlertFamily = "count" | "event" | "metric";
+/** Anomaly targets threshold the hourly score the anomaly sweep derives, never a raw window. */
+export const ANOMALY_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["error_anomaly", "usage_anomaly"]);
+
+/** A rule target's family — the four shapes a rule's condition can take. */
+export type AlertFamily = "anomaly" | "count" | "event" | "metric";
 
 /**
  * Classify a target into its family.
  *
  * Replaces the `(isMetric, isEvent)` boolean pair the validator used to take,
- * where `(true, true)` was representable and meaningless. One value, three arms,
- * no impossible states.
+ * where `(true, true)` was representable and meaningless. One value, one arm per
+ * family, no impossible states.
  */
 export const alertFamily = (target: AlertTarget): AlertFamily => {
     if (METRIC_TARGETS.has(target)) {
         return "metric";
+    }
+
+    if (ANOMALY_TARGETS.has(target)) {
+        return "anomaly";
     }
 
     return EVENT_TARGETS.has(target) ? "event" : "count";
@@ -627,7 +643,7 @@ export interface MetricLevelEvaluation {
  * already firing). Named rather than nested so each arm reads as the state
  * change it is: fire on a fresh breach, clear on a recovery, otherwise hold.
  */
-const transitionFor = (breaching: boolean, wasFiring: boolean): MetricLevelEvaluation["action"] => {
+export const transitionFor = (breaching: boolean, wasFiring: boolean): MetricLevelEvaluation["action"] => {
     if (breaching) {
         return wasFiring ? "none" : "fire";
     }

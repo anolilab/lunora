@@ -43,6 +43,7 @@ import { storeRowReader } from "../targets/placement";
 import { registeredFleet, registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
 import { runAlertDrain } from "../telemetry/alert-drain";
 import type { AlertDelivery } from "../telemetry/alerts";
+import { runAnomalySweep } from "../telemetry/anomaly-sweep";
 import { readQueueDepth, recordQueueDepth } from "../telemetry/platform-metrics";
 import { runAlertSweep } from "../telemetry/sweep";
 import { runUptimeSweep } from "../uptime/sweep";
@@ -248,6 +249,23 @@ const sweepAlerts = async (env: ControlPlaneEnv): Promise<void> => {
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const now = Date.now();
     const { deliveries } = await runAlertSweep(database, { now });
+
+    await deliverFiredAlerts(env, database, deliveries, now);
+};
+
+/**
+ * Anomaly sweep (plan 365 W4): score each organization's last completed hour
+ * against its rolling baseline and fire/clear its `usage_anomaly` /
+ * `error_anomaly` rules. Hourly, on the bucket the readback ledger is filled at.
+ */
+const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const { deliveries } = await runAnomalySweep(database, { now });
 
     await deliverFiredAlerts(env, database, deliveries, now);
 };
@@ -555,6 +573,10 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     { cron: EVERY_HOUR, run: sweepCertificates },
     // Suspended organizations blocked at the edge, recovered ones restored (plan 365 W8).
     { cron: EVERY_HOUR, run: sweepEdgeBlocks },
+    // Anomaly scores over the last completed hour (plan 365 W4). It reads the hour
+    // BEFORE this tick, so the usage rollback writing this tick's rows alongside
+    // it lands in the next bucket rather than racing this one.
+    { cron: EVERY_HOUR, run: sweepAnomalies },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —

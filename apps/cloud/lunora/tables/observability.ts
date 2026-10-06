@@ -6,6 +6,8 @@
  */
 import { defineTable, v } from "@lunora/server";
 
+import { alertTarget, anomalyTarget } from "./shared";
+
 export const observabilityTables = {
     // Exact metric measurements (the precise tier behind the Metrics UI). Every
     // `ctx.metrics.*` data point OTLP-ingested via `/v1/metrics` lands here as one
@@ -252,19 +254,12 @@ export const observabilityTables = {
         // no threshold, because a failed release is not a quantity that crosses a
         // line, it is one thing that happened. Event: `spend` (the org's soft cap
         // was reached, or its hard cap suspended it) — its threshold is the org's
-        // `spendWarnMinor` / cap, not the rule's.
-        target: v.union(
-            v.literal("issue"),
-            v.literal("incident"),
-            v.literal("uptime"),
-            v.literal("error_rate"),
-            v.literal("latency_p95"),
-            v.literal("llm_cost"),
-            v.literal("deploy"),
-            v.literal("spend"),
-        ),
+        // `spendWarnMinor` / cap, not the rule's. Anomaly: `usage_anomaly` /
+        // `error_anomaly` threshold the hourly anomaly score (`anomalyBaselines`).
+        target: alertTarget,
         // Count-crossing: fire when the source's count first reaches this value.
         // Metric-window: the value the window metric is compared against.
+        // Anomaly: the score, in standard deviations from the rolling baseline.
         threshold: v.number(),
         updatedAt: v.number(),
         // Rolling window length for a metric target, in minutes. Required for
@@ -281,7 +276,8 @@ export const observabilityTables = {
     // fire once on a breach and re-arm on recovery. Both the ingest path and the
     // periodic sweep read/advance this latch, so a sustained breach alerts once and
     // a window that goes quiet still clears (and can fire again later). One row per
-    // rule; count-crossing/uptime rules don't use it.
+    // rule; count-crossing/uptime rules don't use it. Anomaly rules latch here too,
+    // advanced by the hourly anomaly sweep, with `lastValue` holding the score.
     alertRuleState: defineTable({
         createdAt: v.number(),
         // `true` while the rule's window is over threshold (already alerted).
@@ -318,21 +314,57 @@ export const observabilityTables = {
         ruleId: v.id("alertRules"),
         status: v.union(v.literal("firing"), v.literal("delivered"), v.literal("failed")),
         subject: v.string(),
-        target: v.union(
-            v.literal("issue"),
-            v.literal("incident"),
-            v.literal("uptime"),
-            v.literal("error_rate"),
-            v.literal("latency_p95"),
-            v.literal("llm_cost"),
-            v.literal("deploy"),
-            v.literal("spend"),
-        ),
+        target: alertTarget,
         updatedAt: v.number(),
     })
         .global()
         .index("by_org", ["organizationId"])
         .index("by_status", ["status"]),
+
+    // Rolling anomaly baselines (plan 365 W4) — one row per (organization, signal),
+    // the EWMA mean/variance the hourly anomaly sweep (`src/telemetry/anomaly-sweep.ts`)
+    // scores each completed hour against. Two signals, so at most two rows per org,
+    // and only for orgs with an anomaly rule. `last*` is the latest scored bucket:
+    // the derived score the `usage_anomaly`/`error_anomaly` rules threshold.
+    anomalyBaselines: defineTable({
+        createdAt: v.number(),
+        // Start (epoch ms) of the last hourly bucket folded in — the idempotency key.
+        lastBucketStart: v.number(),
+        // The baseline mean that bucket was scored against.
+        lastMean: v.number(),
+        // The bucket's score, in standard deviations from that mean.
+        lastScore: v.number(),
+        // The bucket's measured value (requests, or error spans).
+        lastValue: v.number(),
+        mean: v.number(),
+        organizationId: v.id("organizations"),
+        // Buckets folded in (capped); the baseline scores nothing until it has a day of them.
+        samples: v.number(),
+        signal: v.union(v.literal("requests"), v.literal("errors")),
+        updatedAt: v.number(),
+        variance: v.number(),
+    })
+        // Written only by the hourly anomaly sweep (control-plane `scheduled()`).
+        .externallyManaged()
+        .global()
+        .index("by_org_signal", ["organizationId", "signal"], { unique: true }),
+
+    // Anomaly silences (plan 365 W4): while one overlaps an hour, the anomaly sweep
+    // skips that hour of its target's signal entirely — no score, no baseline update
+    // — so a planned load test neither pages anyone nor becomes the new "normal".
+    // Bounded per org and in length by `alerts.createSilence`.
+    anomalySilences: defineTable({
+        createdAt: v.number(),
+        // Member who created it (from the verified session, never an argument).
+        createdBy: v.string(),
+        endsAt: v.number(),
+        organizationId: v.id("organizations"),
+        reason: v.string(),
+        startsAt: v.number(),
+        target: anomalyTarget,
+    })
+        .global()
+        .index("by_org", ["organizationId"]),
 
     // Synthetic uptime — one row per external probe of a live deployment's URL,
     // written by the every-minute uptime sweep (src/uptime/sweep.ts). A bounded,

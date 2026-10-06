@@ -63,6 +63,27 @@ export const usageMeter = v.union(
     v.literal("workflowStorageGbMonths"),
 );
 
+/**
+ * What an alert rule watches — `AlertTarget` in `src/telemetry/alerts.ts`, as a
+ * validator. One declaration for the rule table, the fired-alert table and
+ * `alerts.createRule`, which each carried their own copy of the union.
+ */
+export const alertTarget = v.union(
+    v.literal("issue"),
+    v.literal("incident"),
+    v.literal("uptime"),
+    v.literal("error_rate"),
+    v.literal("latency_p95"),
+    v.literal("llm_cost"),
+    v.literal("deploy"),
+    v.literal("spend"),
+    v.literal("usage_anomaly"),
+    v.literal("error_anomaly"),
+);
+
+/** An anomaly target — the subset of {@link alertTarget} a silence can name. */
+export const anomalyTarget = v.union(v.literal("usage_anomaly"), v.literal("error_anomaly"));
+
 export const memberRole = v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer"));
 
 /**

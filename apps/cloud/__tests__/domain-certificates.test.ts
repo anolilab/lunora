@@ -36,6 +36,8 @@ const PURGED_TABLES = [
     "alertRuleState",
     "alertRules",
     "alerts",
+    "anomalyBaselines",
+    "anomalySilences",
     "aliasOwnership",
     "auditLog",
     "boxEnrolments",

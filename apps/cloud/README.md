@@ -603,6 +603,50 @@ the connected account's token at the edge and never returns it. It bounds
 Cloudflare's product lines before answering. `POST /v1/usage` (the metering
 write) and every admin-token route stay off the MCP surface.
 
+### Alerts & anomaly detection (`lunora/alerts.ts`, `src/telemetry/`)
+
+Alert rules fire on four kinds of condition (`alertFamily` in
+`src/telemetry/alerts.ts`): a count crossing a threshold (`issue`, `incident`,
+`uptime`), a metric window (`error_rate`, `latency_p95`, `llm_cost`, as a
+threshold or as a deviation from a trailing baseline), an event (`deploy`), and
+an **anomaly score** (`usage_anomaly`, `error_anomaly`, plan 365 W4). Every
+family is delivered the same way (email, webhook, Slack, PagerDuty) and latches
+in `alertRuleState`, so a sustained breach alerts once and clears on recovery.
+
+The anomaly detector follows the score-as-metric design (plan 365 D5/D6).
+`src/telemetry/anomaly-sweep.ts` runs hourly. It measures each organization's
+last completed hour and scores it as an online z-score against that
+organization's own rolling baseline: an EWMA mean and variance (decay 0.95)
+with σ floored at the Poisson spread `√mean`. It stores the advanced baseline
+in `anomalyBaselines`, one row per (organization, signal), and the anomaly
+rules threshold that score in standard deviations (`gt 4`, or `lt -4` for
+traffic that falls away). The noise controls are fixed by the platform:
+
+- **Minimum activity floor.** No anomaly can fire below 1,000 requests or 25
+  error spans in both the hour and its baseline. Organizations cannot change it.
+- **Warm-up.** A baseline scores nothing until it has folded in 24 hours.
+  Baselines exist only for organizations with an anomaly rule, so a new rule
+  arms a day after it is created.
+- **Silences** (`alerts.createSilence`, owners/admins, at most 20 per org, each
+  up to 30 days). The sweep skips a silenced hour entirely: it records no score
+  and does not update the baseline. Silencing a load test therefore keeps it
+  from paging anyone and from becoming the next day's "normal".
+
+The signals come from stores every target writes to. That makes the score
+target-agnostic:
+
+| Signal                        | Source                                                | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` (box)       |
+| ----------------------------- | ----------------------------------------------------- | ---------------- | -------------------------- | ----------------------- |
+| requests (`usage_anomaly`)    | `platformUsage` `requests` rows created in the hour   | AE readback      | readback of the account    | the box's usage reports |
+| error spans (`error_anomaly`) | error-level `observations` started in the hour (OTLP) | when telemetered | when telemetered           | when telemetered        |
+
+A box's rows are display-only (`billable: false`) and still count, because
+an anomaly is about traffic, not the invoice. The last hour of each month is
+not scored, because ledger compaction can fold the whole closed month into a
+row created in that hour. An hour with no usage report, for example from a box
+that went offline, scores as zero traffic, which an `lt` rule reads as a
+collapse.
+
 ### Tenant secrets (`lunora/secrets.ts`, `src/secrets/crypto.ts`, §7)
 
 Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:

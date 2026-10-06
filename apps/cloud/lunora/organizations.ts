@@ -281,6 +281,8 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         "alertRuleState",
         "alertRules",
         "alerts",
+        "anomalyBaselines",
+        "anomalySilences",
         "auditLog",
         "boxEnrolments",
         "boxes",
