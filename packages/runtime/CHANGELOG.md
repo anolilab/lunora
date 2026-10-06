@@ -1,3 +1,18 @@
+## @lunora/runtime [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.177...@lunora/runtime@1.0.0-alpha.178) (2026-10-06)
+
+### Features
+
+* durable object class budget check and opt-in merged class ([#995](https://github.com/anolilab/lunora/issues/995)) ([fa5a78e](https://github.com/anolilab/lunora/commit/fa5a78ed39f03c5d39c9d209fc83c49f27bdb6f7))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.97
+* **@lunora/observability:** upgraded to 1.0.0-alpha.122
+* **@lunora/platform:** upgraded to 1.0.0-alpha.56
+* **@lunora/do:** upgraded to 1.0.0-alpha.195
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.113
+
 ## @lunora/runtime [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.176...@lunora/runtime@1.0.0-alpha.177) (2026-10-05)
 
 
