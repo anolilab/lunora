@@ -13,6 +13,8 @@
  * Each descriptor carries optional **facets**, one per consumer:
  * - `moduleSpecifier` / `contextProperty` drive the usage probe: every row names
  * its package; every row but `mail` (no `ctx.mail` helper) names its ctx property.
+ * `bindingFreeExports` lists the package's pure helpers whose import alone does
+ * not mark the capability used.
  * - `tier` is the determinism tier the `ctx.<contextProperty>` helper rides —
  * stated once here and read by both the type surface and the runtime wiring.
  * - `serverCtxField` is the exact `ctx.*` type fragment spliced into the emitted
@@ -111,6 +113,18 @@ interface AppMethodFacet {
 interface CapabilityBase {
     /** The fluent `defineApp` builder method facet — present for long-tail (`shardExtras`-backed) capabilities. */
     appMethod?: AppMethodFacet;
+
+    /**
+     * The `moduleSpecifier` exports that touch no binding, env or ctx (WebCrypto
+     * URL signing, string builders, validators). An import naming ONLY these —
+     * `import { buildSignedUrl } from "@lunora/storage"` — does not mark the
+     * capability used, so it neither wires `ctx.<prop>` nor trips the platform
+     * gate on a host without the binding. Fail closed: an unlisted export, a
+     * default, namespace or side-effect import and an `export *` all still
+     * count, as does a dynamic `import()` wherever one is counted
+     * (`@lunora/config`). List a name only after reading it.
+     */
+    bindingFreeExports?: ReadonlyArray<string>;
     /** Generated `ctx.*` helper name (the usage probe + the destructure detector); omitted when the feature has no ctx surface (`mail`). */
     contextProperty?: string;
     /** The capability id — equal to its `FeatureUsage` key and its `ctx.<key>` helper (except where `contextProperty` differs, e.g. `hyperdrive` → `ctx.sql`). */
@@ -187,6 +201,8 @@ const CAPABILITY_ROWS = [
     // off this row's usage.
     {
         appMethod: { configKey: "ai", doc: "Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`).", method: "ai" },
+        // The token-pricing table and its lookups.
+        bindingFreeExports: ["DEFAULT_MODEL_PRICES", "estimateModelCost", "lookupModelPrice"],
         contextProperty: "ai",
         key: "ai",
         moduleSpecifier: "@lunora/ai",
@@ -362,6 +378,8 @@ const CAPABILITY_ROWS = [
     // non-deterministic compute/network I/O.
     {
         appMethod: { configKey: "images", doc: "Override the Images binding backing `ctx.images` (defaults to `env.IMAGES`).", method: "images" },
+        // The delivery-URL string builder and the WebCrypto signed-URL trio.
+        bindingFreeExports: ["buildImageDeliveryUrl", "buildSignedImageUrl", "parseSignedTransform", "verifySignedImageUrl"],
         contextProperty: "images",
         key: "images",
         moduleSpecifier: "@lunora/bindings/images",
@@ -380,6 +398,7 @@ const CAPABILITY_ROWS = [
     // which is why its reads are stamped unvouchable.
     {
         appMethod: { configKey: "kv", doc: "Override the Workers KV binding backing `ctx.kv` (defaults to `env.KV`).", method: "kv" },
+        bindingFreeExports: ["scopeKey"],
         contextProperty: "kv",
         key: "kv",
         moduleSpecifier: "@lunora/bindings/kv",
@@ -480,8 +499,21 @@ const CAPABILITY_ROWS = [
         shardBinding: "bespoke",
         tier: "action",
     },
-    { contextProperty: "scheduler", key: "scheduler", moduleSpecifier: "@lunora/scheduler" },
-    { contextProperty: "storage", key: "storage", moduleSpecifier: "@lunora/storage" },
+    {
+        // The cron-expression validators.
+        bindingFreeExports: ["assertValidCronExpression", "isValidCronExpression"],
+        contextProperty: "scheduler",
+        key: "scheduler",
+        moduleSpecifier: "@lunora/scheduler",
+    },
+    {
+        // Worker-signed URLs (WebCrypto), R2 S3 presigned URLs (SigV4 over the
+        // caller's credentials, not the binding) and the tenant key prefixer.
+        bindingFreeExports: ["buildPresignedUrl", "buildSignedUrl", "scopeKey", "verifySignedUrl"],
+        contextProperty: "storage",
+        key: "storage",
+        moduleSpecifier: "@lunora/storage",
+    },
     // `ctx.vectors` is declaration-gated (schema indexes + the platform gate), so
     // its `.vectors()` builder method is emitted off `hasVectors` in `emit-app.ts`,
     // not from this row; the row is the usage probe only.

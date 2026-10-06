@@ -1782,6 +1782,11 @@ const CAPABILITY_ROWS: readonly [
             readonly doc: "Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`).";
             readonly method: "ai";
         };
+        readonly bindingFreeExports: readonly [
+            "DEFAULT_MODEL_PRICES",
+            "estimateModelCost",
+            "lookupModelPrice"
+        ];
         readonly contextProperty: "ai";
         readonly key: "ai";
         readonly moduleSpecifier: "@lunora/ai";
@@ -1985,6 +1990,12 @@ const CAPABILITY_ROWS: readonly [
             readonly doc: "Override the Images binding backing `ctx.images` (defaults to `env.IMAGES`).";
             readonly method: "images";
         };
+        readonly bindingFreeExports: readonly [
+            "buildImageDeliveryUrl",
+            "buildSignedImageUrl",
+            "parseSignedTransform",
+            "verifySignedImageUrl"
+        ];
         readonly contextProperty: "images";
         readonly key: "images";
         readonly moduleSpecifier: "@lunora/bindings/images";
@@ -2014,6 +2025,9 @@ const CAPABILITY_ROWS: readonly [
             readonly doc: "Override the Workers KV binding backing `ctx.kv` (defaults to `env.KV`).";
             readonly method: "kv";
         };
+        readonly bindingFreeExports: readonly [
+            "scopeKey"
+        ];
         readonly contextProperty: "kv";
         readonly key: "kv";
         readonly moduleSpecifier: "@lunora/bindings/kv";
@@ -2121,11 +2135,21 @@ const CAPABILITY_ROWS: readonly [
         readonly tier: "action";
     },
     {
+        readonly bindingFreeExports: readonly [
+            "assertValidCronExpression",
+            "isValidCronExpression"
+        ];
         readonly contextProperty: "scheduler";
         readonly key: "scheduler";
         readonly moduleSpecifier: "@lunora/scheduler";
     },
     {
+        readonly bindingFreeExports: readonly [
+            "buildPresignedUrl",
+            "buildSignedUrl",
+            "scopeKey",
+            "verifySignedUrl"
+        ];
         readonly contextProperty: "storage";
         readonly key: "storage";
         readonly moduleSpecifier: "@lunora/storage";

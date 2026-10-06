@@ -1,10 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { CAPABILITIES } from "../../src/capabilities";
 import type { FeatureUsage } from "../../src/discover/feature-usage";
 import {
     capabilitiesUsedBy,
@@ -382,6 +384,71 @@ describe("discover/feature-usage", () => {
 
             expect([...capabilitiesUsedBy(folded)].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["kv", "r2sql"]);
         });
+
+        // A capability's binding-free helpers (`bindingFreeExports`) need no
+        // binding, so naming only them must not mark it used; anything that may
+        // reach the binding-backed surface still does (fail closed).
+        it.each([
+            ["a binding-free named import", `import { buildSignedUrl } from "@lunora/storage";`, []],
+            ["several binding-free helpers, one aliased", `import { buildSignedUrl as sign, verifySignedUrl } from "@lunora/storage";`, []],
+            ["a binding-free helper beside a type", `import { type Storage, buildPresignedUrl } from "@lunora/storage";`, []],
+            ["the images URL helpers", `import { buildImageDeliveryUrl, buildSignedImageUrl, verifySignedImageUrl } from "@lunora/bindings/images";`, []],
+            ["a binding-free re-export", `export { buildSignedUrl } from "@lunora/storage";`, []],
+            ["a type-only import", `import type { Storage } from "@lunora/storage";`, []],
+            ["a type-only named list", `import { type Storage } from "@lunora/storage";`, []],
+            ["a binding-backed factory beside a helper", `import { buildSignedUrl, createStorage } from "@lunora/storage";`, ["storage"]],
+            ["the images factory", `import { createImages } from "@lunora/bindings/images";`, ["images"]],
+            ["a namespace import", `import * as storage from "@lunora/storage";`, ["storage"]],
+            ["a default import", `import storage from "@lunora/storage";`, ["storage"]],
+            ["a default import beside a helper", `import storage, { buildSignedUrl } from "@lunora/storage";`, ["storage"]],
+            ["a side-effect import", `import "@lunora/storage";`, ["storage"]],
+            ["an empty named list", `import {} from "@lunora/storage";`, ["storage"]],
+            ["a star re-export", `export * from "@lunora/storage";`, ["storage"]],
+            ["a namespace re-export", `export * as storage from "@lunora/storage";`, ["storage"]],
+            ["a binding-backed re-export", `export { buildSignedUrl, createStorage } from "@lunora/storage";`, ["storage"]],
+            [
+                "a helper of another capability's name",
+                `import { scopeKey } from "@lunora/storage";\nimport { scopeKey as kvKey } from "@lunora/bindings/kv";`,
+                [],
+            ],
+            ["a package with no binding-free exports", `import { createMailer } from "@lunora/mail";`, ["mail"]],
+            [
+                "a binding-free helper beside a ctx read",
+                `import { buildSignedUrl } from "@lunora/storage";\nexport const f = async ({ ctx }) => ctx.storage.getUrl("a");`,
+                ["storage"],
+            ],
+        ])("judges %s", (_case, source, expected) => {
+            expect.assertions(1);
+
+            expect([...capabilitiesUsedBy(signalsOf(source))]).toStrictEqual(expected);
+        });
+
+        it("counts a dynamic import of a package with binding-free exports once merged in (as `@lunora/config` does)", () => {
+            expect.assertions(1);
+
+            const signals = signalsOf(`export const load = () => import("@lunora/storage");`);
+
+            expect([
+                ...capabilitiesUsedBy({ contextReads: signals.contextReads, valueImports: new Set([...signals.valueImports, ...signals.dynamicImports]) }),
+            ]).toStrictEqual(["storage"]);
+        });
+    });
+
+    // A renamed or removed export would leave its entry matching nothing — the
+    // import it was meant to exempt would quietly count again.
+    it.each(
+        CAPABILITIES.flatMap(({ bindingFreeExports, moduleSpecifier }) =>
+            bindingFreeExports === undefined ? [] : [[moduleSpecifier, bindingFreeExports] as const],
+        ),
+    )("lists only real exports of %s as binding-free", (moduleSpecifier, names) => {
+        expect.assertions(1);
+
+        const [, packageName, subpath = ""] = /^@lunora\/([^/]+)(?:\/(.+))?$/u.exec(moduleSpecifier) ?? [];
+        const entry = new Project({ skipAddingFilesFromTsConfig: true }).addSourceFileAtPath(
+            join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", String(packageName), "src", subpath, "index.ts"),
+        );
+
+        expect(names.filter((name) => !entry.getExportedDeclarations().has(name))).toStrictEqual([]);
     });
 
     it("prefilters on `ctx` plus a helper name", () => {

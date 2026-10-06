@@ -86,6 +86,41 @@ describe("gatePlatformFeatures", () => {
         ]);
     });
 
+    it.each([
+        ["a binding-free helper", `import { buildSignedUrl } from "@lunora/storage";\n\nexport const sign = buildSignedUrl;\n`, []],
+        [
+            "the binding-backed factory beside it",
+            `import { buildSignedUrl, createStorage } from "@lunora/storage";\n\nexport const make = [buildSignedUrl, createStorage];\n`,
+            ["storage"],
+        ],
+        ["a ctx.storage read", `export const f = async ({ ctx }) => ctx.storage.getUrl("a");\n`, ["storage"]],
+    ])("gates object storage on what the app reaches, not on importing %s", async (_case, source, expected) => {
+        expect.assertions(2);
+
+        // No registered target rates `objectStorage` unsupported today, so the
+        // synthetic matrix stands in for the first one that does.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const { discoverFeatureUsage } = await import("../src/discover/feature-usage");
+        const { Project } = await import("ts-morph");
+        const directory = mkdtempSync(join(tmpdir(), "lunora-storage-gate-"));
+
+        try {
+            writeFileSync(join(directory, "files.ts"), source, "utf8");
+
+            const usage = discoverFeatureUsage(new Project({ skipAddingFilesFromTsConfig: true }), directory);
+            const result = gateAgainstMatrix(
+                usage,
+                { features: { objectStorage: { level: "unsupported" } }, id: "no-storage", name: "No-Storage Host" },
+                "no-storage",
+            );
+
+            expect(usage.storage).toBe(expected.length > 0);
+            expect(result.diagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(expected);
+        } finally {
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
     it("fails closed on a feature the matrix omits, under its own diagnostic name", async () => {
         expect.assertions(5);
 
@@ -831,6 +866,40 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         expect(viaImport.platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["browser"]);
         expect(viaImport.generated.server).not.toContain(browserField);
+    });
+
+    it("leaves the images URL helpers alone, and gates the binding they sit beside", () => {
+        expect.assertions(4);
+
+        const imagesField = `readonly images: import("@lunora/bindings/images").Images;`;
+
+        // Pure WebCrypto / string builders: they run on any host, so a target
+        // without an Images binding must not reject them, nor emit `ctx.images`.
+        write(
+            "images.ts",
+            `import { buildImageDeliveryUrl, buildSignedImageUrl, verifySignedImageUrl } from "@lunora/bindings/images";\n\nexport const helpers = [buildImageDeliveryUrl, buildSignedImageUrl, verifySignedImageUrl];\n`,
+        );
+
+        const helpersOnly = codegen();
+
+        expect(helpersOnly.platformDiagnostics).toStrictEqual([]);
+        expect(helpersOnly.generated.server).not.toContain(imagesField);
+
+        // `createImages(env.IMAGES)` needs the binding with no `ctx.images` read.
+        write("images.ts", `import { createImages } from "@lunora/bindings/images";\n\nexport const images = createImages;\n`);
+
+        const viaFactory = codegen();
+
+        expect(viaFactory.platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["images"]);
+        expect(viaFactory.generated.server).not.toContain(imagesField);
+    });
+
+    it("gates mail on its import, since it has no ctx helper to read", () => {
+        expect.assertions(1);
+
+        write("send.ts", `import { createMailer } from "@lunora/mail";\n\nexport const mailer = createMailer;\n`);
+
+        expect(codegen().platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["mail"]);
     });
 
     it("gates a destructured ctx.secrets read, not only a direct property access", () => {
