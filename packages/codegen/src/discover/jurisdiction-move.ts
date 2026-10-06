@@ -4,17 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "../diagnostics";
 import type { SchemaIR } from "../ir";
 import { listSecurityScanFiles } from "./ast";
-
-/** The key a property-name node spells, or `undefined` when it is computed from something other than a string literal. */
-const staticKey = (name: Node): string | undefined => {
-    if (Node.isComputedPropertyName(name)) {
-        const expression = name.getExpression();
-
-        return Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression) ? expression.getLiteralValue() : undefined;
-    }
-
-    return Node.isStringLiteral(name) ? name.getLiteralValue() : name.getText();
-};
+import { staticPropertyName } from "./property-name";
 
 /**
  * Whether an options object literal names a `namespace` key (quoted, or as a
@@ -27,7 +17,7 @@ const mayDeclareNamespace = (options: ObjectLiteralExpression): boolean =>
             return true;
         }
 
-        const key = staticKey(property.getNameNode());
+        const key = staticPropertyName(property.getNameNode());
 
         return key === undefined || key === "namespace";
     });
