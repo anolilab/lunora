@@ -24,10 +24,11 @@
  * This is a seam, not an implementation. The aggregates module owns the
  * types and the merge/throw; the RLS module owns the policy logic.
  *
- * Auto-backfill: a counter table is **lazily** populated on the first read
- * that targets an empty counter, by scanning the source table once. Cheap and
- * correct for dev/test; production backfills can also be triggered up-front
- * via `backfillAggregateIndexes` from a one-shot in `runShardMigrations`.
+ * Backfill: the DO store rebuilds a counter table from one scan of the source
+ * table on the first touch (read or write) whose durable marker does not match
+ * the index's current definition, then trusts the write path's deltas — see
+ * `ctx-db-aggregate-state`. `backfillAggregateIndexes` runs the same rebuild
+ * up-front for a host that would rather not pay it on a request.
  */
 
 import { LunoraError } from "@lunora/errors";

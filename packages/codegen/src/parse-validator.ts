@@ -3,7 +3,7 @@ import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, S
 import { Node, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
-import { propertyKeyName } from "./discover/ast";
+import { staticPropertyName } from "./discover/property-name";
 import type { ColumnMetaIR, ValidatorIR } from "./ir";
 
 /**
@@ -379,6 +379,10 @@ const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorI
     }
 };
 
+const unresolvableKey = (nameNode: Node): never => {
+    throw diagnosticAt(nameNode, `computed property name ${nameNode.getText()} must be a string literal — codegen resolves object keys statically.`);
+};
+
 const parseObjectShape = (object: ObjectLiteralExpression): Record<string, ValidatorIR> => {
     const out: Record<string, ValidatorIR> = {};
 
@@ -405,21 +409,19 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
             continue;
         }
 
-        // Skip computed property names (`[expr]: ...`) — we can't derive a stable
-        // identifier from them and they can't be emitted safely.
-        const nameNode = property.getNameNode();
-
-        if (Node.isComputedPropertyName(nameNode)) {
-            continue;
-        }
-
         const initializer = shorthand ? property.getNameNode() : property.getInitializer();
 
         if (!initializer) {
             continue;
         }
 
-        const fieldName = propertyKeyName(property);
+        // A literal computed name (`["id"]`) resolves to its key. Any other one
+        // aborts the run: the key still exists at runtime, so dropping it from the
+        // IR would let the compiled args validator commit records the interpreted
+        // parser rejects (the soundness contract in `@lunora/values`
+        // `validator-map.ts`), or silently drop a table column from `Doc_*`.
+        const nameNode = property.getNameNode();
+        const fieldName = staticPropertyName(nameNode) ?? unresolvableKey(nameNode);
 
         if (!FIELD_NAME_RE.test(fieldName)) {
             throw new LunoraError("INTERNAL", `@lunora/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);

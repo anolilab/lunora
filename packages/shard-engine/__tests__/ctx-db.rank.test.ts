@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { backfillRankIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { clearCompanionSignatures } from "../src/ctx-db-companion-state";
 import { rankKeyFromDoc } from "../src/rank";
 import type { RankIndexDefinitionLike } from "../src/schema-types";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -581,5 +582,122 @@ describe("ctx-db rank", () => {
 
             await expect(writer.rank("events", "byScore", { row: "e1", where: { userId: "u1" } })).resolves.toMatchObject({ position: 1 });
         });
+    });
+});
+
+describe("ctx-db rank — durable backfill marker", () => {
+    const freshWriter = (schema: SchemaLike): DatabaseWriterLike => createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+
+    // Removing a companion entry a rebuild would restore: reading the shorter
+    // total back proves the companion was trusted, not rescanned.
+    const plant = (): void => {
+        harness.raw(`DELETE FROM "messages__rank_byChannel" WHERE "__id__" = 'm3'`);
+    };
+
+    const seed = async (schema: SchemaLike): Promise<void> => {
+        const writer = setupWriter(schema);
+
+        await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
+        await writer.insert("messages", { _creationTime: 200, _id: "m2", archived: true, channelId: "c1", score: 0 }, { allowExplicitId: true });
+        await writer.insert("messages", { _creationTime: 300, _id: "m3", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
+    };
+
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("rebuilds once per shard, not once per ctx-db instance", async () => {
+        expect.assertions(2);
+
+        const schema = makeSchema(byChannelByCreation);
+
+        await seed(schema);
+
+        await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 3 });
+
+        plant();
+        // A cold start re-runs migrations; the marker survives them.
+        runShardMigrations(harness.sql, schema);
+
+        await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 2 });
+    });
+
+    it("rebuilds exactly once when the index definition changes", async () => {
+        expect.assertions(2);
+
+        await seed(makeSchema(byChannelByCreation));
+
+        // Same name, narrower static `where`.
+        const changed = makeSchema({ ...byChannelByCreation, where: { archived: false } });
+
+        runShardMigrations(harness.sql, changed);
+
+        await expect(freshWriter(changed).rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 2 });
+
+        plant();
+
+        await expect(freshWriter(changed).rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
+    });
+
+    it("rebuilds an index re-declared after a deploy that dropped it", async () => {
+        expect.assertions(1);
+
+        const schema = makeSchema(byChannelByCreation);
+
+        await seed(schema);
+
+        // Undeclared: nothing maintains the companion while this row lands.
+        const without = makeSchema();
+
+        runShardMigrations(harness.sql, without);
+        await freshWriter(without).insert("messages", { _creationTime: 400, _id: "m4", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
+        runShardMigrations(harness.sql, schema);
+
+        await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m4" })).resolves.toEqual({ position: 4, total: 4 });
+    });
+
+    it("records the marker on an eager backfill, and rebuilds there when the definition changed", async () => {
+        expect.assertions(2);
+
+        const schema = makeSchema(byChannelByCreation);
+
+        await seed(makeSchema());
+        runShardMigrations(harness.sql, schema);
+        backfillRankIndexes(harness.sql, schema);
+        plant();
+
+        await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 2 });
+
+        const changed = makeSchema({ ...byChannelByCreation, where: { archived: false } });
+
+        runShardMigrations(harness.sql, changed);
+        backfillRankIndexes(harness.sql, changed);
+
+        await expect(freshWriter(changed).rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 2 });
+    });
+
+    it("leaves soft-deleted rows out of a rebuild, so restore() re-adds without colliding", async () => {
+        expect.assertions(2);
+
+        const schema: SchemaLike = {
+            tables: {
+                messages: { ...makeSchema(byChannelByCreation).tables["messages"]!, softDeleteMode: { field: "deletedAt" } },
+            },
+        };
+
+        await seed(schema);
+        await freshWriter(schema).delete("m3", "messages");
+        // Force the next touch to rebuild over a table holding a soft-deleted row.
+        clearCompanionSignatures(harness.sql);
+
+        await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 2 });
+
+        await freshWriter(schema).restore!("m3", "messages");
+
+        await expect(freshWriter(schema).rank("messages", "byChannel", { row: "m3" })).resolves.toEqual({ position: 3, total: 3 });
     });
 });

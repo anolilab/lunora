@@ -119,6 +119,7 @@ const ADMIN_FUNCTIONS = {
     rankBefore: "__lunora_admin__:rankBefore",
     rankPage: "__lunora_admin__:rankPage",
     readTablePage: "__lunora_admin__:readTablePage",
+    rebuildCompanions: "__lunora_admin__:rebuildCompanions",
     recordAuthEvent: "__lunora_admin__:recordAuthEvent",
     recordContainerEvent: "__lunora_admin__:recordContainerEvent",
     recordMail: "__lunora_admin__:recordMail",

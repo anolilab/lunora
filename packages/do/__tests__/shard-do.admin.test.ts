@@ -1183,6 +1183,20 @@ describe("shardDO admin introspection", () => {
         expect(read.result.entries).toHaveLength(0);
     });
 
+    it("forgets every companion rebuild marker on rebuildCompanions", async () => {
+        expect.assertions(2);
+
+        // A marker as a migrated shard holds it; the base class never migrates one.
+        database.raw(`CREATE TABLE "__lunora_companion_state" ("companion" TEXT PRIMARY KEY, "signature" TEXT NOT NULL)`);
+        database.raw(`INSERT INTO "__lunora_companion_state" VALUES ('todos__agg_byProject', 'sig')`);
+
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.rebuildCompanions, {}, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({ result: { ok: true } });
+        expect(database.raw(`SELECT * FROM "__lunora_companion_state"`)).toHaveLength(0);
+    });
+
     it("starts a workflow instance through the declared workflow on ctx.exports", async () => {
         expect.assertions(2);
 

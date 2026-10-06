@@ -32,11 +32,22 @@
  * bumps them in lockstep whenever the CONSUMER package itself releases. But a
  * consumer with no triggering commits since its dependency's last release
  * keeps its stale pin indefinitely — the terminal case is a `private: true`
- * package that never releases at all. That drift is invisible today (nothing
- * walks `dependencies`) and, for a published sibling, means two installers of
- * two different `@lunora/*` packages can resolve two physical copies of a
- * shared dependency. This mode never fails the install — it only reports —
- * because mid-release-train drift between trains is normal and expected.
+ * package that never releases at all. For a published sibling that drift means
+ * two installers of two different `@lunora/*` packages can resolve two physical
+ * copies of a shared dependency. For published packages this mode never fails
+ * the install — it only reports — because mid-release-train drift between
+ * trains is normal and expected.
+ *
+ * Private packages are the exception and DO fail the install: nothing ever
+ * rewrites their pins. The root `pnpm-workspace.yaml` overrides force every
+ * sibling to `workspace:*` at install time, so a stale pin still links the
+ * workspace copy today — but the manifest then disagrees with the lockfile, and
+ * if those overrides are ever removed the stale pin resolves from the registry
+ * (a bundled private package such as `@lunora/dispatch` would inline that copy
+ * into the published packages that bundle it). The manifest should say what is
+ * installed, so any sibling specifier in a private package's dependency fields
+ * that is not `workspace:` or `catalog:` fails — on the shape, not on current
+ * drift. (`workspace:*` peers pass the exact-pin peer check above.)
  *
  * Run on every `pnpm install` via the root `postinstall` script.
  */
@@ -91,12 +102,38 @@ for (const { dir, manifest } of manifests) {
     }
 }
 
-// Report-only: exact sibling `dependencies` pins that have drifted behind the
-// dependency's current published version. Never fails the install — see the
-// doc comment above for why this is a report, not a gate.
+// Private packages: any non-workspace/catalog sibling specifier fails — nothing
+// rewrites it on release, and only the root overrides keep it on the workspace copy.
+for (const { dir, manifest } of manifests) {
+    if (manifest.private !== true) {
+        continue;
+    }
+
+    for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+        for (const [name, specifier] of Object.entries(manifest[field] ?? {})) {
+            if (!isSibling(name) || typeof specifier !== "string" || specifier.startsWith("workspace:") || specifier.startsWith("catalog:")) {
+                continue;
+            }
+
+            hasFailure = true;
+
+            console.error(`❌ packages/${dir} is private but its ${field} pin "${name}": "${specifier}".`);
+            console.error("   A private package never releases, so nothing rewrites the pin; the manifest should match the workspace:* install.");
+            console.error(`   Use "${name}": "workspace:*" instead.`);
+        }
+    }
+}
+
+// Report-only: exact sibling `dependencies` pins in published packages that have
+// drifted behind the dependency's current published version. Never fails the
+// install — see the doc comment above for why this is a report, not a gate.
 let dependencyWarnings = 0;
 
 for (const { dir, manifest } of manifests) {
+    if (manifest.private === true) {
+        continue;
+    }
+
     for (const [name, specifier] of Object.entries(manifest.dependencies ?? {})) {
         if (!isSibling(name) || typeof specifier !== "string" || specifier.startsWith("workspace:")) {
             continue;
@@ -141,4 +178,6 @@ if (hasFailure) {
     process.exit(1);
 }
 
-console.log("✅ No exact @lunora/* or lunorash peerDependency pins; multi-semantic-release keeps ranges (deps.bump: satisfy).");
+console.log(
+    "✅ No exact @lunora/* or lunorash peerDependency pins; private packages use workspace:/catalog: siblings; multi-semantic-release keeps ranges (deps.bump: satisfy).",
+);
