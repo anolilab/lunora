@@ -386,7 +386,7 @@
     # skips. Keep CELLD_* in step with test-celld and release-pins.json, and Go/xcaddy
     # in step with hostd-release.yml.
     "test-hostd":
-        "name": "hostd integration (@lunora/hostd)"
+        "name": "hostd integration (lunora-hostd)"
         "if": "needs.files-changed.outputs.hostd == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-24.04"
