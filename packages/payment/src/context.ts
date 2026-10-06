@@ -4,8 +4,9 @@
  * This is what codegen wires `ctx.payments` to: the store rides the request's `ctx.db` (the app's
  * ShardDO), and authorization defaults to "the caller may only act on their own `userId`" — apps
  * keyed on org/workspace references pass a custom `authorize`, which receives the caller's `userId`
- * and the request's `db` (e.g. to check the caller is an owner/admin of the org being billed). Adapters carry secrets, so the
- * adapter is supplied by the caller (typically from a `config.payment(env)` thunk).
+ * and the request's `db` (e.g. to check the caller is an owner/admin of the org being billed).
+ * Adapters carry secrets, so the adapter is supplied by the caller (typically from a
+ * `config.payment(env)` thunk).
  */
 import type { PaymentAdapter } from "./adapter";
 import type { LunoraPayment } from "./create-payment";
@@ -92,23 +93,15 @@ export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): P
  * @experimental
  */
 export const paymentsFromContext = (context: PaymentContextLike, options: PaymentsFromContextOptions): LunoraPayment => {
-    // Narrow `null | string | undefined` to `string | undefined` — this only folds `null` into
-    // `undefined`. It does NOT normalize an empty string: `"" ?? undefined` is `""`. What stops a
-    // blank principal from matching an empty/orphan `referenceId` is the `referenceId.trim() !== ""`
-    // clause in the default authorizer below, so do not drop that clause on the strength of this line.
-    const userId = context.auth?.userId ?? undefined;
+    const userId = context.auth?.userId;
     const { authorize } = options;
-    // A blank identity is unauthenticated for an app rule too, as `AuthorizeContextReference` promises —
-    // otherwise its `referenceId === userId` would match every orphaned (`""`) row.
-    const caller = { db: context.db, userId: userId === "" ? undefined : userId };
+    // A blank identity is unauthenticated, for the default rule and an app's alike — otherwise
+    // `referenceId === userId` would match every orphaned (`""`) row.
+    const caller = { db: context.db, userId: userId?.trim() ? userId : undefined };
 
     return createPayment({
         adapter: options.adapter,
-        // The default authorizer fails closed on an empty/whitespace reference: a missing identity or a
-        // blank reference (e.g. webhook-orphaned rows with `referenceId: ""`) is never authorized.
-        authorize: authorize
-            ? (referenceId) => authorize(referenceId, caller)
-            : (referenceId) => referenceId.trim() !== "" && userId !== undefined && referenceId === userId,
+        authorize: authorize ? (referenceId) => authorize(referenceId, caller) : (referenceId) => caller.userId !== undefined && referenceId === caller.userId,
         entitlements: options.entitlements,
         observability: options.observability,
         store: createDatabasePaymentStore(lunoraDatabaseToPaymentDatabase(context.db)),

@@ -590,11 +590,7 @@ const emitQueuesMetadataFragments = (queues: ReadonlyArray<QueueIR>): { constant
     );
 };
 
-/**
- * Every callable member of `LunoraPayment`, which `paymentStub` stubs. Missing one here meant the
- * stub's `as unknown as LunoraPayment` cast hid the gap, and calling it failed with an opaque
- * "not a function" instead of the "no payment configured" message.
- */
+/** Every callable member of `LunoraPayment` — the stub's cast hides a missing one (payment's `codegen-stub` test pins it). */
 const PAYMENT_METHODS = [
     "attach",
     "cancelPayment",
@@ -647,7 +643,7 @@ const emitPaymentFragments = (
                 },`,
         stub: renderThrowingStub("paymentStub: LunoraPayment", "ctx.payments: no payment configured. Pass `payment` to createShardDO().", PAYMENT_METHODS, {
             cast: " as unknown as LunoraPayment",
-            sync: PAYMENT_METHODS,
+            sync: true,
         }),
     };
 };

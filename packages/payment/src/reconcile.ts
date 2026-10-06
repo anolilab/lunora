@@ -19,6 +19,7 @@ import { compareMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
+import { overlayProviderSubscription, ownerOf } from "./store";
 import type { PaymentSession, PaymentState, Subscription } from "./types";
 
 /**
@@ -109,7 +110,7 @@ const REFUND_RANK: Partial<Record<PaymentState, number>> = { captured: 0, partia
  * order snapshot carries no `referenceId`. A naive overwrite would then erase a `charge.refunded`
  * webhook (re-entitling a refunded/charged-back customer) or blank a webhook-set reference (orphaning
  * the row from the `by_reference` index and the default authorizer). So never move the refunded total
- * backward, never regress a refund state, and never blank a non-empty reference.
+ * backward, never regress a refund state, and never move a stored owner (see {@link ownerOf}).
  *
  * The state guard is a LADDER, not a single `captured` special case. A status read can report a
  * refund state that lags the row rather than only a pre-refund one: `orderToSession` (Polar) and
@@ -131,24 +132,15 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
     const existingRank = REFUND_RANK[existing.state];
     const currentRank = REFUND_RANK[current.state];
     const state = existingRank !== undefined && currentRank !== undefined && currentRank < existingRank ? existing.state : current.state;
-    const referenceId = current.referenceId === "" ? existing.referenceId : current.referenceId;
 
-    return { ...current, referenceId, refundedAmount, state };
+    return {
+        ...current,
+        referenceId: ownerOf(existing.referenceId, current.referenceId),
+        refundedAmount,
+        state,
+        subscriptionId: current.subscriptionId ?? existing.subscriptionId,
+    };
 };
-
-/**
- * The subscription half of {@link mergePaymentTruth}: provider truth decides the lifecycle, but it
- * must never move `referenceId`.
- *
- * `referenceId` is framework-controlled owner attribution pinned into checkout metadata, not
- * something the provider computes — so a read that does not echo that metadata resolves to `""`
- * (Stripe, Polar, Creem) or falls back to the provider's own CUSTOMER id (Dodo), and a subscription
- * created outside a Lunora checkout at all (provider dashboard, migration import) never carries it.
- * Writing either value orphans the row from the `by_reference` index, from `check`/`hasActivePrice`
- * and from the default authorizer, so a paying customer is denied access — and `sync.ts` only
- * fills a blank owner on an update, so a wrong non-blank one is permanent. Keep what the store has.
- */
-const keepReferenceId = (existing: string | undefined, current: string): string => (existing === undefined || existing === "" ? current : existing);
 
 // Re-sync one subscription against the provider's truth. Returns whether the store changed.
 const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
@@ -159,15 +151,9 @@ const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStor
         return false;
     }
 
-    // Preserve the original createdAt when we already had the row. `lastEventAt` stays as stored:
-    // a status read has no event time, and stamping it with OUR clock could out-date a genuinely
-    // newer event from a provider whose clock runs behind, dropping it as stale.
-    await store.upsertSubscription({
-        ...current,
-        createdAt: existing?.createdAt ?? current.createdAt,
-        ...(existing?.lastEventAt === undefined ? {} : { lastEventAt: existing.lastEventAt }),
-        referenceId: keepReferenceId(existing?.referenceId, current.referenceId),
-    });
+    // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
+    // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
+    await store.upsertSubscription(overlayProviderSubscription(existing, current));
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;

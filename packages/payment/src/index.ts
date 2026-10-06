@@ -21,6 +21,7 @@ export {
     isZeroDecimalCurrency,
     isZeroMoney,
     money,
+    moneyFromMinor,
     subtractMoney,
     toMoneyJSON,
     zeroMoney,

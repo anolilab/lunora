@@ -26,26 +26,18 @@ const subscription = (priceId: string, state: Subscription["state"]): Subscripti
     };
 };
 
-describe("usagePeriodStart", () => {
+describe("entitlements.periodStart", () => {
     it("windows a metered feature on the subscription whose plan grants its limit", () => {
         expect.assertions(2);
 
         const pro = { ...subscription("price_pro", "active"), currentPeriodStart: 1000 };
         // Grants nothing metered — its fresher period must not reset `seats`, which pro's plan caps.
         const addon = { ...subscription("price_addon", "active"), currentPeriodStart: 5000 };
+        const entitlements = resolveEntitlements(config, [pro, addon]);
 
-        expect(usagePeriodStart(config, [pro, addon], "seats")).toBe(1000);
+        expect(entitlements.periodStart("seats")).toBe(1000);
         // No plan limits `export`, so it keeps the latest active period instead of all-time.
-        expect(usagePeriodStart(config, [pro, addon], "export")).toBe(5000);
-    });
-
-    it("uses the latest active period when no entitlements are configured (provider-metered track)", () => {
-        expect.assertions(1);
-
-        const pro = { ...subscription("price_pro", "active"), currentPeriodStart: 1000 };
-        const addon = { ...subscription("price_addon", "active"), currentPeriodStart: 5000 };
-
-        expect(usagePeriodStart(undefined, [pro, addon], "api_calls")).toBe(5000);
+        expect(entitlements.periodStart("export")).toBe(5000);
     });
 
     it("follows the most generous granting plan, whose limit is the one in force", () => {
@@ -54,7 +46,19 @@ describe("usagePeriodStart", () => {
         const pro = { ...subscription("price_pro", "active"), currentPeriodStart: 5000 };
         const team = { ...subscription("price_team", "active"), currentPeriodStart: 1000 };
 
-        expect(usagePeriodStart(config, [pro, team], "seats")).toBe(1000);
+        expect(resolveEntitlements(config, [pro, team]).periodStart("seats")).toBe(1000);
+    });
+
+    it("pools the plans tied on the winning limit", () => {
+        expect.assertions(1);
+
+        const tied: EntitlementsConfig = {
+            plans: { a: { limits: { seats: 5 }, priceIds: ["price_a"] }, b: { limits: { seats: 5 }, priceIds: ["price_b"] } },
+        };
+        const a = { ...subscription("price_a", "active"), currentPeriodStart: 1000 };
+        const b = { ...subscription("price_b", "active"), currentPeriodStart: 3000 };
+
+        expect(resolveEntitlements(tied, [a, b]).periodStart("seats")).toBe(3000);
     });
 
     it("ignores inactive subscriptions and falls back to 0", () => {
@@ -62,8 +66,21 @@ describe("usagePeriodStart", () => {
 
         const canceled = { ...subscription("price_pro", "canceled"), currentPeriodStart: 9000 };
 
-        expect(usagePeriodStart(config, [canceled], "seats")).toBe(0);
-        expect(usagePeriodStart(config, [], "seats")).toBe(0);
+        expect(resolveEntitlements(config, [canceled]).periodStart("seats")).toBe(0);
+        expect(resolveEntitlements(config, []).periodStart("seats")).toBe(0);
+    });
+});
+
+describe("usagePeriodStart", () => {
+    it("uses the latest active period across every subscription", () => {
+        expect.assertions(2);
+
+        const pro = { ...subscription("price_pro", "active"), currentPeriodStart: 1000 };
+        const addon = { ...subscription("price_addon", "active"), currentPeriodStart: 5000 };
+        const canceled = { ...subscription("price_team", "canceled"), currentPeriodStart: 9000 };
+
+        expect(usagePeriodStart([pro, addon, canceled])).toBe(5000);
+        expect(usagePeriodStart([])).toBe(0);
     });
 });
 

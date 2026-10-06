@@ -400,6 +400,12 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 const money: (minorUnits: bigint | number, currency: CurrencyCode) => Money;
 ```
 
+### `moneyFromMinor` (const)
+
+```ts
+const moneyFromMinor: (minorUnits: number, currency: CurrencyCode) => Money;
+```
+
 ### `nextPaymentState` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

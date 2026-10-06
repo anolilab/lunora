@@ -74,9 +74,12 @@ const paymentSessions = defineTable({
     referenceId: v.string(),
     refundedMinor: v.bigint(),
     state: v.string(),
+    // The provider subscription this payment started — lends its owner to an unattributed subscription row.
+    subscriptionId: v.optional(v.string()),
     updatedAt: v.number(),
 })
     .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
+    .index("by_provider_subscription", ["provider", "subscriptionId"])
     .index("by_reference", ["referenceId"]);
 
 // Append-only webhook log: inbound idempotency + audit + debugging.

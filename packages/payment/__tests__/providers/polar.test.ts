@@ -541,7 +541,8 @@ describe("polar adapter", () => {
 
         (client as { customers: unknown }).customers = {
             create: async () => {
-                throw new Error("customer with this external ID already exists");
+                // Polar answers a uniqueness conflict with a 422 validation error (`PolarError.statusCode`).
+                throw Object.assign(new Error("customer with this external ID already exists"), { statusCode: 422 });
             },
             getExternal: async (request: { externalId: string }) => {
                 lookups.push(request);
@@ -563,7 +564,7 @@ describe("polar adapter", () => {
 
         (client as { customers: unknown }).customers = {
             create: async () => {
-                throw new Error("polar is down");
+                throw Object.assign(new Error("customer with this external ID already exists"), { statusCode: 422 });
             },
             getExternal: async () => {
                 throw new Error("not found");
@@ -571,16 +572,77 @@ describe("polar adapter", () => {
         };
         const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
 
-        await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).rejects.toThrow("polar is down");
+        await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).rejects.toThrow("already exists");
     });
 
-    it("maps subscription.paused / resumed / past_due and carries occurredAt (regression)", async () => {
-        expect.assertions(4);
+    it("propagates a non-conflict create failure without looking the customer up (regression)", async () => {
+        expect.assertions(2);
+
+        const lookups: unknown[] = [];
+        const client = makeClient();
+
+        (client as { customers: unknown }).customers = {
+            create: async () => {
+                throw Object.assign(new Error("unauthorized"), { statusCode: 401 });
+            },
+            getExternal: async (request: unknown) => {
+                lookups.push(request);
+
+                return { email: "a@b.test", id: "pcus_existing" };
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).rejects.toThrow("unauthorized");
+        expect(lookups).toEqual([]);
+    });
+
+    it("caps a partial refund at Polar's refundable remainder and reports what Polar refunded (regression)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const client = makeClient([], calls);
+
+        (client as { orders: { get: unknown } }).orders = {
+            get: async () => {
+                return {
+                    currency: "usd",
+                    id: "ord_1",
+                    netAmount: 10_000,
+                    refundableAmount: 300,
+                    status: "partially_refunded",
+                    taxAmount: 2000,
+                    totalAmount: 12_000,
+                };
+            },
+        };
+        (client as { refunds: { create: unknown } }).refunds = {
+            create: async (parameters: { amount: number }) => {
+                calls.push({ args: [parameters], name: "refund" });
+
+                return { amount: parameters.amount, id: "ref_1", status: "succeeded", taxAmount: 60 };
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        // Gross 1200 is net 1000 at the order's ratio, but only 300 net is still refundable.
+        const session = await adapter.refundPayment({ amount: money(1200n, "usd"), sessionId: "ord_1" });
+
+        expect((calls.at(-1)?.args[0] as { amount: number }).amount).toBe(300);
+        expect(session.refundedAmount.minorUnits).toBe(360n);
+    });
+
+    it("maps subscription.paused / resumed / past_due and carries occurredAt and periods (regression)", async () => {
+        expect.assertions(5);
 
         const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const deliver = async (id: string, type: string, status: string) => {
-            const payload = JSON.stringify({ data: { id: "sub_1", status }, timestamp: "2026-01-02T03:04:05Z", type });
+            const payload = JSON.stringify({
+                data: { current_period_end: "2026-02-01T00:00:00Z", id: "sub_1", status },
+                timestamp: "2026-01-02T03:04:05Z",
+                type,
+            });
 
             return adapter.parseWebhook({ headers: headersFor(id, timestamp, sign(id, timestamp, payload)), payload });
         };
@@ -589,6 +651,7 @@ describe("polar adapter", () => {
 
         expect(paused.type).toBe("subscription.paused");
         expect(paused.occurredAt).toBe(Date.parse("2026-01-02T03:04:05Z"));
+        expect(paused.currentPeriodEnd).toBe(Date.parse("2026-02-01T00:00:00Z"));
         await expect(deliver("evt_r", "subscription.resumed", "active").then((a) => a.type)).resolves.toBe("subscription.active");
         await expect(deliver("evt_d", "subscription.past_due", "past_due").then((a) => a.type)).resolves.toBe("subscription.past_due");
     });
@@ -702,7 +765,7 @@ describe("polar adapter", () => {
 
         (client as { refunds: { create: unknown } }).refunds = {
             create: async () => {
-                return { id: "ref_1", status: "pending" };
+                return { amount: 500, id: "ref_1", status: "pending", taxAmount: 0 };
             },
         };
         const adapter = createPolarAdapter({ client, webhookSecret: SECRET });

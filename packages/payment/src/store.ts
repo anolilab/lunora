@@ -18,6 +18,8 @@ const recordKey = (provider: ProviderId, id: string): string => `${provider}:${i
 export interface PaymentStore {
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
+    /** A payment session for `subscriptionId` that names an owner (non-blank `referenceId`), if any. */
+    getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
     getSubscription: (provider: ProviderId, id: string) => Promise<Subscription | undefined>;
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
 
@@ -118,6 +120,25 @@ export const foldUsage = (events: ReadonlyArray<Pick<UsageEvent, "createdAt" | "
 };
 
 /**
+ * The owner a row keeps: the stored `referenceId` wins unless it is blank. Owner attribution comes
+ * from checkout metadata the provider does not always echo, so an incoming value only fills a gap.
+ */
+export const ownerOf = (stored: string | undefined, incoming: string | undefined): string => (stored?.trim() ? stored : (incoming ?? ""));
+
+/**
+ * Overlay the provider's view of a subscription on the stored row: provider truth for the
+ * lifecycle, the store for owner, `createdAt` and `lastEventAt` (a status read is not an event).
+ */
+export const overlayProviderSubscription = (existing: Subscription | undefined, current: Subscription): Subscription => {
+    return {
+        ...current,
+        createdAt: existing?.createdAt ?? current.createdAt,
+        lastEventAt: existing?.lastEventAt,
+        referenceId: ownerOf(existing?.referenceId, current.referenceId),
+    };
+};
+
+/**
  * In-memory {@link PaymentStore} for tests and local development. Not durable.
  * @experimental
  */
@@ -138,6 +159,14 @@ export class MemoryPaymentStore implements PaymentStore {
 
     public getPaymentSession(provider: ProviderId, id: string): Promise<PaymentSession | undefined> {
         return Promise.resolve(this.sessions.get(recordKey(provider, id)));
+    }
+
+    public getPaymentSessionBySubscription(provider: ProviderId, subscriptionId: string): Promise<PaymentSession | undefined> {
+        return Promise.resolve(
+            [...this.sessions.values()].find(
+                (session) => session.provider === provider && session.subscriptionId === subscriptionId && session.referenceId.trim() !== "",
+            ),
+        );
     }
 
     public getSubscription(provider: ProviderId, id: string): Promise<Subscription | undefined> {

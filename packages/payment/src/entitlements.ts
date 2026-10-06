@@ -20,6 +20,25 @@ const ACTIVE_STATES: ReadonlySet<Subscription["state"]> = new Set<Subscription["
  */
 const priceIdsOf = (subscription: Subscription): ReadonlyArray<string> => subscription.priceIds ?? [subscription.priceId];
 
+const isActive = (subscription: Subscription): boolean => ACTIVE_STATES.has(subscription.state);
+
+/** Latest `currentPeriodStart` among active subscriptions, optionally only those billing one of `priceIds`. */
+const latestPeriodStart = (subscriptions: ReadonlyArray<Subscription>, priceIds?: ReadonlySet<string>): number => {
+    let start = 0;
+
+    for (const subscription of subscriptions) {
+        if (
+            isActive(subscription) &&
+            subscription.currentPeriodStart !== undefined &&
+            (priceIds === undefined || priceIdsOf(subscription).some((id) => priceIds.has(id)))
+        ) {
+            start = Math.max(start, subscription.currentPeriodStart);
+        }
+    }
+
+    return start;
+};
+
 /**
  * `PlanDefinition` is part of the experimental `@lunora/payment` API and may change without a major version bump.
  * @experimental
@@ -52,6 +71,14 @@ export interface Entitlements {
     readonly has: (feature: string) => boolean;
     /** The most-generous granted value for a numeric limit, or `undefined`. */
     readonly limit: (key: string) => number | undefined;
+
+    /**
+     * Start of the window `featureId`'s metered usage is summed over: the latest period start among
+     * the active subscriptions billing the plan its {@link Entitlements.limit} comes from (any other
+     * subscription renewing must not reset it). Unlimited by any plan, the latest across every active
+     * subscription. `0` (all-time) when none reports a period.
+     */
+    readonly periodStart: (featureId: string) => number;
     /** Active plan names (a reference can hold more than one). */
     readonly plans: ReadonlyArray<string>;
 }
@@ -81,20 +108,19 @@ export const featureNames = (config: EntitlementsConfig): string[] => {
  * @experimental
  */
 export const hasActivePrice = (subscriptions: ReadonlyArray<Subscription>, priceId: string): boolean =>
-    subscriptions.some((subscription) => ACTIVE_STATES.has(subscription.state) && priceIdsOf(subscription).includes(priceId));
+    subscriptions.some((subscription) => isActive(subscription) && priceIdsOf(subscription).includes(priceId));
 
 /**
  * Derive {@link Entitlements} from a reference's subscriptions. Pure — the basis of `check`.
  * @experimental
  */
 export const resolveEntitlements = (config: EntitlementsConfig, subscriptions: ReadonlyArray<Subscription>): Entitlements => {
-    const activePriceIds = new Set(
-        subscriptions.filter((subscription) => ACTIVE_STATES.has(subscription.state)).flatMap((subscription) => priceIdsOf(subscription)),
-    );
+    const activePriceIds = new Set(subscriptions.filter((subscription) => isActive(subscription)).flatMap((subscription) => priceIdsOf(subscription)));
 
     const plans: string[] = [];
     const features = new Set<string>();
-    const limits = new Map<string, number>();
+    // Each limit's winning value and the price ids of the plan(s) granting it.
+    const limits = new Map<string, { priceIds: Set<string>; value: number }>();
 
     for (const [name, plan] of Object.entries(config.plans)) {
         if (!plan.priceIds.some((id) => activePriceIds.has(id))) {
@@ -110,54 +136,32 @@ export const resolveEntitlements = (config: EntitlementsConfig, subscriptions: R
         for (const [key, value] of Object.entries(plan.limits ?? {})) {
             const current = limits.get(key);
 
-            // Most-generous wins when several active plans cap the same limit.
-            limits.set(key, current === undefined ? value : Math.max(current, value));
+            // Most-generous wins when several active plans cap the same limit; a tie pools both plans.
+            if (current === undefined || value > current.value) {
+                limits.set(key, { priceIds: new Set(plan.priceIds), value });
+            } else if (value === current.value) {
+                for (const id of plan.priceIds) {
+                    current.priceIds.add(id);
+                }
+            }
         }
     }
 
     return {
         features,
         has: (feature) => features.has(feature),
-        limit: (key) => limits.get(key),
+        limit: (key) => limits.get(key)?.value,
+        periodStart: (featureId) => latestPeriodStart(subscriptions, limits.get(featureId)?.priceIds),
         plans,
     };
 };
 
 /**
- * Start of the window `check` sums `featureId`'s metered usage over: the most recent billing-period
- * start among the active subscriptions that bill the plan granting its limit — the most generous
- * one, the same plan {@link resolveEntitlements} takes the limit from. Any OTHER subscription is
- * none of this feature's business: taking the latest period across all of them meant buying an
- * unrelated add-on reset the usage of a plan that had not renewed. With no config, or no plan
- * limiting the feature (a provider-metered one `track` still folds), it is the latest period start
- * across every active subscription. `0` (count all-time) when no such subscription reports a
- * period — the limit still binds, it just never resets.
+ * Latest billing-period start across every active subscription — the usage window when no
+ * entitlements are configured. With a config, use {@link Entitlements.periodStart}.
  * @experimental
  */
-export const usagePeriodStart = (config: EntitlementsConfig | undefined, subscriptions: ReadonlyArray<Subscription>, featureId: string): number => {
-    const limit = config ? resolveEntitlements(config, subscriptions).limit(featureId) : undefined;
-    const granting =
-        config && limit !== undefined
-            ? new Set(
-                  Object.values(config.plans)
-                      .filter((plan) => plan.limits?.[featureId] === limit)
-                      .flatMap((plan) => plan.priceIds),
-              )
-            : undefined;
-    let start = 0;
-
-    for (const subscription of subscriptions) {
-        if (
-            ACTIVE_STATES.has(subscription.state) &&
-            subscription.currentPeriodStart !== undefined &&
-            (granting === undefined || priceIdsOf(subscription).some((id) => granting.has(id)))
-        ) {
-            start = Math.max(start, subscription.currentPeriodStart);
-        }
-    }
-
-    return start;
-};
+export const usagePeriodStart = (subscriptions: ReadonlyArray<Subscription>): number => latestPeriodStart(subscriptions);
 
 /**
  * Convenience: resolve entitlements straight from the store for a reference.

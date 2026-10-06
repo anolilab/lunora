@@ -59,7 +59,9 @@ develop against it first, then flip to production.
 **An access token.** In the Polar dashboard, open your organization
 **Settings → General → Developers** and create an **Organization Access Token**.
 This is the `POLAR_ACCESS_TOKEN` the SDK authenticates with. See
-[Authentication](https://polar.sh/docs/integrate/authentication).
+[Authentication](https://polar.sh/docs/integrate/authentication). To issue refunds
+through `refundPayment`, the token needs `refunds:write` **and** `orders:read`:
+every refund, full or partial, first reads the order to convert the amount to net.
 
 </Step>
 <Step>

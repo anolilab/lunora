@@ -133,6 +133,7 @@ const sessionToRow = (session: PaymentSession): Record<string, unknown> => {
         referenceId: session.referenceId,
         refundedMinor: session.refundedAmount.minorUnits,
         state: session.state,
+        ...(session.subscriptionId === undefined ? {} : { subscriptionId: session.subscriptionId }),
         updatedAt: session.updatedAt,
     };
 };
@@ -149,6 +150,7 @@ const rowToSession = (row: PaymentRow): PaymentSession => {
         referenceId: readString(row, "referenceId"),
         refundedAmount: money(readBigint(row, "refundedMinor"), currency),
         state: readString(row, "state") as PaymentState,
+        subscriptionId: readOptionalString(row, "subscriptionId"),
         updatedAt: readNumber(row, "updatedAt"),
     };
 };
@@ -251,6 +253,13 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             const row = await database.findFirst("paymentSessions", { provider, providerSessionId: id });
 
             return row ? rowToSession(row) : undefined;
+        },
+
+        getPaymentSessionBySubscription: async (provider, subscriptionId) => {
+            // Unbounded by design: one subscription's checkout plus its renewals.
+            const { rows } = await database.findMany("paymentSessions", { provider, subscriptionId });
+
+            return rows.map((row) => rowToSession(row)).find((session) => session.referenceId.trim() !== "");
         },
 
         getSubscription: async (provider, id) => {

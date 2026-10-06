@@ -14,8 +14,8 @@ import type { Stripe } from "stripe";
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import { idempotencyKey } from "../idempotency";
-import { asRecord, readBoolean, readNumber, readString } from "../json";
-import { compareMoney, money, zeroMoney } from "../money";
+import { asRecord, readBoolean, readNumber, readString, secondsToMs } from "../json";
+import { compareMoney, moneyFromMinor, zeroMoney } from "../money";
 import type {
     CaptureInput,
     CheckoutInput,
@@ -152,30 +152,21 @@ const firstQuantity = (object: Record<string, unknown>): number | undefined => r
 // The current billing period moved from the top-level Subscription to the subscription item in
 // Stripe API 2025-03-31.basil (`items.data[].current_period_*`). Read the item first, falling back
 // to the top level for apps pinned to an older API version.
-const periodEndMs = (object: Record<string, unknown>): number | undefined => {
-    const seconds = readNumber(firstItem(object), "current_period_end") ?? readNumber(object, "current_period_end");
-
-    return seconds === undefined ? undefined : seconds * 1000;
-};
-
-const periodStartMs = (object: Record<string, unknown>): number | undefined => {
-    const seconds = readNumber(firstItem(object), "current_period_start") ?? readNumber(object, "current_period_start");
-
-    return seconds === undefined ? undefined : seconds * 1000;
-};
+const periodMs = (object: Record<string, unknown>, key: "current_period_end" | "current_period_start"): number | undefined =>
+    secondsToMs(readNumber(firstItem(object), key) ?? readNumber(object, key));
 
 /** Normalize a Stripe PaymentIntent (typed return read defensively) into a {@link PaymentSession}. */
 const intentToSession = (input: unknown): PaymentSession => {
     const intent = asRecord(input);
     const currency = readString(intent, "currency") ?? "usd";
     const amountValue = readNumber(intent, "amount") ?? 0;
-    const amount = money(BigInt(Math.round(amountValue)), currency);
+    const amount = moneyFromMinor(amountValue, currency);
     const state = PAYMENT_STATE_BY_STRIPE_STATUS[readString(intent, "status") ?? ""] ?? "initiated";
     const now = Date.now();
 
     return {
         amount,
-        capturedAmount: state === "captured" ? money(BigInt(Math.round(readNumber(intent, "amount_received") ?? amountValue)), currency) : zeroMoney(currency),
+        capturedAmount: state === "captured" ? moneyFromMinor(readNumber(intent, "amount_received") ?? amountValue, currency) : zeroMoney(currency),
         createdAt: now,
         id: readString(intent, "id") ?? "",
         provider: "stripe",
@@ -194,8 +185,8 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
     return {
         cancelAtPeriodEnd: readBoolean(subscription, "cancel_at_period_end") ?? false,
         createdAt: now,
-        currentPeriodEnd: periodEndMs(subscription),
-        currentPeriodStart: periodStartMs(subscription),
+        currentPeriodEnd: periodMs(subscription, "current_period_end"),
+        currentPeriodStart: periodMs(subscription, "current_period_start"),
         id: readString(subscription, "id") ?? "",
         // Always the first item, which the first page always carries — truncation cannot move it.
         priceId: firstPriceId(subscription) ?? "",
@@ -222,7 +213,7 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
  * the next — takes the same shape instead of repeating its own preamble.
  */
 interface StripeEvent {
-    base: Pick<WebhookAction, "eventId" | "occurredAt" | "provider" | "raw">;
+    base: Pick<WebhookAction, "eventId" | "provider" | "raw">;
     currency: string;
     object: Record<string, unknown>;
 }
@@ -269,7 +260,7 @@ const checkoutSessionAction = ({ base, currency, object }: StripeEvent): Webhook
 
     return {
         ...base,
-        amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
+        amount: amountTotal === undefined ? undefined : moneyFromMinor(amountTotal, currency),
         customerId: readString(object, "customer"),
         referenceId: readReferenceId(object),
         sessionId: paymentIntentId ?? readString(object, "id"),
@@ -302,7 +293,7 @@ const disputeClosedAction = ({ base, currency, object }: StripeEvent): WebhookAc
         // The disputed amount, which can be less than the charge (partial dispute, currency drift).
         // It is this event's own delta, not a cumulative total, so the default `"delta"` kind applies
         // — as with the `charge.refunded` total it may follow.
-        amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
+        amount: moneyFromMinor(readNumber(object, "amount") ?? 0, currency),
         referenceId: readReferenceId(object),
         // Not a refund the facade issued, so the dispute id can never consume a local refund marker
         // and have its reversal silently dropped — see `sync.ts`.
@@ -314,8 +305,8 @@ const disputeClosedAction = ({ base, currency, object }: StripeEvent): WebhookAc
     };
 };
 
-const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>, occurredAt: number | undefined): WebhookAction => {
-    const base = { eventId, occurredAt, provider: "stripe" as const, raw: { object, type: eventType } };
+const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
+    const base = { eventId, provider: "stripe" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
     const event: StripeEvent = { base, currency, object };
 
@@ -330,7 +321,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             // layer sets — rather than adds — the running refunded total and never over-counts.
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "amount_refunded") ?? 0)), currency),
+                amount: moneyFromMinor(readNumber(object, "amount_refunded") ?? 0, currency),
                 amountKind: "absolute",
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
@@ -376,8 +367,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             return {
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_period_end"),
-                currentPeriodEnd: periodEndMs(object),
-                currentPeriodStart: periodStartMs(object),
+                currentPeriodEnd: periodMs(object, "current_period_end"),
+                currentPeriodStart: periodMs(object, "current_period_start"),
                 customerId: readString(object, "customer"),
                 priceId: firstPriceId(object),
                 // Absent when the event embeds only the first page of a longer item list: a webhook
@@ -402,7 +393,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "payment_intent.amount_capturable_updated": {
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
+                amount: moneyFromMinor(readNumber(object, "amount") ?? 0, currency),
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "id"),
                 type: "payment.authorized",
@@ -416,7 +407,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "payment_intent.succeeded": {
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "amount_received") ?? readNumber(object, "amount") ?? 0)), currency),
+                amount: moneyFromMinor(readNumber(object, "amount_received") ?? readNumber(object, "amount") ?? 0, currency),
                 customerId: readString(object, "customer"),
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "id"),
@@ -553,10 +544,8 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
             const object = asRecord(asRecord(event.data).object);
 
-            const created = readNumber(asRecord(event), "created");
-
             // `event.created` is Unix seconds.
-            return mapEvent(event.id, event.type, object, created === undefined ? undefined : created * 1000);
+            return { ...mapEvent(event.id, event.type, object), occurredAt: secondsToMs(readNumber(asRecord(event), "created")) };
         },
 
         refundPayment: async (input: RefundInput) => {
@@ -588,7 +577,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 refundedTotal:
                     amountRefunded === undefined
                         ? undefined
-                        : money(BigInt(Math.round(amountRefunded)), readString(charge, "currency") ?? session.capturedAmount.currency),
+                        : moneyFromMinor(amountRefunded, readString(charge, "currency") ?? session.capturedAmount.currency),
                 state: partial ? "partially_refunded" : "refunded",
             };
         },

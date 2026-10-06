@@ -81,6 +81,12 @@ export interface PaymentSession {
     readonly referenceId: string;
     readonly refundedAmount: Money;
     readonly state: PaymentState;
+
+    /**
+     * The provider subscription this payment started or renewed, when the event carried one. A
+     * subscription row created without an owner takes this session's `referenceId`.
+     */
+    readonly subscriptionId?: string;
     readonly updatedAt: number;
 }
 
@@ -132,19 +138,13 @@ export interface CustomerRef {
 }
 
 /**
- * `CheckoutInput` is part of the experimental `@lunora/payment` API and may change without a major version bump.
+ * What the facade's `createCheckout` takes. The provider customer is always derived from the store
+ * for the authorized `referenceId`, never supplied by the caller.
  * @experimental
  */
-export interface CheckoutInput {
+export interface CheckoutRequest {
     /** Where an abandoned checkout returns to. Creem has no cancel URL, so its adapter ignores it. */
     readonly cancelUrl?: string;
-
-    /**
-     * Ignored at runtime (kept for backward-compat). The provider customer is always derived from the store for the
-     * authorized `referenceId` (never caller-supplied) to prevent cross-tenant checkout attachment (IDOR).
-     * Retained on the type only for backward compatibility; setting it has no effect.
-     */
-    readonly customerId?: string;
 
     /**
      * Customer email, used when the reference has no provider customer yet. Some Merchant-of-Record
@@ -162,6 +162,15 @@ export interface CheckoutInput {
 }
 
 /**
+ * What an adapter's `createCheckout` takes: the facade's {@link CheckoutRequest} plus the stored
+ * provider customer for the reference.
+ * @experimental
+ */
+export interface CheckoutInput extends CheckoutRequest {
+    readonly customerId?: string;
+}
+
+/**
  * `CheckoutResult` is part of the experimental `@lunora/payment` API and may change without a major version bump.
  * @experimental
  */
@@ -173,12 +182,12 @@ export interface CheckoutResult {
 
 /**
  * `attach` input — subscribe a reference to a plan. A thin, plan-oriented skin over
- * {@link CheckoutInput}: `mode` defaults to `"subscription"` (the common case), so callers pass
+ * {@link CheckoutRequest}: `mode` defaults to `"subscription"` (the common case), so callers pass
  * just `{ referenceId, priceId, successUrl, cancelUrl }`.
  * @experimental
  */
-export interface AttachInput extends Omit<CheckoutInput, "mode"> {
-    readonly mode?: CheckoutInput["mode"];
+export interface AttachInput extends Omit<CheckoutRequest, "mode"> {
+    readonly mode?: CheckoutRequest["mode"];
 }
 
 /**
@@ -359,6 +368,9 @@ export interface RefundResult extends PaymentSession {
      * is not yet `succeeded`.
      */
     readonly pending?: boolean;
+
+    /** What THIS refund moved, as the provider reports it — not the session's cumulative total. */
+    readonly refundedAmount: Money;
 
     /**
      * The provider's CUMULATIVE refunded-to-date total after this refund, when its response carries

@@ -53,6 +53,7 @@ export interface Doc_paymentSessions {
     referenceId: string;
     refundedMinor: bigint;
     state: string;
+    subscriptionId?: string;
     updatedAt: number;
 }
 
@@ -114,7 +115,7 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
 export interface IndexNamesByTable {
     customers: "by_reference" | "by_provider_customer";
     events: "by_provider_event";
-    paymentSessions: "by_reference" | "by_provider_session";
+    paymentSessions: "by_reference" | "by_provider_subscription" | "by_provider_session";
     subscriptions: "by_reference" | "by_provider_subscription";
     usageEvents: "by_reference_feature" | "by_idempotency";
     ratelimit_buckets: "by_key";
@@ -192,6 +193,7 @@ export interface Insert_paymentSessions {
     referenceId: string;
     refundedMinor: bigint;
     state: string;
+    subscriptionId?: string;
     updatedAt: number;
 }
 

@@ -29,8 +29,8 @@ import type { Autumn } from "autumn-js";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
-import { asRecord, readAny, readAnyNumber, readBoolean, readString } from "../json";
-import { money } from "../money";
+import { asRecord, readAny, readAnyNumber, readBoolean, readEpochMs, readString } from "../json";
+import { moneyFromMinor } from "../money";
 import type {
     CaptureInput,
     CheckInput,
@@ -155,8 +155,8 @@ const productToSubscription = (customerId: string, product: Record<string, unkno
     return {
         cancelAtPeriodEnd: isCanceling(product),
         createdAt: now,
-        currentPeriodEnd: readAnyNumber(product, "current_period_end", "currentPeriodEnd") ?? undefined,
-        currentPeriodStart: readAnyNumber(product, "current_period_start", "currentPeriodStart") ?? undefined,
+        currentPeriodEnd: readEpochMs(product, "current_period_end", "currentPeriodEnd"),
+        currentPeriodStart: readEpochMs(product, "current_period_start", "currentPeriodStart"),
         id: autumnSubscriptionId(customerId, productId),
         priceId: productId,
         provider: "autumn",
@@ -238,7 +238,7 @@ const mapBillingUpdated = (eventId: string, object: Record<string, unknown>): We
     const customerId = referenceFromEvent(object);
     const change = asRecordList(object.plan_changes)[0] ?? object;
     const subscription = change.subscription ? asRecord(change.subscription) : change;
-    const planId = readAny(subscription, "plan_id", "planId", "product_id", "productId", "id");
+    const planId = planIdOf(subscription);
     const status = readAny(subscription, "status");
     const action = readAny(change, "action");
     const pastDue = readBoolean(subscription, "past_due") ?? readBoolean(subscription, "pastDue") ?? false;
@@ -249,8 +249,8 @@ const mapBillingUpdated = (eventId: string, object: Record<string, unknown>): We
     return {
         ...base,
         cancelAtPeriodEnd: readBoolean(subscription, "cancel_at_period_end") ?? isCanceling(subscription),
-        currentPeriodEnd: readAnyNumber(subscription, "current_period_end", "currentPeriodEnd"),
-        currentPeriodStart: readAnyNumber(subscription, "current_period_start", "currentPeriodStart"),
+        currentPeriodEnd: readEpochMs(subscription, "current_period_end", "currentPeriodEnd"),
+        currentPeriodStart: readEpochMs(subscription, "current_period_start", "currentPeriodStart"),
         customerId,
         priceId: planId,
         referenceId: customerId,
@@ -272,7 +272,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
             return {
                 ...base,
-                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), invoiceCurrency),
+                amount: amount === undefined ? undefined : moneyFromMinor(amount, invoiceCurrency),
                 customerId: referenceFromEvent(object),
                 referenceId: referenceFromEvent(object),
                 sessionId: readAny(invoice, "id", "stripe_id", "invoice_id") ?? readAny(object, "id"),
@@ -460,6 +460,8 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
             const event = asRecord(JSON.parse(payload));
 
             // Standard Webhooks carries no body id, so the delivery id header is our idempotency key.
+            // `occurredAt` is deliberately unset: the body carries no event time and the Svix timestamp
+            // changes on every retry, so the stale-event guard does not cover Autumn (reconcile does).
             return mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data));
         },
 

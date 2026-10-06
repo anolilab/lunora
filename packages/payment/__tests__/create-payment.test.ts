@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { PaymentAdapter } from "../src/adapter";
 import type { WebhookOutcome } from "../src/create-payment";
 import { createPayment, webhookResponse } from "../src/create-payment";
+import { derivedIdempotencyKey } from "../src/idempotency";
 import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
-import type { PaymentSession, Subscription, WebhookAction } from "../src/types";
+import type { CheckoutRequest, PaymentSession, Subscription, WebhookAction } from "../src/types";
 
 const subscription = (referenceId: string, state: Subscription["state"]): Subscription => {
     return {
@@ -236,15 +237,15 @@ describe("createPayment", () => {
 
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
 
+        // An untyped caller's attacker-chosen victim customer — dropped in favor of the store-derived one.
         await payment.createCheckout({
             cancelUrl: "https://x/cancel",
-            // Attacker-chosen victim customer — must be dropped in favor of the store-derived one.
             customerId: "cus_victim",
             mode: "payment",
             priceId: "price_1",
             referenceId: "user_1",
             successUrl: "https://x/ok",
-        });
+        } as CheckoutRequest);
 
         expect(forwarded).toBe("cus_legit");
         expect(forwarded).not.toBe("cus_victim");
@@ -271,7 +272,7 @@ describe("createPayment", () => {
             priceId: "price_1",
             referenceId: "user_1",
             successUrl: "https://x/ok",
-        });
+        } as CheckoutRequest);
 
         expect(forwarded).toBe("cus_1");
         expect(forwarded).not.toBe("cus_victim");
@@ -416,7 +417,7 @@ describe("createPayment", () => {
             refundPayment: async () => {
                 calls += 1;
 
-                return paymentSession("user_1");
+                return { ...paymentSession("user_1"), refundedAmount: money(1000, "USD") };
             },
         });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
@@ -440,7 +441,11 @@ describe("createPayment", () => {
 
         await store.upsertPaymentSession(paymentSession("user_1"));
 
-        const adapter = fakeAdapter({ refundPayment: async () => paymentSession("user_1") });
+        const adapter = fakeAdapter({
+            refundPayment: async () => {
+                return { ...paymentSession("user_1"), refundedAmount: money(1000, "USD") };
+            },
+        });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
 
         await payment.refundPayment({ sessionId: "pi_1" });
@@ -472,7 +477,12 @@ describe("createPayment", () => {
 
         await store.upsertPaymentSession(polarSession);
 
-        const adapter = fakeAdapter({ identifier: "polar", refundPayment: async () => polarSession });
+        const adapter = fakeAdapter({
+            identifier: "polar",
+            refundPayment: async (input) => {
+                return { ...polarSession, refundedAmount: input.amount ?? money(1000, "USD") };
+            },
+        });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
         const refundEvent = (eventId: string, minorUnits: number): WebhookAction => {
             return { amount: money(minorUnits, "USD"), eventId, provider: "polar", sessionId: "ord_1", type: "payment.refunded" };
@@ -522,10 +532,10 @@ describe("createPayment", () => {
         let issued = 0;
         const adapter = fakeAdapter({
             identifier: "polar",
-            refundPayment: async () => {
+            refundPayment: async (input) => {
                 issued += 1;
 
-                return { ...polarSession, refundId: `ref_${String(issued)}` };
+                return { ...polarSession, refundedAmount: input.amount ?? money(1000, "USD"), refundId: `ref_${String(issued)}` };
             },
         });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
@@ -577,7 +587,7 @@ describe("createPayment", () => {
                 const replayed = byKey.get(key);
 
                 if (replayed) {
-                    return { ...captured, refundId: replayed.refundId };
+                    return { ...captured, refundedAmount: money(replayed.amount, "USD"), refundId: replayed.refundId };
                 }
 
                 const amount = input.amount?.minorUnits ?? captured.capturedAmount.minorUnits;
@@ -585,7 +595,7 @@ describe("createPayment", () => {
                 issued.push(amount);
                 byKey.set(key, { amount, refundId: `re_${String(issued.length)}` });
 
-                return { ...captured, refundId: `re_${String(issued.length)}` };
+                return { ...captured, refundedAmount: money(amount, "USD"), refundId: `re_${String(issued.length)}` };
             },
         });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
@@ -604,6 +614,40 @@ describe("createPayment", () => {
         await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(10_000n);
     });
 
+    it("books the amount the provider reports refunding, not the amount asked for", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        // Polar caps the refund at the order's refundable amount and adds tax, so it can differ.
+        const adapter = fakeAdapter({
+            identifier: "polar",
+            refundPayment: async () => {
+                return { ...polarSession, refundedAmount: money(250, "USD"), refundId: "ref_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.refundPayment({ amount: money(300, "USD"), sessionId: "ord_1" });
+
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(250n);
+
+        // The confirming webhook for the same refund id adds nothing on top.
+        await applyWebhookAction(store, {
+            amount: money(250, "USD"),
+            eventId: "evt_1",
+            provider: "polar",
+            refundId: "ref_1",
+            sessionId: "ord_1",
+            type: "payment.refunded",
+        });
+
+        await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(250n);
+    });
+
     it("asks the provider for the remainder when a full refund follows a partial one", async () => {
         expect.assertions(4);
 
@@ -618,7 +662,7 @@ describe("createPayment", () => {
             refundPayment: async (input) => {
                 forwarded.push(input.amount?.minorUnits);
 
-                return { ...polarSession, refundId: `ref_${String(forwarded.length)}` };
+                return { ...polarSession, refundedAmount: input.amount ?? money(1000, "USD"), refundId: `ref_${String(forwarded.length)}` };
             },
         });
         const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
@@ -944,7 +988,7 @@ describe("createPayment", () => {
 
         await payment.cancelPayment("pi_1");
 
-        expect(forwardedKey).toBe("cancel_payment:stripe:pi_1");
+        expect(forwardedKey).toBe(await derivedIdempotencyKey("cancel_payment", "stripe", "pi_1"));
 
         const stored = await store.getPaymentSession("stripe", "pi_1");
 
@@ -1604,7 +1648,37 @@ describe("createPayment — bug-hunt regressions", () => {
 
         expect(keys[0]).not.toBe(keys[1]);
         expect(keys[0]).not.toBe(keys[2]);
-        expect(keys[0]).toBe("cancel_subscription:stripe:sub_1:period_end:0");
+        expect(keys[0]).toBe(await derivedIdempotencyKey("cancel_subscription", "stripe", "sub_1", "period_end", 0));
+    });
+
+    it("returns a subscription already in the requested end state without calling the provider", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        let calls = 0;
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id, cancelOptions) => {
+                calls += 1;
+
+                return cancelOptions?.atPeriodEnd
+                    ? { ...subscription("user_1", "active"), cancelAtPeriodEnd: true, id, updatedAt: 10 }
+                    : { ...subscription("user_1", "canceled"), id, updatedAt: 20 };
+            },
+        });
+        const payment = createPayment({ adapter, ...owned, store });
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+        // A client retry after the first cancel succeeded: the row's `updatedAt` moved, so a new key.
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+
+        expect(calls).toBe(1);
+
+        await payment.cancelSubscription("sub_1");
+
+        await expect(payment.cancelSubscription("sub_1")).resolves.toMatchObject({ state: "canceled" });
+
+        expect(calls).toBe(2);
     });
 
     it("books a refund onto the row as it is after the provider call, keeping a concurrent refund", async () => {
@@ -1620,7 +1694,7 @@ describe("createPayment — bug-hunt regressions", () => {
                 // A second refund of 30 lands while the provider is answering this one.
                 await store.upsertPaymentSession({ ...paymentSession("user_1"), refundedAmount: money(30, "USD"), state: "partially_refunded" });
 
-                return { ...paymentSession("user_1"), refundId: `re_${String(input.amount?.minorUnits)}` };
+                return { ...paymentSession("user_1"), refundedAmount: input.amount ?? money(1000, "USD"), refundId: `re_${String(input.amount?.minorUnits)}` };
             },
         });
         const payment = createPayment({ adapter, ...owned, store });

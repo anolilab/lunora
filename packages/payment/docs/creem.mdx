@@ -359,6 +359,7 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
 
 - **Refunds are dashboard-only.** Creem exposes no SDK/API endpoint to _initiate_ a refund, so `refundPayment` throws. Issue refunds from the Creem dashboard; the resulting `refund.created` webhook syncs the refunded amount back into the store.
 - **No usage metering.** `usageMetering` is `false`. `track` still records to Lunora's own durable ledger (and `check` reads it), but nothing is forwarded to Creem.
+- **One customer per email.** Creem keys customers by email. When the same person pays under two references with the same email (a personal plan and their org's), Creem files the second purchase under the first reference's customer: that customer's portal can see and cancel both subscriptions, and the second reference has no portal of its own. Entitlement is unaffected, because subscriptions are attributed by checkout metadata, not by customer. When that matters, have each reference use a distinct billing email.
 - **No manual capture / payment cancellation.** `capturePayment` and `cancelPayment` throw, because Creem captures at checkout and owns the payment lifecycle.
 
 ## Troubleshooting
@@ -395,11 +396,13 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
 ## Customers and `getOrCreateCustomer`
 
 The facade only calls `getOrCreateCustomer` when the store holds no Creem customer
-for the `referenceId`, i.e. the first checkout (a caller-supplied `customerId` is
-ignored — the customer is always derived from the store for the authorized
-reference). The adapter tries `customers.create` first, then (on the
-duplicate-email error Creem returns for an existing email) falls back to
-`customers.retrieve` by email, an idempotent get-or-create.
+for the `referenceId`, i.e. the first checkout (the customer is always derived
+from the store for the authorized reference). The adapter tries `customers.create`
+first, then (on the duplicate-email error Creem returns for an existing email)
+falls back to `customers.retrieve` by email, an idempotent get-or-create. A
+reference whose email belongs to another reference's customer stores no customer
+of its own, so each of its checkouts repeats those two calls: Creem can look a
+customer up only by id or email, not by the `externalId` the adapter sets.
 
 ## Related
 

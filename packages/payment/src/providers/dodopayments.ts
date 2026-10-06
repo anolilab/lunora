@@ -17,8 +17,8 @@ import type DodoPayments from "dodopayments";
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import { idempotencyKey } from "../idempotency";
-import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
-import { money, zeroMoney } from "../money";
+import { asRecord, readBoolean, readEpochMs, readNumber, readString, referenceFromMetadata } from "../json";
+import { money, moneyFromMinor, zeroMoney } from "../money";
 import type {
     CaptureInput,
     CheckoutInput,
@@ -119,7 +119,7 @@ const readMinorUnits = (object: Record<string, unknown>, key: string): bigint | 
     const value = object[key];
 
     if (typeof value === "number") {
-        // Round before BigInt, as elsewhere in this adapter: a stray fractional number would throw a
+        // Round before BigInt, as `moneyFromMinor` does: a stray fractional number would throw a
         // RangeError out of the parse path (a webhook 400 → provider retry loop).
         return Number.isFinite(value) ? BigInt(Math.round(value)) : undefined;
     }
@@ -138,8 +138,8 @@ const subscriptionFromDodo = (input: unknown): Subscription => {
     return {
         cancelAtPeriodEnd: readBoolean(subscription, "cancel_at_next_billing_date") ?? false,
         createdAt: now,
-        currentPeriodEnd: parseTimestamp(readString(subscription, "next_billing_date")),
-        currentPeriodStart: parseTimestamp(readString(subscription, "previous_billing_date")),
+        currentPeriodEnd: readEpochMs(subscription, "next_billing_date"),
+        currentPeriodStart: readEpochMs(subscription, "previous_billing_date"),
         id: readString(subscription, "subscription_id") ?? "",
         priceId: readString(subscription, "product_id") ?? "",
         provider: "dodopayments",
@@ -184,9 +184,7 @@ const paymentFromDodo = (input: unknown): PaymentSession => {
     const payment = asRecord(input);
     const now = Date.now();
     const currency = readString(payment, "currency") ?? "usd";
-    // Round before BigInt: Dodo documents integer minor units, but a stray fractional amount would
-    // throw a RangeError out of the parse path (a webhook 400 → provider retry loop). Match Autumn.
-    const amount = money(BigInt(Math.round(readNumber(payment, "total_amount") ?? 0)), currency);
+    const amount = moneyFromMinor(readNumber(payment, "total_amount") ?? 0, currency);
     const captured = PAYMENT_STATE_BY_DODO_STATUS[readString(payment, "status") ?? ""] ?? "initiated";
     const capturedAmount = captured === "captured" ? amount : zeroMoney(currency);
 
@@ -220,8 +218,8 @@ const paymentFromDodo = (input: unknown): PaymentSession => {
     };
 };
 
-const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>, occurredAt: number | undefined): WebhookAction => {
-    const base = { eventId, occurredAt, provider: "dodopayments" as const, raw: { object, type: eventType } };
+const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
+    const base = { eventId, provider: "dodopayments" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
 
     switch (eventType) {
@@ -255,7 +253,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "payment.succeeded": {
             return {
                 ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "total_amount") ?? 0)), currency),
+                amount: moneyFromMinor(readNumber(object, "total_amount") ?? 0, currency),
                 customerId: customerIdOf(object),
                 referenceId: referenceFromMetadata(object),
                 sessionId: readString(object, "payment_id"),
@@ -295,8 +293,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             return {
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_next_billing_date"),
-                currentPeriodEnd: parseTimestamp(readString(object, "next_billing_date")),
-                currentPeriodStart: parseTimestamp(readString(object, "previous_billing_date")),
+                currentPeriodEnd: readEpochMs(object, "next_billing_date"),
+                currentPeriodStart: readEpochMs(object, "previous_billing_date"),
                 customerId: customerIdOf(object),
                 priceId: readString(object, "product_id"),
                 quantity: readNumber(object, "quantity"),
@@ -406,7 +404,7 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
 
             // Standard Webhooks carries no body id, so the `webhook-id` header is our idempotency key.
             // `timestamp` is the body's ISO-8601 "when the event occurred" — the ordering key for sync.
-            return mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data), parseTimestamp(readString(event, "timestamp")));
+            return { ...mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data)), occurredAt: readEpochMs(event, "timestamp") };
         },
 
         refundPayment: async (input: RefundInput) => {
@@ -422,7 +420,7 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
 
             const refund = asRecord(await client.refunds.create({ payment_id: input.sessionId, reason: input.reason }));
             const currency = readString(refund, "currency") ?? "usd";
-            const refundedAmount = money(BigInt(Math.round(readNumber(refund, "amount") ?? 0)), currency);
+            const refundedAmount = moneyFromMinor(readNumber(refund, "amount") ?? 0, currency);
 
             // Dodo refunds can settle asynchronously (`pending`/`review` → later `refund.succeeded` or
             // `refund.failed`). Reflect the refund's real status instead of optimistically claiming

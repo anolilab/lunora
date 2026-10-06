@@ -2,11 +2,9 @@
  * Apply a normalized {@link WebhookAction} to the {@link PaymentStore}.
  *
  * Flow: claim the event id (inbound idempotency) → map the action to an FSM transition → upsert
- * if legal, otherwise no-op. Duplicate and out-of-order webhooks are absorbed here, not by the
- * caller — with one exception: an event that arrives before the row it patches is ready (a
- * subscription update before its create, a refund before its capture) reports `"orphaned"`, which
- * the HTTP layer answers with a 500 to request ONE redelivery (bounded below), because absorbing it
- * would burn the event id while the change it carries is still unapplied.
+ * if legal, otherwise no-op. Duplicate and out-of-order webhooks are absorbed here, except an event
+ * whose target row does not exist yet (an update before its create, a refund before its capture):
+ * that reports `"orphaned"`, which the HTTP layer answers with a 500 for ONE bounded redelivery.
  */
 import { LunoraPaymentError } from "./errors";
 import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
@@ -16,6 +14,7 @@ import { notifyObserver } from "./observability";
 import type { PaymentAction, SubscriptionAction } from "./state-machine";
 import { nextPaymentState, nextSubscriptionState } from "./state-machine";
 import type { PaymentStore } from "./store";
+import { ownerOf } from "./store";
 import type { ApplyResult, Money, PaymentSession, PaymentState, Subscription, SubscriptionState, WebhookAction, WebhookActionType } from "./types";
 
 const PAYMENT_ACTION_BY_TYPE: Partial<Record<WebhookActionType, PaymentAction>> = {
@@ -185,33 +184,26 @@ const resolveRefundAction = (existing: PaymentSession | undefined, action: Webho
 const refundedAfter = (base: PaymentSession, action: WebhookAction, resolvedAction: PaymentAction): Money | undefined =>
     (resolvedAction === "partial_refund" || resolvedAction === "refund") && action.amount ? refundedTotalFor(base, action) : base.refundedAmount;
 
-/** A row stored orphaned (`""`) takes the first reference a later event carries; an owner never moves. */
-const fillOrphanReference = (stored: string, action: WebhookAction): string => (stored === "" ? (action.referenceId ?? "") : stored);
-
 /**
- * A subscription event that arrived without the checkout's `referenceId` metadata is stored
- * orphaned (`""`, entitling nobody). The checkout that started it does carry the reference, so
- * adopt it — only into a blank row, never over an established owner.
- * @returns `true` when a capture's subscription has no row yet, so there is nothing to adopt into.
+ * A capture names the owner a subscription event may lack. Adopt it into an EXISTING blank row (the
+ * subscription event landed first); the other order is resolved when `applySubscription` creates
+ * the row from this session.
  */
-const adoptOrphanSubscription = async (store: PaymentStore, action: WebhookAction, paymentAction: PaymentAction, now: number): Promise<boolean> => {
+const adoptOrphanSubscription = async (store: PaymentStore, action: WebhookAction, now: number): Promise<void> => {
     if (!action.subscriptionId || !action.referenceId) {
-        return false;
+        return;
     }
 
     const subscription = await store.getSubscription(action.provider, action.subscriptionId);
 
-    if (subscription?.referenceId === "") {
+    if (subscription && !subscription.referenceId.trim()) {
         await store.upsertSubscription({ ...subscription, referenceId: action.referenceId, updatedAt: now });
     }
-
-    return paymentAction === "capture" && subscription === undefined;
 };
 
 /**
- * A session stored orphaned (`""`, e.g. a capture from before the PaymentIntent carried the
- * reference) is adopted by any later event that names its owner — even one whose own transition is
- * a no-op. Only into a blank row, never over an established owner.
+ * Fill what a stored session is missing — a blank owner, the subscription link — from any later
+ * event, even one whose own transition is a no-op. Never moves an established owner.
  */
 const adoptOrphanSession = async (
     store: PaymentStore,
@@ -219,11 +211,18 @@ const adoptOrphanSession = async (
     action: WebhookAction,
     now: number,
 ): Promise<PaymentSession | undefined> => {
-    if (existing?.referenceId !== "" || !action.referenceId) {
+    if (!existing) {
         return existing;
     }
 
-    const adopted = { ...existing, referenceId: action.referenceId, updatedAt: now };
+    const referenceId = ownerOf(existing.referenceId, action.referenceId);
+    const subscriptionId = existing.subscriptionId ?? action.subscriptionId;
+
+    if (referenceId === existing.referenceId && subscriptionId === existing.subscriptionId) {
+        return existing;
+    }
+
+    const adopted = { ...existing, referenceId, subscriptionId, updatedAt: now };
 
     await store.upsertPaymentSession(adopted);
 
@@ -246,12 +245,9 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
     const fromState: PaymentState = existing?.state ?? "initiated";
     const now = Date.now();
 
-    // Before the FSM gate, for the same reason as the subscription adoption below.
+    // Before the FSM gate: ownership does not depend on whether this event's transition is legal.
     existing = await adoptOrphanSession(store, existing, action, now);
-
-    // Before the FSM gate: the session's own transition (e.g. a checkout landing on a row reconcile
-    // already marked captured) has no bearing on who owns the subscription it started.
-    const subscriptionPending = await adoptOrphanSubscription(store, action, paymentAction, now);
+    await adoptOrphanSubscription(store, action, now);
 
     const currency = action.amount?.currency ?? existing?.amount.currency ?? "USD";
 
@@ -290,6 +286,7 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         referenceId: action.referenceId ?? "",
         refundedAmount: zeroMoney(currency),
         state: fromState,
+        subscriptionId: action.subscriptionId,
         updatedAt: now,
     };
 
@@ -311,7 +308,7 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         await store.upsertPaymentSession({
             ...base,
             capturedAmount,
-            referenceId: fillOrphanReference(base.referenceId, action),
+            referenceId: ownerOf(base.referenceId, action.referenceId),
             refundedAmount,
             state: toState,
             updatedAt: now,
@@ -326,11 +323,7 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         throw error;
     }
 
-    // The checkout beat its subscription's first event here. If that event then lands without the
-    // reference metadata, nothing would ever adopt the orphan — so ask for the one bounded retry: the
-    // session is already booked (the retry is an illegal captured→captured no-op), and it re-runs the
-    // adoption above once the subscription row exists.
-    return subscriptionPending ? { applied: true, reason: "orphaned" } : { applied: true, reason: "ok" };
+    return { applied: true, reason: "ok" };
 };
 
 /**
@@ -360,11 +353,22 @@ const resolveSubscriptionAction = (from: SubscriptionState, targetState: Subscri
     return SUBSCRIPTION_ACTION_BY_TYPE[type];
 };
 
-/** The newer of the stored and incoming event times, as a spreadable field (omitted when neither is known). */
-const latestEventAt = (stored: number | undefined, incoming: number | undefined): Pick<Subscription, "lastEventAt"> => {
-    const latest = stored === undefined ? incoming : Math.max(stored, incoming ?? stored);
-
-    return latest === undefined ? {} : { lastEventAt: latest };
+/** Overlay an event's fields on the stored row; an absent field leaves the stored value standing. */
+const mergeSubscriptionEvent = (existing: Subscription, action: WebhookAction, now: number): Subscription => {
+    return {
+        ...existing,
+        cancelAtPeriodEnd: action.cancelAtPeriodEnd ?? existing.cancelAtPeriodEnd,
+        currentPeriodEnd: action.currentPeriodEnd ?? existing.currentPeriodEnd,
+        currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
+        lastEventAt: action.occurredAt ?? existing.lastEventAt,
+        priceId: action.priceId ?? existing.priceId,
+        // A reported set REPLACES the stored one (a plan change can remove an item); `undefined`
+        // means "unknown", not "empty", so the stored set stands.
+        priceIds: action.priceIds ?? existing.priceIds,
+        quantity: action.quantity ?? existing.quantity,
+        referenceId: ownerOf(existing.referenceId, action.referenceId),
+        updatedAt: now,
+    };
 };
 
 const applySubscription = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
@@ -380,10 +384,15 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
     // payment has since failed. Drop anything older than the last event applied to this row. Strictly
     // older: Stripe stamps whole seconds, so same-instant events still apply in arrival order.
     if (action.occurredAt !== undefined && existing?.lastEventAt !== undefined && action.occurredAt < existing.lastEventAt) {
+        // Its state is stale, but the owner it names still fills a blank row.
+        const referenceId = ownerOf(existing.referenceId, action.referenceId);
+
+        if (referenceId !== existing.referenceId) {
+            await store.upsertSubscription({ ...existing, referenceId, updatedAt: now });
+        }
+
         return { applied: false, reason: "stale" };
     }
-
-    const lastEventAt = latestEventAt(existing?.lastEventAt, action.occurredAt);
 
     // A pure metadata change (price / quantity / cancel-at-period-end) with no state transition.
     if (action.type === "subscription.updated") {
@@ -394,22 +403,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
             return { applied: false, reason: "orphaned" };
         }
 
-        await store.upsertSubscription({
-            ...existing,
-            cancelAtPeriodEnd: action.cancelAtPeriodEnd ?? existing.cancelAtPeriodEnd,
-            currentPeriodEnd: action.currentPeriodEnd ?? existing.currentPeriodEnd,
-            currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
-            priceId: action.priceId ?? existing.priceId,
-            // A plan change REPLACES the item set, so a reported set wins outright rather than
-            // merging — an item removed upstream has to disappear here too. The adapter only reports
-            // a set it could establish completely, so `undefined` means "unknown", not "empty", and
-            // leaves the stored set standing for the next reconcile sweep to confirm.
-            priceIds: action.priceIds ?? existing.priceIds,
-            quantity: action.quantity ?? existing.quantity,
-            referenceId: fillOrphanReference(existing.referenceId, action),
-            ...lastEventAt,
-            updatedAt: now,
-        });
+        await store.upsertSubscription(mergeSubscriptionEvent(existing, action, now));
 
         return { applied: true, reason: "ok" };
     }
@@ -421,12 +415,16 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
     }
 
     if (!existing) {
+        // No owner on the event: take the one the checkout's payment session recorded, if it landed first.
+        const checkout = action.referenceId?.trim() ? undefined : await store.getPaymentSessionBySubscription(action.provider, action.subscriptionId);
+
         await store.upsertSubscription({
             cancelAtPeriodEnd: action.cancelAtPeriodEnd ?? false,
             createdAt: now,
             currentPeriodEnd: action.currentPeriodEnd,
             currentPeriodStart: action.currentPeriodStart ?? now,
             id: action.subscriptionId,
+            lastEventAt: action.occurredAt,
             priceId: action.priceId ?? "",
             // Left ABSENT rather than defaulted to `[]`: an empty set would grant nothing, whereas
             // absent falls back to `[priceId]` on read — the right answer for the single-price
@@ -434,9 +432,8 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
             priceIds: action.priceIds,
             provider: action.provider,
             quantity: action.quantity ?? 1,
-            referenceId: action.referenceId ?? "",
+            referenceId: ownerOf(action.referenceId, checkout?.referenceId),
             state: targetState,
-            ...lastEventAt,
             updatedAt: now,
         });
 
@@ -451,20 +448,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
         return { applied: false, reason: "illegal_transition" };
     }
 
-    await store.upsertSubscription({
-        ...existing,
-        cancelAtPeriodEnd: action.cancelAtPeriodEnd ?? existing.cancelAtPeriodEnd,
-        currentPeriodEnd: action.currentPeriodEnd ?? existing.currentPeriodEnd,
-        currentPeriodStart: action.currentPeriodStart ?? existing.currentPeriodStart,
-        priceId: action.priceId ?? existing.priceId,
-        // Same wholesale-replace-or-preserve rule as the metadata patch above.
-        priceIds: action.priceIds ?? existing.priceIds,
-        quantity: action.quantity ?? existing.quantity,
-        referenceId: fillOrphanReference(existing.referenceId, action),
-        state: nextState,
-        ...lastEventAt,
-        updatedAt: now,
-    });
+    await store.upsertSubscription({ ...mergeSubscriptionEvent(existing, action, now), state: nextState });
 
     return { applied: true, reason: "ok" };
 };

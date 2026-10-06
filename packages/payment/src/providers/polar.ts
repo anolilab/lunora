@@ -11,8 +11,8 @@
 import type { Polar } from "@polar-sh/sdk";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
-import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
-import { money, zeroMoney } from "../money";
+import { asRecord, readBoolean, readEpochMs, readNumber, readString, referenceFromMetadata } from "../json";
+import { money, moneyFromMinor, zeroMoney } from "../money";
 import type {
     CaptureInput,
     CheckoutInput,
@@ -58,15 +58,6 @@ interface PolarAdapterOptions {
     readonly webhookToleranceSeconds?: number;
 }
 
-/** Polar client responses carry `Date` period fields; webhook bodies carry ISO strings. Handle both. */
-const toEpochMs = (value: unknown): number | undefined => {
-    if (value instanceof Date) {
-        return value.getTime();
-    }
-
-    return parseTimestamp(typeof value === "string" ? value : undefined);
-};
-
 const PAYMENT_STATE_BY_POLAR_ORDER_STATUS: Record<string, PaymentState> = {
     draft: "initiated",
     paid: "captured",
@@ -105,6 +96,13 @@ const polarRefundReason = (reason: string | undefined): PolarRefundReason => {
     return (POLAR_REFUND_REASONS.has(reason) ? reason : "other") as PolarRefundReason;
 };
 
+/** Whether a rejection carries the HTTP status Polar answers a uniqueness conflict with (`PolarError.statusCode`). */
+const isConflictError = (error: unknown): boolean => {
+    const statusCode = error instanceof Error ? (error as { statusCode?: unknown }).statusCode : undefined;
+
+    return statusCode === 409 || statusCode === 422;
+};
+
 const subscriptionFromPolar = (input: unknown): Subscription => {
     const subscription = asRecord(input);
     const now = Date.now();
@@ -112,8 +110,8 @@ const subscriptionFromPolar = (input: unknown): Subscription => {
     return {
         cancelAtPeriodEnd: readBoolean(subscription, "cancelAtPeriodEnd") ?? false,
         createdAt: now,
-        currentPeriodEnd: toEpochMs(subscription.currentPeriodEnd),
-        currentPeriodStart: toEpochMs(subscription.currentPeriodStart),
+        currentPeriodEnd: readEpochMs(subscription, "currentPeriodEnd"),
+        currentPeriodStart: readEpochMs(subscription, "currentPeriodStart"),
         id: readString(subscription, "id") ?? "",
         priceId: readString(subscription, "productId") ?? "",
         provider: "polar",
@@ -129,7 +127,7 @@ const orderToSession = (input: unknown): PaymentSession => {
     const order = asRecord(input);
     const now = Date.now();
     const currency = readString(order, "currency") ?? "usd";
-    const amount = money(BigInt(Math.round(readNumber(order, "totalAmount") ?? readNumber(order, "amount") ?? 0)), currency);
+    const amount = moneyFromMinor(readNumber(order, "totalAmount") ?? readNumber(order, "amount") ?? 0, currency);
     const state = PAYMENT_STATE_BY_POLAR_ORDER_STATUS[readString(order, "status") ?? ""] ?? "initiated";
     const settled = state === "captured" || state === "partially_refunded" || state === "refunded";
 
@@ -158,15 +156,15 @@ const orderToSession = (input: unknown): PaymentSession => {
         // Polar copies checkout metadata onto the order, so recover the framework-pinned `referenceId`
         // rather than blanking it — a reconcile sweep would otherwise orphan the row from `by_reference`.
         referenceId: referenceFromMetadata(order) ?? "",
-        refundedAmount: refundedMinor === undefined ? inferredRefund : money(BigInt(Math.round(refundedMinor)), currency),
+        refundedAmount: refundedMinor === undefined ? inferredRefund : moneyFromMinor(refundedMinor, currency),
         state,
         updatedAt: now,
     };
 };
 
 // Webhook bodies are raw snake_case.
-const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>, occurredAt: number | undefined): WebhookAction => {
-    const base = { eventId, occurredAt, provider: "polar" as const, raw: { object, type: eventType } };
+const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
+    const base = { eventId, provider: "polar" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
 
     switch (eventType) {
@@ -238,8 +236,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             return {
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_period_end"),
-                currentPeriodEnd: parseTimestamp(readString(object, "current_period_end")),
-                currentPeriodStart: parseTimestamp(readString(object, "current_period_start")),
+                currentPeriodEnd: readEpochMs(object, "current_period_end"),
+                currentPeriodStart: readEpochMs(object, "current_period_start"),
                 customerId: readString(object, "customer_id"),
                 priceId: readString(object, "product_id"),
                 referenceId: referenceFromMetadata(object),
@@ -319,11 +317,17 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
                     metadata: { ...ref.metadata, referenceId: ref.referenceId },
                     type: "individual",
                 })
-                .catch(async (error: unknown) =>
-                    client.customers.getExternal({ externalId: ref.referenceId }).catch(() => {
+                .catch(async (error: unknown) => {
+                    // Only Polar's uniqueness rejection (a 422 validation error; 409 tolerated) can mean
+                    // "already minted" — a network, auth or 5xx failure propagates as itself.
+                    if (!isConflictError(error)) {
                         throw error;
-                    }),
-                );
+                    }
+
+                    return client.customers.getExternal({ externalId: ref.referenceId }).catch(() => {
+                        throw error;
+                    });
+                });
 
             return { createdAt: Date.now(), email: customer.email ?? undefined, id: customer.id, provider: "polar", referenceId: ref.referenceId };
         },
@@ -353,7 +357,7 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
 
             // Standard Webhooks carries no body id, so the `webhook-id` header is our idempotency key.
             // The body's `timestamp` (ISO-8601) is when Polar says the event happened.
-            return mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data), parseTimestamp(readString(event, "timestamp")));
+            return { ...mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data)), occurredAt: readEpochMs(event, "timestamp") };
         },
 
         refundPayment: async (input) => {
@@ -368,12 +372,18 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
             let amountMinor = order.refundableAmount;
 
             if (input.amount !== undefined) {
-                amountMinor = gross > 0 ? Math.round((Number(input.amount.minorUnits) * order.netAmount) / gross) : Number(input.amount.minorUnits);
+                const net = gross > 0 ? Math.round((Number(input.amount.minorUnits) * order.netAmount) / gross) : Number(input.amount.minorUnits);
+
+                // The proportional conversion (or a remainder the ledger computed against a stale
+                // total) can overshoot what Polar will still refund; never ask for more than that.
+                amountMinor = Math.min(net, order.refundableAmount);
             }
 
             const refund = await client.refunds.create({ amount: amountMinor, orderId: input.sessionId, reason: polarRefundReason(input.reason) });
 
-            const refundedAmount = input.amount ?? money(BigInt(Math.round(refund.amount + refund.taxAmount)), currency);
+            // What Polar actually refunded (net + its tax), not what was asked for — a full refund
+            // moves the order's refundable remainder, which can differ from the ledger's gross figure.
+            const refundedAmount = moneyFromMinor(refund.amount + refund.taxAmount, currency);
             // Polar's `RefundStatus` is pending | succeeded | failed | canceled, so `refunds.create`
             // answering does not mean the money moved. Report an unsettled refund as `pending` (as the
             // Dodo adapter does) so the facade holds its ledger back: a refund that later fails

@@ -12,18 +12,19 @@ import type { PaymentAdapter } from "./adapter";
 import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 import { LunoraPaymentError } from "./errors";
-import { derivedIdempotencyKey, idempotencyKey, LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
+import { derivedIdempotencyKey, LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
 import { addMoney, compareMoney, isZeroMoney, maxMoney, subtractMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
+import { overlayProviderSubscription } from "./store";
 import applyWebhookAction from "./sync";
 import type {
     AttachInput,
     CancelSubscriptionOptions,
     CaptureInput,
     CheckInput,
-    CheckoutInput,
+    CheckoutRequest,
     CheckoutResult,
     CheckResult,
     FeatureBalance,
@@ -63,6 +64,21 @@ const nextUsageStamp = (): number => {
 
 /** The amount, as stable idempotency-key parts — a full-amount operation is its own distinct part. */
 const amountPart = (amount: Money | undefined): string => (amount ? `${amount.currency}:${String(amount.minorUnits)}` : "full");
+
+/**
+ * A caller's `quantity`, defaulting to `1`. Must be a non-negative safe integer: a negative one drives
+ * `balance = limit - used` past the cap. `=== undefined`, not `??`, so a JSON `null` is rejected.
+ */
+const requireQuantity = (method: string, value: number | undefined): number => {
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- `??` would turn a runtime `null` into the default
+    const quantity = value === undefined ? 1 : value;
+
+    if (!Number.isSafeInteger(quantity) || quantity < 0) {
+        throw new LunoraPaymentError("VALIDATION_ERROR", `${method}(): \`quantity\` must be a non-negative safe integer (got ${String(value)})`);
+    }
+
+    return quantity;
+};
 
 /** Drop a caller-supplied `referenceId` from checkout metadata — it's framework-controlled, never caller-set. */
 const stripReferenceId = (metadata: Record<string, string> | undefined): Record<string, string> | undefined =>
@@ -143,7 +159,7 @@ export interface LunoraPayment {
      * check active access to a product. The feature path requires `entitlements` to be configured.
      */
     check: (input: CheckInput) => Promise<CheckResult>;
-    createCheckout: (input: CheckoutInput) => Promise<CheckoutResult>;
+    createCheckout: (input: CheckoutRequest) => Promise<CheckoutResult>;
     /** Open the provider billing portal for the caller's own customer (derived from the store). */
     createPortalSession: (referenceId: string, returnUrl: string) => Promise<{ url: string }>;
 
@@ -209,15 +225,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         }
     };
 
-    // Namespace a caller-supplied idempotency key to the object it acts on. Provider keys are
-    // account-wide, so a bare key is shared across tenants: one tenant could pre-claim another's, or
-    // replay its response. `undefined` when the caller passed none, so the operation derives its own.
-    const callerKey = async (operation: string, id: string, key: string | undefined): Promise<string | undefined> =>
-        key === undefined ? undefined : derivedIdempotencyKey(operation, adapter.identifier, id, key);
+    // The outbound key for `operation` on the object `scope` names. Provider keys are account-wide, so
+    // a caller's key is namespaced to that object (one tenant can't claim or replay another's); without
+    // one the key derives from the request-shaping `parts`. Hashed, so it stays under Stripe's 255 chars.
+    const outboundKey = async (
+        operation: string,
+        scope: ReadonlyArray<string>,
+        key: string | undefined,
+        parts: () => ReadonlyArray<number | string>,
+    ): Promise<string> => derivedIdempotencyKey(operation, adapter.identifier, ...scope, ...(key === undefined ? parts() : [key]));
 
     // Shared by `createCheckout` and `attach`: reuse the reference's stored provider customer, only
     // minting a new one the first time, then delegate to the adapter with an outbound idempotency key.
-    const startCheckout = async (input: CheckoutInput): Promise<CheckoutResult> => {
+    const startCheckout = async (input: CheckoutRequest): Promise<CheckoutResult> => {
         await ensureAuthorized(input.referenceId);
 
         // `referenceId` is the tenant-isolation key and is framework-controlled: never let caller-supplied
@@ -225,11 +245,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         // authorized one. Strip it here so the invariant holds regardless of adapter spread order.
         const metadata = stripReferenceId(input.metadata);
 
-        // Never trust a caller-supplied `input.customerId` (cross-tenant checkout IDOR): the authorizer
-        // covers only `referenceId`, so honoring a client-set customer id would bind the authorized
-        // reference's checkout to an arbitrary provider customer. Always derive the customer from the
-        // store for the authorized reference — mirroring `createPortalSession` — minting one only the
-        // first time. `input.customerId` is intentionally ignored (kept on the type for back-compat).
+        // The customer comes from the store for the authorized reference (as in `createPortalSession`),
+        // minted only the first time — never from the caller, which would be a cross-tenant IDOR.
         let customer = await store.getCustomerByReference(adapter.identifier, input.referenceId);
 
         if (!customer) {
@@ -240,56 +257,34 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
         }
 
-        // Derive a key over every request-shaping field, not just (reference, price, mode): a second
-        // checkout that changes quantity/URLs/metadata must not collide with the provider's idempotency
-        // window (which would error or return the stale earlier session). Hash the parts so the key stays
-        // a fixed length (Stripe rejects keys >255 chars, and two full URLs + metadata routinely exceed
-        // that) and can't collide via unescaped `:` joining of the URLs/metadata.
-        //
-        // A caller-supplied key is namespaced to the authorized reference before it reaches the
-        // provider: provider idempotency is account-wide, so a bare key one tenant chose would replay
-        // (or collide with) another tenant's checkout.
-        const key =
-            (await callerKey("checkout", input.referenceId, input.idempotencyKey)) ??
-            (await derivedIdempotencyKey(
-                "checkout",
-                adapter.identifier,
-                input.referenceId,
-                input.priceId,
-                input.mode,
-                String(input.quantity ?? 1),
-                input.successUrl,
-                input.cancelUrl ?? "",
-                metadata ? JSON.stringify(metadata) : "",
-            ));
+        // Every request-shaping field is part of the key, so a changed checkout is a new request
+        // rather than a replay (or a provider-side mismatch) of the earlier one.
+        const key = await outboundKey("checkout", [input.referenceId], input.idempotencyKey, () => [
+            input.priceId,
+            input.mode,
+            String(input.quantity ?? 1),
+            input.successUrl,
+            input.cancelUrl ?? "",
+            metadata ? JSON.stringify(metadata) : "",
+        ]);
 
         return adapter.createCheckout({ ...input, customerId: customer?.id, idempotencyKey: key, metadata });
     };
 
-    // Resolve one feature's allowance — shared by `check` and `listBalances`. A metered feature
-    // (numeric plan limit) subtracts usage tracked this period; a boolean feature is granted or not.
-    // The balance arithmetic for a metered feature — shared by the single-feature `check` path and
-    // the batched `listBalances` path so the two can never disagree.
+    // The balance arithmetic for a metered feature, shared by `check` and `listBalances`.
     const meteredResult = (limit: number, used: number, need: number): CheckResult => {
         const balance = limit - used;
 
         return { allowed: balance >= need, balance, limit, unlimited: false, used };
     };
 
-    const evaluateFeature = async (
-        config: EntitlementsConfig,
-        entitlements: Entitlements,
-        subscriptions: ReadonlyArray<Subscription>,
-        referenceId: string,
-        featureId: string,
-        need: number,
-    ): Promise<CheckResult> => {
+    // One feature's allowance: a metered feature (numeric plan limit) subtracts usage tracked this
+    // period; a boolean feature is granted or not.
+    const evaluateFeature = async (entitlements: Entitlements, referenceId: string, featureId: string, need: number): Promise<CheckResult> => {
         const limit = entitlements.limit(featureId);
 
         if (limit !== undefined) {
-            const used = await store.sumUsage(referenceId, featureId, usagePeriodStart(config, subscriptions, featureId));
-
-            return meteredResult(limit, used, need);
+            return meteredResult(limit, await store.sumUsage(referenceId, featureId, entitlements.periodStart(featureId)), need);
         }
 
         return { allowed: entitlements.has(featureId), unlimited: entitlements.has(featureId) };
@@ -331,21 +326,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return existing;
     };
 
-    /**
-     * Persist an adapter result onto the stored row.
-     *
-     * An adapter returns a PROVIDER-shaped session, not a store row: Polar's `refundPayment` pins
-     * `amount`/`capturedAmount` to the refund amount and blanks `referenceId`, and Stripe's
-     * `intentToSession` blanks `referenceId` for any checkout-originated intent (the reference lives
-     * on the checkout session, not the PaymentIntent). Writing one verbatim would wipe the captured
-     * total and orphan the row from `by_reference`, leaving it unauthorizable — and so permanently
-     * unrefundable. Merge the way the webhook path does (`sync.ts`): the stored row owns identity and
-     * money, and each operation contributes only the fields it actually establishes.
-     */
-    //
-    // The patch is applied to the row RE-READ after the provider call, not to the pre-call read: a
-    // webhook or a concurrent call can land while the provider is answering, and writing the old row
-    // back would undo it. `existing` stands in only when there is still no stored row at all.
+    // Merge an adapter result onto the stored row. An adapter returns a PROVIDER-shaped session (Polar
+    // pins the amounts to the refund, Stripe blanks `referenceId`), so the stored row owns identity and
+    // money and each operation patches only the fields it establishes. The patch applies to the row
+    // RE-READ after the provider call, so a webhook that landed meanwhile is not undone.
     const persistSession = async (existing: PaymentSession, patch: (fresh: PaymentSession) => Partial<PaymentSession>): Promise<PaymentSession> => {
         const fresh = (await store.getPaymentSession(adapter.identifier, existing.id)) ?? existing;
         const merged: PaymentSession = { ...fresh, ...patch(fresh), updatedAt: Date.now() };
@@ -363,11 +347,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         cancelPayment: async (sessionId, cancelOptions) => {
             const existing = await ownedSession(sessionId);
 
-            const key = await callerKey("cancel_payment", sessionId, cancelOptions?.idempotencyKey);
-            const updated = await adapter.cancelPayment(sessionId, {
-                ...cancelOptions,
-                idempotencyKey: key ?? idempotencyKey("cancel_payment", adapter.identifier, sessionId),
-            });
+            const key = await outboundKey("cancel_payment", [sessionId], cancelOptions?.idempotencyKey, () => []);
+            const updated = await adapter.cancelPayment(sessionId, { ...cancelOptions, idempotencyKey: key });
 
             // A cancel establishes the state and nothing else — the amounts on the row stand.
             return persistSession(existing, () => {
@@ -391,33 +372,23 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
             }
 
-            // The default key carries the MODE (period-end and immediate are different provider calls,
-            // and one key across both is a Stripe idempotency_error) and the row's `updatedAt`, so a
-            // cancel → resume → cancel inside the provider's 24h window is a new request rather than a
-            // replay of the first cancel's response. A plain retry sees the same row and the same key.
-            const key =
-                (await callerKey("cancel_subscription", subscriptionId, cancelOptions?.idempotencyKey)) ??
-                idempotencyKey(
-                    "cancel_subscription",
-                    adapter.identifier,
-                    subscriptionId,
-                    cancelOptions?.atPeriodEnd ? "period_end" : "now",
-                    existing.updatedAt,
-                );
-            const updated = await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key });
+            // Already in the requested end state: a retry after a successful cancel. Calling the
+            // provider again would be a fresh key (the row's `updatedAt` moved) on a canceled sub.
+            const done = cancelOptions?.atPeriodEnd
+                ? existing.cancelAtPeriodEnd && (existing.state === "active" || existing.state === "trialing")
+                : existing.state === "canceled";
 
-            // Keep the stored `referenceId` over the adapter's. The adapter maps a MUTATION response,
-            // which is even less likely than a read to echo the checkout metadata the reference is
-            // pinned in: without it Dodo falls back to the provider's own customer id and
-            // Stripe/Polar/Creem resolve to `""`, either of which orphans the row from `by_reference`,
-            // `check`/`hasActivePrice` and the default authorizer — and a customer id permanently,
-            // because `sync.ts` only fills a blank owner. Same rule `reconcile` applies on its own write.
-            // `lastEventAt` stays as stored too: a mutation response is not an event.
-            const synced: Subscription = {
-                ...updated,
-                ...(existing.lastEventAt === undefined ? {} : { lastEventAt: existing.lastEventAt }),
-                referenceId: existing.referenceId === "" ? updated.referenceId : existing.referenceId,
-            };
+            if (done) {
+                return existing;
+            }
+
+            // Mode is in the key (period-end and immediate are different calls), and so is `updatedAt`,
+            // so cancel → resume → cancel inside the provider's 24h window is a new request.
+            const key = await outboundKey("cancel_subscription", [subscriptionId], cancelOptions?.idempotencyKey, () => [
+                cancelOptions?.atPeriodEnd ? "period_end" : "now",
+                existing.updatedAt,
+            ]);
+            const synced = overlayProviderSubscription(existing, await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key }));
 
             await store.upsertSubscription(synced);
 
@@ -430,9 +401,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // The amount is part of the key: `CaptureInput` supports partial captures, and reusing one
             // key across two different amounts makes the provider reject the second call as a
             // parameter mismatch — while two identical ones must still replay rather than double-charge.
-            const key =
-                (await callerKey("capture_payment", input.sessionId, input.idempotencyKey)) ??
-                (await derivedIdempotencyKey("capture_payment", adapter.identifier, input.sessionId, amountPart(input.amount)));
+            const key = await outboundKey("capture_payment", [input.sessionId], input.idempotencyKey, () => [amountPart(input.amount)]);
             const updated = await adapter.capturePayment({ ...input, idempotencyKey: key });
 
             // The provider's captured total is authoritative here, and its own `payment.captured`
@@ -452,13 +421,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 throw new LunoraPaymentError("VALIDATION_ERROR", "check() requires a featureId or priceId");
             }
 
-            // Same boundary as `track`: a negative `need` makes `balance >= need` true past the cap.
-            // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- deliberate: `??` would swallow a runtime `null` the type says can't happen
-            const need = input.quantity === undefined ? 1 : input.quantity;
-
-            if (!Number.isSafeInteger(need) || need < 0) {
-                throw new LunoraPaymentError("VALIDATION_ERROR", `check(): \`quantity\` must be a non-negative safe integer (got ${String(input.quantity)})`);
-            }
+            const need = requireQuantity("check", input.quantity);
 
             // When the provider owns entitlement truth (e.g. Autumn), delegate the whole decision to
             // it — its live balances/credits/limits are authoritative, and the app need not mirror
@@ -484,9 +447,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 throw new LunoraPaymentError("CONFIG_INVALID", "check() requires `entitlements` to be configured");
             }
 
-            const entitlements = resolveEntitlements(options.entitlements, subscriptions);
-
-            return evaluateFeature(options.entitlements, entitlements, subscriptions, input.referenceId, input.featureId, need);
+            return evaluateFeature(resolveEntitlements(options.entitlements, subscriptions), input.referenceId, input.featureId, need);
         },
 
         createCheckout: async (input) => startCheckout(input),
@@ -566,7 +527,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             const metered = names.filter((featureId) => entitlements.limit(featureId) !== undefined);
             // Each metered feature resets on its OWN granting plan's period, so batch the ledger
             // read per distinct window — usually one — rather than one unbounded scan per feature.
-            const byWindow = Map.groupBy(metered, (featureId) => usagePeriodStart(config, subscriptions, featureId));
+            const byWindow = Map.groupBy(metered, (featureId) => entitlements.periodStart(featureId));
             const usage = new Map<string, number>();
 
             for (const totals of await Promise.all([...byWindow].map(async ([since, featureIds]) => store.sumUsageByFeature(referenceId, featureIds, since)))) {
@@ -618,91 +579,45 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 return existing;
             }
 
-            // What the PROVIDER is asked to refund. An omitted `input.amount` means "whatever is left",
-            // which is not the same thing as "the whole order": Polar's refund endpoint takes the order
-            // total when no amount is given (`providers/polar.ts`), so a full refund of a partially
-            // refunded session would move the total a second time while the ledger records only the
-            // remainder. Send the resolved remainder instead.
-            //
-            // The amount stays absent when the remainder IS the captured total, so a provider that can
-            // only refund in full keeps working; when the two differ, that provider rejects the call
-            // (Dodo throws PROVIDER_ERROR for any explicit amount) — which is the right answer, since
-            // it cannot express the refund being asked for.
+            // Send the resolved remainder, not "no amount": Polar refunds the whole order total when
+            // none is given. Omitted only when the remainder IS the captured total (full-only providers).
             const providerAmount = input.amount ?? (compareMoney(issued, existing.capturedAmount) === 0 ? undefined : issued);
 
-            // Amount and reason are part of the key — see `capturePayment`; partial refunds of one
-            // session are legitimate and must not collide on the provider's idempotency window. It is
-            // the amount actually sent that keys it, so a full-refund-of-a-remainder and an explicit
-            // refund of the same remainder are one operation rather than two.
-            //
-            // The cost of that is deliberate and documented on {@link LunoraPayment.refundPayment}: two
-            // INTENTIONAL refunds of the same amount inside the provider's idempotency window are the
-            // same key too, and the provider replays the first instead of issuing a second. The caller
-            // passes a distinct `input.idempotencyKey` for that; the replay guard below is what keeps
-            // the ledger honest when they do not.
-            const key =
-                (await callerKey("refund_payment", input.sessionId, input.idempotencyKey)) ??
-                (await derivedIdempotencyKey("refund_payment", adapter.identifier, input.sessionId, amountPart(providerAmount), input.reason ?? ""));
+            // Keyed on the amount sent and the reason, so partial refunds don't collide. Two intentional
+            // same-amount refunds need distinct caller keys (see `LunoraPayment.refundPayment`).
+            const key = await outboundKey("refund_payment", [input.sessionId], input.idempotencyKey, () => [amountPart(providerAmount), input.reason ?? ""]);
 
             const issuedRefund = await adapter.refundPayment({ ...input, amount: providerAmount, idempotencyKey: key });
 
-            // A refund the provider has NOT settled yet moves no money and must not be written to the
-            // ledger. Dodo answers `refunds.create` with `pending`/`review` and only later sends
-            // `refund.succeeded` — or `refund.failed`, which maps to `unhandled` and reverses nothing,
-            // so an optimistically recorded amount would over-state the row forever. Leave the row
-            // untouched and let the confirming `payment.refunded` webhook carry the money; no marker
-            // either, or that webhook would be zeroed and the refund would never land at all.
-            //
-            // The cost is that the local ledger cannot guard a retry during the pending window. That is
-            // the lesser evil: a retry is bounded and visible, an over-stated refunded total is neither
-            // (it also blocks every later legitimate refund through the over-refund guard above).
+            // An unsettled (pending) refund moves no money yet: leave the row and add no marker, so the
+            // confirming `payment.refunded` webhook books it (or `refund.failed` leaves nothing to undo).
             if (issuedRefund.pending) {
                 return existing;
             }
 
-            const marker = localRefundKey(input.sessionId, issuedRefund.refundId, issued);
+            // What the provider says this refund moved (Polar caps at the refundable amount and adds
+            // tax), else what was asked for.
+            const booked = issuedRefund.refundedAmount.currency === issued.currency ? issuedRefund.refundedAmount : issued;
+            const marker = localRefundKey(input.sessionId, issuedRefund.refundId, booked);
 
-            // Record the refund on the row NOW rather than waiting for the provider's webhook. This
-            // ledger is the only thing standing between a retried (or repeated) call and a second
-            // real refund: Polar's refund endpoint accepts no idempotency key at all, so the key
-            // above cannot dedupe it on the wire (`idempotency.ts`). With the total written, the
-            // over-refund guard above rejects the retry before the adapter is reached.
-            //
-            // The confirming webhook then restates the same money. `sync.ts` folds it in without
-            // double-counting: a cumulative-total provider resolves to `max(...)`, and a per-refund
-            // (delta) provider's event consumes this marker and contributes nothing. The marker is keyed
-            // on the provider's id for THIS refund, so two in-flight refunds of the same amount on one
-            // session leave two markers and each confirming event consumes its own.
-            //
-            // The state is derived locally too — from the amount this call refunds, not from the
-            // adapter's own state, which Polar pins to "refunded" for a partial refund as well.
+            // Book the refund on the row now: this ledger is what makes the over-refund guard reject a
+            // retry on providers whose refund endpoint takes no key (Polar, Dodo). The marker, keyed on
+            // the provider's refund id, stops the confirming delta webhook from counting it twice.
             const freshRefund = await store.markEventProcessed(adapter.identifier, marker, LOCAL_REFUND_CLAIM_TYPE);
 
-            // The marker for this provider REFUND ID is already claimed, so this response is a replay of
-            // a refund the ledger has: the key above collided (two same-amount refunds on one session)
-            // and the provider answered with the original rather than moving money a second time. Adding
-            // to the ledger here records money that never left — and the damage compounds, because the
-            // over-refund guard then blocks the real refund and "refund the rest" hands back a remainder
-            // computed from an inflated total, leaving the customer short by exactly the phantom amount.
-            //
-            // Only a provider-supplied `refundId` proves identity. The amount fallback (a provider that
-            // reports no id) is shared by two genuinely distinct same-amount refunds, so treating it as a
-            // replay would drop a real one; that case keeps the old behaviour and the collision documented
-            // on `localRefundKey`.
+            // The marker for this refund id is already claimed: the provider replayed an earlier refund
+            // under a colliding key, so no money moved. (An amount-keyed marker proves nothing, so only
+            // a provider `refundId` short-circuits.)
             if (!freshRefund && issuedRefund.refundId !== undefined) {
                 return existing;
             }
 
             try {
-                // Onto the row as it is NOW, not as it was before the provider call: a concurrent
-                // refund (or a webhook for another one) may have landed meanwhile, and writing
-                // `existing + issued` would erase it. An absolute provider reports its cumulative total
-                // instead, which already includes anything that landed — and may include THIS refund
-                // via its own webhook, so adding to it would count it twice.
+                // Against the re-read row; an absolute provider's cumulative total may already include this refund.
                 return await persistSession(existing, (fresh) => {
                     const prospective =
                         issuedRefund.refundedTotal === undefined
-                            ? addMoney(fresh.refundedAmount, issued)
+                            ? addMoney(fresh.refundedAmount, booked)
                             : maxMoney(fresh.refundedAmount, issuedRefund.refundedTotal);
                     // The money has already moved, so a total past the capture (two racing refunds
                     // the provider settled between them) is recorded as fully refunded, not thrown.
@@ -711,18 +626,9 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                     return { refundedAmount: total, state: compareMoney(total, fresh.capturedAmount) < 0 ? "partially_refunded" : "refunded" };
                 });
             } catch (error) {
-                // The marker is claimed BEFORE the row, because the confirming webhook can arrive while
-                // this write is still in flight and must not double-count. There is no transaction across
-                // the two stores, so if the row write fails the claim would outlive the fold it stands
-                // for: the delta provider's `payment.refunded` would consume it, contribute nothing, and
-                // the refund would be absent from the row entirely. Release it so that webhook carries
-                // the money instead — the same claim/rollback shape `sync.ts` uses around `applyPayment`.
-                //
-                // KNOWN WINDOW: a hard isolate kill between the two writes still strands the marker, and
-                // it is inert only until this refund's webhook consumes it. Closing that needs a
-                // conditional write on `PaymentStore` (the DB store's `patch` compare-and-swaps on the
-                // pre-image it reads itself, which a caller cannot supply), not an ordering change —
-                // writing the row first only trades a lost refund for a double-counted one.
+                // The marker is claimed before the row (the webhook may land mid-write) with no transaction
+                // across the two, so release it on failure and let the webhook carry the money. A hard
+                // isolate kill between the writes still strands it until that webhook consumes it.
                 await store.releaseEvent(adapter.identifier, marker);
 
                 throw error;
@@ -734,58 +640,18 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         track: async (input) => {
             await ensureAuthorized(input.referenceId);
 
-            // `=== undefined`, not `??`. The two are equivalent to the TYPE (`number |
-            // undefined`), which is why the lint rule cannot tell them apart — but
-            // this is a trust boundary, and an untyped/JSON caller can send
-            // `quantity: null`. `??` would quietly turn that into the default 1
-            // instead of letting the check below reject it.
-            // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- deliberate: `??` would swallow a runtime `null` the type says can't happen
-            const target = input.quantity === undefined ? 1 : input.quantity;
+            const target = requireQuantity("track", input.quantity);
 
-            // A negative (or non-integer/non-finite) quantity is never a legitimate
-            // meter reading, and it is not merely garbage-in: the ledger is summed
-            // to `used`, and `evaluateFeature` derives `balance = limit - used`, so
-            // a negative event pushes `used` below zero and hands the caller an
-            // unbounded balance past its paid cap. Reject at the boundary — for
-            // BOTH modes ("set" to a negative total is the same bypass in one call).
-            if (!Number.isSafeInteger(target) || target < 0) {
-                throw new LunoraPaymentError("VALIDATION_ERROR", `track(): \`quantity\` must be a non-negative safe integer (got ${String(input.quantity)})`);
-            }
-            // A caller-stable key dedupes retries; an omitted one means "always record". The ledger's
-            // dedupe index is per PROVIDER, so a caller's key is namespaced to its reference and
-            // feature first — bare, tenant B's "u1" was silently dropped as tenant A's duplicate.
-            const key =
-                input.idempotencyKey === undefined
-                    ? crypto.randomUUID()
-                    : await derivedIdempotencyKey("track", adapter.identifier, input.referenceId, input.featureId, input.idempotencyKey);
+            // A caller key dedupes retries (namespaced, since the ledger's dedupe index is per provider);
+            // without one every call records.
+            const key = await outboundKey("track", [input.referenceId, input.featureId], input.idempotencyKey, () => [crypto.randomUUID()]);
 
-            // Both modes are a single append — the ledger is append-only and the
-            // period total is a FOLD over it (`foldUsage`), not a plain sum: an
-            // "add" event increments, a "set" event resets the total to its own
-            // quantity and discards everything earlier in the period.
-            //
-            // CONCURRENCY: that fold is the whole point. Reconciling a "set" the
-            // obvious way — read the current total, append `target - current` —
-            // is a read-modify-write across two un-transacted store calls, so two
-            // interleaved "set" calls both read the same total, both append a
-            // delta, and leave the period over- or under-counted, which inflates
-            // `balance = limit - used` exactly like a negative quantity would.
-            // Appending the absolute target instead makes concurrent "set" calls
-            // resolve last-writer-wins and a replayed "set" idempotent, with no
-            // lock and no serialized-context requirement. "add" was never at risk
-            // (its increment is independent of the current total).
+            // Both modes are one append; the period total is a fold (`foldUsage`) in which "set" resets,
+            // so concurrent or replayed sets resolve last-writer-wins without a read-modify-write.
             const isSet = input.mode === "set";
 
-            // A provider meter is ADDITIVE, and a period total is not expressible on one. The forward
-            // below can only send a delta against the total it just read, and a LOWERING "set" has no
-            // negative delta to send — so it stays local and every later raise re-sends ground the
-            // meter already has: `set 10 → set 5 → set 8` forwards 10 then 3, billing 13 against a
-            // local period total of 8, and the gap widens with every cycle.
-            //
-            // Correcting it needs a durable last-forwarded total per (reference, feature), which this
-            // append-only ledger does not carry. So reject the mode where a forward would happen rather
-            // than silently over-bill. `mode: "add"` is exact on both sides and is what a metered
-            // provider wants anyway; `"set"` stays available wherever usage is enforced locally.
+            // A provider meter is additive: a lowering "set" has no delta to forward, so the meter and the
+            // local total would drift apart. Reject it wherever a forward would happen.
             if (isSet && adapter.capabilities.usageMetering && adapter.reportUsage) {
                 throw new LunoraPaymentError(
                     "VALIDATION_ERROR",
@@ -793,26 +659,22 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 );
             }
 
-            // Advisory ONLY: skip a "set" that already matches, and an explicit
-            // `add 0`, so the ledger doesn't grow for a no-op. A stale read here
-            // can only cost a redundant marker — never a wrong total — because the
-            // fold resolves the period regardless of what this read saw. Nothing
-            // downstream depends on it, which is what keeps the path race-free.
-            const subscriptions = isSet ? await store.listSubscriptionsByReference(input.referenceId) : undefined;
-            const current =
-                subscriptions === undefined
-                    ? 0
-                    : await store.sumUsage(input.referenceId, input.featureId, usagePeriodStart(options.entitlements, subscriptions, input.featureId));
+            // Advisory only — skip a no-op ("set" to the current total, `add 0`); a stale read costs a
+            // redundant marker, never a wrong total.
+            let current = 0;
+
+            if (isSet) {
+                const subscriptions = await store.listSubscriptionsByReference(input.referenceId);
+                const since = options.entitlements
+                    ? resolveEntitlements(options.entitlements, subscriptions).periodStart(input.featureId)
+                    : usagePeriodStart(subscriptions);
+
+                current = await store.sumUsage(input.referenceId, input.featureId, since);
+            }
 
             if (isSet ? target === current : target === 0) {
                 return { recorded: false, reportedToProvider: false };
             }
-
-            // What this event forwards to the additive upstream meter below. Only
-            // "add" ever reaches it — a "set" is rejected above wherever a forward
-            // is possible — so the increment IS the delta, and the two sides of the
-            // ledger cannot drift. Local enforcement never reads this (the fold does).
-            const delta = target;
 
             const recorded = await store.recordUsage({
                 createdAt: nextUsageStamp(),
@@ -830,12 +692,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 return { recorded: false, reportedToProvider: false };
             }
 
-            // Provider meters are additive: only forward positive deltas (a "set" that lowers usage,
-            // or a no-op, stays local). For a locally-evaluated provider the ledger `check` reads is
-            // authoritative; for a provider that OWNS entitlements (`checkEntitlement`/`getBalances`),
-            // the provider's meter is authoritative and this forward is what `check` will later read —
-            // a swallowed forward failure below means the usage isn't enforced until `reconcile`.
-            if (delta <= 0 || !adapter.capabilities.usageMetering || !adapter.reportUsage) {
+            // Only "add" reaches here on a metering provider, so `target` is the delta to forward.
+            if (!adapter.capabilities.usageMetering || !adapter.reportUsage) {
                 return { recorded: true, reportedToProvider: false };
             }
 
@@ -846,18 +704,15 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                     customerId: customer?.id,
                     featureId: input.featureId,
                     idempotencyKey: key,
-                    quantity: delta,
+                    quantity: target,
                     referenceId: input.referenceId,
                 });
                 await store.markUsageReported(adapter.identifier, key);
 
                 return { recorded: true, reportedToProvider: true };
             } catch {
-                // Upstream metering is best-effort: the durable ledger is already updated, so a
-                // transient provider error can never fail the caller's request. For a locally-evaluated
-                // provider that ledger is what `check` reads; for a provider that owns entitlements the
-                // row stays `reportedToProvider: false` and `reconcile` retries the forward from
-                // `store.listUnreportedUsage` (plus this `usage.report_failed` signal for alerting).
+                // Best-effort upstream: the ledger is already written, and `reconcile` retries the forward
+                // from `listUnreportedUsage`.
                 notifyObserver(options.observability, {
                     featureId: input.featureId,
                     provider: adapter.identifier,

@@ -43,17 +43,11 @@
  * `customers.create` type-checks and never leaves the process. Dodo's only working idempotency in
  * this SDK version is body-level (`event_id` on usage ingestion), which we do use.
  *
- * **A key is stable for the logical OPERATION, not fresh per attempt** — and must change when the
- * operation does. A capture or refund is keyed on its amount, so an identical retry replays while a
- * different amount is a different key (one key across two parameter sets is a provider-side mismatch
- * error). A subscription cancel is keyed on its mode and the stored row's `updatedAt`, so cancel →
- * resume → cancel inside the provider's idempotency window (24h on Stripe) is a new request rather
- * than a replay of the first response. Plan changes and resumes derive NO key: they set an absolute
- * state, so an un-keyed retry is already a no-op, and a target-derived key would replay a toggle
- * (A → B → A) instead of acting. A caller-supplied key passes through; the ones the facade forwards
- * (checkout, capture, refund, cancel, `track`) are first namespaced to the object they act on, so
- * one tenant's key can never claim another's. On the subscription calls only the Stripe adapter
- * honours one: per the list above, no other provider's plan-change endpoint accepts a key at all.
+ * **A key is stable for the logical OPERATION, not fresh per attempt**, and changes when the
+ * operation does: captures and refunds key on their amount, a subscription cancel on its mode and the
+ * row's `updatedAt`. Plan changes and resumes derive no key (they set absolute state, so a retry is a
+ * no-op). Every key the facade forwards is hashed and namespaced to the object it acts on, a
+ * caller-supplied one included, so one tenant's key never claims another's.
  */
 import type { Money, ProviderId } from "./types";
 

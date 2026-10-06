@@ -33,19 +33,31 @@ describe("applyWebhookAction", () => {
         await expect(store.getSubscription("creem", "sub_owned")).resolves.toMatchObject({ referenceId: "user_1" });
     });
 
-    it("asks for one retry when the checkout beats its subscription, then adopts on the retry", async () => {
+    it("gives a subscription created after its checkout the checkout's owner, with no redelivery", async () => {
         expect.assertions(3);
 
         const store = new MemoryPaymentStore();
         const checkout = { ...captureEvent("e1"), provider: "creem", referenceId: "org_1", sessionId: "ch_1", subscriptionId: "sub_1" } as const;
 
-        // The session is booked, but the claim is released so the provider redelivers.
-        await expect(applyWebhookAction(store, checkout)).resolves.toEqual({ applied: true, reason: "orphaned" });
-
-        await applyWebhookAction(store, { eventId: "e2", priceId: "prod_team", provider: "creem", subscriptionId: "sub_1", type: "subscription.active" });
-
-        await expect(applyWebhookAction(store, checkout)).resolves.toEqual({ applied: false, reason: "illegal_transition" });
+        await expect(applyWebhookAction(store, checkout)).resolves.toEqual({ applied: true, reason: "ok" });
+        await expect(
+            applyWebhookAction(store, { eventId: "e2", priceId: "prod_team", provider: "creem", subscriptionId: "sub_1", type: "subscription.active" }),
+        ).resolves.toEqual({ applied: true, reason: "ok" });
         await expect(store.getSubscription("creem", "sub_1")).resolves.toMatchObject({ referenceId: "org_1" });
+    });
+
+    it("lets a stale event fill a blank owner, but nothing else", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const event = { provider: "stripe", subscriptionId: "sub_1" } as const;
+
+        await applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 3000, type: "subscription.past_due" });
+
+        await expect(
+            applyWebhookAction(store, { ...event, eventId: "e2", occurredAt: 1000, referenceId: "user_1", type: "subscription.active" }),
+        ).resolves.toEqual({ applied: false, reason: "stale" });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 3000, referenceId: "user_1", state: "past_due" });
     });
 
     it("adopts an orphan from a checkout whose session reconcile already captured", async () => {

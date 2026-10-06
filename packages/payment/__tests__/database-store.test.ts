@@ -264,6 +264,18 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.getSubscription("stripe", "sub_2").then((row) => row?.lastEventAt)).resolves.toBeUndefined();
     });
 
+    it("finds a subscription's owning payment session, skipping unowned ones", async () => {
+        expect.assertions(2);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertPaymentSession({ ...session, id: "renewal", referenceId: "", subscriptionId: "sub_1" });
+        await store.upsertPaymentSession({ ...session, id: "checkout", subscriptionId: "sub_1" });
+
+        await expect(store.getPaymentSessionBySubscription("stripe", "sub_1")).resolves.toMatchObject({ id: "checkout", subscriptionId: "sub_1" });
+        await expect(store.getPaymentSessionBySubscription("stripe", "sub_2")).resolves.toBeUndefined();
+    });
+
     it("dedupes events via markEventProcessed", async () => {
         expect.assertions(3);
 

@@ -263,10 +263,10 @@ export const checkout = action.input({ priceId: v.string() }).action(async ({ ct
 ```
 
 `createCheckout` reuses a reference's stored provider customer, minting a new
-one only on first checkout, and attaches an outbound idempotency key
-automatically (override via `input.idempotencyKey`). A key you pass is
-namespaced to the authorized reference before it reaches the provider, so two
-tenants choosing the same key never collide.
+one only on first checkout (the customer is never caller-supplied), and attaches
+an outbound idempotency key automatically (override via `input.idempotencyKey`).
+A key you pass is hashed and namespaced to the authorized reference before it
+reaches the provider, so two tenants choosing the same key never collide.
 
 ### Entitlements: `check` and `track`
 
@@ -433,6 +433,20 @@ migration. A **capture or refund is not its own table**: both fold into the
 payment's `paymentSessions` row as `capturedMinor` / `refundedMinor` plus a
 state (`refunded` / `partially_refunded`). Products, prices, checkouts and
 invoices stay with the provider — the store does not mirror them.
+
+### Upgrading
+
+- **Caller idempotency keys are now namespaced and hashed** before they reach
+  the provider. A retry that spans the deploy reaches the provider under a new
+  key, so it is not deduplicated against the attempt made before it — avoid
+  retrying a payment operation across the deploy.
+- **Two new optional columns**: `subscriptions.lastEventAt` (the stale-event
+  guard) and `paymentSessions.subscriptionId`, plus the `paymentSessions` index
+  `by_provider_subscription` on `["provider", "subscriptionId"]` (how a
+  subscription that arrives without owner metadata finds its checkout's owner).
+  Apps that copied the tables into their own `lunora/schema.ts` must add them.
+  On a `.global()` table an undeclared column is **silently dropped**, so a
+  missing `lastEventAt` leaves the subscription with no stale protection.
 
 ### Backfilling money columns written before the storage fix
 

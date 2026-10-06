@@ -39,9 +39,11 @@ export const paymentSessions = sqliteTable("paymentSessions", {
     referenceId: text("referenceId").notNull(),
     refundedMinor: blob("refundedMinor", { mode: "bigint" }).notNull(),
     state: text("state").notNull(),
+    subscriptionId: text("subscriptionId"),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_reference: index("by_reference").on(t.referenceId),
+    by_provider_subscription: index("by_provider_subscription").on(t.provider, t.subscriptionId),
     by_provider_session: uniqueIndex("by_provider_session").on(t.provider, t.providerSessionId),
 }));
 
