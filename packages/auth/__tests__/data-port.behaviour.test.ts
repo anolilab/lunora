@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { AUTH_AUDIT_TABLE } from "../src/audit";
 import { LunoraAuthDO } from "../src/auth-do";
 import type { AuthDataPortLike } from "../src/data-port";
-import { authTableNames, createSqlAuthDataPort } from "../src/data-port";
+import { authTableNames, createDoAuthDataPort, createSqlAuthDataPort } from "../src/data-port";
 import { createDoAuthWiring } from "../src/do-wiring";
 import type { SqlExecutor } from "../src/sql-store";
 import createDoStorage from "./helpers/do-storage";
@@ -38,14 +38,40 @@ const collect = async (port: AuthDataPortLike): Promise<{ doc: Record<string, un
 };
 
 describe("auth data port", () => {
-    it("lists better-auth's tables user-first with the audit log last", () => {
+    it("lists better-auth's tables user-first with the audit log last, never the live credentials", () => {
         expect.hasAssertions();
 
         const names = authTableNames({ secret: SECRET });
 
         expect(names[0]).toBe("user");
-        expect(names).toContain("session");
+        expect(names).toContain("account");
+        // Signed-in sessions and one-time tokens are working logins, not data.
+        expect(names).not.toContain("session");
+        expect(names).not.toContain("verification");
         expect(names.at(-1)).toBe(AUTH_AUDIT_TABLE);
+    });
+
+    it("never reads the live credential tables off the auth object", async () => {
+        expect.hasAssertions();
+
+        const paged: string[] = [];
+        const port = createDoAuthDataPort(async (body) => {
+            if (body["op"] === "tables") {
+                return Response.json({ tables: ["user", "session", "account", "verification"] });
+            }
+
+            paged.push(String(body["table"]));
+
+            return Response.json({ rows: [{ id: `${String(body["table"])}-1` }] });
+        });
+        const exported: string[] = [];
+
+        for await (const row of port.exportRows()) {
+            exported.push(row.table);
+        }
+
+        expect(paged).toStrictEqual(["user", "account"]);
+        expect(exported).toStrictEqual(["user", "account"]);
     });
 
     it("round-trips D1 auth tables, bytes included, and skips rows that already exist", async () => {

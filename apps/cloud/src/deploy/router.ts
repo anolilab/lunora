@@ -4,7 +4,7 @@ import type { ExecutionContextLike } from "@lunora/runtime";
 
 import { api, internal } from "../../lunora/_generated/api.js";
 import type { AlertDelivery } from "../../lunora/telemetry";
-import { proxyAdminRequest } from "../admin/proxy";
+import { isDataMovementPath, proxyAdminRequest } from "../admin/proxy";
 import { currentAuth } from "../auth";
 import { handleBackupNowRoute, handleDownloadRoute, handleRestoreRoute } from "../backup/tenant-routes";
 import { exportTenantSnapshot, TenantAdminError, tenantSender } from "../backup/tenant-transport";
@@ -157,6 +157,9 @@ const handleAdminRoute = async (request: Request, environment: RouterEnv): Promi
         return jsonError(400, "organizationId, deploymentId and path are required");
     }
 
+    // Export and import resolve their target for owners and admins only.
+    const dataMovement = isDataMovementPath(adminBody.path);
+
     try {
         return await proxyAdminRequest(
             {
@@ -173,6 +176,7 @@ const handleAdminRoute = async (request: Request, environment: RouterEnv): Promi
                 },
                 resolveTarget: async (organizationId, deploymentId) => {
                     const target = await context.runMutation<(StoredAdminToken & { url: string }) | null>(api.deployments.adminTarget, {
+                        dataMovement,
                         deploymentId,
                         organizationId,
                     });

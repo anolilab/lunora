@@ -256,6 +256,20 @@ const randomBytes = (size: number): Uint8Array<ArrayBuffer> => {
 };
 
 describe("admin export — auth, KV and storage sections", () => {
+    it("leaves the auth section out of a whole-deployment export unless it is asked for by name", async () => {
+        expect.hasAssertions();
+
+        const source = createStores();
+
+        source.auth.get("user")!.set("u1", { email: "a@example.com", id: "u1" });
+
+        const lines = await exportFrom(workerFor(source.options));
+        const parsed = lines.map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string });
+
+        expect(parsed[0]).toStrictEqual({ doc: { format: 2, sections: ["kv", "storage"] }, table: "$lunora" });
+        expect(parsed.some((row) => row.table === "$auth")).toBe(false);
+    });
+
     it("round-trips every section through export and a batched import", async () => {
         expect.hasAssertions();
 
@@ -276,7 +290,7 @@ describe("admin export — auth, KV and storage sections", () => {
         source.buckets.get("default")!.set("_lunora/uploads/state.json", { bytes: new TextEncoder().encode("{}") });
         source.buckets.get("avatars")!.set("large.bin", { bytes: large, contentType: "application/octet-stream" });
 
-        const lines = await exportFrom(workerFor(source.options));
+        const lines = await exportFrom(workerFor(source.options), { sections: ["auth", "kv", "storage"] });
         const parsed = lines.map((line) => JSON.parse(line) as { doc: Record<string, unknown>; table: string });
 
         expect(parsed[0]).toStrictEqual({ doc: { format: 2, sections: ["auth", "kv", "storage"] }, table: "$lunora" });

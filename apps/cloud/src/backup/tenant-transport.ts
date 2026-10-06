@@ -78,7 +78,9 @@ const tenantErrorMessage = async (response: Response): Promise<string> => {
  * arrives here as a real error rather than a short file.
  */
 export const exportTenantSnapshot = async (send: TenantSend): Promise<ReadableStream<Uint8Array<ArrayBuffer>>> => {
-    const response = await send(EXPORT_PATH, "{}", "application/json");
+    // Auth by name: the runtime leaves it out unless asked. A snapshot is only ever
+    // downloaded or restored by an owner/admin, so it carries the users too.
+    const response = await send(EXPORT_PATH, JSON.stringify({ sections: ["auth", "kv", "storage"] }), "application/json");
 
     if (!response.ok || !response.body) {
         throw new TenantAdminError(`tenant export failed (HTTP ${String(response.status)}): ${await tenantErrorMessage(response)}`, response.status);

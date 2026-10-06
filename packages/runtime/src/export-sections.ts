@@ -62,6 +62,13 @@ const SECTION_TABLES: ReadonlySet<string> = new Set([AUTH_TABLE, HEADER_TABLE, K
 /** Exportable sections, in the order they are written. */
 const EXPORT_SECTIONS = ["auth", "kv", "storage"] as const;
 
+/**
+ * What a whole-deployment export carries when it names no `sections`. Not `auth`:
+ * every end user's password hash and second factor is the most sensitive thing a
+ * deployment holds, so it leaves only when the caller asks for it by name.
+ */
+const DEFAULT_EXPORT_SECTIONS: ReadonlyArray<ExportSection> = ["kv", "storage"];
+
 type ExportSection = (typeof EXPORT_SECTIONS)[number];
 
 /**
@@ -705,6 +712,7 @@ const isSectionTable = (table: string): boolean => SECTION_TABLES.has(table);
 export type { AuthDataPort, ExportSection, SectionRow };
 export {
     assertSupportedHeader,
+    DEFAULT_EXPORT_SECTIONS,
     EXPORT_FORMAT_VERSION,
     EXPORT_SECTIONS,
     exportSectionRows,

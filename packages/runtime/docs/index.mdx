@@ -206,9 +206,11 @@ Each run writes two objects under `backupPrefix`:
 
 The scheduled backup carries schema tables only. The admin export carries more:
 a whole-deployment `POST /_lunora/admin/export` (no `tables`, or an explicit
-`sections: ["auth", "kv", "storage"]`) writes export format 2 — a
+`sections`) writes export format 2 — a
 `{"table":"$lunora","doc":{"format":2,"sections":[…]}}` header, the table rows,
-then `$auth` rows (the auth tables outside the schema, through `authData`), `$kv`
+then `$auth` rows (the auth tables outside the schema, through `authData` — only
+when `sections` names `"auth"`, never by default, and never the live `session` or
+`verification` tables), `$kv`
 entries (every namespace `kvIntrospector` lists, as base64 bytes with metadata and
 expiration) and `$storage` chunks (every object the `storage*` ops list, in
 512 KiB pieces). `/_lunora/admin/import` reads format 1 and 2 and writes the

@@ -159,7 +159,8 @@ platform holds nothing back.
 - \`wrangler.jsonc\` — your project's config with the old account's ids replaced
   by \`<create with: …>\` placeholders.
 - \`export.ndjson\` — your data snapshot: every shard and \`.global()\` table, the
-  auth tables (users, accounts, sessions), every bound KV namespace, and the
+  auth tables (users and accounts — signed-in sessions and one-time tokens are
+  never exported, so users sign in again), every bound KV namespace, and the
   objects in your storage buckets. Vectorize indexes are not in it — the binding
   cannot list an index's vectors — so re-embed them after the import
   (\`backfillVectors\`).

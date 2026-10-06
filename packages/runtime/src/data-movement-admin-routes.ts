@@ -19,7 +19,7 @@ import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage, shardCdcPage
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import { LunoraError } from "./errors";
 import type { ExportSection } from "./export-sections";
-import { EXPORT_SECTIONS } from "./export-sections";
+import { DEFAULT_EXPORT_SECTIONS, EXPORT_SECTIONS } from "./export-sections";
 import type { ExportRow } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import { runExportTap } from "./export-tap";
@@ -184,9 +184,10 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         // worker memory scales with the total shard-local row count — the
         // streaming only keeps the *response* from being buffered.
         const tableRows = await prepareExportRows(forwardedHeaders, body.tables);
-        // A whole-deployment export carries every section the worker can read; one
-        // that names tables carries none unless it asks.
-        const sections = exportSectionRows(body.sections ?? (body.tables === undefined ? EXPORT_SECTIONS : []));
+        // A whole-deployment export carries the default sections (never `auth`,
+        // which must be asked for by name); one that names tables carries none
+        // unless it asks.
+        const sections = exportSectionRows(body.sections ?? (body.tables === undefined ? DEFAULT_EXPORT_SECTIONS : []));
         const rows = (async function* ordered(): AsyncGenerator<ExportRow> {
             // The header, when any section is present, is the file's first line.
             if (sections.header) {

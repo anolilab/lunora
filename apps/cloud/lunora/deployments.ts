@@ -191,18 +191,20 @@ const PHASE_TIMESTAMP: Record<DeploymentStatus, "destroyedAt" | "failedAt" | "li
  * is not yet live.
  */
 export const adminTarget = query
-    .input({ deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
+    .input({ dataMovement: v.optional(v.boolean()), deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
     .query(
         async ({
             ctx: context,
-            args: { deploymentId, organizationId },
+            args: { dataMovement, deploymentId, organizationId },
         }): Promise<null | { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string }> => {
             // Not bare `assertMember`. This resolves the tenant's ADMIN bearer for
             // the studio proxy, which forwards writes to the tenant's own admin
             // API — so a `viewer`, whose whole role is read-only, was able to
             // mutate tenant data through it. Roles are named explicitly here
             // rather than at the route, because the token is handed out here.
-            await assertMember(context, organizationId, ["owner", "admin", "member"]);
+            // `dataMovement` (the tenant's export / import) is owner/admin: an export
+            // carries every end user's data, an import rewrites it.
+            await assertMember(context, organizationId, dataMovement === true ? ["owner", "admin"] : ["owner", "admin", "member"]);
 
             const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
             const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);

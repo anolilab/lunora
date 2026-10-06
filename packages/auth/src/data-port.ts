@@ -48,12 +48,24 @@ interface AuthDataPortLike {
 type AuthSqlReader = Pick<SqlExecutor, "all">;
 
 /**
+ * better-auth tables that hold live bearer credentials rather than data: signed-in
+ * sessions and one-time verification / reset tokens. They are never exported — a
+ * backup or eject must not hand out working logins, and restoring them would only
+ * revive stale ones; users sign in again after a restore.
+ */
+const LIVE_CREDENTIAL_TABLES: ReadonlySet<string> = new Set(["session", "verification"]);
+
+/**
  * The physical table names better-auth creates for `options` (plugin tables
  * included), in its own creation order — `user` first — then the audit log.
+ * {@link LIVE_CREDENTIAL_TABLES} are left out, by their logical name so a
+ * renamed model is still recognised.
  * @param options The resolved auth options — a built instance's `auth.options`.
  */
 const authTableNames = (options: LunoraAuthOptions): string[] => [
-    ...Object.values(getAuthTables(options))
+    ...Object.entries(getAuthTables(options))
+        .filter(([logical]) => !LIVE_CREDENTIAL_TABLES.has(logical))
+        .map(([, table]) => table)
         .toSorted((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.modelName.localeCompare(b.modelName))
         .map((table) => table.modelName),
     AUTH_AUDIT_TABLE,
@@ -202,7 +214,8 @@ const createDoAuthDataPort = (post: (body: Row) => Promise<Response>): AuthDataP
         exportRows: async function* exportRows() {
             const { tables } = await call<{ tables: string[] }>({ op: "tables" });
 
-            for (const table of tables) {
+            // The DO auth schema keeps better-auth's default model names.
+            for (const table of tables.filter((name) => !LIVE_CREDENTIAL_TABLES.has(name))) {
                 let after = 0;
 
                 for (;;) {

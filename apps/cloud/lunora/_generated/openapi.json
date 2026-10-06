@@ -2563,6 +2563,9 @@
                 "properties": {
                   "args": {
                     "properties": {
+                      "dataMovement": {
+                        "type": "boolean"
+                      },
                       "deploymentId": {
                         "description": "Id<\"deployments\">",
                         "type": "string",
