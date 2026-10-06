@@ -791,7 +791,15 @@ type HttpRunners = Pick<ActionCtx, "runAction" | "runMutation" | "runQuery">;
 
 ### `HttpStreamHandlerOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params extends ArgsValidator> {
+    ctx: HttpActionCtx;
+    params: InferArgs<Params>;
+    request: Request;
+    searchParams: InferArgs<SearchParams>;
+    signal: AbortSignal;
+}
+```
 
 ### `Id` (type)
 

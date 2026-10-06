@@ -105,15 +105,15 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `HttpStreamArgsOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamChunkOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamRef` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `ListPresentReference` (type)
 
@@ -301,11 +301,11 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ### `UseHttpStreamOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `UseHttpStreamResult` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `UseImpersonateResult` (interface)
 
@@ -533,7 +533,7 @@ Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useHttpStream` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/react` — signature tracked at its source.
 
 ### `useImpersonate` (const)
 

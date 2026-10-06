@@ -133,13 +133,23 @@ against something written down rather than case by case.
 
 Where the tier stands today:
 
-| Package                     | 1. Snapshotted                                                                                                                   | 2. Verified on workerd                                                                                                                                                                                                                            |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                     | yes — `api-snapshots/agent.api.md`                                                                                               | no                                                                                                                                                                                                                                                |
-| `ai`                        | yes — `api-snapshots/ai.api.md`                                                                                                  | no                                                                                                                                                                                                                                                |
-| `container`                 | yes — `api-snapshots/container.api.md`, and **no export carries `@experimental`**, so signatures are tracked rather than skipped | partial — a real workerd suite boots the DO, resolves `ctx.containers` bindings and round-trips the bridge, but **starting** a container needs Docker and is out of scope there, so proxied fetch, lifecycle and `exec` are unverified on workerd |
-| `platform-node`             | yes — `api-snapshots/platform-node.api.md`                                                                                       | n/a — a Node host; workerd is not the runtime it ships to                                                                                                                                                                                         |
-| everything else in the tier | not yet                                                                                                                          | —                                                                                                                                                                                                                                                 |
+| Package          | 1. Snapshotted (untracked `@experimental` exports) | 2. Verified on workerd                                                              |
+| ---------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `agent`          | yes (183)                                          | no                                                                                  |
+| `ai`             | yes (63)                                           | no                                                                                  |
+| `angular`        | yes (80)                                           | n/a — runs in the browser                                                           |
+| `browser`        | yes (25)                                           | no                                                                                  |
+| `container`      | yes (0 — fully tracked)                            | partial — starting a container needs Docker, so lifecycle and `exec` are unverified |
+| `payment`        | yes (103)                                          | no                                                                                  |
+| `platform-celld` | yes (0)                                            | n/a — verified by the `test:celld` TCK                                              |
+| `platform-node`  | yes (0)                                            | n/a — a Node host                                                                   |
+| `react-native`   | yes (5)                                            | n/a — runs on device                                                                |
+| `replica`        | yes (69)                                           | no                                                                                  |
+| `rspack`         | yes (0)                                            | n/a — a bundler plugin                                                              |
+| `x402`           | yes (83)                                           | yes                                                                                 |
+
+No Core or Stable-adapter export carries `@experimental`: `api:check` fails if one does. The
+per-package graduation order is in [`plans/463`](./plans/463-experimental-graduation.md).
 
 Ordering is not fixed: a package that clears the bar early graduates early,
 regardless of where it sits in the tier list above.

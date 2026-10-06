@@ -324,7 +324,6 @@ export interface LunoraArtifactsOptions {
 
 /**
  * Envelope fields shared by every Artifacts Queues event (`eventSchemaVersion: 1`).
- * @experimental
  */
 export interface ArtifactsEventMetadata {
     accountId: string;
@@ -347,7 +346,6 @@ export interface ArtifactsRepoEventState {
 /**
  * Envelope of an account-level event (source `artifacts`). For a fork, `source`
  * names the repo forked FROM; the payload names the new one.
- * @experimental
  */
 export interface ArtifactsLifecycleEnvelope {
     metadata: ArtifactsEventMetadata;
@@ -357,7 +355,6 @@ export interface ArtifactsLifecycleEnvelope {
 /**
  * Envelope of a repo-level event (source `artifacts.repo`, subscribed per
  * namespace + repo).
- * @experimental
  */
 export interface ArtifactsActivityEnvelope {
     metadata: ArtifactsEventMetadata;
@@ -378,7 +375,6 @@ export interface ArtifactsPushedCommit {
 /**
  * An account-level repo lifecycle event: `created`, `deleted`, `forked` or
  * `imported`. Narrow on `type`.
- * @experimental
  */
 export type ArtifactsRepoLifecycleEvent =
     | (ArtifactsLifecycleEnvelope & { payload: ArtifactsRepoEventState & { branch: string; sourceUrl: string }; type: "cf.artifacts.repo.imported" })
@@ -390,7 +386,6 @@ export type ArtifactsRepoLifecycleEvent =
  * A repo-level activity event: `pushed`, `cloned`, `fetched`,
  * `token.created` or `token.revoked`. Narrow on `type`. Token events carry the
  * token id, never the plaintext.
- * @experimental
  */
 export type ArtifactsRepoActivityEvent =
     | (ArtifactsActivityEnvelope & {
@@ -412,6 +407,5 @@ export type ArtifactsRepoActivityEvent =
 /**
  * Any Artifacts event a Queue subscription delivers — type a `defineQueue`
  * consumer's messages with it and narrow on `type`.
- * @experimental
  */
 export type ArtifactsEvent = ArtifactsRepoActivityEvent | ArtifactsRepoLifecycleEvent;

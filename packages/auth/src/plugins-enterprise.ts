@@ -70,7 +70,6 @@ const warnIfDomainVerificationOff = (options: SSOOptions | undefined): void => {
  *
  * SAML loads on workerd but its assertion-verify path (pure-JS RSA) has not been
  * measured against a Worker CPU budget — treat OIDC/OAuth2 as the supported mode.
- * @experimental
  */
 export const sso: typeof betterAuthSso = ((options?: SSOOptions) => {
     warnIfDomainVerificationOff(options);
@@ -82,6 +81,5 @@ export const sso: typeof betterAuthSso = ((options?: SSOOptions) => {
  * The OIDC provider configuration accepted by `registerSSOProvider` — exported so a
  * caller can type the config it builds (from env, a tenant record, …) before handing it
  * over.
- * @experimental
  */
 export type { OIDCConfig } from "@better-auth/sso";

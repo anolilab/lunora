@@ -166,7 +166,6 @@ interface HttpRouteHandlerOptions<SearchParams extends ArgsValidator, Body exten
  * handler receives. There is no parsed `body` — streams are typically GET, and
  * the raw `request` is exposed if a handler needs to read the body itself.
  * `signal` is tripped when the client disconnects.
- * @experimental Part of the HTTP-SSE stream surface; reconnect/POST-body design questions are still open.
  */
 interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params extends ArgsValidator> {
     ctx: HttpActionCtx;
@@ -222,7 +221,6 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * handler's yielded type — unless `.output()` was declared, in which case each
      * chunk must be that type and is parsed through the validator before the frame
      * is written (a violation ends the stream with an `event: error` frame).
-     * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
      */
     stream: [Output] extends [undefined]
         ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler
@@ -608,7 +606,7 @@ const buildStreamHandler =
             // pulling one chunk per `pull()`, which rewrites the abort / terminal-
             // frame / error-frame ordering this block already carries a scar from
             // (see the post-loop re-check). Do it when a real stream is observed
-            // outrunning its reader; the surface is `@experimental` until then.
+            // outrunning its reader; the fix is internal and does not move the public surface.
             async start(controller) {
                 try {
                     const iterator = userHandler({ ctx: context, params, request, searchParams, signal: ac.signal });

@@ -179,7 +179,6 @@ const lunoraD1Adapter = (d1: Parameters<typeof d1Executor>[0]): ReturnType<typeo
  * before reaching for it: the auth tables then live inside a single Durable Object.
  *
  * Schema-checked like {@link lunoraD1Adapter}, against the object's own SQLite.
- * @experimental
  */
 const lunoraDoAdapter = (storage: DoStorageLike): ReturnType<typeof lunoraAuthAdapter> => {
     const executor = doExecutor(storage);

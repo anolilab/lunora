@@ -283,7 +283,7 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `HttpStreamHandlerOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `Id` (type)
 
@@ -1585,23 +1585,23 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamArgsOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamCallArgs` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamChunkOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `HttpStreamRef` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `IndexedDbPersistenceOptions` (interface)
 
@@ -1989,7 +1989,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `httpStream` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `isAuthReplayFailure` (const)
 
@@ -5273,7 +5273,7 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `HttpStreamHandlerOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `Id` (type)
 

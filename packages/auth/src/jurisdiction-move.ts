@@ -46,7 +46,6 @@
  *
  * `done: true` means the source's fingerprint of every table matches the target's
  * record. Purge re-checks the same fingerprints inside the transaction that drops.
- * @experimental
  */
 /* eslint-disable unicorn/no-null -- SQL NULL: a bound parameter or a hashed column value must be `null`, which `undefined` is not */
 import { LunoraError } from "@lunora/errors";

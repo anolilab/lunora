@@ -24,7 +24,6 @@ const SSE_FIELD_SPACE_RE = /^ /u;
 
 /**
  * Options accepted by {@link httpStream}.
- * @experimental Part of the HTTP-SSE stream surface.
  */
 interface HttpStreamOptions {
     /**
@@ -272,7 +271,6 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
  * an `event: error` frame (or a transport failure) surfaces as a coded
  * rejection on the next `next()`. `.cancel()` — or aborting `options.signal` —
  * aborts the underlying fetch, which the server observes via `request.signal`.
- * @experimental Reconnect/POST-body/wire-fidelity design questions are still open, so the shape may change.
  */
 const httpStream = <Ref extends HttpStreamRef>(
     route: Ref,

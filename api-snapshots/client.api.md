@@ -302,23 +302,50 @@ interface GlobalTablePage {
 
 ### `HttpStreamArgsOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type HttpStreamArgsOf<R> = R extends HttpStreamRef<infer _C, infer S, infer P> ? HttpStreamCallArgs<S, P> : never;
+```
 
 ### `HttpStreamCallArgs` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface HttpStreamCallArgs<SearchParams = unknown, Params = unknown> {
+    params?: Params;
+    searchParams?: SearchParams;
+}
+```
 
 ### `HttpStreamChunkOf` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type HttpStreamChunkOf<R> = R extends HttpStreamRef<infer Chunk, infer _S, infer _P> ? Chunk : never;
+```
 
 ### `HttpStreamOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface HttpStreamOptions {
+    baseUrl?: string;
+    fetch?: typeof fetch;
+    headers?: Record<string, string>;
+    maxBuffer?: number;
+    signal?: AbortSignal;
+}
+```
 
 ### `HttpStreamRef` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params = unknown> {
+    readonly __lunoraHttpStream?: {
+        chunk: Chunk;
+        params: Params;
+        searchParams: SearchParams;
+    };
+    readonly method: string;
+    readonly path: string;
+}
+```
 
 ### `IndexedDbPersistenceOptions` (interface)
 
@@ -1625,7 +1652,9 @@ const getRetryAfterMs: (error: unknown) => number | undefined;
 
 ### `httpStream` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+const httpStream: <Ref extends HttpStreamRef>(route: Ref, args?: HttpStreamArgsOf<Ref>, options?: HttpStreamOptions) => StreamIterable<HttpStreamChunkOf<Ref>>;
+```
 
 ### `isAuthReplayFailure` (const)
 
