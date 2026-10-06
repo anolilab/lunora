@@ -96,10 +96,17 @@ const sweepWithOffsite = async (remote: ReturnType<typeof fakeS3>, objects: { ke
 };
 
 describe("control-plane backup off-site copy", () => {
-    it("stays inert unless every off-site value is set", () => {
+    it("stays inert unless every off-site value is set, and warns on a partial set", () => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
         expect(offsiteBucket({})).toBeUndefined();
+        expect(warn).not.toHaveBeenCalled();
         expect(offsiteBucket({ ...OFFSITE_ENV, BACKUP_OFFSITE_SECRET_ACCESS_KEY: "" })).toBeUndefined();
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(OFFSITE_ENV.BACKUP_OFFSITE_ACCESS_KEY_ID);
         expect(offsiteBucket(OFFSITE_ENV)).toBeDefined();
+
+        warn.mockRestore();
     });
 
     it("copies the dump to the off-site account under the same key", async () => {

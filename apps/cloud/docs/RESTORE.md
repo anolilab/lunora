@@ -200,8 +200,10 @@ The export fails loudly rather than short: a shard it cannot reach, or a
 `.shardBy()` table on an app with no shard registry, answers an error and the
 attempt is recorded `failed` with that reason — never a partial snapshot marked
 good. Snapshots stream to R2 as a multipart upload (8 MiB parts, one held in
-memory at a time), so the control plane imposes no size ceiling of its own; a
-tenant export that breaks midway aborts the upload and leaves no object.
+memory at a time), so memory no longer limits a snapshot. It is capped at 4 GiB
+compressed (`MAX_SNAPSHOT_BYTES`), because the export is the tenant's own code:
+past the cap, or when the export breaks midway, the upload is aborted, no
+object is left and the attempt is recorded `failed`.
 
 Retention is per plan (`limits.backupRetention` in `src/billing/plans.ts`): the
 newest **3** (free), **14** (pro) or **30** (enterprise) successful snapshots of

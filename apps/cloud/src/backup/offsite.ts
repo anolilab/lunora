@@ -67,6 +67,12 @@ export const offsiteBucket = (environment: OffsiteEnvironment, fetchImpl: typeof
     } = environment;
 
     if (!accessKeyId || !bucket || !endpoint || !secretAccessKey) {
+        // Some but not all set reads as a typo, not as "off": say so, by name only.
+        if (accessKeyId || bucket || endpoint || secretAccessKey) {
+            // eslint-disable-next-line no-console -- variable names only, never a value
+            console.warn("[backup-offsite] off-site copy is off: set all four BACKUP_OFFSITE_* values or none");
+        }
+
         return undefined;
     }
 

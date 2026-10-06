@@ -89,6 +89,17 @@ export const exportTenantSnapshot = async (send: TenantSend): Promise<ReadableSt
 
 const SNAPSHOT_CONTENT_TYPE = "application/gzip";
 
+/**
+ * The largest compressed snapshot the control plane stores. Multipart lifts the
+ * Worker-memory ceiling the old 64 MiB cap stood for, but the export is the
+ * tenant's own code, so the stream still needs a bound on what it can make us
+ * store and how long it can keep the backup sweep busy.
+ *
+ * ponytail: one ceiling for every plan; make it plan data next to
+ * `limits.backupRetention` if a plan needs a different one.
+ */
+export const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024;
+
 /** A snapshot written: its stored (compressed) size, and the off-site copy when one is configured. */
 export interface CapturedSnapshot {
     bytes: number;
@@ -97,9 +108,9 @@ export interface CapturedSnapshot {
 
 /**
  * Export the tenant's data, gzip it and stream it to `key` as a multipart
- * upload (`./multipart.ts`), so a snapshot's size is bounded by R2 rather than
- * by the Worker's memory. Nothing is written unless the whole export arrived: a
- * tenant stream that errors midway aborts the upload.
+ * upload (`./multipart.ts`), so a snapshot is bounded by {@link MAX_SNAPSHOT_BYTES}
+ * rather than by the Worker's memory. Nothing is written unless the whole export
+ * arrived: a tenant stream that errors midway or passes the cap aborts the upload.
  *
  * Then, with `offsite`, copies the stored object to the off-site account. That
  * copy never fails the snapshot — its outcome is returned for the caller to
@@ -112,7 +123,13 @@ export const captureTenantSnapshot = async (options: {
     send: TenantSend;
 }): Promise<CapturedSnapshot> => {
     const exported = await exportTenantSnapshot(options.send);
-    const bytes = await uploadStream(options.bucket, options.key, exported.pipeThrough(new CompressionStream("gzip")), SNAPSHOT_CONTENT_TYPE);
+    const bytes = await uploadStream(
+        options.bucket,
+        options.key,
+        exported.pipeThrough(new CompressionStream("gzip")),
+        SNAPSHOT_CONTENT_TYPE,
+        MAX_SNAPSHOT_BYTES,
+    );
 
     return options.offsite ? { bytes, offsite: await copyObject(options.bucket, options.offsite, options.key, SNAPSHOT_CONTENT_TYPE) } : { bytes };
 };

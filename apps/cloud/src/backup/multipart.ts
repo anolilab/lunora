@@ -38,10 +38,18 @@ export const PART_BYTES = 8 * 1024 * 1024;
 /**
  * Upload `stream` to `key`, one {@link PART_BYTES} part at a time, and return
  * the bytes stored. Nothing becomes visible unless the whole stream arrived: a
- * stream that errors midway, or a part the store refuses, aborts the upload and
- * rejects.
+ * stream that errors midway, a part the store refuses, or a stream longer than
+ * `maxBytes` aborts the upload and rejects. `maxBytes` is required because a
+ * tenant's export is the tenant's own code: without a ceiling it could stream
+ * into our bucket for as long as the Worker runs.
  */
-export const uploadStream = async (bucket: MultipartBucket, key: string, stream: ReadableStream<Uint8Array>, contentType: string): Promise<number> => {
+export const uploadStream = async (
+    bucket: MultipartBucket,
+    key: string,
+    stream: ReadableStream<Uint8Array>,
+    contentType: string,
+    maxBytes: number,
+): Promise<number> => {
     const upload = await bucket.createMultipartUpload(key, { httpMetadata: { contentType } });
     const reader = stream.getReader();
     const parts: UploadedPart[] = [];
@@ -65,6 +73,10 @@ export const uploadStream = async (bucket: MultipartBucket, key: string, stream:
             }
 
             total += value.byteLength;
+
+            if (total > maxBytes) {
+                throw new Error(`the stream exceeds the ${String(Math.round(maxBytes / 1024 / 1024))} MiB limit`);
+            }
 
             let offset = 0;
 
@@ -124,7 +136,8 @@ export const copyObject = async (
             throw new Error("the primary object is missing");
         }
 
-        await uploadStream(target, key, object.body, contentType);
+        // An object already stored, under the cap its own upload enforced.
+        await uploadStream(target, key, object.body, contentType, Number.POSITIVE_INFINITY);
 
         return { status: "succeeded" };
     } catch (error) {

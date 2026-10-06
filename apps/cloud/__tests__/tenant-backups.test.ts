@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { internal } from "../lunora/_generated/api.js";
 import { authorizeDownload, beginBackup, beginRestore } from "../lunora/tenant-backups";
-import { PART_BYTES } from "../src/backup/multipart";
+import { PART_BYTES, uploadStream } from "../src/backup/multipart";
 import { offsiteBucket } from "../src/backup/offsite";
 import { backupRetentionFor, isDueForBackup, OPERATION_STALE_MS, tenantBackupKey } from "../src/backup/tenant-policy";
 import type { BackupTargetRow } from "../src/backup/tenant-sweep";
@@ -353,6 +353,20 @@ describe(captureTenantSnapshot, () => {
         await expect(captureTenantSnapshot({ bucket, key: "broken.ndjson.gz", send })).rejects.toThrow("tenant stream broke");
         expect(stats.parts).toBeGreaterThan(0);
         expect(stats.aborted).toBe(1);
+        expect(objects.size).toBe(0);
+    });
+
+    it("aborts and stores nothing once a stream passes its byte ceiling", async () => {
+        const objects = new Map<string, StoredObject>();
+        const bucket = fakeMultipart(objects);
+        const endless = new ReadableStream<Uint8Array>({
+            pull: (controller) => {
+                controller.enqueue(new Uint8Array(1024 * 1024));
+            },
+        });
+
+        await expect(uploadStream(bucket, "endless.ndjson.gz", endless, "application/gzip", 3 * PART_BYTES)).rejects.toThrow("exceeds the 24 MiB limit");
+        expect(bucket.stats.aborted).toBe(1);
         expect(objects.size).toBe(0);
     });
 });
