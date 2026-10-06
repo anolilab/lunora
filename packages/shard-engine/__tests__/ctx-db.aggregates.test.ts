@@ -880,4 +880,97 @@ describe("ctx-db aggregates", () => {
             await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
         });
     });
+
+    describe("durable backfill marker", () => {
+        const freshWriter = (schema: SchemaLike): DatabaseWriterLike =>
+            createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+
+        // A planted value a rebuild would overwrite: reading it back proves the
+        // companion was trusted, not rescanned.
+        const plant = (): void => {
+            harness.raw(`UPDATE "todos__agg_byProject" SET "__value__" = 99 WHERE "__key__" = '{"projectId":"p1"}'`);
+        };
+
+        it("rebuilds once per shard, not once per ctx-db instance", async () => {
+            expect.assertions(3);
+
+            await seed(setupWriter(makeSchema()));
+
+            const schema = makeSchema(byProject);
+
+            runShardMigrations(harness.sql, schema);
+
+            await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(4);
+
+            plant();
+
+            await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(99);
+
+            // A cold start re-runs migrations; the marker survives them.
+            runShardMigrations(harness.sql, schema);
+
+            await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(99);
+        });
+
+        it("rebuilds exactly once when the index definition changes", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter(makeSchema(byProject));
+
+            await seed(writer);
+
+            await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
+
+            // Same name, narrower grouping: the old tally would answer wrongly.
+            const changed = makeSchema({ ...byProject, where: { archived: false } });
+
+            runShardMigrations(harness.sql, changed);
+            plant();
+
+            await expect(freshWriter(changed).count("todos", { archived: false, projectId: "p1" })).resolves.toBe(3);
+
+            plant();
+
+            await expect(freshWriter(changed).count("todos", { archived: false, projectId: "p1" })).resolves.toBe(99);
+        });
+
+        it("rebuilds exactly once when the recorded format is stale", async () => {
+            expect.assertions(2);
+
+            const schema = makeSchema(byProject);
+
+            await seed(setupWriter(schema));
+
+            // What a shard built by an older tally format holds.
+            harness.raw(`UPDATE "__lunora_agg_state" SET "signature" = 'older-format'`);
+            plant();
+
+            await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(4);
+
+            plant();
+
+            await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(99);
+        });
+
+        it("rebuilds an index re-declared after a deploy that dropped it", async () => {
+            expect.assertions(2);
+
+            const schema = makeSchema(byProject);
+            const writer = setupWriter(schema);
+
+            await seed(writer);
+
+            await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
+
+            // Undeclared: nothing maintains the companion while this row lands.
+            const without = makeSchema();
+
+            runShardMigrations(harness.sql, without);
+            await freshWriter(without).insert("todos", { _id: "t6", archived: false, projectId: "p1", seq: 6 }, { allowExplicitId: true });
+
+            runShardMigrations(harness.sql, schema);
+
+            await expect(freshWriter(schema).count("todos", { projectId: "p1" })).resolves.toBe(5);
+        });
+    });
 });

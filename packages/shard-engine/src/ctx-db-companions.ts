@@ -8,19 +8,17 @@
  * shared insert fan-out (`syncCompanionsForInsert`) that also drives CDC, the
  * reactive cache, and live-subscription broadcast.
  *
- * Behavior is byte-identical to the in-`ctx-db` original — the SQL text, the
- * call order, the backfill idempotency model (one rebuild per (table, index)
- * per ctx-db instance, run BEFORE the triggering row write), and the companion
- * semantics all sit on the hot write path and feed the same reads, so nothing
- * here may shift.
+ * Backfill idempotency: an aggregate rebuild is recorded durably in
+ * `__lunora_agg_state` under its definition's signature, so it runs once per
+ * shard per definition — not once per ctx-db instance, which codegen builds per
+ * dispatch. Rank rebuilds are still memoised per ctx-db instance. Either one
+ * runs BEFORE the triggering row write.
  *
  * The maintenance functions need the DO writer's locals (`sql`, `schema`, the
  * read hook, the reactive cache, the CDC recorder, the subscription broadcast).
  * Those are threaded explicitly through {@link CompanionSyncDeps} rather than
  * captured from the writer closure, so the cluster reads as a pure function of
- * its dependencies — mirroring `ctx-db-rank-page`'s `RankPageDeps`. The
- * per-(table, index) backfill bookkeeping lives inside the factory, so a fresh
- * companion-sync (one per ctx-db instance) cold-starts its backfills.
+ * its dependencies — mirroring `ctx-db-rank-page`'s `RankPageDeps`.
  */
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companions" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
@@ -32,7 +30,7 @@ import { sql as dsql } from "drizzle-orm";
 
 import { aggregateSqlFunction, matchesStaticWhere } from "./aggregate-sql";
 import type { AggregateTally } from "./aggregate-tally";
-import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally } from "./aggregate-tally";
+import { aggregateTableName, coerceAggregateNumber, compareStrings, encodeAggregateKey, foldAggregateTally } from "./aggregate-tally";
 // Type-only imports for the structural surfaces the DO writer threads in — value
 // imports would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec } from "./ctx-db";
@@ -46,6 +44,70 @@ import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnNa
 import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
 import { mayHoldProjectedValue } from "./sql-projection";
 import type { MutationDelta } from "./types";
+
+/** Reserved table recording which aggregate companions are built, and from which definition. */
+const AGGREGATE_STATE_TABLE = "__lunora_agg_state";
+
+/**
+ * Bump when the tally a rebuild writes changes shape (it has twice: the
+ * reducer-aware `__value__`/`__count__`, then live-only rows), so every shard
+ * rebuilds each companion exactly once on its next touch.
+ */
+const AGGREGATE_FORMAT_VERSION = 1;
+
+/**
+ * Everything a rebuild's output depends on. A companion whose recorded
+ * signature differs was built from another definition or format and is
+ * rebuilt — this is what stops a changed `by` / `field` / `op` / `where`, or a
+ * toggled `.softDelete()`, from answering out of a stale grouping.
+ */
+const aggregateSignature = (index: AggregateIndexDefinitionLike, softField: string | undefined): string =>
+    JSON.stringify([
+        AGGREGATE_FORMAT_VERSION,
+        (index.by ?? []).toSorted(compareStrings),
+        index.field ?? "",
+        index.op,
+        index.where ? encodeAggregateKey(Object.keys(index.where), index.where) : "",
+        softField ?? "",
+    ]);
+
+/**
+ * Create the marker table and drop markers for companions the schema no longer
+ * declares. Called from `runShardMigrations` on every cold start.
+ *
+ * The prune is what makes a durable marker safe across deploys: while an index
+ * is undeclared nothing maintains its companion, so re-declaring it later with
+ * the identical definition must rebuild rather than trust the old marker.
+ */
+const migrateAggregateState = (sql: SqlExec, schema: SchemaLike): void => {
+    runDrizzle(
+        sql,
+        dsql`CREATE TABLE IF NOT EXISTS ${dsql.identifier(AGGREGATE_STATE_TABLE)} (${dsql.identifier("companion")} TEXT PRIMARY KEY, ${dsql.identifier("signature")} TEXT NOT NULL)`,
+    );
+
+    const declared = new Set<string>();
+
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        if (definition.shardMode?.kind === "global") {
+            continue;
+        }
+
+        for (const index of definition.aggregateIndexes ?? []) {
+            declared.add(aggregateTableName(tableName, index.name));
+        }
+    }
+
+    const recorded = runDrizzle<{ companion: string }>(
+        sql,
+        dsql`SELECT ${dsql.identifier("companion")} FROM ${dsql.identifier(AGGREGATE_STATE_TABLE)}`,
+    ).toArray();
+
+    for (const { companion } of recorded) {
+        if (!declared.has(companion)) {
+            runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(AGGREGATE_STATE_TABLE)} WHERE ${dsql.identifier("companion")} = ${companion}`);
+        }
+    }
+};
 
 /**
  * Whether none of the fields a rank index reads (partition / sort / static
@@ -151,9 +213,9 @@ interface CompanionSyncDeps {
 
 /** The companion-maintenance surface the writer destructures back into its hot write path. */
 interface CompanionSync {
-    /** Pre-write hook: ensure every aggregate counter on `tableName` is rebuilt once per ctx-db. */
+    /** Pre-write hook: ensure every aggregate counter on `tableName` is built from its current definition. */
     ensureBackfilledForTable: (tableName: string) => void;
-    /** Lazily (re)build a single aggregate companion the first time this ctx-db touches it. */
+    /** Rebuild a single aggregate companion unless the durable marker records it as built from this definition. */
     ensureBackfilledIndex: (tableName: string, index: AggregateIndexDefinitionLike) => void;
     /** Lazily (re)build a single rank companion the first time this ctx-db touches it. */
     ensureRankBackfilled: (tableName: string, index: RankIndexDefinitionLike) => void;
@@ -180,14 +242,13 @@ interface CompanionSync {
  * Build the companion-index maintenance cluster bound to one ctx-db instance.
  * The returned functions keep the aggregate, rank, and FTS companions in step
  * with the writer's row writes; both the write path and the aggregate/rank read
- * fast-paths share the returned backfill helpers, so the per-(table, index)
- * backfill set held here is the single "rebuilt this instance?" source of truth.
+ * fast-paths share the returned backfill helpers.
  */
 const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     const { broadcast, indexKeysFor, invalidateCache, recordCdc, schema, sql } = deps;
 
-    // Tracks which (table, aggregateIndex) pairs this ctx-db has already rebuilt
-    // so the lazy backfill runs exactly once per index per ctx-db instance.
+    // (table, aggregateIndex) pairs this ctx-db has already verified against the
+    // durable marker, so only the first touch per instance pays the lookup.
     const backfilled = new Set<string>();
 
     /**
@@ -201,23 +262,15 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     const rankBackfilled = new Set<string>();
 
     /**
-     * Lazily (re)build an aggregate companion the first time this ctx-db
-     * touches it. Idempotency model: each ctx-db tracks which (table, index)
-     * pairs it has already considered; the first touch (read or write) does a
-     * full rebuild from scratch — TRUNCATE then re-tally — so that an index
-     * declared after rows already existed (the "added to an existing schema"
-     * case) heals on first use. Subsequent touches in the same ctx-db skip the
-     * rebuild and trust the trigger-maintained deltas.
+     * Rebuild an aggregate companion unless the durable marker says it was
+     * already built from this exact definition. The rebuild is from scratch —
+     * TRUNCATE then re-tally — so an index declared after rows already existed
+     * heals on first use; after it, the write path's `-prev + next` deltas keep
+     * the companion exact and every later ctx-db trusts it.
      *
      * Must run **before** the triggering row write — otherwise the rebuild
-     * would double-count the row that's about to be stepped.
-     *
-     * **The memo is per ctx-db INSTANCE, and codegen builds one per dispatch** —
-     * so this full scan runs on the first companion touch of every request, and
-     * the incremental deltas it maintains are discarded and recomputed each
-     * time. That cost is why `ctx-db.ts`'s readers gate the companion behind
-     * `scanRefusesAny` on a soft-delete table rather than always preferring it.
-     * Making this marker durable (plan 315) is what retires that gate.
+     * would double-count the row that's about to be stepped. The marker is
+     * written last, so a rebuild cut short is simply redone.
      */
     const ensureBackfilledIndex = (tableName: string, index: AggregateIndexDefinitionLike): void => {
         const cacheKey = `${tableName}::${index.name}`;
@@ -227,8 +280,20 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
         }
 
         const aggTable = aggregateTableName(tableName, index.name);
-        const by = index.by ?? [];
         const softField = softDeleteFieldFor(tableName);
+        const signature = aggregateSignature(index, softField);
+        const recorded = runDrizzle<{ signature: string }>(
+            sql,
+            dsql`SELECT ${dsql.identifier("signature")} FROM ${dsql.identifier(AGGREGATE_STATE_TABLE)} WHERE ${dsql.identifier("companion")} = ${aggTable}`,
+        ).toArray()[0];
+
+        if (recorded?.signature === signature) {
+            backfilled.add(cacheKey);
+
+            return;
+        }
+
+        const by = index.by ?? [];
         const tallies = new Map<string, AggregateTally>();
         const rows = runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
 
@@ -263,6 +328,11 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
 
             runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(aggTable)} (${AGG_KEY}, ${AGG_VALUE}, ${AGG_COUNT}) VALUES ${rowsSql}`);
         }
+
+        runDrizzle(
+            sql,
+            dsql`INSERT INTO ${dsql.identifier(AGGREGATE_STATE_TABLE)} (${dsql.identifier("companion")}, ${dsql.identifier("signature")}) VALUES (${aggTable}, ${signature}) ON CONFLICT (${dsql.identifier("companion")}) DO UPDATE SET ${dsql.identifier("signature")} = excluded.${dsql.identifier("signature")}`,
+        );
 
         backfilled.add(cacheKey);
     };
@@ -569,8 +639,8 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     /* eslint-enable sonarjs/cognitive-complexity */
 
     /**
-     * Pre-write hook: ensure every aggregate counter on `tableName` is rebuilt
-     * once per ctx-db instance. The rebuild scans the live source table, so
+     * Pre-write hook: ensure every aggregate counter on `tableName` is built
+     * from its current definition. A rebuild scans the live source table, so
      * callers MUST invoke this before the row write — otherwise the new row
      * lands in both the rebuild and the `+1` step that follows.
      */
@@ -740,5 +810,5 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     };
 };
 
-export { createCompanionSync, insertRankRow, rankColumnsSql };
+export { createCompanionSync, insertRankRow, migrateAggregateState, rankColumnsSql };
 export type { CompanionSync, CompanionSyncDeps };

@@ -30,6 +30,7 @@ import { backfillSearchIndexesForTable } from "./ctx-db-backfill";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
 import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateCommitSeq } from "./ctx-db-commit-seq";
+import { migrateAggregateState } from "./ctx-db-companions";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { migrateRelayShapes } from "./ctx-db-relay-shapes";
@@ -289,8 +290,9 @@ const migrateGeoIndexes = (sql: SqlExec, tableName: string, definition: TableDef
 /**
  * Create the counter tables backing `aggregateIndex` declarations. One row per
  * distinct `by`-tuple; `__key__` is a canonical-JSON encoding so lookups stay
- * stable. Not populated here — the write path steps every counter and the
- * reader lazily backfills empties on first use (or `backfillAggregateIndexes`).
+ * stable. Not populated here — the first touch rebuilds a companion whose
+ * durable marker (`migrateAggregateState`) does not match its definition, and
+ * the write path steps every counter from then on.
  */
 const migrateAggregateIndexes = (sql: SqlExec, tableName: string, definition: TableDefinitionLike): void => {
     if (!definition.aggregateIndexes) {
@@ -311,8 +313,9 @@ const migrateAggregateIndexes = (sql: SqlExec, tableName: string, definition: Ta
         );
 
         // Alpha-era companion-rebuild caveat: a DO persisted before `__count__`
-        // existed gets the column added here (defaulted 0). The first read/write
-        // that touches the index re-runs the full backfill (`ensureBackfilled`),
+        // existed gets the column added here (defaulted 0). Such a DO predates the
+        // durable marker, so the first read/write that touches the index re-runs
+        // the full backfill (`ensureBackfilled`),
         // so the seeded 0s are overwritten with real per-op values — no stale
         // count survives. We pragma-check rather than blindly ALTER so a fresh
         // table (created above with the column) doesn't raise "duplicate column".
@@ -387,6 +390,7 @@ export const runShardMigrations = (
     // Before any table: the search backfill records its progress here, and it
     // runs inside the per-table pass below.
     migrateSearchState(sql);
+    migrateAggregateState(sql, schema);
 
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind === "global") {
