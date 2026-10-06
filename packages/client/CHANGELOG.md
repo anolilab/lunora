@@ -1,3 +1,10 @@
+## @lunora/client [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.180...@lunora/client@1.0.0-alpha.181) (2026-10-05)
+
+
+### Dependencies
+
+* **@visulima/storage-client:** 1.0.5 → 1.0.8
+
 ## @lunora/client [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.179...@lunora/client@1.0.0-alpha.180) (2026-10-05)
 
 
