@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.55...@lunora/platform@1.0.0-alpha.56) (2026-10-06)
+
+### Features
+
+* durable object class budget check and opt-in merged class ([#995](https://github.com/anolilab/lunora/issues/995)) ([fa5a78e](https://github.com/anolilab/lunora/commit/fa5a78ed39f03c5d39c9d209fc83c49f27bdb6f7))
+
 ## @lunora/platform [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.54...@lunora/platform@1.0.0-alpha.55) (2026-10-03)
 
 ### Features
