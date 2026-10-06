@@ -1,3 +1,16 @@
+## @lunora/client [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.185...@lunora/client@1.0.0-alpha.186) (2026-10-06)
+
+### Bug Fixes
+
+* **client:** encode the offline outbox through wire ([#1007](https://github.com/anolilab/lunora/issues/1007)) ([beafc21](https://github.com/anolilab/lunora/commit/beafc217a39c9515933ae9e3ea4cd35610123c48))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.198
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.182
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.115
+
 ## @lunora/client [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.184...@lunora/client@1.0.0-alpha.185) (2026-10-06)
 
 

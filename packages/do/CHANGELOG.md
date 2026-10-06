@@ -1,3 +1,15 @@
+## @lunora/do [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.197...@lunora/do@1.0.0-alpha.198) (2026-10-06)
+
+### Performance Improvements
+
+* **shard-engine:** make the aggregate backfill marker durable ([#1009](https://github.com/anolilab/lunora/issues/1009)) ([8d418a6](https://github.com/anolilab/lunora/commit/8d418a60a7fadf0e613e3480e908bc18c56054ef))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.125
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.115
+
 ## @lunora/do [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.196...@lunora/do@1.0.0-alpha.197) (2026-10-06)
 
 
