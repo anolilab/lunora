@@ -71,8 +71,7 @@
         "@lunora/client": "1.0.0-alpha.181",
         "@lunora/errors": "1.0.0-alpha.50",
         "@lunora/shard-engine": "1.0.0-alpha.112",
-        "@modelcontextprotocol/sdk": "catalog:mcp",
-        "@visulima/fs": "catalog:cli"
+        "@modelcontextprotocol/sdk": "catalog:mcp"
     },
     "devDependencies": {
         "@lunora/auth": "1.0.0-alpha.193",

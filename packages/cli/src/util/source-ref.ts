@@ -10,12 +10,9 @@
  * their branch (e.g. `1.0.0-alpha.1` → `alpha`), stable versions to `main`, and
  * the unpublished dev version (`0.0.0`) to the `alpha` channel.
  */
-import { fileURLToPath } from "node:url";
-
 import { LunoraError } from "@lunora/errors";
-import { findUpSync, readJsonSync } from "@visulima/fs";
-import { dirname, join } from "@visulima/path";
 
+import { resolveCliVersion } from "./cli-manifest";
 import type { Logger } from "./logger";
 
 /** Branch used when the CLI is unpublished (`0.0.0`) or its package.json can't be read. */
@@ -45,48 +42,6 @@ const SAFE_REF = /^[\w./@-]+$/;
 
 /** True when `ref` is a safe git ref: allowed charset only, and no `..` segment. */
 const isSafeRef = (ref: string): boolean => !ref.includes("..") && SAFE_REF.test(ref);
-
-/**
- * The running `@lunora/cli`'s own manifest: its directory and `version`. Walks
- * up from `startDirectory` (this module by default) to the `package.json` whose
- * `name` is `@lunora/cli`, so it works from `src/` under vitest, from a hoisted
- * `dist/packem_shared/` chunk, and from a published `node_modules` layout alike.
- * The name check matters: in a nested install the first `package.json` met is
- * some dependency's.
- */
-const findCliManifest = (startDirectory: string = dirname(fileURLToPath(import.meta.url))): { directory: string; version: unknown } | undefined => {
-    let version: unknown;
-    const path = findUpSync(
-        (directory) => {
-            try {
-                const manifest = readJsonSync(join(directory, "package.json")) as { name?: unknown; version?: unknown };
-
-                if (manifest.name === "@lunora/cli") {
-                    version = manifest.version;
-
-                    return "package.json";
-                }
-            } catch {
-                // No (or unreadable) package.json at this level — keep climbing.
-            }
-
-            return undefined;
-        },
-        { cwd: startDirectory },
-    );
-
-    return path === undefined ? undefined : { directory: dirname(path), version };
-};
-
-/**
- * The running `@lunora/cli`'s version, or `"0.0.0"` (the unpublished sentinel,
- * which also keeps the update notifier quiet) when it can't be determined.
- */
-const resolveCliVersion = (): string => {
-    const version = findCliManifest()?.version;
-
-    return typeof version === "string" && version !== "" ? version : "0.0.0";
-};
 
 /**
  * Map a CLI version string to the git ref it should fetch. The unpublished
@@ -369,9 +324,7 @@ const resolveTagVersions = async (names: Iterable<string>, tag: string): Promise
 };
 
 export {
-    findCliManifest,
     isImmutableRef,
-    resolveCliVersion,
     resolveCliVersionRef,
     resolveDistTag,
     resolvePinnedRepoRef,

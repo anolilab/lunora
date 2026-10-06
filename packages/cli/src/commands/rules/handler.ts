@@ -4,11 +4,11 @@ import { fileURLToPath } from "node:url";
 import { AGENT_RULES_DIR, detectAgentRules, LUNORA_SKILL_NAMES } from "@lunora/config";
 import { dirname, join, relative, resolve } from "@visulima/path";
 
+import { findCliPackageRoot } from "../../util/cli-manifest";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { findCliManifest } from "../../util/source-ref";
 import type { RulesOptions } from "./index";
 
 interface RunRulesOptions {
@@ -32,12 +32,12 @@ interface RunRulesResult {
 
 /**
  * Resolve the `skills/` directory bundled with `@lunora/cli`: the package root
- * (see `findCliManifest`) plus `skills`. Returns `undefined` when it can't be
+ * (see `findCliPackageRoot`) plus `skills`. Returns `undefined` when it can't be
  * located. `startDirectory` is injectable so the walk is unit-testable.
  */
 const resolveBundledSkillsDirectory = (startDirectory: string = dirname(fileURLToPath(import.meta.url))): string | undefined => {
-    const manifest = findCliManifest(startDirectory);
-    const skills = manifest === undefined ? undefined : join(manifest.directory, "skills");
+    const root = findCliPackageRoot(startDirectory);
+    const skills = root === undefined ? undefined : join(root, "skills");
 
     return skills !== undefined && existsSync(skills) ? skills : undefined;
 };

@@ -39,12 +39,12 @@ import { seedCommand } from "./commands/seed";
 import { shardsCommand } from "./commands/shards";
 import { verifyCommand } from "./commands/verify";
 import viewCommand from "./commands/view";
+import { resolveCliVersion } from "./util/cli-manifest";
 import { detectPackageManager } from "./util/detect-package-manager";
 import { EXIT_CODE, exitCodeForError } from "./util/exit-code";
 import type { Logger } from "./util/logger";
 import { createLogger, setCommandLogger } from "./util/logger";
 import { renderLunoraError } from "./util/render-lunora-error";
-import { resolveCliVersion } from "./util/source-ref";
 import { closestMatch } from "./util/suggest";
 import { maybeNotifyUpdate } from "./util/update-notifier";
 

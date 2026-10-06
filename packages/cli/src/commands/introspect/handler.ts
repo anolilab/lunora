@@ -62,9 +62,7 @@ interface IntrospectCommandResult {
 }
 
 /**
- * Resolve which server package the emitted imports should point at: the
- * `lunorash` umbrella's `lunorash/server`, else `@lunora/server`. Mirrors the
- * rule codegen uses for `_generated/*`.
+ * Which server package the emitted imports point at — see `projectUsesUmbrella`.
  */
 const resolveServerImport = (cwd: string): string => (projectUsesUmbrella(cwd) ? "lunorash/server" : "@lunora/server");
 

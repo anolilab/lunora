@@ -42,11 +42,10 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { readJsonSync } from "@visulima/fs";
 import { parse as parseJsonc } from "jsonc-parser";
 
-import { readProjectDependencyNames } from "./detect-framework";
 import { applyModify } from "./jsonc-edit";
+import { readProjectDependencyNames, readProjectManifest } from "./project-manifest";
 
 /**
  * The generated and derived paths a linter or formatter should skip, in
@@ -216,13 +215,7 @@ const detectLintTools = (projectRoot: string): LintTool[] => {
     // projects configure it there instead of a dotfile. Kept local rather than
     // pushed into the shared dependency reader — it is a prettier fact, not a
     // dependency fact.
-    const configuresPrettierInManifest = (): boolean => {
-        try {
-            return (readJsonSync(join(projectRoot, "package.json")) as Record<string, unknown>)["prettier"] !== undefined;
-        } catch {
-            return false;
-        }
-    };
+    const configuresPrettierInManifest = (): boolean => readProjectManifest(projectRoot)?.["prettier"] !== undefined;
 
     return ALL_TOOLS.filter(
         (tool) =>

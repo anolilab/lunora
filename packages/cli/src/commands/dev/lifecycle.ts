@@ -33,12 +33,12 @@ import {
     readDevServerState,
     readLiveDevServerState,
     readProjectDependencyNames,
+    readProjectManifest,
     resolveProjectTarget,
     targetRunsOwnDevServer,
     updateDevServerState,
 } from "@lunora/config";
 import { warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
-import { readJsonSync } from "@visulima/fs";
 
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { ReadinessProbe } from "../../util/dev-probe";
@@ -133,15 +133,11 @@ const detectDevFlavor = (cwd: string): DevFlavor => {
  */
 const viteDevCommand = (cwd: string): { args: ReadonlyArray<string>; command: string } => {
     const manager = detectPackageManager(cwd);
-    let script: string | undefined;
+    // A missing / malformed package.json falls through to the vite default.
+    const scripts = readProjectManifest(cwd)?.["scripts"];
+    const script = typeof scripts === "object" && scripts !== null ? (scripts as Record<string, unknown>)["dev"] : undefined;
 
-    try {
-        script = (readJsonSync(join(cwd, "package.json")) as { scripts?: Record<string, string> }).scripts?.dev;
-    } catch {
-        // Missing / malformed package.json — fall through to the vite default.
-    }
-
-    if (script === undefined || script.trim() === "" || script.includes("lunora")) {
+    if (typeof script !== "string" || script.trim() === "" || script.includes("lunora")) {
         const exec = execArgsFor(manager, "vite", ["dev"]);
 
         return { args: exec.args, command: exec.command };

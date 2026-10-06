@@ -1,8 +1,8 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { applyLintIgnores, BADGES, detectLintTools, isInteractive, readProjectDependencies } from "@lunora/config";
-import { readJsonSync, walkSync } from "@visulima/fs";
+import { applyLintIgnores, BADGES, detectLintTools, isInteractive, readProjectDependencies, readProjectManifest } from "@lunora/config";
+import { walkSync } from "@visulima/fs";
 import { basename, dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
 import { applyEdits, modify } from "jsonc-parser";
@@ -316,18 +316,11 @@ const resolveLunoraVersions = async (files: ReadonlyArray<string>, distTag: stri
             continue;
         }
 
-        try {
-            const parsed = JSON.parse(readFileSync(file, "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-
-            for (const section of ["dependencies", "devDependencies"] as const) {
-                for (const name of Object.keys(parsed[section] ?? {})) {
-                    if (isLunoraDep(name)) {
-                        names.add(name);
-                    }
-                }
+        // An unparseable package.json contributes nothing; stamping leaves it untouched too.
+        for (const name of Object.keys(readProjectDependencies(dirname(file)))) {
+            if (isLunoraDep(name)) {
+                names.add(name);
             }
-        } catch {
-            // Unparseable package.json — skip; stamping leaves it untouched too.
         }
     }
 
@@ -645,12 +638,8 @@ const isWorkspaceRoot = (directory: string): boolean => {
         return true;
     }
 
-    try {
-        return (readJsonSync(join(directory, "package.json")) as { workspaces?: unknown }).workspaces !== undefined;
-    } catch {
-        // Unreadable / invalid package.json — not a workspace root we can trust.
-        return false;
-    }
+    // An unreadable / invalid package.json is not a workspace root we can trust.
+    return readProjectManifest(directory)?.["workspaces"] !== undefined;
 };
 
 /**

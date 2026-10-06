@@ -1574,6 +1574,12 @@ const readProjectDependencies: (root: string) => Readonly<Record<string, string>
 const readProjectDependencyNames: (root: string) => ReadonlySet<string>;
 ```
 
+### `readProjectManifest` (const)
+
+```ts
+const readProjectManifest: (root: string) => Readonly<Record<string, unknown>> | undefined;
+```
+
 ### `readProjectRemotePreference` (const)
 
 ```ts

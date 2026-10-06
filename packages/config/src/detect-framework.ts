@@ -1,6 +1,4 @@
-import { join } from "node:path";
-
-import { readJsonSync } from "@visulima/fs";
+import { readProjectDependencyNames } from "./project-manifest";
 
 /**
  * The meta-frameworks Lunora can compose with, plus `"none"` for a standalone
@@ -54,26 +52,6 @@ const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: s
 const STANDALONE: FrameworkDetection = { class: "C", framework: "none" };
 
 /**
- * The project `package.json`'s merged `devDependencies` + `dependencies` map
- * (a runtime dependency wins a name declared in both), or `{}` on any failure —
- * a missing or malformed manifest must never crash a consumer, which falls back
- * to standalone behaviour. Public so sibling consumers (the CLI's `add`, `init`
- * and `doctor`) share one best-effort reader instead of re-parsing it.
- */
-const readProjectDependencies = (root: string): Readonly<Record<string, string>> => {
-    try {
-        const manifest = readJsonSync(join(root, "package.json")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-
-        return { ...manifest.devDependencies, ...manifest.dependencies };
-    } catch {
-        return {};
-    }
-};
-
-/** The names {@link readProjectDependencies} reads — empty on any failure. */
-const readProjectDependencyNames = (root: string): ReadonlySet<string> => new Set(Object.keys(readProjectDependencies(root)));
-
-/**
  * Whether the project depends on the unscoped `lunorash` umbrella rather than
  * the granular `@lunora/*` packages.
  *
@@ -112,4 +90,4 @@ const detectFramework = (root: string): FrameworkDetection => {
 };
 
 export type { DetectedFramework, FrameworkClass, FrameworkDetection };
-export { detectFramework, projectUsesUmbrella, readProjectDependencies, readProjectDependencyNames };
+export { detectFramework, projectUsesUmbrella };

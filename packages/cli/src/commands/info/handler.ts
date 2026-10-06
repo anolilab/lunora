@@ -4,10 +4,9 @@ import { join } from "node:path";
 import type { SchemaIR } from "@lunora/codegen";
 import { discoverSchema } from "@lunora/codegen";
 import type { LinkedProject } from "@lunora/config";
-import { readLinkedProject } from "@lunora/config";
+import { readLinkedProject, readProjectManifest } from "@lunora/config";
 import type { BindingManifest } from "@lunora/config/cloudflare";
 import { findWranglerFile } from "@lunora/config/cloudflare";
-import { readJsonSync } from "@visulima/fs";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
@@ -126,15 +125,9 @@ const summariseSchema = (schema: SchemaIR): SchemaSummary => {
 };
 
 const collectLunoraPackages = (projectRoot: string): ReadonlyArray<LunoraPackageInfo> => {
-    let pkg: unknown;
+    const pkg = readProjectManifest(projectRoot);
 
-    try {
-        pkg = readJsonSync(join(projectRoot, "package.json"));
-    } catch {
-        return [];
-    }
-
-    if (pkg === null || typeof pkg !== "object") {
+    if (pkg === undefined) {
         return [];
     }
 
@@ -142,7 +135,7 @@ const collectLunoraPackages = (projectRoot: string): ReadonlyArray<LunoraPackage
     const seen = new Map<string, string>();
 
     for (const section of sections) {
-        const block = (pkg as Record<string, unknown>)[section];
+        const block = pkg[section];
 
         if (block === null || typeof block !== "object") {
             continue;

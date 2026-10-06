@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { projectUsesUmbrella } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runAddFeature } from "../../src/commands/add/handler";
@@ -105,16 +104,6 @@ describe("lunora add", () => {
             // Add-on scopes the umbrella does not re-export are untouched.
             expect(rewriteUmbrellaImports('import { auth } from "@lunora/auth";')).toBe('import { auth } from "@lunora/auth";');
             expect(rewriteUmbrellaImports('import { useQuery } from "@lunora/react";')).toBe('import { useQuery } from "@lunora/react";');
-        });
-
-        it("projectUsesUmbrella detects the lunorash dependency", () => {
-            expect.assertions(2);
-
-            expect(projectUsesUmbrella(workdir)).toBe(false);
-
-            writeUmbrellaPackageJson();
-
-            expect(projectUsesUmbrella(workdir)).toBe(true);
         });
 
         it("applyDeps skips umbrella-provided base deps but keeps add-ons", () => {

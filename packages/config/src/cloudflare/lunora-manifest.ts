@@ -4,7 +4,7 @@
  * also explains why the record lives here and not in the wrangler config) and
  * `lunora.queueTuning` (see `reconcile-bindings.ts`).
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 import type { FormattingOptions } from "jsonc-parser";
 import { applyEdits, findNodeAtLocation, modify, parseTree } from "jsonc-parser";
@@ -51,10 +51,6 @@ interface Manifest {
  */
 const readManifest = (projectRoot: string): Manifest | undefined => {
     const path = join(projectRoot, "package.json");
-
-    if (!existsSync(path)) {
-        return undefined;
-    }
 
     try {
         const text = readFileSync(path, "utf8");
