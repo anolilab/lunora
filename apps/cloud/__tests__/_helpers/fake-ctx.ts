@@ -69,7 +69,9 @@ const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; userId?
 
     const facade = (table: string) => {
         return {
-            findMany: (args?: { where?: Row }) => Promise.resolve({ page: (tables[table] ?? []).filter((row) => matches(row, args?.where ?? {})) }),
+            // One page holding every match: `isDone` stops a draining reader (`collectAll`) after it.
+            findMany: (args?: { where?: Row }) =>
+                Promise.resolve({ continueCursor: null, isDone: true, page: (tables[table] ?? []).filter((row) => matches(row, args?.where ?? {})) }),
             // Pinned to the table, like the real facade: an id of another table answers null.
             get: (id: string) => Promise.resolve((tables[table] ?? []).find((row) => row["_id"] === id) ?? null),
         };

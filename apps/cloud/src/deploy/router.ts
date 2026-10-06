@@ -45,6 +45,7 @@ import {
     refuseAdminToken,
     withAdminToken,
 } from "./routes/tenant-admin";
+import { handleCloudflareCostsRoute, handleUsageSummaryRoute } from "./routes/usage";
 
 interface HttpRouterLike {
     fetch: (request: Request, environment?: unknown, context?: ExecutionContextLike) => Promise<Response>;
@@ -705,6 +706,31 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleOtlpLogsRoute, method: "POST", path: "/v1/logs", spec: { auth: "deployKey" } },
         { handler: handleOtlpMetricsRoute, method: "POST", path: "/v1/metrics", spec: { auth: "deployKey" } },
         { handler: handleUsageRoute, method: "POST", path: "/v1/usage", spec: { auth: "deployKey" } },
+        // Agent-queryable billing (plan 365 W6): read-only, org-wide deploy key, opted in as tools.
+        {
+            handler: handleUsageSummaryRoute,
+            method: "POST",
+            path: "/v1/usage/summary",
+            spec: {
+                auth: "deployKey",
+                mcp: {
+                    description:
+                        "An organization's usage and estimated spend for a billing period: cost per meter, spend cap and warning threshold, level (ok/warn/breach), suspension, and the current period's projected spend (needs organizationId; optional periodStart, a UTC month start in epoch ms). Needs an organization-wide deploy key.",
+                },
+            },
+        },
+        {
+            handler: handleCloudflareCostsRoute,
+            method: "POST",
+            path: "/v1/usage/cloudflare-costs",
+            spec: {
+                auth: "deployKey",
+                mcp: {
+                    description:
+                        "The real Cloudflare spend by product of a Cloudflare account the organization connected, for its most recent charge period (needs organizationId + id of the connected account; the token needs Billing Read). Needs an organization-wide deploy key.",
+                },
+            },
+        },
         // session — dashboard callers; the delegated mutation `assertMember`s.
         { handler: handleAdminRoute, method: "POST", path: "/v1/admin", spec: { auth: "session" } },
         { handler: handleSessionRollbackRoute, method: "POST", path: "/v1/rollback", spec: { auth: "session" } },

@@ -131,6 +131,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "cells:register": lunora_cells_5.register as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:connect": lunora_cloudflare_accounts_6.connect as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:costs": lunora_cloudflare_accounts_6.costs as unknown as RegisteredLunoraFunction,
+    "cloudflare_accounts:costTarget": lunora_cloudflare_accounts_6.costTarget as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:disconnect": lunora_cloudflare_accounts_6.disconnect as unknown as RegisteredLunoraFunction,
     "cloudflare_accounts:list": lunora_cloudflare_accounts_6.list as unknown as RegisteredLunoraFunction,
     "dashboards:create": lunora_dashboards_7.create as unknown as RegisteredLunoraFunction,
@@ -243,6 +244,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "uptime:prune": lunora_uptime_30.prune as unknown as RegisteredLunoraFunction,
     "uptime:recent": lunora_uptime_30.recent as unknown as RegisteredLunoraFunction,
     "uptime:summary": lunora_uptime_30.summary as unknown as RegisteredLunoraFunction,
+    "usage:billingSummary": lunora_usage_31.billingSummary as unknown as RegisteredLunoraFunction,
     "usage:enforceSpendCaps": lunora_usage_31.enforceSpendCaps as unknown as RegisteredLunoraFunction,
     "usage:ingest": lunora_usage_31.ingest as unknown as RegisteredLunoraFunction,
     "usage:overageWatermark": lunora_usage_31.overageWatermark as unknown as RegisteredLunoraFunction,
@@ -967,6 +969,7 @@ export interface Caller {
     cloudflare_accounts: {
         connect: (args: { accountId: unknown; displayName?: unknown; ciphertext: unknown; iv: unknown; permissions: Array<unknown>; tokenExpiresAt?: number; workersSubdomain: unknown; id?: Id<"cloudflareAccounts">; label: unknown; organizationId: Id<"organizations"> }) => Promise<Id<"cloudflareAccounts">>;
         costs: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<{ status: "error" | "no-permission" | "ok" | "unauthorized" | "unconfigured"; view: null | { currency: string; periodEnd: string | null; periodStart: string | null; products: { costMinor: number; currency: string; product: string; quantity: null | number; unit: null | string; }[]; totalMinor: number } }>;
+        costTarget: (args: { deployKey: unknown; id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<{ accountId: string; ciphertext: string; iv: string; permissions: string[]; }>;
         disconnect: (args: { id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }) => Promise<void>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"cloudflareAccounts">; accountId: string; createdAt: number; displayName?: string; label: string; organizationId: Id<"organizations">; permissions: string[]; tokenExpiresAt?: number; verifiedAt: number; workersSubdomain: string }[]>;
     };
@@ -1129,6 +1132,7 @@ export interface Caller {
         summary: (args: { organizationId: Id<"organizations"> }) => Promise<{ avgLatencyMs?: number; consecutiveFailures: number; deploymentId: Id<"deployments">; lastCheckedAt: number; ok: boolean; sampleCount: number; upFraction: number }[]>;
     };
     usage: {
+        billingSummary: (args: { deployKey: unknown; organizationId: Id<"organizations">; periodStart?: number }) => Promise<{ breakdown: import("../../src/billing/spend.js").SpendLine[]; level: import("../../src/billing/spend.js").SpendLevel; periodEnd: number; periodStart: number; projectedSpendMinor: number; spendMinor: number; suspended: boolean; capMinor: number | null; warnMinor: number | null }>;
         enforceSpendCaps: (args?: {}) => Promise<{ suspended: number; unsuspended: number; warned: number; }>;
         ingest: (args: { deployKey: unknown; deploymentId?: Id<"deployments">; kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths"; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         overageWatermark: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ debitedCredits: number; }>;
@@ -1233,6 +1237,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     cloudflare_accounts: {
         connect: (args) => callRegistered(context, "cloudflare_accounts:connect", args),
         costs: (args) => callRegistered(context, "cloudflare_accounts:costs", args),
+        costTarget: (args) => callRegistered(context, "cloudflare_accounts:costTarget", args),
         disconnect: (args) => callRegistered(context, "cloudflare_accounts:disconnect", args),
         list: (args) => callRegistered(context, "cloudflare_accounts:list", args),
     },
@@ -1395,6 +1400,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         summary: (args) => callRegistered(context, "uptime:summary", args),
     },
     usage: {
+        billingSummary: (args) => callRegistered(context, "usage:billingSummary", args),
         enforceSpendCaps: (args) => callRegistered(context, "usage:enforceSpendCaps", args),
         ingest: (args) => callRegistered(context, "usage:ingest", args),
         overageWatermark: (args) => callRegistered(context, "usage:overageWatermark", args),

@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import type { PeriodUsage, SpendAccrual, SpendCapDecision, UsageMeter } from "../src/billing/spend";
+import type { PeriodUsage, SpendAccrual, SpendCapDecision, SpendLevel, SpendLimits, SpendLine, UsageMeter } from "../src/billing/spend";
 import {
     accruedSpend,
     estimatedSpendMinor,
@@ -9,6 +9,7 @@ import {
     isUsageMeter,
     MAX_SPEND_THRESHOLD_MINOR,
     periodStartOf,
+    spendBreakdown,
 } from "../src/billing/spend";
 import type { UsageTotals } from "../src/billing/usage";
 import { aggregateUsage, isBillableUsage } from "../src/billing/usage";
@@ -16,7 +17,7 @@ import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { fireSpendAlerts } from "./alerts";
-import { assertMember, assertRowInOrg, authorizeDeployKeyRow } from "./authz";
+import { assertMember, assertRowInOrg, authorizeBillingKey, authorizeDeployKeyRow } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
@@ -332,6 +333,79 @@ export const spendStatus = query
         });
 
         return { ...decision, periodStart, warnCustomized: organization.spendWarnMinor != null };
+    });
+
+/** Shortest elapsed span a projection extrapolates from, so the first minutes of a month do not project a runaway. */
+const MIN_PROJECTION_ELAPSED_MS = 60 * 60 * 1000;
+
+/** What an agent reads about one period's bill (`POST /v1/usage/summary`, Lago's `current_usage` shape). */
+export interface BillingSummary extends SpendLimits {
+    /** Per-meter cost, most expensive first — at most one line per rate-card meter. */
+    breakdown: SpendLine[];
+    level: SpendLevel;
+    periodEnd: number;
+    periodStart: number;
+    /** The period's spend extrapolated linearly to its end; equal to `spendMinor` for a closed period. */
+    projectedSpendMinor: number;
+    spendMinor: number;
+    suspended: boolean;
+}
+
+/**
+ * One period's usage, estimated spend, thresholds, level and current-period
+ * projection for an org (plan 365 W6) — the agent-facing read behind the
+ * `usage.summary` MCP tool. SYSTEM (the route), authorized by an org-wide deploy
+ * key; every row is read for the key's organization, never the request's.
+ * `periodStart` must be a month start no later than the current one.
+ */
+export const billingSummary = internalQuery
+    .input({ deployKey: boundedString(LIMITS.token), organizationId: v.id("organizations"), periodStart: v.optional(v.number()) })
+    .query(async ({ ctx: context, args: { deployKey, organizationId, periodStart: requested } }): Promise<BillingSummary> => {
+        const verified = await authorizeBillingKey(context, organizationId, deployKey);
+        const current = periodStartOf(context.now);
+        const periodStart = requested ?? current;
+
+        if (!Number.isFinite(periodStart) || periodStart < 0 || periodStart > current || periodStartOf(periodStart) !== periodStart) {
+            throw new LunoraError("BAD_REQUEST", "periodStart must be the first instant (UTC) of the current or an earlier month");
+        }
+
+        const organization = (await context.db.get(verified)) as null | {
+            plan: string;
+            spendCapMinor?: null | number;
+            spendWarnMinor?: null | number;
+            suspendedAt?: null | number;
+        };
+
+        if (!organization) {
+            throw new LunoraError("NOT_FOUND", "organization not found");
+        }
+
+        const usage = await orgPeriodUsage(context, verified, periodStart);
+        const decision = evaluateSpendCap({
+            capMinorOverride: organization.spendCapMinor,
+            plan: organization.plan,
+            usage,
+            warnMinorOverride: organization.spendWarnMinor,
+        });
+        // Any instant 32 days in falls in the next month; its month start is this period's end.
+        const periodEnd = periodStartOf(periodStart + 32 * 24 * 60 * 60 * 1000);
+        const elapsed = Math.max(context.now - periodStart, MIN_PROJECTION_ELAPSED_MS);
+        const projectedSpendMinor =
+            periodStart === current
+                ? Math.round((decision.spendMinor * (periodEnd - periodStart)) / Math.min(elapsed, periodEnd - periodStart))
+                : decision.spendMinor;
+
+        return {
+            breakdown: spendBreakdown(usage),
+            capMinor: decision.capMinor,
+            level: decision.level,
+            periodEnd,
+            periodStart,
+            projectedSpendMinor,
+            spendMinor: decision.spendMinor,
+            suspended: organization.suspendedAt != null,
+            warnMinor: decision.warnMinor,
+        };
     });
 
 /**

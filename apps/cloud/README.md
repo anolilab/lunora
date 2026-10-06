@@ -543,6 +543,23 @@ suspended org's box tenants keep serving: the box routing table does not read
 the suspension today. `cloudflare-workers` tenants run on the customer's own
 account and are not edge-blocked either.
 
+**Billing for agents** (plan 365 W6). Two read-only, deploy-key routes are
+opted in as tools on the MCP surface (`POST /v1/mcp`):
+
+| Tool                     | Route                             | Body                                         | Answers                                                                                                                                       |
+| ------------------------ | --------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `usage.summary`          | `POST /v1/usage/summary`          | `organizationId`, optional `periodStart`     | per-meter cost (`spendBreakdown`), `spendMinor`, `capMinor`, `warnMinor`, `level`, `suspended`, and `projectedSpendMinor` for the open period |
+| `usage.cloudflare-costs` | `POST /v1/usage/cloudflare-costs` | `organizationId`, `id` (a connected account) | the account's Billable Usage view for its latest charge period, as the costs tab shows it                                                     |
+
+Both take the key as `Authorization: Bearer`, and both need an
+organization-wide deploy key (`authorizeBillingKey`). An ingest key, a
+project-scoped key, a revoked one or another org's key is refused. Every row is
+read for the key's organization. The projection is linear over the elapsed
+part of the UTC month, with at least one hour elapsed. The cost route unseals
+the connected account's token at the edge and never returns it. It bounds
+Cloudflare's product lines before answering. `POST /v1/usage` (the metering
+write) and every admin-token route stay off the MCP surface.
+
 ### Tenant secrets (`lunora/secrets.ts`, `src/secrets/crypto.ts`, §7)
 
 Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:

@@ -205,6 +205,7 @@ export interface InternalApiTypes {
     };
     cloudflare_accounts: {
         connect: FunctionReference<"mutation", { accountId: unknown; displayName?: unknown; ciphertext: unknown; iv: unknown; permissions: Array<unknown>; tokenExpiresAt?: number; workersSubdomain: unknown; id?: Id<"cloudflareAccounts">; label: unknown; organizationId: Id<"organizations"> }, Id<"cloudflareAccounts">>;
+        costTarget: FunctionReference<"query", { deployKey: unknown; id: Id<"cloudflareAccounts">; organizationId: Id<"organizations"> }, { accountId: string; ciphertext: string; iv: string; permissions: string[]; }>;
     };
     deploy_keys: {
         ingestKeyCipher: FunctionReference<"query", { deployKey?: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
@@ -270,6 +271,7 @@ export interface InternalApiTypes {
         prune: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     usage: {
+        billingSummary: FunctionReference<"query", { deployKey: unknown; organizationId: Id<"organizations">; periodStart?: number }, { breakdown: import("../../src/billing/spend.js").SpendLine[]; level: import("../../src/billing/spend.js").SpendLevel; periodEnd: number; periodStart: number; projectedSpendMinor: number; spendMinor: number; suspended: boolean; capMinor: number | null; warnMinor: number | null }>;
         enforceSpendCaps: FunctionReference<"mutation", {}, { suspended: number; unsuspended: number; warned: number; }>;
         overageWatermark: FunctionReference<"query", { organizationId: Id<"organizations">; periodStart: number }, { debitedCredits: number; }>;
         record: FunctionReference<"mutation", { deploymentId?: Id<"deployments">; kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths"; organizationId: Id<"organizations">; periodStart: number; quantity: number }, Id<"platformUsage">>;
