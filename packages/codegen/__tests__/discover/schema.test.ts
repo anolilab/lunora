@@ -58,6 +58,25 @@ describe("discoverSchema", () => {
         expect(tasks?.shape.status?.members?.map((member) => member.literalValue)).toStrictEqual(['"todo"', '"done"']);
     });
 
+    it('keeps a literal computed column (`defineTable({ ["email"]: … })`) in the table shape', () => {
+        expect.assertions(2);
+
+        // Computed names used to be skipped outright, dropping the column from
+        // `Doc_*` and the emitted schema although it exists at runtime.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                users: defineTable({ name: v.string(), ["email"]: v.string() }),
+            });
+        `);
+
+        const users = discoverSchema(project, schemaPath).tables.find((table) => table.name === "users");
+
+        expect(Object.keys(users?.shape ?? {})).toStrictEqual(["name", "email"]);
+        expect(users?.shape.email?.kind).toBe("string");
+    });
+
     it("captures `.externallyManaged()` into the table IR; defaults to false", () => {
         expect.assertions(2);
 
