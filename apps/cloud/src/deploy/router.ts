@@ -36,7 +36,14 @@ import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRo
 import { handleOtlpLogsRoute, handleOtlpMetricsRoute, handleOtlpTracesRoute } from "./routes/otlp";
 import type { RouterEnv } from "./routes/shared";
 import { jsonError, otlpBearer, rejected, requireContext, withContext } from "./routes/shared";
-import { handleCellRegisterRoute, handlePreviewAuthRoute, handleTenantCustomDomainRoute, handleTenantPlanRoute } from "./routes/tenant-admin";
+import {
+    handleCellRegisterRoute,
+    handlePreviewAuthRoute,
+    handleTenantCustomDomainRoute,
+    handleTenantPlanRoute,
+    refuseAdminToken,
+    withAdminToken,
+} from "./routes/tenant-admin";
 
 interface HttpRouterLike {
     fetch: (request: Request, environment?: unknown, context?: ExecutionContextLike) => Promise<Response>;
@@ -711,14 +718,6 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleWebhookRoute, method: "POST", path: "/v1/github/webhook", spec: { auth: "webhookHmac" } },
         // tailSecret — the dispatch-namespace tail worker's shared secret.
         { handler: handleLogsTailRoute, method: "POST", path: "/v1/logs/tail", spec: { auth: "tailSecret" } },
-        // adminToken — the dispatcher/platform trust boundary (LUNORA_ADMIN_TOKEN).
-        { handler: handleTenantPlanRoute, method: "GET", path: "/v1/tenants/plan", spec: { auth: "adminToken" } },
-        { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken" } },
-        { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
-        { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
-        // The build queue: claimed by the Worker's own `scheduled()`, run by each build's runner alarm — both in-process.
-        { handler: handleBuildDispatchRoute, method: "POST", path: "/v1/builds/dispatch", spec: { auth: "adminToken" } },
-        { handler: handleBuildRunRoute, method: "POST", path: "/v1/builds/run", spec: { auth: "adminToken" } },
     ];
 
     // The MCP surface (GAPS.md Ring-3 #8): opted-in tool routes are exposed to
@@ -751,23 +750,56 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleBoxDiagnoseRoute, method: "POST", path: "/v1/boxes/diagnose", spec: { auth: "session" } },
         // session — a customer's own Cloudflare account (cloudflare-workers); the connect mutation asserts owner/admin.
         { handler: handleCloudflareAccountConnectRoute, method: "POST", path: "/v1/cloudflare-accounts", spec: { auth: "session" } },
-        // lunora-hostd releases (plan 458 G17): stored and rolled out by the operator, fetched by boxes.
-        { handler: handleHostdReleaseRoute, method: "POST", path: "/v1/hostd/releases", spec: { auth: "adminToken" } },
-        { handler: handleHostdRolloutRoute, method: "POST", path: "/v1/hostd/rollout", spec: { auth: "adminToken" } },
+        // lunora-hostd releases (plan 458 G17): fetched by boxes; stored and rolled out through the admin table.
         { handler: handleHostdManifestRoute, method: "GET", path: HOSTD_MANIFEST_PATH, spec: { auth: "boxKey" } },
     ];
 
-    // Boot scanner: throws here (at construction) if a route is unclassified.
-    assertRoutesClassified(routes);
+    // The admin table — the dispatcher/platform trust boundary (`LUNORA_ADMIN_TOKEN`).
+    // Its own router seam: every route here is guarded by `withAdminToken` and
+    // every route above by `refuseAdminToken`, so the admin token authorizes this
+    // table and nothing else, and nothing else authorizes this table. Kept out of
+    // `toolRoutes` so the MCP surface — which calls handlers directly, past these
+    // guards — can never dispatch into it.
+    const adminRoutes: RegisteredRoute<RouteHandler>[] = [
+        { handler: handleTenantPlanRoute, method: "GET", path: "/v1/tenants/plan", spec: { auth: "adminToken" } },
+        { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken" } },
+        { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
+        { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
+        // The build queue: claimed by the Worker's own `scheduled()`, run by each build's runner alarm — both in-process.
+        { handler: handleBuildDispatchRoute, method: "POST", path: "/v1/builds/dispatch", spec: { auth: "adminToken" } },
+        { handler: handleBuildRunRoute, method: "POST", path: "/v1/builds/run", spec: { auth: "adminToken" } },
+        // lunora-hostd releases (plan 458 G17): stored and rolled out by the operator.
+        { handler: handleHostdReleaseRoute, method: "POST", path: "/v1/hostd/releases", spec: { auth: "adminToken" } },
+        { handler: handleHostdRolloutRoute, method: "POST", path: "/v1/hostd/rollout", spec: { auth: "adminToken" } },
+    ];
+
+    // A route's classification must match the table it sits in, or its guard would be the wrong one.
+    const misplaced = routes.find((route) => route.spec.auth === "adminToken") ?? adminRoutes.find((route) => route.spec.auth !== "adminToken");
+
+    if (misplaced) {
+        throw new Error(`route ${misplaced.method} ${misplaced.path} is classified ${misplaced.spec.auth} but sits in the wrong table`);
+    }
+
+    // Boot scanner: throws here (at construction) if a route is unclassified (or duplicated across the tables).
+    const guardedRoutes: RegisteredRoute<RouteHandler>[] = [
+        ...routes.map((route) => {
+            return { ...route, handler: refuseAdminToken(route.handler) };
+        }),
+        ...adminRoutes.map((route) => {
+            return { ...route, handler: withAdminToken(route.handler) };
+        }),
+    ];
+
+    assertRoutesClassified(guardedRoutes);
 
     // `withContext` at the table, once, rather than a null check opening every
     // handler — see `requireContext`. Wrapping here also means a new route cannot
     // forget it.
-    const exactRoutes = routes.filter((route) => !isRoutePattern(route.path));
+    const exactRoutes = guardedRoutes.filter((route) => !isRoutePattern(route.path));
     const postRoutes = new Map(exactRoutes.filter((route) => route.method === "POST").map((route) => [route.path, withContext(route.handler)]));
     const getRoutes = new Map(exactRoutes.filter((route) => route.method === "GET").map((route) => [route.path, withContext(route.handler)]));
     // Routes with a `:parameter` segment, tried only when no exact path matched.
-    const patternRoutes = routes
+    const patternRoutes = guardedRoutes
         .filter((route) => isRoutePattern(route.path))
         .map((route) => {
             return { handler: withContext(route.handler), method: route.method, path: route.path };

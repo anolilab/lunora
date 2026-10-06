@@ -8,7 +8,8 @@ import { randomBase64Url } from "../src/boxes/encoding";
 import { versionKey, versionsOf } from "../src/boxes/hostd-releases";
 import type { RolloutTarget } from "../src/boxes/rollout";
 import { planHostdRollout, resumeHostdRollouts, runHostdRollout, withdrawDesiredRelease } from "../src/boxes/rollout";
-import { handleHostdManifestRoute, handleHostdReleaseRoute, handleHostdRolloutRoute } from "../src/deploy/routes/hostd";
+import { createDeployRouter } from "../src/deploy/router";
+import { handleHostdManifestRoute, handleHostdRolloutRoute } from "../src/deploy/routes/hostd";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import type { HostdReleaseManifest } from "../src/hostd/release";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -57,8 +58,9 @@ describe("the hostd release store", () => {
 describe("the release routes", () => {
     it("refuses to store a release without the admin token, and refuses the placeholder key with it", async () => {
         const { envelope } = signedRelease();
+        // Through the router: the admin-token gate is its admin table's, not the handler's.
         const post = (headers: Record<string, string>) =>
-            handleHostdReleaseRoute(
+            createDeployRouter().fetch(
                 new Request("https://cloud.test/v1/hostd/releases", {
                     body: JSON.stringify({ envelope: { ...envelope, keyId: "ed25519-placeholder" } }),
                     headers,
@@ -457,7 +459,8 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
     it("refuses without the admin token, and without the box bindings", async () => {
         const environment = environmentWith([], []);
 
-        await expect(handleHostdRolloutRoute(new Request("https://cloud.test/v1/hostd/rollout", { method: "POST" }), environment)).resolves.toMatchObject({
+        // The admin-token gate is the router's admin table, so the unauthenticated half goes through it.
+        await expect(createDeployRouter().fetch(new Request("https://cloud.test/v1/hostd/rollout", { method: "POST" }), environment)).resolves.toMatchObject({
             status: 401,
         });
         await expect(handleHostdRolloutRoute(rolloutRequest({ releaseId: "x" }), { ...environment, DB: undefined })).resolves.toMatchObject({ status: 503 });
