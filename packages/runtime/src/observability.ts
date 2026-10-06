@@ -31,11 +31,15 @@ export interface ObservabilityEvent {
     /**
      * Populated on `ok === false`. `code`/`status` mirror the LunoraError
      * taxonomy; `message` is the human-readable string (may include user
-     * input — sinks that ship to third parties should scrub it).
+     * input — sinks that ship to third parties should scrub it). `name` and
+     * `stack` are the thrown `Error`'s, captured where it was thrown — inside
+     * the shard for a handler error — and are never sent to the client.
      */
     error?: {
         code: string;
         message: string;
+        name?: string;
+        stack?: string;
         status: number;
     };
 
@@ -357,6 +361,7 @@ export const flushSink = (sink: ObservabilitySink | undefined, context?: Observa
 // itself never emits them — so such helpers would have no possible caller. The
 // DO applies the identical swallow inline in its own `recordSpan`/`recordMetric`.
 
+export { type ErrorDetail } from "../../../shared/error-detail";
 export { type LogEvent } from "../../../shared/log-event";
 export { type LogFields } from "../../../shared/log-fields";
 export { type MetricEvent, type MetricKind } from "../../../shared/metric-event";

@@ -217,6 +217,52 @@ describe("observabilitySink", () => {
             expect(events[0]!.error?.code).toBe("SHARD_ERROR");
         });
 
+        it("reports the shard's own error detail (stack included) and keeps it from the client", async () => {
+            expect.assertions(4);
+
+            const { events, sink } = collectEvents();
+            const detail = {
+                code: "INTERNAL_SERVER_ERROR",
+                message: "db down",
+                name: "TypeError",
+                stack: "TypeError: db down\n    at handler (messages.ts:3:9)",
+            };
+            let asked: null | string = null;
+
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) => {
+                            asked = request.headers.get("x-lunora-want-error-detail");
+
+                            return Response.json(
+                                { error: { code: "INTERNAL_SERVER_ERROR", message: "internal error" } },
+                                { headers: { "x-lunora-error-detail": encodeURIComponent(JSON.stringify(detail)) }, status: 500 },
+                            );
+                        },
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ observability: sink, shardDO: namespace });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            expect(asked).toBe("1");
+            expect(events[0]!.error).toStrictEqual({ ...detail, status: 500 });
+            expect(response.headers.get("x-lunora-error-detail")).toBeNull();
+            await expect(response.text()).resolves.not.toContain("stack");
+        });
+
         it("reports ok=false with the thrown error when the fetch throws", async () => {
             expect.assertions(6);
 

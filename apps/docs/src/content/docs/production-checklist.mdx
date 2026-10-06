@@ -115,7 +115,8 @@ Lunora has two migration surfaces; see [Migrations](/docs/concepts/migrations).
 ## Observability
 
 - [ ] An observability sink is configured on `createWorker`: `otlpSink` to a
-      collector, `sentrySink`, `analyticsEngineSink`, or several via
+      collector, `webhookSink` to an error tracker (Sentry, PostHog, …),
+      `analyticsEngineSink`, or several via
       `combineSinks`. Without one, a deployed worker's telemetry goes nowhere.
       See [Observability](/docs/concepts/observability).
 - [ ] You know where errors surface: the Studio groups error events into

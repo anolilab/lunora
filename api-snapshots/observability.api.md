@@ -1251,6 +1251,17 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `ErrorDetail` (interface)
+
+```ts
+interface ErrorDetail {
+    code?: string;
+    message: string;
+    name: string;
+    stack?: string;
+}
+```
+
 ### `EvaluationInput` (interface)
 
 ```ts
@@ -1285,6 +1296,7 @@ interface ExplainIssueSuccess extends ExplainIssueGrounding {
 ```ts
 interface LogEvent {
     args: unknown[];
+    error?: ErrorDetail;
     eventName?: string;
     fields?: LogFields;
     functionPath: string;

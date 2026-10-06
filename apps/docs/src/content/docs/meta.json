@@ -98,6 +98,7 @@
         "concepts/environments",
         "production-checklist",
         "concepts/observability",
+        "concepts/error-tracking",
         "architecture",
         "non-goals",
         "limits",

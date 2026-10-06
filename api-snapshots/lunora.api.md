@@ -4537,6 +4537,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `ReportedError` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ResolvedSecurity` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4602,10 +4606,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `SecurityOptions` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `SentrySinkOptions` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4698,6 +4698,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `SpanEvent` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `StackFrame` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4909,6 +4913,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `parseStackFrames` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `pipelineLogSink` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4961,11 +4969,11 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `sentrySink` (const)
+### `toAirbyteMessages` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `toAirbyteMessages` (const)
+### `toError` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

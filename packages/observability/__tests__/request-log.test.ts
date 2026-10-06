@@ -926,6 +926,12 @@ describe("renderLogMessage", () => {
         expect(renderLogMessage(["loaded", 3, { id: "x" }, true])).toBe('loaded 3 {"id":"x"} true');
     });
 
+    it("renders an Error as `Name: message`, not the `{}` JSON.stringify gives it", () => {
+        expect.assertions(1);
+
+        expect(renderLogMessage(["failed", new TypeError("db down")])).toBe("failed TypeError: db down");
+    });
+
     it("falls back to String() for an unserialisable (circular) value rather than throwing", () => {
         expect.assertions(1);
 

@@ -1,0 +1,232 @@
+---
+title: Error tracking
+description: Send Lunora's failed calls and error logs to Sentry, PostHog, Datadog, or any error tracker, with the thrown error's real stack and nothing extra in your client responses.
+related:
+    - to: /docs/concepts/observability
+    - to: /docs/concepts/error-handling
+---
+
+Lunora has no per-vendor sinks. An error tracker is one of two things:
+
+- **An SDK you already run** (Sentry, Bugsnag, Rollbar, …): a plain sink object
+  whose `onRpc` / `onLog` hand the error to the SDK. `toError()` turns the
+  event's error back into a throwable with its original stack.
+- **An HTTP ingestion API** (PostHog, Datadog, Axiom, Better Stack, …): a
+  [`webhookSink`](/docs/concepts/observability#sinks) whose `transform` returns
+  the vendor's request body. `parseStackFrames()` turns the stack into frames
+  for the APIs that want them parsed.
+
+## What reaches your tracker
+
+**A failed call.** Every query, mutation, and action produces one RPC event
+(`onRpc`, or `transform` on a `webhookSink`). When it fails, `event.error` is
+set:
+
+| Field     | What it is                                                                                                             |
+| --------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `code`    | The error code (`"CONFLICT"`, `"INTERNAL_SERVER_ERROR"`, a code you threw with `LunoraError`, …)                       |
+| `status`  | The HTTP status the client received. `>= 500` is a server fault; a 4xx is usually the caller's.                        |
+| `message` | The **unredacted** message. For an unexpected throw the client got `"internal error"`; your tracker gets the real one. |
+| `name`    | The thrown error's class name (`"TypeError"`, `"ConflictError"`, …)                                                    |
+| `stack`   | The thrown error's stack, captured inside the Durable Object where your handler threw (capped at 8 KiB)                |
+
+`name`, `stack`, and the unredacted `message` travel from the shard to the
+worker on an internal channel that the worker strips before replying, so they
+never appear in a client response, for single calls and batched calls alike.
+
+The event also carries `functionPath`, `durationMs`, `shardKey`, and the
+`traceId` / `spanId` of the call, so an error in your tracker links to its
+trace in your collector.
+
+**An error you log.** Pass the `Error` to `ctx.log`, as an argument or as a
+field:
+
+```ts
+try {
+    await charge(order);
+} catch (error) {
+    ctx.log.error("charge failed", { err: error, orderId: order._id });
+}
+```
+
+The log event (`onLog`, or `transformLog` on a `webhookSink`) gets the same
+`error` (`name`, `message`, `stack`, and `code` when the error has one), plus
+`level`, `message`, `fields`, `functionPath`, `traceId`, and the acting
+`userId`. A line that logged no `Error` has no `error`.
+
+## Wire it once, to both halves
+
+RPC events come from the **worker**; `ctx.log`, `ctx.trace`, and `ctx.metrics`
+come from the **shard** (the Durable Object). Build the sink in one place and
+pass it to both:
+
+```ts title="src/server/error-tracking.ts"
+import type { ObservabilitySink } from "@lunora/runtime";
+
+export const errorTracking = (env: Env): ObservabilitySink => {
+    // one of the recipes below
+};
+```
+
+```ts title="src/server/index.ts"
+import { createWorker } from "@lunora/runtime";
+
+import { createShardDO } from "../../lunora/_generated/shard";
+import { errorTracking } from "./error-tracking";
+
+export const ShardDO = createShardDO({
+    observability: (env) => errorTracking(env as unknown as Env),
+});
+
+let worker: ReturnType<typeof createWorker> | undefined;
+
+export default {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+        worker ??= createWorker({ observability: errorTracking(env), shardDO: env.SHARD });
+
+        return worker.fetch(request, env, ctx);
+    },
+};
+```
+
+To keep your collector too, combine them:
+`combineSinks(otlpSink({ … }), errorTracking(env))`.
+
+## Sentry
+
+Sentry ingests an envelope format rather than JSON, so use its SDK.
+Initialize [`@sentry/cloudflare`](https://docs.sentry.io/platforms/javascript/guides/cloudflare/)
+in the worker and the Durable Object (`Sentry.withSentry` around the worker
+export, `Sentry.instrumentDurableObjectWithSentry` around `ShardDO`), then hand
+it the events:
+
+```ts
+import type { ObservabilitySink } from "@lunora/runtime";
+import { toError } from "@lunora/runtime";
+import * as Sentry from "@sentry/cloudflare";
+
+export const errorTracking = (): ObservabilitySink => {
+    return {
+        onLog: (event) => {
+            if (event.error) {
+                Sentry.captureException(toError(event.error), {
+                    extra: event.fields,
+                    level: event.level === "fatal" ? "fatal" : "error",
+                    tags: { function: event.functionPath },
+                });
+            }
+        },
+        onRpc: (event) => {
+            // 5xx only: a 4xx is the caller's error, not yours.
+            if (event.error && event.error.status >= 500) {
+                Sentry.captureException(toError(event.error), { tags: { code: event.error.code, function: event.functionPath, trace_id: event.traceId } });
+            }
+        },
+    };
+};
+```
+
+`toError` keeps the original `name`, `message`, `stack`, and `code`, so Sentry
+groups the issue by the line in your handler that threw, not by the sink.
+
+## PostHog
+
+[PostHog Error Tracking](https://posthog.com/docs/error-tracking) ingests
+`$exception` events through its capture endpoint, and wants the stack as
+frame objects
+([manual capture schema](https://posthog.com/docs/error-tracking/installation/manual)):
+
+```ts
+import type { ReportedError } from "@lunora/runtime";
+import { parseStackFrames, webhookSink } from "@lunora/runtime";
+
+export const errorTracking = (env: Env) => {
+    const capture = (error: ReportedError, properties: Record<string, unknown>, userId?: string) => {
+        return {
+            event: "$exception",
+            properties: {
+                ...properties,
+                $exception_list: [
+                    {
+                        mechanism: { handled: false, synthetic: false },
+                        stacktrace: {
+                            frames: parseStackFrames(error.stack).map((frame) => ({ ...frame, lang: "javascript", platform: "custom" })),
+                            type: "raw",
+                        },
+                        type: error.name ?? error.code ?? "Error",
+                        value: error.message,
+                    },
+                ],
+                distinct_id: userId ?? "lunora-server",
+                // No user: don't create a person profile for the server.
+                ...(userId === undefined ? { $process_person_profile: false } : {}),
+            },
+            token: env.POSTHOG_KEY,
+        };
+    };
+
+    return webhookSink({
+        url: "https://us.i.posthog.com/i/v0/e/", // or https://eu.i.posthog.com/i/v0/e/
+        // Return the body to send, or null to skip the event.
+        transform: (event) =>
+            event.error && event.error.status >= 500
+                ? capture(event.error, { code: event.error.code, function_path: event.functionPath, trace_id: event.traceId })
+                : null,
+        transformLog: (event) => (event.error ? capture(event.error, { function_path: event.functionPath, trace_id: event.traceId }, event.userId) : null),
+    });
+};
+```
+
+## Datadog, Axiom, Better Stack, and the rest
+
+Any JSON ingestion API follows the PostHog pattern: point `url` at the
+endpoint, put the key in `headers`, and shape the body in `transform` /
+`transformLog`. Datadog Logs, for example, recognizes `error.kind` /
+`error.message` / `error.stack`:
+
+```ts
+import type { ReportedError } from "@lunora/runtime";
+import { webhookSink } from "@lunora/runtime";
+
+const datadog = (error: ReportedError, functionPath: string) => {
+    return {
+        ddsource: "lunora",
+        error: { kind: error.name ?? error.code, message: error.message, stack: error.stack },
+        message: `${functionPath}: ${error.message}`,
+        service: "my-app",
+        status: "error",
+    };
+};
+
+webhookSink({
+    headers: { "DD-API-KEY": env.DD_API_KEY },
+    // DD_SITE is your Datadog site, as shown in its docs (US1, EU, US3, …).
+    url: `https://http-intake.logs.${env.DD_SITE}/api/v2/logs`,
+    transform: (event) => (event.error ? datadog(event.error, event.functionPath) : null),
+    transformLog: (event) => (event.error ? datadog(event.error, event.functionPath) : null),
+});
+```
+
+If your vendor speaks OpenTelemetry, you need no mapping at all: `otlpSink`
+already puts the error on the RPC span's exception event and on the log record
+as `exception.type`, `exception.message`, and `exception.stacktrace`.
+
+## Source maps
+
+The stack comes from your **bundled** worker, so frames point into the built
+output. Upload the worker's source maps to your tracker (Sentry and PostHog
+both have a CLI for it) to see your source instead.
+
+## Privacy
+
+`event.error.message` is unredacted, and an error message often quotes user
+input. The stack names your source files. Both go to whatever endpoint you
+configure, so:
+
+- send them only to a tracker you trust with user data, or
+- strip them in `transform` / `onRpc` before they leave (for example, send
+  `event.error.code` instead of the message).
+
+`transform` and `transformLog` fail closed: if one throws, the event is dropped
+rather than sent unscrubbed. `otlpSink` redacts a logged error's message the
+same way it redacts the rest of the log line.
