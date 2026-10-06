@@ -252,6 +252,18 @@ describe("createDatabasePaymentStore", () => {
         expect(legacy?.priceId).toBe("price_1");
     });
 
+    it("round-trips the last applied event time, and reads an absent column as undefined", async () => {
+        expect.assertions(2);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertSubscription({ ...subscription, lastEventAt: 3000 });
+        await store.upsertSubscription({ ...subscription, id: "sub_2" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 3000 });
+        await expect(store.getSubscription("stripe", "sub_2").then((row) => row?.lastEventAt)).resolves.toBeUndefined();
+    });
+
     it("dedupes events via markEventProcessed", async () => {
         expect.assertions(3);
 

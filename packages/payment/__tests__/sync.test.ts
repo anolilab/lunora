@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { LunoraPaymentError } from "../src/errors";
 import { money } from "../src/money";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
-import type { WebhookAction } from "../src/types";
+import type { PaymentSession, WebhookAction } from "../src/types";
 
 const captureEvent = (eventId: string): WebhookAction => {
     return {
@@ -846,5 +846,104 @@ describe("applyWebhookAction", () => {
         await expect(applyWebhookAction(store, captureEvent(""))).rejects.toMatchObject({ code: "WEBHOOK_EVENT_ID_MISSING" });
 
         await expect(applyWebhookAction(store, captureEvent("evt_1"))).resolves.toEqual({ applied: true, reason: "ok" });
+    });
+});
+
+describe("applyWebhookAction — bug-hunt regressions", () => {
+    const captured = (referenceId: string): PaymentSession => {
+        return {
+            amount: money(100, "USD"),
+            capturedAmount: money(100, "USD"),
+            createdAt: 0,
+            id: "ord_1",
+            provider: "polar",
+            referenceId,
+            refundedAmount: money(0, "USD"),
+            state: "captured",
+            updatedAt: 0,
+        };
+    };
+
+    const refundEvent = (eventId: string, extra: Partial<WebhookAction> = {}): WebhookAction => {
+        return { amount: money(30, "USD"), eventId, provider: "polar", refundId: "re_1", sessionId: "ord_1", type: "payment.refunded", ...extra };
+    };
+
+    it("never writes back a pre-claim row when a restatement of the same refund loses the claim", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(captured("user_1"));
+
+        // Two deliveries of one refund read the row together; the first books it before the second claims.
+        const getPaymentSession = vi.spyOn(store, "getPaymentSession");
+
+        getPaymentSession.mockResolvedValueOnce(captured("user_1"));
+        await applyWebhookAction(store, refundEvent("e1"));
+        getPaymentSession.mockResolvedValueOnce(captured("user_1"));
+
+        await expect(applyWebhookAction(store, refundEvent("e2"))).resolves.toEqual({ applied: false, reason: "duplicate" });
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(30, "USD"), state: "partially_refunded" });
+    });
+
+    it("acknowledges an amount-less refund without booking a full refund of nothing", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(captured("user_1"));
+
+        await expect(applyWebhookAction(store, refundEvent("e1", { amount: undefined }))).resolves.toEqual({ applied: false, reason: "invalid_refund_amount" });
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ refundedAmount: money(0, "USD"), state: "captured" });
+    });
+
+    it("adopts a blank session owner from a later event, even a no-op one, and never moves an owner", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(captured(""));
+        // captured → captured is illegal, but the reference it carries still lands.
+        await applyWebhookAction(store, {
+            amount: money(100, "USD"),
+            eventId: "e1",
+            provider: "polar",
+            referenceId: "user_1",
+            sessionId: "ord_1",
+            type: "payment.captured",
+        });
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ referenceId: "user_1" });
+
+        await applyWebhookAction(store, refundEvent("e2", { referenceId: "user_2" }));
+
+        await expect(store.getPaymentSession("polar", "ord_1")).resolves.toMatchObject({ referenceId: "user_1" });
+    });
+
+    it("ignores a subscription event older than the last one applied, and records the newest time", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+
+        await applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 1000, type: "subscription.active" });
+        await applyWebhookAction(store, { ...event, eventId: "e2", occurredAt: 3000, type: "subscription.past_due" });
+
+        await expect(applyWebhookAction(store, { ...event, eventId: "e3", occurredAt: 2000, type: "subscription.active" })).resolves.toEqual({
+            applied: false,
+            reason: "stale",
+        });
+        await expect(
+            applyWebhookAction(store, { ...event, eventId: "e4", occurredAt: 2500, priceId: "price_old", type: "subscription.updated" }),
+        ).resolves.toEqual({
+            applied: false,
+            reason: "stale",
+        });
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 3000, state: "past_due" });
+
+        // No time on the event: applied as before.
+        await applyWebhookAction(store, { ...event, eventId: "e5", type: "subscription.active" });
+
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 3000, state: "active" });
     });
 });

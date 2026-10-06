@@ -433,6 +433,45 @@ describe("dodopayments adapter", () => {
         expect(action.type).toBe("subscription.paused");
     });
 
+    it("maps subscription.unpaused and subscription.past_due instead of dropping them (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const unpausedBody = JSON.stringify({ data: { status: "active", subscription_id: "sub_1" }, type: "subscription.unpaused" });
+        const unpaused = await adapter.parseWebhook({ headers: headersFor("m10", timestamp, sign("m10", timestamp, unpausedBody)), payload: unpausedBody });
+        const pastDueBody = JSON.stringify({ data: { status: "past_due", subscription_id: "sub_1" }, type: "subscription.past_due" });
+        const pastDue = await adapter.parseWebhook({ headers: headersFor("m11", timestamp, sign("m11", timestamp, pastDueBody)), payload: pastDueBody });
+
+        expect(unpaused.type).toBe("subscription.active");
+        expect(pastDue.type).toBe("subscription.past_due");
+    });
+
+    it("leaves referenceId unset without metadata instead of using the customer id, and carries occurredAt (regression)", async () => {
+        expect.assertions(3);
+
+        const client = makeClient();
+
+        (client as { subscriptions: { retrieve: unknown } }).subscriptions = {
+            retrieve: async (id: string) => {
+                return { customer: { customer_id: "cus_1" }, product_id: "pro", status: "active", subscription_id: id };
+            },
+        };
+        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        // `sync.ts` adopts an orphan row only while its referenceId is "" — a customer id there blocks it.
+        const payload = JSON.stringify({
+            data: { customer: { customer_id: "cus_1" }, status: "active", subscription_id: "sub_1" },
+            timestamp: "2026-01-02T03:04:05Z",
+            type: "subscription.active",
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor("m12", timestamp, sign("m12", timestamp, payload)), payload });
+
+        expect(action.referenceId).toBeUndefined();
+        expect(action.occurredAt).toBe(Date.parse("2026-01-02T03:04:05Z"));
+        await expect(adapter.getSubscriptionStatus("sub_1").then((s) => s.referenceId)).resolves.toBe("");
+    });
+
     it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {
         expect.assertions(2);
 

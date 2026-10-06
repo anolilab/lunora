@@ -109,6 +109,9 @@ export const compareMoney = (a: Money, b: Money): -1 | 0 | 1 => {
     return compare(toDinero(a), toDinero(b));
 };
 
+/** The larger of two same-currency amounts. */
+export const maxMoney = (a: Money, b: Money): Money => (compareMoney(a, b) > 0 ? a : b);
+
 /**
  * Split an amount across integer ratios, distributing the remainder to the smallest unit so the
  * parts always sum back to the original. The basis for seat/proration math.

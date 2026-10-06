@@ -159,6 +159,7 @@ const subscriptionToRow = (subscription: Subscription): Record<string, unknown> 
         createdAt: subscription.createdAt,
         ...(subscription.currentPeriodEnd === undefined ? {} : { currentPeriodEnd: subscription.currentPeriodEnd }),
         ...(subscription.currentPeriodStart === undefined ? {} : { currentPeriodStart: subscription.currentPeriodStart }),
+        ...(subscription.lastEventAt === undefined ? {} : { lastEventAt: subscription.lastEventAt }),
         priceId: subscription.priceId,
         // Left absent when the adapter reported no set, so the column stays unwritten for the
         // single-price providers and the round-trip below falls back to `[priceId]`.
@@ -179,6 +180,7 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
         currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
         currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
         id: readString(row, "providerSubscriptionId"),
+        lastEventAt: readOptionalNumber(row, "lastEventAt"),
         priceId: readString(row, "priceId"),
         // Absent on a row written before the column existed, and on one the webhook path wrote (it
         // carries a single price id). `undefined` is what makes the entitlement read fall back to

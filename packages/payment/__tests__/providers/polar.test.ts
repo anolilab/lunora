@@ -72,7 +72,16 @@ const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall
             get: async (parameters: Record<string, unknown>) => {
                 calls.push({ args: [parameters], name: "order.get" });
 
-                return { currency: "usd", id: "ord_1", status: "paid", totalAmount: 2500 };
+                return {
+                    currency: "usd",
+                    id: "ord_1",
+                    netAmount: 2500,
+                    refundableAmount: 2500,
+                    refundableTaxAmount: 0,
+                    status: "paid",
+                    taxAmount: 0,
+                    totalAmount: 2500,
+                };
             },
         },
         refunds: {
@@ -81,7 +90,7 @@ const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall
 
                 // `status` is required on Polar's `Refund`; the adapter reads it to tell a settled
                 // refund from a `pending` one it must not book yet.
-                return { id: "ref_1", status: "succeeded" };
+                return { amount: (parameters as { amount: number }).amount, id: "ref_1", status: "succeeded", taxAmount: 0 };
             },
         },
         subscriptions: {
@@ -428,17 +437,13 @@ describe("polar adapter", () => {
         expect(session.refundId).toBe("ref_1");
     });
 
-    it("refunds an explicit amount without querying orders.get, still landing on state=refunded", async () => {
-        expect.assertions(3);
+    it("refunds an explicit amount on an untaxed order as-is, still landing on state=refunded", async () => {
+        expect.assertions(2);
 
         const calls: RecordedCall[] = [];
         const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
 
         const session = await adapter.refundPayment({ amount: money(500n, "usd"), sessionId: "ord_1" });
-
-        // An explicit amount skips the order lookup entirely (see refundPayment's `input.amount ?
-        // undefined : ...`).
-        expect(calls.some((entry) => entry.name === "order.get")).toBe(false);
 
         const call = calls.find((entry) => entry.name === "refund");
 
@@ -446,6 +451,146 @@ describe("polar adapter", () => {
         // Unlike Stripe, Polar's refundPayment never distinguishes "partially_refunded" from
         // "refunded" — a strictly smaller amount is still pinned as "refunded" here.
         expect(session.state).toBe("refunded");
+    });
+
+    it("refunds on the same tax-inclusive basis the capture was booked on (regression)", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const client = makeClient([], calls);
+
+        // A taxed order: Polar refunds NET amounts and refunds the matching tax on top.
+        (client as { orders: { get: unknown } }).orders = {
+            get: async () => {
+                return {
+                    currency: "usd",
+                    id: "ord_1",
+                    netAmount: 10_000,
+                    refundableAmount: 6000,
+                    refundableTaxAmount: 1200,
+                    status: "partially_refunded",
+                    taxAmount: 2000,
+                    totalAmount: 12_000,
+                };
+            },
+        };
+        (client as { refunds: { create: unknown } }).refunds = {
+            create: async (parameters: { amount: number }) => {
+                calls.push({ args: [parameters], name: "refund" });
+
+                return { amount: parameters.amount, id: "ref_1", status: "succeeded", taxAmount: Math.round(parameters.amount * 0.2) };
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        // Full: send the net refundable remainder (not the gross total), book what Polar refunded incl. tax.
+        const full = await adapter.refundPayment({ sessionId: "ord_1" });
+
+        expect((calls.at(-1)?.args[0] as { amount: number }).amount).toBe(6000);
+        expect(full.refundedAmount.minorUnits).toBe(7200n);
+
+        // Partial: a gross 1200 is net 1000 at this order's 10000:2000 ratio.
+        await adapter.refundPayment({ amount: money(1200n, "usd"), sessionId: "ord_1" });
+
+        expect((calls.at(-1)?.args[0] as { amount: number }).amount).toBe(1000);
+    });
+
+    it("books a refund webhook and the order's refunded total including tax (regression)", async () => {
+        expect.assertions(2);
+
+        const client = makeClient();
+
+        (client as { orders: { get: unknown } }).orders = {
+            get: async () => {
+                return { currency: "usd", id: "ord_1", refundedAmount: 1000, refundedTaxAmount: 200, status: "partially_refunded", totalAmount: 12_000 };
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            data: { amount: 1000, currency: "usd", id: "ref_1", order_id: "ord_1", status: "succeeded", tax_amount: 200 },
+            timestamp: "2026-01-02T03:04:05Z",
+            type: "refund.updated",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("evt_tax", timestamp, sign("evt_tax", timestamp, payload)), payload });
+
+        expect(action.amount?.minorUnits).toBe(1200n);
+        await expect(adapter.getPaymentStatus("ord_1").then((s) => s.refundedAmount.minorUnits)).resolves.toBe(1200n);
+    });
+
+    it("maps a free-form refund reason onto Polar's closed enum instead of failing validation (regression)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        await adapter.refundPayment({ reason: "requested_by_customer", sessionId: "ord_1" });
+
+        expect((calls.at(-1)?.args[0] as { reason: string }).reason).toBe("other");
+
+        await adapter.refundPayment({ reason: "duplicate", sessionId: "ord_1" });
+
+        expect((calls.at(-1)?.args[0] as { reason: string }).reason).toBe("duplicate");
+    });
+
+    it("adopts the customer already holding our external id when create conflicts (regression)", async () => {
+        expect.assertions(2);
+
+        const lookups: unknown[] = [];
+        const client = makeClient();
+
+        (client as { customers: unknown }).customers = {
+            create: async () => {
+                throw new Error("customer with this external ID already exists");
+            },
+            getExternal: async (request: { externalId: string }) => {
+                lookups.push(request);
+
+                return { email: "a@b.test", id: "pcus_existing" };
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).resolves.toMatchObject({ id: "pcus_existing" });
+        // Matched on OUR external id — never on the (shareable) email.
+        expect(lookups).toEqual([{ externalId: "user_1" }]);
+    });
+
+    it("rethrows the create error when no customer holds our external id", async () => {
+        expect.assertions(1);
+
+        const client = makeClient();
+
+        (client as { customers: unknown }).customers = {
+            create: async () => {
+                throw new Error("polar is down");
+            },
+            getExternal: async () => {
+                throw new Error("not found");
+            },
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).rejects.toThrow("polar is down");
+    });
+
+    it("maps subscription.paused / resumed / past_due and carries occurredAt (regression)", async () => {
+        expect.assertions(4);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const deliver = async (id: string, type: string, status: string) => {
+            const payload = JSON.stringify({ data: { id: "sub_1", status }, timestamp: "2026-01-02T03:04:05Z", type });
+
+            return adapter.parseWebhook({ headers: headersFor(id, timestamp, sign(id, timestamp, payload)), payload });
+        };
+
+        const paused = await deliver("evt_p", "subscription.paused", "paused");
+
+        expect(paused.type).toBe("subscription.paused");
+        expect(paused.occurredAt).toBe(Date.parse("2026-01-02T03:04:05Z"));
+        await expect(deliver("evt_r", "subscription.resumed", "active").then((a) => a.type)).resolves.toBe("subscription.active");
+        await expect(deliver("evt_d", "subscription.past_due", "past_due").then((a) => a.type)).resolves.toBe("subscription.past_due");
     });
 
     it("fails closed on an unknown status in the webhook path (regression)", async () => {

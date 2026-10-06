@@ -10,13 +10,13 @@
  */
 import { LunoraPaymentError } from "./errors";
 import { LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
-import { addMoney, compareMoney, zeroMoney } from "./money";
+import { addMoney, compareMoney, maxMoney, zeroMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentAction, SubscriptionAction } from "./state-machine";
 import { nextPaymentState, nextSubscriptionState } from "./state-machine";
 import type { PaymentStore } from "./store";
-import type { ApplyResult, Money, PaymentSession, PaymentState, SubscriptionState, WebhookAction, WebhookActionType } from "./types";
+import type { ApplyResult, Money, PaymentSession, PaymentState, Subscription, SubscriptionState, WebhookAction, WebhookActionType } from "./types";
 
 const PAYMENT_ACTION_BY_TYPE: Partial<Record<WebhookActionType, PaymentAction>> = {
     "payment.authorized": "authorize",
@@ -48,9 +48,6 @@ const SUBSCRIPTION_ACTION_BY_TYPE: Partial<Record<WebhookActionType, Subscriptio
     "subscription.paused": "pause",
 };
 
-/** The larger of two same-currency amounts. */
-const maxMoney = (a: Money, b: Money): Money => (compareMoney(a, b) > 0 ? a : b);
-
 /**
  * States in which the money has not been captured yet. A refund that lands on one of them is
  * out-of-order delivery, not an illegal transition — see the `orphaned` branch in `applyPayment`.
@@ -59,8 +56,12 @@ const PRE_CAPTURE_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["au
 
 /** What {@link foldRefundOnce} resolved, plus the undo for the claim it minted. */
 interface RefundFold {
-    /** The action to apply — amount zeroed when this refund is already in the row. */
-    readonly action: WebhookAction;
+    /**
+     * Another writer already claimed this refund — a concurrent restatement, or the facade's own
+     * `refundPayment`. Its write carries the money; this one must not write at all, because the row
+     * it read predates that claim and upserting it would put the refunded total back.
+     */
+    readonly booked: boolean;
 
     /**
      * Undo the claim this fold minted. Call it on any path that does NOT write the refund into the
@@ -70,6 +71,8 @@ interface RefundFold {
 }
 
 const noRelease = async (): Promise<void> => {};
+
+const UNCLAIMED: RefundFold = { booked: false, release: noRelease };
 
 /**
  * Book a DELTA provider's refund at most once, whoever reports it first.
@@ -88,7 +91,8 @@ const noRelease = async (): Promise<void> => {};
  *
  * Both are the same shape, so one marker answers both: claim `local-refund:<session>:id:<refundId>`
  * and KEEP it. Whoever claims it first books the money, and every later restatement of that refund
- * id zeroes its amount, carrying only its state transition. An ABSOLUTE provider (Stripe's
+ * id is `booked` and writes nothing — the refunded total is the whole of its state, so the winner's
+ * write already carries the transition it implies. An ABSOLUTE provider (Stripe's
  * cumulative `amount_refunded`) resolves to `max(...)` and is idempotent without any of this, so it
  * is skipped.
  *
@@ -99,25 +103,24 @@ const noRelease = async (): Promise<void> => {};
  */
 const foldRefundOnce = async (store: PaymentStore, action: WebhookAction, existing: PaymentSession | undefined): Promise<RefundFold> => {
     if (!existing || !action.sessionId || !action.amount || action.amountKind === "absolute") {
-        return { action, release: noRelease };
+        return UNCLAIMED;
     }
 
     const key = localRefundKey(action.sessionId, action.refundId, action.amount);
     const unclaimed = await store.markEventProcessed(action.provider, key, LOCAL_REFUND_CLAIM_TYPE);
-    const zeroed: WebhookAction = { ...action, amount: zeroMoney(action.amount.currency) };
 
     if (action.refundId === undefined) {
         await store.releaseEvent(action.provider, key);
 
-        return { action: unclaimed ? action : zeroed, release: noRelease };
+        return { booked: !unclaimed, release: noRelease };
     }
 
     if (!unclaimed) {
-        return { action: zeroed, release: noRelease };
+        return { booked: true, release: noRelease };
     }
 
     return {
-        action,
+        booked: false,
         release: async () => {
             await store.releaseEvent(action.provider, key);
         },
@@ -178,6 +181,10 @@ const resolveRefundAction = (existing: PaymentSession | undefined, action: Webho
     return prospective && compareMoney(prospective, existing.capturedAmount) < 0 ? "partial_refund" : "refund";
 };
 
+/** The refunded total once `resolvedAction` applies, or `undefined` when its amount cannot be booked. */
+const refundedAfter = (base: PaymentSession, action: WebhookAction, resolvedAction: PaymentAction): Money | undefined =>
+    (resolvedAction === "partial_refund" || resolvedAction === "refund") && action.amount ? refundedTotalFor(base, action) : base.refundedAmount;
+
 /** A row stored orphaned (`""`) takes the first reference a later event carries; an owner never moves. */
 const fillOrphanReference = (stored: string, action: WebhookAction): string => (stored === "" ? (action.referenceId ?? "") : stored);
 
@@ -201,14 +208,46 @@ const adoptOrphanSubscription = async (store: PaymentStore, action: WebhookActio
     return paymentAction === "capture" && subscription === undefined;
 };
 
+/**
+ * A session stored orphaned (`""`, e.g. a capture from before the PaymentIntent carried the
+ * reference) is adopted by any later event that names its owner — even one whose own transition is
+ * a no-op. Only into a blank row, never over an established owner.
+ */
+const adoptOrphanSession = async (
+    store: PaymentStore,
+    existing: PaymentSession | undefined,
+    action: WebhookAction,
+    now: number,
+): Promise<PaymentSession | undefined> => {
+    if (existing?.referenceId !== "" || !action.referenceId) {
+        return existing;
+    }
+
+    const adopted = { ...existing, referenceId: action.referenceId, updatedAt: now };
+
+    await store.upsertPaymentSession(adopted);
+
+    return adopted;
+};
+
 const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentAction: PaymentAction): Promise<ApplyResult> => {
     if (!action.sessionId) {
         return { applied: false, reason: "unhandled" };
     }
 
-    const existing = await store.getPaymentSession(action.provider, action.sessionId);
+    // No amount means no way to book it: resolving one as a FULL refund flipped the row to
+    // `refunded` with nothing in `refundedAmount`, and the next `refundPayment` then issued the whole
+    // captured amount again. Acknowledged (200) rather than orphaned — a retry carries no amount either.
+    if (!action.amount && paymentAction === "refund") {
+        return { applied: false, reason: "invalid_refund_amount" };
+    }
+
+    let existing = await store.getPaymentSession(action.provider, action.sessionId);
     const fromState: PaymentState = existing?.state ?? "initiated";
     const now = Date.now();
+
+    // Before the FSM gate, for the same reason as the subscription adoption below.
+    existing = await adoptOrphanSession(store, existing, action, now);
 
     // Before the FSM gate: the session's own transition (e.g. a checkout landing on a row reconcile
     // already marked captured) has no bearing on who owns the subscription it started.
@@ -217,9 +256,12 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
     const currency = action.amount?.currency ?? existing?.amount.currency ?? "USD";
 
     const refund = paymentAction === "refund" ? await foldRefundOnce(store, action, existing) : undefined;
-    const effective = refund?.action ?? action;
 
-    const resolvedAction = paymentAction === "refund" ? resolveRefundAction(existing, effective) : paymentAction;
+    if (refund?.booked) {
+        return { applied: false, reason: "duplicate" };
+    }
+
+    const resolvedAction = paymentAction === "refund" ? resolveRefundAction(existing, action) : paymentAction;
 
     const toState = nextPaymentState(fromState, resolvedAction);
 
@@ -251,29 +293,25 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
         updatedAt: now,
     };
 
-    let { capturedAmount, refundedAmount } = base;
+    let { capturedAmount } = base;
 
     if (resolvedAction === "capture" && action.amount) {
         capturedAmount = action.amount;
     }
 
-    if ((resolvedAction === "partial_refund" || resolvedAction === "refund") && effective.amount) {
-        const prospective = refundedTotalFor(base, effective);
+    const refundedAmount = refundedAfter(base, action, resolvedAction);
 
-        if (!prospective) {
-            await refund?.release();
+    if (!refundedAmount) {
+        await refund?.release();
 
-            return { applied: false, reason: "invalid_refund_amount" };
-        }
-
-        refundedAmount = prospective;
+        return { applied: false, reason: "invalid_refund_amount" };
     }
 
     try {
         await store.upsertPaymentSession({
             ...base,
             capturedAmount,
-            referenceId: action.referenceId ?? base.referenceId,
+            referenceId: fillOrphanReference(base.referenceId, action),
             refundedAmount,
             state: toState,
             updatedAt: now,
@@ -322,6 +360,13 @@ const resolveSubscriptionAction = (from: SubscriptionState, targetState: Subscri
     return SUBSCRIPTION_ACTION_BY_TYPE[type];
 };
 
+/** The newer of the stored and incoming event times, as a spreadable field (omitted when neither is known). */
+const latestEventAt = (stored: number | undefined, incoming: number | undefined): Pick<Subscription, "lastEventAt"> => {
+    const latest = stored === undefined ? incoming : Math.max(stored, incoming ?? stored);
+
+    return latest === undefined ? {} : { lastEventAt: latest };
+};
+
 const applySubscription = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
     if (!action.subscriptionId) {
         return { applied: false, reason: "unhandled" };
@@ -329,6 +374,16 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
 
     const existing = await store.getSubscription(action.provider, action.subscriptionId);
     const now = Date.now();
+
+    // Providers redeliver after a 5xx, so an event can land after a newer one already applied — and
+    // `past_due → active` is a legal edge, so a late `active` would re-entitle a customer whose
+    // payment has since failed. Drop anything older than the last event applied to this row. Strictly
+    // older: Stripe stamps whole seconds, so same-instant events still apply in arrival order.
+    if (action.occurredAt !== undefined && existing?.lastEventAt !== undefined && action.occurredAt < existing.lastEventAt) {
+        return { applied: false, reason: "stale" };
+    }
+
+    const lastEventAt = latestEventAt(existing?.lastEventAt, action.occurredAt);
 
     // A pure metadata change (price / quantity / cancel-at-period-end) with no state transition.
     if (action.type === "subscription.updated") {
@@ -352,6 +407,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
             priceIds: action.priceIds ?? existing.priceIds,
             quantity: action.quantity ?? existing.quantity,
             referenceId: fillOrphanReference(existing.referenceId, action),
+            ...lastEventAt,
             updatedAt: now,
         });
 
@@ -380,6 +436,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
             quantity: action.quantity ?? 1,
             referenceId: action.referenceId ?? "",
             state: targetState,
+            ...lastEventAt,
             updatedAt: now,
         });
 
@@ -405,6 +462,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
         quantity: action.quantity ?? existing.quantity,
         referenceId: fillOrphanReference(existing.referenceId, action),
         state: nextState,
+        ...lastEventAt,
         updatedAt: now,
     });
 

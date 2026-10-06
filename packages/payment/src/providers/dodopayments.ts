@@ -87,6 +87,7 @@ const SUBSCRIPTION_STATE_BY_DODO_STATUS: Record<string, SubscriptionState> = {
     // Treat them as non-entitling `past_due`; Dodo has no trial status in this enum.
     failed: "past_due",
     on_hold: "past_due",
+    past_due: "past_due",
     // A paused subscription is non-entitling until it resumes, but distinct from dunning — it maps to
     // the `paused` state so a `subscription.paused` webhook routes to `subscription.paused` (not the
     // generic `subscription.updated`) and stays consistent with `subscriptionFromDodo`.
@@ -143,7 +144,8 @@ const subscriptionFromDodo = (input: unknown): Subscription => {
         priceId: readString(subscription, "product_id") ?? "",
         provider: "dodopayments",
         quantity: readNumber(subscription, "quantity") ?? 1,
-        referenceId: referenceFromMetadata(subscription) ?? customerIdOf(subscription) ?? "",
+        // Never the customer id: `sync.ts` adopts an orphan row only while its referenceId is "".
+        referenceId: referenceFromMetadata(subscription) ?? "",
         // Fail closed: an unrecognized Dodo status is treated as non-entitling `past_due`.
         state: SUBSCRIPTION_STATE_BY_DODO_STATUS[status] ?? "past_due",
         updatedAt: now,
@@ -218,8 +220,8 @@ const paymentFromDodo = (input: unknown): PaymentSession => {
     };
 };
 
-const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
-    const base = { eventId, provider: "dodopayments" as const, raw: { object, type: eventType } };
+const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>, occurredAt: number | undefined): WebhookAction => {
+    const base = { eventId, occurredAt, provider: "dodopayments" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
 
     switch (eventType) {
@@ -267,13 +269,15 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.expired":
         case "subscription.failed":
         case "subscription.on_hold":
+        case "subscription.past_due":
         case "subscription.paused":
         case "subscription.plan_changed":
         case "subscription.renewed":
+        case "subscription.unpaused":
         case "subscription.updated": {
-            // The event name is authoritative for a pause: Dodo's `SubscriptionStatus` is
-            // pending|active|on_hold|cancelled|failed|expired, with no `paused` member, so a
-            // `subscription.paused` payload cannot say so itself. Read from the status alone, a
+            // The event name is authoritative for a pause: older Dodo `SubscriptionStatus` generations
+            // (pending|active|on_hold|cancelled|failed|expired) have no `paused` member, so a
+            // `subscription.paused` payload cannot always say so itself. Read from the status alone, a
             // deliberate pause landed on the fail-closed `past_due` and raised the dunning alert
             // `sync.ts` emits for it. `paused` is non-entitling either way — this only stops a
             // customer-initiated pause from being reported as a failed payment.
@@ -296,7 +300,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 customerId: customerIdOf(object),
                 priceId: readString(object, "product_id"),
                 quantity: readNumber(object, "quantity"),
-                referenceId: referenceFromMetadata(object) ?? customerIdOf(object),
+                referenceId: referenceFromMetadata(object),
                 subscriptionId: readString(object, "subscription_id"),
                 // Fail closed before `stateToEventType` — an unmapped status must not degrade to a
                 // state-preserving metadata patch.
@@ -401,7 +405,8 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             const event = asRecord(JSON.parse(payload));
 
             // Standard Webhooks carries no body id, so the `webhook-id` header is our idempotency key.
-            return mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data));
+            // `timestamp` is the body's ISO-8601 "when the event occurred" — the ordering key for sync.
+            return mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data), parseTimestamp(readString(event, "timestamp")));
         },
 
         refundPayment: async (input: RefundInput) => {

@@ -27,13 +27,34 @@ const subscription = (priceId: string, state: Subscription["state"]): Subscripti
 };
 
 describe("usagePeriodStart", () => {
-    it("returns the latest current-period start among active subscriptions", () => {
+    it("windows a metered feature on the subscription whose plan grants its limit", () => {
+        expect.assertions(2);
+
+        const pro = { ...subscription("price_pro", "active"), currentPeriodStart: 1000 };
+        // Grants nothing metered — its fresher period must not reset `seats`, which pro's plan caps.
+        const addon = { ...subscription("price_addon", "active"), currentPeriodStart: 5000 };
+
+        expect(usagePeriodStart(config, [pro, addon], "seats")).toBe(1000);
+        // No plan limits `export`, so it keeps the latest active period instead of all-time.
+        expect(usagePeriodStart(config, [pro, addon], "export")).toBe(5000);
+    });
+
+    it("uses the latest active period when no entitlements are configured (provider-metered track)", () => {
         expect.assertions(1);
 
-        const a = { ...subscription("price_pro", "active"), currentPeriodStart: 1000 };
-        const b = { ...subscription("price_team", "active"), currentPeriodStart: 5000 };
+        const pro = { ...subscription("price_pro", "active"), currentPeriodStart: 1000 };
+        const addon = { ...subscription("price_addon", "active"), currentPeriodStart: 5000 };
 
-        expect(usagePeriodStart([a, b])).toBe(5000);
+        expect(usagePeriodStart(undefined, [pro, addon], "api_calls")).toBe(5000);
+    });
+
+    it("follows the most generous granting plan, whose limit is the one in force", () => {
+        expect.assertions(1);
+
+        const pro = { ...subscription("price_pro", "active"), currentPeriodStart: 5000 };
+        const team = { ...subscription("price_team", "active"), currentPeriodStart: 1000 };
+
+        expect(usagePeriodStart(config, [pro, team], "seats")).toBe(1000);
     });
 
     it("ignores inactive subscriptions and falls back to 0", () => {
@@ -41,8 +62,8 @@ describe("usagePeriodStart", () => {
 
         const canceled = { ...subscription("price_pro", "canceled"), currentPeriodStart: 9000 };
 
-        expect(usagePeriodStart([canceled])).toBe(0);
-        expect(usagePeriodStart([])).toBe(0);
+        expect(usagePeriodStart(config, [canceled], "seats")).toBe(0);
+        expect(usagePeriodStart(config, [], "seats")).toBe(0);
     });
 });
 

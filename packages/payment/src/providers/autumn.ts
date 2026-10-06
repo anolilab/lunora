@@ -99,6 +99,18 @@ const SUBSCRIPTION_STATE_BY_AUTUMN_ACTION: Record<string, SubscriptionState> = {
     scheduled: "paused",
 };
 
+/**
+ * `customer.products.updated` reports WHY via `scenario`. It decides the state only when the
+ * customer's own row for the product is absent from the payload; otherwise the row's status wins (a
+ * `cancel` is usually a period-end cancel, still active until then).
+ */
+const SUBSCRIPTION_STATE_BY_AUTUMN_SCENARIO: Record<string, SubscriptionState> = {
+    cancel: "canceled",
+    expired: "canceled",
+    past_due: "past_due",
+    scheduled: "paused",
+};
+
 const SUBSCRIPTION_ID_SEPARATOR = "::";
 
 const notSupported = makeNotSupported("autumn");
@@ -125,11 +137,16 @@ const parseAutumnSubscriptionId = (subscriptionId: string): { customerId: string
 const isCanceling = (product: Record<string, unknown>): boolean =>
     readAnyNumber(product, "canceled_at", "canceledAt") !== undefined || readAny(product, "status") === "scheduled";
 
+/**
+ * The plan a customer row is for. On the current SDK's `subscriptions[]` row, `id` is the
+ * SUBSCRIPTION's own id and the plan is `planId` — so the plan keys are read first, and `id` only for
+ * the classic `products[]` row, where it is the product id.
+ */
+const planIdOf = (row: Record<string, unknown>): string | undefined => readAny(row, "planId", "plan_id", "product_id", "productId", "id");
+
 const productToSubscription = (customerId: string, product: Record<string, unknown>): Subscription => {
     const now = Date.now();
-    // Newer Autumn generations key the plan as `plan_id` under a `subscriptions` row; classic ones use
-    // `id`/`product_id` under `products`. Read across both so an active subscriber is never missed.
-    const productId = readAny(product, "id", "product_id", "productId", "plan_id", "planId") ?? "";
+    const productId = planIdOf(product) ?? "";
     const status = readAny(product, "status") ?? "active";
     // Current Autumn exposes past-due as a separate boolean rather than a status — honor it so an
     // otherwise-`active` row that is past due is treated as non-entitling (fail closed), never entitling.
@@ -160,7 +177,7 @@ const asRecordList = (value: unknown): Record<string, unknown>[] => (Array.isArr
 const findProduct = (customer: Record<string, unknown>, productId: string): Record<string, unknown> | undefined => {
     const rows = [...asRecordList(customer.products), ...asRecordList(customer.subscriptions)];
 
-    return rows.find((entry) => (readAny(entry, "id", "product_id", "productId", "plan_id", "planId") ?? "") === productId);
+    return rows.find((entry) => (planIdOf(entry) ?? "") === productId);
 };
 
 /**
@@ -267,46 +284,33 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             return mapBillingUpdated(eventId, object);
         }
 
-        // Product lifecycle — the entitling truth. `data` is the product row (or wraps it).
-        case "customer.product.added":
-        case "customer.product.canceled":
-        case "customer.product.expired":
-        case "customer.product.updated":
-        case "product.attached": {
-            const product = object.product ? asRecord(object.product) : object;
-            const status = eventType === "customer.product.canceled" || eventType === "customer.product.expired" ? "canceled" : readAny(product, "status");
-            const customerId = referenceFromEvent(object) ?? referenceFromEvent(product);
+        // Product lifecycle — the entitling truth. `data` carries the `scenario`, the `customer` (with
+        // its product rows) and the `updated_product`.
+        case "customer.products.updated": {
+            const customer = asRecord(object.customer);
+            const customerId = readAny(customer, "id") ?? referenceFromEvent(object);
+            const productId = planIdOf(asRecord(object.updated_product));
+
+            if (customerId === undefined || productId === undefined) {
+                return { ...base, type: "unhandled" };
+            }
+
+            const row = findProduct(customer, productId);
+            const subscription = row
+                ? productToSubscription(customerId, row)
+                : constructedSubscription(customerId, productId, SUBSCRIPTION_STATE_BY_AUTUMN_SCENARIO[readAny(object, "scenario") ?? ""] ?? "past_due", false);
 
             return {
                 ...base,
-                cancelAtPeriodEnd: readBoolean(product, "cancel_at_period_end") ?? isCanceling(product),
-                currentPeriodEnd: readAnyNumber(product, "current_period_end", "currentPeriodEnd"),
-                currentPeriodStart: readAnyNumber(product, "current_period_start", "currentPeriodStart"),
+                cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+                currentPeriodEnd: subscription.currentPeriodEnd,
+                currentPeriodStart: subscription.currentPeriodStart,
                 customerId,
-                priceId: readAny(product, "id", "product_id", "productId"),
+                priceId: productId,
                 referenceId: customerId,
-                subscriptionId:
-                    customerId === undefined ? undefined : autumnSubscriptionId(customerId, readAny(product, "id", "product_id", "productId") ?? ""),
-                // Fail closed before `stateToEventType` — an unmapped status must not degrade to a
-                // state-preserving metadata patch.
-                type: stateToEventType(SUBSCRIPTION_STATE_BY_AUTUMN_STATUS[status ?? ""] ?? "past_due"),
-            };
-        }
-        // Money movement — Autumn surfaces settled invoices/payments.
-        case "invoice.paid":
-        case "payment.succeeded": {
-            const amount = readAnyNumber(object, "total", "amount", "amount_paid");
-
-            return {
-                ...base,
-                // Autumn amounts are assumed integer minor units, but the event catalog is unverified —
-                // round defensively so a provider-sent decimal can't throw a RangeError out of
-                // `parseWebhook` (which would 400 the endpoint and wedge Autumn into infinite retries).
-                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), currency),
-                customerId: referenceFromEvent(object),
-                referenceId: referenceFromEvent(object),
-                sessionId: readAny(object, "id", "invoice_id", "stripe_id"),
-                type: "payment.captured",
+                subscriptionId: subscription.id,
+                // Fail closed: both paths above already land an unknown status/scenario on `past_due`.
+                type: stateToEventType(subscription.state),
             };
         }
 
@@ -386,7 +390,7 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
             // Autumn keys everything on the customer id (our reference id), so there is no metadata to pin;
             // `attach` returns a hosted `paymentUrl` when a payment step is needed.
-            const result = asRecord(await client.billing.attach({ customerId: input.referenceId, planId: input.priceId }));
+            const result = asRecord(await client.billing.attach({ customerId: input.referenceId, planId: input.priceId, successUrl: input.successUrl }));
 
             return { id: autumnSubscriptionId(input.referenceId, input.priceId), provider: "autumn", url: checkoutUrlFrom(result) };
         },

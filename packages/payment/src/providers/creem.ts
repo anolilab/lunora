@@ -96,8 +96,38 @@ const idOf = (value: unknown): string | undefined => (typeof value === "string" 
 
 const readCheckoutUrl = (checkout: Record<string, unknown>): string => readAny(checkout, "checkout_url", "checkoutUrl") ?? "";
 
+/**
+ * Epoch ms from a date field. Raw webhooks carry ISO strings, but the SDK's zod parse hands back
+ * `Date` objects — reading strings only left every SDK-sourced period undefined and ignored `canceledAt`.
+ */
+const readTime = (object: Record<string, unknown>, ...keys: ReadonlyArray<string>): number | undefined => {
+    for (const key of keys) {
+        const value = object[key];
+
+        if (value instanceof Date) {
+            return Number.isNaN(value.getTime()) ? undefined : value.getTime();
+        }
+
+        if (typeof value === "number") {
+            return value;
+        }
+
+        const parsed = parseTimestamp(typeof value === "string" ? value : undefined);
+
+        if (parsed !== undefined) {
+            return parsed;
+        }
+    }
+
+    return undefined;
+};
+
+/** `units` is top-level on older shapes; the SDK's `SubscriptionEntity` carries it on `items[].units`. */
+const readUnits = (subscription: Record<string, unknown>): number | undefined =>
+    readNumber(subscription, "units") ?? readNumber(asRecord(Array.isArray(subscription.items) ? subscription.items[0] : undefined), "units");
+
 const isCanceling = (subscription: Record<string, unknown>): boolean =>
-    readAny(subscription, "canceled_at", "canceledAt") !== undefined || readString(subscription, "status") === "scheduled_cancel";
+    readTime(subscription, "canceled_at", "canceledAt") !== undefined || readString(subscription, "status") === "scheduled_cancel";
 
 /**
  * Whether a `customers.create` rejection is Creem's known duplicate-email conflict (safe to recover
@@ -129,12 +159,12 @@ const subscriptionFromCreem = (input: unknown): Subscription => {
     return {
         cancelAtPeriodEnd: isCanceling(subscription),
         createdAt: now,
-        currentPeriodEnd: parseTimestamp(readAny(subscription, "current_period_end_date", "currentPeriodEndDate")),
-        currentPeriodStart: parseTimestamp(readAny(subscription, "current_period_start_date", "currentPeriodStartDate")),
+        currentPeriodEnd: readTime(subscription, "current_period_end_date", "currentPeriodEndDate"),
+        currentPeriodStart: readTime(subscription, "current_period_start_date", "currentPeriodStartDate"),
         id: readString(subscription, "id") ?? "",
         priceId: idOf(subscription.product) ?? "",
         provider: "creem",
-        quantity: readNumber(subscription, "units") ?? 1,
+        quantity: readUnits(subscription) ?? 1,
         // Never fall back to the customer id: a reference the app does not know entitles nobody and
         // looks owned. Blank is the explicit orphan a later event or `checkout.completed` heals.
         referenceId: referenceFromMetadata(subscription) ?? "",
@@ -167,8 +197,8 @@ const checkoutToSession = (input: unknown): PaymentSession => {
     };
 };
 
-const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
-    const base = { eventId, provider: "creem" as const, raw: { object, type: eventType } };
+const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>, occurredAt: number | undefined): WebhookAction => {
+    const base = { eventId, occurredAt, provider: "creem" as const, raw: { object, type: eventType } };
     const order = asRecord(object.order);
     const currency = readString(order, "currency") ?? readString(object, "currency") ?? "usd";
 
@@ -244,13 +274,21 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.trialing":
         case "subscription.unpaid":
         case "subscription.update": {
-            const status = eventType === "subscription.scheduled_cancel" ? "scheduled_cancel" : readString(object, "status");
+            // The event name is authoritative where Creem's `SubscriptionStatus` cannot say it: there is
+            // no `expired` member, so an expired subscription's payload may still read `active`.
+            let status = readString(object, "status");
+
+            if (eventType === "subscription.scheduled_cancel") {
+                status = "scheduled_cancel";
+            } else if (eventType === "subscription.expired") {
+                status = "canceled";
+            }
 
             return {
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_period_end") ?? isCanceling(object),
-                currentPeriodEnd: parseTimestamp(readAny(object, "current_period_end_date", "currentPeriodEndDate")),
-                currentPeriodStart: parseTimestamp(readAny(object, "current_period_start_date", "currentPeriodStartDate")),
+                currentPeriodEnd: readTime(object, "current_period_end_date", "currentPeriodEndDate"),
+                currentPeriodStart: readTime(object, "current_period_start_date", "currentPeriodStartDate"),
                 customerId: idOf(object.customer),
                 priceId: idOf(object.product),
                 // Creem copies the checkout's metadata onto the subscription it creates. Without it the
@@ -338,10 +376,10 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
                     asRecord(
                         await client.customers.create({
                             email: ref.email ?? "",
+                            externalId: ref.referenceId,
                             // Pin the framework-controlled `referenceId` LAST so caller metadata can never
-                            // override it (same pattern as `createCheckout`) — this is the only thing Creem
-                            // lets us key a customer on (no `externalId`-style create, unlike Polar/Dodo), so
-                            // the recovery path below can verify it before ever adopting a retrieved customer.
+                            // override it (same pattern as `createCheckout`). The recovery path below looks
+                            // up by email, so it verifies this before ever adopting a retrieved customer.
                             metadata: { ...ref.metadata, referenceId: ref.referenceId },
                             name: ref.metadata?.name ?? ref.referenceId,
                         }),
@@ -390,7 +428,12 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
             // parameter (WebhookAction.eventId is non-optional) — it is NOT a "safe default": a blank
             // id still flows through as `eventId: ""`, and `applyWebhookAction`'s central guard
             // (sync.ts) is what actually rejects it before it can ever reach the dedupe store.
-            return mapEvent(readAny(event, "id", "event_id", "eventId") ?? "", readAny(event, "eventType", "type") ?? "", asRecord(event.object));
+            // `created_at` is epoch ms on Creem's events; a seconds-sized value is scaled rather than read
+            // as 1970, which would make every later event look newer and this one never apply.
+            const createdAt = readAnyNumber(event, "created_at", "createdAt");
+            const occurredAt = createdAt !== undefined && createdAt < 1e12 ? createdAt * 1000 : createdAt;
+
+            return mapEvent(readAny(event, "id", "event_id", "eventId") ?? "", readAny(event, "eventType", "type") ?? "", asRecord(event.object), occurredAt);
         },
 
         // Creem refunds are issued from the dashboard; there is no SDK endpoint to initiate one.

@@ -52,6 +52,8 @@ export default defineSchema({
         createdAt: v.number(),
         currentPeriodEnd: v.optional(v.number()),
         currentPeriodStart: v.optional(v.number()),
+        // Provider time of the newest webhook applied — an older redelivery is ignored as stale.
+        lastEventAt: v.optional(v.number()),
         priceId: v.string(),
         // EVERY price id the subscription bills, not just the primary one.
         // Entitlements test membership here (falling back to `[priceId]` when

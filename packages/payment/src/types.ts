@@ -95,6 +95,13 @@ export interface Subscription {
     /** Start of the current billing period — the window `check` sums metered usage over. */
     readonly currentPeriodStart?: number;
     readonly id: string;
+
+    /**
+     * Provider time (epoch ms) of the newest webhook applied to this row — see
+     * {@link WebhookAction.occurredAt}. An older event arriving later is ignored as `"stale"`.
+     * Absent until an event that carries a time lands; `reconcile` and the facade leave it as stored.
+     */
+    readonly lastEventAt?: number;
     /** The primary (first) price/product id — `priceIds[0]`. Display and single-item plan changes. */
     readonly priceId: string;
 
@@ -348,9 +355,18 @@ export interface RefundResult extends PaymentSession {
      * `refunds.create` with `pending`/`review` and settles later via `refund.succeeded`, or never,
      * via `refund.failed`. The facade leaves its ledger untouched for one of these and lets the
      * confirming webhook carry the money, because a `refund.failed` reverses nothing. Absent (the
-     * default) means the refund is already settled — Stripe and Polar refund synchronously.
+     * default) means the refund is already settled. Stripe reports one whenever the refund's status
+     * is not yet `succeeded`.
      */
     readonly pending?: boolean;
+
+    /**
+     * The provider's CUMULATIVE refunded-to-date total after this refund, when its response carries
+     * one (Stripe's charge `amount_refunded`). The facade then records `max(stored, refundedTotal)`
+     * rather than adding this refund to the stored total — the provider's own `charge.refunded` can
+     * land mid-call and book this refund first. Absent on a per-refund (delta) provider.
+     */
+    readonly refundedTotal?: Money;
 
     /**
      * The provider's id for THIS refund — Stripe and Polar `Refund.id`, Dodo `refund_id`. It is the
@@ -377,11 +393,11 @@ export interface CancelSubscriptionOptions {
  */
 export interface SubscriptionPatch {
     /**
-     * Override the outbound idempotency key. Honoured by the Stripe adapter only — no other provider's
-     * plan-change endpoint accepts a key at all (see the `idempotency` module docblock). Stripe
-     * otherwise derives one from the subscription and the target plan/quantity, which is stable across
-     * retries of the same intent; pass your own only to re-issue a target that was already applied and
-     * then changed away from, which a stable key would replay rather than prorate again.
+     * Outbound idempotency key, passed through when given. Honoured by the Stripe adapter only — no
+     * other provider's plan-change endpoint accepts a key at all (see the `idempotency` module
+     * docblock). Omitted, the update is sent un-keyed: it sets an ABSOLUTE price/quantity, so a retry
+     * of an applied change is a no-op, whereas a key derived from the target would make A → B → A
+     * inside Stripe's 24h window replay the first A response and leave the subscription on B.
      */
     readonly idempotencyKey?: string;
     readonly priceId?: string;
@@ -436,6 +452,13 @@ export interface WebhookAction {
     readonly customerId?: string;
     /** Provider event id — the inbound idempotency key. */
     readonly eventId: string;
+
+    /**
+     * When the provider says the event happened (epoch ms), if its payload carries it. `sync.ts`
+     * ignores a subscription event older than the last one it applied to that row, so a late
+     * redelivery cannot roll a `past_due` subscription back to `active`. Absent = always applied.
+     */
+    readonly occurredAt?: number;
     readonly priceId?: string;
 
     /**
@@ -450,6 +473,7 @@ export interface WebhookAction {
     readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity?: number;
+
     /** Raw provider event, retained for the events log / debugging. */
     readonly raw?: unknown;
     readonly referenceId?: string;
@@ -471,5 +495,5 @@ export interface WebhookAction {
  */
 export interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "unhandled";
+    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled";
 }

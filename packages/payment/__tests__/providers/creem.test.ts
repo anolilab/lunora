@@ -248,6 +248,50 @@ describe("creem adapter", () => {
         expect(canceled.type).toBe("subscription.canceled");
     });
 
+    it("maps subscription.expired to canceled whatever status it carries, with occurredAt (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        // Creem's `SubscriptionStatus` has no `expired` member, so the payload can still read `active`.
+        const body = JSON.stringify({
+            created_at: 1_767_323_045_000,
+            eventType: "subscription.expired",
+            id: "e9",
+            object: { id: "sub_1", product: "prod_pro", status: "active" },
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor(sign(body)), payload: body });
+
+        expect(action.type).toBe("subscription.canceled");
+        expect(action.occurredAt).toBe(1_767_323_045_000);
+    });
+
+    it("reads the SDK's Date fields and items[].units on subscription responses (regression)", async () => {
+        expect.assertions(4);
+
+        const client = makeClient();
+
+        // The real SDK zod-parses date fields into `Date`s and carries units on `items[]`.
+        (client as { subscriptions: { get: unknown } }).subscriptions = {
+            get: async (id: string) => {
+                return {
+                    canceledAt: new Date("2026-07-05T00:00:00Z"),
+                    currentPeriodEndDate: new Date("2026-08-01T00:00:00Z"),
+                    currentPeriodStartDate: new Date("2026-07-01T00:00:00Z"),
+                    id,
+                    items: [{ id: "item_1", productId: "prod_pro", units: 5 }],
+                    product: "prod_pro",
+                    status: "active",
+                };
+            },
+        };
+        const subscription = await createCreemAdapter({ client, webhookSecret: SECRET }).getSubscriptionStatus("sub_1");
+
+        expect(subscription.currentPeriodEnd).toBe(Date.parse("2026-08-01T00:00:00Z"));
+        expect(subscription.currentPeriodStart).toBe(Date.parse("2026-07-01T00:00:00Z"));
+        expect(subscription.cancelAtPeriodEnd).toBe(true);
+        expect(subscription.quantity).toBe(5);
+    });
+
     it("normalizes a refund.created webhook from Creem's flat refund fields (regression)", async () => {
         expect.assertions(5);
 
@@ -345,8 +389,8 @@ describe("creem adapter", () => {
         expect(action.amount?.minorUnits).toBe(2501n);
     });
 
-    it("pins the reference into the new customer's metadata", async () => {
-        expect.assertions(1);
+    it("pins the reference into the new customer's metadata and externalId", async () => {
+        expect.assertions(2);
 
         const calls: RecordedCall[] = [];
         const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
@@ -356,6 +400,7 @@ describe("creem adapter", () => {
         const body = calls.find((call) => call.name === "customer")?.args[0] as Record<string, unknown>;
 
         expect((body.metadata as { referenceId?: string }).referenceId).toBe("user_1");
+        expect(body.externalId).toBe("user_1");
     });
 
     it("reuses the existing customer on a same-reference retry after a duplicate-email conflict (regression)", async () => {

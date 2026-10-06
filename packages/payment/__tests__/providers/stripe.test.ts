@@ -72,7 +72,7 @@ const makeClient = (calls: RecordedCall[]): Stripe =>
             create: async (parameters: Record<string, unknown>, options?: { idempotencyKey?: string }) => {
                 calls.push({ args: [parameters, options], name: "refund" });
 
-                return { id: "re_1" };
+                return { id: "re_1", status: "succeeded" };
             },
         },
         subscriptions: {
@@ -146,6 +146,37 @@ describe("stripe adapter", () => {
         expect((checkout?.args[0] as { metadata?: Record<string, string> }).metadata?.referenceId).toBe("user_1");
     });
 
+    it("pins the referenceId on the PaymentIntent of a payment-mode checkout (regression)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        await adapter.createCheckout({
+            cancelUrl: "https://x/cancel",
+            metadata: { order: "o_1", referenceId: "victim" },
+            mode: "payment",
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        const parameters = calls.find((call) => call.name === "checkout")?.args[0] as { payment_intent_data?: { metadata?: Record<string, string> } };
+
+        // `payment_intent.succeeded` can beat `checkout.session.completed`, and it reads the intent alone.
+        expect(parameters.payment_intent_data?.metadata).toEqual({ order: "o_1", referenceId: "user_1" });
+
+        await adapter.createCheckout({
+            cancelUrl: "https://x/cancel",
+            mode: "subscription",
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        expect((calls.at(-1)?.args[0] as { payment_intent_data?: unknown }).payment_intent_data).toBeUndefined();
+    });
+
     it("maps a captured intent to a payment session", async () => {
         expect.assertions(2);
 
@@ -158,16 +189,20 @@ describe("stripe adapter", () => {
     });
 
     it("normalizes a verified payment_intent.succeeded webhook", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
 
         const event = {
+            created: 1_700_000_000,
             data: { object: { amount: 2000, amount_received: 2000, currency: "usd", customer: "cus_1", id: "pi_1", metadata: { referenceId: "user_1" } } },
             id: "evt_1",
             type: "payment_intent.succeeded",
         };
         const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        // `event.created` is Unix seconds; `occurredAt` is epoch ms.
+        expect(action.occurredAt).toBe(1_700_000_000_000);
 
         expect(action.type).toBe("payment.captured");
         expect(action.sessionId).toBe("pi_1");
@@ -670,8 +705,8 @@ describe("stripe adapter", () => {
         expect(subscription.state).toBe("active");
     });
 
-    it("carries a stable idempotency key on resume, distinct from the cancel key", async () => {
-        expect.assertions(2);
+    it("sends no derived idempotency key on resume, so a second resume is not a replay (regression)", async () => {
+        expect.assertions(1);
 
         const calls: RecordedCall[] = [];
         const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
@@ -680,10 +715,9 @@ describe("stripe adapter", () => {
 
         const call = calls.find((entry) => entry.name === "sub.update");
 
-        // Stable for the logical operation, so a Worker retry replays instead of re-issuing. The
-        // operation name must differ from `cancel_subscription` or a resume would replay the cancel.
-        expect((call?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBe("resume_subscription:stripe:sub_1");
-        expect((call?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).not.toBe("cancel_subscription:stripe:sub_1");
+        // A stable key made cancel → resume → cancel → resume replay the first resume inside Stripe's
+        // 24h window, leaving the second cancel in place. Setting absolute state needs no key.
+        expect((call?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBeUndefined();
     });
 
     it("lets the caller override the resume idempotency key", async () => {
@@ -699,27 +733,23 @@ describe("stripe adapter", () => {
         expect((call?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBe("resume_2");
     });
 
-    it("keys a plan/quantity update on the subscription AND the target plan (proration moves money)", async () => {
-        expect.assertions(2);
+    it("sends no derived idempotency key on a plan change, so A → B → A is not a replay (regression)", async () => {
+        expect.assertions(1);
 
         const calls: RecordedCall[] = [];
         const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
 
-        await adapter.updateSubscription("sub_1", { priceId: "price_new", quantity: 3 });
+        await adapter.updateSubscription("sub_1", { priceId: "price_a" });
+        await adapter.updateSubscription("sub_1", { priceId: "price_b" });
+        await adapter.updateSubscription("sub_1", { priceId: "price_a" });
 
-        const first = calls.find((entry) => entry.name === "sub.update");
-
-        expect((first?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBe("update_subscription:stripe:sub_1:price_new:3");
-
-        // A different target is a different logical operation: reusing one key across two parameter
-        // sets makes Stripe reject the second call as a mismatch.
-        const other: RecordedCall[] = [];
-
-        await createStripeAdapter({ client: makeClient(other), webhookSecret: "whsec" }).updateSubscription("sub_1", { quantity: 3 });
-
-        expect((other.find((entry) => entry.name === "sub.update")?.args[2] as undefined | { idempotencyKey?: string })?.idempotencyKey).toBe(
-            "update_subscription:stripe:sub_1::3",
-        );
+        // A target-derived key made the second switch to A replay the first one's cached response
+        // inside Stripe's 24h window, silently leaving the subscription on B.
+        expect(calls.filter((entry) => entry.name === "sub.update").map((entry) => (entry.args[2] as { idempotencyKey?: string }).idempotencyKey)).toEqual([
+            undefined,
+            undefined,
+            undefined,
+        ]);
     });
 
     it("lets the caller override the plan-change idempotency key", async () => {
@@ -824,6 +854,56 @@ describe("stripe adapter", () => {
         expect(session.refundedAmount.minorUnits).toBe(1000n);
         // Stripe's `Refund.id` — the per-refund identity the facade keys its local marker on.
         expect(session.refundId).toBe("re_1");
+    });
+
+    it("reports the charge's cumulative amount_refunded as refundedTotal (regression)", async () => {
+        expect.assertions(2);
+
+        const retrieves: unknown[] = [];
+        const client = makeClient([]);
+
+        (client as unknown as { paymentIntents: { retrieve: unknown } }).paymentIntents.retrieve = async (id: string, parameters?: unknown) => {
+            retrieves.push(parameters);
+
+            return {
+                amount: 1000,
+                amount_received: 1000,
+                currency: "usd",
+                id,
+                latest_charge: { amount_refunded: 700, currency: "usd", id: "ch_1" },
+                status: "succeeded",
+            };
+        };
+        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+
+        const result = await adapter.refundPayment({ amount: money(500n, "usd"), sessionId: "pi_1" });
+
+        // An earlier 200 refund plus this 500: the provider's total, not this refund's delta.
+        expect(result.refundedTotal?.minorUnits).toBe(700n);
+        expect(retrieves).toEqual([{ expand: ["latest_charge"] }]);
+    });
+
+    it("flags a refund Stripe has not settled yet as pending (regression)", async () => {
+        expect.assertions(2);
+
+        const client = makeClient([]);
+
+        (client as unknown as { refunds: unknown }).refunds = {
+            create: async () => {
+                return { id: "re_2", status: "pending" };
+            },
+        };
+        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+
+        await expect(adapter.refundPayment({ sessionId: "pi_1" })).resolves.toMatchObject({ pending: true });
+
+        (client as unknown as { refunds: unknown }).refunds = {
+            create: async () => {
+                return { id: "re_3", status: "succeeded" };
+            },
+        };
+
+        await expect(adapter.refundPayment({ sessionId: "pi_1" })).resolves.toMatchObject({ pending: false });
     });
 
     it("refunds a strictly smaller amount as state=partially_refunded", async () => {

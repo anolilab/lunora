@@ -1498,3 +1498,183 @@ describe("createPayment — attach / check / track", () => {
         expect(sumUsageByFeature).toHaveBeenCalledTimes(1);
     });
 });
+
+describe("createPayment — bug-hunt regressions", () => {
+    const entitlements = { plans: { pro: { features: ["export"], limits: { api_calls: 100 }, priceIds: ["price_1"] } } };
+
+    const owned = { authorize: (referenceId: string) => referenceId === "user_1" };
+
+    it("windows metered usage on the granting plan, so an unrelated subscription's fresh period does not reset it", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), currentPeriodStart: 1000 });
+
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), entitlements, store });
+
+        await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
+        // An add-on bought later — it grants nothing metered, and its period starts after the usage.
+        await store.upsertSubscription({
+            ...subscription("user_1", "active"),
+            currentPeriodStart: Date.now() + 1_000_000,
+            id: "sub_addon",
+            priceId: "price_addon",
+        });
+
+        await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ used: 30 });
+        await expect(payment.listBalances("user_1")).resolves.toContainEqual(expect.objectContaining({ featureId: "api_calls", used: 30 }));
+    });
+
+    it("check rejects a negative / non-integer quantity like track does", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription({ ...subscription("user_1", "active"), currentPeriodStart: 1000 });
+
+        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+
+        await payment.track({ featureId: "api_calls", quantity: 150, referenceId: "user_1" });
+
+        // Over the cap, a negative `need` made `balance >= need` true.
+        await expect(payment.check({ featureId: "api_calls", quantity: -100, referenceId: "user_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(payment.check({ featureId: "api_calls", quantity: 0.5, referenceId: "user_1" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("namespaces a caller's track key per reference, so one tenant cannot claim another's", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), store });
+
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "k1", quantity: 5, referenceId: "user_a" })).resolves.toMatchObject({
+            recorded: true,
+        });
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "k1", quantity: 7, referenceId: "user_b" })).resolves.toMatchObject({
+            recorded: true,
+        });
+        await expect(store.sumUsage("user_b", "api_calls", 0)).resolves.toBe(7);
+    });
+
+    it("namespaces a caller's checkout key per reference before it reaches the provider", async () => {
+        expect.assertions(2);
+
+        const keys: string[] = [];
+        const payment = createPayment({
+            adapter: fakeAdapter({
+                createCheckout: async (input) => {
+                    keys.push(input.idempotencyKey ?? "");
+
+                    return { id: "cs_1", provider: "stripe", url: "https://pay.test" };
+                },
+            }),
+            store: new MemoryPaymentStore(),
+        });
+        const checkout = { idempotencyKey: "k1", mode: "payment", priceId: "price_1", successUrl: "https://x/ok" } as const;
+
+        await payment.createCheckout({ ...checkout, referenceId: "user_a" });
+        await payment.createCheckout({ ...checkout, referenceId: "user_b" });
+
+        expect(keys[0]).not.toBe("k1");
+        expect(keys[0]).not.toBe(keys[1]);
+    });
+
+    it("keys a subscription cancel by mode and by the row's version", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const keys: string[] = [];
+        const adapter = fakeAdapter({
+            cancelSubscription: async (id, cancelOptions) => {
+                keys.push(cancelOptions?.idempotencyKey ?? "");
+
+                return { ...subscription("user_1", "active"), cancelAtPeriodEnd: true, id };
+            },
+        });
+        const payment = createPayment({ adapter, ...owned, store });
+
+        await store.upsertSubscription(subscription("user_1", "active"));
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+        await store.upsertSubscription(subscription("user_1", "active"));
+        await payment.cancelSubscription("sub_1");
+        // Resumed (a later write moved `updatedAt`), then cancelled at period end again.
+        await store.upsertSubscription({ ...subscription("user_1", "active"), updatedAt: 50 });
+        await payment.cancelSubscription("sub_1", { atPeriodEnd: true });
+
+        expect(keys[0]).not.toBe(keys[1]);
+        expect(keys[0]).not.toBe(keys[2]);
+        expect(keys[0]).toBe("cancel_subscription:stripe:sub_1:period_end:0");
+    });
+
+    it("books a refund onto the row as it is after the provider call, keeping a concurrent refund", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_1"));
+
+        const adapter = fakeAdapter({
+            identifier: "stripe",
+            refundPayment: async (input) => {
+                // A second refund of 30 lands while the provider is answering this one.
+                await store.upsertPaymentSession({ ...paymentSession("user_1"), refundedAmount: money(30, "USD"), state: "partially_refunded" });
+
+                return { ...paymentSession("user_1"), refundId: `re_${String(input.amount?.minorUnits)}` };
+            },
+        });
+        const payment = createPayment({ adapter, ...owned, store });
+
+        await payment.refundPayment({ amount: money(40, "USD"), sessionId: "pi_1" });
+
+        const stored = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(stored?.refundedAmount.minorUnits).toBe(70n);
+        expect(stored?.state).toBe("partially_refunded");
+    });
+
+    it("takes an absolute provider's cumulative total instead of adding to a row its webhook already booked", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertPaymentSession(paymentSession("user_1"));
+
+        const adapter = fakeAdapter({
+            refundPayment: async () => {
+                // `charge.refunded` (cumulative 30, THIS refund) lands mid-call.
+                await store.upsertPaymentSession({ ...paymentSession("user_1"), refundedAmount: money(30, "USD"), state: "partially_refunded" });
+
+                return { ...paymentSession("user_1"), refundedTotal: money(30, "USD"), refundId: "re_1" };
+            },
+        });
+        const payment = createPayment({ adapter, ...owned, store });
+
+        await payment.refundPayment({ amount: money(30, "USD"), sessionId: "pi_1" });
+
+        await expect(store.getPaymentSession("stripe", "pi_1")).resolves.toMatchObject({ refundedAmount: money(30, "USD") });
+    });
+
+    it("acknowledges a stale subscription event with 200 and leaves the row alone", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        const payment = createPayment({ adapter: fakeAdapter(), store });
+        const deliver = async (action: Partial<WebhookAction>): Promise<Response> =>
+            payment.handleWebhook(
+                new Request("https://x/webhook", {
+                    body: JSON.stringify({ provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1", ...action }),
+                    method: "POST",
+                }),
+            );
+
+        await deliver({ eventId: "e1", occurredAt: 1000, type: "subscription.active" });
+        await deliver({ eventId: "e2", occurredAt: 3000, type: "subscription.past_due" });
+
+        // The earlier `active`, redelivered after a 5xx.
+        const response = await deliver({ eventId: "e3", occurredAt: 2000, type: "subscription.active" });
+
+        expect(response.status).toBe(200);
+        await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ state: "past_due" });
+    });
+});

@@ -43,15 +43,17 @@
  * `customers.create` type-checks and never leaves the process. Dodo's only working idempotency in
  * this SDK version is body-level (`event_id` on usage ingestion), which we do use.
  *
- * **A key is stable for the logical OPERATION, not fresh per attempt.** A plan change is keyed on
- * the subscription AND the target plan/quantity, so an identical retry replays while a different
- * target is a different key — one key across two parameter sets is a provider-side mismatch error.
- * The cost of that stability is a toggle: re-issuing a target that was applied and then changed
- * away from, inside the provider's idempotency window (24h on Stripe), replays the first response
- * instead of acting. Pass an explicit key (`SubscriptionPatch.idempotencyKey`,
- * `CancelSubscriptionOptions.idempotencyKey`, `resumeSubscription`'s `options`) for that case.
- * Those overrides are honoured by the Stripe adapter only — per the list above, no other
- * provider's plan-change endpoint accepts a key at all.
+ * **A key is stable for the logical OPERATION, not fresh per attempt** — and must change when the
+ * operation does. A capture or refund is keyed on its amount, so an identical retry replays while a
+ * different amount is a different key (one key across two parameter sets is a provider-side mismatch
+ * error). A subscription cancel is keyed on its mode and the stored row's `updatedAt`, so cancel →
+ * resume → cancel inside the provider's idempotency window (24h on Stripe) is a new request rather
+ * than a replay of the first response. Plan changes and resumes derive NO key: they set an absolute
+ * state, so an un-keyed retry is already a no-op, and a target-derived key would replay a toggle
+ * (A → B → A) instead of acting. A caller-supplied key passes through; the ones the facade forwards
+ * (checkout, capture, refund, cancel, `track`) are first namespaced to the object they act on, so
+ * one tenant's key can never claim another's. On the subscription calls only the Stripe adapter
+ * honours one: per the list above, no other provider's plan-change endpoint accepts a key at all.
  */
 import type { Money, ProviderId } from "./types";
 

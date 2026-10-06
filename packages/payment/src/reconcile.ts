@@ -64,11 +64,28 @@ const DEFAULT_USAGE_REPORT_LIMIT = 100;
 
 const sameCurrencyAmount = (a: PaymentSession["amount"], b: PaymentSession["amount"]): boolean => a.currency === b.currency && compareMoney(a, b) === 0;
 
+/**
+ * The price SET is compared, not just the primary `priceId`: a removed add-on leaves the primary
+ * standing, and without this a missed removal kept the add-on's entitlement forever. Only when the
+ * provider reported a complete set — `undefined` is "unknown", the same rule `sync.ts` applies.
+ */
+const priceIdsDrifted = (existing: Subscription, current: Subscription): boolean => {
+    if (current.priceIds === undefined) {
+        return false;
+    }
+
+    const stored = new Set(existing.priceIds ?? [existing.priceId]);
+
+    return stored.size !== new Set(current.priceIds).size || current.priceIds.some((id) => !stored.has(id));
+};
+
 const subscriptionDrifted = (existing: Subscription | undefined, current: Subscription): boolean =>
     existing?.state !== current.state ||
     existing.cancelAtPeriodEnd !== current.cancelAtPeriodEnd ||
     existing.currentPeriodEnd !== current.currentPeriodEnd ||
+    existing.currentPeriodStart !== current.currentPeriodStart ||
     existing.priceId !== current.priceId ||
+    priceIdsDrifted(existing, current) ||
     existing.quantity !== current.quantity;
 
 const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSession): boolean =>
@@ -142,10 +159,13 @@ const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStor
         return false;
     }
 
-    // Preserve the original createdAt when we already had the row.
+    // Preserve the original createdAt when we already had the row. `lastEventAt` stays as stored:
+    // a status read has no event time, and stamping it with OUR clock could out-date a genuinely
+    // newer event from a provider whose clock runs behind, dropping it as stale.
     await store.upsertSubscription({
         ...current,
         createdAt: existing?.createdAt ?? current.createdAt,
+        ...(existing?.lastEventAt === undefined ? {} : { lastEventAt: existing.lastEventAt }),
         referenceId: keepReferenceId(existing?.referenceId, current.referenceId),
     });
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });

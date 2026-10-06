@@ -13,7 +13,7 @@ import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 import { LunoraPaymentError } from "./errors";
 import { derivedIdempotencyKey, idempotencyKey, LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "./idempotency";
-import { addMoney, compareMoney, isZeroMoney, subtractMoney } from "./money";
+import { addMoney, compareMoney, isZeroMoney, maxMoney, subtractMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
@@ -209,6 +209,12 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         }
     };
 
+    // Namespace a caller-supplied idempotency key to the object it acts on. Provider keys are
+    // account-wide, so a bare key is shared across tenants: one tenant could pre-claim another's, or
+    // replay its response. `undefined` when the caller passed none, so the operation derives its own.
+    const callerKey = async (operation: string, id: string, key: string | undefined): Promise<string | undefined> =>
+        key === undefined ? undefined : derivedIdempotencyKey(operation, adapter.identifier, id, key);
+
     // Shared by `createCheckout` and `attach`: reuse the reference's stored provider customer, only
     // minting a new one the first time, then delegate to the adapter with an outbound idempotency key.
     const startCheckout = async (input: CheckoutInput): Promise<CheckoutResult> => {
@@ -239,8 +245,12 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         // window (which would error or return the stale earlier session). Hash the parts so the key stays
         // a fixed length (Stripe rejects keys >255 chars, and two full URLs + metadata routinely exceed
         // that) and can't collide via unescaped `:` joining of the URLs/metadata.
+        //
+        // A caller-supplied key is namespaced to the authorized reference before it reaches the
+        // provider: provider idempotency is account-wide, so a bare key one tenant chose would replay
+        // (or collide with) another tenant's checkout.
         const key =
-            input.idempotencyKey ??
+            (await callerKey("checkout", input.referenceId, input.idempotencyKey)) ??
             (await derivedIdempotencyKey(
                 "checkout",
                 adapter.identifier,
@@ -267,6 +277,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     };
 
     const evaluateFeature = async (
+        config: EntitlementsConfig,
         entitlements: Entitlements,
         subscriptions: ReadonlyArray<Subscription>,
         referenceId: string,
@@ -276,7 +287,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         const limit = entitlements.limit(featureId);
 
         if (limit !== undefined) {
-            const used = await store.sumUsage(referenceId, featureId, usagePeriodStart(subscriptions));
+            const used = await store.sumUsage(referenceId, featureId, usagePeriodStart(config, subscriptions, featureId));
 
             return meteredResult(limit, used, need);
         }
@@ -331,8 +342,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
      * unrefundable. Merge the way the webhook path does (`sync.ts`): the stored row owns identity and
      * money, and each operation contributes only the fields it actually establishes.
      */
-    const persistSession = async (existing: PaymentSession, patch: Partial<PaymentSession>): Promise<PaymentSession> => {
-        const merged: PaymentSession = { ...existing, ...patch, updatedAt: Date.now() };
+    //
+    // The patch is applied to the row RE-READ after the provider call, not to the pre-call read: a
+    // webhook or a concurrent call can land while the provider is answering, and writing the old row
+    // back would undo it. `existing` stands in only when there is still no stored row at all.
+    const persistSession = async (existing: PaymentSession, patch: (fresh: PaymentSession) => Partial<PaymentSession>): Promise<PaymentSession> => {
+        const fresh = (await store.getPaymentSession(adapter.identifier, existing.id)) ?? existing;
+        const merged: PaymentSession = { ...fresh, ...patch(fresh), updatedAt: Date.now() };
 
         await store.upsertPaymentSession(merged);
 
@@ -347,11 +363,16 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         cancelPayment: async (sessionId, cancelOptions) => {
             const existing = await ownedSession(sessionId);
 
-            const key = cancelOptions?.idempotencyKey ?? idempotencyKey("cancel_payment", adapter.identifier, sessionId);
-            const updated = await adapter.cancelPayment(sessionId, { ...cancelOptions, idempotencyKey: key });
+            const key = await callerKey("cancel_payment", sessionId, cancelOptions?.idempotencyKey);
+            const updated = await adapter.cancelPayment(sessionId, {
+                ...cancelOptions,
+                idempotencyKey: key ?? idempotencyKey("cancel_payment", adapter.identifier, sessionId),
+            });
 
             // A cancel establishes the state and nothing else — the amounts on the row stand.
-            return persistSession(existing, { state: updated.state });
+            return persistSession(existing, () => {
+                return { state: updated.state };
+            });
         },
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
@@ -370,7 +391,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
             }
 
-            const key = cancelOptions?.idempotencyKey ?? idempotencyKey("cancel_subscription", adapter.identifier, subscriptionId);
+            // The default key carries the MODE (period-end and immediate are different provider calls,
+            // and one key across both is a Stripe idempotency_error) and the row's `updatedAt`, so a
+            // cancel → resume → cancel inside the provider's 24h window is a new request rather than a
+            // replay of the first cancel's response. A plain retry sees the same row and the same key.
+            const key =
+                (await callerKey("cancel_subscription", subscriptionId, cancelOptions?.idempotencyKey)) ??
+                idempotencyKey(
+                    "cancel_subscription",
+                    adapter.identifier,
+                    subscriptionId,
+                    cancelOptions?.atPeriodEnd ? "period_end" : "now",
+                    existing.updatedAt,
+                );
             const updated = await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key });
 
             // Keep the stored `referenceId` over the adapter's. The adapter maps a MUTATION response,
@@ -379,7 +412,12 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // Stripe/Polar/Creem resolve to `""`, either of which orphans the row from `by_reference`,
             // `check`/`hasActivePrice` and the default authorizer — and a customer id permanently,
             // because `sync.ts` only fills a blank owner. Same rule `reconcile` applies on its own write.
-            const synced = { ...updated, referenceId: existing.referenceId === "" ? updated.referenceId : existing.referenceId };
+            // `lastEventAt` stays as stored too: a mutation response is not an event.
+            const synced: Subscription = {
+                ...updated,
+                ...(existing.lastEventAt === undefined ? {} : { lastEventAt: existing.lastEventAt }),
+                referenceId: existing.referenceId === "" ? updated.referenceId : existing.referenceId,
+            };
 
             await store.upsertSubscription(synced);
 
@@ -392,12 +430,16 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // The amount is part of the key: `CaptureInput` supports partial captures, and reusing one
             // key across two different amounts makes the provider reject the second call as a
             // parameter mismatch — while two identical ones must still replay rather than double-charge.
-            const key = input.idempotencyKey ?? (await derivedIdempotencyKey("capture_payment", adapter.identifier, input.sessionId, amountPart(input.amount)));
+            const key =
+                (await callerKey("capture_payment", input.sessionId, input.idempotencyKey)) ??
+                (await derivedIdempotencyKey("capture_payment", adapter.identifier, input.sessionId, amountPart(input.amount)));
             const updated = await adapter.capturePayment({ ...input, idempotencyKey: key });
 
             // The provider's captured total is authoritative here, and its own `payment.captured`
             // webhook later ASSIGNS the same value (never accumulates), so both paths agree.
-            return persistSession(existing, { capturedAmount: updated.capturedAmount, state: updated.state });
+            return persistSession(existing, () => {
+                return { capturedAmount: updated.capturedAmount, state: updated.state };
+            });
         },
 
         check: async (input) => {
@@ -408,6 +450,14 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // would reach a provider-owned adapter unscoped and could fail open ("customer exists").
             if (input.featureId === undefined && input.priceId === undefined) {
                 throw new LunoraPaymentError("VALIDATION_ERROR", "check() requires a featureId or priceId");
+            }
+
+            // Same boundary as `track`: a negative `need` makes `balance >= need` true past the cap.
+            // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- deliberate: `??` would swallow a runtime `null` the type says can't happen
+            const need = input.quantity === undefined ? 1 : input.quantity;
+
+            if (!Number.isSafeInteger(need) || need < 0) {
+                throw new LunoraPaymentError("VALIDATION_ERROR", `check(): \`quantity\` must be a non-negative safe integer (got ${String(input.quantity)})`);
             }
 
             // When the provider owns entitlement truth (e.g. Autumn), delegate the whole decision to
@@ -436,7 +486,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             const entitlements = resolveEntitlements(options.entitlements, subscriptions);
 
-            return evaluateFeature(entitlements, subscriptions, input.referenceId, input.featureId, input.quantity ?? 1);
+            return evaluateFeature(options.entitlements, entitlements, subscriptions, input.referenceId, input.featureId, need);
         },
 
         createCheckout: async (input) => startCheckout(input),
@@ -504,17 +554,26 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 return adapter.getBalances(referenceId);
             }
 
-            if (!options.entitlements) {
+            const config = options.entitlements;
+
+            if (!config) {
                 throw new LunoraPaymentError("CONFIG_INVALID", "listBalances() requires `entitlements` to be configured");
             }
 
             const subscriptions = await store.listSubscriptionsByReference(referenceId);
-            const entitlements = resolveEntitlements(options.entitlements, subscriptions);
-            const names = featureNames(options.entitlements);
+            const entitlements = resolveEntitlements(config, subscriptions);
+            const names = featureNames(config);
             const metered = names.filter((featureId) => entitlements.limit(featureId) !== undefined);
-            // One batched ledger read for every metered feature instead of one unbounded scan each.
-            const usage =
-                metered.length === 0 ? new Map<string, number>() : await store.sumUsageByFeature(referenceId, metered, usagePeriodStart(subscriptions));
+            // Each metered feature resets on its OWN granting plan's period, so batch the ledger
+            // read per distinct window — usually one — rather than one unbounded scan per feature.
+            const byWindow = Map.groupBy(metered, (featureId) => usagePeriodStart(config, subscriptions, featureId));
+            const usage = new Map<string, number>();
+
+            for (const totals of await Promise.all([...byWindow].map(async ([since, featureIds]) => store.sumUsageByFeature(referenceId, featureIds, since)))) {
+                for (const [featureId, used] of totals) {
+                    usage.set(featureId, used);
+                }
+            }
 
             // `names` is already sorted; mapping it preserves the order.
             return names.map((featureId) => {
@@ -582,7 +641,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // passes a distinct `input.idempotencyKey` for that; the replay guard below is what keeps
             // the ledger honest when they do not.
             const key =
-                input.idempotencyKey ??
+                (await callerKey("refund_payment", input.sessionId, input.idempotencyKey)) ??
                 (await derivedIdempotencyKey("refund_payment", adapter.identifier, input.sessionId, amountPart(providerAmount), input.reason ?? ""));
 
             const issuedRefund = await adapter.refundPayment({ ...input, amount: providerAmount, idempotencyKey: key });
@@ -635,9 +694,21 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
 
             try {
-                return await persistSession(existing, {
-                    refundedAmount: refunded,
-                    state: compareMoney(refunded, existing.capturedAmount) < 0 ? "partially_refunded" : "refunded",
+                // Onto the row as it is NOW, not as it was before the provider call: a concurrent
+                // refund (or a webhook for another one) may have landed meanwhile, and writing
+                // `existing + issued` would erase it. An absolute provider reports its cumulative total
+                // instead, which already includes anything that landed — and may include THIS refund
+                // via its own webhook, so adding to it would count it twice.
+                return await persistSession(existing, (fresh) => {
+                    const prospective =
+                        issuedRefund.refundedTotal === undefined
+                            ? addMoney(fresh.refundedAmount, issued)
+                            : maxMoney(fresh.refundedAmount, issuedRefund.refundedTotal);
+                    // The money has already moved, so a total past the capture (two racing refunds
+                    // the provider settled between them) is recorded as fully refunded, not thrown.
+                    const total = compareMoney(prospective, fresh.capturedAmount) > 0 ? fresh.capturedAmount : prospective;
+
+                    return { refundedAmount: total, state: compareMoney(total, fresh.capturedAmount) < 0 ? "partially_refunded" : "refunded" };
                 });
             } catch (error) {
                 // The marker is claimed BEFORE the row, because the confirming webhook can arrive while
@@ -680,8 +751,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             if (!Number.isSafeInteger(target) || target < 0) {
                 throw new LunoraPaymentError("VALIDATION_ERROR", `track(): \`quantity\` must be a non-negative safe integer (got ${String(input.quantity)})`);
             }
-            // A caller-stable key dedupes retries; an omitted one means "always record".
-            const key = input.idempotencyKey ?? crypto.randomUUID();
+            // A caller-stable key dedupes retries; an omitted one means "always record". The ledger's
+            // dedupe index is per PROVIDER, so a caller's key is namespaced to its reference and
+            // feature first — bare, tenant B's "u1" was silently dropped as tenant A's duplicate.
+            const key =
+                input.idempotencyKey === undefined
+                    ? crypto.randomUUID()
+                    : await derivedIdempotencyKey("track", adapter.identifier, input.referenceId, input.featureId, input.idempotencyKey);
 
             // Both modes are a single append — the ledger is append-only and the
             // period total is a FOLD over it (`foldUsage`), not a plain sum: an
@@ -723,7 +799,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             // fold resolves the period regardless of what this read saw. Nothing
             // downstream depends on it, which is what keeps the path race-free.
             const subscriptions = isSet ? await store.listSubscriptionsByReference(input.referenceId) : undefined;
-            const current = subscriptions === undefined ? 0 : await store.sumUsage(input.referenceId, input.featureId, usagePeriodStart(subscriptions));
+            const current =
+                subscriptions === undefined
+                    ? 0
+                    : await store.sumUsage(input.referenceId, input.featureId, usagePeriodStart(options.entitlements, subscriptions, input.featureId));
 
             if (isSet ? target === current : target === 0) {
                 return { recorded: false, reportedToProvider: false };

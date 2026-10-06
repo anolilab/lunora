@@ -94,7 +94,7 @@ describe("autumn adapter", () => {
     });
 
     it("creates a checkout via billing.attach keyed on the customer + plan", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const calls: RecordedCall[] = [];
         const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
@@ -112,6 +112,7 @@ describe("autumn adapter", () => {
         const attach = calls.find((call) => call.name === "attach")?.args[0] as Record<string, unknown>;
 
         expect(attach.planId).toBe("pro");
+        expect(attach.successUrl).toBe("https://x/ok");
         // Autumn keys everything on the customer id (our reference id) — no caller metadata to smuggle.
         expect(attach.customerId).toBe("user_1");
     });
@@ -195,6 +196,19 @@ describe("autumn adapter", () => {
         expect(subscription.priceId).toBe("pro");
     });
 
+    it("matches the real SDK row on planId, not the subscription's own id (regression)", async () => {
+        expect.assertions(2);
+
+        // `GetCustomerSubscription`: `id` is the subscription id, the plan is `planId`.
+        const client = makeClient([], {
+            customerGet: { id: "user_1", subscriptions: [{ id: "sub_internal_1", pastDue: false, planId: "pro", status: "active" }] },
+        });
+        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+
+        await expect(adapter.getSubscriptionStatus("user_1::pro")).resolves.toMatchObject({ id: "user_1::pro", priceId: "pro", state: "active" });
+        await expect(adapter.checkEntitlement?.({ priceId: "pro", referenceId: "user_1" })).resolves.toMatchObject({ allowed: true });
+    });
+
     it("fails closed: a separate past_due boolean overrides an active status (regression)", async () => {
         expect.assertions(1);
 
@@ -275,49 +289,51 @@ describe("autumn adapter", () => {
         });
     });
 
-    it("normalizes a verified product.attached webhook to an active subscription", async () => {
+    it("maps customer.products.updated from the customer's own row for the updated product (regression)", async () => {
         expect.assertions(4);
 
         const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
-
         const payload = JSON.stringify({
-            data: { customer_id: "user_1", product: { current_period_end: 1_900_000_000_000, id: "pro", status: "active" } },
-            type: "product.attached",
+            data: {
+                customer: { id: "user_1", subscriptions: [{ canceledAt: 1_900_000_000_000, id: "sub_x", planId: "pro", status: "active" }] },
+                scenario: "cancel",
+                updated_product: { id: "pro" },
+            },
+            type: "customer.products.updated",
         });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const action = await adapter.parseWebhook({ headers: headersFor("msg_1", timestamp, sign("msg_1", timestamp, payload)), payload });
 
+        // A `cancel` scenario on a still-active row is a period-end cancel, not a revocation.
         expect(action.type).toBe("subscription.active");
+        expect(action.cancelAtPeriodEnd).toBe(true);
         expect(action.subscriptionId).toBe("user_1::pro");
-        expect(action.referenceId).toBe("user_1");
         expect(action.eventId).toBe("msg_1");
     });
 
-    it("maps a canceled product event to a cancellation", async () => {
-        expect.assertions(2);
+    it("falls back to the scenario when the updated product has left the customer's rows", async () => {
+        expect.assertions(1);
 
         const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
-
-        const payload = JSON.stringify({ data: { customer_id: "user_1", product: { id: "pro", status: "active" } }, type: "customer.product.canceled" });
+        const payload = JSON.stringify({
+            data: { customer: { id: "user_1", subscriptions: [] }, scenario: "expired", updated_product: { id: "pro" } },
+            type: "customer.products.updated",
+        });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const action = await adapter.parseWebhook({ headers: headersFor("msg_2", timestamp, sign("msg_2", timestamp, payload)), payload });
 
         expect(action.type).toBe("subscription.canceled");
-        expect(action.subscriptionId).toBe("user_1::pro");
     });
 
-    it("normalizes a settled invoice.paid webhook to a captured payment", async () => {
-        expect.assertions(3);
+    it("leaves event names outside Autumn's webhook catalog unhandled", async () => {
+        expect.assertions(1);
 
         const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
-
         const payload = JSON.stringify({ data: { currency: "usd", customer_id: "user_1", id: "inv_1", total: 2500 }, type: "invoice.paid" });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const action = await adapter.parseWebhook({ headers: headersFor("msg_3", timestamp, sign("msg_3", timestamp, payload)), payload });
 
-        expect(action.type).toBe("payment.captured");
-        expect(action.amount?.minorUnits).toBe(2500n);
-        expect(action.sessionId).toBe("inv_1");
+        expect(action.type).toBe("unhandled");
     });
 
     it("maps a verified billing.updated webhook (plan_changes shape) to a subscription transition (regression)", async () => {

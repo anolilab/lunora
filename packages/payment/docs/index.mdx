@@ -264,7 +264,9 @@ export const checkout = action.input({ priceId: v.string() }).action(async ({ ct
 
 `createCheckout` reuses a reference's stored provider customer, minting a new
 one only on first checkout, and attaches an outbound idempotency key
-automatically (override via `input.idempotencyKey`).
+automatically (override via `input.idempotencyKey`). A key you pass is
+namespaced to the authorized reference before it reaches the provider, so two
+tenants choosing the same key never collide.
 
 ### Entitlements: `check` and `track`
 
@@ -278,7 +280,9 @@ active plans cap the same limit, the most-generous value wins.
 - A **boolean feature** check (`featureId`, no numeric limit) returns
   `unlimited: true` when granted.
 - A **metered feature** check (`featureId` with a plan `limit`) subtracts usage
-  tracked this period and returns `{ allowed, balance, limit, used }`.
+  tracked this period and returns `{ allowed, balance, limit, used }`. "This
+  period" is the billing period of the subscription whose plan grants that
+  limit, so an unrelated subscription renewing never resets it.
 
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
@@ -306,9 +310,9 @@ failure is observed, never thrown, and the local ledger `check` reads is always
 updated.
 
 <Callout type="warn">
-    **Deduping a retry is opt-in.** Pass your own `idempotencyKey` — a unique index over `(provider, idempotencyKey)` then makes the append exactly-once, so a
-    retried call records once. Omit it (as the example above does) and `track` mints a fresh `crypto.randomUUID()` per call, which means "always record": the
-    same call retried after a timeout counts twice. Derive the key from whatever identifies the unit of work — the request id, the message id, the job id.
+    **Deduping a retry is opt-in.** Pass your own `idempotencyKey` — namespaced to the reference and feature, it makes the append exactly-once, so a retried
+    call records once. Omit it (as the example above does) and `track` mints a fresh `crypto.randomUUID()` per call, which means "always record": the same call
+    retried after a timeout counts twice. Derive the key from whatever identifies the unit of work — the request id, the message id, the job id.
 </Callout>
 
 <Callout type="warn">
@@ -371,7 +375,10 @@ export const processWebhook = internalAction
 `WebhookAction` (e.g. `subscription.active`, `payment.captured`,
 `payment.refunded`), and applies it through the state machine. A duplicate or
 no-op event is acknowledged with `200`, not re-applied. The inbound provider
-event id keys an append-only `events` log for idempotency and audit.
+event id keys an append-only `events` log for idempotency and audit. A
+subscription event older than the last one applied to its row (a redelivery
+after a `5xx`) is acknowledged as `stale` and ignored, so a late `active` cannot
+re-entitle a subscription that has since gone `past_due`.
 
 There is one deliberate non-200. An **orphaned** event — one that patches a row
 whose create event has not arrived yet, which is how providers deliver

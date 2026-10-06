@@ -591,6 +591,26 @@ const emitQueuesMetadataFragments = (queues: ReadonlyArray<QueueIR>): { constant
 };
 
 /**
+ * Every callable member of `LunoraPayment`, which `paymentStub` stubs. Missing one here meant the
+ * stub's `as unknown as LunoraPayment` cast hid the gap, and calling it failed with an opaque
+ * "not a function" instead of the "no payment configured" message.
+ */
+const PAYMENT_METHODS = [
+    "attach",
+    "cancelPayment",
+    "cancelSubscription",
+    "capturePayment",
+    "check",
+    "createCheckout",
+    "createPortalSession",
+    "handleWebhook",
+    "listBalances",
+    "listSubscriptions",
+    "refundPayment",
+    "track",
+] as const;
+
+/**
  * The `ctx.payments` code fragments woven into the generated ShardDO, or empty strings when the
  * project doesn't use payments. Unlike `ctx.ai` (a stateless binding), the facade is stateful —
  * its store rides the request's `ctx.db` — so it is a getter on the ctx literal (built on first read)
@@ -625,25 +645,10 @@ const emitPaymentFragments = (
 
                     return payments;
                 },`,
-        stub: renderThrowingStub(
-            "paymentStub: LunoraPayment",
-            "ctx.payments: no payment configured. Pass `payment` to createShardDO().",
-            ["attach", "cancelSubscription", "check", "createCheckout", "createPortalSession", "handleWebhook", "listBalances", "listSubscriptions", "track"],
-            {
-                cast: " as unknown as LunoraPayment",
-                sync: [
-                    "attach",
-                    "cancelSubscription",
-                    "check",
-                    "createCheckout",
-                    "createPortalSession",
-                    "handleWebhook",
-                    "listBalances",
-                    "listSubscriptions",
-                    "track",
-                ],
-            },
-        ),
+        stub: renderThrowingStub("paymentStub: LunoraPayment", "ctx.payments: no payment configured. Pass `payment` to createShardDO().", PAYMENT_METHODS, {
+            cast: " as unknown as LunoraPayment",
+            sync: PAYMENT_METHODS,
+        }),
     };
 };
 

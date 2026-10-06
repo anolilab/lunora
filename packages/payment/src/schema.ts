@@ -41,6 +41,8 @@ const subscriptions = defineTable({
     createdAt: v.number(),
     currentPeriodEnd: v.optional(v.number()),
     currentPeriodStart: v.optional(v.number()),
+    // Provider time of the newest webhook applied — an older redelivery is ignored as stale.
+    lastEventAt: v.optional(v.number()),
     priceId: v.string(),
 
     /**

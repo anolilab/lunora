@@ -63,6 +63,7 @@ export interface Doc_subscriptions {
     createdAt: number;
     currentPeriodEnd?: number;
     currentPeriodStart?: number;
+    lastEventAt?: number;
     priceId: string;
     priceIds?: Array<string>;
     provider: string;
@@ -201,6 +202,7 @@ export interface Insert_subscriptions {
     createdAt: number;
     currentPeriodEnd?: number;
     currentPeriodStart?: number;
+    lastEventAt?: number;
     priceId: string;
     priceIds?: Array<string>;
     provider: string;

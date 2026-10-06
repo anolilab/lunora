@@ -222,7 +222,7 @@ const subscriptionFromStripe = (input: unknown): Subscription => {
  * the next — takes the same shape instead of repeating its own preamble.
  */
 interface StripeEvent {
-    base: Pick<WebhookAction, "eventId" | "provider" | "raw">;
+    base: Pick<WebhookAction, "eventId" | "occurredAt" | "provider" | "raw">;
     currency: string;
     object: Record<string, unknown>;
 }
@@ -314,8 +314,8 @@ const disputeClosedAction = ({ base, currency, object }: StripeEvent): WebhookAc
     };
 };
 
-const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
-    const base = { eventId, provider: "stripe" as const, raw: { object, type: eventType } };
+const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>, occurredAt: number | undefined): WebhookAction => {
+    const base = { eventId, occurredAt, provider: "stripe" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
     const event: StripeEvent = { base, currency, object };
 
@@ -477,6 +477,9 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                     // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
                     metadata: { ...input.metadata, referenceId: input.referenceId },
                     mode: input.mode,
+                    // The PaymentIntent needs the reference too: `payment_intent.succeeded` can land
+                    // before `checkout.session.completed` and is mapped from the intent alone.
+                    payment_intent_data: input.mode === "payment" ? { metadata: { ...input.metadata, referenceId: input.referenceId } } : undefined,
                     subscription_data: input.mode === "subscription" ? { metadata: { referenceId: input.referenceId } } : undefined,
                     success_url: input.successUrl,
                 },
@@ -550,7 +553,10 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
             const object = asRecord(asRecord(event.data).object);
 
-            return mapEvent(event.id, event.type, object);
+            const created = readNumber(asRecord(event), "created");
+
+            // `event.created` is Unix seconds.
+            return mapEvent(event.id, event.type, object, created === undefined ? undefined : created * 1000);
         },
 
         refundPayment: async (input: RefundInput) => {
@@ -563,12 +569,28 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 { idempotencyKey: input.idempotencyKey },
             );
 
-            const intent = await client.paymentIntents.retrieve(input.sessionId);
+            // Expand the charge for its cumulative `amount_refunded` — the same total `charge.refunded`
+            // reports, which may already have booked this refund by the time we return.
+            const intent = await client.paymentIntents.retrieve(input.sessionId, { expand: ["latest_charge"] });
             const session = intentToSession(intent);
             const refundedAmount = input.amount ?? session.capturedAmount;
+            const charge = asRecord(intent.latest_charge);
+            const amountRefunded = readNumber(charge, "amount_refunded");
             const partial = input.amount !== undefined && compareMoney(input.amount, session.capturedAmount) < 0;
 
-            return { ...session, refundedAmount, refundId: refund.id, state: partial ? "partially_refunded" : "refunded" };
+            // Not every Stripe refund settles synchronously (`pending`, `requires_action`, …); the
+            // facade holds its ledger back until `charge.refunded` confirms one that has not.
+            return {
+                ...session,
+                pending: refund.status !== "succeeded",
+                refundedAmount,
+                refundId: refund.id,
+                refundedTotal:
+                    amountRefunded === undefined
+                        ? undefined
+                        : money(BigInt(Math.round(amountRefunded)), readString(charge, "currency") ?? session.capturedAmount.currency),
+                state: partial ? "partially_refunded" : "refunded",
+            };
         },
 
         reportUsage: async (input: ReportUsageInput) => {
@@ -586,12 +608,13 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         resumeSubscription: async (subscriptionId, resumeOptions) => {
-            // Its own operation name: `cancel_subscription`'s key on the same subscription would make a
-            // resume replay the cancel's cached response instead of clearing the pending cancellation.
+            // No derived default key: this sets absolute state, so a plain retry is already idempotent,
+            // while a stable key would make cancel → resume → cancel → resume inside Stripe's 24h window
+            // replay the first resume's cached response and silently leave the second cancel standing.
             const subscription = await client.subscriptions.update(
                 subscriptionId,
                 { cancel_at_period_end: false },
-                { idempotencyKey: resumeOptions?.idempotencyKey ?? idempotencyKey("resume_subscription", "stripe", subscriptionId) },
+                { idempotencyKey: resumeOptions?.idempotencyKey },
             );
 
             return subscriptionFromStripe(subscription);
@@ -608,13 +631,11 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 parameters.items = [{ id: current.items.data[0]?.id, price: patch.priceId, quantity: patch.quantity }];
             }
 
-            // A plan change prorates, so an un-keyed retry charges twice. The TARGET is part of the key:
-            // this is the one call whose parameters vary, and reusing one key across two of them makes
-            // Stripe reject the second as a mismatch — while an identical retry must still replay.
-            const subscription = await client.subscriptions.update(subscriptionId, parameters, {
-                idempotencyKey:
-                    patch.idempotencyKey ?? idempotencyKey("update_subscription", "stripe", subscriptionId, patch.priceId ?? "", patch.quantity ?? ""),
-            });
+            // No derived default key: the update sets the item to an absolute price/quantity, so a retry
+            // of an already-applied change is a no-op (no second proration). A key derived from the
+            // target would make plan A → B → A inside Stripe's 24h window replay the first A response
+            // and silently leave the subscription on B.
+            const subscription = await client.subscriptions.update(subscriptionId, parameters, { idempotencyKey: patch.idempotencyKey });
 
             return subscriptionFromStripe(subscription);
         },

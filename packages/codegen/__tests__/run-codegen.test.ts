@@ -4626,7 +4626,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("wires ctx.payments into the ShardDO when payments are used", () => {
-            expect.assertions(5);
+            expect.assertions(8);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
@@ -4637,6 +4637,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("const paymentStub: LunoraPayment");
             expect(output).toContain("config.payment");
             expect(output).toContain("payments ??= config.payment");
+
+            // The money-moving facade methods are stubbed too — not left as `undefined` behind the cast.
+            for (const method of ["cancelPayment", "capturePayment", "refundPayment"]) {
+                expect(output).toContain(`    ${method}: () => {`);
+            }
         });
 
         it("omits @lunora/payment entirely when payments are not used", () => {
