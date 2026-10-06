@@ -1,3 +1,11 @@
+## @lunora/solid [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.189...@lunora/solid@1.0.0-alpha.190) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.181
+* **@visulima/storage-client:** 1.0.5 → 1.0.8
+
 ## @lunora/solid [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/solid@1.0.0-alpha.188...@lunora/solid@1.0.0-alpha.189) (2026-10-05)
 
 
