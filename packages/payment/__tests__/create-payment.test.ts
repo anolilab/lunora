@@ -648,6 +648,29 @@ describe("createPayment", () => {
         await expect(store.getPaymentSession("polar", "ord_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(250n);
     });
 
+    it("books the amount asked for when the provider reports a zero amount (security regression)", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const dodoSession = { ...paymentSession("user_1"), id: "pay_1", provider: "dodopayments" as const };
+
+        await store.upsertPaymentSession(dodoSession);
+
+        // Dodo's response can omit the amount, which the adapter reads as 0. Booking that would claim
+        // the refund id's marker for nothing, and the confirming webhook would then be a duplicate.
+        const adapter = fakeAdapter({
+            identifier: "dodopayments",
+            refundPayment: async () => {
+                return { ...dodoSession, refundedAmount: money(0, "USD"), refundId: "ref_1" };
+            },
+        });
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.refundPayment({ sessionId: "pay_1" });
+
+        await expect(store.getPaymentSession("dodopayments", "pay_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(1000n);
+    });
+
     it("asks the provider for the remainder when a full refund follows a partial one", async () => {
         expect.assertions(4);
 

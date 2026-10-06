@@ -596,8 +596,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
 
             // What the provider says this refund moved (Polar caps at the refundable amount and adds
-            // tax), else what was asked for.
-            const booked = issuedRefund.refundedAmount.currency === issued.currency ? issuedRefund.refundedAmount : issued;
+            // tax), else what was asked for. A zero report is "unknown", never "nothing moved": booking it
+            // would claim the refund's marker for 0, and the confirming webhook would then add nothing.
+            const reported = issuedRefund.refundedAmount;
+            const booked = reported.currency === issued.currency && reported.minorUnits > 0n ? reported : issued;
             const marker = localRefundKey(input.sessionId, issuedRefund.refundId, booked);
 
             // Book the refund on the row now: this ledger is what makes the over-refund guard reject a
