@@ -83,6 +83,7 @@ export type { CdcArchiveScope } from "./ctx-db-cdc-archive";
 export { archiveCdcSegment, cdcArchiveRewound, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough } from "./ctx-db-cdc-archive";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export { allocateCommitSeq, COMMIT_SEQ_FIELD, COMMIT_SEQ_TABLE, migrateCommitSeq, readCommitSeq } from "./ctx-db-commit-seq";
+export { clearCompanionSignatures } from "./ctx-db-companion-state";
 export type { CompanionSync, CompanionSyncDeps } from "./ctx-db-companions";
 export { createCompanionSync } from "./ctx-db-companions";
 export {

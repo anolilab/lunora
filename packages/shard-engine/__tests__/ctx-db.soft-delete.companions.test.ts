@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aggregateTableName } from "../src/aggregate-tally";
 import type { DatabaseWriterLike, SchemaLike, WriteHook } from "../src/ctx-db";
 import { backfillAggregateIndexes, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { clearCompanionSignatures } from "../src/ctx-db-companion-state";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -86,11 +87,9 @@ describe("soft delete — rank companion", () => {
  * companion became live-only, that left a bigint column with no way to be
  * aggregated at all on a `.softDelete()` table, at any magnitude.
  *
- * Every case here therefore aggregates a PROJECTED column, because that is the
- * only shape that reaches the companion on a soft-delete table — a reader whose
- * scan can answer keeps the scan (see the note on `isProjectedField`). A case
- * that groups or counts on a plain column would pass with the fix reverted and
- * prove nothing.
+ * Every case here aggregates a PROJECTED column, because that is the shape the
+ * scan cannot answer: a case that groups or counts on a plain column would pass
+ * off the scan with the fix reverted and prove nothing.
  */
 describe("soft delete — aggregate companion", () => {
     const schema: SchemaLike = {
@@ -222,18 +221,16 @@ describe("soft delete — aggregate companion", () => {
     it("seeds the EXPLICIT backfill over live rows only", async () => {
         expect.assertions(1);
 
-        // `backfillAggregateIndexes` is the eager twin of the lazy rebuild — a
-        // separate implementation with its own idempotence guard, so the
-        // liveness rule has to hold in both or a host that pre-seeds its
-        // companions gets a different answer from one that does not. The lazy
-        // path is covered above; this is the twin.
+        // `backfillAggregateIndexes` is the eager entry to the lazy rebuild; a
+        // host that pre-seeds its companions must get the same answer as one
+        // that does not. The lazy path is covered above; this is the eager one.
         const writer = await setup();
 
         await writer.delete("i1", "invoices");
 
-        // Drop the companions so the eager seed does the work rather than
-        // no-opping on its `hasRows` guard.
-        harness.sql.exec(`DELETE FROM ${aggregateTableName("invoices", "sumByCurrency")}`);
+        // Forget the rebuild markers so the eager seed rebuilds rather than
+        // trusting the companions the writes above built.
+        clearCompanionSignatures(harness.sql);
         backfillAggregateIndexes(harness.sql, schema);
 
         const usd = harness.sql

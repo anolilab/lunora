@@ -72,6 +72,7 @@ const ADMIN_FUNCTIONS: {
     readonly rankBefore: "__lunora_admin__:rankBefore";
     readonly rankPage: "__lunora_admin__:rankPage";
     readonly readTablePage: "__lunora_admin__:readTablePage";
+    readonly rebuildCompanions: "__lunora_admin__:rebuildCompanions";
     readonly recordAuthEvent: "__lunora_admin__:recordAuthEvent";
     readonly recordContainerEvent: "__lunora_admin__:recordContainerEvent";
     readonly recordMail: "__lunora_admin__:recordMail";
@@ -3743,6 +3744,12 @@ const clampPromotionThresholds: (tUp: number, tDownRaw: number) => PromotionThre
 const clearCapturedMail: (sql: SqlExec) => {
     cleared: true;
 };
+```
+
+### `clearCompanionSignatures` (const)
+
+```ts
+const clearCompanionSignatures: (sql: SqlExec) => void;
 ```
 
 ### `clearMemoryTables` (const)

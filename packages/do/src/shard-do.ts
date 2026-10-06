@@ -153,6 +153,7 @@ import {
     cdcTouchesTables,
     cdcTrimmedError,
     clearCapturedMail,
+    clearCompanionSignatures,
     clearQueueMessages,
     ConflictError,
     createDependencyTracker,
@@ -9781,6 +9782,21 @@ abstract class ShardDO {
     }
 
     /**
+     * `__lunora_admin__:rebuildCompanions` — forget every aggregate/rank
+     * companion's durable rebuild marker, so each one is rebuilt from its source
+     * table on its next touch. The way out of a companion that drifted while
+     * nothing maintained it: a `wrangler rollback` to a build that predates the
+     * marker, with the index undeclared or declared differently there, leaves a
+     * marker that still matches on roll-forward. Admin-gated by the caller.
+     */
+    private handleRebuildCompanions(): Response {
+        clearCompanionSignatures(this.shardHost.sql);
+        this.recordAudit("rebuildCompanions");
+
+        return adminResponse({ ok: true });
+    }
+
+    /**
      * Serve `__lunora_admin__:sendQueueMessage` — the studio's "Send test message"
      * button. Resolves the declared queue's `QUEUE_*` producer binding and calls
      * `.send(body, { delaySeconds?, contentType? })`, or `.sendBatch(...)` when a
@@ -9900,6 +9916,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.explainIssue]: (args) => this.handleExplainIssue(args),
             [ADMIN_FUNCTIONS.getWorkflowInstanceStatus]: (args) => this.handleGetWorkflowInstanceStatus(args),
             [ADMIN_FUNCTIONS.listFlags]: (args) => this.handleListFlags(args),
+            [ADMIN_FUNCTIONS.rebuildCompanions]: () => this.handleRebuildCompanions(),
             [ADMIN_FUNCTIONS.recordAuthEvent]: (args) => this.handleRecordAuthEvent(args),
             [ADMIN_FUNCTIONS.recordContainerEvent]: (args) => this.handleRecordContainerEvent(args),
             [ADMIN_FUNCTIONS.recordMail]: (args) => this.handleRecordMail(args),
