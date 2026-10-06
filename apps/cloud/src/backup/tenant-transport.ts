@@ -14,15 +14,16 @@
 import { stripTrailingSlashes } from "../admin/proxy";
 import readNdjson from "../lib/read-ndjson";
 import readJson from "../read-json";
+import type { CopyOutcome, MultipartBucket } from "./multipart";
+import { copyObject, uploadStream } from "./multipart";
 
 /** One call into a tenant Worker's admin API, with the admin bearer already attached. */
 export type TenantSend = (path: string, body: string, contentType: "application/json" | "application/x-ndjson") => Promise<Response>;
 
 /** The subset of an R2 bucket binding tenant backups use. */
-export interface TenantBackupBucket {
+export interface TenantBackupBucket extends MultipartBucket {
     delete: (keys: string | string[]) => Promise<void>;
     get: (key: string) => Promise<null | { body: ReadableStream<Uint8Array<ArrayBuffer>>; size: number }>;
-    put: (key: string, value: Uint8Array<ArrayBuffer>, options?: { httpMetadata?: { contentType?: string } }) => Promise<unknown>;
 }
 
 /** A tenant admin call that did not succeed. `status` is the tenant's HTTP status (0 when it was never reached). */
@@ -35,21 +36,6 @@ export class TenantAdminError extends Error {
         this.status = status;
     }
 }
-
-/**
- * The largest compressed snapshot the control plane will hold.
- *
- * R2's binding refuses a stream of unknown length, and a gzip stream never has
- * one, so a snapshot is assembled in memory before the upload. This keeps that
- * well inside a Worker's ~128 MB alongside the tenant's decompressed rows in
- * flight. NDJSON of document rows typically compresses 5-10x, so this covers
- * several hundred megabytes of tenant data.
- *
- * ponytail: in-memory assembly; switch to an R2 multipart upload when a tenant
- * outgrows this — the export itself also materialises every shard's rows in the
- * tenant Worker, so that side has to stream first for it to matter.
- */
-export const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 
 /**
  * Bytes per import request. The tenant's import reads its body under the
@@ -101,55 +87,34 @@ export const exportTenantSnapshot = async (send: TenantSend): Promise<ReadableSt
     return response.body;
 };
 
-/** Drain a stream into one buffer, refusing past `maxBytes`. */
-const collect = async (stream: ReadableStream<Uint8Array<ArrayBuffer>>, maxBytes: number): Promise<Uint8Array<ArrayBuffer>> => {
-    const reader = stream.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
+const SNAPSHOT_CONTENT_TYPE = "application/gzip";
 
-    for (;;) {
-        // eslint-disable-next-line no-await-in-loop -- a stream is read sequentially by construction
-        const { done, value } = await reader.read();
-
-        if (done) {
-            break;
-        }
-
-        total += value.byteLength;
-
-        if (total > maxBytes) {
-            // eslint-disable-next-line no-await-in-loop -- one-shot cleanup before refusing
-            await reader.cancel();
-
-            throw new TenantAdminError(`snapshot exceeds the ${String(maxBytes / 1024 / 1024)} MiB the control plane can hold`, 0);
-        }
-
-        chunks.push(value);
-    }
-
-    const buffer = new Uint8Array(total);
-    let offset = 0;
-
-    for (const chunk of chunks) {
-        buffer.set(chunk, offset);
-        offset += chunk.byteLength;
-    }
-
-    return buffer;
-};
+/** A snapshot written: its stored (compressed) size, and the off-site copy when one is configured. */
+export interface CapturedSnapshot {
+    bytes: number;
+    offsite?: CopyOutcome;
+}
 
 /**
- * Export the tenant's data, gzip it and write it to `key`. Returns the stored
- * (compressed) size. Nothing is written unless the whole export arrived: a
- * tenant stream that errors midway rejects the read before `put` runs.
+ * Export the tenant's data, gzip it and stream it to `key` as a multipart
+ * upload (`./multipart.ts`), so a snapshot's size is bounded by R2 rather than
+ * by the Worker's memory. Nothing is written unless the whole export arrived: a
+ * tenant stream that errors midway aborts the upload.
+ *
+ * Then, with `offsite`, copies the stored object to the off-site account. That
+ * copy never fails the snapshot — its outcome is returned for the caller to
+ * record on the row.
  */
-export const captureTenantSnapshot = async (options: { bucket: TenantBackupBucket; key: string; maxBytes?: number; send: TenantSend }): Promise<number> => {
+export const captureTenantSnapshot = async (options: {
+    bucket: TenantBackupBucket;
+    key: string;
+    offsite?: MultipartBucket;
+    send: TenantSend;
+}): Promise<CapturedSnapshot> => {
     const exported = await exportTenantSnapshot(options.send);
-    const compressed = await collect(exported.pipeThrough(new CompressionStream("gzip")), options.maxBytes ?? MAX_SNAPSHOT_BYTES);
+    const bytes = await uploadStream(options.bucket, options.key, exported.pipeThrough(new CompressionStream("gzip")), SNAPSHOT_CONTENT_TYPE);
 
-    await options.bucket.put(options.key, compressed, { httpMetadata: { contentType: "application/gzip" } });
-
-    return compressed.byteLength;
+    return options.offsite ? { bytes, offsite: await copyObject(options.bucket, options.offsite, options.key, SNAPSHOT_CONTENT_TYPE) } : { bytes };
 };
 
 /** What a restore wrote, summed over its import batches. */

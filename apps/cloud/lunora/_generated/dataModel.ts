@@ -281,6 +281,8 @@ export interface Doc_tenantBackups {
     deploymentId: Id<"deployments">;
     error?: string;
     key: string;
+    offsiteError?: string;
+    offsiteStatus?: "succeeded" | "failed";
     operation: "backup" | "restore";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
@@ -1130,6 +1132,8 @@ export interface Insert_tenantBackups {
     deploymentId: Id<"deployments">;
     error?: string;
     key: string;
+    offsiteError?: string;
+    offsiteStatus?: "succeeded" | "failed";
     operation: "backup" | "restore";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;

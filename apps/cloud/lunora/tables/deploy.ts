@@ -336,6 +336,11 @@ export const deployTables = {
         error: v.optional(v.string()),
         // R2 key of the snapshot (backup rows); the source snapshot's key (restore rows).
         key: v.string(),
+        // Off-site copy of a backup row's snapshot (`src/backup/offsite.ts`), set
+        // only when an off-site bucket is configured. A failed copy never fails
+        // the snapshot; the bounded reason carries a status, never data.
+        offsiteError: v.optional(v.string()),
+        offsiteStatus: v.optional(v.union(v.literal("succeeded"), v.literal("failed"))),
         operation: v.union(v.literal("backup"), v.literal("restore")),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),

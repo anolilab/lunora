@@ -21,21 +21,21 @@ restored by hand (below).
 
 Two layers, and they fail differently.
 
-| Layer                          | Recovers from                                 | Does not recover from                      |
-| ------------------------------ | --------------------------------------------- | ------------------------------------------ |
-| **D1 Time Travel** (automatic) | A bad write, a dropped table, a bad migration | Losing the database or the account         |
-| **This backup sweep**          | Losing the database                           | Losing the **account** — see the gap below |
+| Layer                                  | Recovers from                                 | Does not recover from                    |
+| -------------------------------------- | --------------------------------------------- | ---------------------------------------- |
+| **D1 Time Travel** (automatic)         | A bad write, a dropped table, a bad migration | Losing the database or the account       |
+| **This backup sweep**                  | Losing the database                           | Losing the **account**                   |
+| **The off-site copy** (when it is set) | Losing the account                            | Losing both accounts; see the note below |
 
 Time Travel is Cloudflare's, needs no code, and covers 30 days. Reach for it
 first: it is faster, exact to the second, and does not involve a dump at all.
 The sweep exists because Time Travel history lives inside the database it
 protects, so a deleted or compromised account takes the history with it.
 
-> **Known gap.** The dump is written to R2 **in the same account**. A Worker's
-> R2 binding cannot address another Cloudflare account, so a second copy in
-> another cell needs R2's S3 API and a credential for that account. Until that
-> lands, an account-level loss is not covered. Do not describe this as
-> off-account DR.
+> **Off-account only when configured.** The primary dump is written to R2 **in
+> the same account** (a Worker's R2 binding cannot address another one). Only a
+> cell with the [off-site copy](#off-site-copy) configured survives an
+> account-level loss; on any other cell, do not describe this as off-account DR.
 
 ### What the sweep does
 
@@ -46,6 +46,11 @@ is not available — Cloudflare caps a Worker at three).
 2. `GET` the presigned URL it answers — valid for one hour.
 3. Stream the body into `BACKUPS` at `control-plane/<cell>/<timestamp>.sql`.
 4. Delete dumps older than 30 days, by the object's own upload time.
+5. With the off-site copy configured: read the new dump back from `BACKUPS`,
+   stream it to the off-site bucket under the same key, then delete off-site
+   dumps older than 30 days by their `LastModified`. The off-site prune runs
+   only after a good copy, so a run of failed copies never ages out the last
+   good off-site dump.
 
 It no-ops unless `BACKUPS`, `CONTROL_PLANE_DATABASE_ID`,
 `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are all set, so a cell
@@ -54,6 +59,43 @@ without backups configured still ticks rather than erroring every six hours.
 **The bucket must be private.** The dump contains every sealed admin token and
 auth session in the cell. It is ciphertext — `SECRET_ENCRYPTION_KEY` seals the
 tokens and is not in the dump — but treat the file as a credential.
+
+### Off-site copy
+
+Set all four Worker secrets (`wrangler secret put <NAME> --env <cell>`):
+
+| Secret                             | Value                                                                                  |
+| ---------------------------------- | -------------------------------------------------------------------------------------- |
+| `BACKUP_OFFSITE_ENDPOINT`          | The **other** account's R2 S3 API URL, `https://<account-id>.r2.cloudflarestorage.com` |
+| `BACKUP_OFFSITE_BUCKET`            | A private bucket in that account                                                       |
+| `BACKUP_OFFSITE_ACCESS_KEY_ID`     | An R2 API token in that account, Object Read & Write on that bucket only               |
+| `BACKUP_OFFSITE_SECRET_ACCESS_KEY` | That token's secret                                                                    |
+
+Any one unset → no off-site copy, exactly as before. The copy is signed with
+SigV4 (`src/backup/offsite.ts`) and streamed as a multipart upload. Both
+control-plane dumps and tenant snapshots go to the same bucket, under the same
+keys as their primaries (`control-plane/…`, `tenant-backups/…`).
+
+**A failed copy never fails or rolls back the primary backup.** Where to see it:
+
+- Control-plane dumps: the six-hourly tick logs `[control-plane-backup] {…}`,
+  as a warning with `offsite.status: "failed"` and a bounded reason (HTTP status
+  and S3 error code) when the copy failed. The control plane keeps no row for
+  its own dumps, so Workers Logs is the record. Alert on that line.
+- Tenant snapshots: `offsiteStatus` / `offsiteError` on the `tenantBackups` row,
+  shown as "off-site copy failed" next to the snapshot in the studio, plus a
+  `[tenant-backup] … off-site copy failed` warning. The next snapshot copies
+  again; a failed one is not retried on its own.
+
+Retention follows the primary: control-plane dumps age out after 30 days;
+a tenant snapshot dropped by plan retention or a project delete is deleted
+off-site in the same pass, before its row. While the off-site account refuses a
+delete, the row stays and the sweep retries next tick, so an off-site object of
+a deleted project is never orphaned. Objects already off-site when the copy is
+**un**configured are not pruned any more; delete them by hand.
+
+Keep the off-site account's credentials out of the primary account, and treat
+the off-site bucket exactly like `BACKUPS`: it holds the same sealed tokens.
 
 ### Restoring
 
@@ -75,6 +117,16 @@ R2. Confirm the bookmark reads back what you expect with `info` before you run
     ```bash
     wrangler r2 object get <BUCKET>/control-plane/<cell>/<timestamp>.sql --file restore.sql
     ```
+
+    If the cell's account is gone, take it from the off-site bucket instead,
+    with wrangler logged in to **that** account (or any S3 client against
+    `BACKUP_OFFSITE_ENDPOINT`):
+
+    ```bash
+    wrangler r2 object get <OFFSITE_BUCKET>/control-plane/<cell>/<timestamp>.sql --file restore.sql
+    ```
+
+    Then continue in a replacement account: the steps below are the same.
 
 2. **Create a replacement database** and note the new uuid:
 
@@ -147,8 +199,9 @@ at `tenant-backups/<org>/<alias>/<timestamp>.ndjson.gz` in the private
 The export fails loudly rather than short: a shard it cannot reach, or a
 `.shardBy()` table on an app with no shard registry, answers an error and the
 attempt is recorded `failed` with that reason — never a partial snapshot marked
-good. Snapshots over 64 MiB compressed are refused (the control plane assembles
-them in memory before the upload).
+good. Snapshots stream to R2 as a multipart upload (8 MiB parts, one held in
+memory at a time), so the control plane imposes no size ceiling of its own; a
+tenant export that breaks midway aborts the upload and leaves no object.
 
 Retention is per plan (`limits.backupRetention` in `src/billing/plans.ts`): the
 newest **3** (free), **14** (pro) or **30** (enterprise) successful snapshots of
@@ -208,10 +261,22 @@ If the control-plane D1 is gone, the snapshots are still in R2:
 wrangler r2 object get lunora-cloud-tenant-backups/tenant-backups/<org>/<alias>/<timestamp>.ndjson.gz --file snapshot.ndjson.gz
 ```
 
+If the account is gone too, the same key is in the off-site bucket (when the
+[off-site copy](#off-site-copy) is configured), read with wrangler logged in to
+that account:
+
+```bash
+wrangler r2 object get <OFFSITE_BUCKET>/tenant-backups/<org>/<alias>/<timestamp>.ndjson.gz --file snapshot.ndjson.gz
+```
+
 ### Known gaps
 
-- **Same account.** Like the control-plane dump, snapshots live in the cell's
-  own account; an account-level loss takes them too.
+- **Same account unless the off-site copy is configured.** Without the
+  `BACKUP_OFFSITE_*` secrets, snapshots live only in the cell's own account and
+  an account-level loss takes them too. Restoring from the off-site copy is by
+  hand (above); the studio restores from the primary bucket only.
 - **No point-in-time rewind.** Needs a replace-mode import in the runtime.
 - **Not covered:** R2 objects, KV, Vectorize (table above).
-- **Size ceiling** of 64 MiB compressed per snapshot until uploads go multipart.
+- **The tenant export itself** still materialises every shard's rows inside
+  the tenant Worker, so a very large tenant can exhaust the tenant side before
+  the control plane's upload is the limit.

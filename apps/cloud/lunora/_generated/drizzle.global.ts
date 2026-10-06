@@ -301,6 +301,8 @@ export const tenantBackups = sqliteTable("tenantBackups", {
     deploymentId: text("deploymentId").references((): AnySQLiteColumn => deployments._id).notNull(),
     error: text("error"),
     key: text("key").notNull(),
+    offsiteError: text("offsiteError"),
+    offsiteStatus: text("offsiteStatus", { mode: "json" }).$type<"succeeded" | "failed">(),
     operation: text("operation", { mode: "json" }).$type<"backup" | "restore">().notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),

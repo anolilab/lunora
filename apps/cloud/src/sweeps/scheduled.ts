@@ -9,6 +9,7 @@ import type { ExecutionContextLike, LunoraWorker, ScheduledControllerLike } from
 import { Creem } from "creem";
 
 import { controlPlaneExport } from "../backup/control-plane-export";
+import { offsiteBucket } from "../backup/offsite";
 import { runBackupSweep } from "../backup/sweep";
 import { runTenantBackupSweep } from "../backup/tenant-sweep";
 import type { CreemCreditsClientLike } from "../billing/creem-credits";
@@ -284,12 +285,28 @@ const sweepBackup = async (env: ControlPlaneEnv): Promise<void> => {
         return;
     }
 
-    await runBackupSweep({
+    const offsite = offsiteBucket(env);
+    const result = await runBackupSweep({
         bucket: env.BACKUPS,
         cell: env.LUNORA_CELL ?? "default",
         now: Date.now(),
+        ...(offsite ? { offsite } : {}),
         startExport,
     });
+
+    // The control plane keeps no row for its own dumps, so this line is the record
+    // of the off-site copy — and a failed one is a warning, never a failed tick.
+    if (!result.offsite) {
+        return;
+    }
+
+    if (result.offsite.status === "failed") {
+        // eslint-disable-next-line no-console -- keys, counts and a bounded reason only
+        console.warn("[control-plane-backup]", JSON.stringify(result));
+    } else {
+        // eslint-disable-next-line no-console -- keys and counts only
+        console.log("[control-plane-backup]", JSON.stringify(result));
+    }
 };
 
 /**
@@ -303,6 +320,7 @@ const sweepTenantBackups = async (env: ControlPlaneEnv): Promise<void> => {
         return;
     }
 
+    const offsite = offsiteBucket(env);
     const result = await runTenantBackupSweep({
         bucket: env.TENANT_BACKUPS,
         database: controlPlaneDatabase(env.DB as D1DatabaseLike),
@@ -311,6 +329,7 @@ const sweepTenantBackups = async (env: ControlPlaneEnv): Promise<void> => {
             console.warn(line);
         },
         now: Date.now(),
+        ...(offsite ? { offsite } : {}),
         senderFor: async (deployment) => {
             const adminToken = await resolveAdminToken(deployment, env.SECRET_ENCRYPTION_KEY);
             const target = storedTarget(deployment.target);

@@ -2,16 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 
 import { internal } from "../lunora/_generated/api.js";
 import { authorizeDownload, beginBackup, beginRestore } from "../lunora/tenant-backups";
+import { PART_BYTES } from "../src/backup/multipart";
+import { offsiteBucket } from "../src/backup/offsite";
 import { backupRetentionFor, isDueForBackup, OPERATION_STALE_MS, tenantBackupKey } from "../src/backup/tenant-policy";
 import type { BackupTargetRow } from "../src/backup/tenant-sweep";
 import { runTenantBackupSweep } from "../src/backup/tenant-sweep";
 import type { TenantBackupBucket, TenantSend } from "../src/backup/tenant-transport";
-import { IMPORT_BATCH_BYTES, restoreTenantSnapshot } from "../src/backup/tenant-transport";
+import { captureTenantSnapshot, IMPORT_BATCH_BYTES, restoreTenantSnapshot } from "../src/backup/tenant-transport";
 import { createDeployRouter } from "../src/deploy/router";
 import type { DispatchNamespaceLike } from "../src/targets/cloudflare-wfp/dispatch";
 import { dispatchTenantSender } from "../src/targets/cloudflare-wfp/dispatch";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
+import type { MultipartStats, StoredObject } from "./_helpers/fake-object-store";
+import { fakeMultipart, fakeS3 } from "./_helpers/fake-object-store";
 
 const NOW = Date.UTC(2026, 8, 30, 12, 0, 0);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -26,27 +30,29 @@ const gzip = async (text: string): Promise<Uint8Array<ArrayBuffer>> =>
 const gunzip = (bytes: Uint8Array<ArrayBuffer>): Promise<string> =>
     new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
 
-/** An R2 double over a Map. */
-const memoryBucket = (initial: Record<string, Uint8Array<ArrayBuffer>> = {}): { bucket: TenantBackupBucket; objects: Map<string, Uint8Array<ArrayBuffer>> } => {
-    const objects = new Map(Object.entries(initial));
+/** An R2 double over a Map, writing through R2's multipart rules (`./_helpers/fake-object-store.ts`). */
+const memoryBucket = (
+    initial: Record<string, Uint8Array<ArrayBuffer>> = {},
+): { bucket: TenantBackupBucket; objects: Map<string, StoredObject>; stats: MultipartStats } => {
+    const objects = new Map<string, StoredObject>(Object.entries(initial).map(([key, body]) => [key, { body, uploaded: new Date(NOW) }]));
+    const { createMultipartUpload, stats } = fakeMultipart(objects);
 
     return {
         bucket: {
+            createMultipartUpload,
             delete: async (keys) => {
                 for (const key of [keys].flat()) {
                     objects.delete(key);
                 }
             },
             get: async (key) => {
-                const value = objects.get(key);
+                const value = objects.get(key)?.body;
 
                 return value ? { body: new Blob([value]).stream(), size: value.byteLength } : null;
             },
-            put: async (key, value) => {
-                objects.set(key, value);
-            },
         },
         objects,
+        stats,
     };
 };
 
@@ -194,7 +200,7 @@ describe(runTenantBackupSweep, () => {
             ["POST", "/_lunora/admin/export", `Bearer ${TOKEN}`],
         ]);
 
-        const [stored] = [...objects.values()];
+        const [stored] = [...objects.values()].map((object) => object.body);
 
         await expect(gunzip(stored ?? new Uint8Array())).resolves.toBe(SECRET_ROW);
         expect(patched.find((entry) => entry.id === "new_1")?.patch).toMatchObject({ bytes: stored?.byteLength, status: "succeeded" });
@@ -270,6 +276,227 @@ describe(runTenantBackupSweep, () => {
         expect(objects.has(freeRows[3]?.["key"] as string)).toBe(false);
         expect(objects.has(orphan["key"] as string)).toBe(false);
         expect(objects.size).toBe(8);
+    });
+});
+
+const MIB = 1024 * 1024;
+const OFFSITE_KEY_ID = "offsite-key-id";
+const OFFSITE_SECRET = "offsite-secret-access-key-never-logged";
+const OFFSITE_ENV = {
+    BACKUP_OFFSITE_ACCESS_KEY_ID: OFFSITE_KEY_ID,
+    BACKUP_OFFSITE_BUCKET: "dr-backups",
+    BACKUP_OFFSITE_ENDPOINT: "https://other-account.r2.cloudflarestorage.com",
+    BACKUP_OFFSITE_SECRET_ACCESS_KEY: OFFSITE_SECRET,
+};
+
+/** An S3 double for the off-site account and the bucket over it. */
+const offsite = (options: { intercept?: (request: Request) => Response | undefined; objects?: Map<string, StoredObject> } = {}) => {
+    const s3 = fakeS3({ accessKeyId: OFFSITE_KEY_ID, bucket: "dr-backups", ...options });
+    const bucket = offsiteBucket(OFFSITE_ENV, s3.fetch);
+
+    if (!bucket) {
+        throw new Error("off-site bucket should be configured");
+    }
+
+    return { ...s3, bucket };
+};
+
+/** `megabytes` of random bytes, streamed a MiB at a time — gzip cannot shrink them under the old 64 MiB cap. */
+const noise = (megabytes: number, failAfter?: number): ReadableStream<Uint8Array> => {
+    let sent = 0;
+
+    return new ReadableStream({
+        pull: (controller) => {
+            if (failAfter !== undefined && sent === failAfter) {
+                controller.error(new Error("tenant stream broke"));
+
+                return;
+            }
+
+            if (sent === megabytes) {
+                controller.close();
+
+                return;
+            }
+
+            const chunk = new Uint8Array(MIB);
+
+            // `getRandomValues` fills at most 64 KiB per call.
+            for (let offset = 0; offset < MIB; offset += 65_536) {
+                crypto.getRandomValues(chunk.subarray(offset, offset + 65_536));
+            }
+
+            sent += 1;
+            controller.enqueue(chunk);
+        },
+    });
+};
+
+describe(captureTenantSnapshot, () => {
+    it("stores a snapshot past the old 64 MiB ceiling in fixed parts, one part in memory", async () => {
+        const { bucket, objects, stats } = memoryBucket();
+        const send: TenantSend = () => Promise.resolve(new Response(noise(70)));
+
+        const { bytes } = await captureTenantSnapshot({ bucket, key: "big.ndjson.gz", send });
+
+        expect(bytes).toBeGreaterThan(64 * MIB);
+        expect(objects.get("big.ndjson.gz")?.body.byteLength).toBe(bytes);
+        // R2's rules held (the fake refuses otherwise), and no part outgrew the buffer.
+        expect(stats.largestPart).toBe(PART_BYTES);
+        expect(stats.parts).toBe(Math.ceil(bytes / PART_BYTES));
+    }, 60_000);
+
+    it("writes nothing and aborts the upload when the export breaks midway", async () => {
+        const { bucket, objects, stats } = memoryBucket();
+        const send: TenantSend = () => Promise.resolve(new Response(noise(20, 12)));
+
+        await expect(captureTenantSnapshot({ bucket, key: "broken.ndjson.gz", send })).rejects.toThrow("tenant stream broke");
+        expect(stats.parts).toBeGreaterThan(0);
+        expect(stats.aborted).toBe(1);
+        expect(objects.size).toBe(0);
+    });
+});
+
+describe("tenant backup off-site copy", () => {
+    it("copies each snapshot to the off-site account and records it on the row", async () => {
+        const { database, patched } = recordingDb({
+            deployments: [deployment("dep_a", "p_a")],
+            organizations: [{ _id: "org_1", plan: "free" }],
+            projects: [{ _id: "p_a" }],
+            tenantBackups: [],
+        });
+        const { bucket, objects } = memoryBucket();
+        const remote = offsite();
+        const send: TenantSend = () => Promise.resolve(new Response(SECRET_ROW));
+
+        const result = await runTenantBackupSweep({ bucket, database, now: NOW, offsite: remote.bucket, senderFor: () => Promise.resolve(send) });
+
+        expect(result).toMatchObject({ failed: 0, succeeded: 1 });
+
+        const [key] = [...objects.keys()];
+
+        expect(remote.objects.get(key ?? "")?.body).toStrictEqual(objects.get(key ?? "")?.body);
+        expect(patched[0]?.patch).toMatchObject({ offsiteStatus: "succeeded", status: "succeeded" });
+        expect(patched[0]?.patch).not.toHaveProperty("offsiteError");
+        // Signed under the key id; the secret itself never goes on the wire.
+        expect(remote.requests.every((request) => request.headers.get("authorization")?.includes(`Credential=${OFFSITE_KEY_ID}/`))).toBe(true);
+        expect(JSON.stringify(remote.requests.map((request) => [request.url, [...request.headers]]))).not.toContain(OFFSITE_SECRET);
+    });
+
+    it("keeps the snapshot succeeded when the off-site account is down, and says so", async () => {
+        const { database, patched } = recordingDb({
+            deployments: [deployment("dep_a", "p_a")],
+            organizations: [{ _id: "org_1", plan: "free" }],
+            projects: [{ _id: "p_a" }],
+            tenantBackups: [],
+        });
+        const { bucket, objects } = memoryBucket();
+        const remote = offsite({ intercept: () => new Response("<Error><Code>ServiceUnavailable</Code></Error>", { status: 503 }) });
+        const logs: string[] = [];
+
+        const result = await runTenantBackupSweep({
+            bucket,
+            database,
+            log: (line) => logs.push(line),
+            now: NOW,
+            offsite: remote.bucket,
+            senderFor: () => Promise.resolve(async () => new Response(SECRET_ROW)),
+        });
+
+        expect(result).toMatchObject({ failed: 0, succeeded: 1 });
+        expect(objects.size).toBe(1);
+        expect(patched[0]?.patch).toMatchObject({ offsiteStatus: "failed", status: "succeeded" });
+        expect(String(patched[0]?.patch["offsiteError"])).toContain("HTTP 503 ServiceUnavailable");
+        expect(logs.some((line) => line.includes("off-site copy failed"))).toBe(true);
+        expect(JSON.stringify({ logs, patched })).not.toContain(OFFSITE_SECRET);
+    });
+
+    it("deletes the off-site copy with the primary, and keeps the row while it cannot", async () => {
+        const doomed = [1, 2, 3, 4].map((age) => backupRow(`b_${String(age)}`, "p_a", NOW - (age * DAY_MS) / 4));
+        const seed = (): Map<string, StoredObject> =>
+            new Map(doomed.map((row) => [row["key"] as string, { body: new Uint8Array([1]), uploaded: new Date(NOW) }]));
+        const tables = {
+            deployments: [],
+            organizations: [{ _id: "org_1", plan: "free" }],
+            projects: [{ _id: "p_a" }],
+            tenantBackups: doomed,
+        };
+
+        // Free keeps 3 of 4: the oldest goes from both accounts.
+        const healthy = recordingDb(tables);
+        const remote = offsite({ objects: seed() });
+
+        await runTenantBackupSweep({
+            bucket: memoryBucket().bucket,
+            database: healthy.database,
+            now: NOW,
+            offsite: remote.bucket,
+            senderFor: () => Promise.resolve(null),
+        });
+
+        expect(healthy.deleted).toStrictEqual(["b_4"]);
+        expect(remote.objects.has(doomed[3]?.["key"] as string)).toBe(false);
+        expect(remote.objects.size).toBe(3);
+
+        // Off-site down: the row stays so the next tick finds the object again.
+        const outage = recordingDb(tables);
+        const down = offsite({ intercept: (request) => (request.method === "DELETE" ? new Response(null, { status: 503 }) : undefined), objects: seed() });
+        const result = await runTenantBackupSweep({
+            bucket: memoryBucket().bucket,
+            database: outage.database,
+            now: NOW,
+            offsite: down.bucket,
+            senderFor: () => Promise.resolve(null),
+        });
+
+        expect(outage.deleted).toStrictEqual([]);
+        expect(result.pruned).toBe(0);
+        expect(down.objects.size).toBe(4);
+    });
+
+    it("records the off-site outcome of a manual backup through the route", async () => {
+        const remote = fakeS3({ accessKeyId: OFFSITE_KEY_ID, bucket: "dr-backups" });
+        const { bucket } = memoryBucket();
+        const { dispatcher } = fakeDispatcher({ acme: () => Promise.resolve(new Response(SECRET_ROW)) });
+        const finished: Row[] = [];
+        const runMutation = vi.fn<(reference: unknown, args?: Row) => Promise<unknown>>(async (reference, args) => {
+            if (reference === internal.tenant_backups.beginBackup) {
+                return {
+                    adminToken: TOKEN,
+                    alias: "acme",
+                    backupId: "bk_1",
+                    deploymentId: "dep_a",
+                    key: "manual.ndjson.gz",
+                    resourceRef: "acme",
+                    scriptName: "acme",
+                    url: "https://acme.lunora.app",
+                };
+            }
+
+            finished.push(args ?? {});
+
+            return null;
+        });
+
+        vi.stubGlobal("fetch", remote.fetch);
+
+        try {
+            const response = await createDeployRouter().fetch(
+                new Request("https://control.lunora.app/v1/backups", {
+                    body: JSON.stringify({ organizationId: "org_1", projectId: "p_a" }),
+                    headers: { "cf-connecting-ip": "client-a", "content-type": "application/json" },
+                    method: "POST",
+                }),
+                { __lunoraCtx: { runMutation }, DISPATCHER: dispatcher, TENANT_BACKUPS: bucket, ...OFFSITE_ENV },
+            );
+
+            expect(response.status).toBe(200);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+
+        expect(remote.objects.has("manual.ndjson.gz")).toBe(true);
+        expect(finished).toStrictEqual([expect.objectContaining({ id: "bk_1", offsiteStatus: "succeeded", status: "succeeded" })]);
     });
 });
 
@@ -406,7 +633,7 @@ describe("tenant backup routes", () => {
 
         expect(response.status).toBe(200);
         expect(requests.map((request) => request.path)).toStrictEqual(["/_lunora/admin/export", "/_lunora/admin/import"]);
-        await expect(gunzip(objects.get("pre.ndjson.gz") ?? new Uint8Array())).resolves.toBe("current\n");
+        await expect(gunzip(objects.get("pre.ndjson.gz")?.body ?? new Uint8Array())).resolves.toBe("current\n");
         expect(finished).toStrictEqual([
             expect.objectContaining({ id: "pre_1", status: "succeeded" }),
             expect.objectContaining({ id: "res_1", restoreInserted: 1, status: "succeeded" }),

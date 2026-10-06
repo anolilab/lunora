@@ -40,6 +40,21 @@ CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 # and auth session in the cell. Restore steps: apps/cloud/docs/RESTORE.md.
 # CONTROL_PLANE_DATABASE_ID=replace-with-the-control-plane-d1-uuid
 
+# Off-site backup copy (GAPS.md D1). The BACKUPS and TENANT_BACKUPS buckets live
+# in the cell's own account and die with it; set all four of these and every
+# control-plane dump and tenant snapshot is also copied, under the same key, to a
+# PRIVATE R2 bucket in a SECOND Cloudflare account over R2's S3 API, and pruned
+# there on the primary's schedule. Create an R2 API token in that account with
+# Object Read & Write on that one bucket. The endpoint is the account's S3 API
+# URL without the bucket path. Any of the four unset -> no off-site copy (the
+# primary backups are unaffected). A failed copy never fails a backup: it shows
+# as offsiteStatus "failed" on the tenantBackups row (and in the studio) and as a
+# [control-plane-backup] warning in Workers Logs. Restore: docs/RESTORE.md.
+# BACKUP_OFFSITE_ENDPOINT=https://replace-with-other-account-id.r2.cloudflarestorage.com
+# BACKUP_OFFSITE_BUCKET=replace-with-off-site-bucket-name
+# BACKUP_OFFSITE_ACCESS_KEY_ID=replace-with-r2-token-access-key-id
+# BACKUP_OFFSITE_SECRET_ACCESS_KEY=replace-with-r2-token-secret-access-key
+
 # Per-org "Cloudflare costs" tab (Billable Usage API): each BYO org connects its
 # OWN Cloudflare account + a token scoped to "Billing Read" from the console's
 # Cloudflare costs tab. That token is encrypted at the edge with

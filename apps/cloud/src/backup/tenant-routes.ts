@@ -20,6 +20,8 @@ import type { RouterEnv } from "../deploy/routes/shared";
 import { jsonError, rejected, requireContext } from "../deploy/routes/shared";
 import { targetOf } from "../targets/placement";
 import { targetFleet } from "../targets/registry";
+import { offsiteBucket } from "./offsite";
+import { offsiteFields } from "./tenant-sweep";
 import type { RestoreSummary, TenantBackupBucket, TenantSend } from "./tenant-transport";
 import { captureTenantSnapshot, restoreTenantSnapshot } from "./tenant-transport";
 
@@ -54,7 +56,11 @@ const settle = async (context: Context, organizationId: string, id: string, outc
     await context.runMutation(internal.tenant_backups.finish, { id, organizationId, ...outcome }).catch(() => undefined);
 };
 
-/** Take one snapshot into `key` and settle its row. Resolves to the stored size, or rejects with the failure (already recorded). */
+/**
+ * Take one snapshot into `key` (and the off-site copy, when configured) and
+ * settle its row. A failed off-site copy is recorded on the row, not raised.
+ * Resolves to the stored size, or rejects with the failure (already recorded).
+ */
 const snapshot = async (
     context: Context,
     environment: RouterEnv & { TENANT_BACKUPS: TenantBackupBucket },
@@ -62,9 +68,15 @@ const snapshot = async (
     row: { id: string; key: string; target: TenantTarget },
 ): Promise<number> => {
     try {
-        const bytes = await captureTenantSnapshot({ bucket: environment.TENANT_BACKUPS, key: row.key, send: await senderFor(row.target, environment) });
+        const offsite = offsiteBucket(environment);
+        const { bytes, offsite: copied } = await captureTenantSnapshot({
+            bucket: environment.TENANT_BACKUPS,
+            key: row.key,
+            ...(offsite ? { offsite } : {}),
+            send: await senderFor(row.target, environment),
+        });
 
-        await settle(context, organizationId, row.id, { bytes, status: "succeeded" });
+        await settle(context, organizationId, row.id, { bytes, status: "succeeded", ...offsiteFields(copied) });
 
         return bytes;
     } catch (error) {

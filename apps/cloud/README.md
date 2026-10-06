@@ -515,6 +515,15 @@ deleted since the snapshot and does not revert or remove anything — and takes 
 snapshot of the current data first. What a snapshot covers, what it does not,
 and the manual recovery paths are in [`docs/RESTORE.md`](docs/RESTORE.md).
 
+Snapshots stream to R2 as multipart uploads, so their size is not capped by the
+Worker's memory. With the four `BACKUP_OFFSITE_*` secrets set
+(`src/backup/offsite.ts`), every snapshot and every control-plane dump is also
+copied to an R2 bucket in a second Cloudflare account over the S3 API and
+pruned there on the same schedule. A failed copy never fails the backup; it is
+recorded on the `tenantBackups` row (`offsiteStatus` / `offsiteError`, shown in
+the studio) or, for control-plane dumps, logged as a `[control-plane-backup]`
+warning.
+
 ### Auth (`src/server.ts`, §3)
 
 The hosted studio runs on hardened better-auth (`@lunora/auth`): email/password
@@ -1048,7 +1057,8 @@ once per cell with `wrangler secret put <NAME> --env <cell>`:
 - **Control plane** (`wrangler.jsonc`): `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`,
   `SECRET_ENCRYPTION_KEY`, `CLOUDFLARE_API_TOKEN`, `GITHUB_WEBHOOK_SECRET`,
   `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`, plus the optional
-  `LUNORA_TAIL_SECRET`, `R2_SQL_TOKEN`, `RESEND_API_KEY`, `GITHUB_APP_*` and the
+  `LUNORA_TAIL_SECRET`, `R2_SQL_TOKEN`, `RESEND_API_KEY`, `GITHUB_APP_*`, the
+  four `BACKUP_OFFSITE_*` values (off-site backup copy, all or none) and the
   social sign-in pairs. `.dev.vars.example` documents what each one does and, for
   the optional ones, the symptom of leaving it unset.
 - **Dispatcher**: `CONTROL_PLANE_TOKEN` (the control plane's

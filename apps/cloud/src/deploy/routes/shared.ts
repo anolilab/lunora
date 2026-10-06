@@ -16,6 +16,7 @@ import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
 import { isLunoraError } from "@lunora/errors";
 import type { ExecutionContextLike } from "@lunora/runtime";
 
+import type { OffsiteEnvironment } from "../../backup/offsite";
 import type { TenantBackupBucket } from "../../backup/tenant-transport";
 import type { TargetEnvironment } from "../../targets/registry";
 import type { ReleaseBucket } from "../release-store";
@@ -68,7 +69,8 @@ export type RouterEnv = {
     TELEMETRY_PIPELINE?: PipelineBindingLike;
     /** Private R2 bucket of tenant data snapshots (docs/RESTORE.md). */
     TENANT_BACKUPS?: TenantBackupBucket;
-} & TargetEnvironment;
+} & OffsiteEnvironment &
+    TargetEnvironment;
 
 export const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 

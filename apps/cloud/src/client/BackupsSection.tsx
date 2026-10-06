@@ -199,6 +199,11 @@ export const BackupsSection = ({ organizationId, projectId, target }: { organiza
                                         <span title={row.error}>
                                             <StatusBadge tone={STATUS_TONE[row.status]}>{row.status}</StatusBadge>
                                         </span>
+                                        {row.offsiteStatus === "failed" ? (
+                                            <span className="ml-2 text-xs text-warning" title={row.offsiteError}>
+                                                off-site copy failed
+                                            </span>
+                                        ) : null}
                                     </TableCell>
                                     <TableCell className="text-right">
                                         {row.operation === "backup" && row.status === "succeeded" ? (
