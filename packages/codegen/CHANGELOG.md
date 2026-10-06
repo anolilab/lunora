@@ -1,3 +1,14 @@
+## @lunora/codegen [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.266...@lunora/codegen@1.0.0-alpha.267) (2026-10-06)
+
+### Features
+
+* durable object class budget check and opt-in merged class ([#995](https://github.com/anolilab/lunora/issues/995)) ([fa5a78e](https://github.com/anolilab/lunora/commit/fa5a78ed39f03c5d39c9d209fc83c49f27bdb6f7))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.196
+
 ## @lunora/codegen [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.265...@lunora/codegen@1.0.0-alpha.266) (2026-10-06)
 
 ### Bug Fixes
