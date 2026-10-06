@@ -3450,6 +3450,9 @@ importers:
       '@lunora/observability':
         specifier: workspace:*
         version: link:../observability
+      '@lunora/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@lunora/platform-cloudflare':
         specifier: workspace:*
         version: link:../platform-cloudflare
@@ -3472,9 +3475,6 @@ importers:
       '@lunora/bindings':
         specifier: workspace:*
         version: link:../bindings
-      '@lunora/platform':
-        specifier: workspace:*
-        version: link:../platform
       '@types/node':
         specifier: catalog:types
         version: 26.6.4

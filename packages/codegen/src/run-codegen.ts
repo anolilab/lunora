@@ -96,6 +96,7 @@ import {
     emitContainers,
     emitCrons,
     emitDrizzleSchema,
+    emitDurableObjects,
     emitFunctions,
     emitQueues,
     emitScheduler,
@@ -126,6 +127,7 @@ import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import { setStandardTypeResolver } from "./parse-validator";
 import type { PlatformDiagnostic } from "./platform-target";
 import { resolveCodegenTarget } from "./platform-target";
+import { readMergeDurableObjects } from "./project-config-file";
 import { buildSchemaSnapshot } from "./schema-drift";
 
 /**
@@ -977,6 +979,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
     const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella);
+    const durableObjectsContent = readMergeDurableObjects(options.projectRoot) ? emitDurableObjects(useUmbrella) : "";
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
     // Only emit the project-bound seed client when `@lunora/seed` is a declared
@@ -1174,6 +1177,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         emitOptional("queues.ts", queuesContent);
         emitOptional("scheduler.ts", schedulerContent);
         emitOptional("shardRegistry.ts", shardRegistryContent);
+        emitOptional("durableObjects.ts", durableObjectsContent);
         emitOptional("seed.ts", seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
         emitOptional("collections.ts", collectionsContent);

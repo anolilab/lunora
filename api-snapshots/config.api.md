@@ -342,6 +342,18 @@ const DEV_WORKER_ENV_VALUE = "development";
 const DEV_WORKER_ENV_VAR = "WORKER_ENV";
 ```
 
+### `DURABLE_OBJECT_BINDINGS` (const)
+
+```ts
+const DURABLE_OBJECT_BINDINGS: {
+    readonly LunoraDO: "SHARD";
+    readonly SchedulerDO: "SCHEDULER";
+    readonly SessionDO: "SESSION";
+    readonly ShardDO: "SHARD";
+    readonly ShardRegistryDO: "SHARD_REGISTRY";
+};
+```
+
 ### `DeployDriver` (interface)
 
 ```ts
@@ -626,6 +638,12 @@ const GENERATED_CLASS_MODULES: readonly [
 ];
 ```
 
+### `GENERATED_MODULE_DURABLE_OBJECTS` (const)
+
+```ts
+const GENERATED_MODULE_DURABLE_OBJECTS: Partial<Record<GeneratedClassModule, DurableObjectClass>>;
+```
+
 ### `GeneratedClassModule` (type)
 
 ```ts
@@ -860,6 +878,12 @@ class LunoraReporter {
     setStderr(stderr: NodeJS.WriteStream): void;
     log(meta: unknown): void;
 }
+```
+
+### `MERGED_DURABLE_OBJECTS_MODULE` (const)
+
+```ts
+const MERGED_DURABLE_OBJECTS_MODULE: "durableObjects";
 ```
 
 ### `MultiSelectOption` (type)
@@ -1394,6 +1418,18 @@ const isDevServerReady: (state: Pick<DevServerState, "readyAt"> | undefined) => 
 
 ```ts
 const isInteractive: () => boolean;
+```
+
+### `isMergedProject` (const)
+
+```ts
+const isMergedProject: (generatedDirectory: string) => boolean;
+```
+
+### `isMergedRoleModule` (const)
+
+```ts
+const isMergedRoleModule: (module: string) => boolean;
 ```
 
 ### `isMintableSecretKey` (const)
@@ -2204,6 +2240,7 @@ interface WranglerCacheShape {
 
 ```ts
 interface WranglerConfig {
+    account_id?: unknown;
     ai?: {
         binding?: unknown;
     } | null;
@@ -3072,6 +3109,12 @@ interface DockerLogStream {
     destroy: () => void;
     on: (event: "data" | "end" | "error", listener: (chunk?: Buffer) => void) => void;
 }
+```
+
+### `DurableObjectClass` (type)
+
+```ts
+type DurableObjectClass = keyof typeof DURABLE_OBJECT_BINDINGS;
 ```
 
 ### `DurableObjectSpec` (interface)

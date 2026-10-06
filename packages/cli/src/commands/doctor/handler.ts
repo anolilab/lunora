@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
+import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import {
     DEV_VARS_FILE,
     discoverSchemaInfo,
@@ -22,8 +23,11 @@ import {
 
 import { isSecretKeyName } from "../../../../../shared/secret-key";
 import { describeAdminTokenSource, resolveAdminBearer } from "../../util/admin-token";
+import { nonEmpty } from "../../util/cloudflare-credentials";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import type { DurableObjectBudget } from "../../util/durable-object-budget";
+import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { Logger } from "../../util/logger";
 import type { OutputFormat } from "../../util/output-format";
 import isInsideDirectory from "../../util/path-containment";
@@ -61,6 +65,10 @@ const DOCTOR_CODES = [
     "declared-export-ok",
     "declared-export-unchecked",
     "dev-vars-missing-secret",
+    "do-class-budget-full",
+    "do-class-budget-near",
+    "do-class-budget-ok",
+    "do-class-budget-unchecked",
     "email-destination-placeholder",
     "observability-full-sampling",
     "r2-lifecycle-unset",
@@ -108,12 +116,18 @@ interface DoctorResult {
 interface RunDoctorOptions {
     cwd?: string;
 
+    /** Where the Cloudflare credentials for the account checks are read from (defaults to `process.env`). */
+    environment?: Readonly<Record<string, string | undefined>>;
+
     /**
      * Path of the running `lunora` executable (defaults to `process.argv[1]`).
      * Overridable so the CLI-shadow check is testable without re-launching the
      * process, the same seam `cwd` provides for the filesystem checks.
      */
     executablePath?: string;
+
+    /** The `fetch` the account checks call the Cloudflare API with — injectable so tests stay offline. */
+    fetch?: typeof globalThis.fetch;
     logger: Logger;
 }
 
@@ -737,6 +751,76 @@ const checkCliShadow = (cwd: string, executablePath: string | undefined, finding
     });
 };
 
+/** The doctor code and level for each budget verdict. A full account warns: it is a fact about the account, not this project. */
+const DURABLE_OBJECT_BUDGET_FINDINGS = {
+    full: { code: "do-class-budget-full", level: "warn" },
+    near: { code: "do-class-budget-near", level: "warn" },
+    ok: { code: "do-class-budget-ok", level: "pass" },
+    unchecked: { code: "do-class-budget-unchecked", level: "info" },
+} as const satisfies Record<DurableObjectBudget["verdict"], { code: DoctorCode; level: FindingLevel }>;
+
+/**
+ * Every distinct `account_id` the config deploys to — the top level and each
+ * `env.*` block (wrangler lets an environment override it) — with the blocks
+ * that name it.
+ */
+const configuredAccounts = (parsed: WranglerConfig | undefined): Map<string, string[]> => {
+    const accounts = new Map<string, string[]>();
+    const add = (accountId: unknown, block: string): void => {
+        const id = nonEmpty(accountId);
+
+        if (id !== undefined) {
+            accounts.set(id, [...(accounts.get(id) ?? []), block]);
+        }
+    };
+
+    add(parsed?.account_id, "top level");
+
+    for (const [name, block] of Object.entries(parsed?.env ?? {})) {
+        add((block as WranglerConfig | null | undefined)?.account_id, `env.${name}`);
+    }
+
+    return accounts;
+};
+
+/**
+ * How close the Cloudflare account is to its Durable Object class cap (plan
+ * 462). The one doctor check that goes online, and only with credentials in the
+ * environment; without them it says it did not check.
+ *
+ * Doctor takes no `--env`, so it checks every account the config deploys to,
+ * naming each when there is more than one. `CLOUDFLARE_ACCOUNT_ID` overrides
+ * every block, as it does for wrangler, so it is then the one account checked.
+ */
+const checkDurableObjectClassBudget = async (
+    cwd: string,
+    parsed: WranglerConfig | undefined,
+    options: RunDoctorOptions,
+    findings: Finding[],
+): Promise<void> => {
+    // A Cloudflare account limit: a celld / node target has none to check.
+    if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "cloudflare") {
+        return;
+    }
+
+    const overridden = nonEmpty((options.environment ?? process.env).CLOUDFLARE_ACCOUNT_ID) !== undefined;
+    const accounts = overridden ? [] : [...configuredAccounts(parsed)];
+    const targets: [string | undefined, string[]][] = accounts.length === 0 ? [[undefined, []]] : accounts;
+    const results = await Promise.all(
+        targets.map(async ([accountId, blocks]) => {
+            return { accountId, blocks, budget: await checkDurableObjectBudget({ accountId, environment: options.environment, fetch: options.fetch }) };
+        }),
+    );
+
+    for (const { accountId, blocks, budget } of results) {
+        findings.push({
+            ...DURABLE_OBJECT_BUDGET_FINDINGS[budget.verdict],
+            message: results.length > 1 ? `account ${String(accountId)} (${blocks.join(", ")}): ${budget.message}` : budget.message,
+            ...(budget.fix === undefined ? {} : { fix: budget.fix }),
+        });
+    }
+};
+
 /**
  * Pure, testable preflight core: run the read-only project checks against `cwd`
  * and return the aggregated findings + the exit code (1 if any hard FAIL). Does
@@ -771,6 +855,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     }
 
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
+    await checkDurableObjectClassBudget(cwd, parsed, options, findings);
     checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);
 
     const summary: Record<FindingLevel, number> = { fail: 0, info: 0, pass: 0, warn: 0 };

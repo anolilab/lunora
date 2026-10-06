@@ -2086,6 +2086,118 @@ export const schema = defineSchema({
                     expect(reported).not.toContain("export { SessionDO } from");
                 });
 
+                it("tells a merging app with a ShardDO binding that the merge does not move deployed data", () => {
+                    expect.assertions(3);
+
+                    // Plan 462: with the merge module written, the composed entry
+                    // exports `LunoraDO`, not `ShardDO`. The binding still naming
+                    // `ShardDO` is either an app mid-adoption (rename it) or one
+                    // already deployed (whose data the merged class cannot reach).
+                    writeClassAProject("");
+                    mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                    writeFileSync(join(workdir, "lunora", "_generated", "durableObjects.ts"), "export {};\n", "utf8");
+
+                    const result = validateWranglerProject({ projectRoot: workdir });
+                    const reported = result.report.errors.filter((error) => error.includes("does not export it")).join("\n");
+
+                    expect(result.report.valid).toBe(false);
+                    expect(reported).toContain('bind only `SHARD` to "LunoraDO"');
+                    expect(reported).toContain("never been deployed");
+                });
+
+                describe("a merged app (durableObjects.merge)", () => {
+                    /** A class-A project whose codegen wrote the merge module (and, optionally, the scheduler module). */
+                    const writeMergedProject = (durableObjects: string, migrations: string, extraModules: string[] = []): void => {
+                        writeSchema(SCHEMA_NO_GLOBAL);
+                        mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                        writeFileSync(join(workdir, "lunora", "_generated", "durableObjects.ts"), "export {};\n", "utf8");
+
+                        for (const module of extraModules) {
+                            writeFileSync(join(workdir, "lunora", "_generated", `${module}.ts`), "export {};\n", "utf8");
+                        }
+
+                        writeFileSync(
+                            join(workdir, "wrangler.jsonc"),
+                            `{
+    "name": "x",
+    "main": "virtual:lunora/worker",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [${durableObjects}] },
+    "migrations": [${migrations}]
+}
+`,
+                            "utf8",
+                        );
+                    };
+
+                    it("accepts SHARD bound to LunoraDO with a LunoraDO migration", () => {
+                        expect.assertions(2);
+
+                        writeMergedProject(`{ "name": "SHARD", "class_name": "LunoraDO" }`, `{ "tag": "v1", "new_sqlite_classes": ["LunoraDO"] }`);
+
+                        const result = validateWranglerProject({ projectRoot: workdir });
+
+                        expect(result.report.errors).toStrictEqual([]);
+                        expect(result.report.valid).toBe(true);
+                    });
+
+                    it("refuses a template migration that still creates a per-role class", () => {
+                        expect.assertions(1);
+
+                        // Every starter's `v1` lists ShardDO; reconcile only appends LunoraDO.
+                        writeMergedProject(
+                            `{ "name": "SHARD", "class_name": "LunoraDO" }`,
+                            `{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }, { "tag": "v2", "new_sqlite_classes": ["LunoraDO"] }`,
+                        );
+
+                        const result = validateWranglerProject({ projectRoot: workdir });
+
+                        expect(result.report.errors.join("\n")).toContain('replace "ShardDO" with "LunoraDO" in new_sqlite_classes');
+                    });
+
+                    it("warns about a missing LUNORA_ORIGIN_URL when LunoraDO hosts the scheduler, naming LunoraDO", () => {
+                        expect.assertions(3);
+
+                        writeMergedProject(`{ "name": "SHARD", "class_name": "LunoraDO" }`, `{ "tag": "v1", "new_sqlite_classes": ["LunoraDO"] }`, [
+                            "scheduler",
+                        ]);
+
+                        const result = validateWranglerProject({ projectRoot: workdir });
+
+                        const warning = result.report.warnings.find((entry) => entry.includes("LUNORA_ORIGIN_URL"));
+
+                        expect(warning).toContain("the merged LunoraDO hosts the scheduler");
+                        // A merged app has no SchedulerDO binding to point at.
+                        expect(warning).not.toContain("SchedulerDO");
+                        expect(warning).toContain("ORIGIN_NOT_CONFIGURED");
+                    });
+
+                    it("tells an app that turned the merge off that it cannot be undone after deploy", () => {
+                        expect.assertions(2);
+
+                        // No merge module any more, but SHARD still names the merged class.
+                        writeSchema(SCHEMA_NO_GLOBAL);
+                        mkdirSync(join(workdir, "lunora", "_generated"), { recursive: true });
+                        writeFileSync(
+                            join(workdir, "wrangler.jsonc"),
+                            `{
+    "name": "x",
+    "main": "virtual:lunora/worker",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "LunoraDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LunoraDO"] }]
+}
+`,
+                            "utf8",
+                        );
+
+                        const reported = validateWranglerProject({ projectRoot: workdir }).report.errors.join("\n");
+
+                        expect(reported).toContain("Turn `durableObjects.merge` back on");
+                        expect(reported).not.toContain("drop the binding");
+                    });
+                });
+
                 it("accepts a class the composed entry star-re-exports from a generated module", () => {
                     expect.assertions(1);
 

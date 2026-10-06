@@ -6,6 +6,7 @@ import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/conf
 import { discoverContainerInfo, inferLunoraBindings, planToolchainInvocation, resolveDeployDriver, resolveSchemaDirectory } from "@lunora/config";
 import {
     describePreservedCrons,
+    readWranglerJsonc,
     reconcileWranglerBindings,
     reconcileWranglerCompatibilityDate,
     reconcileWranglerCrons,
@@ -22,6 +23,7 @@ import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
 import { resolveRunnableTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
+import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
@@ -700,6 +702,25 @@ const deployServices = async (cwd: string, options: DeployCommandOptions, driver
     return undefined;
 };
 
+/** Warn when a Cloudflare deploy's account is near or at its Durable Object class cap; say nothing otherwise. */
+const warnDurableObjectBudget = async (wranglerPath: string | undefined, target: string, environment: string | undefined, logger: Logger): Promise<void> => {
+    if (target !== "cloudflare") {
+        return;
+    }
+
+    // `--env` deploys to the environment's own `account_id` when it sets one.
+    const parsed =
+        wranglerPath === undefined
+            ? undefined
+            : readWranglerJsonc<{ account_id?: unknown; env?: Record<string, { account_id?: unknown } | undefined> }>(wranglerPath).parsed;
+    const accountId = (environment === undefined ? undefined : parsed?.env?.[environment]?.account_id) ?? parsed?.account_id;
+    const budget = await checkDurableObjectBudget({ accountId });
+
+    if (budget.verdict === "near" || budget.verdict === "full") {
+        logger.warn(budget.fix === undefined ? budget.message : `${budget.message} ${budget.fix}`);
+    }
+};
+
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
@@ -750,6 +771,11 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     warnCloudflareCliConfigOnce(cwd, (message) => {
         options.logger.warn(message);
     });
+
+    // Non-blocking as well: an account at its Durable Object class cap makes
+    // wrangler reject a deploy that adds a class, and its error does not say
+    // which limit (plan 462). Online only with credentials; silent otherwise.
+    await warnDurableObjectBudget(validation.wranglerPath, pipeline.target, options.env, options.logger);
 
     // Detect required secrets not yet set on the target. Interactive: offer to
     // generate + push the mintable ones (provider keys flagged to set by hand).

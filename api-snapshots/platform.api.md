@@ -225,6 +225,12 @@ type KvValue = ReadableStream | ArrayBuffer | ArrayBufferView | string;
 type KvValueType = "text" | "json" | "arrayBuffer" | "stream";
 ```
 
+### `LUNORA_ROLE_PREFIX` (const)
+
+```ts
+const LUNORA_ROLE_PREFIX = "__lunora_do__:";
+```
+
 ### `MessageBatchLike` (interface)
 
 ```ts

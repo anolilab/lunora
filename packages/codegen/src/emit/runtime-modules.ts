@@ -97,6 +97,26 @@ export { ShardRegistryDO } from "${baseSpecifiers(useUmbrella).do}";
 `;
 };
 
+/**
+ * `_generated/durableObjects.ts`, written when `lunora.config` sets
+ * `durableObjects: { merge: true }` (plan 462). Its existence is the signal the
+ * composed entry, binding inference and the validator all read.
+ */
+const emitDurableObjects = (useUmbrella: boolean): string => `${GENERATED_HEADER}/**
+ * Host the shard, the scheduler and the shard registry in ONE Durable Object
+ * class, so the app spends one of the account's classes instead of three. A
+ * Vite-first (class-A) app needs nothing more: its generated worker entry builds
+ * \`LunoraDO\` from these. A hand-written entry does the same by hand:
+ *
+ * \`export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, shardRegistry: ShardRegistryDO });\`
+ *
+ * and passes \`roleNamespace(env.SHARD, "scheduler")\` / \`roleNamespace(env.SHARD, "shardRegistry")\`
+ * to \`.scheduler()\` / \`.shardRegistry()\`. Merge before the first deploy only:
+ * data already in \`ShardDO\` does not move, and a deployed merge cannot be undone.
+ */
+export { mergeDurableObjects, roleNamespace } from "${baseSpecifiers(useUmbrella).do}";
+`;
+
 const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     const byExpression = new Map<string, CronJobIR[]>();
 
@@ -234,4 +254,4 @@ export const LUNORA_VECTOR_INDEXES: ReadonlyArray<LunoraVectorIndex> = [${body}]
  */
 const emitWranglerCronTriggers = (crons: ReadonlyArray<CronJobIR>): string[] => [...new Set(crons.map((cron) => cron.cron))];
 
-export { emitCrons, emitScheduler, emitShardRegistry, emitVectors, emitWranglerCronTriggers };
+export { emitCrons, emitDurableObjects, emitScheduler, emitShardRegistry, emitVectors, emitWranglerCronTriggers };

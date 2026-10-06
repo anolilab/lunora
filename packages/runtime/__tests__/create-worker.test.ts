@@ -293,6 +293,28 @@ describe("createWorker", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
+    it("rejects a client shard key carrying the reserved role prefix with a 400", async () => {
+        expect.assertions(3);
+
+        // In an app that merges its Durable Objects the scheduler lives at this
+        // name in the shard namespace; a client must not be able to address it —
+        // even where unauthenticated shard access is allowed.
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "__lunora_do__:scheduler:default" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("rejects a relation fan-out whose args.table differs from the authorized fanOut.table (confused-deputy regression)", async () => {
         expect.assertions(3);
 

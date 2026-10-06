@@ -991,6 +991,137 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("durable object class budget", () => {
+        /** A Cloudflare namespaces response reporting `total` classes on the account. */
+        const namespacesApi = (total: number): typeof globalThis.fetch =>
+            vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: [], result_info: { total_count: total }, success: true }));
+
+        const budgetFinding = async (fetchImpl: typeof globalThis.fetch, environment: Record<string, string>) => {
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-budget-"));
+
+            try {
+                const result = await runDoctor({ cwd, environment, fetch: fetchImpl, logger: makeLogger().logger });
+
+                return result.findings.find((finding) => finding.code.startsWith("do-class-budget"));
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
+        };
+
+        const credentials = { CLOUDFLARE_ACCOUNT_ID: "acc", CLOUDFLARE_API_TOKEN: "token" };
+
+        it.each([
+            [40, "do-class-budget-ok"],
+            [95, "do-class-budget-near"],
+            // Exactly the Free cap: a Free account cannot add another class.
+            [100, "do-class-budget-near"],
+            [101, "do-class-budget-ok"],
+            [250, "do-class-budget-ok"],
+            [495, "do-class-budget-near"],
+            [500, "do-class-budget-full"],
+        ])("judges %i classes as %s", async (total, code) => {
+            expect.assertions(1);
+
+            await expect(budgetFinding(namespacesApi(total), credentials)).resolves.toMatchObject({ code });
+        });
+
+        it("warns rather than fails at the Paid cap — the count is an account fact, not this project's", async () => {
+            expect.assertions(1);
+
+            await expect(budgetFinding(namespacesApi(500), credentials)).resolves.toMatchObject({ code: "do-class-budget-full", level: "warn" });
+        });
+
+        it("skips the check for a non-Cloudflare target", async () => {
+            expect.assertions(2);
+
+            const cwd = mkdtempSync(join(tmpdir(), "lunora-doctor-budget-"));
+            const fetchImpl = namespacesApi(40);
+
+            try {
+                writeFileSync(join(cwd, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+                const result = await runDoctor({ cwd, environment: credentials, fetch: fetchImpl, logger: makeLogger().logger });
+
+                expect(result.findings.some((finding) => finding.code.startsWith("do-class-budget"))).toBe(false);
+                expect(fetchImpl).not.toHaveBeenCalled();
+            } finally {
+                rmSync(cwd, { force: true, recursive: true });
+            }
+        });
+
+        it("stays offline without credentials", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = namespacesApi(0);
+
+            await expect(budgetFinding(fetchImpl, {})).resolves.toMatchObject({ code: "do-class-budget-unchecked", level: "info" });
+            expect(fetchImpl).not.toHaveBeenCalled();
+        });
+
+        it("reports a refused API call as unchecked, never as a failure", async () => {
+            expect.assertions(1);
+
+            const refused = vi.fn<typeof globalThis.fetch>(async () => Response.json({ errors: [{ message: "auth" }], success: false }, { status: 403 }));
+
+            await expect(budgetFinding(refused, credentials)).resolves.toMatchObject({ code: "do-class-budget-unchecked", level: "info" });
+        });
+
+        describe("with accounts set per environment", () => {
+            /** Run doctor over `wrangler` with only a token in the environment; returns the budget findings and the accounts the API was asked about. */
+            const tokenOnly = { CLOUDFLARE_API_TOKEN: "token" };
+
+            const budgetFindings = async (wrangler: Record<string, unknown>, environment: Record<string, string> = tokenOnly) => {
+                const fetchImpl = namespacesApi(40);
+
+                seed(workdir, JSON.stringify(wrangler));
+
+                const result = await runDoctor({ cwd: workdir, environment, fetch: fetchImpl, logger: makeLogger().logger });
+                const asked = vi
+                    .mocked(fetchImpl)
+                    .mock.calls.map(([url]) => /accounts\/([^/]+)\//u.exec(url instanceof Request ? url.url : url.toString())?.[1]);
+
+                return { asked, findings: result.findings.filter((finding) => finding.code.startsWith("do-class-budget")) };
+            };
+
+            it("checks an account that only a named environment sets", async () => {
+                expect.assertions(2);
+
+                const { asked, findings } = await budgetFindings({ env: { staging: { account_id: "staging-acc" } }, name: "app" });
+
+                expect(asked).toStrictEqual(["staging-acc"]);
+                expect(findings).toMatchObject([{ code: "do-class-budget-ok" }]);
+            });
+
+            it("checks each distinct account once, naming the blocks it came from", async () => {
+                expect.assertions(3);
+
+                const { asked, findings } = await budgetFindings({
+                    account_id: "main-acc",
+                    env: { production: { account_id: "main-acc" }, staging: { account_id: "staging-acc" } },
+                    name: "app",
+                });
+
+                expect(asked.toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual(["main-acc", "staging-acc"]);
+                expect(findings.map((finding) => finding.message.split(":")[0])).toStrictEqual([
+                    "account main-acc (top level, env.production)",
+                    "account staging-acc (env.staging)",
+                ]);
+                expect(findings.every((finding) => finding.code === "do-class-budget-ok")).toBe(true);
+            });
+
+            it("checks only CLOUDFLARE_ACCOUNT_ID when it is set, as wrangler does", async () => {
+                expect.assertions(1);
+
+                const { asked } = await budgetFindings(
+                    { account_id: "main-acc", env: { staging: { account_id: "staging-acc" } }, name: "app" },
+                    { CLOUDFLARE_ACCOUNT_ID: "override-acc", CLOUDFLARE_API_TOKEN: "token" },
+                );
+
+                expect(asked).toStrictEqual(["override-acc"]);
+            });
+        });
+    });
+
     /**
      * The codes are the machine-readable contract, so adding or renaming one has
      * to be a deliberate act rather than a side effect of editing a check. The

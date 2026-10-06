@@ -17,15 +17,18 @@ import type { DatabaseWriterLike, MutationDelta } from "@lunora/shard-engine";
 import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { DurableObject } from "cloudflare:workers";
 
+import { mergeDurableObjects } from "../../src/merge-durable-objects";
 import { SessionDO } from "../../src/session-do";
 import type { ShardDOState } from "../../src/shard-do";
 import { ShardDO } from "../../src/shard-do";
+import { ShardRegistryDO } from "../../src/shard-registry-do";
 import messagesSchema from "../_helpers/messages-schema";
 
 interface Env {
     COUNTER: DurableObjectNamespace<TestCounterDO>;
     ECHO: DurableObjectNamespace<TestEchoDO>;
     LUNORA_ALLOWED_ORIGINS?: string;
+    MERGED: DurableObjectNamespace;
     SESSION: DurableObjectNamespace<TestSessionDO>;
     SHARD: DurableObjectNamespace<TestShardDO>;
     SYNC: DurableObjectNamespace<TestSyncDO>;
@@ -485,6 +488,49 @@ class TestSessionDO extends DurableObject<Env> {
     }
 }
 
+/** The shard role of {@link TestMergedDO}: answers with its own instance name. */
+class MergedShardRole {
+    readonly #state: DurableObjectState;
+
+    public constructor(state: DurableObjectState) {
+        this.#state = state;
+    }
+
+    public fetch(): Response {
+        return new Response(`shard:${String(this.#state.id.name)}`);
+    }
+}
+
+/**
+ * The scheduler role of {@link TestMergedDO}: `/arm` sets an alarm, the alarm
+ * records which instance name it woke under, `/fired` reads that back. The wake
+ * is the case under test — the merged class re-reads `ctx.id.name` on a cold
+ * start with no request to go by.
+ */
+class MergedSchedulerRole {
+    readonly #state: DurableObjectState;
+
+    public constructor(state: DurableObjectState) {
+        this.#state = state;
+    }
+
+    public async alarm(): Promise<void> {
+        await this.#state.storage.put("fired", `scheduler:${String(this.#state.id.name)}`);
+    }
+
+    public async fetch(request: Request): Promise<Response> {
+        if (new URL(request.url).pathname === "/arm") {
+            await this.#state.storage.setAlarm(Date.now() + 20);
+
+            return new Response("armed");
+        }
+
+        return new Response((await this.#state.storage.get<string>("fired")) ?? "pending");
+    }
+}
+
+const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole, shardRegistry: ShardRegistryDO });
+
 const handler = {
     async fetch(_request: Request, _env: Env): Promise<Response> {
         return new Response("test-worker", { status: 200 });
@@ -492,5 +538,5 @@ const handler = {
 };
 
 export default handler;
-export { TestCounterDO, TestEchoDO, TestSessionDO, TestShardDO, TestSyncDO };
+export { TestCounterDO, TestEchoDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
 export type { Env };

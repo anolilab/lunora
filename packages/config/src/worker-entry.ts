@@ -103,6 +103,7 @@ const isGeneratedOutput = (relativeMain: string): boolean =>
  * to export a class of this exact name, so detection keys on the class name.
  */
 const DURABLE_OBJECT_BINDINGS = {
+    LunoraDO: "SHARD",
     SchedulerDO: "SCHEDULER",
     SessionDO: "SESSION",
     ShardDO: "SHARD",
@@ -199,6 +200,57 @@ const GENERATED_MODULE_DURABLE_OBJECTS: Partial<Record<GeneratedClassModule, Dur
     scheduler: "SchedulerDO",
     shardRegistry: "ShardRegistryDO",
 };
+
+/**
+ * The class an app that merges its Durable Objects (`durableObjects.merge`,
+ * plan 462) exports instead of {@link COMPOSED_ENTRY_DURABLE_OBJECTS} and the
+ * {@link GENERATED_MODULE_DURABLE_OBJECTS} classes, bound as `SHARD`. Each of
+ * those modules is one merged role, named after the module.
+ */
+const MERGED_DURABLE_OBJECT = "LunoraDO" as const;
+
+/** The classes {@link MERGED_DURABLE_OBJECT} hosts — never bound alongside it. */
+const MERGED_ROLE_DURABLE_OBJECTS: ReadonlySet<string> = new Set<string>([
+    ...COMPOSED_ENTRY_DURABLE_OBJECTS,
+    ...Object.values(GENERATED_MODULE_DURABLE_OBJECTS),
+]);
+
+/** The `_generated/` module codegen writes when `lunora.config` opts in to the merge. */
+const MERGED_DURABLE_OBJECTS_MODULE = "durableObjects" as const;
+
+/**
+ * Whether the project merges its Durable Objects: codegen wrote the merge
+ * module. The one test the composed entry, binding inference and the export
+ * validator all ask — the same "module existence is the signal" rule the
+ * scheduler and registry modules follow.
+ */
+const isMergedProject = (generatedDirectory: string): boolean => existsSync(join(generatedDirectory, `${MERGED_DURABLE_OBJECTS_MODULE}.ts`));
+
+/** Whether `module` holds a class the merged class hosts — imported into it, never re-exported. */
+const isMergedRoleModule = (module: string): boolean => Object.hasOwn(GENERATED_MODULE_DURABLE_OBJECTS, module);
+
+/**
+ * The framework Durable Objects the class-A composed entry exports, decided from
+ * the generated modules that exist: `LunoraDO` alone when the app merges, else
+ * `ShardDO` plus the class of each generated scheduler / registry module.
+ */
+const composedEntryDurableObjects = (generatedDirectory: string): DurableObjectClass[] =>
+    isMergedProject(generatedDirectory)
+        ? [MERGED_DURABLE_OBJECT]
+        : [
+              ...COMPOSED_ENTRY_DURABLE_OBJECTS,
+              ...Object.entries(GENERATED_MODULE_DURABLE_OBJECTS)
+                  .filter(([module]) => existsSync(join(generatedDirectory, `${module}.ts`)))
+                  .map(([, className]) => className),
+          ];
+
+/**
+ * `classes` with the per-role classes dropped when the merged class is among
+ * them — the hand-written-entry case, where the entry's own exports are the only
+ * signal: one `SHARD` binding, not four.
+ */
+const collapseMergedDurableObjects = (classes: ReadonlyArray<DurableObjectClass>): DurableObjectClass[] =>
+    classes.includes(MERGED_DURABLE_OBJECT) ? classes.filter((className) => !MERGED_ROLE_DURABLE_OBJECTS.has(className)) : [...classes];
 
 /**
  * The class-B composed entry. `lunora deploy` passes this file to wrangler as
@@ -349,7 +401,7 @@ const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] =>
         );
     }
 
-    return DURABLE_OBJECT_CLASSES.filter((className) => exportedNames.has(className)).map((className) => {
+    return collapseMergedDurableObjects(DURABLE_OBJECT_CLASSES.filter((className) => exportedNames.has(className))).map((className) => {
         return {
             binding: DURABLE_OBJECT_BINDINGS[className],
             className,
@@ -469,8 +521,10 @@ export type { DurableObjectClass, DurableObjectSpec, GeneratedClassModule, Worke
 // and "what class-A composition is allowed to bind" cannot drift.
 
 export {
+    collapseMergedDurableObjects,
     COMPOSED_ENTRY_DURABLE_OBJECTS,
     COMPOSED_WORKER_ENTRY,
+    composedEntryDurableObjects,
     detectClassExports,
     detectExportedDurableObjects,
     DURABLE_OBJECT_BINDINGS,
@@ -479,7 +533,12 @@ export {
     GENERATED_MODULE_DURABLE_OBJECTS,
     isFrameworkDurableObject,
     isGeneratedOutput,
+    isMergedProject,
+    isMergedRoleModule,
     LUNORA_WORKER_VIRTUAL_ID,
+    MERGED_DURABLE_OBJECT,
+    MERGED_DURABLE_OBJECTS_MODULE,
+    MERGED_ROLE_DURABLE_OBJECTS,
     NON_SOURCE_DIRECTORIES,
     resolveWorkerEntry,
     SOURCE_DOT_DIRECTORIES,

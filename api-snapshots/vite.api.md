@@ -184,6 +184,7 @@ interface WorkerEntryComposition {
     allowUnauthenticatedShardAccess?: boolean;
     appConfigModule?: string;
     classModules?: ReadonlyArray<GeneratedClassModule>;
+    mergeDurableObjects?: boolean;
     shard?: LunoraShardConfig;
 }
 ```

@@ -489,6 +489,7 @@ interface LunoraProjectConfig {
     advisor?: unknown;
     app?: unknown;
     codegen?: unknown;
+    durableObjects?: unknown;
     remote?: unknown;
     target?: unknown;
 }
@@ -641,6 +642,10 @@ interface ProjectConfigLiterals {
     };
     codegen?: {
         exclude?: string[];
+        unreadable?: boolean;
+    };
+    durableObjects?: {
+        merge?: boolean;
         unreadable?: boolean;
     };
     remote?: boolean;

@@ -925,6 +925,7 @@ const validateVpcNetworks = (wrangler: WranglerConfig, errors: string[]): void =
 // hit the same raw `TypeError` on a `null` entry. Package-internal only — the
 // `./cloudflare` barrel re-exports by name and deliberately does not list them.
 export {
+    foldMigrationClasses,
     HINT_BINDING_RULES,
     objectBindingEntries,
     REQUIRED_FIELD_BINDING_RULES,
