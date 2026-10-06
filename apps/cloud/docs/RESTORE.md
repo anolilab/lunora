@@ -203,23 +203,30 @@ import reads both.
 | `$kv` — every bound KV namespace: raw bytes, metadata, expiration (a value over 512 KiB in 512 KiB chunks)                                                                                                                                | Objects under `_lunora/` (resumable-upload state, restore staging)                      |
 | `$storage` — every object in the app's `@lunora/storage` buckets, in 512 KiB base64 chunks, with type and metadata                                                                                                                        |                                                                                         |
 
-A restore writes each section append-only, the way it writes rows: an auth row
-whose key or unique value exists, a KV key that exists (or has expired since), or
-an object key that exists is left alone and counted as already present. A KV
-value or object of more than one chunk is staged under
-`_lunora/restore/<target>/<session>/` (in the object's bucket; a KV value's in
-the default bucket), each chunk sealed with AES-GCM under a key derived from the
-deployment's admin token so a staged KV value never sits in a bucket in the
-clear, and assembled when its last chunk arrives, checked against
-the SHA-256 the export wrote: a KV value (at most 25 MiB) in memory, an object up
-to 32 MiB in memory with one checksummed put, and a larger one through an R2
-multipart upload in equal 5 MiB parts, one in memory at a time, aborted with
-nothing written when the digest does not match. The session's chunks are
-deleted once the target is written; a restore that stops partway leaves its
-session, and the next restore deletes every session over a day old when its
-header line arrives, touching nothing else under `_lunora/`. Storage objects
-count toward the
-64 MiB cap below, so an app with a large bucket can outgrow snapshots it fit
+A studio restore rewinds each section the snapshot's header declares, the way it
+rewinds rows (below): the auth tables, every bound KV namespace and every storage
+bucket end up holding exactly what the snapshot holds. A KV value or object of
+more than one chunk is restored exactly as `lunora import` restores it — each
+chunk sealed with AES-GCM under a key derived from the deployment's admin token,
+checked against the SHA-256 the export wrote, a KV value (at most 25 MiB)
+assembled in memory, an object up to 32 MiB in memory with one checksummed put
+and a larger one through an R2 multipart upload in equal 5 MiB parts — with one
+difference: the chunks are staged under the restore session's own prefix,
+`_lunora/restore-session/<session>/<generation>/`, checked when the value's last
+chunk is staged, and written only at commit. That prefix is disjoint from the
+append import's `_lunora/restore/<target>/<session>/`, so neither import's sweep
+of stale staging can delete the other's chunks. Objects under `_lunora/` are
+Lunora's own and are never touched, apart from the restore's own staging.
+
+`lunora import` (an append) writes sections append-only, the way it writes rows:
+an auth row whose key or unique value exists, a KV key that exists (or has
+expired since), or an object key that exists is left alone and counted as
+already present. Its chunks are staged under `_lunora/restore/<target>/<session>/`
+(in the object's bucket; a KV value's in the default bucket) and assembled when
+the last one arrives; a restore that stops partway leaves its session, and the
+next import deletes every such session over a day old when its header line
+arrives, touching nothing else under `_lunora/`. Storage objects count toward
+the 64 MiB cap below, so an app with a large bucket can outgrow snapshots it fit
 before.
 
 The export fails loudly rather than short: a shard it cannot reach, or a
@@ -248,10 +255,15 @@ What it does, in order:
 
 1. Takes a **pre-restore snapshot** of the current data. If that fails, nothing
    is restored.
-2. Rewinds the tenant to the chosen snapshot through its
-   `POST /_lunora/admin/import`, in batches under its 1 MiB body limit. The
-   first batch goes in **replace mode** (`?mode=replace`) over every table in
-   the schema; the rest are appended onto it.
+2. **Stages** the snapshot: every batch (under the tenant's 1 MiB body limit)
+   goes to `POST /_lunora/admin/import?mode=replace&stage=<session>`, all under
+   one session. Staging changes nothing a reader sees: shard rows wait in each
+   shard's staging table, `.global()` rows in D1's, auth and KV records on the
+   root shard, sealed chunks under `_lunora/restore-session/<session>/…`.
+   Every row is checked as it is staged, and a chunked value against its
+   SHA-256 once its last chunk is.
+3. **Commits** it: `POST /_lunora/admin/import/commit` swaps the whole snapshot
+   in for every table in the schema (and the sections the header declares).
 
 **A restore is a rewind.** Afterwards every table holds exactly what the
 snapshot holds:
@@ -261,29 +273,56 @@ snapshot holds:
 - A row created since the snapshot **is deleted**.
 - A table the snapshot holds no rows for **is emptied**.
 
-How atomic that is depends on the storage:
+The same goes for the sections: an auth row, a KV key or a storage object created
+since is removed, one changed since gets its snapshot contents back. Signed-in
+sessions and one-time tokens are cleared with the auth tables, so users sign in
+again after a restore.
 
-- **Each shard** applies its replace batch in one Durable Object transaction:
-  every write and delete lands, or none does.
-- **`.global()` D1 tables** have no interactive transactions. Every row is
-  validated before anything is written, the writes go first, and the deletes
-  run only once every write has landed — a failure part-way leaves extra rows,
-  never missing ones.
-- **A snapshot larger than one batch** (about 900 KB of NDJSON) is not atomic as
-  a whole: between the replace batch and the last appended one, only part of the
-  snapshot is back.
+**If staging fails** — a batch the tenant refuses, a row that does not validate
+against the current schema, a shard it cannot reach — the restore **aborts the
+session** (`POST /_lunora/admin/import/abort`) and is recorded `failed`: the
+tenant was never touched. A session nobody commits or aborts expires an hour
+after its last batch and is swept when the next one opens.
 
-The restore **stops** at the first batch that is refused, rejects a row (one
-that no longer validates against the current schema, for example), or cannot
-reach a shard, and is recorded `failed` with the reason. If the replace batch
-itself failed on a shard, that shard was rolled back and the `.global()` tables
-were not touched. Re-running a restore is safe — it starts over with a replace.
+**The session fails closed.** Its state lives in one manifest on the tenant's
+root shard, and every change to it is a compare-and-set. A staging batch is
+opened before it writes and closed after, so a batch that never finished (the
+request died) leaves the session uncommittable. A session with a refused row,
+an unfinished batch, a batch that arrived after the commit's dry run, an abort
+in progress, or a manifest that is missing, expired or unreadable refuses the
+commit (409/404) before anything is written. Each session carries a generation,
+so a session id reused after an expiry never picks up rows an earlier session
+left behind, and no sweep deletes state it cannot read.
+
+**The commit** first runs every shard's swap as a dry run in a transaction it
+rolls back, so a row that would not land refuses the whole commit before any
+shard is written; the restore then aborts and nothing changed. After that, how
+atomic it is depends on the storage:
+
+| Storage                    | Guarantee                                                                                                                                                                                                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Each shard** (DO SQLite) | One Durable Object storage transaction: every overwrite and every delete lands, or none does. A shard records that it committed.                                                                                                                                                |
+| **Across shards**          | Not one transaction — there is none across Durable Objects. The dry run leaves only infrastructure failures (a shard unreachable mid-commit); the commit then answers `partial`, and sending it again finishes the shards that had not committed.                               |
+| **`.global()` D1 tables**  | D1 has no interactive transaction, and `batch()` covers only a statement list fixed up front, which the schema-aware writer cannot produce. Writes go first, deletes only once every write landed, so a failure leaves extra rows, never missing ones; a retry re-applies them. |
+| **Auth tables**            | One transaction of the auth store: D1's `batch()`, or the auth Durable Object's storage transaction.                                                                                                                                                                            |
+| **KV, storage objects**    | No multi-key transaction exists. Writes first, then deletes of what the snapshot does not hold; a retry re-applies them.                                                                                                                                                        |
+
+The commit runs those in order — shards, `.global()`, auth, KV, storage — and the
+root shard records each step that finished, so a retried commit skips what is
+done and, once everything is, answers the same totals again. The studio retries a
+`partial` commit up to three times; if it still has not finished, the restore is
+recorded `failed` saying the tenant may be part-restored — restore the snapshot
+again (it starts a fresh session) or restore the pre-restore snapshot.
+
+The restore row records what it wrote (`restoreInserted`) and, per table, what it
+removed (`restoreDeleted`; `$auth`, `$kv` and `$storage` for the sections), shown
+next to the restore in the studio. Restores from before staged import recorded
+`restoreConflicts` / `restoreRowErrors` instead; those rows still read.
 
 The pre-restore snapshot preserves exactly what was there before, and restoring
 it is a rewind too, so it **undoes** the restore. A tenant whose runtime predates
-replace-mode import cannot be rewound: the restore says so after its first batch
-(which was appended, so rows deleted since the snapshot are back) — redeploy the
-project and restore again.
+staged import is refused before a single row is sent — redeploy the project and
+restore again.
 
 ### Downloading, and restoring by hand
 
@@ -300,17 +339,27 @@ LUNORA_ADMIN_TOKEN=<its admin token> lunora import acme-20260930T120000000Z.ndjs
 
 `lunora import` appends: a row whose `_id` already exists is skipped. For a
 rewind, either restore into an **empty** deployment (a fresh project, or after
-clearing the tables), where append and replace are the same thing, or post a
-snapshot that fits one request (1 MiB) in replace mode yourself:
+clearing the tables), where append and replace are the same thing, or drive the
+staged replace yourself — split the file into batches under 1 MiB, stage each,
+then commit:
 
 ```bash
-curl -X POST "<worker-url>/_lunora/admin/import?mode=replace" \
-  -H "authorization: Bearer <its admin token>" -H "content-type: application/x-ndjson" \
-  --data-binary @acme-20260930T120000000Z.ndjson
+split -C 900000 acme-20260930T120000000Z.ndjson batch-
+for batch in batch-*; do
+  curl -fsS -X POST "<worker-url>/_lunora/admin/import?mode=replace&stage=manual-1" \
+    -H "authorization: Bearer <its admin token>" -H "content-type: application/x-ndjson" \
+    --data-binary @"$batch" || break
+done
+curl -X POST "<worker-url>/_lunora/admin/import/commit" \
+  -H "authorization: Bearer <its admin token>" -H "content-type: application/json" \
+  --data '{"session":"manual-1"}'
 ```
 
-`?tables=a,b` narrows a replace to those tables; without it every table in the
-schema is replaced.
+Check each staging answer's `errors` and `failed`; if any is non-empty, abort
+(`/_lunora/admin/import/abort` with the same body) instead of committing. A
+snapshot that fits one request can skip the session: `?mode=replace` without
+`stage` stages and commits in that one call. `?tables=a,b` narrows a replace to
+those tables; without it every table in the schema is replaced.
 
 If the control-plane D1 is gone, the snapshots are still in R2:
 
@@ -332,10 +381,14 @@ wrangler r2 object get <OFFSITE_BUCKET>/tenant-backups/<org>/<alias>/<timestamp>
   `BACKUP_OFFSITE_*` secrets, snapshots live only in the cell's own account and
   an account-level loss takes them too. Restoring from the off-site copy is by
   hand (above); the studio restores from the primary bucket only.
-- **Multi-batch restores are not atomic.** A snapshot over one import batch
-  passes through a partly-restored window; a staged import (load every batch,
-  then swap per shard) would close it.
-- **Not covered:** R2 objects, KV, Vectorize (table above).
+- **Not one transaction across stores.** Each shard swaps atomically and the
+  dry run refuses a bad row before anything is written, but shards, D1, KV and
+  storage are committed one after another; a commit that fails part-way is
+  finished by retrying it, not rolled back (table above).
+- **Objects over 32 MiB need multipart.** A tenant Worker without
+  `storageMultipartUpload` refuses such an object at staging, and the restore
+  aborts with nothing changed.
+- **Not covered:** Vectorize (table above).
 - **The tenant export itself** still materialises every shard's rows inside
   the tenant Worker, so a very large tenant can exhaust the tenant side before
   the control plane's upload is the limit.

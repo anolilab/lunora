@@ -288,6 +288,7 @@ export interface Doc_tenantBackups {
     projectId: Id<"projects">;
     restoredFrom?: Id<"tenantBackups">;
     restoreConflicts?: number;
+    restoreDeleted?: Record<string, number>;
     restoreInserted?: number;
     restoreRowErrors?: number;
     status: "running" | "succeeded" | "failed";
@@ -1139,6 +1140,7 @@ export interface Insert_tenantBackups {
     projectId: Id<"projects">;
     restoredFrom?: Id<"tenantBackups">;
     restoreConflicts?: number;
+    restoreDeleted?: Record<string, number>;
     restoreInserted?: number;
     restoreRowErrors?: number;
     status: "running" | "succeeded" | "failed";

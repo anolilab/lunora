@@ -345,8 +345,13 @@ export const deployTables = {
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
         // Restore rows: the snapshot restored, and what the import wrote.
+        // `restoreDeleted` is per table (`$auth` / `$kv` / `$storage` for the
+        // sections): the rows the rewind removed. `restoreConflicts` and
+        // `restoreRowErrors` are only on restores from before the staged import,
+        // which settles a restore with errors as failed.
         restoredFrom: v.optional(v.id("tenantBackups")),
         restoreConflicts: v.optional(v.number()),
+        restoreDeleted: v.optional(v.record(v.string(), v.number())),
         restoreInserted: v.optional(v.number()),
         restoreRowErrors: v.optional(v.number()),
         status: v.union(v.literal("running"), v.literal("succeeded"), v.literal("failed")),

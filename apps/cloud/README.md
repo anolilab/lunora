@@ -510,14 +510,17 @@ export (the one `lunora cloud eject` uses), as gzipped NDJSON under
 `tenant-backups/{org}/{alias}/{timestamp}.ndjson.gz`. Retention is
 `limits.backupRetention` in the plan catalog (free 3, pro 14, enterprise 30).
 Owners and admins can back up now, download, and restore from the project view;
-all three are audit-logged. A restore is a **rewind** of the schema tables
-through the runtime's replace-mode import — rows deleted since the snapshot come
-back, edits since are reverted, rows created since are removed — and takes a
-snapshot of the current data first, which can be restored to undo it. A snapshot
-also carries the auth tables, KV namespaces and storage objects (export format 2),
-which a restore brings back append-only; Vectorize is not in it. What exactly it
-covers, what it does not, and the manual recovery paths are in
-[`docs/RESTORE.md`](docs/RESTORE.md).
+all three are audit-logged. A restore is a **rewind** through the runtime's
+staged replace import: every batch of the snapshot is staged into one session
+(nothing a reader sees changes), then one commit swaps it in — rows deleted since
+the snapshot come back, edits since are reverted, rows created since are removed.
+The same holds for the auth tables, KV namespaces and storage objects the
+snapshot carries (export format 2); Vectorize is not in it. A failure while
+staging aborts the session and leaves the tenant untouched, and a snapshot of the
+current data is taken first, which can be restored to undo it. The restore row
+records what was written and, per table, what was removed (`restoreDeleted`).
+What exactly it covers, how atomic each store is, and the manual recovery paths
+are in [`docs/RESTORE.md`](docs/RESTORE.md).
 
 Snapshots stream to R2 as multipart uploads, so their size is not capped by the
 Worker's memory. With the four `BACKUP_OFFSITE_*` secrets set

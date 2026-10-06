@@ -52,7 +52,12 @@ const senderFor = async (target: TenantTarget, environment: RouterEnv): Promise<
  * revoked mid-flight, say) leaves the row `running` until the sweep reaps it —
  * the tenant-side outcome is already decided, so the response still reports it.
  */
-const settle = async (context: Context, organizationId: string, id: string, outcome: Record<string, number | string>): Promise<void> => {
+const settle = async (
+    context: Context,
+    organizationId: string,
+    id: string,
+    outcome: Record<string, number | Record<string, number> | string>,
+): Promise<void> => {
     await context.runMutation(internal.tenant_backups.finish, { id, organizationId, ...outcome }).catch(() => undefined);
 };
 
@@ -129,10 +134,11 @@ export const handleBackupNowRoute = async (request: Request, environment: Router
  * production Worker.
  *
  * Takes a snapshot of the current data FIRST and refuses to touch anything if
- * that fails. Then rewinds the tenant to the chosen snapshot through its
- * replace-mode import: rows deleted since come back, rows edited since get their
- * snapshot contents, rows created since are removed. Restoring the pre-restore
- * snapshot the same way undoes it.
+ * that fails. Then rewinds the tenant to the chosen snapshot through its staged
+ * replace import — every batch staged, then one commit: rows deleted since come
+ * back, rows edited since get their snapshot contents, rows created since are
+ * removed. A failure while staging aborts, leaving the tenant untouched.
+ * Restoring the pre-restore snapshot the same way undoes it.
  */
 export const handleRestoreRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
@@ -185,7 +191,11 @@ export const handleRestoreRoute = async (request: Request, environment: RouterEn
         return jsonError(502, reason);
     }
 
-    await settle(context, organizationId, started.restoreId, { restoreInserted: summary.inserted, status: "succeeded" });
+    await settle(context, organizationId, started.restoreId, {
+        restoreDeleted: summary.deletedByTable,
+        restoreInserted: summary.inserted,
+        status: "succeeded",
+    });
 
     return Response.json({ ok: true, preRestoreBackupId: started.preRestoreBackupId, restoreId: started.restoreId, summary });
 };

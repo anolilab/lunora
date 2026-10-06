@@ -4,7 +4,8 @@
  * restore writes through.
  *
  * Both go through the tenant runtime's own admin data-movement routes
- * (`/_lunora/admin/export` and `/_lunora/admin/import`, see
+ * (`/_lunora/admin/export`, and `/_lunora/admin/import` with its staged
+ * `/import/commit` and `/import/abort`, see
  * `packages/runtime/src/data-movement-admin-routes.ts`) under the deployment's
  * admin bearer. The bearer is unsealed by the caller and only ever travels in the
  * `authorization` header built here — never into a log line, an error message or
@@ -60,12 +61,18 @@ export const tenantSender = (target: { adminToken: string; url: string }): Tenan
         fetch(`${base}${path}`, { body, headers: { authorization: `Bearer ${target.adminToken}`, "content-type": contentType }, method: "POST" });
 };
 
+/** A tenant-supplied text, bounded — or `fallback` when it is not a string at all. */
+const boundedText = (value: unknown, fallback: string): string => (typeof value === "string" ? value : fallback).slice(0, MAX_ERROR_LENGTH);
+
+/** How many entries a tenant-supplied list has — zero for anything that is not a list. */
+const entriesOf = (value: unknown): number => (Array.isArray(value) ? value.length : 0);
+
 /** The tenant's error message (runtime error bodies are `{ error: { message } }`), bounded. */
 const tenantErrorMessage = async (response: Response): Promise<string> => {
-    const body = (await response.json().catch(() => null)) as { error?: string | { message?: string } } | null;
-    const message = typeof body?.error === "string" ? body.error : body?.error?.message;
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    const error = body?.error;
 
-    return (message ?? "no error message").slice(0, MAX_ERROR_LENGTH);
+    return boundedText(typeof error === "string" ? error : (error as { message?: unknown } | null | undefined)?.message, "no error message");
 };
 
 /**
@@ -136,58 +143,223 @@ export const captureTenantSnapshot = async (options: {
     return options.offsite ? { bytes, offsite: await copyObject(options.bucket, options.offsite, options.key, SNAPSHOT_CONTENT_TYPE) } : { bytes };
 };
 
-/** What a restore wrote, summed over its import batches. */
+/** What a restore wrote, from the commit of its staged import. */
 export interface RestoreSummary {
-    /** Rows the restore removed because the snapshot does not hold them. */
+    /** Rows the restore removed because the snapshot does not hold them, in total. */
     deleted: number;
+    /** {@link RestoreSummary.deleted} per table (`$auth`, `$kv`, `$storage` for the sections). */
+    deletedByTable: Record<string, number>;
     /** Rows written (inserted, or overwritten with their snapshot version). */
     inserted: number;
     /** Rows read from the snapshot. */
     received: number;
 }
 
-interface ImportResponseBody {
-    deleted?: Record<string, number>;
-    errors?: unknown[];
-    failed?: unknown[];
-    inserted?: Record<string, number>;
-    received?: number;
+interface StageResponseBody {
+    errors?: unknown;
+    failed?: unknown;
+    received?: unknown;
+    session?: string;
 }
 
-const sum = (counts: Record<string, number> | undefined): number => Object.values(counts ?? {}).reduce((total, count) => total + count, 0);
+interface CommitResponseBody {
+    deleted?: unknown;
+    errors?: unknown[];
+    failed?: unknown[];
+    inserted?: unknown;
+    status?: unknown;
+}
 
 /**
- * Rewind the tenant to a gzipped snapshot through its admin import, one
- * {@link IMPORT_BATCH_BYTES} batch at a time.
- *
- * The first batch goes in `mode=replace` over every table: each shard (in one
- * transaction) and the `.global()` tables end up holding exactly that batch, so
- * rows created since the snapshot are deleted and rows edited since are
- * overwritten. The remaining batches append the rest of the snapshot onto that.
- * A snapshot that fits one batch is therefore an atomic rewind per shard; a
- * larger one passes through a window where only part of the snapshot is back.
- *
- * Any batch that is refused, rejects a row, or misses a shard stops the restore:
- * a rewind that skipped rows is not one. Running the restore again is safe — it
- * starts over with a replace — and the pre-restore snapshot undoes it.
- *
- * ponytail: the multi-batch window; a staged import (load every batch, then swap
- * per shard) closes it.
+ * The tenant's answers come from the tenant's own code, so nothing in them is
+ * stored or summed as sent: a count is a non-negative safe integer or nothing,
+ * and a per-table map keeps at most {@link MAX_COUNTED_TABLES} tables with names
+ * of at most {@link MAX_TABLE_NAME_LENGTH} characters. What does not fit is
+ * folded into one {@link TRUNCATED_TABLES} entry.
  */
-export const restoreTenantSnapshot = async (send: TenantSend, gzipped: ReadableStream<Uint8Array<ArrayBuffer>>): Promise<RestoreSummary> => {
-    const summary: RestoreSummary = { deleted: 0, inserted: 0, received: 0 };
+const MAX_COUNTED_TABLES = 64;
+const MAX_TABLE_NAME_LENGTH = 128;
+const TRUNCATED_TABLES = "(other tables)";
+
+/** `value` as a count, or `undefined` when it is not a non-negative safe integer. */
+const countOf = (value: unknown): number | undefined => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined);
+
+const saturatingAdd = (a: number, b: number): number => Math.min(a + b, Number.MAX_SAFE_INTEGER);
+
+/** A tenant's per-table count map, bounded (see {@link MAX_COUNTED_TABLES}); anything else is an empty map. */
+export const boundedCounts = (raw: unknown): Record<string, number> => {
+    const counts: Record<string, number> = {};
+
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        return counts;
+    }
+
+    let kept = 0;
+    let folded: number | undefined;
+
+    for (const [table, value] of Object.entries(raw as Record<string, unknown>)) {
+        const count = countOf(value);
+
+        if (count === undefined) {
+            continue;
+        }
+
+        if (kept < MAX_COUNTED_TABLES && table.length > 0 && table.length <= MAX_TABLE_NAME_LENGTH && table !== TRUNCATED_TABLES) {
+            counts[table] = count;
+            kept += 1;
+        } else {
+            folded = saturatingAdd(folded ?? 0, count);
+        }
+    }
+
+    if (folded !== undefined) {
+        counts[TRUNCATED_TABLES] = folded;
+    }
+
+    return counts;
+};
+
+const sum = (counts: Record<string, number>): number => {
+    let total = 0;
+
+    for (const count of Object.values(counts)) {
+        total = saturatingAdd(total, count);
+    }
+
+    return total;
+};
+
+/** Commit attempts before a restore gives up on a session whose commit began: each retry finishes what the last one could not. */
+const COMMIT_ATTEMPTS = 3;
+
+const sessionPath = (action: "abort" | "commit"): string => `${IMPORT_PATH}/${action}`;
+
+/**
+ * Drop the staged session, best effort: the tenant's data was never touched, and
+ * staging the tenant cannot drop expires on its own within the hour.
+ */
+const abortSession = async (send: TenantSend, session: string): Promise<void> => {
+    await send(sessionPath("abort"), JSON.stringify({ session }), "application/json").catch(() => undefined);
+};
+
+/**
+ * 409 codes that mean "send the commit again" rather than "refused": another
+ * commit of the session is under way, or a batch landed after this one's dry run.
+ */
+const RETRY_CODES: ReadonlySet<string> = new Set(["IMPORT_SESSION_CHANGED", "IMPORT_SESSION_COMMITTING"]);
+
+type RefusedBody = CommitResponseBody & { error?: { code?: unknown; message?: unknown } };
+
+/** Why the tenant refused a commit before it wrote anything (its dry run, or a session it cannot commit). */
+const refusalOf = (body: RefusedBody | null): string => {
+    if (body?.status === "refused") {
+        return `${String(entriesOf(body.errors))} row(s) would not land, ${String(entriesOf(body.failed))} shard(s) unreachable — nothing changed`;
+    }
+
+    return boundedText(body?.error?.message, "the tenant refused the commit");
+};
+
+/** A commit attempt that neither landed nor was refused: a status, or the network failure. */
+const failureOf = (response: unknown): string => {
+    if (response instanceof Response) {
+        return `HTTP ${String(response.status)}`;
+    }
+
+    return `the tenant did not answer (${(response instanceof Error ? response.message : String(response)).slice(0, MAX_ERROR_LENGTH)})`;
+};
+
+/** One commit attempt: the totals, a refusal (aborted, then thrown), or why it has to be sent again. */
+const attemptCommit = async (send: TenantSend, session: string): Promise<{ body: CommitResponseBody } | { failure: string }> => {
+    const response = await send(sessionPath("commit"), JSON.stringify({ session }), "application/json").catch((error: unknown) => error);
+
+    if (response instanceof Response && response.status === 200) {
+        return { body: await readJson<CommitResponseBody>(response) };
+    }
+
+    if (response instanceof Response && response.status === 409) {
+        const body = (await response.json().catch(() => null)) as RefusedBody | null;
+
+        if (typeof body?.error?.code === "string" && RETRY_CODES.has(body.error.code)) {
+            return { failure: boundedText(body?.error?.message, "the commit has to be sent again") };
+        }
+
+        await abortSession(send, session);
+
+        throw new TenantAdminError(`restore refused before anything was written: ${refusalOf(body)}`, 409);
+    }
+
+    return { failure: failureOf(response) };
+};
+
+/**
+ * Swap the staged snapshot in. A commit that failed part-way (a shard
+ * unreachable, a section's store refusing) is finished by sending it again; one
+ * refused before it wrote anything is aborted.
+ */
+const commitSession = async (send: TenantSend, session: string): Promise<CommitResponseBody> => {
+    let lastFailure = "";
+
+    for (let attempt = 1; attempt <= COMMIT_ATTEMPTS; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop -- retries are sequential by design
+        const outcome = await attemptCommit(send, session);
+
+        if ("body" in outcome) {
+            return outcome.body;
+        }
+
+        lastFailure = outcome.failure;
+    }
+
+    throw new TenantAdminError(
+        `the restore's commit did not finish after ${String(COMMIT_ATTEMPTS)} attempts (${lastFailure}); part of the tenant may already hold the snapshot — restore the snapshot again, or the pre-restore snapshot`,
+        502,
+    );
+};
+
+/**
+ * Rewind the tenant to a gzipped snapshot through its staged replace import
+ * (`packages/runtime/src/import-session.ts`):
+ *
+ * every {@link IMPORT_BATCH_BYTES} batch is staged into one session (`mode=replace`
+ * with `stage` set to the session id), which does not touch the tenant's data
+ * yet; then the commit swaps the whole snapshot in — each shard in one Durable
+ * Object transaction after a dry run on all of them, then the `.global()`
+ * tables, the auth tables, KV and storage objects (see docs/RESTORE.md for what
+ * each guarantees).
+ *
+ * Any batch that is refused, rejects a row or misses a shard aborts the session,
+ * so the tenant is left exactly as it was. A commit that fails part-way is sent
+ * again; a commit refused by its dry run is aborted.
+ */
+export const restoreTenantSnapshot = async (
+    send: TenantSend,
+    gzipped: ReadableStream<Uint8Array<ArrayBuffer>>,
+    session: string = `restore-${crypto.randomUUID()}`,
+): Promise<RestoreSummary> => {
+    // A runtime without staged import has no abort route. Asked first, because one
+    // that predates it would read the staged batches as single-request replaces.
+    const probe = await send(sessionPath("abort"), JSON.stringify({ session }), "application/json");
+
+    if (probe.status !== 200) {
+        throw new TenantAdminError(
+            "the tenant's runtime predates staged import, so it cannot be rewound atomically — redeploy it and restore again",
+            probe.status,
+        );
+    }
+
     const encoder = new TextEncoder();
+    let received = 0;
     let batch = "";
     let batchBytes = 0;
     let batches = 0;
 
     const flush = async (): Promise<void> => {
-        // The replace batch goes out even when empty: an empty snapshot empties the tenant.
+        // The first batch goes out even when empty: it opens the session, and an empty snapshot empties the tenant.
         if (batch === "" && batches > 0) {
             return;
         }
 
-        const response = await send(batches === 0 ? `${IMPORT_PATH}?mode=replace` : IMPORT_PATH, batch, "application/x-ndjson");
+        const response = await send(`${IMPORT_PATH}?mode=replace&stage=${session}`, batch, "application/x-ndjson");
 
         batches += 1;
         batch = "";
@@ -197,45 +369,46 @@ export const restoreTenantSnapshot = async (send: TenantSend, gzipped: ReadableS
             throw new TenantAdminError(`tenant import failed (HTTP ${String(response.status)}): ${await tenantErrorMessage(response)}`, response.status);
         }
 
-        const result = await readJson<ImportResponseBody>(response);
+        const result = await readJson<StageResponseBody>(response);
+        const rowErrors = entriesOf(result.errors);
+        const unreachable = entriesOf(result.failed);
 
-        // A runtime from before replace mode ignores `?mode=` and appends: the
-        // first batch still lands, but the rewind must not be reported as one.
-        if (batches === 1 && result.deleted === undefined) {
-            throw new TenantAdminError("the tenant's runtime predates replace-mode import, so it cannot be rewound — redeploy it and restore again", 0);
-        }
-
-        summary.deleted += sum(result.deleted);
-        summary.inserted += sum(result.inserted);
-        summary.received += result.received ?? 0;
-
-        const rowErrors = result.errors?.length ?? 0;
-        const unreachable = result.failed?.length ?? 0;
+        received = saturatingAdd(received, countOf(result.received) ?? 0);
 
         if (rowErrors > 0 || unreachable > 0) {
             throw new TenantAdminError(
-                `restore stopped at import batch ${String(batches)}: ${String(rowErrors)} row(s) rejected, ${String(unreachable)} shard(s) unreachable — run it again, or restore the pre-restore snapshot`,
+                `restore stopped at import batch ${String(batches)}: ${String(rowErrors)} row(s) rejected, ${String(unreachable)} shard(s) unreachable — nothing was changed`,
                 response.status,
             );
         }
     };
 
-    // Batches go out in snapshot order, one at a time, as the snapshot streams in.
-    await readNdjson(gzipped.pipeThrough(new DecompressionStream("gzip")), async (line) => {
-        const size = encoder.encode(line).byteLength + 1;
+    try {
+        // Batches are staged in snapshot order, one at a time, as the snapshot streams in.
+        await readNdjson(gzipped.pipeThrough(new DecompressionStream("gzip")), async (line) => {
+            const size = encoder.encode(line).byteLength + 1;
 
-        if (size > IMPORT_BATCH_BYTES) {
-            throw new TenantAdminError(`a snapshot row is larger than the ${String(IMPORT_BATCH_BYTES)}-byte import limit`, 0);
-        }
+            if (size > IMPORT_BATCH_BYTES) {
+                throw new TenantAdminError(`a snapshot row is larger than the ${String(IMPORT_BATCH_BYTES)}-byte import limit`, 0);
+            }
 
-        if (batchBytes + size > IMPORT_BATCH_BYTES) {
-            await flush();
-        }
+            if (batchBytes + size > IMPORT_BATCH_BYTES) {
+                await flush();
+            }
 
-        batch += `${line}\n`;
-        batchBytes += size;
-    });
-    await flush();
+            batch += `${line}\n`;
+            batchBytes += size;
+        });
+        await flush();
+    } catch (error) {
+        await abortSession(send, session);
 
-    return summary;
+        throw error;
+    }
+
+    const committed = await commitSession(send, session);
+
+    const deletedByTable = boundedCounts(committed.deleted);
+
+    return { deleted: sum(deletedByTable), deletedByTable, inserted: sum(boundedCounts(committed.inserted)), received };
 };

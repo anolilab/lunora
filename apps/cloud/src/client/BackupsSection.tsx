@@ -63,8 +63,23 @@ const describeRow = (row: BackupRow): string => {
         return "—";
     }
 
-    return `${formatNumber(row.restoreInserted)} rows restored`;
+    const restored = `${formatNumber(row.restoreInserted)} rows restored`;
+
+    if (row.restoreDeleted === undefined) {
+        return restored;
+    }
+
+    return `${restored}, ${formatNumber(Object.values(row.restoreDeleted).reduce((total, count) => total + count, 0))} removed`;
 };
+
+/** What a restore removed, per table (`$kv` / `$storage` / `$auth` for the sections), for the cell's tooltip. */
+const deletedByTable = (row: BackupRow): string | undefined =>
+    row.restoreDeleted === undefined
+        ? undefined
+        : Object.entries(row.restoreDeleted)
+              .filter(([, count]) => count > 0)
+              .map(([table, count]) => `${table}: ${formatNumber(count)} removed`)
+              .join("\n") || undefined;
 
 /**
  * A project's production data backups: the daily snapshots, "Back up now",
@@ -106,7 +121,7 @@ export const BackupsSection = ({ organizationId, projectId, target }: { organiza
                 <CardDescription>
                     Production data is snapshotted daily and kept per your plan. Restoring a snapshot rewinds your data to it: rows deleted since come back,
                     edits since are reverted, and rows created since are removed. A snapshot of the current data is taken first, so a restore can be undone by
-                    restoring that one. Files in storage buckets are not included.
+                    restoring that one. Files in storage buckets, KV entries and your users are rewound with it.
                     {TARGETS[target].limitations.some((limitation) => limitation.id === "pitr")
                         ? " On your own server these snapshots are the recovery tier: celld keeps no point-in-time history, so you cannot rewind to an arbitrary moment."
                         : null}
@@ -190,7 +205,7 @@ export const BackupsSection = ({ organizationId, projectId, target }: { organiza
                                 <TableRow key={row._id}>
                                     <TableCell className="text-muted-foreground">{formatDateTime(row.createdAt)}</TableCell>
                                     <TableCell>{row.operation === "restore" ? "Restore" : TRIGGER_LABEL[row.trigger]}</TableCell>
-                                    <TableCell>{describeRow(row)}</TableCell>
+                                    <TableCell title={deletedByTable(row)}>{describeRow(row)}</TableCell>
                                     <TableCell>
                                         <span title={row.error}>
                                             <StatusBadge tone={STATUS_TONE[row.status]}>{row.status}</StatusBadge>

@@ -36,6 +36,7 @@ interface BackupRow {
     organizationId: OrgId;
     projectId: Id<"projects">;
     restoreConflicts?: number;
+    restoreDeleted?: Record<string, number>;
     restoredFrom?: BackupId;
     restoreInserted?: number;
     restoreRowErrors?: number;
@@ -98,6 +99,7 @@ const toView = (row: BackupRow): BackupView => {
         ...(row.offsiteStatus == null ? {} : { offsiteStatus: row.offsiteStatus }),
         ...(row.restoredFrom == null ? {} : { restoredFrom: row.restoredFrom }),
         ...(row.restoreConflicts == null ? {} : { restoreConflicts: row.restoreConflicts }),
+        ...(row.restoreDeleted == null ? {} : { restoreDeleted: row.restoreDeleted }),
         ...(row.restoreInserted == null ? {} : { restoreInserted: row.restoreInserted }),
         ...(row.restoreRowErrors == null ? {} : { restoreRowErrors: row.restoreRowErrors }),
     };
@@ -272,6 +274,7 @@ export const finish = internalMutation
         offsiteStatus: v.optional(v.union(v.literal("succeeded"), v.literal("failed"))),
         organizationId: v.id("organizations"),
         restoreConflicts: v.optional(v.number()),
+        restoreDeleted: v.optional(v.record(v.string(), v.number())),
         restoreInserted: v.optional(v.number()),
         restoreRowErrors: v.optional(v.number()),
         status: v.union(v.literal("succeeded"), v.literal("failed")),
