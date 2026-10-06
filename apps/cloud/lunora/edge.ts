@@ -58,7 +58,7 @@ export const rules = query
         return page.map((row) => {
             return {
                 applied: row.applied,
-                hostnames: row.hostnames,
+                hostnames: row.targets.map((target) => target.hostname),
                 kind: row.kind,
                 status: row.status,
                 updatedAt: row.updatedAt,
@@ -71,6 +71,23 @@ export const rules = query
             };
         });
     });
+
+/**
+ * The erasure purge's half of an organization's edge rules
+ * (`organizations.purgeDeleted`): delete the rows whose rule is NOT on the edge,
+ * and leave the applied ones. Deleting an applied row would leave a rule on the
+ * zone that no row names — still covering hostnames another organization can
+ * claim next. The reconciler takes those off (an erased organization's removal
+ * is retried without a cap) and deletes each row once its rule is gone.
+ */
+export const releaseEdgeRules = async (context: MutationContext, organizationId: Id<"organizations">): Promise<void> => {
+    const { page } = await context.db.edgeRules.findMany({ where: { organizationId } });
+
+    for (const row of page.filter((candidate) => !candidate.applied)) {
+        // eslint-disable-next-line no-await-in-loop -- at most one row per kind
+        await context.db.edgeRules.delete(row._id);
+    }
+};
 
 /**
  * Upsert the org's row of `kind` as pending intent and audit the change. The
@@ -90,7 +107,7 @@ const recordIntent = async (
 
     await (existing
         ? context.db.edgeRules.patch(existing._id, intent)
-        : context.db.insert("edgeRules", { ...intent, applied: false, createdAt: now, hostnames: [], kind, organizationId: member.organizationId }));
+        : context.db.insert("edgeRules", { ...intent, applied: false, createdAt: now, kind, organizationId: member.organizationId, targets: [] }));
     await context.db.insert("auditLog", {
         action: `edge.${kind}.configure`,
         actorUserId: member.userId,

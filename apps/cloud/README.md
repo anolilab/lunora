@@ -679,10 +679,19 @@ rule as an idempotent upsert or delete under a stable `ref`, and records every
 outcome (`applied`, `removed`, `failed`, `unavailable`) on the row and in the
 audit log. A failed or interrupted write is therefore never a rule nobody
 recorded: the next pass retries with backoff and finds the rule by its ref.
-Each hour the reconciler also re-checks applied rules, so a hostname added
-later is covered. A rule covers at most 50 hostnames, and every hostname is
-re-validated before it enters a Rules expression. An organization whose
-deletion was requested has its rules removed.
+Nothing is reused from an earlier pass. Every minute the reconciler re-derives
+each applied rule's hostnames from the organization's current deployment and
+domain rows. Each hostname is bound to the row id and project that gave it
+(`edgeRules.targets`). A domain that was deleted, moved, or re-added under
+another organization therefore drops off the old organization's rule within a
+minute. Writes never use a stored Cloudflare id. The zone is re-read on every
+call, and the rule is found by the organization's own ref. Two rules under one
+ref, or an id that cannot form an unambiguous ref, refuse the write. The row is
+also re-read right before the write and skipped if it changed. A rule covers at
+most 50 hostnames, and every hostname is re-validated before it enters a Rules
+expression. When an organization requests deletion, its rules come off, and that
+removal retries without a cap. The erasure purge deletes only the rows whose
+rule is already off. The reconciler deletes the rest once their rule is gone.
 
 Writes are off until an operator says what the zone's plan allows.
 `LUNORA_DDOS_OVERRIDE_BUDGET` and `LUNORA_RATE_LIMIT_RULE_BUDGET` cap how many

@@ -25,8 +25,22 @@ export const EDGE_PHASE: Record<EdgeRuleKind, string> = { ddos_l7: "ddos_l7", ra
 /** Cloudflare's HTTP DDoS Attack Protection managed ruleset. */
 export const HTTP_DDOS_MANAGED_RULESET_ID = "4d21379b4f9f4bb088e0729962c8b3cf";
 
-/** The rule's stable ref: the idempotency key for every write. Organization ids are opaque; only `[A-Za-z0-9]` survives. */
-export const edgeRuleRef = (kind: EdgeRuleKind, organizationId: string): string => `lunora_${kind}_${organizationId.replaceAll(/[^a-z0-9]/gi, "")}`;
+/** The shape an organization id must have to name a rule: injective into a ref, so two orgs can never share one. */
+const REF_SAFE_ID = /^[a-z0-9]{1,64}$/i;
+
+/**
+ * The rule's stable ref, and the ONLY way a write finds its rule: never a name,
+ * a description, an expression or an id remembered from an earlier call. An id
+ * that would need rewriting to fit is refused rather than sanitized, because a
+ * sanitized ref could collide with another organization's.
+ */
+export const edgeRuleRef = (kind: EdgeRuleKind, organizationId: string): string => {
+    if (!REF_SAFE_ID.test(organizationId)) {
+        throw new Error("this organization id cannot name an edge rule unambiguously");
+    }
+
+    return `lunora_${kind}_${organizationId}`;
+};
 
 /** `(http.host in {"a" "b"})` — every hostname re-validated, so nothing but DNS text is quoted. */
 export const hostExpression = (hostnames: ReadonlyArray<string>): string => {
@@ -109,9 +123,19 @@ export const applyEdgeRule = async (
     const call = cloudflareFetch(credentials);
     const zone = `/zones/${encodeURIComponent(input.zoneId)}/rulesets`;
     const entrypointPath = `${zone}/phases/${encodeURIComponent(input.phase)}/entrypoint`;
+    // Read fresh on every call: the rule id and ruleset id addressed below come
+    // from this answer, never from a row or an earlier call.
     const entrypoint = await call<Ruleset>(entrypointPath, { allow404: true });
     const ruleset = entrypoint?.result;
-    const existing = ruleset?.rules?.find((candidate) => candidate.ref === input.ref);
+    const matches = (ruleset?.rules ?? []).filter((candidate) => candidate.ref === input.ref);
+
+    // Two rules under one ref is a zone this code did not write. Fail closed:
+    // editing either could change a rule that is not this organization's.
+    if (matches.length > 1) {
+        throw new Error("the zone holds more than one rule under this organization's ref; refusing to write");
+    }
+
+    const existing = matches[0];
 
     if (input.rule === null) {
         if (ruleset?.id && existing?.id) {

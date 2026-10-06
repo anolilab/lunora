@@ -532,7 +532,7 @@ export interface Doc_edgeRules {
     cloudflareRuleId?: string;
     createdAt: number;
     engaged?: boolean;
-    hostnames: Array<string>;
+    targets: Array<{ hostname: string; projectId: string; rowId: string; source: "deployment" | "domain" }>;
     kind: "ddos_l7" | "rate_limit";
     lastError?: string;
     organizationId: Id<"organizations">;
@@ -1448,7 +1448,7 @@ export interface Insert_edgeRules {
     cloudflareRuleId?: string;
     createdAt: number;
     engaged?: boolean;
-    hostnames: Array<string>;
+    targets: Array<{ hostname: string; projectId: string; rowId: string; source: "deployment" | "domain" }>;
     kind: "ddos_l7" | "rate_limit";
     lastError?: string;
     organizationId: Id<"organizations">;

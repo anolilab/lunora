@@ -87,9 +87,25 @@ export const edgeBudget = (value: string | undefined): number => {
     return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 100) : 0;
 };
 
+/**
+ * One hostname an edge rule covers, bound to the row that gives the organization
+ * the right to it: a live deployment (its alias) or a verified custom domain.
+ * An applied rule stores these, so the reconciler can tell when a row went away,
+ * moved project, or was re-created under another organization, and take the
+ * hostname off the rule.
+ */
+export interface EdgeTarget {
+    hostname: string;
+    projectId: string;
+    rowId: string;
+    source: "deployment" | "domain";
+}
+
 /** Hostnames an organization serves through the platform edge, and the projects that are not served there. */
 export interface OrganizationHostnames {
     hostnames: string[];
+    /** {@link hostnames}, each with the row it comes from, sorted by hostname then row. */
+    targets: EdgeTarget[];
     /** Projects whose traffic never crosses the platform edge, so no firewall event or edge rule can see them. */
     unsupported: { name: string; reason: string; target: string }[];
 }
@@ -108,24 +124,44 @@ const UNSUPPORTED_REASON: Record<string, string> = {
  */
 export const organizationHostnames = (input: {
     appDomain: string;
-    deployments: ReadonlyArray<{ alias?: null | string; organizationId: string; projectId: string; scriptName: string; status: string }>;
-    domains: ReadonlyArray<{ hostname: string; organizationId: string; projectId: string; redirectTo?: null | string; verifiedAt?: null | number }>;
+    deployments: ReadonlyArray<{ _id: string; alias?: null | string; organizationId: string; projectId: string; scriptName: string; status: string }>;
+    domains: ReadonlyArray<{
+        _id: string;
+        hostname: string;
+        organizationId: string;
+        projectId: string;
+        redirectTo?: null | string;
+        verifiedAt?: null | number;
+    }>;
     organizationId: string;
     projects: ReadonlyArray<{ _id: string; name: string; organizationId: string; target?: null | string }>;
 }): OrganizationHostnames => {
     const projects = input.projects.filter((project) => project.organizationId === input.organizationId);
     const onEdge = new Set(projects.filter((project) => (project.target ?? "cloudflare-wfp") === "cloudflare-wfp").map((project) => project._id));
-    const candidates = [
+    const candidates: EdgeTarget[] = [
         ...input.deployments
             .filter((row) => row.organizationId === input.organizationId && row.status === "live" && onEdge.has(row.projectId))
-            .map((row) => `${row.alias ?? row.scriptName}.${input.appDomain}`),
+            .map((row) => {
+                return {
+                    hostname: `${row.alias ?? row.scriptName}.${input.appDomain}`.toLowerCase(),
+                    projectId: row.projectId,
+                    rowId: row._id,
+                    source: "deployment" as const,
+                };
+            }),
         ...input.domains
             .filter((row) => row.organizationId === input.organizationId && row.verifiedAt != null && row.redirectTo == null && onEdge.has(row.projectId))
-            .map((row) => row.hostname),
+            .map((row) => {
+                return { hostname: row.hostname.toLowerCase(), projectId: row.projectId, rowId: row._id, source: "domain" as const };
+            }),
     ];
+    const targets = candidates
+        .filter((target) => isEdgeHostname(target.hostname))
+        .toSorted((a, b) => a.hostname.localeCompare(b.hostname) || a.rowId.localeCompare(b.rowId));
 
     return {
-        hostnames: edgeHostnames(candidates),
+        hostnames: edgeHostnames(targets.map((target) => target.hostname)),
+        targets,
         unsupported: projects
             .filter((project) => !onEdge.has(project._id))
             .map((project) => {

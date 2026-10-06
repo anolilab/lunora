@@ -593,7 +593,7 @@ export const edgeRules = sqliteTable("edgeRules", {
     cloudflareRuleId: text("cloudflareRuleId"),
     createdAt: real("createdAt").notNull(),
     engaged: integer("engaged", { mode: "boolean" }),
-    hostnames: text("hostnames", { mode: "json" }).$type<Array<string>>().notNull(),
+    targets: text("targets", { mode: "json" }).$type<Array<{ hostname: string; projectId: string; rowId: string; source: "deployment" | "domain" }>>().notNull(),
     kind: text("kind", { mode: "json" }).$type<"ddos_l7" | "rate_limit">().notNull(),
     lastError: text("lastError"),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),

@@ -360,13 +360,26 @@ export const observabilityTables = {
         // `rate_limit`: the org opted in to anomaly-triggered rate limiting.
         armed: v.optional(v.boolean()),
         attempts: v.number(),
-        // The rule's id on the zone, once applied.
+        // The rule's id on the zone as of the last apply — a RECORD for the audit trail,
+        // never used to address a write. Every write re-reads the zone's entrypoint and
+        // finds the rule by this org's ref, so a stale id can never edit another rule.
         cloudflareRuleId: v.optional(v.string()),
         createdAt: v.number(),
         // `rate_limit`: a usage anomaly is firing, so the limit is wanted now.
         engaged: v.optional(v.boolean()),
-        // The hostnames the applied rule covers (bounded by MAX_EDGE_HOSTNAMES).
-        hostnames: v.array(v.string()),
+        // What the applied rule covers (bounded by MAX_EDGE_HOSTNAMES): each hostname
+        // bound to the deployment or domain row, and project, that entitled this org
+        // to it. The reconciler re-derives these from the current rows every pass and
+        // re-applies on any difference, so a row deleted, moved, or re-created under
+        // another org takes its hostname off this org's rule.
+        targets: v.array(
+            v.object({
+                hostname: v.string(),
+                projectId: v.string(),
+                rowId: v.string(),
+                source: v.union(v.literal("deployment"), v.literal("domain")),
+            }),
+        ),
         kind: v.union(v.literal("ddos_l7"), v.literal("rate_limit")),
         // Why the last pass did not apply it (bounded, token-free).
         lastError: v.optional(v.string()),

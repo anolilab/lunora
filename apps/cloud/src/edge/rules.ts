@@ -5,22 +5,35 @@
  * sweep engaging a rate limit ({@link engageAnomalyRateLimits}) — records intent
  * on the `edgeRules` row (`status: "pending"`), and this converges the edge onto it.
  *
- * Why intent first: the row is written before the edge is called, so a write
- * that fails, or a crash between the edge's answer and the row update, is never
- * a rule nobody recorded. The next pass finds the row still pending and the
- * edge's idempotent apply finishes it. Every outcome — applied, removed, failed,
- * unavailable — lands on the row and in the audit log.
+ * Intent first: the row is written before the edge is called, so a write that
+ * fails, or a crash between the edge's answer and the row update, is never a
+ * rule nobody recorded. Every outcome — applied, removed, failed, unavailable —
+ * lands on the row and in the audit log.
+ *
+ * Nothing is trusted from an earlier pass:
+ *
+ * - **Hostnames** are re-derived every pass, for every applied rule, from the
+ *   organization's CURRENT deployment and domain rows, each bound to its row id
+ *   and project (`EdgeTarget`). A row deleted, moved to another project, or
+ *   re-created for the same hostname under another organization changes that
+ *   set, and the rule is re-applied without it within a minute. A rule never
+ *   keeps covering a hostname its organization no longer holds.
+ * - **Cloudflare ids** are never remembered for a write: the edge re-reads the
+ *   zone and finds the rule by this organization's ref each time (see
+ *   `src/targets/cloudflare-wfp/edge.ts`).
+ * - **The row itself** is re-read just before the write, and the write is
+ *   skipped if it changed hands or changed since this pass read it.
  *
  * Bounded: one rule per (organization, kind); at most the cell's budget of each
  * kind applied at once ({@link edgeBudget}); {@link MAX_EDGE_HOSTNAMES}
- * hostnames per rule; {@link RECONCILE_BATCH} rows per pass. Fails closed: no
- * edge, no budget, too many hostnames or an unknown shape leaves the rule
+ * hostnames per rule; {@link MAX_EDGE_WRITES} edge writes per pass. Fails closed:
+ * no edge, no budget, too many hostnames or an unknown shape leaves the rule
  * unapplied and says why.
  */
 import type { ControlPlaneStore } from "../d1-store";
 import { drainTable } from "../store";
 import type { OrganizationAnomalyTransition } from "../telemetry/anomaly-sweep";
-import type { EdgeProtection, EdgeRuleConfig, EdgeRuleKind } from "./protection";
+import type { EdgeProtection, EdgeRuleConfig, EdgeRuleKind, EdgeTarget } from "./protection";
 import { MAX_EDGE_HOSTNAMES, organizationHostnames } from "./protection";
 
 /** An `edgeRules` row. */
@@ -33,25 +46,26 @@ export interface EdgeRuleRow {
     attempts: number;
     /** `rate_limit`: a usage anomaly is currently firing for the organization. */
     engaged?: boolean;
-    hostnames: string[];
     kind: EdgeRuleKind;
     organizationId: string;
     periodSeconds?: 10 | 60;
     requestsPerPeriod?: number;
     sensitivity?: "default" | "low" | "medium";
     status: "applied" | "failed" | "pending" | "removed" | "unavailable";
+    /** What the applied rule covers, each hostname bound to its row. */
+    targets: EdgeTarget[];
     updatedAt: number;
 }
 
 type Outcome = EdgeRuleRow["status"] | "skipped";
 
-/** Rows reconciled per pass, so one tick's edge calls stay bounded. */
-export const RECONCILE_BATCH = 25;
+/** Edge writes per pass, so one tick's Cloudflare calls stay bounded. Checks that find no drift are free. */
+export const MAX_EDGE_WRITES = 25;
 
 /** A failed row is retried after `attempts × this`, capped at an hour. */
 const RETRY_STEP_MS = 5 * 60 * 1000;
 
-/** After this many failures a row waits for a new intent (a settings change or an anomaly transition). */
+/** After this many failures a row waits for a new intent — unless its rule must come OFF, which is retried forever. */
 export const MAX_EDGE_ATTEMPTS = 12;
 
 export interface EdgeRuleOptions {
@@ -59,9 +73,9 @@ export interface EdgeRuleOptions {
     budgets: Record<EdgeRuleKind, number>;
     /** The platform edge; absent on a cell without the zone and token. */
     edge?: EdgeProtection;
-    /** Also re-check applied and unavailable rows (hourly): a hostname added since, or a budget freed. */
-    includeApplied: boolean;
     now: number;
+    /** Also re-check unavailable rows (hourly): a budget freed, or a zone configured since. */
+    recheckUnavailable: boolean;
 }
 
 /** The config a row asks the edge to hold, or `null` for none. An unknown shape asks for none (fail closed). */
@@ -81,20 +95,26 @@ export const desiredConfig = (row: EdgeRuleRow, deleting: boolean): EdgeRuleConf
     return null;
 };
 
-const isDue = (row: EdgeRuleRow, options: EdgeRuleOptions): boolean => {
-    if (row.status === "pending") {
+const isDue = (row: EdgeRuleRow, options: EdgeRuleOptions, deleting: boolean): boolean => {
+    // An applied rule is re-checked every pass: its hostnames may have moved.
+    if (row.status === "pending" || row.applied) {
         return true;
     }
 
     if (row.status === "failed") {
-        return row.attempts < MAX_EDGE_ATTEMPTS && options.now - row.updatedAt >= Math.min(row.attempts * RETRY_STEP_MS, 60 * 60 * 1000);
+        // A rule of an organization being erased must come off whatever it costs.
+        const capped = !deleting && row.attempts >= MAX_EDGE_ATTEMPTS;
+
+        return !capped && options.now - row.updatedAt >= Math.min(row.attempts * RETRY_STEP_MS, 60 * 60 * 1000);
     }
 
-    return options.includeApplied && (row.status === "applied" || row.status === "unavailable");
+    return options.recheckUnavailable && row.status === "unavailable";
 };
 
-const sameHostnames = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
-    left.length === right.length && left.every((hostname, index) => hostname === right[index]);
+const targetKey = (target: EdgeTarget): string => `${target.hostname}|${target.rowId}|${target.projectId}|${target.source}`;
+
+const sameTargets = (left: ReadonlyArray<EdgeTarget>, right: ReadonlyArray<EdgeTarget>): boolean =>
+    left.map((target) => targetKey(target)).join("\n") === right.map((target) => targetKey(target)).join("\n");
 
 /** A bounded reason for the row and the audit log. The edge's errors never carry the token. */
 const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : "unknown error").slice(0, 300);
@@ -118,25 +138,25 @@ const recordOutcome = async (
     return outcome.status;
 };
 
-/** The org's hostnames on the platform edge, from its own rows. */
-const hostnamesOf = async (database: ControlPlaneStore, organizationId: string, appDomain: string): Promise<string[]> => {
+/** The org's current targets on the platform edge, from its own rows. */
+const targetsOf = async (database: ControlPlaneStore, organizationId: string, appDomain: string): Promise<EdgeTarget[]> => {
     const [deployments, domains, projects] = await Promise.all([
         drainTable<never>(database, "deployments", { where: { organizationId, status: "live" } }),
         drainTable<never>(database, "domains", { where: { organizationId } }),
         drainTable<never>(database, "projects", { where: { organizationId } }),
     ]);
 
-    return organizationHostnames({ appDomain, deployments, domains, organizationId, projects }).hostnames;
+    return organizationHostnames({ appDomain, deployments, domains, organizationId, projects }).targets;
 };
 
 /** Why a wanted rule cannot be applied, or `undefined` when it can. */
 const refusalOf = (
     row: EdgeRuleRow,
-    hostnames: ReadonlyArray<string>,
+    targets: ReadonlyArray<EdgeTarget>,
     options: EdgeRuleOptions,
     appliedOfKind: Map<EdgeRuleKind, number>,
 ): string | undefined => {
-    if (hostnames.length > MAX_EDGE_HOSTNAMES) {
+    if (new Set(targets.map((target) => target.hostname)).size > MAX_EDGE_HOSTNAMES) {
         return `an edge rule covers at most ${String(MAX_EDGE_HOSTNAMES)} hostnames`;
     }
 
@@ -149,40 +169,70 @@ const refusalOf = (
     return undefined;
 };
 
+/**
+ * Whether the row is still the one this pass planned against: same organization
+ * and kind, and not re-written since. A row that changed is left for the next
+ * pass, which plans against its new intent; a row that is gone is not written for.
+ */
+const stillCurrent = async (database: ControlPlaneStore, row: EdgeRuleRow): Promise<boolean> => {
+    const fresh = (await database.get(row._id, "edgeRules")) as EdgeRuleRow | null;
+
+    return fresh !== null && fresh.organizationId === row.organizationId && fresh.kind === row.kind && fresh.updatedAt === row.updatedAt;
+};
+
 /** Call the edge and record what happened. */
 const applyAndRecord = async (
     database: ControlPlaneStore,
     row: EdgeRuleRow,
     edge: EdgeProtection,
-    input: { appliedOfKind: Map<EdgeRuleKind, number>; config: EdgeRuleConfig | null; hostnames: string[]; now: number },
-): Promise<EdgeRuleRow["status"]> => {
-    const { appliedOfKind, config, hostnames, now } = input;
+    input: { appliedOfKind: Map<EdgeRuleKind, number>; config: EdgeRuleConfig | null; now: number; organizationGone: boolean; targets: EdgeTarget[] },
+): Promise<Outcome> => {
+    const { appliedOfKind, config, now, organizationGone, targets } = input;
+    const hostnames = [...new Set(targets.map((target) => target.hostname))];
     const wanted = config !== null && hostnames.length > 0;
+
+    if (!(await stillCurrent(database, row))) {
+        return "skipped";
+    }
 
     try {
         const result = await edge.apply({ config, hostnames, kind: row.kind, organizationId: row.organizationId });
-        const delta = Number(wanted) - Number(row.applied);
 
-        appliedOfKind.set(row.kind, Math.max((appliedOfKind.get(row.kind) ?? 0) + delta, 0));
+        appliedOfKind.set(row.kind, Math.max((appliedOfKind.get(row.kind) ?? 0) + Number(wanted) - Number(row.applied), 0));
 
         if (wanted) {
-            return recordOutcome(database, row, now, {
+            return await recordOutcome(database, row, now, {
                 audit: "applied",
                 detail: `${String(hostnames.length)} hostnames`,
-                fields: { applied: true, appliedAt: now, attempts: 0, cloudflareRuleId: result.ruleId ?? null, hostnames, lastError: null },
+                fields: { applied: true, appliedAt: now, attempts: 0, cloudflareRuleId: result.ruleId ?? null, lastError: null, targets },
                 status: "applied",
             });
         }
 
-        return recordOutcome(database, row, now, {
+        if (organizationGone) {
+            // The organization was purged while its rule was still on the zone; with
+            // the rule gone, nothing is left for this row to name.
+            await database.delete(row._id, "edgeRules");
+            await database.insert("auditLog", {
+                action: `edge.${row.kind}.removed`,
+                actorUserId: "system:edge-rules",
+                createdAt: now,
+                organizationId: row.organizationId,
+                target: "organization erased",
+            });
+
+            return "removed";
+        }
+
+        return await recordOutcome(database, row, now, {
             audit: "removed",
             detail: config === null ? "rule removed" : "no hostnames",
             fields: {
                 applied: false,
                 attempts: 0,
                 cloudflareRuleId: null,
-                hostnames: [],
                 lastError: config === null ? null : "no hostnames are served through the platform edge",
+                targets: [],
             },
             status: config === null ? "removed" : "unavailable",
         });
@@ -198,46 +248,99 @@ const applyAndRecord = async (
     }
 };
 
-/** Reconcile one row. */
+/** Per-pass state: the applied count per kind, and the edge-write allowance (`takeWrite` answers false once spent). */
+interface PassState {
+    appliedOfKind: Map<EdgeRuleKind, number>;
+    takeWrite: () => boolean;
+}
+
+/** Take an applied rule off the edge because it can no longer be held, and say why. */
+const reconcileRemoval = async (
+    database: ControlPlaneStore,
+    row: EdgeRuleRow,
+    edge: EdgeProtection,
+    input: PassState & { now: number; refusal: string },
+): Promise<Outcome> => {
+    if (!(await stillCurrent(database, row)) || !input.takeWrite()) {
+        return "skipped";
+    }
+
+    try {
+        await edge.apply({ config: null, hostnames: [], kind: row.kind, organizationId: row.organizationId });
+        input.appliedOfKind.set(row.kind, Math.max((input.appliedOfKind.get(row.kind) ?? 1) - 1, 0));
+
+        return await recordOutcome(database, row, input.now, {
+            audit: "unavailable",
+            detail: input.refusal,
+            fields: { applied: false, cloudflareRuleId: null, lastError: input.refusal, targets: [] },
+            status: "unavailable",
+        });
+    } catch (error) {
+        return recordOutcome(database, row, input.now, {
+            audit: "failed",
+            detail: reasonOf(error),
+            fields: { attempts: row.attempts + 1, lastError: reasonOf(error) },
+            status: "failed",
+        });
+    }
+};
+
+/**
+ * A cell without an edge: nothing to call. A rule never applied needs nothing;
+ * an applied one stays recorded as applied-but-unreachable, never silently forgotten.
+ */
+const recordWithoutEdge = async (database: ControlPlaneStore, row: EdgeRuleRow, config: EdgeRuleConfig | null, now: number): Promise<Outcome> => {
+    if (config === null && !row.applied) {
+        return row.status === "removed"
+            ? "skipped"
+            : recordOutcome(database, row, now, { audit: "removed", detail: "no rule requested", fields: { attempts: 0, lastError: null }, status: "removed" });
+    }
+
+    return row.status === "unavailable"
+        ? "skipped"
+        : recordOutcome(database, row, now, {
+              audit: "unavailable",
+              detail: "edge not configured",
+              fields: { lastError: "edge rules are not configured on this cell (LUNORA_SAAS_ZONE_ID / CLOUDFLARE_API_TOKEN)" },
+              status: "unavailable",
+          });
+};
+
+/** Reconcile one row. At the pass's write cap, a row that needs a write waits for the next pass. */
 const reconcileRow = async (
     database: ControlPlaneStore,
     row: EdgeRuleRow,
     options: EdgeRuleOptions,
-    appliedOfKind: Map<EdgeRuleKind, number>,
+    state: PassState & { deleting: boolean; organizationGone: boolean },
 ): Promise<Outcome> => {
     const { edge, now } = options;
-    const organization = (await database.get(row.organizationId, "organizations")) as null | { deletionRequestedAt?: null | number };
-    // A missing organization counts as deleting: its rule must come off.
-    const config = desiredConfig(row, organization?.deletionRequestedAt != null || organization === null);
+    const config = desiredConfig(row, state.deleting);
 
     if (edge === undefined) {
-        // Nothing to call. A rule never applied needs nothing; an applied one stays
-        // recorded as applied-but-unreachable, never silently forgotten.
-        return config === null && !row.applied
-            ? recordOutcome(database, row, now, { audit: "removed", detail: "no rule requested", fields: { attempts: 0, lastError: null }, status: "removed" })
-            : recordOutcome(database, row, now, {
-                  audit: "unavailable",
-                  detail: "edge not configured",
-                  fields: { lastError: "edge rules are not configured on this cell (LUNORA_SAAS_ZONE_ID / CLOUDFLARE_API_TOKEN)" },
-                  status: "unavailable",
-              });
+        return recordWithoutEdge(database, row, config, now);
     }
 
-    const hostnames = config === null ? [] : await hostnamesOf(database, row.organizationId, options.appDomain);
-
-    if (config !== null) {
-        const refusal = refusalOf(row, hostnames, options, appliedOfKind);
-
-        if (refusal !== undefined) {
-            return recordOutcome(database, row, now, { audit: "unavailable", detail: refusal, fields: { lastError: refusal }, status: "unavailable" });
-        }
-
-        if (row.status === "applied" && row.applied && sameHostnames(row.hostnames, hostnames)) {
-            return "skipped";
-        }
+    if (config === null && !row.applied && row.status === "removed") {
+        return "skipped";
     }
 
-    return applyAndRecord(database, row, edge, { appliedOfKind, config, hostnames, now });
+    const targets = config === null ? [] : await targetsOf(database, row.organizationId, options.appDomain);
+    const refusal = config === null ? undefined : refusalOf(row, targets, options, state.appliedOfKind);
+
+    if (refusal !== undefined) {
+        // A rule already applied that can no longer be held must come off, not linger.
+        return row.applied
+            ? reconcileRemoval(database, row, edge, { ...state, now, refusal })
+            : recordOutcome(database, row, now, { audit: "unavailable", detail: refusal, fields: { lastError: refusal }, status: "unavailable" });
+    }
+
+    if (config !== null && row.status === "applied" && row.applied && sameTargets(row.targets, targets)) {
+        return "skipped";
+    }
+
+    return state.takeWrite()
+        ? applyAndRecord(database, row, edge, { appliedOfKind: state.appliedOfKind, config, now, organizationGone: state.organizationGone, targets })
+        : "skipped";
 };
 
 /** One reconcile pass; answers how many rows reached each outcome. */
@@ -252,10 +355,26 @@ export const runEdgeRuleSweep = async (database: ControlPlaneStore, options: Edg
     }
 
     const counts: Partial<Record<Outcome, number>> = {};
+    let writes = 0;
+    const takeWrite = (): boolean => {
+        writes += 1;
 
-    for (const row of rows.filter((candidate) => isDue(candidate, options)).slice(0, RECONCILE_BATCH)) {
-        // eslint-disable-next-line no-await-in-loop -- serialized so the budget count stays exact across rows
-        const outcome = await reconcileRow(database, row, options, appliedOfKind);
+        return writes <= MAX_EDGE_WRITES;
+    };
+
+    for (const row of rows) {
+        // eslint-disable-next-line no-await-in-loop -- serialized so the budget and write counts stay exact across rows
+        const organization = (await database.get(row.organizationId, "organizations")) as null | { deletionRequestedAt?: null | number };
+        const organizationGone = organization === null;
+        // A missing organization counts as deleting: its rule must come off.
+        const deleting = organizationGone || organization.deletionRequestedAt != null;
+
+        if (!isDue(row, options, deleting)) {
+            continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- see above
+        const outcome = await reconcileRow(database, row, options, { appliedOfKind, deleting, organizationGone, takeWrite });
 
         counts[outcome] = (counts[outcome] ?? 0) + 1;
     }

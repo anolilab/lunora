@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { setAnomalyRateLimit, setDdosSensitivity } from "../lunora/edge";
+import { releaseEdgeRules, setAnomalyRateLimit, setDdosSensitivity } from "../lunora/edge";
 import { edgeBudget, edgeHostnames, organizationHostnames } from "../src/edge/protection";
 import type { EdgeRuleRow } from "../src/edge/rules";
 import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../src/edge/rules";
@@ -135,16 +135,16 @@ describe(organizationHostnames, () => {
     const input = {
         appDomain: "lunora.app",
         deployments: [
-            { alias: "shop", organizationId: "org1", projectId: "p_wfp", scriptName: "shop", status: "live" },
-            { alias: "old", organizationId: "org1", projectId: "p_wfp", scriptName: "old", status: "superseded" },
-            { alias: "box-app", organizationId: "org1", projectId: "p_box", scriptName: "box-app", status: "live" },
-            { alias: "theirs", organizationId: "org2", projectId: "p_other", scriptName: "theirs", status: "live" },
+            { _id: "d_shop", alias: "shop", organizationId: "org1", projectId: "p_wfp", scriptName: "shop", status: "live" },
+            { _id: "d_old", alias: "old", organizationId: "org1", projectId: "p_wfp", scriptName: "old", status: "superseded" },
+            { _id: "d_box", alias: "box-app", organizationId: "org1", projectId: "p_box", scriptName: "box-app", status: "live" },
+            { _id: "d_theirs", alias: "theirs", organizationId: "org2", projectId: "p_other", scriptName: "theirs", status: "live" },
         ],
         domains: [
-            { hostname: "shop.example.com", organizationId: "org1", projectId: "p_wfp", verifiedAt: 1 },
-            { hostname: "pending.example.com", organizationId: "org1", projectId: "p_wfp" },
-            { hostname: "apex.example.com", organizationId: "org1", projectId: "p_wfp", redirectTo: "https://shop.example.com", verifiedAt: 1 },
-            { hostname: "theirs.example.com", organizationId: "org2", projectId: "p_wfp", verifiedAt: 1 },
+            { _id: "m_shop", hostname: "shop.example.com", organizationId: "org1", projectId: "p_wfp", verifiedAt: 1 },
+            { _id: "m_pending", hostname: "pending.example.com", organizationId: "org1", projectId: "p_wfp" },
+            { _id: "m_apex", hostname: "apex.example.com", organizationId: "org1", projectId: "p_wfp", redirectTo: "https://shop.example.com", verifiedAt: 1 },
+            { _id: "m_theirs", hostname: "theirs.example.com", organizationId: "org2", projectId: "p_wfp", verifiedAt: 1 },
         ],
         organizationId: "org1",
         projects: [
@@ -294,7 +294,7 @@ const edgeRow = (overrides: Partial<EdgeRuleRow> = {}): EdgeRuleRow => {
         _id: "edge1",
         applied: false,
         attempts: 0,
-        hostnames: [],
+        targets: [],
         kind: "ddos_l7",
         organizationId: "org1",
         sensitivity: "low",
@@ -304,17 +304,20 @@ const edgeRow = (overrides: Partial<EdgeRuleRow> = {}): EdgeRuleRow => {
     };
 };
 
-/** The control-plane store with an org-keyed `get`, as the reconciler reads organizations. */
+/** The target the default org's one live deployment gives it. */
+const SHOP = { hostname: "shop.lunora.app", projectId: "p1", rowId: "dep1", source: "deployment" as const };
+
+/** The control-plane store with a table-pinned `get`, as the real ctx-db has. */
 const store = (tables: Record<string, unknown[]>, spies: Partial<ControlPlaneDatabase> = {}) => {
     return {
         ...fakeControlPlaneDb(tables, spies),
-        get: (id: string) => Promise.resolve((tables.organizations ?? []).find((row) => (row as { _id: string })._id === id) ?? null),
+        get: (id: string, table?: string) => Promise.resolve((tables[table ?? ""] ?? []).find((row) => (row as { _id: string })._id === id) ?? null),
     };
 };
 
 const orgTables = (row: EdgeRuleRow, organization?: Record<string, unknown>) => {
     return {
-        deployments: [{ alias: "shop", organizationId: "org1", projectId: "p1", scriptName: "shop", status: "live" }],
+        deployments: [{ _id: "dep1", alias: "shop", organizationId: "org1", projectId: "p1", scriptName: "shop", status: "live" }],
         domains: [],
         edgeRules: [row],
         organizations: [organization ?? { _id: "org1" }],
@@ -327,7 +330,7 @@ const options = (fetch: typeof globalThis.fetch, overrides: Record<string, unkno
         appDomain: "lunora.app",
         budgets: { ddos_l7: 10, rate_limit: 5 },
         edge: createEdgeProtection({ credentials: { apiToken: "t", fetch }, zoneId: ZONE }),
-        includeApplied: false,
+        recheckUnavailable: false,
         now: NOW,
         ...overrides,
     };
@@ -342,7 +345,7 @@ describe(runEdgeRuleSweep, () => {
         await expect(runEdgeRuleSweep(store(orgTables(edgeRow()), { insert, patch }), options(zone.fetch))).resolves.toStrictEqual({ applied: 1 });
         expect(patch).toHaveBeenCalledWith(
             "edge1",
-            expect.objectContaining({ applied: true, cloudflareRuleId: "rule_1", hostnames: ["shop.lunora.app"], status: "applied" }),
+            expect.objectContaining({ applied: true, cloudflareRuleId: "rule_1", targets: [SHOP], status: "applied" }),
             "edgeRules",
         );
         expect(insert).toHaveBeenCalledWith("auditLog", expect.objectContaining({ action: "edge.ddos_l7.applied", organizationId: "org1" }));
@@ -393,9 +396,12 @@ describe(runEdgeRuleSweep, () => {
         const tables = orgTables(edgeRow());
 
         tables.edgeRules.push(edgeRow({ _id: "edge_other", applied: true, organizationId: "org2", status: "applied" }));
+        tables.organizations.push({ _id: "org2" });
         await runEdgeRuleSweep(store(tables), options(zone.fetch, { budgets: { ddos_l7: 1, rate_limit: 0 } }));
 
-        expect(zone.calls).toStrictEqual([]);
+        // org2's applied rule is re-checked (it has no hostnames left, so it would come
+        // off), but nothing is ever written for org1.
+        expect(zone.calls.filter((call) => call.method !== "GET" && call.method !== "DELETE")).toStrictEqual([]);
     });
 
     it("records why without a zone, and keeps an applied rule recorded rather than forgotten", async () => {
@@ -437,16 +443,130 @@ describe(runEdgeRuleSweep, () => {
         });
     });
 
-    it("leaves an applied, unchanged rule alone on the hourly re-check", async () => {
+    it("leaves an applied, unchanged rule alone on every pass", async () => {
         const zone = memoryZone();
 
         await expect(
-            runEdgeRuleSweep(
-                store(orgTables(edgeRow({ applied: true, hostnames: ["shop.lunora.app"], status: "applied" }))),
-                options(zone.fetch, { includeApplied: true }),
-            ),
+            runEdgeRuleSweep(store(orgTables(edgeRow({ applied: true, targets: [SHOP], status: "applied" }))), options(zone.fetch)),
         ).resolves.toStrictEqual({ skipped: 1 });
         expect(zone.calls).toStrictEqual([]);
+    });
+
+    const appliedRow = (targets = [SHOP, { hostname: "shop.example.com", projectId: "p1", rowId: "dom1", source: "domain" as const }]) =>
+        edgeRow({ applied: true, status: "applied", targets });
+    const ourRef = edgeRuleRef("ddos_l7", "org1");
+
+    it("takes a custom domain off the rule once it moved to another organization", async () => {
+        const zone = memoryZone({ ddos_l7: [{ ref: ourRef }] });
+        const tables = {
+            ...orgTables(appliedRow()),
+            // dom1 now belongs to org2: org1's rule must stop covering its hostname.
+            domains: [{ _id: "dom1", hostname: "shop.example.com", organizationId: "org2", projectId: "p9", verifiedAt: 1 }],
+        };
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+
+        await runEdgeRuleSweep(store(tables, { patch }), options(zone.fetch));
+
+        expect(zone.calls.find((call) => call.method === "PATCH")?.body).toMatchObject({ expression: '(http.host in {"shop.lunora.app"})', ref: ourRef });
+        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ targets: [SHOP] }), "edgeRules");
+    });
+
+    it("treats a deleted-then-re-added hostname as a different row, and re-binds only to the org's own", async () => {
+        const zone = memoryZone({ ddos_l7: [{ ref: ourRef }] });
+        // dom1 was deleted; the same hostname now exists as dom2 — under org2.
+        const tables = {
+            ...orgTables(appliedRow()),
+            domains: [{ _id: "dom2", hostname: "shop.example.com", organizationId: "org2", projectId: "p9", verifiedAt: 1 }],
+        };
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+
+        await runEdgeRuleSweep(store(tables, { patch }), options(zone.fetch));
+
+        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ targets: [SHOP] }), "edgeRules");
+    });
+
+    it("re-applies when the same hostname comes back as a new row of the same org", async () => {
+        const zone = memoryZone({ ddos_l7: [{ ref: ourRef }] });
+        const tables = {
+            ...orgTables(appliedRow()),
+            domains: [{ _id: "dom2", hostname: "shop.example.com", organizationId: "org1", projectId: "p1", verifiedAt: 1 }],
+        };
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+
+        await runEdgeRuleSweep(store(tables, { patch }), options(zone.fetch));
+
+        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ targets: [expect.objectContaining({ rowId: "dom2" }), SHOP] }), "edgeRules");
+    });
+
+    it("never writes to a stale Cloudflare id on the row: the rule is found by ref on a fresh read", async () => {
+        const zone = memoryZone({ ddos_l7: [{ ref: "someone_elses_rule" }, { ref: ourRef }] });
+        // rule_1 is the other rule; the row remembers it from some earlier state.
+        const row = { ...edgeRow({ sensitivity: "medium" }), cloudflareRuleId: "rule_1" };
+
+        await runEdgeRuleSweep(store(orgTables(row)), options(zone.fetch));
+
+        expect(zone.calls.filter((call) => call.method === "PATCH").map((call) => call.url)).toStrictEqual([
+            `${API}/zones/${ZONE}/rulesets/rs_ddos_l7/rules/rule_2`,
+        ]);
+        expect(zone.phases.get("ddos_l7")?.rules[0]).toStrictEqual({ id: "rule_1", ref: "someone_elses_rule" });
+    });
+
+    it("refuses to write when the zone holds two rules under the org's ref", async () => {
+        const zone = memoryZone({ ddos_l7: [{ ref: ourRef }, { ref: ourRef }] });
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+
+        await runEdgeRuleSweep(store(orgTables(edgeRow()), { patch }), options(zone.fetch));
+
+        expect(zone.calls.map((call) => call.method)).toStrictEqual(["GET"]);
+        expect(patch).toHaveBeenCalledWith(
+            "edge1",
+            expect.objectContaining({ lastError: expect.stringContaining("more than one rule"), status: "failed" }),
+            "edgeRules",
+        );
+    });
+
+    it("refuses an organization id that cannot name a rule unambiguously", () => {
+        expect(() => edgeRuleRef("ddos_l7", "org-1")).toThrow("unambiguously");
+    });
+
+    it("skips the write when the row changed since the pass read it", async () => {
+        const zone = memoryZone();
+        const row = edgeRow();
+        const database = store(orgTables(row));
+        const reread = { ...row, updatedAt: row.updatedAt + 1 };
+
+        await runEdgeRuleSweep(
+            { ...database, get: (id, table) => (table === "edgeRules" ? Promise.resolve(reread) : database.get(id, table)) },
+            options(zone.fetch),
+        );
+
+        expect(zone.calls).toStrictEqual([]);
+    });
+
+    it("removes an erased organization's rule, retrying past the attempt cap, then deletes its row", async () => {
+        const zone = memoryZone({ ddos_l7: [{ ref: ourRef }] });
+        const remove = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
+        // The org row is gone (purged); the row is applied and has failed many times.
+        const tables = { ...orgTables(edgeRow({ applied: true, attempts: 50, status: "failed", targets: [SHOP], updatedAt: 0 })), organizations: [] };
+
+        await runEdgeRuleSweep(store(tables, { delete: remove }), options(zone.fetch));
+
+        expect(zone.phases.get("ddos_l7")?.rules).toStrictEqual([]);
+        expect(remove).toHaveBeenCalledWith("edge1", "edgeRules");
+    });
+
+    it("takes an applied rule off when its organization now has too many hostnames", async () => {
+        const zone = memoryZone({ ddos_l7: [{ ref: ourRef }] });
+        const tables = {
+            ...orgTables(appliedRow([SHOP])),
+            domains: Array.from({ length: 51 }, (_, index) => {
+                return { _id: `d${String(index)}`, hostname: `h${String(index)}.example.com`, organizationId: "org1", projectId: "p1", verifiedAt: 1 };
+            }),
+        };
+
+        await runEdgeRuleSweep(store(tables), options(zone.fetch));
+
+        expect(zone.phases.get("ddos_l7")?.rules).toStrictEqual([]);
     });
 });
 
@@ -485,6 +605,22 @@ describe(engageAnomalyRateLimits, () => {
 
         await expect(engageAnomalyRateLimits(store(tables(edgeRow({ armed: false, kind: "rate_limit" })), { patch }), [transition], NOW)).resolves.toBe(0);
         expect(patch).not.toHaveBeenCalled();
+    });
+});
+
+describe(releaseEdgeRules, () => {
+    it("deletes an erased organization's rows whose rule is off the zone, and keeps the applied ones for the reconciler", async () => {
+        const { ctx, ops } = makeCtx({
+            edgeRules: [
+                { _id: "e_off", applied: false, kind: "rate_limit", organizationId: "org1" },
+                { _id: "e_on", applied: true, kind: "ddos_l7", organizationId: "org1" },
+                { _id: "e_other", applied: false, kind: "ddos_l7", organizationId: "org2" },
+            ],
+        });
+
+        await releaseEdgeRules(ctx, "org1" as never);
+
+        expect(ops).toStrictEqual([{ id: "e_off", kind: "delete" }]);
     });
 });
 

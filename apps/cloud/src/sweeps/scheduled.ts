@@ -276,9 +276,10 @@ const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
 
 /**
  * Converge each organization's edge rules on the platform zone onto their rows
- * (plan 365 W7, `src/cloudflare/edge-rules.ts`). Every minute for pending and
- * failed rows; on the top-of-hour tick also re-checks applied rows for hostname
- * drift. Without the zone and token, rows record why nothing was applied.
+ * (plan 365 W7, `src/edge/rules.ts`). Every minute: pending and failed rows, and
+ * every applied rule's hostnames against the current rows; on the top-of-hour
+ * tick also rows that were unavailable. Without the zone and token, rows record
+ * why nothing was applied.
  */
 const sweepEdgeRules = async (env: ControlPlaneEnv, controller: ScheduledControllerLike): Promise<void> => {
     if (!env.DB) {
@@ -291,7 +292,7 @@ const sweepEdgeRules = async (env: ControlPlaneEnv, controller: ScheduledControl
         appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
         budgets: { ddos_l7: edgeBudget(env.LUNORA_DDOS_OVERRIDE_BUDGET), rate_limit: edgeBudget(env.LUNORA_RATE_LIMIT_RULE_BUDGET) },
         ...(edge ? { edge } : {}),
-        includeApplied: new Date(controller.scheduledTime).getUTCMinutes() === 0,
+        recheckUnavailable: new Date(controller.scheduledTime).getUTCMinutes() === 0,
         now: Date.now(),
     });
 
