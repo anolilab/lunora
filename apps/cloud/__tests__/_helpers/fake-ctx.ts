@@ -13,7 +13,9 @@ import type { MutationCtx } from "../../lunora/_generated/server";
  * What it models:
  *
  * - **`where`** on the per-table `findMany` facades, by equality, plus the
- *   `{ lt }` operator the cutoff-filtered reads use.
+ *   `{ lt }` / `{ gt }` operators the cutoff-filtered reads use.
+ * - **Table pinning** on the per-table facades: `get` answers null for an id of
+ *   another table, and `patch`/`delete` refuse one, as the real facade does.
  * - **The explicit-`undefined` refusal** on `patch`, with the store's own message.
  * - **The rate-limit store**, because most mutations here carry
  *   `.use(rateLimit(...))` and `.handler` runs the middleware chain — a ctx
@@ -46,11 +48,14 @@ const assertNoExplicitUndefined = (patch: Row): void => {
     }
 };
 
-/** Whether a `where` value is the `{ lt }` operator rather than an equality literal. */
-const isLessThan = (value: unknown): value is { lt: number } => typeof value === "object" && value !== null && "lt" in value;
+/** Whether a `where` value is an `{ lt }` / `{ gt }` operator rather than an equality literal. */
+const isRange = (value: unknown): value is { gt?: number; lt?: number } => typeof value === "object" && value !== null && ("lt" in value || "gt" in value);
+
+const inRange = (actual: unknown, range: { gt?: number; lt?: number }): boolean =>
+    typeof actual === "number" && (range.lt === undefined || actual < range.lt) && (range.gt === undefined || actual > range.gt);
 
 const matches = (row: Row, where: Row): boolean =>
-    Object.entries(where).every(([field, value]) => (isLessThan(value) ? typeof row[field] === "number" && row[field] < value.lt : row[field] === value));
+    Object.entries(where).every(([field, value]) => (isRange(value) ? inRange(row[field], value) : row[field] === value));
 
 /**
  * Build the double.
@@ -67,13 +72,35 @@ const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; userId?
             .map((row) => [row["_id"] as string, row]),
     );
 
+    // Pinned to the table, like the real facade: an id of another table answers
+    // null, and a write to one refuses the way the store does.
+    const pinned = (table: string, id: string): Row | null => (tables[table] ?? []).find((row) => row["_id"] === id) ?? null;
+    const assertPinned = (table: string, id: string): void => {
+        if (pinned(table, id) === null) {
+            throw new Error(`no ${table} row ${id}`);
+        }
+    };
+
     const facade = (table: string) => {
         return {
+            delete: (id: string) => {
+                assertPinned(table, id);
+                ops.push({ id, kind: "delete" });
+
+                return Promise.resolve();
+            },
             // One page holding every match: `isDone` stops a draining reader (`collectAll`) after it.
             findMany: (args?: { where?: Row }) =>
                 Promise.resolve({ continueCursor: null, isDone: true, page: (tables[table] ?? []).filter((row) => matches(row, args?.where ?? {})) }),
             // Pinned to the table, like the real facade: an id of another table answers null.
-            get: (id: string) => Promise.resolve((tables[table] ?? []).find((row) => row["_id"] === id) ?? null),
+            get: (id: string) => Promise.resolve(pinned(table, id)),
+            patch: (id: string, patch: Row) => {
+                assertPinned(table, id);
+                assertNoExplicitUndefined(patch);
+                ops.push({ id, kind: "patch", patch });
+
+                return Promise.resolve();
+            },
         };
     };
 

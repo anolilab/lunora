@@ -6,7 +6,7 @@ import { MIN_ANOMALY_SAMPLES } from "../src/telemetry/anomaly";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
-import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
+import { assertMember, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
 import { alertTarget, anomalyTarget } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
@@ -48,6 +48,22 @@ interface AlertRow {
     subject: string;
     target: RuleTarget;
 }
+
+/**
+ * Refuse a row that is missing or belongs to another organization.
+ *
+ * Callers load the row through the TABLE-PINNED facade (`context.db.alertRules.get`, …)
+ * and write through the same facade, never the bare `context.db.get`/`patch`/
+ * `delete`. The bare reader resolves an id of ANY table, so `setRuleEnabled`
+ * handed an `alerts` id, or `deleteSilence` handed an `alertRules` id, passed the
+ * org check on the wrong row and then patched or deleted it. Pinned, an id of
+ * another table reads as missing.
+ */
+const assertInOrg = (row: null | { organizationId: Id<"organizations"> }, organizationId: Id<"organizations">, label: string): void => {
+    if (row?.organizationId !== organizationId) {
+        throw new LunoraError("NOT_FOUND", `${label} not found in this organization`);
+    }
+};
 
 /** An org's alert rules, most-recent first (any member). */
 export const rules = query
@@ -213,8 +229,8 @@ export const setRuleEnabled = mutation
     .input({ enabled: v.boolean(), id: v.id("alertRules"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { enabled, id, organizationId } }): Promise<Id<"alertRules">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "alert rule");
-        await context.db.patch(id, { enabled, updatedAt: context.now });
+        assertInOrg(await context.db.alertRules.get(id), organizationId, "alert rule");
+        await context.db.alertRules.patch(id, { enabled, updatedAt: context.now });
 
         return id;
     });
@@ -225,8 +241,8 @@ export const deleteRule = mutation
     .input({ id: v.id("alertRules"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<Id<"alertRules">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "alert rule");
-        await context.db.delete(id);
+        assertInOrg(await context.db.alertRules.get(id), organizationId, "alert rule");
+        await context.db.alertRules.delete(id);
 
         return id;
     });
@@ -259,9 +275,9 @@ export const markDelivered = mutation
 
         for (const id of ids) {
             // eslint-disable-next-line no-await-in-loop -- small bounded set; the global mutation is serialized
-            await assertRowInOrg(context, id, organizationId, "alert");
+            assertInOrg(await context.db.alerts.get(id), organizationId, "alert");
             // eslint-disable-next-line no-await-in-loop -- see above
-            await context.db.patch(id, { deliveredAt: now, status: "delivered", updatedAt: now });
+            await context.db.alerts.patch(id, { deliveredAt: now, status: "delivered", updatedAt: now });
         }
 
         return { delivered: ids.length };
@@ -347,7 +363,7 @@ export const createSilence = mutation
         // most MAX_SILENCES_PER_ORG rows per org without a prune cron.
         for (const ended of page.filter((row) => row.endsAt <= now)) {
             // eslint-disable-next-line no-await-in-loop -- at most MAX_SILENCES_PER_ORG rows
-            await context.db.delete(ended._id);
+            await context.db.anomalySilences.delete(ended._id);
         }
 
         if (page.filter((row) => row.endsAt > now).length >= MAX_SILENCES_PER_ORG) {
@@ -384,8 +400,8 @@ export const deleteSilence = mutation
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<Id<"anomalySilences">> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "silence");
-        await context.db.delete(id);
+        assertInOrg(await context.db.anomalySilences.get(id), organizationId, "silence");
+        await context.db.anomalySilences.delete(id);
         await context.db.insert("auditLog", {
             action: "alerts.silence.delete",
             actorUserId: member.userId,
