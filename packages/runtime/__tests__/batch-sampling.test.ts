@@ -266,4 +266,30 @@ describe("/_lunora/rpc-batch — trace context and head sampling", () => {
 
         expect(dropped).toStrictEqual([]);
     });
+
+    it("reports each failed slot's shard error detail and strips it from the client response", async () => {
+        expect.assertions(4);
+
+        const detail = { code: "INTERNAL_SERVER_ERROR", message: "db down", name: "TypeError", stack: "TypeError: db down\n    at handler (messages.ts:3:9)" };
+
+        shard.respond = (entries) =>
+            Response.json({
+                results: entries.map((entry) => {
+                    return {
+                        body: { error: { code: "INTERNAL_SERVER_ERROR", message: "internal error" } },
+                        errorDetail: encodeURIComponent(JSON.stringify(detail)),
+                        id: entry.id,
+                        status: 500,
+                    };
+                }),
+            });
+
+        const worker = createWorker({ observability: { onRpc: (event) => seen.push(event) }, shardDO: shard.namespace });
+        const response = await worker.fetch(batchRequest(), {}, fakeContext);
+
+        expect(shard.calls[0]!.request.headers.get("x-lunora-want-error-detail")).toBe("1");
+        expect(seen).toHaveLength(2);
+        expect(seen[0]!.error).toStrictEqual({ ...detail, status: 500 });
+        await expect(response.text()).resolves.not.toContain("errorDetail");
+    });
 });

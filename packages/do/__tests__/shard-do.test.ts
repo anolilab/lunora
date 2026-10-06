@@ -299,6 +299,32 @@ describe("shardDO", () => {
         errorSpy.mockRestore();
     });
 
+    it("hands the real error to a worker that asks for it, and to no one else", async () => {
+        expect.assertions(3);
+
+        const failing = new TestShard(state, {});
+
+        failing.handleRpc = async () => {
+            throw new TypeError("db down");
+        };
+
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const rpc = (headers: Record<string, string>) =>
+            failing.fetch(new Request("https://shard.internal/rpc", { body: JSON.stringify({ args: {}, functionPath: "fail" }), headers, method: "POST" }));
+
+        const unasked = await rpc({});
+
+        expect(unasked.headers.get("x-lunora-error-detail")).toBeNull();
+
+        const asked = await rpc({ "x-lunora-want-error-detail": "1" });
+        const detail = JSON.parse(decodeURIComponent(asked.headers.get("x-lunora-error-detail")!)) as Record<string, string>;
+
+        expect(detail).toMatchObject({ message: "db down", name: "TypeError" });
+        expect(detail.stack).toContain("TypeError: db down");
+
+        errorSpy.mockRestore();
+    });
+
     it("subscribe updates attachment registry and acks", async () => {
         expect.assertions(2);
 

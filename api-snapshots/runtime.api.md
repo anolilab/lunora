@@ -1157,6 +1157,7 @@ interface LogArchiveConfig {
 ```ts
 interface LogEvent {
     args: unknown[];
+    error?: ErrorDetail;
     eventName?: string;
     fields?: LogFields;
     functionPath: string;
@@ -1349,6 +1350,8 @@ interface ObservabilityEvent {
     error?: {
         code: string;
         message: string;
+        name?: string;
+        stack?: string;
         status: number;
     };
     fanOut?: {
@@ -1675,6 +1678,17 @@ interface RateLimiterLike {
 }
 ```
 
+### `ReportedError` (interface)
+
+```ts
+interface ReportedError {
+    code?: string;
+    message: string;
+    name?: string;
+    stack?: string;
+}
+```
+
 ### `ResolvedSecurity` (interface)
 
 ```ts
@@ -1838,15 +1852,6 @@ interface SecurityOptions {
     cors?: CorsOptions | false;
     csrf?: boolean | CsrfOptions;
     headers?: boolean | SecurityHeadersOptions;
-}
-```
-
-### `SentrySinkOptions` (interface)
-
-```ts
-interface SentrySinkOptions extends OnlyErrorsOption {
-    capture: (event: ObservabilityEvent) => void;
-    captureLog?: (event: LogEvent) => void;
 }
 ```
 
@@ -2118,6 +2123,17 @@ interface SpanEvent {
 }
 ```
 
+### `StackFrame` (interface)
+
+```ts
+interface StackFrame {
+    colno: number;
+    filename: string;
+    function: string;
+    lineno: number;
+}
+```
+
 ### `StorageListFn` (type)
 
 ```ts
@@ -2226,8 +2242,8 @@ interface VectorQueryMatch {
 ```ts
 interface WebhookSinkOptions extends OnlyErrorsOption {
     headers?: Record<string, string>;
-    transform?: (event: ObservabilityEvent) => null | ObservabilityEvent | undefined;
-    transformLog?: (event: LogEvent) => LogEvent | null | undefined;
+    transform?: (event: ObservabilityEvent) => unknown;
+    transformLog?: (event: LogEvent) => unknown;
     url: string;
 }
 ```
@@ -2560,6 +2576,12 @@ const normalizeBackupPrefix: (prefix: string) => string;
 const otlpSink: (options: OtlpSinkOptions) => ObservabilitySink;
 ```
 
+### `parseStackFrames` (const)
+
+```ts
+const parseStackFrames: (stack: string | undefined) => StackFrame[];
+```
+
 ### `pipelineLogSink` (const)
 
 ```ts
@@ -2642,16 +2664,16 @@ const runExportTap: (options: RunExportTapOptions) => Promise<ExportTapResult>;
 const sanitizeChange: (raw: Record<string, unknown>) => ExportChange;
 ```
 
-### `sentrySink` (const)
-
-```ts
-const sentrySink: (options: SentrySinkOptions) => ObservabilitySink;
-```
-
 ### `toAirbyteMessages` (const)
 
 ```ts
 const toAirbyteMessages: (page: ConnectorSyncPage, emittedAt?: number) => AirbyteMessage[];
+```
+
+### `toError` (const)
+
+```ts
+const toError: (error: ReportedError) => Error;
 ```
 
 ### `toErrorResponse` (const)
@@ -2839,6 +2861,17 @@ const DEFAULT_COLUMNS: {
 
 ```ts
 type DefaultShardKey = string | null;
+```
+
+### `ErrorDetail` (interface)
+
+```ts
+interface ErrorDetail {
+    code?: string;
+    message: string;
+    name: string;
+    stack?: string;
+}
 ```
 
 ### `FetchLike` (type)

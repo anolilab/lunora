@@ -7,6 +7,7 @@ import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch
 import { collectPages } from "../../../shared/collect-pages";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
+import { decodeErrorDetail, describeError, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
@@ -2002,11 +2003,11 @@ const buildErrorEvent = (
     const mappable = isLunoraError(error);
     const code = mappable ? error.code : "INTERNAL_SERVER_ERROR";
     const status = mappable ? error.status : 500;
-    const message = error instanceof Error ? error.message : String(error);
+    const { message, name, stack } = describeError(error);
 
     return {
         durationMs,
-        error: { code, message, status },
+        error: { code, message, name, status, ...(stack === undefined ? {} : { stack }) },
         functionPath,
         ok: false,
         ...(extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {}),
@@ -4683,6 +4684,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const outgoingHeaders: Record<string, string> = {
             ...forwardedHeaders,
             [SAMPLE_ERRORS_HEADER]: decision.keepErrors ? "1" : "0",
+            [WANT_ERROR_DETAIL_HEADER]: "1",
         };
 
         injectTraceContext(trace, outgoingHeaders);
@@ -4691,6 +4693,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Re-emit the RPC body at the shard's `/rpc` route — on a region-local
             // replica when this read is eligible for one, else on the owner.
             const response = await forwardRpcToShard(request, functionPath, args, shardKey, outgoingHeaders);
+            const detail = decodeErrorDetail(response.headers.get(ERROR_DETAIL_HEADER));
 
             // A non-2xx from the shard is reported as ok=false even though no
             // exception was thrown — the user-visible result is still an error
@@ -4704,7 +4707,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     functionPath,
                     ok: response.ok,
                     shardKey,
-                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
+                    ...(response.ok
+                        ? {}
+                        : {
+                              error: {
+                                  ...detail,
+                                  code: detail?.code ?? "SHARD_ERROR",
+                                  message: detail?.message ?? `shard returned ${String(response.status)}`,
+                                  status: response.status,
+                              },
+                          }),
                 },
                 sinkContext,
                 // No `sampling` fallback: `emitRpcEvent` ignores it whenever a
@@ -4734,6 +4746,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const stamped = new Response(response.body, { headers: response.headers, status: response.status, statusText: response.statusText });
 
             stamped.headers.set("x-lunora-shard-key", shardKey);
+            // The unredacted error is for the sinks above, never the client.
+            stamped.headers.delete(ERROR_DETAIL_HEADER);
 
             return stamped;
         } catch (error) {
@@ -4991,6 +5005,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 ...forwardedHeaders,
                 "content-type": "application/json",
                 [SAMPLE_ERRORS_HEADER]: decision.keepErrors ? "1" : "0",
+                [WANT_ERROR_DETAIL_HEADER]: "1",
             };
 
             injectTraceContext({ ...trace, spanId: shardSpanId }, headers);
@@ -5048,12 +5063,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             shardKey: string,
             shardSpanId: string,
             durationMs: number,
-            statusById: Map<unknown, number>,
+            resultById: Map<unknown, { errorDetail?: string; status?: number }>,
             fallbackStatus: number,
         ): void => {
             for (const entry of entries) {
-                const status = statusById.get(entry.id) ?? fallbackStatus;
+                const result = resultById.get(entry.id);
+                const status = result?.status ?? fallbackStatus;
                 const ok = status < 400;
+                const detail = ok ? undefined : decodeErrorDetail(result?.errorDetail);
 
                 emitRpcEvent(
                     observability,
@@ -5064,7 +5081,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         ...entryTraceFields(shardSpanId),
                         ok,
                         shardKey,
-                        ...(ok ? {} : { error: { code: "SHARD_ERROR", message: `batched call returned ${String(status)}`, status } }),
+                        ...(ok
+                            ? {}
+                            : {
+                                  error: {
+                                      ...detail,
+                                      code: detail?.code ?? "SHARD_ERROR",
+                                      message: detail?.message ?? `batched call returned ${String(status)}`,
+                                      status,
+                                  },
+                              }),
                     },
                     sinkContext,
                     // No `sampling` fallback: `emitRpcEvent` ignores it whenever a
@@ -5121,7 +5147,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     bookmarks.push(bookmark);
                 }
 
-                let parsed: { results?: { body?: unknown; id?: number; status?: number }[] };
+                let parsed: { results?: { body?: unknown; errorDetail?: string; id?: number; status?: number }[] };
 
                 try {
                     parsed = await response.json();
@@ -5146,11 +5172,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 }
 
                 const entryResults = Array.isArray(parsed.results) ? parsed.results : [];
-                const statusById = new Map(entryResults.map((entry) => [entry.id, entry.status ?? response.status]));
                 const seenIds = new Set(entryResults.map((entry) => entry.id));
 
-                emitEntryEvents(entries, shardKey, shardSpanId, durationMs, statusById, response.status);
-                results.push(...entryResults);
+                emitEntryEvents(entries, shardKey, shardSpanId, durationMs, new Map(entryResults.map((entry) => [entry.id, entry])), response.status);
+                // The unredacted `errorDetail` was for the sinks above, never the client.
+                results.push(...entryResults.map(({ errorDetail: _detail, ...slot }) => slot));
 
                 // Any entry the shard omitted (short/partial response) gets an
                 // explicit slot error rather than a silent "no result" client-side.

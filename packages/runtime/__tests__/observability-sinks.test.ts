@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LogEvent, LogLevel, MetricEvent, ObservabilityEvent, ObservabilitySinkContext, SpanEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
-import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "../src/observability-sinks";
+import { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, webhookSink } from "../src/observability-sinks";
 import { createResourceAttributeResolver } from "../src/resource-detect";
 
 const okEvent: ObservabilityEvent = { durationMs: 5, functionPath: "messages:list", ok: true, shardKey: "channel-1" };
@@ -404,6 +404,43 @@ describe("observability-sinks", () => {
             vi.unstubAllGlobals();
         });
 
+        it("ships whatever transform returns, so a vendor shape needs no dedicated sink", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = webhookSink({
+                transform: (event) =>
+                    event.error && event.error.status >= 500
+                        ? {
+                              api_key: "phc_test",
+                              distinct_id: "lunora",
+                              event: "$exception",
+                              properties: { $exception_list: [{ type: event.error.code, value: event.error.message }] },
+                          }
+                        : null,
+                url: "https://us.i.posthog.com/i/v0/e/",
+            });
+
+            const serverError: ObservabilityEvent = { ...errorEvent, error: { code: "INTERNAL_SERVER_ERROR", message: "db down", status: 500 } };
+
+            // A success and a 4xx (the caller's fault) are filtered out by returning null.
+            sink.onRpc!(okEvent);
+            sink.onRpc!(errorEvent);
+            sink.onRpc!(serverError);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toStrictEqual({
+                api_key: "phc_test",
+                distinct_id: "lunora",
+                event: "$exception",
+                properties: { $exception_list: [{ type: "INTERNAL_SERVER_ERROR", value: "db down" }] },
+            });
+
+            vi.unstubAllGlobals();
+        });
+
         it("fails closed by dropping the event when transform throws", () => {
             expect.assertions(2);
 
@@ -459,90 +496,6 @@ describe("observability-sinks", () => {
             expect(fetchMock).not.toHaveBeenCalled();
 
             vi.unstubAllGlobals();
-        });
-    });
-
-    describe("sentrySink", () => {
-        it("captures only error events by default", () => {
-            expect.assertions(2);
-
-            const capture = vi.fn<(event: ObservabilityEvent) => void>();
-            const sink = sentrySink({ capture });
-
-            sink.onRpc!(okEvent);
-
-            expect(capture).not.toHaveBeenCalled();
-
-            sink.onRpc!(errorEvent);
-
-            expect(capture).toHaveBeenCalledWith(errorEvent);
-        });
-
-        it("captures all events when onlyErrors is false", () => {
-            expect.assertions(1);
-
-            const capture = vi.fn<(event: ObservabilityEvent) => void>();
-            const sink = sentrySink({ capture, onlyErrors: false });
-
-            sink.onRpc!(okEvent);
-            sink.onRpc!(errorEvent);
-
-            expect(capture).toHaveBeenCalledTimes(2);
-        });
-
-        it("swallows a throwing capture callback", () => {
-            expect.assertions(1);
-
-            const sink = sentrySink({
-                capture: () => {
-                    throw new Error("sentry down");
-                },
-            });
-
-            expect(() => {
-                sink.onRpc!(errorEvent);
-            }).not.toThrow();
-        });
-
-        it("forwards ctx.log lines to captureLog when wired, and swallows its throws", () => {
-            expect.assertions(3);
-
-            const captureLog = vi.fn<(event: LogEvent) => void>();
-            const sink = sentrySink({ capture: vi.fn<(event: ObservabilityEvent) => void>(), captureLog });
-            const logEvent: LogEvent = { args: [], fields: { orderId: "o-1" }, functionPath: "orders:place", level: "error", message: "boom", ts: 1 };
-
-            sink.onLog!(logEvent);
-
-            expect(captureLog).toHaveBeenCalledWith(logEvent);
-
-            const throwing = sentrySink({
-                capture: vi.fn<(event: ObservabilityEvent) => void>(),
-                captureLog: () => {
-                    throw new Error("sentry down");
-                },
-            });
-
-            expect(throwing.onLog).toBeDefined();
-            expect(() => {
-                throwing.onLog!(logEvent);
-            }).not.toThrow();
-        });
-
-        it("omits onLog entirely when captureLog is not provided (logs stay out of Sentry)", () => {
-            expect.assertions(1);
-
-            const sink = sentrySink({ capture: vi.fn<(event: ObservabilityEvent) => void>() });
-
-            expect(sink.onLog).toBeUndefined();
-        });
-
-        it("throws at construction when `capture` is missing instead of swallowing every event", () => {
-            expect.assertions(2);
-
-            expect(() => sentrySink({ dsn: "https://key@o0.ingest.sentry.io/0" } as unknown as Parameters<typeof sentrySink>[0])).toThrow(
-                /requires a `capture` callback/u,
-            );
-            expect(() => sentrySink({} as unknown as Parameters<typeof sentrySink>[0])).toThrow(TypeError);
         });
     });
 
@@ -1019,6 +972,106 @@ describe("observability-sinks", () => {
             // this is a redactor, not a blunt drop-everything.
             expect(attrValue(record.attributes, "orderId")).toStrictEqual({ stringValue: "o-1" });
             expect(record.body.stringValue).not.toContain("buyer@example.com");
+        });
+
+        it("puts a logged error on the record as OTel exception attributes, its message and stack redacted", () => {
+            expect.assertions(4);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+
+            sink.onLog!({
+                args: [],
+                error: {
+                    message: "no user buyer@example.com",
+                    name: "TypeError",
+                    stack: "TypeError: no user buyer@example.com\n    at charge (orders.ts:4:2)",
+                },
+                functionPath: "orders:place",
+                level: "error",
+                message: "charge failed",
+                ts: 1,
+            });
+
+            const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(attrValue(record.attributes, "exception.type")).toStrictEqual({ stringValue: "TypeError" });
+            // The stack's first line repeats the message, so it is redacted too.
+            expect(JSON.stringify(attrValue(record.attributes, "exception.stacktrace"))).not.toContain("buyer@example.com");
+            expect(JSON.stringify(attrValue(record.attributes, "exception.stacktrace"))).toContain("at charge (orders.ts:4:2)");
+            expect(JSON.stringify(attrValue(record.attributes, "exception.message"))).not.toContain("buyer@example.com");
+        });
+
+        it("redacts a multi-line message out of the stack even when a line of it looks like a frame", () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            const sink = otlpSink({ batch: false, endpoint: "https://collector.example" });
+            const message = "lookup failed\n    at buyer@example.com";
+
+            sink.onLog!({
+                args: [],
+                error: { message, name: "TypeError", stack: `Error: ${message}\n    at charge (orders.ts:4:2)` },
+                functionPath: "orders:place",
+                level: "error",
+                message: "charge failed",
+                ts: 1,
+            });
+
+            const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(JSON.stringify(attrValue(record.attributes, "exception.stacktrace"))).not.toContain("buyer@example.com");
+        });
+
+        it.each([
+            // A one-letter message also occurs inside the name: the cut must not land in `Erro|r`.
+            ["a message that also occurs in the name", "r", "Error: r\n    at charge (orders.ts:4:2)", "TypeError: r\n    at charge (orders.ts:4:2)"],
+            // V8 prints no `: ` for an empty message.
+            ["an empty message", "", "Error\n    at charge (orders.ts:4:2)", "TypeError: \n    at charge (orders.ts:4:2)"],
+        ])("rebuilds a well-formed stack header for %s", (_label, message, stack, expected) => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            otlpSink({ batch: false, endpoint: "https://collector.example" }).onLog!({
+                args: [],
+                error: { message, name: "TypeError", stack },
+                functionPath: "orders:place",
+                level: "error",
+                message: "charge failed",
+                ts: 1,
+            });
+
+            const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(attrValue(record.attributes, "exception.stacktrace")).toStrictEqual({ stringValue: expected });
+        });
+
+        it("lets a logged error's exception.* keys replace caller fields of the same name", () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => new Response("ok"));
+            vi.stubGlobal("fetch", fetchMock);
+
+            otlpSink({ batch: false, endpoint: "https://collector.example", redactLogs: false }).onLog!({
+                args: [],
+                error: { message: "declined", name: "TypeError" },
+                fields: { "exception.type": "caller" },
+                functionPath: "orders:place",
+                level: "error",
+                message: "charge failed",
+                ts: 1,
+            });
+
+            const { record } = logFrom(fetchMock.mock.calls[0]![1] as RequestInit);
+
+            expect(record.attributes.filter((attribute) => attribute.key === "exception.type")).toHaveLength(1);
+            expect(attrValue(record.attributes, "exception.type")).toStrictEqual({ stringValue: "TypeError" });
         });
 
         it("ships the raw log record when redactLogs is opted out", () => {

@@ -24,6 +24,12 @@ export const stringifyFieldValue = (value: unknown): string => {
         return value;
     }
 
+    // `JSON.stringify(new Error("x"))` is `"{}"` — an Error has no own
+    // enumerable properties — so render it the way `console` does.
+    if (value instanceof Error) {
+        return String(value);
+    }
+
     try {
         // `JSON.stringify` returns `undefined` for a function/symbol and throws
         // on a bigint / circular reference — cover both.

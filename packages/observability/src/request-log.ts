@@ -42,7 +42,7 @@ import { createRedactor, standardRules } from "@visulima/redact";
 import { maskCredentials } from "../../../shared/credential-redaction";
 import type { LogEvent } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
-import { normalizeLogFields } from "../../../shared/log-fields";
+import { normalizeLogFields, stringifyFieldValue } from "../../../shared/log-fields";
 import type { IssueSeverity, IssueStatus } from "./issue-state";
 import { readIssueStates } from "./issue-state";
 import { runSql } from "./run-sql";
@@ -549,30 +549,13 @@ const LOG_EVENT_TYPE = "log";
 
 /**
  * Render `ctx.log.*` arguments into a single display string, the way `console`
- * does: strings pass through verbatim; everything else is JSON-serialised (with
- * a `String()` fallback for a circular/unserialisable value so rendering never
- * throws). Values are space-joined. This rendered string is what the dev-server
+ * does: strings pass through verbatim, an `Error` renders as `Name: message`, and
+ * everything else is JSON-serialised (with a `String()` fallback for a
+ * circular/unserialisable value so rendering never throws). Values are space-joined. This rendered string is what the dev-server
  * terminal shows; the structured `args` array travels alongside it for sinks
  * that want the raw values.
  */
-const renderLogMessage = (args: unknown[]): string =>
-    args
-        .map((value) => {
-            if (typeof value === "string") {
-                return value;
-            }
-
-            try {
-                // `JSON.stringify` is typed `=> string` but returns `undefined`
-                // for a function/symbol/undefined value — fall back to `String`.
-                const json = JSON.stringify(value) as string | undefined;
-
-                return json ?? String(value);
-            } catch {
-                return String(value);
-            }
-        })
-        .join(" ");
+const renderLogMessage = (args: unknown[]): string => args.map((value) => stringifyFieldValue(value)).join(" ");
 
 /**
  * True only for a **plain** object usable as a structured-fields bag — an object

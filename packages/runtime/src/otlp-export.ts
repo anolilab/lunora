@@ -26,6 +26,13 @@ const SAMPLED_TRACE_FLAG = 1;
 /** Trace flags with `sampled` clear — a trace the head decision dropped, exported anyway by the tail bias. */
 const UNSAMPLED_TRACE_FLAG = 0;
 
+/** OTel semconv `exception.*` attributes, shared by the RPC span's exception event and an error log record. */
+const exceptionAttributes = (type: string, message: string, stack: string | undefined): OtlpAttribute[] => [
+    encodeAttribute("exception.type", type),
+    encodeAttribute("exception.message", message),
+    ...(stack === undefined ? [] : [encodeAttribute("exception.stacktrace", stack)]),
+];
+
 /** Build the OTLP trace-export body for one RPC dispatch event. */
 const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     const attributes = [encodeAttribute(LUNORA_ATTR.functionPath, event.functionPath), encodeAttribute(LUNORA_ATTR.ok, event.ok)];
@@ -117,7 +124,7 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
     if (event.error) {
         span.events = [
             {
-                attributes: [encodeAttribute("exception.type", event.error.code), encodeAttribute("exception.message", event.error.message)],
+                attributes: exceptionAttributes(event.error.code, event.error.message, event.error.stack),
                 name: "exception",
                 timeUnixNano: otlpUnixNano(endMs),
             },
@@ -319,6 +326,17 @@ const otlpLogBody = (event: LogEvent): unknown => {
 
     if (event.spanId !== undefined) {
         logRecord.spanId = event.spanId;
+    }
+
+    // OTel semconv for an exception carried on a log record: the same
+    // `exception.*` keys the RPC span's exception event uses.
+    // A caller field of the same name gives way, so the record never carries a
+    // key twice (collectors may reject that).
+    if (event.error !== undefined) {
+        const exception = exceptionAttributes(event.error.name, event.error.message, event.error.stack);
+        const keys = new Set(exception.map((attribute) => attribute.key));
+
+        logRecord.attributes = [...(logRecord.attributes as OtlpAttribute[]).filter((attribute) => !keys.has(attribute.key)), ...exception];
     }
 
     if (event.eventName !== undefined) {

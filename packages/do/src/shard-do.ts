@@ -254,6 +254,8 @@ import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
+import type { ErrorDetail } from "../../../shared/error-detail";
+import { describeError, encodeErrorDetail, ERROR_DETAIL_HEADER, findLoggedError, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
 import { jsonResponse } from "../../../shared/json-response";
@@ -6329,6 +6331,11 @@ abstract class ShardDO {
         sink?: TelemetrySink,
         eventName?: string,
         anchor?: TraceAnchor,
+        // The `Error` the line logged. Searched in `fields` too, which covers
+        // `ctx.log.event(name, { err })`; `makeLogger` passes it explicitly when
+        // the Error sat in a `with()` bound field, which `fields` has already
+        // stringified by the time it gets here.
+        error: ErrorDetail | undefined = findLoggedError(fields === undefined ? args : [...args, fields]),
     ): void {
         // Correlate the line to its dispatch span. Read from the resolved anchor
         // rather than re-parsing the inbound `traceparent`, so a dispatch that
@@ -6347,6 +6354,7 @@ abstract class ShardDO {
         // get the full payload. Structured `fields` DO ride every destination.
         const event: LogEventInput = {
             args,
+            ...(error === undefined ? {} : { error }),
             ...(eventName === undefined ? {} : { eventName }),
             fields,
             functionPath,
@@ -6393,8 +6401,10 @@ abstract class ShardDO {
             (level: ContextLogLevel) =>
             (...args: unknown[]): void => {
                 const { fields, message } = parseLogArgs(args, boundFields);
+                // Searched before `parseLogArgs` stringified any Error in the fields.
+                const error = findLoggedError(boundFields === undefined ? args : [...args, boundFields]);
 
-                this.recordUserLog(functionPath, level, args, message, fields, sink);
+                this.recordUserLog(functionPath, level, args, message, fields, sink, undefined, undefined, error);
             };
 
         return {
@@ -7531,6 +7541,12 @@ abstract class ShardDO {
             // what the caller saw.
             dispatchServerFault = errorResponse.status >= 500;
 
+            // The body is redacted for the client; the worker that asked gets the
+            // real error (stack included) for its `onRpc` sinks, and strips it.
+            if (request.headers.get(WANT_ERROR_DETAIL_HEADER) === "1") {
+                errorResponse.headers.set(ERROR_DETAIL_HEADER, encodeErrorDetail(describeError(error)));
+            }
+
             return errorResponse;
         } finally {
             // Guard hoisted to the call site so the common case — a handler that
@@ -8651,7 +8667,7 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "BAD_REQUEST", message: `batch exceeds the ${String(MAX_BATCH_ENTRIES)}-call limit` } }, 400);
         }
 
-        const results: { body: unknown; id: unknown; status: number }[] = [];
+        const results: { body: unknown; errorDetail?: string; id: unknown; status: number }[] = [];
         let latestBookmark: string | undefined;
 
         for (const raw of payload.calls) {
@@ -8662,7 +8678,14 @@ abstract class ShardDO {
                 latestBookmark = outcome.bookmark;
             }
 
-            results.push({ body: outcome.body, id: outcome.id, status: outcome.status });
+            // `errorDetail` is the per-slot form of the single call's
+            // `ERROR_DETAIL_HEADER`; the worker reads it and drops it before replying.
+            results.push({
+                body: outcome.body,
+                ...(outcome.errorDetail === undefined ? {} : { errorDetail: outcome.errorDetail }),
+                id: outcome.id,
+                status: outcome.status,
+            });
         }
 
         return jsonResponse({ results }, 200, bookmarkHeaders(latestBookmark));
@@ -8672,11 +8695,17 @@ abstract class ShardDO {
     private async dispatchBatchEntry(
         batchRequest: Request,
         entry: BatchEntry,
-    ): Promise<{ body: unknown; bookmark: string | undefined; id: unknown; status: number }> {
+    ): Promise<{ body: unknown; bookmark: string | undefined; errorDetail?: string; id: unknown; status: number }> {
         try {
             const response = await this.fetch(buildBatchEntryRequest(batchRequest, entry));
 
-            return { body: await response.json(), bookmark: response.headers.get("x-d1-bookmark") ?? undefined, id: entry.id, status: response.status };
+            return {
+                body: await response.json(),
+                bookmark: response.headers.get("x-d1-bookmark") ?? undefined,
+                errorDetail: response.headers.get(ERROR_DETAIL_HEADER) ?? undefined,
+                id: entry.id,
+                status: response.status,
+            };
         } catch (error: unknown) {
             // A malformed entry (non-object, or missing `functionPath`) makes the
             // per-entry request builder / the nested `/rpc` dispatch throw *before*

@@ -167,22 +167,56 @@ const applyTailSampler = (
  * you cannot retract. So a broken redaction rule loses telemetry rather than
  * exporting secrets.
  */
-const postProcess = <T>(event: T, hook: ((event: T) => null | T | undefined) | undefined): T | undefined => {
-    if (hook === undefined) {
-        return event;
-    }
+const postProcess = <T, R = T>(event: T, hook: ((event: T) => null | R | undefined) | undefined): R | T | undefined => {
+    let result: null | R | T | undefined;
 
     try {
-        return hook(event) ?? undefined;
+        result = hook === undefined ? event : hook(event);
     } catch {
-        return undefined;
+        result = undefined;
     }
+
+    return result ?? undefined;
 };
 
 /**
  * Post-process and encode one buffered signal, tagged with the OTLP endpoint
  * bucket it belongs to. `undefined` when the post-processor dropped it.
  */
+
+/**
+ * Redact a logged error's `message`, and the stack's header with it: V8's stack
+ * opens with `Name: message` verbatim (multi-line if the message is), so
+ * redacting only `message` would still ship it. The header is rebuilt from the
+ * redacted message rather than redacting the whole stack, because the redactor
+ * reads a frame's `file.ts:4:2` as a URL and would erase every location.
+ */
+const redactLoggedError = (error: NonNullable<LogEvent["error"]>): NonNullable<LogEvent["error"]> => {
+    const message = redactArgs(error.message) as string;
+
+    if (error.stack === undefined) {
+        return { ...error, message };
+    }
+
+    // V8's header is `<name>: <message>` on the first line (the message may run
+    // onto more). Anchor on `: <message>` within that first line, which holds
+    // even when a subclass renamed itself after `super()` (its header still says
+    // `Error:`), and cut there — exact even when the message has lines that look
+    // like frames. A stack whose first line does not carry it (an empty message,
+    // a message changed after construction) keeps only its `at …` lines.
+    const marker = `: ${error.message}`;
+    const markerAt = error.stack.indexOf(marker);
+    const anchored = error.message !== "" && markerAt !== -1 && !error.stack.slice(0, markerAt).includes("\n");
+    const frames = anchored
+        ? error.stack.slice(markerAt + marker.length)
+        : error.stack
+              .split("\n")
+              .filter((line) => line.trimStart().startsWith("at "))
+              .map((line) => `\n${line}`)
+              .join("");
+
+    return { ...error, message, stack: `${error.name}: ${message}${frames}` };
+};
 
 /**
  * Apply the default redaction to one `ctx.log` event before it leaves for a
@@ -197,6 +231,7 @@ const postProcess = <T>(event: T, hook: ((event: T) => null | T | undefined) | u
 const redactLogEvent = (event: LogEvent): LogEvent => {
     return {
         ...event,
+        ...(event.error === undefined ? {} : { error: redactLoggedError(event.error) }),
         ...(event.fields === undefined ? {} : { fields: redactArgs(event.fields) as LogEvent["fields"] }),
         message: redactArgs(event.message) as string,
     };
@@ -302,23 +337,24 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
     headers?: Record<string, string>;
 
     /**
-     * Optional redaction hook applied to each event immediately before it is
-     * serialized and shipped. Use it to scrub or drop PII (e.g. strip
-     * `error.message`) before it leaves the worker. Return the (possibly
-     * modified) event to send, or `null`/`undefined` to drop the event
-     * entirely. A throwing `transform` drops the event (fail-closed) so a buggy
-     * redactor can never leak the un-scrubbed payload.
+     * Optional hook applied to each event immediately before it is serialized
+     * and shipped. Its return value IS the request body, so it can scrub PII
+     * (return the event minus `error.message`), filter (return `null`/`undefined`
+     * to drop the event), or map the event onto a vendor's ingestion shape — e.g.
+     * a PostHog `$exception` capture — without a dedicated sink. A throwing
+     * `transform` drops the event (fail-closed) so a buggy redactor can never
+     * leak the un-scrubbed payload.
      */
-    transform?: (event: ObservabilityEvent) => null | ObservabilityEvent | undefined;
+    transform?: (event: ObservabilityEvent) => unknown;
 
     /**
-     * Optional redaction hook for `ctx.log` events (the `transform`
-     * counterpart for log lines). Same fail-closed contract: return the event to
-     * ship it, `null`/`undefined` to drop it, and a throw drops it. When unset,
-     * log events are shipped as-is (message + structured fields — which may carry
-     * user input; see the privacy note).
+     * Optional hook for `ctx.log` events (the `transform` counterpart for log
+     * lines). Same contract: the return value is the body, `null`/`undefined`
+     * drops the line, and a throw drops it. When unset, log events are shipped
+     * as-is (message + structured fields — which may carry user input; see the
+     * privacy note).
      */
-    transformLog?: (event: LogEvent) => LogEvent | null | undefined;
+    transformLog?: (event: LogEvent) => unknown;
     /** The ingestion endpoint to POST each event to. */
     url: string;
 }
@@ -326,8 +362,10 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
 /**
  * A fire-and-forget sink that POSTs each event as JSON to an HTTP endpoint.
  *
- * This covers Axiom, Datadog, and any generic webhook/log-ingestion service —
- * point `url` at the ingestion endpoint and supply auth via `headers`. Each
+ * This covers Axiom, Datadog, PostHog, and any generic webhook/log-ingestion
+ * service — point `url` at the ingestion endpoint, supply auth via `headers`,
+ * and reshape the body with `transform` / `transformLog` when the vendor
+ * expects its own format. Each
  * event is sent as its own `fetch`. When the runtime supplies a per-event
  * `context.waitUntil` (the request's `ctx.waitUntil`), the send is registered
  * with it so it survives isolate teardown after the response returns; otherwise
@@ -382,79 +420,6 @@ export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
 
             if (payload !== undefined) {
                 post(payload, context);
-            }
-        },
-    };
-};
-
-/** Options for {@link sentrySink}. */
-export interface SentrySinkOptions extends OnlyErrorsOption {
-    /**
-     * User-supplied capture callback. Wire this to your Sentry client, e.g.
-     * `(event) => Sentry.captureMessage(...)` or `captureException`. Kept as an
-     * injected callback so the runtime takes no dependency on `@sentry/*`.
-     */
-    capture: (event: ObservabilityEvent) => void;
-
-    /**
-     * Optional callback for `ctx.log` events. Wire it to Sentry's structured
-     * logging or a breadcrumb, e.g. `(e) => Sentry.logger[e.level]?.(e.message,
-     * e.fields)`. Omit it to leave `ctx.log` lines out of Sentry entirely
-     * (capturing every log line would usually flood the project). Invoked inside
-     * a try/catch so a throwing client can't break the handler.
-     */
-    captureLog?: (event: LogEvent) => void;
-}
-
-/**
- * A thin adapter that forwards events to an injected `capture` callback.
- *
- * Intentionally does NOT bundle `@sentry/*`: the user wires their own Sentry
- * client (`captureException` / `captureMessage`) into `capture`, giving Sentry
- * parity without a hard dependency. The callback is invoked inside a try/catch
- * so a throwing client can't break dispatch.
- * @param options Sink options: `capture` is invoked per forwarded event;
- * `onlyErrors` defaults to true (error events only) — pass `false` for all.
- */
-export const sentrySink = (options: SentrySinkOptions): ObservabilitySink => {
-    const { capture, captureLog } = options;
-
-    // Fail at construction, not per event. `capture` is the whole sink: without
-    // it every `onRpc` throws inside the try/catch below, which swallows — so a
-    // misconfigured sink (`sentrySink({ dsn })`, the shape the docs used to
-    // show) reports nothing and logs nothing, losing the error feed silently.
-    // A worker that boots with a broken sink is worse than one that refuses to.
-    if (typeof capture !== "function") {
-        throw new TypeError(
-            "sentrySink requires a `capture` callback — wire your own Sentry client, e.g. `sentrySink({ capture: (event) => Sentry.captureMessage(event.name) })`. There is no `dsn` option; the runtime bundles no Sentry client.",
-        );
-    }
-
-    // Sentry defaults to error-only — capturing every successful RPC as an
-    // event would flood the project. Callers opt into all events explicitly.
-    const onlyErrors = options.onlyErrors ?? true;
-
-    return {
-        // Only forward log lines when the caller wired `captureLog`; otherwise
-        // `ctx.log` output stays out of Sentry.
-        onLog: captureLog
-            ? (event) => {
-                  try {
-                      captureLog(event);
-                  } catch {
-                      // A throwing capture callback must not break the handler.
-                  }
-              }
-            : undefined,
-        onRpc: (event) => {
-            if (shouldSkip(event, onlyErrors)) {
-                return;
-            }
-
-            try {
-                capture(event);
-            } catch {
-                // A throwing capture callback must not break dispatch.
             }
         },
     };

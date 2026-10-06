@@ -88,6 +88,8 @@ export type { CrossShardCounter, CrossShardReader, CrossShardRelationCapabilitie
 export { createCrossShardRelationCapabilities } from "./cross-shard-relations";
 export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry";
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
+export type { ReportedError, StackFrame } from "./error-reporting";
+export { parseStackFrames, toError } from "./error-reporting";
 export type { LunoraErrorBody } from "./errors";
 export { LunoraError, toErrorResponse } from "./errors";
 export type { ExportBatch, ExportChange, ExportCursorStore, ExportSink, ExportTapFailure, ExportTapResult, RunExportTapOptions } from "./export-tap";
@@ -119,10 +121,9 @@ export type {
     OtlpSinkOptions,
     PipelineLike,
     PipelineLogSinkOptions,
-    SentrySinkOptions,
     WebhookSinkOptions,
 } from "./observability-sinks";
-export { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, sentrySink, webhookSink } from "./observability-sinks";
+export { analyticsEngineSink, combineSinks, consoleSink, otlpSink, pipelineLogSink, webhookSink } from "./observability-sinks";
 export type {
     PipelineLogColumnMap,
     PipelineLogCursor,

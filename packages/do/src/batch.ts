@@ -7,6 +7,7 @@
  */
 
 import type { BatchEntry } from "../../../shared/batch-wire";
+import { WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 
 /**
  * Header names copied verbatim from the batch request onto each per-entry `/rpc`
@@ -22,6 +23,7 @@ const SHARED_BATCH_HEADERS = [
     "x-lunora-origin",
     "x-lunora-system",
     "x-lunora-shard-binding",
+    WANT_ERROR_DETAIL_HEADER,
 ] as const;
 
 /**

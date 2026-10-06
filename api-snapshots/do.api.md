@@ -533,7 +533,7 @@ abstract class ShardDO {
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor): void;
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined): void;
     protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger;
     protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer;
     protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor;
@@ -872,6 +872,17 @@ interface ContextLogger {
     trace: (...args: unknown[]) => void;
     warn: (...args: unknown[]) => void;
     with: (fields: LogFields) => ContextLogger;
+}
+```
+
+### `ErrorDetail` (interface)
+
+```ts
+interface ErrorDetail {
+    code?: string;
+    message: string;
+    name: string;
+    stack?: string;
 }
 ```
 

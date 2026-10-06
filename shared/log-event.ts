@@ -10,6 +10,7 @@
  * coincidentally compatible, and gives the level union + its severity ordering a
  * single source of truth. Keep genuinely zero-dependency so inlining stays sound.
  */
+import type { ErrorDetail } from "./error-detail";
 import type { LogFields } from "./log-fields";
 
 /**
@@ -51,6 +52,14 @@ export interface LogSinkContext {
 export interface LogEvent {
     /** Raw arguments passed to the `ctx.log.*` call, in order. */
     args: unknown[];
+    /**
+     * The first `Error` the call was handed, as an argument
+     * (`ctx.log.error("failed", err)`) or a fields value (`{ err }`): its `name`,
+     * unredacted `message`, `stack`, and `code` when it carries one. Absent when
+     * the line logged no `Error`. An error tracker reads this rather than parsing
+     * the rendered `message`.
+     */
+    error?: ErrorDetail;
     /**
      * OTel `LogRecord.eventName` — set when the line was emitted as a **structured
      * event** via `ctx.log.event(name, fields)` rather than as a human-readable
