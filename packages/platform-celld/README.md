@@ -88,4 +88,4 @@ Ratings derive from celld's documented compatibility surface (`docs/cloudflare-c
 
 ## Scope
 
-Private and gated by the API-snapshot guard at the **experimental** tier, alongside `@lunora/platform-node`.
+Published on the `alpha` dist-tag and gated by the API-snapshot guard at the **experimental** tier, alongside `@lunora/platform-node`: the snapshot records how the surface moves and carries no SemVer promise.

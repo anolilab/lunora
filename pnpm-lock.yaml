@@ -1059,6 +1059,7 @@ overrides:
   '@lunora/payment': workspace:*
   '@lunora/platform': workspace:*
   '@lunora/platform-cloudflare': workspace:*
+  '@lunora/platform-celld': workspace:*
   '@lunora/platform-node': workspace:*
   '@lunora/queue': workspace:*
   '@lunora/ratelimit': workspace:*
