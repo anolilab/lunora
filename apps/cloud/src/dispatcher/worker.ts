@@ -3,7 +3,9 @@ import type { AnalyticsEngineDatasetLike } from "../targets/cloudflare-wfp/analy
 import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../targets/cloudflare-wfp/analytics";
 import type { CustomDomainRoute, ScriptFacts } from "../targets/cloudflare-wfp/route";
 import { createCustomDomainResolver, createPlanResolver, resolveTenant, SERVABLE_PLANS } from "../targets/cloudflare-wfp/route";
-import { recordDispatch } from "../telemetry/platform-metrics";
+import { recordDispatch, recordRecursion } from "../telemetry/platform-metrics";
+import type { Lineage } from "./lineage";
+import { formatLineageParameter, LINEAGE_HEADER, MAX_LINEAGE_DEPTH, newLineageRoot, readLineage } from "./lineage";
 import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
 
 /**
@@ -34,6 +36,8 @@ interface DispatcherEnv {
     LUNORA_APP_DOMAIN?: string;
     /** Cell name stamped into the `X-Lunora-Id` debug header (GAPS.md B3). */
     LUNORA_CELL?: string;
+    /** HMAC key shared with the Outbound Worker (plan 365 W5). Absent → lineage is not verified and nothing is refused. A secret. */
+    LUNORA_LINEAGE_SECRET?: string;
     /** Platform self-metrics dataset (GAPS.md E1, `src/telemetry/platform-metrics.ts`). Optional. */
     PLATFORM_METRICS?: AnalyticsEngineDatasetLike;
     /** Analytics Engine dataset for per-request metering (§4). Optional. */
@@ -305,8 +309,94 @@ const redirectOnlyDomain = async (url: URL, appDomain: string): Promise<Response
     return URL.canParse(custom.redirectTo) && status >= 300 && status <= 399 ? Response.redirect(custom.redirectTo, status) : undefined;
 };
 
+/** The slice of the execution context the dispatcher uses. */
+interface WaitUntil {
+    waitUntil: (promise: Promise<unknown>) => void;
+}
+
+/** One audit report per script per window, per isolate — a loop storm must not become an audit-log storm. */
+const RECURSION_REPORT_WINDOW_MS = 60_000;
+const recursionReports = new Map<string, number>();
+
+/**
+ * Tell the control plane a chain was terminated, so it lands in the org's audit
+ * log (`POST /v1/tenants/recursion`, admin-token gated; the control plane maps
+ * the script to its org from its own rows). Best-effort and throttled.
+ */
+const reportRecursionStop = (env: DispatcherEnv, scriptName: string, depth: number, context: WaitUntil | undefined): void => {
+    const now = Date.now();
+
+    if (!env.CONTROL_PLANE_URL || !env.CONTROL_PLANE_TOKEN || now - (recursionReports.get(scriptName) ?? 0) < RECURSION_REPORT_WINDOW_MS) {
+        return;
+    }
+
+    if (recursionReports.size >= 1000) {
+        recursionReports.clear();
+    }
+
+    recursionReports.set(scriptName, now);
+
+    const sent = fetch(`${stripTrailingSlashes(env.CONTROL_PLANE_URL)}/v1/tenants/recursion`, {
+        body: JSON.stringify({ depth, scriptName }),
+        headers: { authorization: `Bearer ${env.CONTROL_PLANE_TOKEN}`, "content-type": "application/json" },
+        method: "POST",
+    }).catch(() => undefined);
+
+    context?.waitUntil(sent);
+};
+
+/**
+ * Decide an invocation's lineage before the tenant runs: the verified depth (0
+ * for a request from outside), and the request with the lineage header
+ * stripped so the tenant never sees it. A forged or stale header answers 400;
+ * a chain at {@link MAX_LINEAGE_DEPTH} answers 508 unless the org's policy is
+ * `allow`. Both are metered, and a termination is audited.
+ */
+const admitLineage = async (
+    request: Request,
+    route: { recursion?: "allow"; scriptName: string },
+    env: DispatcherEnv,
+    context: WaitUntil | undefined,
+): Promise<Response | { lineage: Lineage; request: Request }> => {
+    const cell = env.LUNORA_CELL ?? "default";
+    const header = request.headers.get(LINEAGE_HEADER);
+    const inbound = await readLineage(header, env.LUNORA_LINEAGE_SECRET, Date.now());
+
+    if (inbound.status === "invalid") {
+        recordRecursion(env.PLATFORM_METRICS, { cell, depth: 0, outcome: "forged" });
+
+        return Response.json({ error: "invalid lineage" }, { status: 400 });
+    }
+
+    const lineage = inbound.status === "valid" ? inbound.lineage : { depth: 0, root: newLineageRoot() };
+
+    if (lineage.depth >= MAX_LINEAGE_DEPTH) {
+        if (route.recursion !== "allow") {
+            recordRecursion(env.PLATFORM_METRICS, { cell, depth: lineage.depth, outcome: "terminated" });
+            reportRecursionStop(env, route.scriptName, lineage.depth, context);
+
+            return Response.json(
+                { depth: lineage.depth, error: "loop detected: this request re-entered Lunora Cloud too many times in one chain" },
+                { status: 508 },
+            );
+        }
+
+        recordRecursion(env.PLATFORM_METRICS, { cell, depth: lineage.depth, outcome: "allowed" });
+    }
+
+    if (header === null) {
+        return { lineage, request };
+    }
+
+    const headers = new Headers(request.headers);
+
+    headers.delete(LINEAGE_HEADER);
+
+    return { lineage, request: new Request(request, { headers }) };
+};
+
 /** Route one request to its tenant — the dispatcher's whole job, timed by `fetch` below. */
-const serve = async (request: Request, env: DispatcherEnv): Promise<Response> => {
+const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined): Promise<Response> => {
     buildResolvers(env);
 
     const url = new URL(request.url);
@@ -366,21 +456,32 @@ const serve = async (request: Request, env: DispatcherEnv): Promise<Response> =>
         }
     }
 
+    // Recursion protection (plan 365 W5): the invocation's depth, from a verified
+    // lineage header or 0 for a request from outside. Decided here, server-side,
+    // before the tenant runs — so a refused loop never bills the tenant invocation.
+    const lineage = await admitLineage(request, route, env, context);
+
+    if (lineage instanceof Response) {
+        return lineage;
+    }
+
     // Captured outside the `try` so the catch can still measure how long the
     // failing dispatch took.
     const startedAt = Date.now();
 
     try {
         // Per-plan runtime caps (§4): CPU + subrequests scale with the tenant's
-        // plan, falling back to the free tier when the plan is unknown.
+        // plan, falling back to the free tier when the plan is unknown. The
+        // lineage rides to the Outbound Worker as a binding parameter, which
+        // tenant code can neither read nor set.
         const limits = limitsForPlan(plan);
-        const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
+        const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits, outbound: { lineage: formatLineageParameter(lineage.lineage) } });
         // A WebSocket upgrade returns a 101 response carrying `webSocket`;
         // returning it verbatim hands the hibernatable socket back to the
         // eyeball (Lunora's `/_lunora/ws` subscription path). Post-upgrade
         // message invocations run inside the tenant's DO, not back through
         // this dispatcher — see spikes/ws-dispatch for the live validation.
-        const response = await userWorker.fetch(request);
+        const response = await userWorker.fetch(lineage.request);
 
         meterRequest(env.USAGE_ANALYTICS, request, response, route, url, startedAt);
 
@@ -426,12 +527,12 @@ export default {
      * (GAPS.md E1) — routing, the plan lookup and the tenant's response together,
      * which is what an eyeball waits on. A thrown dispatch is `exception`.
      */
-    async fetch(request: Request, env: DispatcherEnv): Promise<Response> {
+    async fetch(request: Request, env: DispatcherEnv, context?: WaitUntil): Promise<Response> {
         const startedAt = Date.now();
         const cell = env.LUNORA_CELL ?? "default";
 
         try {
-            const response = await serve(request, env);
+            const response = await serve(request, env, context);
 
             recordDispatch(env.PLATFORM_METRICS, { cell, durationMs: Date.now() - startedAt, outcome: statusClass(response.status) });
 

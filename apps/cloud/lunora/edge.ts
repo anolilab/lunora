@@ -6,9 +6,10 @@ import type { TargetEnvironment } from "../src/targets/registry";
 import { registeredFleet } from "../src/targets/registry";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { action, mutation, query, v } from "./_generated/server.js";
+import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
+import { boundedString, LIMITS } from "./validators";
 
 /**
  * Edge protection (plan 365 W7, D9): what Cloudflare's edge did to an
@@ -177,6 +178,81 @@ export const setAnomalyRateLimit = mutation
         );
 
         return null;
+    });
+
+/** The org's recursion policy (any member). Absent on the row ⇒ `terminate`. */
+export const recursionPolicy = query
+    .input({ organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { organizationId } }): Promise<"allow" | "terminate"> => {
+        const member = await assertMember(context, organizationId);
+        const organization = await context.db.organizations.get(member.organizationId);
+
+        return organization?.recursionPolicy === "allow" ? "allow" : "terminate";
+    });
+
+/**
+ * Set what the dispatcher does with a request chain that re-entered Lunora Cloud
+ * past the depth cap (plan 365 W5, owners/admins): `terminate` (508, the
+ * default) or `allow`, mirroring Lambda's recursion config. Audit-logged.
+ */
+export const setRecursionPolicy = mutation
+    .use(rateLimit("sensitive"))
+    .input({ organizationId: v.id("organizations"), policy: v.union(v.literal("terminate"), v.literal("allow")) })
+    .mutation(async ({ ctx: context, args }): Promise<null> => {
+        const member = await assertMember(context, args.organizationId, ["owner", "admin"]);
+
+        await context.db.organizations.patch(member.organizationId, { recursionPolicy: args.policy });
+        await context.db.insert("auditLog", {
+            action: "recursion.policy",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId: member.organizationId,
+            target: args.policy,
+        });
+
+        return null;
+    });
+
+/** One terminated-chain audit entry per script per this window, whatever the dispatcher sends. */
+const RECURSION_AUDIT_WINDOW_MS = 60_000;
+
+/**
+ * Record that the dispatcher terminated a request chain (`POST /v1/tenants/recursion`,
+ * admin-token gated). The organization is the one that owns the script's
+ * deployment row — never a value the caller sends — and a script that is not
+ * a deployment records nothing. Bounded: one entry per script per minute.
+ */
+export const recordRecursionStop = internalMutation
+    .input({ depth: v.number(), scriptName: boundedString(LIMITS.name) })
+    .mutation(async ({ ctx: context, args }): Promise<{ recorded: boolean }> => {
+        const { page } = await context.db.deployments.findMany({ limit: 1, where: { scriptName: args.scriptName } });
+        const deployment = page[0];
+
+        if (!deployment) {
+            return { recorded: false };
+        }
+
+        const depth = Number.isFinite(args.depth) ? Math.min(Math.max(Math.trunc(args.depth), 0), 9999) : 0;
+        const target = `${args.scriptName} at depth ${String(depth)}`;
+        const { page: recent } = await context.db.auditLog.findMany({
+            limit: 1,
+            orderBy: [{ createdAt: "desc" }],
+            where: { action: "recursion.terminate", organizationId: deployment.organizationId, target },
+        });
+
+        if ((recent[0]?.createdAt ?? 0) > context.now - RECURSION_AUDIT_WINDOW_MS) {
+            return { recorded: false };
+        }
+
+        await context.db.insert("auditLog", {
+            action: "recursion.terminate",
+            actorUserId: "system:dispatcher",
+            createdAt: context.now,
+            organizationId: deployment.organizationId,
+            target,
+        });
+
+        return { recorded: true };
     });
 
 /** The firewall view, from one read. */

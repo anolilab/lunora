@@ -15,6 +15,8 @@ export interface TenantRoute {
     plan?: string;
     /** True when this is a PREVIEW deployment whose project has a password set (deployment protection). */
     protected?: boolean;
+    /** `allow` when the org opted out of recursion termination (plan 365 W5); absent ⇒ `terminate`. */
+    recursion?: "allow";
     scriptName: string;
 }
 
@@ -22,6 +24,7 @@ export interface TenantRoute {
 export interface ScriptFacts {
     plan?: string;
     protected?: boolean;
+    recursion?: "allow";
 }
 
 export interface ResolveTenantOptions {
@@ -63,7 +66,12 @@ export const resolveTenant = async (hostname: string, options: ResolveTenantOpti
 
     const facts = (await options.resolvePlan?.(scriptName)) ?? {};
 
-    return { plan: facts.plan, scriptName, ...(facts.protected === true ? { protected: true } : {}) };
+    return {
+        plan: facts.plan,
+        scriptName,
+        ...(facts.protected === true ? { protected: true } : {}),
+        ...(facts.recursion === "allow" ? { recursion: "allow" as const } : {}),
+    };
 };
 
 export interface PlanResolverOptions {
@@ -184,7 +192,9 @@ const toScriptFacts = (data: unknown): ScriptFacts | undefined => {
         return undefined;
     }
 
-    return { plan, ...(body["protected"] === true ? { protected: true } : {}) };
+    // Only an explicit `allow` opts out of recursion termination (plan 365 W5);
+    // anything else keeps it on — fail closed.
+    return { plan, ...(body["protected"] === true ? { protected: true } : {}), ...(body["recursion"] === "allow" ? { recursion: "allow" as const } : {}) };
 };
 
 /**

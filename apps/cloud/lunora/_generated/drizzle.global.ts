@@ -34,6 +34,7 @@ export const organizations = sqliteTable("organizations", {
     paymentFailedAt: real("paymentFailedAt"),
     creditsAccountId: text("creditsAccountId"),
     deletionRequestedAt: real("deletionRequestedAt"),
+    recursionPolicy: text("recursionPolicy", { mode: "json" }).$type<"terminate" | "allow">(),
 }, (t) => ({
     by_slug: uniqueIndex("by_slug").on(t.slug),
 }));

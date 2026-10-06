@@ -3514,6 +3514,69 @@
         "x-lunora-function-kind": "action"
       }
     },
+    "/_lunora/rpc#edge:recursionPolicy": {
+      "post": {
+        "description": "Invoke the `query` `edge:recursionPolicy` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "edge:recursionPolicy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "edge:recursionPolicy",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: edge:recursionPolicy",
+        "tags": [
+          "edge"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
     "/_lunora/rpc#edge:rules": {
       "post": {
         "description": "Invoke the `query` `edge:rules` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -3731,6 +3794,82 @@
           }
         },
         "summary": "mutation: edge:setDdosSensitivity",
+        "tags": [
+          "edge"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#edge:setRecursionPolicy": {
+      "post": {
+        "description": "Invoke the `mutation` `edge:setRecursionPolicy` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "edge:setRecursionPolicy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "policy": {
+                        "anyOf": [
+                          {
+                            "const": "terminate",
+                            "type": "string"
+                          },
+                          {
+                            "const": "allow",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "organizationId",
+                      "policy"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "edge:setRecursionPolicy",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: edge:setRecursionPolicy",
         "tags": [
           "edge"
         ],

@@ -278,7 +278,7 @@ const servingDeployment = async (context: QueryContext, scriptName: string): Pro
  */
 export const planForScript = query
     .input({ scriptName: boundedString(LIMITS.name) })
-    .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string; protected?: boolean }> => {
+    .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string; protected?: boolean; recursion?: "allow" }> => {
         const deployment = await servingDeployment(context, scriptName);
 
         if (!deployment) {
@@ -293,7 +293,7 @@ export const planForScript = query
         // accrual already breaches its cap is refused here as soon as the ledger
         // write lands, not an hour later when the sweep suspends it. An org row
         // this lookup cannot find is refused too — unknown state fails closed.
-        const organization = (await context.db.get(deployment.organizationId)) as AdmissionRow | null;
+        const organization = (await context.db.get(deployment.organizationId)) as (AdmissionRow & { recursionPolicy?: null | string }) | null;
 
         if (!organizationServing(organization, context.now)) {
             return { plan: "suspended" };
@@ -311,7 +311,13 @@ export const planForScript = query
         // definition, and gating it here would be a foot-gun with no undo.
         const isProtectedPreview = deployment.kind === "preview" && (await previewProtectionEnabled(context, deployment.projectId));
 
-        return { plan: highestPlan(entitlements.plans), ...(isProtectedPreview ? { protected: true } : {}) };
+        // The org's recursion policy rides the same cached lookup (plan 365 W5). Only an
+        // explicit `allow` crosses; the dispatcher treats anything else as `terminate`.
+        return {
+            plan: highestPlan(entitlements.plans),
+            ...(isProtectedPreview ? { protected: true } : {}),
+            ...(organization?.recursionPolicy === "allow" ? { recursion: "allow" as const } : {}),
+        };
     });
 
 /** A project's deployments, newest first. Caller must be a member of the org. */

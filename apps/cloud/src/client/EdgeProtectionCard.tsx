@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 
 import { api } from "../../lunora/_generated/api.js";
+import { MAX_LINEAGE_DEPTH } from "../dispatcher/lineage";
 import { ColumnHeader } from "./ColumnHeader";
 import { Field, FieldForm, FormError, StatusBadge } from "./section-ui";
 import type { OrgId } from "./types";
@@ -72,6 +73,8 @@ export const EdgeProtectionCard = ({ organizationId }: { organizationId: OrgId }
     const rules = useQuery(api.edge.rules, { organizationId });
     const setSensitivity = useMutation(api.edge.setDdosSensitivity);
     const setRateLimit = useMutation(api.edge.setAnomalyRateLimit);
+    const recursion = useQuery(api.edge.recursionPolicy, { organizationId });
+    const setRecursion = useMutation(api.edge.setRecursionPolicy);
     const ddos = rules?.find((rule) => rule.kind === "ddos_l7");
     const limit = rules?.find((rule) => rule.kind === "rate_limit");
     const [requests, setRequests] = useState("600");
@@ -179,6 +182,29 @@ export const EdgeProtectionCard = ({ organizationId }: { organizationId: OrgId }
                         <FormError message={formError} />
                     </div>
                 </FieldForm>
+
+                <Field htmlFor="recursion-policy" label="Recursion protection">
+                    <Select
+                        onValueChange={(value: unknown) => {
+                            void setRecursion.mutate({ organizationId, policy: value as "allow" | "terminate" });
+                        }}
+                        value={recursion ?? "terminate"}
+                    >
+                        <SelectTrigger className="w-[280px]" id="recursion-policy">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectGroup>
+                                <SelectItem value="terminate">Stop loops (508 after {String(MAX_LINEAGE_DEPTH)} hops)</SelectItem>
+                                <SelectItem value="allow">Allow deep chains</SelectItem>
+                            </SelectGroup>
+                        </SelectContent>
+                    </Select>
+                </Field>
+                <p className="text-muted-foreground text-xs">
+                    Counts requests that leave a Worker through fetch() and come back in through Lunora Cloud. Durable Object calls and service bindings are not
+                    counted, and the projects named above are not covered.
+                </p>
             </CardContent>
         </Card>
     );

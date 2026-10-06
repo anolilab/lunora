@@ -9,7 +9,17 @@
     "compatibility_flags": ["nodejs_compat"],
     // Bind the production dispatch namespace holding tenant Worker scripts.
     // (Requires the Workers-for-Platforms paid add-on.)
-    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
+    // `outbound` routes every tenant `fetch()` through the Outbound Worker
+    // (outbound.wrangler.jsonc, plan 365 W5), which stamps the signed lineage the
+    // recursion protection verifies; `lineage` is the per-invocation parameter the
+    // dispatcher passes. It also disables `connect()` for tenant Workers.
+    "dispatch_namespaces": [
+        {
+            "binding": "DISPATCHER",
+            "namespace": "lunora-production",
+            "outbound": { "service": "lunora-outbound", "parameters": ["lineage"] },
+        },
+    ],
     // Per-request metering source (§4): the dispatcher writes one data point per
     // tenant request; the control-plane rollup reads it back via the AE SQL API.
     //
@@ -23,6 +33,8 @@
         "LUNORA_APP_DOMAIN": "lunora.app",
         // Control-plane base URL — enables per-plan runtime limits (GET /v1/tenants/plan).
         // Set CONTROL_PLANE_TOKEN as a secret: `wrangler secret put CONTROL_PLANE_TOKEN -c dispatcher.wrangler.jsonc`.
+        // LUNORA_LINEAGE_SECRET (recursion protection) is a secret too, the same value
+        // as on the Outbound Worker; unset → lineage is ignored and nothing is refused.
         "CONTROL_PLANE_URL": "https://lunora-cloud.example.workers.dev",
     },
     // Route all hostnames through the dispatcher (subdomains + custom hostnames).
@@ -36,7 +48,13 @@
             // needs a staging zone to do it. Until one is attached, staging is
             // reachable on workers.dev and routes no tenant hostnames.
             "workers_dev": true,
-            "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-staging" }],
+            "dispatch_namespaces": [
+                {
+                    "binding": "DISPATCHER",
+                    "namespace": "lunora-staging",
+                    "outbound": { "service": "lunora-outbound-staging", "parameters": ["lineage"] },
+                },
+            ],
             "analytics_engine_datasets": [
                 { "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage_staging" },
                 { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics_staging" },
@@ -48,7 +66,13 @@
         },
         "production": {
             "routes": [{ "pattern": "*/*", "zone_name": "lunora.app" }],
-            "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
+            "dispatch_namespaces": [
+                {
+                    "binding": "DISPATCHER",
+                    "namespace": "lunora-production",
+                    "outbound": { "service": "lunora-outbound-production", "parameters": ["lineage"] },
+                },
+            ],
             "analytics_engine_datasets": [
                 { "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage" },
                 { "binding": "PLATFORM_METRICS", "dataset": "lunora_platform_metrics" },

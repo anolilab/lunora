@@ -49,6 +49,7 @@ export interface Doc_organizations {
     paymentFailedAt?: number;
     creditsAccountId?: string;
     deletionRequestedAt?: number;
+    recursionPolicy?: "terminate" | "allow";
 }
 
 export interface Doc_members {
@@ -965,6 +966,7 @@ export interface Insert_organizations {
     paymentFailedAt?: number;
     creditsAccountId?: string;
     deletionRequestedAt?: number;
+    recursionPolicy?: "terminate" | "allow";
 }
 
 export interface Insert_members {

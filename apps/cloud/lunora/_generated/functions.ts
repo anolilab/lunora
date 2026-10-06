@@ -172,9 +172,12 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "domains:remove": lunora_domains_10.remove as unknown as RegisteredLunoraFunction,
     "domains:routeForHostname": lunora_domains_10.routeForHostname as unknown as RegisteredLunoraFunction,
     "edge:firewall": lunora_edge_11.firewall as unknown as RegisteredLunoraFunction,
+    "edge:recordRecursionStop": lunora_edge_11.recordRecursionStop as unknown as RegisteredLunoraFunction,
+    "edge:recursionPolicy": lunora_edge_11.recursionPolicy as unknown as RegisteredLunoraFunction,
     "edge:rules": lunora_edge_11.rules as unknown as RegisteredLunoraFunction,
     "edge:setAnomalyRateLimit": lunora_edge_11.setAnomalyRateLimit as unknown as RegisteredLunoraFunction,
     "edge:setDdosSensitivity": lunora_edge_11.setDdosSensitivity as unknown as RegisteredLunoraFunction,
+    "edge:setRecursionPolicy": lunora_edge_11.setRecursionPolicy as unknown as RegisteredLunoraFunction,
     "fanout:tick": lunora_fanout_12.tick as unknown as RegisteredLunoraFunction,
     "github_installations:claim": lunora_github_installations_13.claim as unknown as RegisteredLunoraFunction,
     "github_installations:list": lunora_github_installations_13.list as unknown as RegisteredLunoraFunction,
@@ -566,6 +569,12 @@ __val2 = source["to"];
 __has2 = true;
 }
 return { ...(__has1 ? { "from": __val1 } : {}), "organizationId": source["organizationId"], ...(__has2 ? { "to": __val2 } : {}) };
+});
+installCompiledValidatorMap(lunora_edge_11.recursionPolicy.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_edge_11.rules.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -1037,7 +1046,7 @@ export interface Caller {
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
         ejectTarget: (args: { deployKey: unknown; deploymentId: Id<"deployments"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; branch?: string; bundleHash?: string; projectId: Id<"projects">; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; expiresAt?: number; url?: string; version?: number }[]>;
-        planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; protected?: boolean; }>;
+        planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; protected?: boolean; recursion?: "allow"; }>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
         releaseTarget: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; cronSpecs?: string[]; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; target?: string }>;
         rollback: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ scriptName: string; version?: number; }>;
@@ -1055,9 +1064,12 @@ export interface Caller {
     };
     edge: {
         firewall: (args: { from?: number; organizationId: Id<"organizations">; to?: number }) => Promise<{ capabilities: { ddosOverride: boolean; rateLimit: boolean; }; events: import("../../src/edge/protection.js").FirewallEvent[]; hostnames: number; reason?: string; status: "unavailable" | "ok" | "unconfigured"; unsupported: { name: string; reason: string; target: string; }[] }>;
+        recordRecursionStop: (args: { depth: number; scriptName: unknown }) => Promise<{ recorded: boolean; }>;
+        recursionPolicy: (args: { organizationId: Id<"organizations"> }) => Promise<"allow" | "terminate">;
         rules: (args: { organizationId: Id<"organizations"> }) => Promise<{ applied: boolean; armed?: false | true; engaged?: false | true; hostnames: string[]; kind: "ddos_l7" | "rate_limit"; lastError?: string; periodSeconds?: 60 | 10; requestsPerPeriod?: number; sensitivity?: "default" | "low" | "medium"; status: "pending" | "failed" | "applied" | "removed" | "unavailable"; updatedAt: number }[]>;
         setAnomalyRateLimit: (args: { enabled: boolean; organizationId: Id<"organizations">; periodSeconds?: 10 | 60; requestsPerPeriod?: number }) => Promise<null>;
         setDdosSensitivity: (args: { organizationId: Id<"organizations">; sensitivity: "default" | "medium" | "low" }) => Promise<null>;
+        setRecursionPolicy: (args: { organizationId: Id<"organizations">; policy: "terminate" | "allow" }) => Promise<null>;
     };
     fanout: {
         tick: (args?: {}) => Promise<{ ok: true; }>;
@@ -1328,9 +1340,12 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     edge: {
         firewall: (args) => callRegistered(context, "edge:firewall", args),
+        recordRecursionStop: (args) => callRegistered(context, "edge:recordRecursionStop", args),
+        recursionPolicy: (args) => callRegistered(context, "edge:recursionPolicy", args),
         rules: (args) => callRegistered(context, "edge:rules", args),
         setAnomalyRateLimit: (args) => callRegistered(context, "edge:setAnomalyRateLimit", args),
         setDdosSensitivity: (args) => callRegistered(context, "edge:setDdosSensitivity", args),
+        setRecursionPolicy: (args) => callRegistered(context, "edge:setRecursionPolicy", args),
     },
     fanout: {
         tick: (args) => callRegistered(context, "fanout:tick", args),

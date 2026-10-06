@@ -42,6 +42,7 @@ import {
     handlePreviewAuthRoute,
     handleTenantCustomDomainRoute,
     handleTenantPlanRoute,
+    handleTenantRecursionRoute,
     refuseAdminToken,
     withAdminToken,
 } from "./routes/tenant-admin";
@@ -795,6 +796,7 @@ export const createDeployRouter = (): HttpRouterLike => {
     const adminRoutes: RegisteredRoute<RouteHandler>[] = [
         { handler: handleTenantPlanRoute, method: "GET", path: "/v1/tenants/plan", spec: { auth: "adminToken" } },
         { handler: handlePreviewAuthRoute, method: "POST", path: "/v1/tenants/preview-auth", spec: { auth: "adminToken" } },
+        { handler: handleTenantRecursionRoute, method: "POST", path: "/v1/tenants/recursion", spec: { auth: "adminToken" } },
         { handler: handleTenantCustomDomainRoute, method: "GET", path: "/v1/tenants/custom-domain", spec: { auth: "adminToken" } },
         { handler: handleCellRegisterRoute, method: "POST", path: "/v1/cells", spec: { auth: "adminToken" } },
         // The build queue: claimed by the Worker's own `scheduled()`, run by each build's runner alarm — both in-process.

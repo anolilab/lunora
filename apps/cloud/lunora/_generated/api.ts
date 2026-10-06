@@ -66,7 +66,7 @@ export interface ApiTypes {
         activate: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments"> }, void>;
         create: FunctionReference<"mutation", { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; deployKey?: unknown; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtimeVersion?: unknown; scriptName: unknown }, { deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
         listByProject: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { organizationId: Id<"organizations">; createdAt: number; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; updatedAt: number; target?: string; branch?: string; bundleHash?: string; projectId: Id<"projects">; kind: "dev" | "preview" | "production"; scriptName: string; _id: Id<"deployments">; alias?: string; bindings?: { name: string; target?: string; type: string; }[]; createdBy: string; cronSpecs?: null | string[]; expiresAt?: number; url?: string; version?: number }[]>;
-        planForScript: FunctionReference<"query", { scriptName: unknown }, { plan: string; protected?: boolean; }>;
+        planForScript: FunctionReference<"query", { scriptName: unknown }, { plan: string; protected?: boolean; recursion?: "allow"; }>;
         updateStatus: FunctionReference<"mutation", { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }, void>;
     };
     domains: {
@@ -77,9 +77,11 @@ export interface ApiTypes {
     };
     edge: {
         firewall: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { capabilities: { ddosOverride: boolean; rateLimit: boolean; }; events: import("../../src/edge/protection.js").FirewallEvent[]; hostnames: number; reason?: string; status: "unavailable" | "ok" | "unconfigured"; unsupported: { name: string; reason: string; target: string; }[] }>;
+        recursionPolicy: FunctionReference<"query", { organizationId: Id<"organizations"> }, "allow" | "terminate">;
         rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, { applied: boolean; armed?: false | true; engaged?: false | true; hostnames: string[]; kind: "ddos_l7" | "rate_limit"; lastError?: string; periodSeconds?: 60 | 10; requestsPerPeriod?: number; sensitivity?: "default" | "low" | "medium"; status: "pending" | "failed" | "applied" | "removed" | "unavailable"; updatedAt: number }[]>;
         setAnomalyRateLimit: FunctionReference<"mutation", { enabled: boolean; organizationId: Id<"organizations">; periodSeconds?: 10 | 60; requestsPerPeriod?: number }, null>;
         setDdosSensitivity: FunctionReference<"mutation", { organizationId: Id<"organizations">; sensitivity: "default" | "medium" | "low" }, null>;
+        setRecursionPolicy: FunctionReference<"mutation", { organizationId: Id<"organizations">; policy: "terminate" | "allow" }, null>;
     };
     github_installations: {
         claim: FunctionReference<"mutation", { installationId: number; organizationId: Id<"organizations"> }, void>;
@@ -233,6 +235,9 @@ export interface InternalApiTypes {
         recordCertificate: FunctionReference<"mutation", { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; issuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; organizationId: Id<"organizations">; scope?: unknown; sslStatus: unknown }, void>;
         removalTarget: FunctionReference<"query", { id: Id<"domains">; organizationId: Id<"organizations"> }, { certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: string; customHostnameId?: string; hostname: string; projectId: Id<"projects"> }>;
         remove: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations"> }, void>;
+    };
+    edge: {
+        recordRecursionStop: FunctionReference<"mutation", { depth: number; scriptName: unknown }, { recorded: boolean; }>;
     };
     fanout: {
         tick: FunctionReference<"mutation", {}, { ok: true; }>;

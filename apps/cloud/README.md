@@ -711,6 +711,68 @@ The card names a box or BYO project rather than leaving it out. Usage
 anomalies still fire for those projects (see above), but nothing is enforced at
 the edge for them.
 
+### Recursion protection (`src/dispatcher/lineage.ts`, `src/outbound/`, plan 365 W5)
+
+A tenant Worker that fetches its own hostname, or two tenants that call each
+other, can loop. Each hop is a fully billed request. Lunora Cloud counts the
+hops of every request chain, the way AWS Lambda's recursive loop detection does,
+and stops the chain after 16 invocations:
+
+1. The dispatcher decides each invocation's depth itself. A request from outside
+   is depth 0. A request that carries a verified lineage header continues its
+   chain. The dispatcher passes the depth to the dispatch namespace's **Outbound
+   Worker** (`outbound.wrangler.jsonc`) as the `lineage` binding parameter,
+   which tenant code can neither read nor set.
+2. Every `fetch()` a tenant Worker makes passes through the Outbound Worker. It
+   removes any lineage header the tenant set and stamps its own, signed with
+   `LUNORA_LINEAGE_SECRET` (HMAC-SHA256, valid for 60 seconds), one hop deeper.
+3. When the request comes back in, the dispatcher verifies the header. A forged,
+   altered or stale header gets `400` and the tenant never runs. At depth 16,
+   under the org's default `terminate` policy, the dispatcher answers
+   `508 Loop Detected` before the tenant runs. It records a `recursion` row in
+   `PLATFORM_METRICS` and an audit entry in the org's log
+   (`POST /v1/tenants/recursion`, at most one per script per minute).
+   Owners can switch the policy to `allow` (`edge.setRecursionPolicy`), in which
+   case the chain continues and the metric still records it.
+
+A tenant cannot forge a lower depth, because it has no key and the Outbound
+Worker overwrites its header. It cannot strip its depth either, because the
+Outbound Worker re-adds the header on every request. Enabling an Outbound Worker
+also **disables `connect()`** (raw TCP sockets) for tenant Workers. That closes
+the socket gap a header-only scheme leaves. It also means a tenant that opens
+raw TCP connections from a `cloudflare-wfp` Worker can no longer do so.
+
+**The blind spot.** Only requests that leave through `fetch()` and come back in
+through the dispatcher are counted. Calls to a Durable Object stub, a service
+binding, a queue or a workflow never touch the Outbound Worker or the
+dispatcher, so a loop through them is not detected. Neither is a loop through a
+third party that drops the header before calling back, where the chain restarts
+at depth 0. Cloudflare's per-invocation subrequest limit and the per-plan CPU
+limits still apply to those.
+
+Deployment is fail-safe in both directions. Without `LUNORA_LINEAGE_SECRET` on
+the dispatcher, lineage headers are stripped and ignored and nothing is refused.
+Without it on the Outbound Worker, nothing is stamped. Deploy the Outbound
+Worker before the dispatcher, because the dispatcher's namespace binding names
+it (`.github/workflows/deploy-cloud.yml` does this), and put the same secret on
+both:
+
+```bash
+wrangler deploy -c outbound.wrangler.jsonc --env <cell>
+wrangler secret put LUNORA_LINEAGE_SECRET -c outbound.wrangler.jsonc --env <cell>
+wrangler secret put LUNORA_LINEAGE_SECRET -c dispatcher.wrangler.jsonc --env <cell>
+```
+
+| Target                     | Recursion protection | Why                                                                               |
+| -------------------------- | -------------------- | --------------------------------------------------------------------------------- |
+| `cloudflare-wfp`           | yes                  | the dispatcher and the dispatch namespace's Outbound Worker see every hop         |
+| `cloudflare-workers` (BYO) | no                   | a plain Worker in the customer's account has no dispatcher and no Outbound Worker |
+| `celld-vps` (box)          | no                   | requests reach celld on the box directly; the platform sees no hop                |
+
+The two unsupported targets list this, and the missing edge protection, as
+target limitations (`TARGETS[…].limitations`). The studio shows those on the
+project's target card, and the Edge protection card names the affected projects.
+
 ### Tenant secrets (`lunora/secrets.ts`, `src/secrets/crypto.ts`, §7)
 
 Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:

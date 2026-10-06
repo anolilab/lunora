@@ -75,6 +75,10 @@ export const platformTables = {
         // Right-to-erasure (GAPS.md D3): an owner requested deletion; the purge
         // cron erases the org's data once the retention window passes.
         deletionRequestedAt: v.optional(v.number()),
+        // Recursion protection (plan 365 W5): what the dispatcher does with a chain
+        // that re-entered past the depth cap. Absent ⇒ `terminate` (508). Set by
+        // owners/admins through `edge.setRecursionPolicy`.
+        recursionPolicy: v.optional(v.union(v.literal("terminate"), v.literal("allow"))),
     })
         .global()
         .index("by_slug", ["slug"], { unique: true }),
