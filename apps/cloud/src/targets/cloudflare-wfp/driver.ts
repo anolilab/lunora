@@ -26,8 +26,8 @@ import type { SaasZone } from "./certificates";
 import { issueCertificate, refreshCertificate, removeCertificate } from "./certificates";
 import type { DispatchNamespaceLike } from "./dispatch";
 import { dispatchTenantSender } from "./dispatch";
-import { reconcileEdgeBlocks } from "./edge-block";
 import { createEdgeProtection } from "./edge";
+import { reconcileEdgeBlocks } from "./edge-block";
 
 /** The tail Worker every tenant ships its console events to (`tail.wrangler.jsonc`). */
 export const TAIL_CONSUMER = "lunora-log-tail";

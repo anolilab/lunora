@@ -347,7 +347,7 @@ const reportSkip = async (
     options: GitHubWebhookHooks,
 ): Promise<void> => {
     // A duplicate still carries its recorded skip, so a redelivery recovers a status the first delivery failed to post.
-    if (!build || build.pathFiltered !== true || build.skipped === undefined || !options.postCommitStatus) {
+    if (build?.pathFiltered !== true || build.skipped === undefined || !options.postCommitStatus) {
         return;
     }
 

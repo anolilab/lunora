@@ -395,6 +395,23 @@ const admitLineage = async (
     return { lineage, request: new Request(request, { headers }) };
 };
 
+/** The admission refusal for a resolved plan, or `undefined` when the plan is servable. */
+const refusalFor = (plan: string | undefined): Response | undefined => {
+    if (plan === "suspended") {
+        return SUSPENDED();
+    }
+
+    if (plan === "unknown") {
+        return NOT_FOUND("no tenant for this hostname");
+    }
+
+    if (plan === undefined || !SERVABLE_PLANS.has(plan)) {
+        return new Response("this deployment is temporarily unavailable", { headers: { "retry-after": "30" }, status: 503 });
+    }
+
+    return undefined;
+};
+
 /** Route one request to its tenant — the dispatcher's whole job, timed by `fetch` below. */
 const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | undefined): Promise<Response> => {
     buildResolvers(env);
@@ -428,17 +445,10 @@ const serve = async (request: Request, env: DispatcherEnv, context: WaitUntil | 
     // nonsense — refused, never served on a default tier. With no control plane
     // configured at all (local dev) there is nothing to ask, and the free tier applies.
     const plan = planResolver === undefined ? "free" : route.plan;
+    const refused = refusalFor(plan);
 
-    if (plan === "suspended") {
-        return SUSPENDED();
-    }
-
-    if (plan === "unknown") {
-        return NOT_FOUND("no tenant for this hostname");
-    }
-
-    if (plan === undefined || !SERVABLE_PLANS.has(plan)) {
-        return new Response("this deployment is temporarily unavailable", { headers: { "retry-after": "30" }, status: 503 });
+    if (refused) {
+        return refused;
     }
 
     // Deployment protection. A preview URL is publicly addressable the moment

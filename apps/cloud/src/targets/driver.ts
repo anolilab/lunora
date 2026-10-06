@@ -176,6 +176,14 @@ export interface TargetFleet {
     dispatch?: (tenant: Pick<TenantHandle, "adminToken" | "resourceRef">) => TenantSend;
 
     /**
+     * The platform edge in front of this target's hostnames — firewall events and
+     * per-organization edge rules (plan 365 W7). Absent on a target whose traffic
+     * the platform's edge does not front (`celld-vps`, `cloudflare-workers`), or
+     * on a deployment without the zone and token configured.
+     */
+    edge?: EdgeProtection;
+
+    /**
      * Stop a suspended organization's traffic before it reaches (and bills) a
      * Worker, and restore it on recovery (plan 365 W8): converge the edge to the
      * suspensions in the store, idempotently. `cloudflare-wfp` only, and only
@@ -184,14 +192,6 @@ export interface TargetFleet {
      * customer's, and the suspension still holds through the plan lookup.
      */
     edgeBlock?: (database: ControlPlaneStore, options: { log: (line: string) => void; now: number }) => Promise<EdgeBlockResult>;
-
-    /**
-     * The platform edge in front of this target's hostnames — firewall events and
-     * per-organization edge rules (plan 365 W7). Absent on a target whose traffic
-     * the platform's edge does not front (`celld-vps`, `cloudflare-workers`), or
-     * on a deployment without the zone and token configured.
-     */
-    edge?: EdgeProtection;
 
     readonly id: TargetId;
 
