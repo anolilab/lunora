@@ -36,7 +36,7 @@
 
 Lunora is **Convex DX on your own Cloudflare account**. You write type-safe queries, mutations, and actions in TypeScript; Lunora turns them into Cloudflare Workers backed by Durable Objects for real-time state, D1 for SQL, R2 for blobs, and Queues for jobs. There are no proprietary servers in the loop — only the Cloudflare account you already pay for.
 
-It is **Vite-first**: the dev loop, codegen, and client bindings plug into a Vite project via `@cloudflare/vite-plugin`, so dev runs on workerd (the same runtime as production). A standalone CLI fallback exists for non-Vite users.
+It is **Vite-first**: the dev loop, codegen, and client bindings plug into a Vite project via `@cloudflare/vite-plugin`, so dev runs on workerd (the same runtime as production). Rsbuild/Rspack projects get the same loop through `@lunora/rspack`, and a standalone CLI covers everything else.
 
 ## Quick start
 
@@ -99,17 +99,21 @@ export default function App() {
 
 `pnpm dev` boots workerd, generates the client types, opens the Vite dev server, and live-reloads on every save.
 
+`lunora init` asks for a framework (React SPA by default). Pass `-t` to choose one directly: `next`, `nuxt`, `sveltekit`, `astro`, `analog`, `react-router`, `tanstack-start-react`, `tanstack-start-solid`, `solid-v2`, `expo`, `vinext`, `rspack-react`, `standalone`, and more (`lunora init --help`). For a React/Vue/Solid/Svelte SPA, use `--vite <framework>`. To add Lunora to an existing app, run `lunora init --here`.
+
 ## Why Lunora
 
 - **End-to-end type safety.** Server schema, validators, query results, and React hooks all share one source of truth. No client codegen step you forget to re-run.
 - **Real-time by default.** Queries are reactive over WebSocket subscriptions; mutations push deltas to subscribed clients without manual cache invalidation.
 - **Your data, your account.** Everything runs on your Cloudflare resources (Workers, Durable Objects, D1, R2, Queues, KV). No vendor lock-in beyond Cloudflare itself.
 - **Scales past the single-DO ceiling.** Start simple with one Durable Object; opt into `.shardBy(key)` per function when you need tenant-level isolation, or `.global()` for geo-replicated reads, without rewriting your app.
-- **Host-neutral core.** The reactive engine (`@lunora/shard-engine`) talks to a small set of host contracts (`@lunora/platform`) rather than to Cloudflare APIs directly; `@lunora/platform-cloudflare` is one implementation of them. A capability matrix records, per target, what is native, emulated, or unsupported.
+- **Batteries as add-ons.** Auth, mail, storage, scheduling, queues and pub/sub topics, workflows, AI agents, payments, feature flags, rate limiting, and notifications ship as `@lunora/*` packages or copy-in `lunora registry add` items. They also cover typed bindings to Cloudflare products: Containers, Browser Rendering, Hyperdrive, AI Search, and service bindings to sibling Workers.
+- **Clients beyond JavaScript.** Alongside the React, Vue, Solid, Svelte, Angular, and React Native adapters, `lunora sdk generate` emits typed clients for Python, Go, Ruby, Rust, Swift, Java, Kotlin, and Dart ([`sdks/`](./sdks/README.md)).
+- **Host-neutral core.** The reactive engine (`@lunora/shard-engine`) talks to a small set of host contracts (`@lunora/platform`) rather than to Cloudflare APIs directly. `@lunora/platform-cloudflare` implements them for production, and `@lunora/platform-node` for dev and test. A capability matrix records, per target, what is native, emulated, or unsupported, and codegen leaves out any surface a target can't serve and warns about it.
 
 ## Lunora Studio
 
-Every app ships with **Lunora Studio** — a local admin UI for your schema, data, functions, logs, and advisors, served automatically by `pnpm dev`. Browse and edit data, run SQL, inspect live connections and function metrics, replay state with Time Travel, and read the security & performance advisories generated from your schema.
+Every app ships with **Lunora Studio** — a local admin UI for your schema, data, functions, logs, and advisors, served automatically by `pnpm dev`. Browse and edit data, run SQL, inspect live connections and function metrics, follow logs, traces, and grouped Issues, replay state with Time Travel, see an architecture diagram drawn from your code's call graph, and read the security & performance advisories generated from your schema.
 
 <div align="center">
   <picture>
@@ -144,8 +148,9 @@ Lunora has fewer batteries-included features than Convex today. The trade you ma
                                           │  HTTPS + WebSocket (RPC envelope)
                                           ▼
                         ┌────────────────────────────────────┐
-                        │  Vite dev (workerd)  or  Standalone │
-                        │  @lunora/vite        │  @lunora/cli │
+                        │  Vite / Rspack dev (workerd)        │
+                        │  @lunora/vite · @lunora/rspack      │
+                        │  or standalone: @lunora/cli         │
                         └─────────────────┬──────────────────┘
                                           │
                                           ▼
@@ -288,6 +293,10 @@ All packages are published under the [`@lunora`](https://www.npmjs.com/org/lunor
 | [`@lunora/x402`](packages/x402/README.md) | [![npm](https://img.shields.io/npm/v/%40lunora%2Fx402?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/%40lunora%2Fx402) | Agentic payments (x402) for Lunora: charge agents per request (charge rail) and let your agents pay x402-gated resources (pay rail) |
 
 <!-- END_TABLE_PLACEHOLDER -->
+
+## Examples
+
+Runnable apps live in [`examples/`](./examples): a [todo app](./examples/todo-app), [team chat](./examples/team-chat), a [kanban board](./examples/kanban-board), [realtime cursors](./examples/realtime-cursors), [chess](./examples/chess), a [blog](./examples/blog), a [feedback board](./examples/feedback-board), [TanStack Start](./examples/tanstack-start), [Expo](./examples/expo), and focused demos for [auth](./examples/auth-playground), [payments](./examples/payment-demo), [notifications](./examples/notify-demo), [offline rejections](./examples/offline-rejections), and [service bindings](./examples/services).
 
 ## Documentation
 
