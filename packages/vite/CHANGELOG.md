@@ -1,3 +1,16 @@
+## @lunora/vite [1.0.0-alpha.309](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.308...@lunora/vite@1.0.0-alpha.309) (2026-10-06)
+
+### Features
+
+* durable object class budget check and opt-in merged class ([#995](https://github.com/anolilab/lunora/issues/995)) ([fa5a78e](https://github.com/anolilab/lunora/commit/fa5a78ed39f03c5d39c9d209fc83c49f27bdb6f7))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.267
+* **@lunora/config:** upgraded to 1.0.0-alpha.311
+* **@lunora/studio:** upgraded to 1.0.0-alpha.267
+
 ## @lunora/vite [1.0.0-alpha.308](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.307...@lunora/vite@1.0.0-alpha.308) (2026-10-06)
 
 ### Bug Fixes
