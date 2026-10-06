@@ -465,6 +465,40 @@ describe("shardDO admin export/import dispatch", () => {
         expect(entry?.detail?.["deleted"]).toEqual(expect.objectContaining({ users: expect.any(Number) }));
     });
 
+    it("audits a worker-side import half from counts alone, dropping anything else it is sent", async () => {
+        expect.assertions(3);
+
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const recorded = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.recordImportAudit, {
+                conflicts: 1,
+                errors: 2,
+                inserted: { profiles: 3 },
+                op: "importGlobal",
+                rows: [{ doc: { email: "secret@example.com" }, table: "profiles" }],
+                tables: ["profiles"],
+            }),
+        );
+
+        expect(recorded.status).toBe(200);
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAuditLog, {}));
+        const body = await response.json<{ result: { entries: { detail?: Record<string, unknown>; op: string }[] } }>();
+
+        expect(body.result.entries.find((candidate) => candidate.op === "importGlobal")?.detail).toStrictEqual({
+            conflicts: 1,
+            errors: 2,
+            inserted: { profiles: 3 },
+            mode: "append",
+            tables: ["profiles"],
+        });
+
+        const refused = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordImportAudit, { conflicts: 0, errors: 0, inserted: {}, op: "writeRow" }));
+
+        expect(refused.status).toBe(400);
+    });
+
     it("rejects without an admin token", async () => {
         expect.assertions(1);
 

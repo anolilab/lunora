@@ -322,10 +322,44 @@ const mergeImportResult = (
 };
 
 /**
+ * Append one audit entry for an import half no shard records itself (see
+ * `recordImportAudit` on the shard). Gets counts and table names only — never a
+ * row. Throws when the entry could not be written.
+ */
+type RecordImportAudit = (args: Record<string, unknown>) => Promise<void>;
+
+/**
+ * Record a plane's outcome in the audit log. An audit write that fails comes
+ * back as a warning rather than failing the import: the data is already
+ * written, and an error would invite a retry into duplicate rows.
+ */
+const auditPlane = async (
+    recordAudit: RecordImportAudit,
+    warnings: string[],
+    op: "importGlobal" | "importSections",
+    result: { conflicts: number; deleted?: Record<string, number>; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> },
+    scope: { replaceTables?: ReadonlyArray<string>; tables?: ReadonlyArray<string> },
+): Promise<void> => {
+    try {
+        await recordAudit({
+            conflicts: result.conflicts,
+            errors: result.errors.length,
+            inserted: result.inserted,
+            op,
+            ...(result.deleted === undefined ? {} : { deleted: result.deleted }),
+            ...scope,
+        });
+    } catch (error) {
+        warnings.push(`the ${op} audit entry was not recorded: ${error instanceof Error ? error.message : String(error)}`);
+    }
+};
+
+/**
  * Hand the `.global()` rows to the user-supplied `importGlobals`, folding its
- * result into `totals`. A replace (`globalScope` non-empty) runs even with no
- * rows — it empties those tables — and is skipped once the shard-local half has
- * failed, so a refused replace does not go on to rewrite D1.
+ * result into `totals` and auditing it as `importGlobal`. A replace
+ * (`globalScope` non-empty) runs even with no rows — it empties those tables —
+ * and is skipped once the shard-local half has failed, so a refused replace
+ * does not go on to rewrite D1.
  */
 const importGlobalPlane = async (
     options: WorkerOptions,
@@ -333,6 +367,7 @@ const importGlobalPlane = async (
     warnings: string[],
     globalRows: BucketedImport["globalRows"],
     globalScope: ReadonlyArray<string>,
+    recordAudit: RecordImportAudit,
 ): Promise<void> => {
     if (globalScope.length > 0 && (totals.errors.length > 0 || totals.failed.length > 0)) {
         warnings.push(`the .global() table(s) ${globalScope.join(", ")} were not replaced because the shard-local half of the replace failed`);
@@ -368,6 +403,10 @@ const importGlobalPlane = async (
     });
 
     mergeImportResult(totals, result);
+
+    const tables = [...new Set([...globalScope, ...globalRows.map((row) => row.table)])].toSorted((a, b) => a.localeCompare(b));
+
+    await auditPlane(recordAudit, warnings, "importGlobal", result, { tables, ...(globalScope.length > 0 ? { replaceTables: globalScope } : {}) });
 };
 
 /**
@@ -389,6 +428,7 @@ const streamingImport = async (
     coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
     namespace: ShardNamespaceLike,
+    recordAudit: RecordImportAudit,
     replaceTables?: ReadonlyArray<string>,
 ): Promise<{
     conflicts: number;
@@ -462,10 +502,13 @@ const streamingImport = async (
         totals.failed.push(...shardFailures(result.shards));
     }
 
-    await importGlobalPlane(options, totals, warnings, globalRows, globalScope);
+    await importGlobalPlane(options, totals, warnings, globalRows, globalScope, recordAudit);
 
     if (sectionRows.length > 0) {
-        mergeImportResult(totals, await importSectionRows(options, sectionRows));
+        const sections = await importSectionRows(options, sectionRows);
+
+        mergeImportResult(totals, sections);
+        await auditPlane(recordAudit, warnings, "importSections", sections, {});
     }
 
     // `received` is the honest denominator, counted as each line was read (see
@@ -491,5 +534,5 @@ const streamingImport = async (
     };
 };
 
-export type { ImportRowError };
+export type { ImportRowError, RecordImportAudit };
 export { streamingImport };

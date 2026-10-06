@@ -334,6 +334,13 @@ Because documents carry their `_id`, a restore preserves identity, so
 [relations](/docs/concepts/relations) between tables survive the round trip.
 Import the referenced table before the table that references it.
 
+Every import request shows up in the Studio's Audit log. Each shard it wrote
+records an `importShard` entry. The parts no shard sees are recorded on the
+default shard: `importGlobal` for the `.global()` rows, `importSections` for
+the `$auth` / `$kv` / `$storage` records. An entry holds the mode, the tables,
+per-table inserted and deleted counts, and the number of errors. Row values
+are never recorded.
+
 ## Streaming data out continuously
 
 Snapshots are point-in-time. To keep an external warehouse or ETL sink in step

@@ -74,6 +74,7 @@ const ADMIN_FUNCTIONS: {
     readonly readTablePage: "__lunora_admin__:readTablePage";
     readonly recordAuthEvent: "__lunora_admin__:recordAuthEvent";
     readonly recordContainerEvent: "__lunora_admin__:recordContainerEvent";
+    readonly recordImportAudit: "__lunora_admin__:recordImportAudit";
     readonly recordMail: "__lunora_admin__:recordMail";
     readonly recordQueueMessage: "__lunora_admin__:recordQueueMessage";
     readonly releaseShardRegistration: "__lunora_admin__:releaseShardRegistration";

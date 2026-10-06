@@ -121,6 +121,7 @@ const ADMIN_FUNCTIONS = {
     readTablePage: "__lunora_admin__:readTablePage",
     recordAuthEvent: "__lunora_admin__:recordAuthEvent",
     recordContainerEvent: "__lunora_admin__:recordContainerEvent",
+    recordImportAudit: "__lunora_admin__:recordImportAudit",
     recordMail: "__lunora_admin__:recordMail",
     recordQueueMessage: "__lunora_admin__:recordQueueMessage",
     releaseShardRegistration: "__lunora_admin__:releaseShardRegistration",

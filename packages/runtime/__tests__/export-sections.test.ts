@@ -393,6 +393,77 @@ describe("admin export — auth, KV and storage sections", () => {
         expect(summary.errors.map((error) => error.code)).toStrictEqual(["AUTH_NOT_CONFIGURED", "KV_NOT_CONFIGURED", "STORAGE_NOT_CONFIGURED"]);
     });
 
+    it("audits a section import on the default shard as counts, never values", async () => {
+        expect.hasAssertions();
+
+        const stores = createStores();
+        const sent: { body: { args: Record<string, unknown>; functionPath: string }; shard: string }[] = [];
+        const worker = workerFor({
+            ...stores.options,
+            shardDO: {
+                get: (id) => {
+                    return {
+                        fetch: async (request: Request) => {
+                            sent.push({ body: await request.json(), shard: (id as { __name: string }).__name });
+
+                            return Response.json({ result: { recorded: true } });
+                        },
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+
+        await importInto(worker, [
+            JSON.stringify({ doc: { row: { email: "secret@example.com", id: "u1" }, table: "user" }, table: "$auth" }),
+            JSON.stringify({ doc: { key: "k", namespace: "CACHE", value: "AQ==" }, table: "$kv" }),
+        ]);
+
+        expect(sent).toStrictEqual([
+            {
+                body: {
+                    args: { conflicts: 0, errors: 0, inserted: { $auth: 1, $kv: 1 }, op: "importSections" },
+                    functionPath: "__lunora_admin__:recordImportAudit",
+                },
+                shard: "__root__",
+            },
+        ]);
+    });
+
+    it("reports a section audit the default shard refused as a warning, not a failed import", async () => {
+        expect.hasAssertions();
+
+        const stores = createStores();
+        const worker = workerFor({
+            ...stores.options,
+            shardDO: {
+                get: () => {
+                    return { fetch: async () => new Response("nope", { status: 403 }) };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: JSON.stringify({ doc: { key: "k", namespace: "CACHE", value: "AQ==" }, table: "$kv" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toMatchObject({
+            inserted: { $kv: 1 },
+            warnings: [expect.stringContaining("importSections audit entry was not recorded")],
+        });
+    });
+
     it("reports an object whose earlier chunks never arrived", async () => {
         expect.hasAssertions();
 

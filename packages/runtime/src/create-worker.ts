@@ -1946,6 +1946,13 @@ const DEFAULT_AUTH_BASE_PATH = "/api/auth";
 const RECORD_AUTH_EVENT_OP = "__lunora_admin__:recordAuthEvent";
 
 /**
+ * Reserved admin RPC the worker sends to the default shard to audit the halves
+ * of an admin import no shard sees — the `.global()` rows and the format-2
+ * sections — so they land in the same audit log the Studio Audit tab reads.
+ */
+const RECORD_IMPORT_AUDIT_OP = "__lunora_admin__:recordImportAudit";
+
+/**
  * Reserved admin RPC the worker (NOT the DO) serves to list the app's registered
  * `@lunora/notify` device subscriptions for the Studio Notifications page. Unlike
  * the DO-served admin RPCs, the subscription store is a WORKER option (built from
@@ -3832,7 +3839,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         shardDO,
         exportSectionRows: (sections) => exportSectionRows(options, sections),
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
-        streamingImport: (request, headers, replaceTables) => streamingImport(request, options, queryCoordinator, headers, shardDO, replaceTables),
+        streamingImport: (request, headers, replaceTables) =>
+            streamingImport(
+                request,
+                options,
+                queryCoordinator,
+                headers,
+                shardDO,
+                async (args) => {
+                    // Under the importer's own headers, so the shard attributes the entry to them.
+                    const response = await forwardToShard(shardDO, defaultShard, shardRpcRequest(RECORD_IMPORT_AUDIT_OP, args, headers));
+
+                    if (!response.ok) {
+                        throw new LunoraError(`the default shard answered HTTP ${String(response.status)}`, { code: "INTERNAL", status: 500 });
+                    }
+                },
+                replaceTables,
+            ),
         syncGlobals: options.syncGlobals,
     });
 

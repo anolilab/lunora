@@ -90,7 +90,8 @@ class TestShard extends ShardDO {
 const buildCluster = () => {
     const shards = new Map<string, { close: () => void; shard: TestShard; writer: DatabaseWriterLike }>();
 
-    for (const key of SHARD_KEYS) {
+    // `__root__` is the default shard: it holds no `messages`, only the audit log.
+    for (const key of [...SHARD_KEYS, "__root__"]) {
         const { close, storage } = buildStorage();
 
         runShardMigrations(storage.sql as never, schema);
@@ -190,6 +191,39 @@ describe("admin import — replace mode", () => {
         // c2 is not named by a single row, yet it is in scope, so it is emptied.
         await expect(texts("c2")).resolves.toStrictEqual({});
         expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ replaceTables: ["profiles"] }));
+    });
+
+    it("audits the global half on the default shard with counts and table names, never row values", async () => {
+        expect.assertions(2);
+
+        await seed();
+
+        const importGlobals = vi.fn<NonNullable<WorkerOptions["importGlobals"]>>(async () => {
+            return { conflicts: 0, deleted: { profiles: 4 }, errors: [], inserted: { profiles: 1 } };
+        });
+
+        await postImport(workerWith({ importGlobals }), "?mode=replace", [{ doc: { _id: "p1", userId: "secret-user" }, table: "profiles" }]);
+
+        const response = await cluster.shards.get("__root__")!.shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "__lunora_admin__:getAuditLog" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+        const { result } = await response.json<{ result: { entries: { detail?: Record<string, unknown>; op: string }[] } }>();
+        const entry = result.entries.find((candidate) => candidate.op === "importGlobal");
+
+        expect(entry?.detail).toStrictEqual({
+            conflicts: 0,
+            deleted: { profiles: 4 },
+            errors: 0,
+            inserted: { profiles: 1 },
+            mode: "replace",
+            replaceTables: ["profiles"],
+            tables: ["profiles"],
+        });
+        expect(JSON.stringify(result.entries)).not.toContain("secret-user");
     });
 
     it("rolls a shard back when one of its rows is refused, and does not go on to the global plane", async () => {

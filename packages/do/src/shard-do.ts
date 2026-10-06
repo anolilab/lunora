@@ -325,6 +325,7 @@ import {
     parseRankPageArgs,
     parseRecordAuthEventArgs,
     parseRecordContainerEventArgs,
+    parseRecordImportAuditArgs,
     parseRecordMailArgs,
     parseRecordQueueMessageArgs,
     parseReleaseShardRegistrationArgs,
@@ -9254,6 +9255,21 @@ abstract class ShardDO {
     }
 
     /**
+     * Audit the halves of an admin import that never reach a shard — the
+     * `.global()` rows and the `$auth`/`$kv`/`$storage` sections — into this
+     * shard's log. The worker sends them to the default shard under the
+     * importer's own headers, so the entry sits beside that shard's
+     * `importShard` entry, attributed to the same user, in the Studio Audit tab.
+     */
+    private handleRecordImportAudit(args: Record<string, unknown>): Response {
+        const parsed = parseRecordImportAuditArgs(args);
+
+        this.recordAudit(parsed.op, { detail: parsed.detail });
+
+        return adminResponse({ recorded: true });
+    }
+
+    /**
      * Append one container lifecycle event to the in-memory {@link LogBuffer}
      * the `getLogs` admin RPC reads, so a start/stop/error on a Container DO
      * surfaces in the Studio Logs panel — not just the dev terminal. The
@@ -9919,6 +9935,7 @@ abstract class ShardDO {
             [ADMIN_FUNCTIONS.listFlags]: (args) => this.handleListFlags(args),
             [ADMIN_FUNCTIONS.recordAuthEvent]: (args) => this.handleRecordAuthEvent(args),
             [ADMIN_FUNCTIONS.recordContainerEvent]: (args) => this.handleRecordContainerEvent(args),
+            [ADMIN_FUNCTIONS.recordImportAudit]: (args) => this.handleRecordImportAudit(args),
             [ADMIN_FUNCTIONS.recordMail]: (args) => this.handleRecordMail(args),
             [ADMIN_FUNCTIONS.recordQueueMessage]: (args) => this.handleRecordQueueMessage(args),
             [ADMIN_FUNCTIONS.releaseShardRegistration]: (args) => this.handleReleaseShardRegistration(args),

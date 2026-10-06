@@ -660,6 +660,79 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
     return { outcome };
 };
 
+/** A `{ name: count }` map, or a 400 naming the field. */
+const parseCountMap = (value: unknown, field: string): Record<string, number> => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new LunoraError("BAD_REQUEST", `recordImportAudit: \`${field}\` must be an object of counts`);
+    }
+
+    const counts: Record<string, number> = {};
+
+    for (const [name, count] of Object.entries(value)) {
+        if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
+            throw new LunoraError("BAD_REQUEST", `recordImportAudit: \`${field}.${name}\` must be a non-negative integer`);
+        }
+
+        counts[name] = count;
+    }
+
+    return counts;
+};
+
+/** A non-negative integer arg, or a 400 naming it. */
+const parseCount = (value: unknown, field: string): number => {
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+        throw new LunoraError("BAD_REQUEST", `recordImportAudit: \`${field}\` must be a non-negative integer`);
+    }
+
+    return value;
+};
+
+/** An optional string-array arg, or a 400 naming it. */
+const parseOptionalNames = (value: unknown, field: string): string[] | undefined => {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(value) || !value.every((name) => typeof name === "string")) {
+        throw new LunoraError("BAD_REQUEST", `recordImportAudit: \`${field}\` must be an array of table names`);
+    }
+
+    return value;
+};
+
+/**
+ * Validate the `__lunora_admin__:recordImportAudit` payload — the worker's
+ * record of the halves of `POST /_lunora/admin/import` no shard sees: the
+ * `.global()` (D1) rows (`importGlobal`) and the format-2 `$auth`/`$kv`/`$storage`
+ * sections (`importSections`). The detail is REBUILT from counts and table names
+ * only, so nothing else the caller sends — least of all a row value — reaches
+ * the audit log. Same shape as the shard's own `importShard` entry.
+ */
+const parseRecordImportAuditArgs = (args: Record<string, unknown>): { detail: Record<string, unknown>; op: "importGlobal" | "importSections" } => {
+    const { op } = args;
+
+    if (op !== "importGlobal" && op !== "importSections") {
+        throw new LunoraError("BAD_REQUEST", 'recordImportAudit: `op` must be "importGlobal" or "importSections"');
+    }
+
+    const replaceTables = parseOptionalNames(args["replaceTables"], "replaceTables");
+    const tables = parseOptionalNames(args["tables"], "tables");
+
+    return {
+        detail: {
+            conflicts: parseCount(args["conflicts"], "conflicts"),
+            errors: parseCount(args["errors"], "errors"),
+            inserted: parseCountMap(args["inserted"], "inserted"),
+            ...(args["deleted"] === undefined ? {} : { deleted: parseCountMap(args["deleted"], "deleted") }),
+            ...(tables === undefined ? {} : { tables }),
+            ...(replaceTables === undefined ? {} : { mode: "replace", replaceTables }),
+            ...(replaceTables === undefined && op === "importGlobal" ? { mode: "append" } : {}),
+        },
+        op,
+    };
+};
+
 /**
  * Validate the `__lunora_admin__:recordContainerEvent` payload — the Container
  * DO's best-effort push of one lifecycle transition (`@lunora/container`'s
@@ -1576,6 +1649,7 @@ export {
     parseRankPageArgs,
     parseRecordAuthEventArgs,
     parseRecordContainerEventArgs,
+    parseRecordImportAuditArgs,
     parseRecordMailArgs,
     parseRecordQueueMessageArgs,
     parseReleaseShardRegistrationArgs,
