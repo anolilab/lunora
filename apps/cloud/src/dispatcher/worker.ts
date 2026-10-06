@@ -3,6 +3,7 @@ import type { AnalyticsEngineDatasetLike } from "../targets/cloudflare-wfp/analy
 import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../targets/cloudflare-wfp/analytics";
 import type { CustomDomainRoute, ScriptFacts } from "../targets/cloudflare-wfp/route";
 import { createCustomDomainResolver, createPlanResolver, resolveTenant } from "../targets/cloudflare-wfp/route";
+import { recordDispatch } from "../telemetry/platform-metrics";
 import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
 
 /**
@@ -33,6 +34,8 @@ interface DispatcherEnv {
     LUNORA_APP_DOMAIN?: string;
     /** Cell name stamped into the `X-Lunora-Id` debug header (GAPS.md B3). */
     LUNORA_CELL?: string;
+    /** Platform self-metrics dataset (GAPS.md E1, `src/telemetry/platform-metrics.ts`). Optional. */
+    PLATFORM_METRICS?: AnalyticsEngineDatasetLike;
     /** Analytics Engine dataset for per-request metering (§4). Optional. */
     USAGE_ANALYTICS?: AnalyticsEngineDatasetLike;
 }
@@ -295,103 +298,126 @@ const redirectOnlyDomain = async (url: URL, appDomain: string): Promise<Response
     return URL.canParse(custom.redirectTo) && status >= 300 && status <= 399 ? Response.redirect(custom.redirectTo, status) : undefined;
 };
 
-export default {
-    async fetch(request: Request, env: DispatcherEnv): Promise<Response> {
-        buildResolvers(env);
+/** Route one request to its tenant — the dispatcher's whole job, timed by `fetch` below. */
+const serve = async (request: Request, env: DispatcherEnv): Promise<Response> => {
+    buildResolvers(env);
 
-        const url = new URL(request.url);
-        const appDomain = env.LUNORA_APP_DOMAIN ?? "lunora.app";
+    const url = new URL(request.url);
+    const appDomain = env.LUNORA_APP_DOMAIN ?? "lunora.app";
 
-        const redirect = await redirectOnlyDomain(url, appDomain);
+    const redirect = await redirectOnlyDomain(url, appDomain);
 
-        if (redirect) {
-            return redirect;
+    if (redirect) {
+        return redirect;
+    }
+
+    const route = await resolveTenant(url.hostname, {
+        appDomain,
+        resolveCustomDomain: async (hostname) => {
+            const custom = await customDomainResolver?.(hostname);
+
+            return custom?.scriptName ?? null;
+        },
+        resolvePlan: planResolver,
+    });
+
+    if (!route) {
+        return NOT_FOUND("no tenant for this hostname");
+    }
+
+    // Spend-cap / abuse suspension (GAPS.md C1): the control plane encodes
+    // a suspended org as the sentinel plan "suspended".
+    if (route.plan === "suspended") {
+        return new Response("this deployment is suspended — see your billing page", { status: 503 });
+    }
+
+    // Deployment protection. A preview URL is publicly addressable the moment
+    // it exists — that is what makes it shareable, and also what serves
+    // unreleased work to anyone forwarded the link. When the project has a
+    // password, nothing reaches the tenant until a valid signed cookie does.
+    //
+    // Gated BEFORE dispatch, deliberately: a check inside the tenant would run
+    // the tenant's own code (and bill for it) on every unauthenticated probe.
+    if (route.protected === true && env.CONTROL_PLANE_TOKEN) {
+        const gate = await guardProtectedPreview(request, url, route.scriptName, env);
+
+        if (gate) {
+            return gate;
+        }
+    }
+
+    // Captured outside the `try` so the catch can still measure how long the
+    // failing dispatch took.
+    const startedAt = Date.now();
+
+    try {
+        // Per-plan runtime caps (§4): CPU + subrequests scale with the tenant's
+        // plan, falling back to the free tier when the plan is unknown.
+        const limits = limitsForPlan(route.plan);
+        const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
+        // A WebSocket upgrade returns a 101 response carrying `webSocket`;
+        // returning it verbatim hands the hibernatable socket back to the
+        // eyeball (Lunora's `/_lunora/ws` subscription path). Post-upgrade
+        // message invocations run inside the tenant's DO, not back through
+        // this dispatcher — see spikes/ws-dispatch for the live validation.
+        const response = await userWorker.fetch(request);
+
+        meterRequest(env.USAGE_ANALYTICS, request, response, route, url, startedAt);
+
+        // Debug header (GAPS.md B3): which cell + script served this. A 101
+        // upgrade response is immutable — return it verbatim.
+        if (response.status === 101) {
+            return response;
         }
 
-        const route = await resolveTenant(url.hostname, {
-            appDomain,
-            resolveCustomDomain: async (hostname) => {
-                const custom = await customDomainResolver?.(hostname);
+        const stamped = new Response(response.body, response);
 
-                return custom?.scriptName ?? null;
-            },
-            resolvePlan: planResolver,
-        });
+        stamped.headers.set("x-lunora-id", `${env.LUNORA_CELL ?? "default"}:${route.scriptName}`);
 
-        if (!route) {
-            return NOT_FOUND("no tenant for this hostname");
-        }
-
-        // Spend-cap / abuse suspension (GAPS.md C1): the control plane encodes
-        // a suspended org as the sentinel plan "suspended".
-        if (route.plan === "suspended") {
-            return new Response("this deployment is suspended — see your billing page", { status: 503 });
-        }
-
-        // Deployment protection. A preview URL is publicly addressable the moment
-        // it exists — that is what makes it shareable, and also what serves
-        // unreleased work to anyone forwarded the link. When the project has a
-        // password, nothing reaches the tenant until a valid signed cookie does.
+        return stamped;
+    } catch (error) {
+        // Meter the FAILED dispatch too.
         //
-        // Gated BEFORE dispatch, deliberately: a check inside the tenant would run
-        // the tenant's own code (and bill for it) on every unauthenticated probe.
-        if (route.protected === true && env.CONTROL_PLANE_TOKEN) {
-            const gate = await guardProtectedPreview(request, url, route.scriptName, env);
+        // This was the metering stream's blind spot, and it was the worst
+        // possible one: a dispatch rejects when the tenant's own `fetch` throws,
+        // when the script is missing from the namespace, and when a plan limit is
+        // exceeded — which is exactly how a bad release fails. Only successful
+        // responses were recorded, so a candidate that threw on every request
+        // produced NO rows at all, and one that threw intermittently produced a
+        // sample containing only the requests it survived. Both read as healthy.
+        //
+        // Everything downstream of the meter inherits that: the Traffic tab's
+        // error rate and the per-deployment health chart.
+        const failure = new Response(null, { status: 502 });
 
-            if (gate) {
-                return gate;
-            }
+        meterRequest(env.USAGE_ANALYTICS, request, failure, route, url, startedAt);
+
+        if (error instanceof Error && error.message.startsWith("Worker not found")) {
+            return NOT_FOUND("worker not found");
         }
 
-        // Captured outside the `try` so the catch can still measure how long the
-        // failing dispatch took.
+        throw error;
+    }
+};
+
+export default {
+    /**
+     * Every request, timed end to end for the platform's own latency and outcome
+     * (GAPS.md E1) — routing, the plan lookup and the tenant's response together,
+     * which is what an eyeball waits on. A thrown dispatch is `exception`.
+     */
+    async fetch(request: Request, env: DispatcherEnv): Promise<Response> {
         const startedAt = Date.now();
+        const cell = env.LUNORA_CELL ?? "default";
 
         try {
-            // Per-plan runtime caps (§4): CPU + subrequests scale with the tenant's
-            // plan, falling back to the free tier when the plan is unknown.
-            const limits = limitsForPlan(route.plan);
-            const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
-            // A WebSocket upgrade returns a 101 response carrying `webSocket`;
-            // returning it verbatim hands the hibernatable socket back to the
-            // eyeball (Lunora's `/_lunora/ws` subscription path). Post-upgrade
-            // message invocations run inside the tenant's DO, not back through
-            // this dispatcher — see spikes/ws-dispatch for the live validation.
-            const response = await userWorker.fetch(request);
+            const response = await serve(request, env);
 
-            meterRequest(env.USAGE_ANALYTICS, request, response, route, url, startedAt);
+            recordDispatch(env.PLATFORM_METRICS, { cell, durationMs: Date.now() - startedAt, outcome: statusClass(response.status) });
 
-            // Debug header (GAPS.md B3): which cell + script served this. A 101
-            // upgrade response is immutable — return it verbatim.
-            if (response.status === 101) {
-                return response;
-            }
-
-            const stamped = new Response(response.body, response);
-
-            stamped.headers.set("x-lunora-id", `${env.LUNORA_CELL ?? "default"}:${route.scriptName}`);
-
-            return stamped;
+            return response;
         } catch (error) {
-            // Meter the FAILED dispatch too.
-            //
-            // This was the metering stream's blind spot, and it was the worst
-            // possible one: a dispatch rejects when the tenant's own `fetch` throws,
-            // when the script is missing from the namespace, and when a plan limit is
-            // exceeded — which is exactly how a bad release fails. Only successful
-            // responses were recorded, so a candidate that threw on every request
-            // produced NO rows at all, and one that threw intermittently produced a
-            // sample containing only the requests it survived. Both read as healthy.
-            //
-            // Everything downstream of the meter inherits that: the Traffic tab's
-            // error rate and the per-deployment health chart.
-            const failure = new Response(null, { status: 502 });
-
-            meterRequest(env.USAGE_ANALYTICS, request, failure, route, url, startedAt);
-
-            if (error instanceof Error && error.message.startsWith("Worker not found")) {
-                return NOT_FOUND("worker not found");
-            }
+            recordDispatch(env.PLATFORM_METRICS, { cell, durationMs: Date.now() - startedAt, outcome: "exception" });
 
             throw error;
         }

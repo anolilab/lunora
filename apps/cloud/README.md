@@ -510,10 +510,26 @@ export (the one `lunora cloud eject` uses), as gzipped NDJSON under
 `tenant-backups/{org}/{alias}/{timestamp}.ndjson.gz`. Retention is
 `limits.backupRetention` in the plan catalog (free 3, pro 14, enterprise 30).
 Owners and admins can back up now, download, and restore from the project view;
-all three are audit-logged. A restore is **append-only** — it brings back rows
-deleted since the snapshot and does not revert or remove anything — and takes a
-snapshot of the current data first. What a snapshot covers, what it does not,
-and the manual recovery paths are in [`docs/RESTORE.md`](docs/RESTORE.md).
+all three are audit-logged. A restore is a **rewind** through the runtime's
+staged replace import: every batch of the snapshot is staged into one session
+(nothing a reader sees changes), then one commit swaps it in — rows deleted since
+the snapshot come back, edits since are reverted, rows created since are removed.
+The same holds for the auth tables, KV namespaces and storage objects the
+snapshot carries (export format 2); Vectorize is not in it. A failure while
+staging aborts the session and leaves the tenant untouched, and a snapshot of the
+current data is taken first, which can be restored to undo it. The restore row
+records what was written and, per table, what was removed (`restoreDeleted`).
+What exactly it covers, how atomic each store is, and the manual recovery paths
+are in [`docs/RESTORE.md`](docs/RESTORE.md).
+
+Snapshots stream to R2 as multipart uploads, so their size is not capped by the
+Worker's memory. With the four `BACKUP_OFFSITE_*` secrets set
+(`src/backup/offsite.ts`), every snapshot and every control-plane dump is also
+copied to an R2 bucket in a second Cloudflare account over the S3 API and
+pruned there on the same schedule. A failed copy never fails the backup; it is
+recorded on the `tenantBackups` row (`offsiteStatus` / `offsiteError`, shown in
+the studio) or, for control-plane dumps, logged as a `[control-plane-backup]`
+warning.
 
 ### Auth (`src/server.ts`, §3)
 
@@ -747,9 +763,36 @@ project's **Build settings** in the Studio (`projects.updateBuildSettings`):
   that does not exist or that resolves outside the repository through a symlink.
 - **Watch paths** — optional globs (picomatch, dotfiles included, at most 20,
   no `!` negations). A push to the default branch builds only if a changed file
-  matches one. The default is everything under the root directory, and the
+  matches one. The default is everything under the root directory plus the
+  **workspace packages the app imports from outside it** (below), and the
   lockfiles at the repository root and at every directory down to the root
-  directory are always watched, so a dependency bump rebuilds.
+  directory are always watched, so a dependency bump rebuilds. Explicit watch
+  paths replace the default, workspace packages included.
+
+**Workspace packages** are found by the build box, not the webhook. After the
+install it follows the app's `dependencies`, `devDependencies`,
+`optionalDependencies` and `peerDependencies` through `node_modules`,
+transitively: a dependency whose link resolves to a directory inside the
+repository and outside any `node_modules` is a workspace package (pnpm, npm and
+Yarn's node-modules linker all install them as links, so `workspace:`, `file:`
+and `link:` specifiers, workspace globs and hoisting are already resolved). Each
+successful **production** build stores the set on the project (newest build
+wins, at most 200 packages); later pushes and PR previews match changed files
+against those directories. Pull-request builds never store it, since a branch
+may have dropped a dependency the default branch still has.
+
+The set stays current without a re-scan: the dependency graph only changes
+through a `package.json` under the root directory or under a recorded package,
+or a lockfile, and every one of those is watched — so the push that adds a
+dependency builds and records the new set. Until a production build has recorded
+a set for the current root directory (a new project, a changed root directory,
+an over-cap repo), a push that touches nothing under the root directory builds
+anyway, with the reason in its log.
+
+The Build settings preview lists the recorded packages alongside the root
+directory and lockfiles. When none are recorded yet, or they were recorded for
+a different root directory than the one in the form, it says so instead: until
+a production build records them for that root, every push builds.
 
 The build box installs at the **workspace root** — the nearest directory at or
 above the root directory holding `pnpm-lock.yaml`, `package-lock.json` or
@@ -757,7 +800,12 @@ above the root directory holding `pnpm-lock.yaml`, `package-lock.json` or
 `lunora build` in the root directory and collects its output there.
 
 A push whose files match nothing is recorded as a `skipped` build with its
-reason ("no changes under apps/web/ …"), shown on the Builds tab. The filter
+reason ("no changes under apps/web/ …"), shown on the Builds tab, and its
+commit gets a **success** `lunora/deploy` status reading "Skipped: <reason>", so
+a required check does not wait on a build that will never run (needs the App
+credentials, like every status; a failed post never fails the webhook). A stale
+push's skip posts nothing — its commit already carries its own build's status.
+The filter
 **fails open**: a forced push, a new branch, a push listing 20+ commits (GitHub
 may have truncated it), a commit without file lists, or more than 1000 changed
 files all build. Pull-request previews use the same filter, with the PR's
@@ -914,6 +962,57 @@ Use a **separate project** from `apps/docs`. That one is a public marketing
 site with a cookie banner and a different legal basis; this one carries
 authenticated control-plane usage, and mixing them makes both harder to read.
 
+## Platform self-metrics (GAPS.md E1)
+
+The studio observes tenants; these observe the platform itself. They are the
+inputs for SLOs and alerts, which are configured outside this repo.
+
+They go to their own Analytics Engine dataset, bound as `PLATFORM_METRICS` on
+both the control plane and the dispatcher (`lunora_platform_metrics`, or
+`lunora_platform_metrics_staging` on staging). The billing meter
+(`USAGE_ANALYTICS`) and the tenant metrics stream (`TELEMETRY`) are never
+touched. A Worker without the binding records nothing and behaves exactly as
+before. The cron sample does not even read D1.
+
+Each row's `blob1` and `index1` hold its metric kind, so AE samples each kind
+separately and dispatch volume cannot sample away the one queue row a minute.
+The row layouts are documented in `src/telemetry/platform-metrics.ts`.
+
+| Metric              | Emitted from                                                             | Dimensions                                                                          | Value                                                 |
+| ------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `dispatch`          | the dispatcher's `fetch`, on every request                               | cell, outcome (`2xx`–`5xx`, or `exception` for a throw)                             | end-to-end duration in ms                             |
+| `queue`             | the every-minute cron (`src/sweeps/scheduled.ts`)                        | cell                                                                                | pending builds, running builds, in-flight deployments |
+| `provision_failure` | the deploy core (`src/deploy/release-core.ts`), for API and git releases | cell, step (`store`, `secrets`, `converge`, `verify`, `status`, `activate`), reason | `1` per failed release                                |
+
+`reason` is a catalogued `LunoraError` code, the error's class name
+(`TypeError`, `TimeoutError`), `health_check`, or `unknown`. It is never the
+error message, because messages carry hostnames, script names and provider
+response text. No tenant hostname, script name or secret goes into this dataset.
+
+Limits worth knowing:
+
+- Dispatch duration uses `Date.now()`, which on Workers advances only across
+  I/O. It measures time spent waiting, not CPU time.
+- Queue depth counts one page per status, so a value above 1000 is reported as 1000.
+
+**Read path.** `GET /v1/platform/metrics?hours=24` (1 to 744 hours) is
+bearer-gated with `LUNORA_ADMIN_TOKEN`. It is operator-only and is never exposed
+to a session or as an MCP tool. It returns:
+
+- `dispatch[]`: per cell, request count, p50/p95 ms (`quantileWeighted` over
+  `sampleInterval`) and counts by outcome
+- `queue[]`: per cell, the peak depth in each 15-minute bucket
+- `provisionFailures[]`: the top 50 (cell, step, reason) counts
+
+It reads through the AE SQL API with `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN`, and answers 501 when either is missing.
+`PLATFORM_METRICS_DATASET` names the dataset; it defaults to
+`lunora_platform_metrics`, and staging sets it.
+
+```bash
+curl -H "authorization: Bearer $LUNORA_ADMIN_TOKEN" "https://<cell>/v1/platform/metrics?hours=6"
+```
+
 ## Deploy
 
 The ordered, once-per-cell setup checklist (resources, tokens, GitHub App,
@@ -970,7 +1069,8 @@ once per cell with `wrangler secret put <NAME> --env <cell>`:
 - **Control plane** (`wrangler.jsonc`): `LUNORA_ADMIN_TOKEN`, `AUTH_SECRET`,
   `SECRET_ENCRYPTION_KEY`, `CLOUDFLARE_API_TOKEN`, `GITHUB_WEBHOOK_SECRET`,
   `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`, plus the optional
-  `LUNORA_TAIL_SECRET`, `R2_SQL_TOKEN`, `RESEND_API_KEY`, `GITHUB_APP_*` and the
+  `LUNORA_TAIL_SECRET`, `R2_SQL_TOKEN`, `RESEND_API_KEY`, `GITHUB_APP_*`, the
+  four `BACKUP_OFFSITE_*` values (off-site backup copy, all or none) and the
   social sign-in pairs. `.dev.vars.example` documents what each one does and, for
   the optional ones, the symptom of leaving it unset.
 - **Dispatcher**: `CONTROL_PLANE_TOKEN` (the control plane's

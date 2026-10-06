@@ -1,17 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { internal } from "../lunora/_generated/api.js";
-import { authorizeDownload, beginBackup, beginRestore } from "../lunora/tenant-backups";
+import { authorizeDownload, beginBackup, beginRestore, finish, list } from "../lunora/tenant-backups";
+import { PART_BYTES, uploadStream } from "../src/backup/multipart";
+import { offsiteBucket } from "../src/backup/offsite";
 import { backupRetentionFor, isDueForBackup, OPERATION_STALE_MS, tenantBackupKey } from "../src/backup/tenant-policy";
 import type { BackupTargetRow } from "../src/backup/tenant-sweep";
 import { runTenantBackupSweep } from "../src/backup/tenant-sweep";
 import type { TenantBackupBucket, TenantSend } from "../src/backup/tenant-transport";
-import { IMPORT_BATCH_BYTES, restoreTenantSnapshot } from "../src/backup/tenant-transport";
+import { captureTenantSnapshot, IMPORT_BATCH_BYTES, restoreTenantSnapshot } from "../src/backup/tenant-transport";
 import { createDeployRouter } from "../src/deploy/router";
 import type { DispatchNamespaceLike } from "../src/targets/cloudflare-wfp/dispatch";
 import { dispatchTenantSender } from "../src/targets/cloudflare-wfp/dispatch";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
+import type { MultipartStats, StoredObject } from "./_helpers/fake-object-store";
+import { fakeMultipart, fakeS3 } from "./_helpers/fake-object-store";
 
 const NOW = Date.UTC(2026, 8, 30, 12, 0, 0);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -26,27 +30,29 @@ const gzip = async (text: string): Promise<Uint8Array<ArrayBuffer>> =>
 const gunzip = (bytes: Uint8Array<ArrayBuffer>): Promise<string> =>
     new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
 
-/** An R2 double over a Map. */
-const memoryBucket = (initial: Record<string, Uint8Array<ArrayBuffer>> = {}): { bucket: TenantBackupBucket; objects: Map<string, Uint8Array<ArrayBuffer>> } => {
-    const objects = new Map(Object.entries(initial));
+/** An R2 double over a Map, writing through R2's multipart rules (`./_helpers/fake-object-store.ts`). */
+const memoryBucket = (
+    initial: Record<string, Uint8Array<ArrayBuffer>> = {},
+): { bucket: TenantBackupBucket; objects: Map<string, StoredObject>; stats: MultipartStats } => {
+    const objects = new Map<string, StoredObject>(Object.entries(initial).map(([key, body]) => [key, { body, uploaded: new Date(NOW) }]));
+    const { createMultipartUpload, stats } = fakeMultipart(objects);
 
     return {
         bucket: {
+            createMultipartUpload,
             delete: async (keys) => {
                 for (const key of [keys].flat()) {
                     objects.delete(key);
                 }
             },
             get: async (key) => {
-                const value = objects.get(key);
+                const value = objects.get(key)?.body;
 
                 return value ? { body: new Blob([value]).stream(), size: value.byteLength } : null;
             },
-            put: async (key, value) => {
-                objects.set(key, value);
-            },
         },
         objects,
+        stats,
     };
 };
 
@@ -194,7 +200,7 @@ describe(runTenantBackupSweep, () => {
             ["POST", "/_lunora/admin/export", `Bearer ${TOKEN}`],
         ]);
 
-        const [stored] = [...objects.values()];
+        const [stored] = [...objects.values()].map((object) => object.body);
 
         await expect(gunzip(stored ?? new Uint8Array())).resolves.toBe(SECRET_ROW);
         expect(patched.find((entry) => entry.id === "new_1")?.patch).toMatchObject({ bytes: stored?.byteLength, status: "succeeded" });
@@ -273,31 +279,440 @@ describe(runTenantBackupSweep, () => {
     });
 });
 
+const MIB = 1024 * 1024;
+const OFFSITE_KEY_ID = "offsite-key-id";
+const OFFSITE_SECRET = "offsite-secret-access-key-never-logged";
+const OFFSITE_ENV = {
+    BACKUP_OFFSITE_ACCESS_KEY_ID: OFFSITE_KEY_ID,
+    BACKUP_OFFSITE_BUCKET: "dr-backups",
+    BACKUP_OFFSITE_ENDPOINT: "https://other-account.r2.cloudflarestorage.com",
+    BACKUP_OFFSITE_SECRET_ACCESS_KEY: OFFSITE_SECRET,
+};
+
+/** An S3 double for the off-site account and the bucket over it. */
+const offsite = (options: { intercept?: (request: Request) => Response | undefined; objects?: Map<string, StoredObject> } = {}) => {
+    const s3 = fakeS3({ accessKeyId: OFFSITE_KEY_ID, bucket: "dr-backups", ...options });
+    const bucket = offsiteBucket(OFFSITE_ENV, s3.fetch);
+
+    if (!bucket) {
+        throw new Error("off-site bucket should be configured");
+    }
+
+    return { ...s3, bucket };
+};
+
+/** `megabytes` of random bytes, streamed a MiB at a time — gzip cannot shrink them under the old 64 MiB cap. */
+const noise = (megabytes: number, failAfter?: number): ReadableStream<Uint8Array> => {
+    let sent = 0;
+
+    return new ReadableStream({
+        pull: (controller) => {
+            if (failAfter !== undefined && sent === failAfter) {
+                controller.error(new Error("tenant stream broke"));
+
+                return;
+            }
+
+            if (sent === megabytes) {
+                controller.close();
+
+                return;
+            }
+
+            const chunk = new Uint8Array(MIB);
+
+            // `getRandomValues` fills at most 64 KiB per call.
+            for (let offset = 0; offset < MIB; offset += 65_536) {
+                crypto.getRandomValues(chunk.subarray(offset, offset + 65_536));
+            }
+
+            sent += 1;
+            controller.enqueue(chunk);
+        },
+    });
+};
+
+describe(captureTenantSnapshot, () => {
+    it("stores a snapshot past the old 64 MiB ceiling in fixed parts, one part in memory", async () => {
+        const { bucket, objects, stats } = memoryBucket();
+        const send: TenantSend = () => Promise.resolve(new Response(noise(70)));
+
+        const { bytes } = await captureTenantSnapshot({ bucket, key: "big.ndjson.gz", send });
+
+        expect(bytes).toBeGreaterThan(64 * MIB);
+        expect(objects.get("big.ndjson.gz")?.body.byteLength).toBe(bytes);
+        // R2's rules held (the fake refuses otherwise), and no part outgrew the buffer.
+        expect(stats.largestPart).toBe(PART_BYTES);
+        expect(stats.parts).toBe(Math.ceil(bytes / PART_BYTES));
+    }, 60_000);
+
+    it("writes nothing and aborts the upload when the export breaks midway", async () => {
+        const { bucket, objects, stats } = memoryBucket();
+        const send: TenantSend = () => Promise.resolve(new Response(noise(20, 12)));
+
+        await expect(captureTenantSnapshot({ bucket, key: "broken.ndjson.gz", send })).rejects.toThrow("tenant stream broke");
+        expect(stats.parts).toBeGreaterThan(0);
+        expect(stats.aborted).toBe(1);
+        expect(objects.size).toBe(0);
+    });
+
+    it("aborts and stores nothing once a stream passes its byte ceiling", async () => {
+        const objects = new Map<string, StoredObject>();
+        const bucket = fakeMultipart(objects);
+        const endless = new ReadableStream<Uint8Array>({
+            pull: (controller) => {
+                controller.enqueue(new Uint8Array(1024 * 1024));
+            },
+        });
+
+        await expect(uploadStream(bucket, "endless.ndjson.gz", endless, "application/gzip", 3 * PART_BYTES)).rejects.toThrow("exceeds the 24 MiB limit");
+        expect(bucket.stats.aborted).toBe(1);
+        expect(objects.size).toBe(0);
+    });
+});
+
+describe("tenant backup off-site copy", () => {
+    it("copies each snapshot to the off-site account and records it on the row", async () => {
+        const { database, patched } = recordingDb({
+            deployments: [deployment("dep_a", "p_a")],
+            organizations: [{ _id: "org_1", plan: "free" }],
+            projects: [{ _id: "p_a" }],
+            tenantBackups: [],
+        });
+        const { bucket, objects } = memoryBucket();
+        const remote = offsite();
+        const send: TenantSend = () => Promise.resolve(new Response(SECRET_ROW));
+
+        const result = await runTenantBackupSweep({ bucket, database, now: NOW, offsite: remote.bucket, senderFor: () => Promise.resolve(send) });
+
+        expect(result).toMatchObject({ failed: 0, succeeded: 1 });
+
+        const [key] = [...objects.keys()];
+
+        expect(remote.objects.get(key ?? "")?.body).toStrictEqual(objects.get(key ?? "")?.body);
+        expect(patched[0]?.patch).toMatchObject({ offsiteStatus: "succeeded", status: "succeeded" });
+        expect(patched[0]?.patch).not.toHaveProperty("offsiteError");
+        // Signed under the key id; the secret itself never goes on the wire.
+        expect(remote.requests.every((request) => request.headers.get("authorization")?.includes(`Credential=${OFFSITE_KEY_ID}/`))).toBe(true);
+        expect(JSON.stringify(remote.requests.map((request) => [request.url, [...request.headers]]))).not.toContain(OFFSITE_SECRET);
+    });
+
+    it("keeps the snapshot succeeded when the off-site account is down, and says so", async () => {
+        const { database, patched } = recordingDb({
+            deployments: [deployment("dep_a", "p_a")],
+            organizations: [{ _id: "org_1", plan: "free" }],
+            projects: [{ _id: "p_a" }],
+            tenantBackups: [],
+        });
+        const { bucket, objects } = memoryBucket();
+        const remote = offsite({ intercept: () => new Response("<Error><Code>ServiceUnavailable</Code></Error>", { status: 503 }) });
+        const logs: string[] = [];
+
+        const result = await runTenantBackupSweep({
+            bucket,
+            database,
+            log: (line) => logs.push(line),
+            now: NOW,
+            offsite: remote.bucket,
+            senderFor: () => Promise.resolve(async () => new Response(SECRET_ROW)),
+        });
+
+        expect(result).toMatchObject({ failed: 0, succeeded: 1 });
+        expect(objects.size).toBe(1);
+        expect(patched[0]?.patch).toMatchObject({ offsiteStatus: "failed", status: "succeeded" });
+        expect(String(patched[0]?.patch["offsiteError"])).toContain("HTTP 503 ServiceUnavailable");
+        expect(logs.some((line) => line.includes("off-site copy failed"))).toBe(true);
+        expect(JSON.stringify({ logs, patched })).not.toContain(OFFSITE_SECRET);
+    });
+
+    it("deletes the off-site copy with the primary, and keeps the row while it cannot", async () => {
+        const doomed = [1, 2, 3, 4].map((age) => backupRow(`b_${String(age)}`, "p_a", NOW - (age * DAY_MS) / 4));
+        const seed = (): Map<string, StoredObject> =>
+            new Map(doomed.map((row) => [row["key"] as string, { body: new Uint8Array([1]), uploaded: new Date(NOW) }]));
+        const tables = {
+            deployments: [],
+            organizations: [{ _id: "org_1", plan: "free" }],
+            projects: [{ _id: "p_a" }],
+            tenantBackups: doomed,
+        };
+
+        // Free keeps 3 of 4: the oldest goes from both accounts.
+        const healthy = recordingDb(tables);
+        const remote = offsite({ objects: seed() });
+
+        await runTenantBackupSweep({
+            bucket: memoryBucket().bucket,
+            database: healthy.database,
+            now: NOW,
+            offsite: remote.bucket,
+            senderFor: () => Promise.resolve(null),
+        });
+
+        expect(healthy.deleted).toStrictEqual(["b_4"]);
+        expect(remote.objects.has(doomed[3]?.["key"] as string)).toBe(false);
+        expect(remote.objects.size).toBe(3);
+
+        // Off-site down: the row stays so the next tick finds the object again.
+        const outage = recordingDb(tables);
+        const down = offsite({ intercept: (request) => (request.method === "DELETE" ? new Response(null, { status: 503 }) : undefined), objects: seed() });
+        const result = await runTenantBackupSweep({
+            bucket: memoryBucket().bucket,
+            database: outage.database,
+            now: NOW,
+            offsite: down.bucket,
+            senderFor: () => Promise.resolve(null),
+        });
+
+        expect(outage.deleted).toStrictEqual([]);
+        expect(result.pruned).toBe(0);
+        expect(down.objects.size).toBe(4);
+    });
+
+    it("records the off-site outcome of a manual backup through the route", async () => {
+        const remote = fakeS3({ accessKeyId: OFFSITE_KEY_ID, bucket: "dr-backups" });
+        const { bucket } = memoryBucket();
+        const { dispatcher } = fakeDispatcher({ acme: () => Promise.resolve(new Response(SECRET_ROW)) });
+        const finished: Row[] = [];
+        const runMutation = vi.fn<(reference: unknown, args?: Row) => Promise<unknown>>(async (reference, args) => {
+            if (reference === internal.tenant_backups.beginBackup) {
+                return {
+                    adminToken: TOKEN,
+                    alias: "acme",
+                    backupId: "bk_1",
+                    deploymentId: "dep_a",
+                    key: "manual.ndjson.gz",
+                    resourceRef: "acme",
+                    scriptName: "acme",
+                    url: "https://acme.lunora.app",
+                };
+            }
+
+            finished.push(args ?? {});
+
+            return null;
+        });
+
+        vi.stubGlobal("fetch", remote.fetch);
+
+        try {
+            const response = await createDeployRouter().fetch(
+                new Request("https://control.lunora.app/v1/backups", {
+                    body: JSON.stringify({ organizationId: "org_1", projectId: "p_a" }),
+                    headers: { "cf-connecting-ip": "client-a", "content-type": "application/json" },
+                    method: "POST",
+                }),
+                { __lunoraCtx: { runMutation }, DISPATCHER: dispatcher, TENANT_BACKUPS: bucket, ...OFFSITE_ENV },
+            );
+
+            expect(response.status).toBe(200);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+
+        expect(remote.objects.has("manual.ndjson.gz")).toBe(true);
+        expect(finished).toStrictEqual([expect.objectContaining({ id: "bk_1", offsiteStatus: "succeeded", status: "succeeded" })]);
+    });
+});
+
 describe(restoreTenantSnapshot, () => {
-    it("replays the snapshot in batches under the tenant's body limit and sums the outcome", async () => {
-        const line = `${JSON.stringify({ doc: { _id: "x", pad: "y".repeat(1000) }, table: "t" })}\n`;
-        const snapshot = line.repeat(2000);
-        const bodies: string[] = [];
-        const send: TenantSend = async (_path, body) => {
-            bodies.push(body);
+    const SESSION = "restore-test";
+    const STAGE_PATH = `/_lunora/admin/import?mode=replace&stage=${SESSION}`;
+    const COMMIT_PATH = "/_lunora/admin/import/commit";
+    const ABORT_PATH = "/_lunora/admin/import/abort";
+
+    /**
+     * A tenant with staged import: stages every batch, and commits with one
+     * deletion per table. `commit` overrides the commit's answers, in order.
+     */
+    const stagedTenant =
+        (calls: { body: string; path: string }[], commit: (() => Response)[] = []): TenantSend =>
+        async (path, body) => {
+            calls.push({ body, path });
+
+            if (path === ABORT_PATH) {
+                return Response.json({ aborted: false });
+            }
+
+            if (path === COMMIT_PATH) {
+                return commit.shift()?.() ?? Response.json({ deleted: { $kv: 1, t: 3 }, inserted: { t: 2000 }, session: SESSION, status: "committed" });
+            }
 
             const rows = body.split("\n").filter(Boolean).length;
 
-            return Response.json({ conflicts: 1, errors: [], failed: [], inserted: { t: rows - 1 }, received: rows });
+            return Response.json({ errors: [], failed: [], received: rows, session: SESSION, staged: { t: rows } });
         };
 
-        const summary = await restoreTenantSnapshot(send, new Blob([await gzip(snapshot)]).stream());
+    it("stages every batch under the tenant's body limit into one session, then commits once", async () => {
+        const line = `${JSON.stringify({ doc: { _id: "x", pad: "y".repeat(1000) }, table: "t" })}\n`;
+        const snapshot = line.repeat(2000);
+        const calls: { body: string; path: string }[] = [];
 
-        expect(bodies.length).toBeGreaterThan(1);
-        expect(bodies.every((body) => new TextEncoder().encode(body).byteLength <= IMPORT_BATCH_BYTES)).toBe(true);
-        expect(bodies.join("")).toBe(snapshot);
-        expect(summary).toStrictEqual({ conflicts: bodies.length, inserted: 2000 - bodies.length, received: 2000, rowErrors: 0, unreachableShards: 0 });
+        const summary = await restoreTenantSnapshot(stagedTenant(calls), new Blob([await gzip(snapshot)]).stream(), SESSION);
+        const staged = calls.filter((call) => call.path === STAGE_PATH);
+
+        expect(staged.length).toBeGreaterThan(1);
+        expect(calls.map((call) => call.path)).toStrictEqual([ABORT_PATH, ...staged.map(() => STAGE_PATH), COMMIT_PATH]);
+        expect(staged.every((call) => new TextEncoder().encode(call.body).byteLength <= IMPORT_BATCH_BYTES)).toBe(true);
+        expect(staged.map((call) => call.body).join("")).toBe(snapshot);
+        expect(summary).toStrictEqual({ deleted: 4, deletedByTable: { $kv: 1, t: 3 }, inserted: 2000, received: 2000 });
     });
 
-    it("stops on a batch the tenant refuses", async () => {
-        const send: TenantSend = () => Promise.resolve(Response.json({ error: { message: "Body too large" } }, { status: 413 }));
+    it("still stages an empty snapshot, whose commit empties the tenant", async () => {
+        const calls: { body: string; path: string }[] = [];
 
-        await expect(restoreTenantSnapshot(send, new Blob([await gzip(SECRET_ROW)]).stream())).rejects.toThrow(/HTTP 413/u);
+        await restoreTenantSnapshot(stagedTenant(calls), new Blob([await gzip("")]).stream(), SESSION);
+
+        expect(calls.map((call) => call.path)).toStrictEqual([ABORT_PATH, STAGE_PATH, COMMIT_PATH]);
+        expect(calls[1]?.body).toBe("");
+    });
+
+    it("aborts the session, and never commits, when a batch rejects a row or misses a shard", async () => {
+        const answering =
+            (calls: string[], stage: Response): TenantSend =>
+            async (path) => {
+                calls.push(path);
+
+                return path === ABORT_PATH ? Response.json({ aborted: true }) : stage.clone();
+            };
+        const rejected: string[] = [];
+        const partial: string[] = [];
+
+        await expect(
+            restoreTenantSnapshot(
+                answering(rejected, Response.json({ errors: [{ code: "VALIDATION_ERROR" }], failed: [], received: 1 })),
+                new Blob([await gzip(SECRET_ROW)]).stream(),
+                SESSION,
+            ),
+        ).rejects.toThrow(/1 row\(s\) rejected.*nothing was changed/u);
+        await expect(
+            restoreTenantSnapshot(
+                answering(partial, Response.json({ errors: [], failed: [{ shardKey: "c2" }], received: 1 }, { status: 207 })),
+                new Blob([await gzip(SECRET_ROW)]).stream(),
+                SESSION,
+            ),
+        ).rejects.toThrow(/1 shard\(s\) unreachable/u);
+        expect(rejected).toStrictEqual([ABORT_PATH, STAGE_PATH, ABORT_PATH]);
+        expect(partial).not.toContain(COMMIT_PATH);
+    });
+
+    it("sends a commit that failed part-way again, and aborts one its dry run refused", async () => {
+        const retried: { body: string; path: string }[] = [];
+
+        await expect(
+            restoreTenantSnapshot(
+                stagedTenant(retried, [() => Response.json({ errors: [], failed: [{ shardKey: "c2" }], status: "partial" }, { status: 502 })]),
+                new Blob([await gzip(SECRET_ROW)]).stream(),
+                SESSION,
+            ),
+        ).resolves.toMatchObject({ inserted: 2000 });
+        expect(retried.filter((call) => call.path === COMMIT_PATH)).toHaveLength(2);
+
+        const refused: { body: string; path: string }[] = [];
+
+        await expect(
+            restoreTenantSnapshot(
+                stagedTenant(refused, [() => Response.json({ errors: [{ code: "VALIDATION_ERROR" }], failed: [], status: "refused" }, { status: 409 })]),
+                new Blob([await gzip(SECRET_ROW)]).stream(),
+                SESSION,
+            ),
+        ).rejects.toThrow(/refused before anything was written: 1 row\(s\) would not land/u);
+        expect(refused.at(-1)?.path).toBe(ABORT_PATH);
+    });
+
+    it("sends the commit again when another commit is under way rather than aborting", async () => {
+        const calls: { body: string; path: string }[] = [];
+
+        await expect(
+            restoreTenantSnapshot(
+                stagedTenant(calls, [() => Response.json({ error: { code: "IMPORT_SESSION_COMMITTING", message: "being committed" } }, { status: 409 })]),
+                new Blob([await gzip(SECRET_ROW)]).stream(),
+                SESSION,
+            ),
+        ).resolves.toMatchObject({ inserted: 2000 });
+        expect(calls.filter((call) => call.path === COMMIT_PATH)).toHaveLength(2);
+        expect(calls.filter((call) => call.path === ABORT_PATH)).toHaveLength(1);
+    });
+
+    it("gives up after a commit keeps failing, saying the tenant may be part-restored", async () => {
+        const failing = (): Response => Response.json({ errors: [], failed: [{ shardKey: "c2" }], status: "partial" }, { status: 502 });
+
+        await expect(
+            restoreTenantSnapshot(stagedTenant([], [failing, failing, failing]), new Blob([await gzip(SECRET_ROW)]).stream(), SESSION),
+        ).rejects.toThrow(/did not finish after 3 attempts.*part of the tenant may already hold the snapshot/u);
+    });
+
+    it("bounds what a hostile tenant answers before anything of it is stored", async () => {
+        const hostileDeleted: Record<string, unknown> = {
+            "": 5,
+            "(other tables)": 7,
+            [`x${"y".repeat(500)}`]: 3,
+            fractional: 1.5,
+            huge: Number.MAX_SAFE_INTEGER,
+            infinite: Number.POSITIVE_INFINITY,
+            negative: -4,
+            text: "9",
+        };
+
+        for (let index = 0; index < 100; index += 1) {
+            hostileDeleted[`t${String(index).padStart(3, "0")}`] = 1;
+        }
+
+        const hostile = (): Response => Response.json({ deleted: hostileDeleted, inserted: { t: Number.NaN, u: 2 }, status: "committed" });
+        const staging: TenantSend = async (path) => {
+            if (path === ABORT_PATH) {
+                return Response.json({ aborted: false });
+            }
+
+            return path === COMMIT_PATH ? hostile() : Response.json({ errors: "x".repeat(10_000), received: -1 });
+        };
+        const summary = await restoreTenantSnapshot(staging, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION);
+        const tables = Object.keys(summary.deletedByTable);
+
+        expect(tables.length).toBeLessThanOrEqual(65);
+        expect(tables.every((table) => table.length > 0 && table.length <= 128)).toBe(true);
+        expect(Object.values(summary.deletedByTable).every((count) => Number.isSafeInteger(count) && count >= 0)).toBe(true);
+        // Past the cap, the rest folds into one marker entry rather than vanishing.
+        expect(summary.deletedByTable["(other tables)"]).toBeGreaterThan(0);
+        expect(summary.deleted).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
+        expect(summary.inserted).toBe(2);
+        expect(summary.received).toBe(0);
+    });
+
+    it("bounds a hostile tenant's error text", async () => {
+        const send: TenantSend = async (path) =>
+            path === ABORT_PATH ? Response.json({ aborted: false }) : Response.json({ error: { message: "m".repeat(100_000) } }, { status: 500 });
+
+        const failure: unknown = await restoreTenantSnapshot(send, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message.length).toBeLessThan(500);
+    });
+
+    it("refuses a runtime without staged import before sending it a row", async () => {
+        const calls: string[] = [];
+        const old: TenantSend = async (path) => {
+            calls.push(path);
+
+            return new Response("not found", { status: 404 });
+        };
+
+        await expect(restoreTenantSnapshot(old, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION)).rejects.toThrow(/predates staged import/u);
+        expect(calls).toStrictEqual([ABORT_PATH]);
+    });
+
+    it("aborts on a batch the tenant refuses", async () => {
+        const calls: string[] = [];
+        const send: TenantSend = async (path) => {
+            calls.push(path);
+
+            return path === ABORT_PATH ? Response.json({ aborted: false }) : Response.json({ error: { message: "Body too large" } }, { status: 413 });
+        };
+
+        await expect(restoreTenantSnapshot(send, new Blob([await gzip(SECRET_ROW)]).stream(), SESSION)).rejects.toThrow(/HTTP 413/u);
+        expect(calls.at(-1)).toBe(ABORT_PATH);
     });
 });
 
@@ -324,6 +739,41 @@ describe("tenant backup mutations", () => {
         );
 
         await expect(beginBackup.handler(ctx, { organizationId: "org_1", projectId: "p_a" } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("stores a restore's per-table deletions and still lists a pre-staging restore's conflict counts", async () => {
+        const running = backupRow("r_new", "p_a", 1_700_000_000_000, { operation: "restore", status: "running", trigger: "manual" });
+        const settled = backupRow("r_done", "p_a", 1_650_000_000_000, {
+            operation: "restore",
+            restoreDeleted: { $kv: 1, users: 2 },
+            restoreInserted: 7,
+            trigger: "manual",
+        });
+        const historical = backupRow("r_old", "p_a", 1_600_000_000_000, {
+            operation: "restore",
+            restoreConflicts: 2,
+            restoreInserted: 5,
+            restoreRowErrors: 1,
+            trigger: "manual",
+        });
+        const { ctx, ops } = makeCtx({ members: [owner("org_1")], projects: [project], tenantBackups: [running, settled, historical] });
+
+        await finish.handler(ctx, {
+            id: "r_new",
+            organizationId: "org_1",
+            restoreDeleted: { $kv: 1, users: 2 },
+            restoreInserted: 7,
+            status: "succeeded",
+        } as never);
+
+        const rows = (await list.handler(ctx, { organizationId: "org_1", projectId: "p_a" } as never)) as Row[];
+
+        expect(ops).toContainEqual(
+            expect.objectContaining({ id: "r_new", kind: "patch", patch: expect.objectContaining({ restoreDeleted: { $kv: 1, users: 2 } }) }),
+        );
+        expect(rows.find((row) => row["_id"] === "r_done")).toMatchObject({ restoreDeleted: { $kv: 1, users: 2 }, restoreInserted: 7 });
+        expect(rows.find((row) => row["_id"] === "r_old")).toMatchObject({ restoreConflicts: 2, restoreInserted: 5, restoreRowErrors: 1 });
+        expect(rows.every((row) => !("key" in row))).toBe(true);
     });
 
     it("records a restore together with its pre-restore backup, and audits it", async () => {
@@ -380,12 +830,23 @@ describe("tenant backup routes", () => {
     it("takes the pre-restore backup before importing, and settles both rows", async () => {
         const { bucket, objects } = memoryBucket({ "src.ndjson.gz": await gzip(SECRET_ROW) });
         const { dispatcher, requests } = fakeDispatcher({
-            acme: (request) =>
-                Promise.resolve(
-                    new URL(request.url).pathname.endsWith("/export")
-                        ? new Response("current\n")
-                        : Response.json({ conflicts: 0, errors: [], failed: [], inserted: { users: 1 }, received: 1 }),
-                ),
+            acme: (request) => {
+                const { pathname } = new URL(request.url);
+
+                if (pathname.endsWith("/export")) {
+                    return Promise.resolve(new Response("current\n"));
+                }
+
+                if (pathname.endsWith("/abort")) {
+                    return Promise.resolve(Response.json({ aborted: false }));
+                }
+
+                return Promise.resolve(
+                    pathname.endsWith("/commit")
+                        ? Response.json({ deleted: { $kv: 1, users: 2 }, inserted: { users: 1 }, status: "committed" })
+                        : Response.json({ errors: [], failed: [], received: 1, staged: { users: 1 } }),
+                );
+            },
         });
         const finished: Row[] = [];
         const runMutation = vi.fn<(reference: unknown, args?: Row) => Promise<unknown>>(async (reference, args) => {
@@ -405,11 +866,17 @@ describe("tenant backup routes", () => {
         });
 
         expect(response.status).toBe(200);
-        expect(requests.map((request) => request.path)).toStrictEqual(["/_lunora/admin/export", "/_lunora/admin/import"]);
-        await expect(gunzip(objects.get("pre.ndjson.gz") ?? new Uint8Array())).resolves.toBe("current\n");
+        await expect(response.json()).resolves.toMatchObject({ summary: { deleted: 3, deletedByTable: { $kv: 1, users: 2 }, inserted: 1, received: 1 } });
+        expect(requests.map((request) => request.path)).toStrictEqual([
+            "/_lunora/admin/export",
+            "/_lunora/admin/import/abort",
+            "/_lunora/admin/import",
+            "/_lunora/admin/import/commit",
+        ]);
+        await expect(gunzip(objects.get("pre.ndjson.gz")?.body ?? new Uint8Array())).resolves.toBe("current\n");
         expect(finished).toStrictEqual([
             expect.objectContaining({ id: "pre_1", status: "succeeded" }),
-            expect.objectContaining({ id: "res_1", restoreInserted: 1, status: "succeeded" }),
+            expect.objectContaining({ id: "res_1", restoreDeleted: { $kv: 1, users: 2 }, restoreInserted: 1, status: "succeeded" }),
         ]);
     });
 

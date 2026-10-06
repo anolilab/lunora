@@ -1,5 +1,6 @@
 import type { TenantDeploymentSpec } from "../provision-contract";
 import type { ProgressLine, TargetDriver } from "../targets/driver";
+import { failureReason } from "../telemetry/platform-metrics";
 import { sha256HexBytes } from "./keys";
 import type { ConvergeScheduler } from "./scheduler";
 
@@ -60,7 +61,9 @@ export interface RunDeploymentOptions {
  * for a failed health check. A converge failure leaves the tenant on the
  * previous release (every driver makes the cut-over its last, atomic step).
  */
-export type DeployOutcome = { error: string; provisioned: boolean; status: "failed" } | { result: DeployedRelease; status: "live" };
+export type DeployOutcome =
+    /** `reason` is the bounded `failureReason` the platform metrics keep, never the message. */
+    { error: string; provisioned: boolean; reason: string; status: "failed" } | { result: DeployedRelease; status: "live" };
 
 export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDeploymentOptions): Promise<DeployOutcome> => {
     const emit = async (progress: DeployProgress): Promise<void> => {
@@ -87,7 +90,7 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
             if (!healthy) {
                 await emit({ error: "health check failed", phase: "failed", url: result.url });
 
-                return { error: "health check failed", provisioned: true, status: "failed" };
+                return { error: "health check failed", provisioned: true, reason: "health_check", status: "failed" };
             }
         }
 
@@ -99,6 +102,6 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
 
         await emit({ error: message, phase: "failed" });
 
-        return { error: message, provisioned: false, status: "failed" };
+        return { error: message, provisioned: false, reason: failureReason(error), status: "failed" };
     }
 };

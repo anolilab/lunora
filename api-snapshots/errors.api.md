@@ -389,6 +389,78 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Export tap not configured";
     };
+    readonly AUTH_DATA_FAILED: {
+        readonly status: 502;
+        readonly title: "Auth data call to the auth object failed";
+    };
+    readonly AUTH_IMPORT_FAILED: {
+        readonly status: 409;
+        readonly title: "Auth row could not be imported";
+    };
+    readonly IMPORT_FORMAT_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "Export format newer than this runtime reads";
+    };
+    readonly IMPORT_REFUSED: {
+        readonly status: 400;
+        readonly title: "Replace import refused on a shard";
+    };
+    readonly IMPORT_SESSION_CHANGED: {
+        readonly status: 409;
+        readonly title: "Import session changed after the commit's dry run";
+    };
+    readonly IMPORT_SESSION_CLOSED: {
+        readonly status: 409;
+        readonly title: "Import session closed to new batches";
+    };
+    readonly IMPORT_SESSION_COMMITTED: {
+        readonly status: 409;
+        readonly title: "Import session already committed";
+    };
+    readonly IMPORT_SESSION_COMMITTING: {
+        readonly status: 409;
+        readonly title: "Import session commit already under way";
+    };
+    readonly IMPORT_SESSION_CORRUPT: {
+        readonly status: 409;
+        readonly title: "Import session state unreadable";
+    };
+    readonly IMPORT_SESSION_EXPIRED: {
+        readonly status: 410;
+        readonly title: "Import session expired";
+    };
+    readonly IMPORT_SESSION_INCOMPLETE: {
+        readonly status: 409;
+        readonly title: "Import session has a batch that never closed";
+    };
+    readonly IMPORT_SESSION_MISMATCH: {
+        readonly status: 400;
+        readonly title: "Import session does not match this request";
+    };
+    readonly IMPORT_SESSION_NOT_COMMITTING: {
+        readonly status: 409;
+        readonly title: "Import session is not committing";
+    };
+    readonly IMPORT_SESSION_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Import session not found";
+    };
+    readonly IMPORT_SESSION_REJECTED: {
+        readonly status: 409;
+        readonly title: "Import session rejected during staging";
+    };
+    readonly IMPORT_SESSION_STALE: {
+        readonly status: 409;
+        readonly title: "Import session belongs to an earlier session of the same id";
+    };
+    readonly SECTION_COMMIT_FAILED: {
+        readonly status: 502;
+        readonly title: "Export section could not be committed";
+    };
+    readonly SECTION_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Export section not configured on this worker";
+    };
     readonly FUNCTIONS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Functions registry not configured";

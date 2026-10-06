@@ -58,7 +58,12 @@ const ADMIN_FUNCTIONS: {
     readonly getTraces: "__lunora_admin__:getTraces";
     readonly getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus";
     readonly ignoreIssue: "__lunora_admin__:ignoreIssue";
+    readonly importAbort: "__lunora_admin__:importAbort";
+    readonly importCommit: "__lunora_admin__:importCommit";
+    readonly importManifest: "__lunora_admin__:importManifest";
     readonly importShard: "__lunora_admin__:importShard";
+    readonly importStage: "__lunora_admin__:importStage";
+    readonly importStagedRows: "__lunora_admin__:importStagedRows";
     readonly listFlags: "__lunora_admin__:listFlags";
     readonly listReactors: "__lunora_admin__:listReactors";
     readonly listQueues: "__lunora_admin__:listQueues";
@@ -74,6 +79,7 @@ const ADMIN_FUNCTIONS: {
     readonly readTablePage: "__lunora_admin__:readTablePage";
     readonly recordAuthEvent: "__lunora_admin__:recordAuthEvent";
     readonly recordContainerEvent: "__lunora_admin__:recordContainerEvent";
+    readonly recordImportAudit: "__lunora_admin__:recordImportAudit";
     readonly recordMail: "__lunora_admin__:recordMail";
     readonly recordQueueMessage: "__lunora_admin__:recordQueueMessage";
     readonly releaseShardRegistration: "__lunora_admin__:releaseShardRegistration";
@@ -1176,6 +1182,18 @@ interface GuardableSchema$1 {
 const IDEMPOTENCY_TABLE = "__idempotency";
 ```
 
+### `IMPORT_MANIFEST_TTL_MS` (const)
+
+```ts
+const IMPORT_MANIFEST_TTL_MS: number;
+```
+
+### `IMPORT_STAGE_TTL_MS` (const)
+
+```ts
+const IMPORT_STAGE_TTL_MS: number;
+```
+
 ### `IdGenerator` (type)
 
 ```ts
@@ -1202,6 +1220,27 @@ interface ImportError {
 }
 ```
 
+### `ImportManifest` (interface)
+
+```ts
+interface ImportManifest {
+    batches: number;
+    expiresAt: number;
+    generation: string;
+    globals: boolean;
+    pending: number;
+    received: number;
+    rejected: number;
+    sections: string[];
+    session: string;
+    shards: string[];
+    state: ManifestState;
+    steps: Record<string, ImportStepResult>;
+    storage: boolean;
+    tables: string[];
+}
+```
+
 ### `ImportShardAdminArgs` (interface)
 
 ```ts
@@ -1215,6 +1254,8 @@ interface ImportShardAdminArgs {
 
 ```ts
 interface ImportShardArgs {
+    keepIds?: ReadonlySet<string>;
+    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -1225,8 +1266,19 @@ interface ImportShardArgs {
 ```ts
 interface ImportShardResult {
     conflicts: number;
+    deleted?: Record<string, number>;
     errors: ImportError[];
     inserted: Record<string, number>;
+}
+```
+
+### `ImportStepResult` (interface)
+
+```ts
+interface ImportStepResult {
+    deleted: Record<string, number>;
+    inserted: Record<string, number>;
+    warnings?: string[];
 }
 ```
 
@@ -1333,6 +1385,37 @@ const MAX_PAGE_SIZE = 500;
 
 ```ts
 const MAX_SQL_ROWS = 1000;
+```
+
+### `ManifestChange` (type)
+
+```ts
+type ManifestChange = {
+    batches: number;
+    state: "committing";
+} | {
+    state: "aborting";
+} | {
+    state: "committed";
+} | {
+    step: string;
+    stepResult: ImportStepResult;
+};
+```
+
+### `ManifestTouch` (interface)
+
+```ts
+interface ManifestTouch {
+    begin: boolean;
+    globals?: boolean;
+    received?: number;
+    rejected?: number;
+    sections?: ReadonlyArray<string>;
+    shards?: ReadonlyArray<string>;
+    storage?: boolean;
+    tables: ReadonlyArray<string>;
+}
 ```
 
 ### `MaskColumnMetadata` (interface)
@@ -2894,6 +2977,16 @@ interface SqlLintResult {
 }
 ```
 
+### `StagedImportRow` (interface)
+
+```ts
+interface StagedImportRow {
+    doc: Record<string, unknown>;
+    line: number;
+    table: string;
+}
+```
+
 ### `StorageMetadata` (interface)
 
 ```ts
@@ -3475,6 +3568,12 @@ type WriteHook = (event: WriteEvent) => Promise<void> | void;
 const advanceClientWatermark: (sql: SqlExec, identity: string, clientId: string, mutationId: number) => void;
 ```
 
+### `advanceImportManifest` (const)
+
+```ts
+const advanceImportManifest: (sql: SqlExec, session: string, change: ManifestChange, now: number) => ImportManifest;
+```
+
 ### `aggUpsertSql` (const)
 
 ```ts
@@ -3551,6 +3650,12 @@ const armRestore: (storage: PitrStorage, args: PitrRestoreArgs) => Promise<Omit<
 
 ```ts
 const assertFlatPredicate: (where: WhereInput | undefined, schema: ResolveContext["schema"], tableName: string, op: string) => void;
+```
+
+### `assertImportSessionId` (const)
+
+```ts
+const assertImportSessionId: (session: unknown) => string;
 ```
 
 ### `assertNoExplicitUndefined` (const)
@@ -3984,6 +4089,18 @@ const diffGlobalMembership: (rows: ReadonlyArray<ShapeRow>, previous: ReadonlyMa
 const distinctValues: (rows: Record<string, unknown>[], field: string) => unknown[];
 ```
 
+### `dropImportManifest` (const)
+
+```ts
+const dropImportManifest: (sql: SqlExec, session: string, now: number) => void;
+```
+
+### `dropImportSession` (const)
+
+```ts
+const dropImportSession: (sql: SqlExec, session: string, generation: string) => boolean;
+```
+
 ### `encodeAggregateKey` (const)
 
 ```ts
@@ -4300,6 +4417,12 @@ const listReactorStates: (sql: SqlExec) => {
 
 ```ts
 const listTables: (sql: SqlExec) => TableInfo[];
+```
+
+### `markShardImportCommitted` (const)
+
+```ts
+const markShardImportCommitted: (sql: SqlExec, session: string, generation: string, result: Record<string, unknown>, now: number) => void;
 ```
 
 ### `markUnvouchableReads` (const)
@@ -4717,6 +4840,12 @@ const readGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: strin
 const readIdempotent: (sql: SqlExec, identity: string, mutationId: string) => IdempotentRecord | undefined;
 ```
 
+### `readImportManifest` (const)
+
+```ts
+const readImportManifest: (sql: SqlExec, session: string, now: number) => ImportManifest | undefined;
+```
+
 ### `readMigrationStatus` (const)
 
 ```ts
@@ -4765,6 +4894,16 @@ const readSearchBackfillState: (sql: SqlExec, companion: string) => BackfillStat
 
 ```ts
 const readShapePokeCursor: (sql: SqlExec, connectionId: string, subId: string) => number | undefined;
+```
+
+### `readShardImportSession` (const)
+
+```ts
+const readShardImportSession: (sql: SqlExec, session: string) => undefined | {
+    generation: string;
+    result?: Record<string, unknown>;
+    state: "committed" | "staging";
+};
 ```
 
 ### `readStreamChunks` (const)
@@ -4853,6 +4992,12 @@ const relayCountFor: (subscribers: number, perRelayCapacity: number, maxRelays: 
 
 ```ts
 const renderSql: (engine: SqlEngine, query: SQL) => RenderedSql;
+```
+
+### `replaceRefusal` (const)
+
+```ts
+const replaceRefusal: (scope: ReadonlySet<string>, row: ExportRow) => string | undefined;
 ```
 
 ### `reprojectableFields` (const)
@@ -5082,6 +5227,31 @@ const stableStringify: (value: unknown) => string;
 const stableWireKey: (value: unknown) => string;
 ```
 
+### `stageImportRows` (const)
+
+```ts
+const stageImportRows: (sql: SqlExec, session: string, generation: string, rows: ReadonlyArray<StagedImportRow>, now: number) => Record<string, number>;
+```
+
+### `stagedImportIds` (const)
+
+```ts
+const stagedImportIds: (sql: SqlExec, session: string) => Set<string>;
+```
+
+### `stagedImportPage` (const)
+
+```ts
+const stagedImportPage: (sql: SqlExec, session: string, options: {
+    afterSeq: number;
+    limit: number;
+    sections?: ReadonlyArray<string>;
+}) => {
+    rows: StagedImportRow[];
+    seq: number;
+};
+```
+
 ### `stripReservedPatchFields` (const)
 
 ```ts
@@ -5122,6 +5292,12 @@ const summarizeFanoutTopics: (attachments: FanoutAttachmentLike[], limit?: numbe
 const summarizeSubscriptions: (attachments: SocketAttachmentLike[]) => SubscriptionsResult;
 ```
 
+### `sweepImportStaging` (const)
+
+```ts
+const sweepImportStaging: (sql: SqlExec, now: number) => ImportManifest[];
+```
+
 ### `tableColumns` (const)
 
 ```ts
@@ -5149,6 +5325,21 @@ const throwingScheduler: SchedulerLike;
 const tiebreakDirectionFor: (keys: ReadonlyArray<{
     direction?: string;
 }>) => SortDirection;
+```
+
+### `touchImportManifest` (const)
+
+```ts
+const touchImportManifest: (sql: SqlExec, session: string, touch: ManifestTouch, now: number) => {
+    created: boolean;
+    manifest: ImportManifest;
+};
+```
+
+### `touchShardImportSession` (const)
+
+```ts
+const touchShardImportSession: (sql: SqlExec, session: string, now: number) => void;
 ```
 
 ### `trimCdcChanges` (const)
@@ -5421,6 +5612,12 @@ interface GuardableSchema {
 
 ```ts
 type IndexUseHook = (table: string, indexName: string, kind: "geo" | "index" | "rank" | "search") => void;
+```
+
+### `ManifestState` (type)
+
+```ts
+type ManifestState = "aborting" | "committed" | "committing" | "open";
 ```
 
 ### `OrderedAfterWrites` (type)

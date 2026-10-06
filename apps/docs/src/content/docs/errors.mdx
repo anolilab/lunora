@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 161 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 179 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -106,6 +106,14 @@ Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 `500` — CIMD transport needs the global_fetch_strictly_public flag
 
 Add "global_fetch_strictly_public" to "compatibility_flags" in wrangler.jsonc, so CIMD metadata fetches cannot reach private addresses. `lunora doctor` reports it as `cimd-fetch-not-strictly-public`.
+
+### `AUTH_DATA_FAILED`
+
+`502` — Auth data call to the auth object failed
+
+### `AUTH_IMPORT_FAILED`
+
+`409` — Auth row could not be imported
 
 ### `AUTH_MCP_RESOURCE_AMBIGUOUS`
 
@@ -453,6 +461,62 @@ A write queued offline was replayed on a session that now belongs to someone els
 
 `@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie.
 
+### `IMPORT_FORMAT_UNSUPPORTED`
+
+`400` — Export format newer than this runtime reads
+
+### `IMPORT_REFUSED`
+
+`400` — Replace import refused on a shard
+
+### `IMPORT_SESSION_CHANGED`
+
+`409` — Import session changed after the commit's dry run
+
+### `IMPORT_SESSION_CLOSED`
+
+`409` — Import session closed to new batches
+
+### `IMPORT_SESSION_COMMITTED`
+
+`409` — Import session already committed
+
+### `IMPORT_SESSION_COMMITTING`
+
+`409` — Import session commit already under way
+
+### `IMPORT_SESSION_CORRUPT`
+
+`409` — Import session state unreadable
+
+### `IMPORT_SESSION_EXPIRED`
+
+`410` — Import session expired
+
+### `IMPORT_SESSION_INCOMPLETE`
+
+`409` — Import session has a batch that never closed
+
+### `IMPORT_SESSION_MISMATCH`
+
+`400` — Import session does not match this request
+
+### `IMPORT_SESSION_NOT_COMMITTING`
+
+`409` — Import session is not committing
+
+### `IMPORT_SESSION_NOT_FOUND`
+
+`404` — Import session not found
+
+### `IMPORT_SESSION_REJECTED`
+
+`409` — Import session rejected during staging
+
+### `IMPORT_SESSION_STALE`
+
+`409` — Import session belongs to an earlier session of the same id
+
 ### `INVALID_INPUT`
 
 `400` — Invalid input
@@ -628,6 +692,14 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 ### `SEARCH_INDEX_BUILDING`
 
 `503` — Search index is still building
+
+### `SECTION_COMMIT_FAILED`
+
+`502` — Export section could not be committed
+
+### `SECTION_NOT_CONFIGURED`
+
+`400` — Export section not configured on this worker
 
 ### `SERVICE_UNAVAILABLE`
 

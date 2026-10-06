@@ -4001,6 +4001,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AuthDataPort` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AuthImpersonation` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4197,6 +4201,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `GlobalImportStaging` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `GlobalIntrospector` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4274,6 +4282,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `ImportFanOutResult` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ImportSessionFanOutRequest` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `ImportSessionShardOutcome` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

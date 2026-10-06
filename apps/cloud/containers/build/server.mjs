@@ -31,7 +31,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { readRelease, releaseFailure } from "./release.mjs";
-import { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory } from "./workspace.mjs";
+import { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory, workspacePackages } from "./workspace.mjs";
 
 /** Where the deploy path expects the entry module. The provision box defaults `mainModule` to this. */
 const ENTRY_MODULE = "index.js";
@@ -278,6 +278,10 @@ const handleBuild = async (request, response) => {
             return;
         }
 
+        // Read off the fresh install, before the tenant's build can touch it. A
+        // failure here only costs the path filter its answer (pushes then build).
+        const packages = await workspacePackages(project, workspaceRoot, repo).catch(() => undefined);
+
         emit({ line: `running lunora build in ${shown(project)}` });
 
         // The PROJECT's own lunora CLI, off its lockfile — not a copy baked into
@@ -326,7 +330,7 @@ const handleBuild = async (request, response) => {
 
         // The bundle travels from the module just hashed, so the hash on the
         // build row always describes the bytes that deploy.
-        emit({ ...(await readRelease(releaseFile)), bundle, bundleHash });
+        emit({ ...(await readRelease(releaseFile)), bundle, bundleHash, ...(packages === undefined ? {} : { workspacePackages: packages }) });
     } catch (error) {
         emit({ error: clientError(error) });
     } finally {

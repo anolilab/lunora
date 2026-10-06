@@ -21,6 +21,8 @@ export {
     runD1SearchMigrations,
     sweepD1CdcRetention,
 } from "./d1-ctx-db";
+export type { StageGlobalArgs } from "./import-staging";
+export { abortStagedGlobalRows, commitStagedGlobalRows, GlobalImportStagingError, stageGlobalRows } from "./import-staging";
 export type {
     FacetGlobalColumnOptions,
     GlobalFacetResult,

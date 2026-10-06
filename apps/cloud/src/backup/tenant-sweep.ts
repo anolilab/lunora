@@ -14,11 +14,18 @@
  *
  * One tenant never takes the sweep down: every snapshot runs in its own
  * try/catch and lands as a `failed` row with a bounded reason. Snapshots run one
- * at a time — each is assembled in memory (`MAX_SNAPSHOT_BYTES`), so running them
- * concurrently multiplies the peak rather than the throughput.
+ * at a time — each holds one multipart part in memory while it streams, so
+ * running them concurrently multiplies the peak rather than the throughput.
+ *
+ * With an off-site bucket (`./offsite.ts`), each snapshot is also copied to a
+ * second account and the copy's outcome lands on the same row
+ * (`offsiteStatus` / `offsiteError`); a failed copy leaves the snapshot
+ * `succeeded`. Retention deletes the off-site object along with the primary.
  */
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
+import type { CopyOutcome } from "./multipart";
+import type { OffsiteBucket } from "./offsite";
 import type { TenantBackupRecord } from "./tenant-policy";
 import {
     backupRetentionFor,
@@ -62,6 +69,8 @@ export interface TenantBackupSweepDeps {
     /** Operational log line. Receives ids and counts only — never a token or snapshot bytes. */
     log?: (line: string) => void;
     now: number;
+    /** The off-site copy; absent → primary only, exactly as before it existed. */
+    offsite?: OffsiteBucket;
     /** Reach one deployment's admin API (the token unsealed in-process), or `null` when it has no usable token. */
     senderFor: (deployment: BackupTargetRow) => Promise<null | TenantSend>;
 }
@@ -88,6 +97,15 @@ export const MAX_PRUNES_PER_TICK = 200;
 const MAX_ERROR_LENGTH = 500;
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : "backup failed").slice(0, MAX_ERROR_LENGTH);
+
+/** The row fields an off-site copy outcome records — none when no copy was attempted. */
+export const offsiteFields = (outcome: CopyOutcome | undefined): { offsiteError?: string; offsiteStatus?: CopyOutcome["status"] } => {
+    if (!outcome) {
+        return {};
+    }
+
+    return outcome.error === undefined ? { offsiteStatus: outcome.status } : { offsiteError: outcome.error, offsiteStatus: outcome.status };
+};
 
 /** Mark `running` rows whose owner died (request killed, isolate evicted) as failed, so they stop blocking their project. */
 const reapStale = async (database: ControlPlaneDatabase, rows: StoredBackupRow[], now: number): Promise<number> => {
@@ -127,9 +145,13 @@ const snapshotOne = async (deps: TenantBackupSweepDeps, deployment: BackupTarget
             throw new Error("deployment has no usable admin token");
         }
 
-        const bytes = await captureTenantSnapshot({ bucket, key, send });
+        const { bytes, offsite } = await captureTenantSnapshot({ bucket, key, ...(deps.offsite ? { offsite: deps.offsite } : {}), send });
 
-        await database.patch(id, { bytes, completedAt: Date.now(), status: "succeeded" }, "tenantBackups");
+        if (offsite?.status === "failed") {
+            deps.log?.(`[tenant-backup] ${deployment.alias} off-site copy failed: ${offsite.error ?? "unknown error"}`);
+        }
+
+        await database.patch(id, { bytes, completedAt: Date.now(), status: "succeeded", ...offsiteFields(offsite) }, "tenantBackups");
 
         return true;
     } catch (error) {
@@ -143,9 +165,10 @@ const snapshotOne = async (deps: TenantBackupSweepDeps, deployment: BackupTarget
 };
 
 /**
- * Apply retention and cleanup. Deletes the R2 object before its row, so a crash
- * between the two leaves a row pointing at nothing (retried next tick) rather
- * than an object no row can find.
+ * Apply retention and cleanup. Deletes the R2 object — primary, then off-site —
+ * before its row, so a crash or an off-site outage between them leaves a row
+ * pointing at nothing (retried next tick) rather than an object no row can find:
+ * the off-site copy of a deleted project must not outlive it either.
  */
 const prune = async (
     deps: TenantBackupSweepDeps,
@@ -182,6 +205,8 @@ const prune = async (
             if (row.operation === "backup" && row.key) {
                 // eslint-disable-next-line no-await-in-loop -- bounded by MAX_PRUNES_PER_TICK; sequential keeps object-before-row ordering per row
                 await bucket.delete(row.key);
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await deps.offsite?.delete([row.key]);
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above

@@ -1,47 +1,57 @@
 /**
  * The platform's own trust boundary — every route the DISPATCHER Worker calls.
  *
- * These five are the entire surface a tenant request touches indirectly: plan
- * and limit lookup, preview-password verification, alias and custom-hostname
- * resolution, and cell registration. All are bearer-gated with
- * `LUNORA_ADMIN_TOKEN` and none is reachable by a tenant — which is exactly why
- * they belong together rather than scattered through a file whose other routes
- * are session- or deploy-key-authorized.
+ * These four are the entire surface a tenant request touches indirectly: plan
+ * and limit lookup, preview-password verification, custom-hostname resolution,
+ * and cell registration. All are bearer-gated with `LUNORA_ADMIN_TOKEN` and none
+ * is reachable by a tenant.
  *
- * `requireAdminToken` lives here with them. It was extracted because the check
- * had been copied per route and one copy was missing entirely — a route that
- * documented the gate and never performed it, leaving an unauthenticated
- * password oracle. Keeping the gate in the same module as everything it gates is
- * what makes a sixth route's omission obvious.
+ * The gate itself — {@link withAdminToken}, and its inverse
+ * {@link refuseAdminToken} — lives here too, but is applied by the router to its
+ * admin table rather than called by each handler: these handlers check nothing
+ * themselves and are only safe behind that table.
  */
 import { api, internal } from "../../../lunora/_generated/api.js";
 import type { TargetId } from "../../provision-contract";
 import { isTargetId, TARGET_IDS, TARGETS } from "../../provision-contract";
 import { constantTimeEqual } from "../../security/constant-time-equal";
 import type { RouterEnv } from "./shared";
-import { jsonError, requireContext, strictBearer } from "./shared";
+import { jsonError, otlpBearer, requireContext, strictBearer } from "./shared";
+
+/** Whether `token` is the platform admin token. Fails closed: an unset token matches nothing. */
+const isAdminToken = (token: string, environment: RouterEnv): boolean =>
+    Boolean(environment.LUNORA_ADMIN_TOKEN) && constantTimeEqual(token, environment.LUNORA_ADMIN_TOKEN ?? "");
+
+type Handler<Rest extends unknown[]> = (request: Request, environment: RouterEnv, ...rest: Rest) => Promise<Response>;
 
 /**
- * Bearer-gate a platform-internal `/v1/tenants/*` route with `LUNORA_ADMIN_TOKEN`,
- * returning the 401 response when it fails and `undefined` when it passes.
+ * The admin table's guard: run `handler` only for a request bearing
+ * `LUNORA_ADMIN_TOKEN` (strict `Bearer` form), 401 otherwise.
  *
- * Extracted because the check was copied per route and one copy was missing:
- * `handlePreviewAuthRoute` documented the gate and never performed it. A shared
- * helper does not make forgetting impossible, but it removes the reason to
- * re-type it, which is what let the omission look like the others.
- *
- * Fails closed when the token is unset — an unconfigured control plane refuses
- * these routes rather than opening them.
+ * Applied once, by the router, to every route in its admin table — the handlers
+ * themselves carry no check. The check used to be copied per handler, and one
+ * copy was missing entirely (`handlePreviewAuthRoute` documented the gate and
+ * never performed it, leaving an unauthenticated password oracle). A route is
+ * now gated by which table it sits in, so a new one cannot forget.
  */
-export const requireAdminToken = (request: Request, environment: RouterEnv): Response | undefined => {
-    const token = strictBearer(request);
+export const withAdminToken =
+    <Rest extends unknown[]>(handler: Handler<Rest>): Handler<Rest> =>
+    async (request, environment, ...rest) =>
+        isAdminToken(strictBearer(request), environment) ? handler(request, environment, ...rest) : jsonError(401, "unauthorized");
 
-    if (!environment.LUNORA_ADMIN_TOKEN || !constantTimeEqual(token, environment.LUNORA_ADMIN_TOKEN)) {
-        return jsonError(401, "unauthorized");
-    }
-
-    return undefined;
-};
+/**
+ * The inverse guard, applied by the router to every route OUTSIDE the admin
+ * table: a request presenting the platform admin token (in either bearer form)
+ * is refused with 403 before the handler runs. The admin token is the
+ * dispatcher's credential and authorizes the admin table only; it must never
+ * be weighed as a deploy key, session or anything else.
+ */
+export const refuseAdminToken =
+    <Rest extends unknown[]>(handler: Handler<Rest>): Handler<Rest> =>
+    async (request, environment, ...rest) =>
+        isAdminToken(otlpBearer(request) ?? "", environment)
+            ? jsonError(403, "the platform admin token does not authorize this route")
+            : handler(request, environment, ...rest);
 
 /**
  * `GET /v1/tenants/plan?script=&lt;id>` — resolve a tenant script's plan tier for
@@ -50,12 +60,6 @@ export const requireAdminToken = (request: Request, environment: RouterEnv): Res
  */
 export const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-
-    const unauthorized = requireAdminToken(request, environment);
-
-    if (unauthorized) {
-        return unauthorized;
-    }
 
     const scriptName = new URL(request.url).searchParams.get("script");
 
@@ -89,17 +93,6 @@ interface PreviewAuthBody {
 export const handlePreviewAuthRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    // The check this route's own docblock claimed and did not perform. Without it
-    // this was an unauthenticated password oracle: anyone who could reach the
-    // control plane could POST a script name and a guess and read back yes or no,
-    // for any protected preview on the platform. Same form as every other
-    // `/v1/tenants/*` route, and now shared with them so a fourth cannot forget.
-    const unauthorized = requireAdminToken(request, environment);
-
-    if (unauthorized) {
-        return unauthorized;
-    }
-
     const body = (await request.json().catch(() => null)) as null | PreviewAuthBody;
 
     if (!body?.scriptName || !body.password) {
@@ -121,12 +114,6 @@ export const handlePreviewAuthRoute = async (request: Request, environment: Rout
  */
 export const handleTenantCustomDomainRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-
-    const unauthorized = requireAdminToken(request, environment);
-
-    if (unauthorized) {
-        return unauthorized;
-    }
 
     const host = new URL(request.url).searchParams.get("host");
 
@@ -162,16 +149,6 @@ const isCellConfig = (value: unknown): value is Record<string, string> =>
  */
 export const handleCellRegisterRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-
-    // Through the shared helper, like its five siblings. `requireAdminToken` was
-    // extracted precisely because the check had been copied per route and one copy
-    // was missing entirely; this route was then written with a sixth inline copy,
-    // which is the same omission waiting to recur.
-    const unauthorized = requireAdminToken(request, environment);
-
-    if (unauthorized) {
-        return unauthorized;
-    }
 
     let body: { cloudflareAccountId?: unknown; config?: unknown; dispatchNamespacePrefix?: unknown; jurisdiction?: unknown; name?: unknown; target?: unknown };
 

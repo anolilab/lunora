@@ -373,6 +373,25 @@ interface AuthConfigInfo {
 }
 ```
 
+### `AuthDataPortLike` (interface)
+
+```ts
+interface AuthDataPortLike {
+    exportRows: () => AsyncIterable<{
+        doc: Row;
+        table: string;
+    }>;
+    importRows: (rows: ReadonlyArray<{
+        doc: Row;
+        table: string;
+    }>) => Promise<AuthImportResult>;
+    replaceRows?: (rows: ReadonlyArray<{
+        doc: Row;
+        table: string;
+    }>) => Promise<AuthReplaceResult>;
+}
+```
+
 ### `AuthDoOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -382,6 +401,20 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ```ts
 interface AuthDoState {
     storage: DoStorageLike;
+}
+```
+
+### `AuthImportResult` (interface)
+
+```ts
+interface AuthImportResult {
+    conflicts: number;
+    errors: {
+        index: number;
+        message: string;
+        table: string;
+    }[];
+    inserted: number;
 }
 ```
 
@@ -528,6 +561,20 @@ interface AuthQuery {
 }
 ```
 
+### `AuthReplaceResult` (interface)
+
+```ts
+interface AuthReplaceResult {
+    deleted: number;
+    errors: {
+        index: number;
+        message: string;
+        table: string;
+    }[];
+    inserted: number;
+}
+```
+
 ### `AuthRow` (type)
 
 ```ts
@@ -633,6 +680,7 @@ const DEFAULT_AUTH_BASE_PATH: string;
 interface DoAuthWiring {
     auditReader: AuthAuditReader;
     authHandler: (request: Request) => Promise<Response | undefined>;
+    dataPort?: AuthDataPortLike;
     discoveryHandler: (request: Request) => Promise<Response | undefined>;
     jurisdictionMove?: AuthJurisdictionMove;
     resolveIdentity: (request: Request) => Promise<null | {
@@ -830,6 +878,10 @@ interface SignUpInvitation {
 ```ts
 interface SqlExecutor {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    batch?: (statements: ReadonlyArray<{
+        params: ReadonlyArray<unknown>;
+        sql: string;
+    }>) => Promise<void>;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
 }
 ```
@@ -917,6 +969,12 @@ const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<E
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
 ```
 
+### `authCredentialTableNames` (const)
+
+```ts
+const authCredentialTableNames: (options: LunoraAuthOptions) => string[];
+```
+
 ### `authDiscoveryPaths` (const)
 
 ```ts
@@ -938,6 +996,12 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `authDoSchemaStatements` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `authTableNames` (const)
+
+```ts
+const authTableNames: (options: LunoraAuthOptions) => string[];
+```
 
 ### `authTables` (const)
 
@@ -1002,6 +1066,12 @@ const createSignUpInvitation: (auth: LunoraAuth, input: {
     expiresInSeconds?: number;
     invitedBy?: string;
 }) => Promise<IssuedSignUpInvitation>;
+```
+
+### `createSqlAuthDataPort` (const)
+
+```ts
+const createSqlAuthDataPort: (executor: SqlExecutor, tables: ReadonlyArray<string>, credentialTables?: ReadonlyArray<string>) => AuthDataPortLike;
 ```
 
 ### `createSqlAuthStore` (const)
@@ -1831,6 +1901,7 @@ interface AuditHookContext {
 
 ```ts
 interface D1Like {
+    batch?: (statements: unknown[]) => Promise<unknown>;
     prepare: (sql: string) => {
         bind: (...values: unknown[]) => {
             all: () => Promise<{
@@ -1880,6 +1951,12 @@ interface MiddlewareNext<ContextIn> {
         ctx: Extension;
     }): Promise<ContextIn & Extension>;
 }
+```
+
+### `Row` (type)
+
+```ts
+type Row = Record<string, unknown>;
 ```
 
 ### `TransactionRunner` (type)

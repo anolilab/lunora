@@ -4,7 +4,9 @@
  * of a deployment: NDJSON export (`/_lunora/admin/export`), the stateless CDC
  * sync feed (`/_lunora/admin/sync`), the turn-key warehouse-connector sync
  * (`/_lunora/admin/connector/sync`), CDC apply / restore (`/_lunora/admin/apply`),
- * and NDJSON import (`/_lunora/admin/import`).
+ * NDJSON import (`/_lunora/admin/import`) and the staged replace import's commit
+ * and abort (`/_lunora/admin/import/commit`, `/_lunora/admin/import/abort`, see
+ * `./import-session`).
  *
  * Each handler reaches the admin gate, the coordinator, the shard namespace, and
  * the export/import primitives through the injected {@link DataMovementAdminRouteDeps}.
@@ -18,15 +20,20 @@ import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
 import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage, shardCdcPageSize } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import { LunoraError } from "./errors";
+import type { ExportSection } from "./export-sections";
+import { DEFAULT_EXPORT_SECTIONS, EXPORT_SECTIONS } from "./export-sections";
 import type { ExportRow } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import { runExportTap } from "./export-tap";
+import type { CommitImportResult, StageImportResult } from "./import-session";
 import { methodGuard } from "./method-guard";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 const EXPORT_PATH = "/_lunora/admin/export";
 const IMPORT_PATH = "/_lunora/admin/import";
+const IMPORT_COMMIT_PATH = "/_lunora/admin/import/commit";
+const IMPORT_ABORT_PATH = "/_lunora/admin/import/abort";
 const SYNC_PATH = "/_lunora/admin/sync";
 const CONNECTOR_SYNC_PATH = "/_lunora/admin/connector/sync";
 const APPLY_PATH = "/_lunora/admin/apply";
@@ -39,20 +46,51 @@ type ImportRowError = { code: string; line: number; message: string; table: stri
 /** A shard the import fan-out never reached — no row of it is at fault, and an unknown slice of the batch is unwritten. */
 type ImportShardFailure = { message: string; shardKey: string; timedOut: boolean };
 
+/** What an import request answers (a replace adds `deleted`). */
+interface ImportResponse {
+    conflicts: number;
+    /** Replace mode only: rows removed per table because the import did not carry them. */
+    deleted?: Record<string, number>;
+    errors: ReadonlyArray<ImportRowError>;
+    /** Shards the fan-out could not write to at all — a non-empty array means the import was PARTIAL. */
+    failed: ReadonlyArray<ImportShardFailure>;
+    inserted: Record<string, number>;
+    received: number;
+    warnings?: ReadonlyArray<string>;
+}
+
 /** NDJSON line encoder for the streaming export response. */
 const NDJSON_ENCODER = new TextEncoder();
 
 interface ExportBody {
+    /** Non-table sections to include; `undefined` → every section for a whole-deployment export, none when `tables` names some. */
+    sections: ReadonlyArray<ExportSection> | undefined;
     tables: ReadonlyArray<string> | undefined;
 }
+
+const parseExportSections = (raw: unknown): ExportSection[] | undefined => {
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(raw) || raw.some((entry) => !EXPORT_SECTIONS.includes(entry as ExportSection))) {
+        throw new LunoraError(`Export \`sections\` must be an array of ${EXPORT_SECTIONS.map((section) => `"${section}"`).join(", ")}`, {
+            code: "BAD_REQUEST",
+            status: 400,
+        });
+    }
+
+    return raw as ExportSection[];
+};
 
 const parseExportBody = async (request: Request): Promise<ExportBody> => {
     const body = await readLooseJsonBody(request, "Export");
 
-    const candidate = (body ?? {}) as { tables?: unknown };
+    const candidate = (body ?? {}) as { sections?: unknown; tables?: unknown };
+    const sections = parseExportSections(candidate.sections);
 
     if (candidate.tables === undefined) {
-        return { tables: undefined };
+        return { sections, tables: undefined };
     }
 
     if (!Array.isArray(candidate.tables)) {
@@ -69,7 +107,7 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
         tables.push(entry);
     }
 
-    return { tables };
+    return { sections, tables };
 };
 
 /** Narrow an untrusted `tables` value to its string entries, or `undefined` when it isn't an array. */
@@ -86,8 +124,19 @@ interface DataMovementAdminRouteDeps {
     defaultShardKey: string;
     /** Durable per-shard cursor store backing the continuous export tap; absent → the tap route reports not-configured. */
     exportCursorStore?: ExportCursorStore;
+    /** The format header and the non-table section records (auth, KV, storage); neither when no requested section is configured. */
+    exportSectionRows: (sections: ReadonlyArray<ExportSection>) => { header: ExportRow | undefined; rows: AsyncIterable<ExportRow> };
     /** Named export sinks (webhook / R2 / custom) the tap can drain to; absent / empty → the tap route reports not-configured. */
     exportSinks?: Record<string, ExportSink>;
+    /** The staged replace import (`./import-session`), bound to the worker options. */
+    importSession: {
+        abort: (headers: Record<string, string>, session: string) => Promise<{ aborted: boolean }>;
+        commit: (headers: Record<string, string>, session: string) => Promise<CommitImportResult>;
+        /** A replace in one request: stage, then commit (or abort on a refusal). */
+        replace: (request: Request, headers: Record<string, string>, tables: ReadonlyArray<string>) => Promise<ImportResponse>;
+        stage: (request: Request, headers: Record<string, string>, session: string, tables: ReadonlyArray<string>) => Promise<StageImportResult>;
+    };
+
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
     knownTables: () => string[];
 
@@ -99,24 +148,13 @@ interface DataMovementAdminRouteDeps {
     prepareExportRows: (headers: Record<string, string>, tables: ReadonlyArray<string> | undefined) => Promise<AsyncIterable<ExportRow>>;
     /** The cross-shard query coordinator (the worker's own, or its default). */
     queryCoordinator: QueryCoordinator;
+
     /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
     resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
-
     /** The shard DO namespace fanned across. */
     shardDO: ShardNamespaceLike;
-    /** Stream-parse + fan-out an NDJSON import body (bound to the worker options). */
-    streamingImport: (
-        request: Request,
-        headers: Record<string, string>,
-    ) => Promise<{
-        conflicts: number;
-        errors: ReadonlyArray<ImportRowError>;
-        /** Shards the fan-out could not write to at all — a non-empty array means the import was PARTIAL. */
-        failed: ReadonlyArray<ImportShardFailure>;
-        inserted: Record<string, number>;
-        received: number;
-        warnings?: ReadonlyArray<string>;
-    }>;
+    /** Stream-parse + fan-out an NDJSON append import body (bound to the worker options). */
+    streamingImport: (request: Request, headers: Record<string, string>) => Promise<ImportResponse>;
     /** Read a page of `.global()` (D1) CDC changes; absent when no global plane is configured. */
     syncGlobals?: (request: { limit?: number; sinceSeq: number }) => Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }>;
 }
@@ -127,7 +165,9 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         applyGlobals,
         defaultShardKey,
         exportCursorStore,
+        exportSectionRows,
         exportSinks,
+        importSession,
         knownTables,
         queryCoordinator: coordinator,
         assertAdmin,
@@ -158,16 +198,38 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         // Caveat: each shard returns a single materialised envelope, so peak
         // worker memory scales with the total shard-local row count — the
         // streaming only keeps the *response* from being buffered.
-        const rows = await prepareExportRows(forwardedHeaders, body.tables);
+        const tableRows = await prepareExportRows(forwardedHeaders, body.tables);
+        // A whole-deployment export carries the default sections (never `auth`,
+        // which must be asked for by name); one that names tables carries none
+        // unless it asks.
+        const sections = exportSectionRows(body.sections ?? (body.tables === undefined ? DEFAULT_EXPORT_SECTIONS : []));
+        const rows = (async function* ordered(): AsyncGenerator<ExportRow> {
+            // The header, when any section is present, is the file's first line.
+            if (sections.header) {
+                yield sections.header;
+            }
 
+            yield* tableRows;
+            yield* sections.rows;
+        })();
+
+        // One row per pull, so the stream's backpressure reaches the producers: a
+        // storage object is read off its body only as fast as the client takes the
+        // lines, instead of the whole export queueing up in the isolate.
+        const iterator = rows[Symbol.asyncIterator]();
         const stream = new ReadableStream<Uint8Array>({
+            async cancel() {
+                await iterator.return(undefined);
+            },
             async pull(controller) {
                 try {
-                    for await (const row of rows) {
-                        controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
-                    }
+                    const next = await iterator.next();
 
-                    controller.close();
+                    if (next.done) {
+                        controller.close();
+                    } else {
+                        controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(next.value)}\n`));
+                    }
                 } catch (error: unknown) {
                     controller.error(error);
                 }
@@ -367,6 +429,48 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         return Response.json({ applied: shardResult.applied + globalApplied, failed: shardResult.failed, ok: shardResult.ok }, { status: 200 });
     };
 
+    /**
+     * Which tables a replace import replaces, or `undefined` for an append.
+     *
+     * `?mode=append` (the default) inserts and skips an `_id` that already exists.
+     * `?mode=replace` makes the import the exact contents of its tables: `?tables=`
+     * (comma-separated) names them, and without it every table in the schema is
+     * in scope — so a table the snapshot holds no rows for is emptied too. With
+     * `?stage=<session>` the batch is staged into that session instead, and the
+     * swap waits for `/_lunora/admin/import/commit`.
+     */
+    const parseReplaceTables = (request: Request): ReadonlyArray<string> | undefined => {
+        const { searchParams } = new URL(request.url);
+        const mode = searchParams.get("mode") ?? "append";
+
+        if (mode === "append") {
+            return undefined;
+        }
+
+        if (mode !== "replace") {
+            throw new LunoraError("Import `mode` must be `append` or `replace`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const known = knownTables();
+        const named = searchParams
+            .get("tables")
+            ?.split(",")
+            .filter((table) => table.length > 0);
+        const tables = named === undefined || named.length === 0 ? known : named;
+
+        if (tables.length === 0) {
+            throw new LunoraError("A replace import needs `tables`: this worker cannot list its schema's tables", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const unknown = known.length > 0 ? tables.filter((table) => !known.includes(table)) : [];
+
+        if (unknown.length > 0) {
+            throw new LunoraError(`Replace import names unknown table(s): ${unknown.join(", ")}`, { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return tables;
+    };
+
     const handleImport = async (request: Request, env: unknown): Promise<Response> => {
         const wrongMethod = methodGuard(request, ["POST"]);
 
@@ -376,9 +480,25 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         assertAdmin(request);
 
+        const replaceTables = parseReplaceTables(request);
+        const session = new URL(request.url).searchParams.get("stage") ?? undefined;
+
+        if (session !== undefined && replaceTables === undefined) {
+            throw new LunoraError("Import `stage` needs `mode=replace`: only a replace is staged", { code: "BAD_REQUEST", status: 400 });
+        }
+
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        const result = await streamingImport(request, forwardedHeaders);
+        if (session !== undefined && replaceTables !== undefined) {
+            const staged = await importSession.stage(request, forwardedHeaders, session, replaceTables);
+
+            return Response.json(staged, { status: staged.failed.length > 0 ? 207 : 200 });
+        }
+
+        const result =
+            replaceTables === undefined
+                ? await streamingImport(request, forwardedHeaders)
+                : await importSession.replace(request, forwardedHeaders, replaceTables);
 
         // A shard the fan-out never reached leaves an unknown slice of the batch
         // unwritten, and its rows contribute to neither `inserted` nor `errors`.
@@ -389,6 +509,58 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
             headers: { "content-type": "application/json" },
             status: result.failed.length > 0 ? 207 : 200,
         });
+    };
+
+    /** The `{ session }` body of a commit / abort. */
+    const readSession = async (request: Request): Promise<string> => {
+        const raw = await readJsonBodyWithLimit(request);
+
+        if (typeof raw["session"] !== "string") {
+            throw new LunoraError("Import commit / abort needs a string `session`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return raw["session"];
+    };
+
+    /**
+     * `POST /_lunora/admin/import/commit` `{ session }`: swap a staged replace in.
+     * 200 once every step landed (a retry of a committed session answers the same
+     * totals); 409 `refused` when the prepare found a row that would not land —
+     * nothing was written, abort it; 502 `partial` when a step failed after
+     * others landed — send the commit again.
+     */
+    const handleImportCommit = async (request: Request, env: unknown): Promise<Response> => {
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
+        }
+
+        assertAdmin(request);
+
+        const session = await readSession(request);
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
+        const result = await importSession.commit(forwardedHeaders, session);
+        // An outcome outside the three is a bug, never a success: 500, not `Response.json`'s default 200.
+        const status: number = ({ committed: 200, partial: 502, refused: 409 } as Record<string, number | undefined>)[result.status] ?? 500;
+
+        return Response.json(result, { status });
+    };
+
+    /** `POST /_lunora/admin/import/abort` `{ session }`: drop a staged replace that has not begun committing (409 once it has). */
+    const handleImportAbort = async (request: Request, env: unknown): Promise<Response> => {
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
+        }
+
+        assertAdmin(request);
+
+        const session = await readSession(request);
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
+
+        return Response.json(await importSession.abort(forwardedHeaders, session), { status: 200 });
     };
 
     /**
@@ -455,10 +627,22 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         [CONNECTOR_SYNC_PATH]: handleConnectorSync,
         [EXPORT_PATH]: handleExport,
         [EXPORT_TAP_RUN_PATH]: handleExportTapRun,
+        [IMPORT_ABORT_PATH]: handleImportAbort,
+        [IMPORT_COMMIT_PATH]: handleImportCommit,
         [IMPORT_PATH]: handleImport,
         [SYNC_PATH]: handleCdcSync,
     };
 };
 
 export type { DataMovementAdminRouteDeps };
-export { APPLY_PATH, buildDataMovementAdminRoutes, CONNECTOR_SYNC_PATH, EXPORT_PATH, EXPORT_TAP_RUN_PATH, IMPORT_PATH, SYNC_PATH };
+export {
+    APPLY_PATH,
+    buildDataMovementAdminRoutes,
+    CONNECTOR_SYNC_PATH,
+    EXPORT_PATH,
+    EXPORT_TAP_RUN_PATH,
+    IMPORT_ABORT_PATH,
+    IMPORT_COMMIT_PATH,
+    IMPORT_PATH,
+    SYNC_PATH,
+};
