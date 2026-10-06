@@ -436,6 +436,11 @@ describe("edge block — suspended-hostnames list", () => {
 });
 
 describe(createHttpHostList, () => {
+    // List item ids are exactly 32 characters (Delete List Items reference).
+    const ID_1 = "a".repeat(32);
+    const ID_2 = "b".repeat(32);
+    const ID_3 = "c".repeat(32);
+
     const answer = (result: unknown[], after?: string): Response =>
         Response.json({ result, result_info: after === undefined ? {} : { cursors: { after } }, success: true });
 
@@ -452,12 +457,13 @@ describe(createHttpHostList, () => {
 
                 return Promise.resolve(
                     url.includes("cursor=")
-                        ? answer([{ hostname: { url_hostname: "B.example.com" }, id: "i2" }])
+                        ? answer([{ hostname: { url_hostname: "B.example.com" }, id: ID_2 }])
                         : answer(
                               [
-                                  { hostname: { url_hostname: "a.example.com" }, id: "i1" },
+                                  { hostname: { url_hostname: "a.example.com" }, id: ID_1 },
                                   { id: "no-hostname" },
-                                  { hostname: { url_hostname: "x".repeat(300) }, id: "i3" },
+                                  { hostname: { url_hostname: "c.example.com" }, id: "short" },
+                                  { hostname: { url_hostname: "x".repeat(300) }, id: ID_3 },
                               ],
                               "c1",
                           ),
@@ -468,8 +474,8 @@ describe(createHttpHostList, () => {
 
         await expect(list.items()).resolves.toStrictEqual({
             items: [
-                { hostname: "a.example.com", id: "i1" },
-                { hostname: "b.example.com", id: "i2" },
+                { hostname: "a.example.com", id: ID_1 },
+                { hostname: "b.example.com", id: ID_2 },
             ],
             truncated: false,
         });
@@ -510,11 +516,11 @@ describe(createHttpHostList, () => {
         });
 
         await list.add(["a.example.com"]);
-        await list.remove(["i1"]);
+        await list.remove([ID_1]);
 
         expect(bodies).toStrictEqual([
             { body: [{ comment: "lunora: organization suspended", hostname: { url_hostname: "a.example.com" } }], method: "POST" },
-            { body: { items: [{ id: "i1" }] }, method: "DELETE" },
+            { body: { items: [{ id: ID_1 }] }, method: "DELETE" },
         ]);
     });
 });

@@ -33,9 +33,16 @@ const PAGE_SIZE = 500;
 /** Pages read at most: 10,000 items, the account-wide list item limit. */
 export const MAX_LIST_PAGES = 20;
 
-/** Longest hostname (RFC 1035) and item id accepted from a list response. */
+/** Longest hostname (RFC 1035) accepted from a list response. */
 const MAX_HOSTNAME = 253;
-const MAX_ID = 64;
+
+/**
+ * A list item id: exactly 32 characters, per the Delete List Items reference
+ * (`items[].id`, minLength 32 / maxLength 32,
+ * https://developers.cloudflare.com/api/resources/rules/subresources/lists/subresources/items/methods/delete/).
+ * An item answering any other id is dropped, so the sweep never sends one back.
+ */
+const ITEM_ID = /^[\da-z]{32}$/iu;
 
 /** A list item off the wire, or `undefined` when it is not a well-formed hostname item. */
 const toItem = (raw: unknown): HostListItem | undefined => {
@@ -43,7 +50,7 @@ const toItem = (raw: unknown): HostListItem | undefined => {
     const hostname = item?.hostname?.url_hostname;
     const id = item?.id;
 
-    return typeof hostname === "string" && typeof id === "string" && hostname.length <= MAX_HOSTNAME && id.length > 0 && id.length <= MAX_ID
+    return typeof hostname === "string" && typeof id === "string" && hostname.length <= MAX_HOSTNAME && ITEM_ID.test(id)
         ? { hostname: hostname.toLowerCase(), id }
         : undefined;
 };
@@ -53,6 +60,8 @@ export const createHttpHostList = (options: CloudflareAccountAccess & { listId: 
     const path = `/accounts/${options.accountId}/rules/lists/${encodeURIComponent(options.listId)}/items`;
 
     return {
+        // `POST .../items` with `[{ hostname: { url_hostname } }]` (Create List Items reference:
+        // https://developers.cloudflare.com/api/resources/rules/subresources/lists/subresources/items/methods/create/).
         add: async (hostnames) => {
             await call(path, {
                 body: hostnames.map((hostname) => {
@@ -88,6 +97,9 @@ export const createHttpHostList = (options: CloudflareAccountAccess & { listId: 
 
             return { items, truncated: true };
         },
+        // `DELETE /accounts/{account_id}/rules/lists/{list_id}/items` with `{ items: [{ id }] }`,
+        // answering an async `operation_id` — checked against the Delete List Items
+        // reference: https://developers.cloudflare.com/api/resources/rules/subresources/lists/subresources/items/methods/delete/
         remove: async (ids) => {
             await call(path, {
                 body: {
