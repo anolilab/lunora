@@ -19,7 +19,14 @@ interface RecordedCall {
     name: string;
 }
 
-const makeClient = (calls: RecordedCall[] = []): CreemClientLike => {
+/** Pages of a customer's subscriptions, as `customers.listSubscriptions` returns them. */
+const subscriptionPages =
+    (...pages: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>) =>
+    async (_customerId: string, page = 1) => {
+        return { items: pages[page - 1] ?? [], pagination: { nextPage: page < pages.length ? page + 1 : null } };
+    };
+
+const makeClient = (calls: RecordedCall[] = [], subscriptions = subscriptionPages([])): CreemClientLike => {
     return {
         checkouts: {
             create: async (request: Record<string, unknown>) => {
@@ -42,6 +49,7 @@ const makeClient = (calls: RecordedCall[] = []): CreemClientLike => {
 
                 return { customer_portal_link: "https://creem.test/portal" };
             },
+            listSubscriptions: subscriptions,
         },
         subscriptions: {
             cancel: async (id: string, request?: Record<string, unknown>) => {
@@ -123,10 +131,35 @@ describe("creem adapter", () => {
         const calls: RecordedCall[] = [];
         const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
 
-        const portal = await adapter.createPortalSession({ customerId: "cust_1", returnUrl: "https://x/back" });
+        const portal = await adapter.createPortalSession({ customerId: "cust_1", referenceId: "user_1", returnUrl: "https://x/back" });
 
         expect(portal).toEqual({ url: "https://creem.test/portal" });
         expect(calls.find((call) => call.name === "billing")?.args[0]).toEqual({ customerId: "cust_1" });
+    });
+
+    it("refuses the hosted portal when the customer holds another reference's subscription (security)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        // Page 2 holds org_b's subscription: the same person pays for a second org with one email.
+        const subscriptions = subscriptionPages([{ id: "sub_a", metadata: { referenceId: "org_a" } }], [{ id: "sub_b", metadata: { referenceId: "org_b" } }]);
+        const adapter = createCreemAdapter({ client: makeClient(calls, subscriptions), webhookSecret: SECRET });
+
+        await expect(adapter.createPortalSession({ customerId: "cust_1", referenceId: "org_a", returnUrl: "https://x/back" })).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+        expect(calls.some((call) => call.name === "billing")).toBe(false);
+    });
+
+    it("opens the portal when every subscription is this reference's or unattributed", async () => {
+        expect.assertions(1);
+
+        const subscriptions = subscriptionPages([{ id: "sub_a", metadata: { referenceId: "org_a" } }, { id: "sub_dashboard" }]);
+        const adapter = createCreemAdapter({ client: makeClient([], subscriptions), webhookSecret: SECRET });
+
+        await expect(adapter.createPortalSession({ customerId: "cust_1", referenceId: "org_a", returnUrl: "https://x/back" })).resolves.toEqual({
+            url: "https://creem.test/portal",
+        });
     });
 
     it("cancels at period end via mode=scheduled and reflects the scheduled-cancel state", async () => {

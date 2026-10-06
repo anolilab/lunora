@@ -165,6 +165,8 @@ export interface AttachInput extends Omit<CheckoutRequest, "mode"> {
 
 export interface PortalInput {
     readonly customerId: string;
+    /** The authorized reference the portal is opened for. */
+    readonly referenceId: string;
     readonly returnUrl: string;
 }
 

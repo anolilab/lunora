@@ -499,6 +499,7 @@ interface PlanDefinition {
 ```ts
 interface PortalInput {
     readonly customerId: string;
+    readonly referenceId: string;
     readonly returnUrl: string;
 }
 ```

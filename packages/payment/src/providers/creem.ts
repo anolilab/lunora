@@ -17,6 +17,7 @@
 import type { Creem } from "creem";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
+import { LunoraPaymentError } from "../errors";
 import { asRecord, readAny, readAnyNumber, readBoolean, readEpochMs, readNumber, readString, referenceFromMetadata } from "../json";
 import { moneyFromMinor, zeroMoney } from "../money";
 import type {
@@ -314,6 +315,32 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         },
 
         createPortalSession: async (input: PortalInput) => {
+            // Creem's hosted portal is customer-wide, and Creem keeps one customer per email, so a
+            // customer can hold another reference's subscription (the same person paying for a second
+            // org). Opening it would let this reference see and cancel that one: refuse instead, and
+            // manage those subscriptions in-app through the per-reference facade calls. Subscriptions
+            // without a recorded reference (created outside this app) do not block.
+            for (let page = 1; ; page += 1) {
+                // eslint-disable-next-line no-await-in-loop -- pages are fetched in order until one names another owner
+                const { items, pagination } = await client.customers.listSubscriptions(input.customerId, page, 100);
+                const foreign = items.find((subscription) => {
+                    const owner = referenceFromMetadata(asRecord(subscription));
+
+                    return owner !== undefined && owner !== "" && owner !== input.referenceId;
+                });
+
+                if (foreign !== undefined) {
+                    throw new LunoraPaymentError(
+                        "FORBIDDEN",
+                        `the Creem billing portal for this customer would expose a subscription owned by another reference; manage it in-app instead`,
+                    );
+                }
+
+                if (pagination.nextPage === null) {
+                    break;
+                }
+            }
+
             const link = await client.customers.generateBillingLinks({ customerId: input.customerId });
 
             return { url: readAny(link, "customer_portal_link", "customerPortalLink") ?? "" };

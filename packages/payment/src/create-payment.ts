@@ -447,7 +447,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 throw new LunoraPaymentError("NOT_FOUND", `no customer for reference "${referenceId}"`);
             }
 
-            return adapter.createPortalSession({ customerId: customer.id, returnUrl });
+            return adapter.createPortalSession({ customerId: customer.id, referenceId, returnUrl });
         },
 
         handleWebhook: async (request) => {

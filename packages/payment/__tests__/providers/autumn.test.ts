@@ -284,7 +284,7 @@ describe("autumn adapter", () => {
 
         const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
 
-        await expect(adapter.createPortalSession({ customerId: "user_1", returnUrl: "https://x/back" })).resolves.toEqual({
+        await expect(adapter.createPortalSession({ customerId: "user_1", referenceId: "user_1", returnUrl: "https://x/back" })).resolves.toEqual({
             url: "https://autumn.test/portal",
         });
     });
