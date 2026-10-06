@@ -1,9 +1,9 @@
 /**
  * Byte encodings for box identity (plan 458 D4): the box's Ed25519 public key
  * and every signature travel as base64url without padding, the form
- * `@lunora/hostd/protocol` specifies (`protocol/hostd/README.md` §4.1, §6).
+ * the hostd protocol (`src/hostd/protocol.ts`) specifies (`protocol/hostd/README.md` §4.1, §6).
  */
-import { isSignature } from "@lunora/hostd/protocol";
+import { isSignature } from "../hostd/protocol";
 
 const BASE64URL_PATTERN = /^[\w-]*$/u;
 

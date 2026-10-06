@@ -15,7 +15,7 @@
  * when the box enrolled: a box enrolled on an old celld has not been behind for
  * longer than it has existed.
  */
-import type { BoxVersions } from "@lunora/hostd/protocol";
+import type { BoxVersions } from "../hostd/protocol";
 
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";

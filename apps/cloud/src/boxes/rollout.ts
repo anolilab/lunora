@@ -29,7 +29,7 @@
  *   sweep and the reconnect replay carry the flag on; a normal rollout never
  *   sets it.
  */
-import type { BoxVersions, UpgradeJob } from "@lunora/hostd/protocol";
+import type { BoxVersions, UpgradeJob } from "../hostd/protocol";
 
 import type { ControlPlaneStore } from "../d1-store";
 import type { FleetUpgradePlan, FleetUpgradeResult } from "../fleet/upgrade";

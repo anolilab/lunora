@@ -1,6 +1,6 @@
 "name": "hostd Cargo"
 
-# The Rust daemon `lunora-hostd` (apps/hostd/daemon): tests, clippy and rustfmt, and
+# The Rust daemon `lunora-hostd` (apps/hostd): tests, clippy and rustfmt, and
 # `cargo deny` over Cargo.lock. Path-filtered on what the crate builds from: its own
 # sources, the release keys build.rs compiles in, and the golden protocol frames its
 # tests decode. The integration lane (test.yml `test-hostd`) and the release build
@@ -13,15 +13,29 @@
         "types": ["opened", "synchronize", "reopened"]
         "branches": ["main", "alpha", "next", "beta", "feat/**", "fix/**"]
         "paths":
-            - "apps/hostd/daemon/**"
-            - "apps/hostd/trusted-release-keys.json"
+            - "apps/hostd/Cargo.toml"
+            - "apps/hostd/Cargo.lock"
+            - "apps/hostd/build.rs"
+            - "apps/hostd/deny.toml"
+            - "apps/hostd/rust-toolchain.toml"
+            - "apps/hostd/rustfmt.toml"
+            - "apps/hostd/src/**"
+            - "apps/hostd/tests/**"
+            - "protocol/hostd/trusted-release-keys.json"
             - "protocol/hostd/fixtures/**"
             - ".github/workflows/hostd-cargo.yml"
     "push":
         "branches": ["main", "alpha"]
         "paths":
-            - "apps/hostd/daemon/**"
-            - "apps/hostd/trusted-release-keys.json"
+            - "apps/hostd/Cargo.toml"
+            - "apps/hostd/Cargo.lock"
+            - "apps/hostd/build.rs"
+            - "apps/hostd/deny.toml"
+            - "apps/hostd/rust-toolchain.toml"
+            - "apps/hostd/rustfmt.toml"
+            - "apps/hostd/src/**"
+            - "apps/hostd/tests/**"
+            - "protocol/hostd/trusted-release-keys.json"
             - "protocol/hostd/fixtures/**"
             - ".github/workflows/hostd-cargo.yml"
     "workflow_dispatch": # yamllint disable-line rule:empty-values
@@ -40,12 +54,13 @@
     "test":
         "name": "Test, clippy and rustfmt"
         "runs-on": "ubuntu-24.04"
-        "timeout-minutes": 20
+        # The black-box tests build two lunora-hostd variants, each in a target directory of its own.
+        "timeout-minutes": 30
         "permissions":
             "contents": "read" # for checkout
         "defaults":
             "run":
-                "working-directory": "apps/hostd/daemon"
+                "working-directory": "apps/hostd"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -55,7 +70,7 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            # apps/hostd/daemon/rust-toolchain.toml pins the same channel and components.
+            # apps/hostd/rust-toolchain.toml pins the same channel and components.
             - "name": "Install Rust stable toolchain"
               "uses": "dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9" # v1
               "with":
@@ -69,8 +84,8 @@
                   "path": |
                       ~/.cargo/registry
                       ~/.cargo/git
-                      apps/hostd/daemon/target
-                  "key": "hostd-cargo-test-${{ hashFiles('apps/hostd/daemon/Cargo.lock', 'apps/hostd/daemon/rust-toolchain.toml') }}"
+                      apps/hostd/target
+                  "key": "hostd-cargo-test-${{ hashFiles('apps/hostd/Cargo.lock', 'apps/hostd/rust-toolchain.toml') }}"
                   "restore-keys": |
                       hostd-cargo-test-
 
@@ -78,10 +93,12 @@
               "run": "cargo fmt --check"
 
             - "name": "Run cargo clippy"
-              "run": "cargo clippy --all-targets --locked -- -D warnings"
+              "run": "cargo clippy --all-targets --locked --features test-fakes -- -D warnings"
 
+            # `test-fakes` builds the fake celld and Caddy and the black-box tests that drive the
+            # daemon against them (tests/support); the lane's tests stay `#[ignore]`d (test.yml).
             - "name": "Run cargo test"
-              "run": "cargo test --locked"
+              "run": "cargo test --locked --features test-fakes"
 
             - "name": "Save Cargo cache"
               "if": "github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true'"
@@ -90,7 +107,7 @@
                   "path": |
                       ~/.cargo/registry
                       ~/.cargo/git
-                      apps/hostd/daemon/target
+                      apps/hostd/target
                   "key": "${{ steps.cargo-cache.outputs.cache-primary-key }}"
 
     # Licenses (deny.toml says why each is allowed), RustSec advisories, bans and sources.
@@ -110,7 +127,7 @@
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             # Not oxc-project/setup-rust (visulima's choice): it rewrites a rust-toolchain.toml at the
-            # repository root, and this repository keeps the crate's in apps/hostd/daemon.
+            # repository root, and this repository keeps the crate's in apps/hostd.
             - "name": "Install Rust stable toolchain"
               "uses": "dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9" # v1
               "with":
@@ -122,7 +139,7 @@
                   "tool": "cargo-deny"
 
             - "name": "Run cargo deny"
-              "working-directory": "apps/hostd/daemon"
+              "working-directory": "apps/hostd"
               "run": "cargo deny check"
 
     # Single required check: green when both jobs passed.

@@ -1,4 +1,4 @@
-import type { CloudMessage, DeployJob } from "@lunora/hostd/protocol";
+import type { CloudMessage, DeployJob } from "../src/hostd/protocol";
 import { describe, expect, it, vi } from "vitest";
 
 import { randomBase64Url } from "../src/boxes/encoding";

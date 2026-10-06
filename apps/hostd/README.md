@@ -1,4 +1,4 @@
-# @lunora/hostd
+# lunora-hostd
 
 `lunora-hostd` is the daemon a customer installs on their own server so Lunora
 Cloud can run [celld](../../packages/platform-celld) fleets on it (plan 458). It
@@ -66,7 +66,7 @@ stable release, or — on a box that runs a pre-release, or with `--prerelease` 
 the newest release of any kind. It reads that from `latest.json` on the GitHub
 Release `hostd-latest` (`{"schema":1,"stable":…,"prerelease":…}`), which the
 release workflow moves forward after each `hostd-v*` release
-([`scripts/update-latest-pointer.mjs`](./scripts/update-latest-pointer.mjs);
+(`hostd-release latest-pointer`, [`src/release_tools.rs`](./src/release_tools.rs);
 each channel only ever moves forward), rather than from the repository's
 release list, where a release per package per version pushes `hostd-v*` off
 the first page at once. The pointer is a hint, not a trust root: the manifest
@@ -112,8 +112,8 @@ the token in shell history and sudo's log; `--token` is now refused.
 ### How install.sh trusts a release
 
 1. **Trust root: the release keys pinned in `install.sh`** (`trusted_key()`, the
-   same set as [`trusted-release-keys.json`](./trusted-release-keys.json); a
-   test keeps them equal). `install.sh` itself comes over HTTPS from the GitHub Release,
+   same set as [`trusted-release-keys.json`](../../protocol/hostd/trusted-release-keys.json);
+   a test in `tests/install_script.rs` keeps them equal). `install.sh` itself comes over HTTPS from the GitHub Release,
    with its SHA-256 in the release notes and a provenance attestation.
 2. It downloads `manifest.json`, looks its `keyId` up among the pinned keys
    (never a key the manifest brings), refuses a placeholder, checks that the
@@ -130,7 +130,7 @@ the token in shell history and sudo's log; `--token` is now refused.
 4. It runs that binary's `install-release` **as `lunora-hostd`**: the binary
    validates the manifest strictly and verifies it again with the keys
    compiled into it, then installs the release exactly as the `upgrade` job
-   does (one implementation, `daemon/src/daemon/release_install.rs`): each file is
+   does (one implementation, `src/daemon/release_install.rs`): each file is
    checked against its size and SHA-256, decompressed, run once
    (`--version`), staged in `<releaseId>.partial/`, renamed into place, and
    `current` is switched in one rename. The release that ran before stays, for
@@ -230,7 +230,7 @@ every connect. `destroy` with `deleteData` deletes exactly the
 **Its own logs** go to the journal (stderr), and — once the control plane's
 `config` frame names an OTLP endpoint and the organization's ingest key
 (protocol §5.2) — to Lunora Cloud as OTLP logs (`POST {endpoint}/v1/logs`,
-`daemon/src/daemon/log_forwarder.rs`): hostd's warnings and errors, each celld node's
+`src/daemon/log_forwarder.rs`): hostd's warnings and errors, each celld node's
 stderr (`RUST_LOG=error,celld=warn`; a fleet's stdout, its app's own output,
 stays on the box) and Caddy's warnings and errors, tagged `box:<slug>`,
 `source` and, for a fleet, `alias:<alias>` (its `service.name` is the alias,
@@ -303,7 +303,7 @@ tenant sandbox):
   before it enters its working directory, so it enters a directory only it
   may. A fleet's directory is likewise emptied by `find` as `lunora-fleet`,
   then removed by the daemon with `rmdir`, which needs only `fleets/`. The
-  access model in `daemon/src/daemon/isolation.rs` computes, from install.sh's
+  access model in `src/daemon/isolation.rs` computes, from install.sh's
   layout and the modes hostd sets, what each user can reach.
 - **Environment.** A fleet's environment is built from nothing and held to an
   allowlist (`PATH`, `HOME`/`TMPDIR` = its own directory, `LANG`, celld's
@@ -393,15 +393,16 @@ time) and a `SystemCallFilter` (celld's needs are not pinned down yet).
 
 ## The `test:hostd` lane
 
-`pnpm run test:hostd` (vitest project `integration`, gated behind
-`LUNORA_HOSTD_TESTS=1`) drives the built daemon against real celld, a Caddy
-built with `caddy-ratelimit`, an S3-compatible bucket and an in-process fake
-control plane. It reads `LUNORA_CELLD_BIN`, `LUNORA_CADDY_BIN`,
-`LUNORA_HOSTD_S3_ENDPOINT` and `LUNORA_HOSTD_BIN` (the Rust daemon,
-`daemon/target/release/lunora-hostd` after `pnpm run build:daemon`). Its files
-run one at a time:
+Two `#[ignore]`d cargo tests, run with
+`LUNORA_HOSTD_TESTS=1 cargo test --features test-fakes --test lane --test lane_upgrade -- --ignored --test-threads=1`,
+drive the built daemon against real celld, a Caddy built with
+`caddy-ratelimit`, an S3-compatible bucket and an in-process fake control plane
+(`tests/support/plane.rs`). They read `LUNORA_CELLD_BIN`, `LUNORA_CADDY_BIN`,
+`LUNORA_HOSTD_S3_ENDPOINT` and `LUNORA_HOSTD_BIN` (`target/release/lunora-hostd`
+after `cargo build --release`; the debug build otherwise). Each is one test
+whose steps run in order on one box:
 
-- [`lane.test.ts`](./__tests__/integration/lane.test.ts): enrol, session,
+- [`lane.rs`](./tests/lane.rs): enrol, session,
   deploy, HTTP through Caddy, a usage report, then the **target-driver
   conformance legs** (`apps/cloud/__tests__/support/target-conformance.ts`)
   through the real daemon, reimplemented here because hostd never depends on
@@ -411,7 +412,7 @@ run one at a time:
   existed, a destroyed fleet is re-created at the same URL ("running" is what
   the host reports: `state.json`) — a refused release forwarded to the
   control plane as an OTLP log, and destroy with `deleteData`.
-- [`upgrade.test.ts`](./__tests__/integration/upgrade.test.ts): the **N → N+1
+- [`lane_upgrade.rs`](./tests/lane_upgrade.rs): the **N → N+1
   gate** (plan 458 W7). Release N is installed by its own
   `lunora-hostd install-release`, an alias is deployed and served, then an
   `upgrade` job brings release N+1 (signed manifest from the control plane,
@@ -419,7 +420,7 @@ run one at a time:
   switches `current`, exits, is started again on N+1 (by systemd, or by the
   lane standing in for it), and the alias answers again. Both releases'
   `lunora-hostd` are cargo builds trusting the tests' own release key
-  ([`__tests__/helpers/hostd-binary.ts`](./__tests__/helpers/hostd-binary.ts)
+  ([`tests/support/hostd.rs`](./tests/support/hostd.rs)
   points `LUNORA_HOSTD_TRUSTED_KEYS` at it, which the release workflow refuses
   to build with) — no shipped build trusts anything but
   `trusted-release-keys.json`.
@@ -431,31 +432,20 @@ asserts the isolation with probes from inside a deployed app, as the fleet
 user and as the edge user. Locally, run it in an unprivileged network
 namespace (`unshare --user --map-current-user --net --keep-caps`, bring `lo`
 up, start the S3 endpoint inside), which also keeps a workstation firewall
-from blocking the binaries. See [`__tests__/integration/lane.ts`](./__tests__/integration/lane.ts).
+from blocking the binaries. See [`tests/support/lane.rs`](./tests/support/lane.rs).
+
+The rest of `tests/` runs on any workstation with `cargo test --features test-fakes`:
+the daemon, `enrol`, the `upgrade` job and the command line against the fake
+control plane and a fake celld and Caddy (`tests/fakes/`, binaries the
+`test-fakes` feature builds, so no release ever contains them).
 
 ## Wire protocol
 
-`@lunora/hostd/protocol` holds the message types, the strict validators and the
-signing payloads both sides use. It has no runtime dependencies and runs in Node
-and workerd. The normative contract is
-[`protocol/hostd/README.md`](../../protocol/hostd/README.md).
-
-```ts
-import { decodeBoxMessage, encodeMessage, negotiateProtocolVersion, peekProtocolVersion } from "@lunora/hostd/protocol";
-
-const offered = peekProtocolVersion(frame);
-const negotiation = negotiateProtocolVersion(offered ?? 0);
-
-if (!negotiation.ok) {
-    socket.send(encodeMessage({ code: negotiation.code, message: negotiation.message, type: "error" }));
-    socket.close();
-}
-
-const decoded = decodeBoxMessage(frame); // never throws
-```
-
-`apps/cloud` depends on this package; this package never depends on
-`apps/cloud`.
+The normative contract is [`protocol/hostd/README.md`](../../protocol/hostd/README.md).
+The daemon implements it in [`src/wire/`](./src/wire); the control plane's
+TypeScript half (message types, strict validators, signing payloads, release
+manifest verification on WebCrypto) lives in `apps/cloud/src/hostd`. The golden
+frames in `protocol/hostd/fixtures/messages.json` hold both to the same bytes.
 
 ## Releases & signing
 
@@ -463,45 +453,24 @@ A box installs `hostd`, celld and Caddy from a **signed release manifest**
 (plan 458 W7, §9 Q2). The manifest pins every binary, per platform
 (`linux-x64`, `linux-arm64`), by URL, SHA-256 and size. It is signed with
 **Ed25519** over its canonical bytes, and the public key that verifies it is
-pinned in [`trusted-release-keys.json`](./trusted-release-keys.json), the one
-file both the daemon (compiled in by `daemon/build.rs`) and the control plane
-(`HOSTD_TRUSTED_RELEASE_KEYS` from `@lunora/hostd/release`, which
-[`src/trusted-release-keys.ts`](./src/trusted-release-keys.ts) reads from it)
-trust. Verifying
-needs only WebCrypto; nothing like minisign or Sigstore runs on the box.
-GitHub artifact attestations add build provenance on top
-(`gh attestation verify <file> --repo anolilab/lunora`), but a box does not
-need them. The byte-level format, for implementations in any language, is §8 of
-[`protocol/hostd/README.md`](../../protocol/hostd/README.md).
-
-```ts
-import { HOSTD_TRUSTED_RELEASE_KEYS, verifyReleaseManifest } from "@lunora/hostd/release";
-import { verifyArtifact } from "@lunora/hostd/release/verify";
-
-const verified = await verifyReleaseManifest(JSON.parse(manifestJson), HOSTD_TRUSTED_RELEASE_KEYS);
-
-if (verified.ok) {
-    const [artifact] = verified.envelope.manifest.hostd.artifacts;
-    const checked = await verifyArtifact(downloadedPath, artifact.sha256, artifact.size);
-}
-```
-
-`@lunora/hostd/release` (types, validator, canonical bytes, and
-`verifyReleaseManifest` on WebCrypto) has no Node imports and runs in workerd —
-the control plane verifies a release with the same function a box does.
-`@lunora/hostd/release/verify` (signing, artifact hashing) is Node only.
+pinned in [`trusted-release-keys.json`](../../protocol/hostd/trusted-release-keys.json),
+the one file both the daemon (compiled in by `build.rs`) and the control plane
+(`apps/cloud/src/hostd/trusted-release-keys.ts`) trust. Nothing like minisign
+or Sigstore runs on the box. GitHub artifact attestations add build provenance
+on top (`gh attestation verify <file> --repo anolilab/lunora`), but a box does
+not need them. The byte-level format, for implementations in any language, is
+§8 of [`protocol/hostd/README.md`](../../protocol/hostd/README.md).
 
 ### Building
 
-- **The daemon is a Rust crate**, [`daemon/`](./daemon) (toolchain pinned by
-  `daemon/rust-toolchain.toml`). `pnpm run build:daemon` runs
-  `cargo build --release --locked` and builds
-  `daemon/target/release/lunora-hostd` for the machine it runs on;
-  `pnpm run test:daemon` runs `cargo test --locked`. `daemon/build.rs` stamps
+- **This directory is a Rust crate** (toolchain pinned by `rust-toolchain.toml`),
+  not an npm package. `cargo build --release --locked` builds
+  `target/release/lunora-hostd` for the machine it runs on; `cargo test --locked`
+  runs the unit and integration tests. `build.rs` stamps
   `LUNORA_HOSTD_VERSION` (default `0.0.0`) as the version and compiles in
-  `trusted-release-keys.json`; `LUNORA_HOSTD_TRUSTED_KEYS` names another key
+  `protocol/hostd/trusted-release-keys.json`; `LUNORA_HOSTD_TRUSTED_KEYS` names another key
   file, for test builds only. `.github/workflows/hostd-cargo.yml` runs tests,
-  clippy, `cargo fmt --check` and `cargo deny check` (`daemon/deny.toml`).
+  clippy, `cargo fmt --check` and `cargo deny check` (`deny.toml`).
 - **Releases are static musl binaries**, cross-built with `cargo zigbuild`
   (`--release --locked --target <arch>-unknown-linux-musl`) on a runner of
   each architecture, so each is smoke-tested natively: `--version` must print
@@ -516,10 +485,12 @@ the control plane verifies a release with the same function a box does.
   `caddy list-modules` (it must list `http.handlers.rate_limit`), and ships as
   `caddy-<platform>.gz` on the same GitHub Release, next to `install.sh` and
   `lunora-hostd.service`.
-- `scripts/make-release-manifest.mjs` writes and signs `manifest.json`: `hostd`
+- `hostd-release manifest` (the crate's second binary, a maintainer and CI tool
+  never shipped to a box: `cargo run --release --bin hostd-release -- --help`)
+  writes and signs `manifest.json`: `hostd`
   and Caddy entries are hashed from the built files in `--artifacts-dir`
   (`lunora-hostd-<platform>`, `caddy-<platform>.gz`), celld entries and the
-  Caddy version + module list come from `release-pins.json`. `--verify` checks
+  Caddy version + module list come from `release-pins.json`. `hostd-release verify` checks
   an envelope (and, with `--artifacts-dir`, the hostd and Caddy files). It
   refuses to sign while an input is missing or a placeholder, or when the
   signature does not verify against a key pinned in
@@ -527,8 +498,8 @@ the control plane verifies a release with the same function a box does.
 - `.github/workflows/hostd-release.yml` does all of it on a `hostd-v<version>`
   tag or a manual dispatch: test and build the daemon and Caddy on x64 and arm64
   runners with smoke tests, sign, verify, attest, publish the GitHub Release
-  `hostd-v<version>`. The committed `daemon/Cargo.toml` and `package.json`
-  versions stay `0.0.0`; the workflow stamps the released version through
+  `hostd-v<version>`. The committed `Cargo.toml` version stays
+  `0.0.0`; the workflow stamps the released version through
   `LUNORA_HOSTD_VERSION`, and refuses to build with `LUNORA_HOSTD_TRUSTED_KEYS`
   set.
 
@@ -549,7 +520,7 @@ Keep the two in step.
 1. Generate the key pair on a trusted machine:
    `openssl genpkey -algorithm ed25519 -out hostd-release.pem`.
 2. Print the public half and its key id:
-   `pnpm --filter @lunora/hostd run build && node apps/hostd/scripts/release-public-key.mjs hostd-release.pem`.
+   `cargo run --release --bin hostd-release -- public-key hostd-release.pem` here.
    The key id is `ed25519-` plus the first 16 hex digits of SHA-256 over the
    raw public key, so it cannot drift from the key.
 3. Commit the two printed entries — to `"keys"` in `trusted-release-keys.json`

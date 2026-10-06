@@ -10,8 +10,8 @@
  */
 import type { D1CtxDbOptions } from "@lunora/d1";
 import { runD1GlobalTableMigrations } from "@lunora/d1";
-import type { CloudMessage } from "@lunora/hostd/protocol";
-import { challengeSigningPayload, decodeCloudMessage } from "@lunora/hostd/protocol";
+import type { CloudMessage } from "../../src/hostd/protocol";
+import { challengeSigningPayload, decodeCloudMessage } from "../../src/hostd/protocol";
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 

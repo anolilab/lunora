@@ -4,7 +4,7 @@
  * binding, so it never leaves Cloudflare. The public router forwards nothing
  * but the box's own WebSocket upgrade (`fetch`) to the object.
  */
-import type { HostdJob } from "@lunora/hostd/protocol";
+import type { HostdJob } from "../hostd/protocol";
 
 import type { JobOutcome } from "./jobs";
 

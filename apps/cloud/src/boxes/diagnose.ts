@@ -8,7 +8,7 @@
  * frame's worth — so a box that never stops printing cannot grow the response
  * the studio is handed.
  */
-import { HOSTD_PROTOCOL_LIMITS } from "@lunora/hostd/protocol";
+import { HOSTD_PROTOCOL_LIMITS } from "../hostd/protocol";
 
 /** How long the control plane waits for a box to finish diagnosing itself. */
 export const DIAGNOSE_TIMEOUT_MS = 60_000;

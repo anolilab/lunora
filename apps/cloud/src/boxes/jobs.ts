@@ -7,7 +7,7 @@
  * In memory: a job only lives as long as the request that dispatched it, and
  * that request keeps its Durable Object awake (and un-hibernated) until then.
  */
-import type { ProgressMessage, ResultMessage } from "@lunora/hostd/protocol";
+import type { ProgressMessage, ResultMessage } from "../hostd/protocol";
 
 /** How a job ended, for a caller that does not care how a box phrases it. */
 export type JobOutcome = Pick<ResultMessage, "error" | "ok" | "url">;

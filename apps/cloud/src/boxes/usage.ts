@@ -18,7 +18,7 @@
  * (`session-do.ts`) also remembers each window it processed, rows or not, and
  * caps how many reports a socket may send.
  */
-import type { ReportMessage } from "@lunora/hostd/protocol";
+import type { ReportMessage } from "../hostd/protocol";
 
 import type { ControlPlaneStore } from "../d1-store";
 

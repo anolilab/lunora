@@ -46,11 +46,11 @@ MIN_MEMORY_MIB=1900
 # BEGIN TRUSTED RELEASE KEYS
 # The release-signing public keys, by key id: the same set as
 # apps/hostd/trusted-release-keys.json (a test
-# keeps them equal; scripts/release-public-key.mjs prints both entries).
+# keeps them equal; `hostd-release public-key` prints both entries).
 trusted_key() {
     case "$1" in
         ed25519-placeholder)
-            printf '%s\n' 'PLACEHOLDER-NOT-A-KEY: replace with the output of apps/hostd/scripts/release-public-key.mjs'
+            printf '%s\n' 'PLACEHOLDER-NOT-A-KEY: replace with the output of hostd-release public-key'
             ;;
         *)
             return 1
@@ -350,7 +350,7 @@ as_hostd() {
 
 # The release to install: --version, else the newest on the box's channel, as the
 # release workflow records it in latest.json on the GitHub Release hostd-latest
-# (apps/hostd/scripts/update-latest-pointer.mjs). The repository's release list
+# (`hostd-release latest-pointer`). The repository's release list
 # is no help: it holds a release per package per version, and hostd's fall off
 # its first page at once. The pointer is only a hint — the manifest it leads to
 # is verified like any other, and lunora-hostd refuses a release older than the

@@ -1,12 +1,12 @@
 /**
  * Signed `lunora-hostd` releases on the control plane (plan 458 W7, G17): the
  * versions a release installs, and which stored release every box is measured
- * against. An envelope is verified by `@lunora/hostd/release`'s
+ * against. An envelope is verified by `../hostd/release.ts`'s
  * `verifyReleaseManifest` — the same function a box runs — against the pinned
  * `HOSTD_TRUSTED_RELEASE_KEYS` (`POST /v1/hostd/releases`, `src/deploy/routes/hostd.ts`).
  */
-import type { BoxVersions } from "@lunora/hostd/protocol";
-import type { HostdReleaseEnvelope } from "@lunora/hostd/release";
+import type { BoxVersions } from "../hostd/protocol";
+import type { HostdReleaseEnvelope } from "../hostd/release";
 
 /** The three versions a release installs — what a box's `hello` reports (`BoxVersions`), compared as a whole. */
 export const versionsOf = (envelope: HostdReleaseEnvelope): BoxVersions => {

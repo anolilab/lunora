@@ -16,7 +16,7 @@
  * Every refusal answers the same 401, so a caller learns nothing about which
  * box ids exist or which check failed.
  */
-import { HOSTD_REQUEST_HEADERS, isNonce, isProtocolId, requestSigningPayload } from "@lunora/hostd/protocol";
+import { HOSTD_REQUEST_HEADERS, isNonce, isProtocolId, requestSigningPayload } from "../hostd/protocol";
 
 import { verifyBoxSignature } from "./encoding";
 
