@@ -16,10 +16,13 @@ import { gzipSync } from "node:zlib";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { currentPlatform } from "../src/daemon/release-install";
 import type { HostdReleaseEnvelope } from "../src/release";
+import { buildHostd } from "./helpers/hostd-binary";
 import type { TestReleaseKey } from "./helpers/test-release";
-import { buildTestHostd, createTestReleaseKey, signTestRelease } from "./helpers/test-release";
+import { createTestReleaseKey, signTestRelease } from "./helpers/test-release";
+
+/** This machine's release platform, when it is one. */
+const PLATFORM = process.platform === "linux" ? ({ arm64: "linux-arm64", x64: "linux-x64" } as Record<string, string>)[process.arch] : undefined;
 
 const INSTALL_SCRIPT = new URL("../install/install.sh", import.meta.url).pathname;
 
@@ -51,7 +54,7 @@ const answerPrompts = (child: ChildProcessWithoutNullStreams, answers: ReadonlyA
 describe("install.sh, installing a release", () => {
     let root: string;
     let key: TestReleaseKey;
-    let launcher: Buffer;
+    let hostd: Buffer;
     let box: string;
 
     /** Publish `envelope` and its files as the GitHub Release `tag`. */
@@ -65,7 +68,7 @@ describe("install.sh, installing a release", () => {
     };
 
     const release = (version: string): { envelope: HostdReleaseEnvelope; files: Record<string, Uint8Array> } => {
-        const files = { caddy: script("v2.11.6 h1:test"), celld: gzipSync(script("celld 0.6.0")), "lunora-hostd": launcher };
+        const files = { caddy: script("v2.11.6 h1:test"), celld: gzipSync(script("celld 0.6.0")), "lunora-hostd": hostd };
         const envelope = signTestRelease(key, `hostd-v${version.replaceAll(".", "_")}`, `${DOWNLOADS}/hostd-v${version}`, {
             caddy: { bytes: files.caddy, version: "v2.11.6" },
             celld: { bytes: files.celld, compression: "gzip", version: "v0.6.0" },
@@ -91,7 +94,7 @@ describe("install.sh, installing a release", () => {
                     `INSTALL_DIR="${join(box, "opt")}"`,
                     `CONFIG_DIR="${join(box, "etc")}"`,
                     `DATA_DIR="${join(box, "data")}"`,
-                    `PLATFORM="${currentPlatform() ?? "linux-x64"}"`,
+                    `PLATFORM="${PLATFORM ?? "linux-x64"}"`,
                     body,
                 ].join("\n"),
             ],
@@ -101,12 +104,11 @@ describe("install.sh, installing a release", () => {
         return { code: result.status, output: `${result.stdout}${result.stderr}` };
     };
 
-    beforeAll(async () => {
+    beforeAll(() => {
         root = mkdtempSync(join(tmpdir(), "lunora-hostd-install-sh-"));
         key = createTestReleaseKey();
-        await buildTestHostd({ bundlePath: join(root, "hostd.cjs"), launcherPath: join(root, "hostd"), trustedKeys: key.trustedKeys, version: "1.0.0" });
-        launcher = readFileSync(join(root, "hostd"));
-    });
+        hostd = readFileSync(buildHostd({ trustedKeys: key.trustedKeys, version: "1.0.0" }));
+    }, 600_000);
 
     beforeEach(() => {
         box = mkdtempSync(join(root, "box-"));
@@ -153,7 +155,7 @@ describe("install.sh, installing a release", () => {
 
         const { envelope, files } = release("1.0.0");
 
-        publish("hostd-v1.0.0", envelope, { ...files, "lunora-hostd": Buffer.concat([launcher, Buffer.from("# tampered\n")]) });
+        publish("hostd-v1.0.0", envelope, { ...files, "lunora-hostd": Buffer.concat([hostd, Buffer.from("# tampered\n")]) });
 
         const result = installFunctions("VERSION=1.0.0; install_release");
 

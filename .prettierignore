@@ -68,6 +68,7 @@ marketing/videos/build/
 sdks/*/.build/
 sdks/**/target/
 sdks/**/.dart_tool/
+apps/hostd/daemon/target/
 
 # Schema baselines — written by `serializeSchemaSnapshot`, whose exact output is
 # the canonical form. Prettier reformats them to 4-space, so every

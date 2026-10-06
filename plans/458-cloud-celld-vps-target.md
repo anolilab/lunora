@@ -435,7 +435,7 @@ five jobs; the supervisor; Caddy; reports; `state.json`. Tested in
 `apps/hostd/__tests__/daemon/` against an in-process fake control plane and
 fake celld/Caddy binaries, and smoke-run by hand against real celld v0.6.0,
 Caddy v2.11.6 (with `caddy-ratelimit`) and moto, from `dist/bin.mjs` and from
-the single executable: deploy, serving through Caddy (Durable Object, D1,
+the release binary: deploy, serving through Caddy (Durable Object, D1,
 assets, forwarded host), a `report`, `diagnose`, `destroy` with `deleteData`.
 That smoke found two bugs the fakes then learned to catch (Caddy's admin API
 refuses Node's `fetch` without its own `Origin`; an access log created after
@@ -468,7 +468,7 @@ Caddy built from `release-pins.json` with xcaddy exactly as the release does,
 moto and the in-process fake control plane: enrol (with celld's bucket check),
 session, deploy, HTTP through Caddy, a `report`, `destroy` with `deleteData`,
 SIGTERM. In CI (`LUNORA_HOSTD_ISOLATION=1`, under sudo) it sets the box up with
-`install.sh`'s own functions, runs the single executable under the real unit
+`install.sh`'s own functions, runs the release binary under the real unit
 with Caddy on port 80, and runs the W8 probe suite. Locally (no root, no
 systemd) the functional path ran green from `dist/bin.mjs` and from the single
 executable, and once as root in a user namespace with a real fleet uid (node as
@@ -661,13 +661,17 @@ control-plane changes.
   code-quality pass the verifier itself is in `@lunora/hostd/release`, on
   WebCrypto (`verifyReleaseManifest`, async); `/verify` keeps signing and
   artifact hashing.
-- `apps/hostd/scripts/build-sea.mjs`: Node 24 single executable (esbuild
-  bundle + SEA blob + postject), smoke-tested with `--version`.
+- `apps/hostd/daemon/`: the daemon in Rust (2026-10-06; it was a Node 24
+  single executable): a static musl binary of a few MiB, cross-built with
+  `cargo zigbuild`, smoke-tested with `--version`. The wire protocol and the
+  release manifest stay in TypeScript for the control plane; the Rust side is
+  held to them by `protocol/hostd/fixtures/messages.json` and a celld-config
+  parity fixture.
 - `apps/hostd/scripts/make-release-manifest.mjs` + `release-pins.json`: make,
   sign and `--verify` manifests. celld is pinned to v0.6.0 (checksums verified
   against the downloaded assets).
 - `.github/workflows/hostd-release.yml`: on a `hostd-v*` tag or dispatch, build
-  and test, single executables on x64 and arm64 (`ubuntu-24.04-arm`) runners,
+  and test, static binaries on x64 and arm64 (`ubuntu-24.04-arm`) runners,
   sign in the `hostd-release` environment, attest, publish the GitHub Release.
 
 Caddy (follow-up, same day): the release workflow builds Caddy v2.11.6 with

@@ -1,5 +1,6 @@
 /**
- * Prints the entries to commit to `src/trusted-release-keys.ts` and
+ * Prints the entries to commit to `trusted-release-keys.json` (which the Rust
+ * daemon compiles in and `src/trusted-release-keys.ts` reads) and
  * `install/install.sh` for a release signing key (plan 458 W7). Reads the
  * PRIVATE key only to derive its public half; nothing is written. Generate the key with
  * `openssl genpkey -algorithm ed25519 -out hostd-release.pem`, then run
@@ -30,9 +31,9 @@ process.stdout.write(
     [
         `key id: ${keyId}`,
         "",
-        "Add to HOSTD_TRUSTED_RELEASE_KEYS in src/trusted-release-keys.ts:",
+        'Add to "keys" in trusted-release-keys.json:',
         "",
-        `    "${keyId}": \`${publicPem}\`,`,
+        `        ${JSON.stringify(keyId)}: ${JSON.stringify(publicPem)}`,
         "",
         "and the same key to trusted_key() in install/install.sh (a test keeps the two equal):",
         "",

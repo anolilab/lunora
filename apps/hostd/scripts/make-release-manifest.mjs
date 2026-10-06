@@ -6,7 +6,7 @@
  * Make and sign: set `HOSTD_RELEASE_SIGNING_KEY` to the Ed25519 private key
  * (PKCS#8 PEM) and run `node scripts/make-release-manifest.mjs --version 1.2.3
  * --base-url https://github.com/anolilab/lunora/releases/download/hostd-v1.2.3`,
- * optionally with `--artifacts-dir` (default `dist/sea`), `--release-id`
+ * optionally with `--artifacts-dir` (default `dist/release`), `--release-id`
  * (default `hostd-v` plus the version with every character outside
  * `[A-Za-z0-9_-]` turned into `_`) and `--out` (default
  * `{artifacts-dir}/manifest.json`).
@@ -18,7 +18,7 @@
  * hashes and sizes come from those files. celld artifacts, and the Caddy version
  * and module list the build used, come from `release-pins.json`. Signing is
  * refused while an input is missing or still a placeholder, and unless the
- * signature verifies against a key pinned in `src/trusted-release-keys.ts` — so
+ * signature verifies against a key pinned in `trusted-release-keys.json` — so
  * a key no box trusts can never sign a release.
  *
  * Verify an envelope against the pinned keys with `--verify manifest.json`;
@@ -207,7 +207,7 @@ const makeMode = async () => {
     }
 
     const base = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-    const artifactsDirectory = resolve(values["artifacts-dir"] ?? join(packageDirectory, "dist", "sea"));
+    const artifactsDirectory = resolve(values["artifacts-dir"] ?? join(packageDirectory, "dist", "release"));
     const hostdArtifacts = hashArtifacts(artifactsDirectory, base, (platform) => `lunora-hostd-${platform}`);
     const caddyArtifacts = hashArtifacts(artifactsDirectory, base, (platform) => `caddy-${platform}.gz`, { compression: "gzip" });
 
@@ -231,7 +231,7 @@ const makeMode = async () => {
 
     if (!check.ok) {
         fail(
-            `signed with ${envelope.keyId}, which does not verify against src/trusted-release-keys.ts (${check.error.code}: ${check.error.message}); commit the public key first (scripts/release-public-key.mjs)`,
+            `signed with ${envelope.keyId}, which does not verify against trusted-release-keys.json (${check.error.code}: ${check.error.message}); commit the public key first (scripts/release-public-key.mjs)`,
         );
     }
 

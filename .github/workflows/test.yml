@@ -369,9 +369,9 @@
                   pnpm --filter "@lunora/platform-celld" run test --project celld
 
     # The `@lunora/hostd` lane (`pnpm run test:hostd`, project `integration`, gated
-    # behind LUNORA_HOSTD_TESTS=1): the daemon, built as the single executable a box
-    # runs, against the pinned celld release, a Caddy built from the pinned source
-    # exactly as hostd-release.yml builds it, moto, and an in-process fake control
+    # behind LUNORA_HOSTD_TESTS=1): the Rust daemon (apps/hostd/daemon), built in
+    # release mode, against the pinned celld release, a Caddy built from the pinned
+    # source exactly as hostd-release.yml builds it, moto, and an in-process fake control
     # plane — enrol, session, deploy, HTTP through Caddy, a usage report, the target-
     # driver conformance legs through the real daemon, log forwarding, destroy with
     # deleteData — and the W7 gate: a live box upgraded from release N to N+1 (test
@@ -408,7 +408,6 @@
             - "name": "Git checkout"
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            # The single executable embeds this node: the line boxes run (hostd-release.yml).
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
@@ -461,11 +460,31 @@
                   cat "${RUNNER_TEMP}/moto.log" >&2
                   exit 1
 
-            - "name": "Build @lunora/hostd and the single executable"
+            # apps/hostd/daemon/rust-toolchain.toml pins the same channel.
+            - "name": "Install Rust stable toolchain"
+              "uses": "dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9" # v1
+              "with":
+                  "toolchain": "stable"
+
+            # Restore only, the cache hostd-cargo.yml saves from trusted refs: this
+            # workflow never runs on `push`, so a pull request (maybe from a fork) can
+            # never write it.
+            - "name": "Restore Cargo cache"
+              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+              "with":
+                  "path": |
+                      ~/.cargo/registry
+                      ~/.cargo/git
+                      apps/hostd/daemon/target
+                  "key": "hostd-cargo-test-${{ hashFiles('apps/hostd/daemon/Cargo.lock', 'apps/hostd/daemon/rust-toolchain.toml') }}"
+                  "restore-keys": |
+                      hostd-cargo-test-
+
+            - "name": "Build @lunora/hostd and the daemon"
               "run": |
                   pnpm exec vis run build --query "project=hostd"
-                  pnpm --filter "@lunora/hostd" run build:sea
-                  echo "LUNORA_HOSTD_BIN=${GITHUB_WORKSPACE}/apps/hostd/dist/sea/lunora-hostd-linux-x64" >> "$GITHUB_ENV"
+                  pnpm --filter "@lunora/hostd" run build:daemon
+                  echo "LUNORA_HOSTD_BIN=${GITHUB_WORKSPACE}/apps/hostd/daemon/target/release/lunora-hostd" >> "$GITHUB_ENV"
 
             - "name": "Shellcheck install.sh"
               "run": "shellcheck -x apps/hostd/install/install.sh"

@@ -1,19 +1,19 @@
 /**
- * The daemon end to end against a fake control plane and fake celld/Caddy:
- * the handshake, then each job kind as the control plane would send it.
+ * The daemon end to end — the Rust binary, run as systemd runs it — against a
+ * fake control plane and fake celld/Caddy: the handshake, then each job kind as
+ * the control plane would send it. What the daemon keeps is read back from the
+ * files it writes (`state.json`, Caddy's config, its log).
  */
 import { appendFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { permissionsOf } from "../../src/daemon/config";
-import { silentLogger } from "../../src/daemon/log";
-import { Daemon } from "../../src/daemon/run";
-import { loadState } from "../../src/daemon/state";
 import type { DeployJob } from "../../src/wire/types";
+import type { RunningHostd } from "../helpers/hostd-binary";
+import { buildHostd, startHostd } from "../helpers/hostd-binary";
 import type { TestBox } from "./helpers/box";
-import { createTestBox, unisolatedSystem } from "./helpers/box";
+import { createTestBox } from "./helpers/box";
 import { caddyInvocations, caddyLoads, celldInvocations, clearFakeFlag, setFakeFlag } from "./helpers/fake-binaries";
 import { FakeControlPlane } from "./helpers/fake-control-plane";
 
@@ -53,25 +53,41 @@ const deployJob = (plane: FakeControlPlane, overrides: Partial<DeployJob> = {}):
     };
 };
 
+/** A file's permission bits. */
+const permissionsOf = (mode: number): number => mode % 0o1000;
+
 describe("the daemon", () => {
+    let binary: string;
     let plane: FakeControlPlane;
     let box: TestBox;
-    let daemon: Daemon;
-    let running: Promise<number>;
+    let daemon: RunningHostd;
+
+    /** The fleet `alias` as the daemon recorded it in `state.json`. */
+    const fleetOf = (alias: string): Record<string, unknown> | undefined => {
+        try {
+            return (JSON.parse(readFileSync(join(box.config.dataDir, "state.json"), "utf8")) as { fleets: Record<string, Record<string, unknown>> }).fleets[
+                alias
+            ];
+        } catch {
+            return undefined;
+        }
+    };
+
+    beforeAll(() => {
+        binary = buildHostd();
+    }, 600_000);
 
     beforeEach(async () => {
         plane = new FakeControlPlane();
         await plane.listen();
         box = await createTestBox(plane);
         plane.releases.set("dep_1", storedRelease());
-        daemon = new Daemon({ config: box.config, isolation: unisolatedSystem(), logFlushMs: 50, logger: silentLogger, reportTickMs: 100 });
-        running = daemon.run();
+        daemon = startHostd(binary, box.configPath);
         await plane.authenticated();
     });
 
     afterEach(async () => {
-        daemon.stop();
-        await running;
+        await daemon.stop();
         await plane.close();
         box.cleanup();
     });
@@ -94,7 +110,7 @@ describe("the daemon", () => {
                     "fleet user: no local user lunora-fleet (install.sh creates it)",
                     "edge user: no local user lunora-edge (install.sh creates it), so Caddy runs as the user that can read the box key",
                     "egress policy: not applied: fleets do not run as their own user",
-                    expect.stringMatching(/^memory limits: not running as a systemd service/u),
+                    expect.stringMatching(/^memory limits: /u),
                 ],
                 status: "single-trust",
             },
@@ -104,10 +120,9 @@ describe("the daemon", () => {
     it("starts no fleet when the self-check fails on a box not enrolled --single-trust", async () => {
         expect.assertions(4);
 
-        daemon.stop();
-        await running;
-        daemon = new Daemon({ config: { ...box.config, singleTrust: false }, isolation: unisolatedSystem(), logger: silentLogger });
-        running = daemon.run();
+        await daemon.stop();
+        box.write({ ...box.config, singleTrust: false });
+        daemon = startHostd(binary, box.configPath);
         await plane.authenticated(2);
 
         expect(plane.received.findLast((message) => message.type === "hello")).toMatchObject({ isolation: { status: "refused" } });
@@ -200,7 +215,10 @@ describe("the daemon", () => {
         // The fleet's environment is the allowlist, built from nothing: no daemon variable leaks in.
         const fleetDirectory = join(box.config.dataDir, "fleets", "my-app");
 
-        expect(node?.env).toStrictEqual({
+        // macOS adds `__CF_USER_TEXT_ENCODING` to every process it starts; it is not the daemon's.
+        const nodeEnvironment = Object.fromEntries(Object.entries(node?.env ?? {}).filter(([name]) => name !== "__CF_USER_TEXT_ENCODING"));
+
+        expect(nodeEnvironment).toStrictEqual({
             AWS_ACCESS_KEY_ID: "test-key",
             AWS_REGION: "us-east-1",
             AWS_SECRET_ACCESS_KEY: "test-secret",
@@ -212,13 +230,15 @@ describe("the daemon", () => {
             TMPDIR: fleetDirectory,
         });
         // `celld deploy` gets the same environment, without the node's durability mode.
-        expect(deploy?.env).toStrictEqual(Object.fromEntries(Object.entries(node?.env ?? {}).filter(([name]) => name !== "CELLD_DURABILITY")));
+        expect(Object.fromEntries(Object.entries(deploy?.env ?? {}).filter(([name]) => name !== "__CF_USER_TEXT_ENCODING"))).toStrictEqual(
+            Object.fromEntries(Object.entries(nodeEnvironment).filter(([name]) => name !== "CELLD_DURABILITY")),
+        );
 
         // Caddy now proxies the alias's hostname to the fleet.
         const load = caddyLoads(box.records).at(-1);
 
         expect(JSON.stringify(load)).toContain(`"dial":"127.0.0.1:${String(first)}"`);
-        expect(loadState(box.config.dataDir).fleets["my-app"]).toMatchObject({ deploymentId: "dep_1", publicPort: first, state: "running" });
+        expect(fleetOf("my-app")).toMatchObject({ deploymentId: "dep_1", publicPort: first, state: "running" });
     });
 
     it("starts Caddy on its own config, with its state in a directory of its own", async () => {
@@ -337,7 +357,7 @@ describe("the daemon", () => {
         expect(result.ok).toBe(true);
         expect(progress).toContain("kept s3://customer-bucket/fleets/my-app/");
         expect([...(plane.objects.get("customer-bucket") ?? [])]).toHaveLength(2);
-        expect(loadState(box.config.dataDir).fleets["my-app"]).toBeUndefined();
+        expect(fleetOf("my-app")).toBeUndefined();
     });
 
     it("deletes exactly the fleet's prefix with deleteData", async () => {
@@ -405,13 +425,13 @@ describe("the daemon", () => {
 
         plane.pushRoutes([]);
 
-        await expect.poll(() => loadState(box.config.dataDir).fleets["my-app"]?.state).toBe("stopped");
+        await expect.poll(() => fleetOf("my-app")?.["state"]).toBe("stopped");
 
         expect(existsSync(join(box.config.dataDir, "releases", "dep_1"))).toBe(true);
 
         plane.pushRoutes([{ alias: "my-app", hostname: `my-app.${plane.hostname}` }]);
 
-        await expect.poll(() => loadState(box.config.dataDir).fleets["my-app"]?.state).toBe("running");
+        await expect.poll(() => fleetOf("my-app")?.["state"]).toBe("running");
     });
 
     it("keeps the previous Caddy config when Caddy rejects a new one", async () => {
@@ -425,7 +445,7 @@ describe("the daemon", () => {
         setFakeFlag(box.records, "reject-load");
         plane.pushRoutes([{ alias: "my-app", hostname: "shop.example.com" }]);
 
-        await expect.poll(() => daemon.caddy.lastError).toMatch(/unknown module/u);
+        await expect.poll(() => daemon.logs()).toMatch(/caddy refused the config \(400\): .*unknown module/u);
 
         expect(caddyLoads(box.records)).toHaveLength(loads);
     });
@@ -435,14 +455,15 @@ describe("the daemon", () => {
 
         plane.pushRoutes([{ alias: "my-app", hostname: `my-app.${plane.hostname}` }]);
 
-        await expect.poll(() => daemon.routeTable).toHaveLength(1);
+        // Caddy loaded the table: the daemon has taken it in.
+        await expect.poll(() => JSON.stringify(caddyLoads(box.records).at(-1) ?? {})).toContain(`my-app.${plane.hostname}`);
 
         // Two minutes ago, so the window is closed by the time the daemon reads it.
         const minute = Math.floor((Date.now() - 120_000) / 60_000) * 60_000;
         const line = (status: number, seconds: number): string =>
             `${JSON.stringify({ duration: seconds, logger: "http.log.access.lunora", request: { host: `my-app.${plane.hostname}` }, status, ts: (minute + 1000) / 1000 })}\n`;
 
-        appendFileSync(daemon.caddy.accessLogPath, `${line(200, 0.01)}${line(502, 0.03)}${line(200, 0.02)}`);
+        appendFileSync(join(box.config.dataDir, "caddy", "log", "access.log"), `${line(200, 0.01)}${line(502, 0.03)}${line(200, 0.02)}`);
 
         await expect(plane.nextFrame((message) => message.type === "report")).resolves.toStrictEqual({
             perAlias: [{ alias: "my-app", errors: 1, p50Ms: 20, requests: 3 }],
@@ -456,11 +477,9 @@ describe("the daemon", () => {
         expect.assertions(1);
 
         await plane.dispatch(deployJob(plane));
-        daemon.stop();
-        await running;
+        await daemon.stop();
 
-        daemon = new Daemon({ config: box.config, isolation: unisolatedSystem(), logger: silentLogger });
-        running = daemon.run();
+        daemon = startHostd(binary, box.configPath);
         await plane.authenticated(2);
 
         const hellos = plane.received.filter((message) => message.type === "hello");
