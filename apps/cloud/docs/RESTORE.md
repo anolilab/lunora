@@ -189,12 +189,28 @@ A snapshot is the tenant runtime's own whole-deployment export
 at `tenant-backups/<org>/<alias>/<timestamp>.ndjson.gz` in the private
 `TENANT_BACKUPS` bucket. One `{"table", "doc"}` row per line, `_id` included.
 
-| Covered                                                                                                              | **Not** covered                                                               |
-| -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Every table in the app's schema on every shard (the default DO and, with a shard registry, every `.shardBy()` shard) | Files in R2 / `ctx.storage` — rows that reference them are, the bytes are not |
-| `.global()` D1 tables                                                                                                | KV, Vectorize, Queues, Hyperdrive-backed databases                            |
-|                                                                                                                      | Tables the schema does not declare (e.g. auth tables owned by an adapter)     |
-|                                                                                                                      | Runtime-internal state: scheduled jobs, CDC log, workflow state               |
+The file is format 2: a `{"table":"$lunora","doc":{"format":2,"sections":[…]}}`
+header line, then one `{"table", "doc"}` row per line, `_id` included, then the
+sections — records under reserved `$`-prefixed table names. A file with no header
+is format 1 (tables only, every snapshot taken before this change), and the
+import reads both.
+
+| Covered                                                                                                              | **Not** covered                                                                         |
+| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Every table in the app's schema on every shard (the default DO and, with a shard registry, every `.shardBy()` shard) | Vectorize — the binding cannot list an index's vectors; re-embed with `backfillVectors` |
+| `.global()` D1 tables                                                                                                | Queues, Hyperdrive-backed databases                                                     |
+| `$auth` — the auth tables outside the schema (users, accounts, sessions, plugin tables, the audit log), either mode  | Runtime-internal state: scheduled jobs, CDC log, workflow state                         |
+| `$kv` — every bound KV namespace: raw bytes, metadata, expiration                                                    | A KV value over 512 KiB — written as a `tooLarge` marker and reported on restore        |
+| `$storage` — every object in the app's `@lunora/storage` buckets, in 512 KiB base64 chunks, with type and metadata   | Objects under `_lunora/` (resumable-upload state, restore staging)                      |
+
+A restore writes each section append-only, the way it writes rows: an auth row
+whose key or unique value exists, a KV key that exists (or has expired since), or
+an object key that exists is left alone and counted as already present. An object
+of more than one chunk is staged under `_lunora/restore/` in its bucket and
+assembled when its last chunk arrives, so a restore stops at objects of 32 MiB
+(the rest are reported, and stay in the file). Storage objects count toward the
+64 MiB cap below, so an app with a large bucket can outgrow snapshots it fit
+before.
 
 The export fails loudly rather than short: a shard it cannot reach, or a
 `.shardBy()` table on an app with no shard registry, answers an error and the

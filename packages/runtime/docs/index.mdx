@@ -204,6 +204,18 @@ Each run writes two objects under `backupPrefix`:
 - `lunora-backup-<id>.ndjson.manifest.json`: a `BackupManifest`
   (`{ id, createdAt, cron, file, rows, bytes, sha256, scheduledTime, tables? }`).
 
+The scheduled backup carries schema tables only. The admin export carries more:
+a whole-deployment `POST /_lunora/admin/export` (no `tables`, or an explicit
+`sections: ["auth", "kv", "storage"]`) writes export format 2 — a
+`{"table":"$lunora","doc":{"format":2,"sections":[…]}}` header, the table rows,
+then `$auth` rows (the auth tables outside the schema, through `authData`), `$kv`
+entries (every namespace `kvIntrospector` lists, as base64 bytes with metadata and
+expiration) and `$storage` chunks (every object the `storage*` ops list, in
+512 KiB pieces). `/_lunora/admin/import` reads format 1 and 2 and writes the
+sections append-only; a multi-chunk object is staged under `_lunora/restore/` and
+assembled from its last chunk, up to 32 MiB. Vectorize is not exported: the
+binding cannot enumerate an index.
+
 The `id` is the trigger's `scheduledTime` as an ISO timestamp, so a snapshot
 is named after the moment it represents. The backup requires `adminToken`
 (it authenticates the per-shard export gate), `queryCoordinator`, and
