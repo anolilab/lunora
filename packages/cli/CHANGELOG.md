@@ -1,3 +1,21 @@
+## @lunora/cli [1.0.0-alpha.353](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.352...@lunora/cli@1.0.0-alpha.353) (2026-10-06)
+
+### Features
+
+* durable object class budget check and opt-in merged class ([#995](https://github.com/anolilab/lunora/issues/995)) ([fa5a78e](https://github.com/anolilab/lunora/commit/fa5a78ed39f03c5d39c9d209fc83c49f27bdb6f7))
+
+### Code Refactoring
+
+* **cli:** read package manifests through shared visulima helpers ([#994](https://github.com/anolilab/lunora/issues/994)) ([dd9891e](https://github.com/anolilab/lunora/commit/dd9891e704fb70eb65b2e1be74038331a7857f7a))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.267
+* **@lunora/config:** upgraded to 1.0.0-alpha.311
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.217
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.179
+
 ## @lunora/cli [1.0.0-alpha.352](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.351...@lunora/cli@1.0.0-alpha.352) (2026-10-06)
 
 
