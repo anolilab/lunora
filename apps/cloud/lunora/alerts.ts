@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
-import type { AlertFamily, AlertTarget, DeployAlertSource } from "../src/telemetry/alerts";
-import { alertFamily, fireDeployRules, isSafeWebhookUrl } from "../src/telemetry/alerts";
+import type { AlertFamily, AlertTarget, DeployAlertSource, EventRule, SpendAlertSource } from "../src/telemetry/alerts";
+import { alertFamily, fireDeployRules, fireSpendRules, isSafeWebhookUrl } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
@@ -127,6 +127,7 @@ export const createRule = mutation
             v.literal("latency_p95"),
             v.literal("llm_cost"),
             v.literal("deploy"),
+            v.literal("spend"),
         ),
         threshold: v.number(),
         // Metric targets only: rolling window length in minutes (required for them).
@@ -241,6 +242,17 @@ export const markDelivered = mutation
         return { delivered: ids.length };
     });
 
+/** The org's enabled rules on one event target, shaped for the firing helpers. */
+const enabledEventRules = async (context: MutationContext, organizationId: Id<"organizations">, target: "deploy" | "spend"): Promise<EventRule[]> => {
+    const { page } = await context.db.alertRules.findMany({ where: { organizationId, target } });
+
+    return page
+        .filter((rule) => rule.enabled)
+        .map((rule) => {
+            return { channel: rule.channel, destination: rule.destination, name: rule.name, ruleId: rule._id };
+        });
+};
+
 /**
  * Fire the org's `deploy` rules for one release-path failure — insert an `alerts`
  * row per enabled rule and return how many were raised.
@@ -266,16 +278,27 @@ export const fireDeployAlerts = async (
     organizationId: Id<"organizations">,
     hash: string,
     source: DeployAlertSource,
-): Promise<number> => {
-    const { page } = await context.db.alertRules.findMany({ where: { organizationId, target: "deploy" } });
-    const enabled = page.filter((rule) => rule.enabled);
-
-    return fireDeployRules(
-        enabled.map((rule) => {
-            return { channel: rule.channel, destination: rule.destination, name: rule.name, ruleId: rule._id };
-        }),
-        source,
-        { hash, now: context.now, organizationId },
-        async (row) => await context.db.insert("alerts", row),
+): Promise<number> =>
+    fireDeployRules(await enabledEventRules(context, organizationId, "deploy"), source, { hash, now: context.now, organizationId }, async (row) =>
+        context.db.insert("alerts", row),
     );
-};
+
+/**
+ * Fire the org's `spend` rules for a soft-cap warning or a hard-cap suspension
+ * (plan 365 W2), in the enforcement sweep's own transaction — the latch it
+ * stamps and the alert rows it raises are one outcome. Delivered by the drain
+ * sweep, like `deploy`. `hash` names the period and level, so a re-fire for the
+ * same period is identifiable in the alert list.
+ */
+export const fireSpendAlerts = async (
+    context: MutationContext,
+    organizationId: Id<"organizations">,
+    periodStart: number,
+    source: SpendAlertSource,
+): Promise<number> =>
+    fireSpendRules(
+        await enabledEventRules(context, organizationId, "spend"),
+        source,
+        { hash: `spend:${source.level}:${String(periodStart)}`, now: context.now, organizationId },
+        async (row) => context.db.insert("alerts", row),
+    );

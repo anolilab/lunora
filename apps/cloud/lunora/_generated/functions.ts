@@ -249,6 +249,8 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "usage:recordOverageDebit": lunora_usage_31.recordOverageDebit as unknown as RegisteredLunoraFunction,
     "usage:rollup": lunora_usage_31.rollup as unknown as RegisteredLunoraFunction,
     "usage:series": lunora_usage_31.series as unknown as RegisteredLunoraFunction,
+    "usage:setSpendWarning": lunora_usage_31.setSpendWarning as unknown as RegisteredLunoraFunction,
+    "usage:spendStatus": lunora_usage_31.spendStatus as unknown as RegisteredLunoraFunction,
     "usage:summary": lunora_usage_31.summary as unknown as RegisteredLunoraFunction,
 };
 
@@ -836,6 +838,12 @@ if (typeof source["organizationId"] !== "string") return DEFER;
 if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
 return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
 });
+installCompiledValidatorMap(lunora_usage_31.spendStatus.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_usage_31.summary.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -898,7 +906,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     alerts: {
-        createRule: (args: { baselineWindows?: number; channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; functionPath?: unknown; mode?: "threshold" | "deviation"; name: unknown; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy"; threshold: number; windowMinutes?: number }) => Promise<Id<"alertRules">>;
+        createRule: (args: { baselineWindows?: number; channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; functionPath?: unknown; mode?: "threshold" | "deviation"; name: unknown; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend"; threshold: number; windowMinutes?: number }) => Promise<Id<"alertRules">>;
         deleteRule: (args: { id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alerts">; channel: "email" | "pagerduty" | "slack" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "failed" | "firing" | "delivered"; subject: string; target: import("../../src/telemetry/alerts.js").AlertTarget }[]>;
         markDelivered: (args: { deployKey: unknown; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }) => Promise<{ delivered: number; }>;
@@ -1112,13 +1120,15 @@ export interface Caller {
         summary: (args: { organizationId: Id<"organizations"> }) => Promise<{ avgLatencyMs?: number; consecutiveFailures: number; deploymentId: Id<"deployments">; lastCheckedAt: number; ok: boolean; sampleCount: number; upFraction: number }[]>;
     };
     usage: {
-        enforceSpendCaps: (args?: {}) => Promise<{ suspended: number; unsuspended: number; }>;
+        enforceSpendCaps: (args?: {}) => Promise<{ suspended: number; unsuspended: number; warned: number; }>;
         ingest: (args: { deployKey: unknown; deploymentId?: Id<"deployments">; kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths"; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         overageWatermark: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ debitedCredits: number; }>;
         record: (args: { deploymentId?: Id<"deployments">; kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths"; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         recordOverageDebit: (args: { debitedCredits: number; organizationId: Id<"organizations">; periodStart: number }) => Promise<void>;
         rollup: (args?: {}) => Promise<{ compacted: number; }>;
         series: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ costMinor: number; cpuMs: number; day: number; requests: number; }[]>;
+        setSpendWarning: (args: { organizationId: Id<"organizations">; warnMinor: number | null }) => Promise<void>;
+        spendStatus: (args: { organizationId: Id<"organizations"> }) => Promise<{ periodStart: number; warnCustomized: boolean; level: import("../../src/billing/spend.js").SpendLevel; spendMinor: number; capMinor: number | null; warnMinor: number | null }>;
         summary: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<import("../../src/billing/usage.js").UsageTotals>;
     };
 }
@@ -1382,6 +1392,8 @@ export const createCaller = (context: CallerCtx): Caller => ({
         recordOverageDebit: (args) => callRegistered(context, "usage:recordOverageDebit", args),
         rollup: (args) => callRegistered(context, "usage:rollup", args),
         series: (args) => callRegistered(context, "usage:series", args),
+        setSpendWarning: (args) => callRegistered(context, "usage:setSpendWarning", args),
+        spendStatus: (args) => callRegistered(context, "usage:spendStatus", args),
         summary: (args) => callRegistered(context, "usage:summary", args),
     },
 });

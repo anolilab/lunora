@@ -493,6 +493,24 @@ an hourly `usage.rollup` cron compacts closed periods, and `usage.summary` reads
 the total. The AE→ledger reader (`createHttpAnalyticsReader`) is the prod rollup
 seam (runs at the edge with the account token).
 
+**Spend caps** (`src/billing/spend.ts`, `usage.enforceSpendCaps`, plan 365) have
+two thresholds per org. `evaluateSpendCap` prices the period's billable ledger
+rows and returns a `level`:
+
+- `warn` — spend reached `organizations.spendWarnMinor` (unset: 80% of the cap;
+  `0`: off). The hourly sweep fires the org's `spend` alert rules once per
+  period (latched by `spendWarnedPeriod`), delivered over the rule's channel by
+  the alert drain, and writes `organization.spend_warn` to the audit log.
+  Owners/admins set the threshold from the Usage tab (`usage.setSpendWarning`,
+  whole cents, at most $1B). Nothing is paused.
+- `breach` — spend reached the cap (plan default `free $5` / `pro $200` /
+  `enterprise` uncapped; `spendCapMinor` override, support-only, `0` =
+  uncapped). The sweep suspends the org (`suspendedReason: "spend-cap"`), fires
+  the `spend` rules again, and lifts only its own suspensions once spend is back
+  under the cap (`organization.unsuspend`).
+
+`usage.spendStatus` is the console's read of the same decision.
+
 ### Tenant secrets (`lunora/secrets.ts`, `src/secrets/crypto.ts`, §7)
 
 Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:

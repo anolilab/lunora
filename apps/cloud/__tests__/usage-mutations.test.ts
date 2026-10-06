@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server";
-import { enforceSpendCaps, ingest, rollup } from "../lunora/usage";
+import { enforceSpendCaps, ingest, rollup, setSpendWarning } from "../lunora/usage";
 import { hashDeployKey } from "../src/deploy/keys";
 
 /**
@@ -26,7 +26,7 @@ type Row = Record<string, unknown>;
 /** Every db call the mutation made, in order — which is the property under test for `rollup`. */
 type Op = { id: string; kind: "delete" } | { id: string; kind: "patch"; patch: Row } | { document: Row; kind: "insert"; table: string };
 
-const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000): { ctx: MutationCtx; ops: Op[] } => {
+const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000, userId: null | string = null): { ctx: MutationCtx; ops: Op[] } => {
     const ops: Op[] = [];
     const matchesEntry = (actual: unknown, expected: unknown): boolean => {
         const comparison = expected as { gte?: number; lt?: number };
@@ -55,8 +55,16 @@ const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000): { ctx:
     const emptyQuery: { first: () => Promise<null>; withIndex: () => typeof emptyQuery } = { first: () => Promise.resolve(null), withIndex: () => emptyQuery };
 
     const ctx = {
-        auth: { getIdentity: () => Promise.resolve(null), userId: null },
+        auth: { getIdentity: () => Promise.resolve(null), userId },
         db: {
+            alertRules: facade("alertRules"),
+            get: (id: string) =>
+                Promise.resolve(
+                    Object.values(tables)
+                        .flat()
+                        .find((row) => row["_id"] === id) ?? null,
+                ),
+            members: facade("members"),
             query: () => emptyQuery,
             delete: (id: string) => {
                 ops.push({ id, kind: "delete" });
@@ -217,6 +225,115 @@ describe("usage.enforceSpendCaps", () => {
         await enforceSpendCaps.handler(ctx, {});
 
         expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "org_1", patch: { suspendedAt: null, suspendedReason: null } });
+    });
+});
+
+/** The real sweep's period bucket — the latch compares against it. */
+const thisPeriod = (): number => {
+    const now = new Date();
+
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+};
+
+/** About $3 of requests in the current period: over a 1-cent warn, under the default cap. */
+const currentSpend = (): Row[] => [usageRow("u1", 10_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })];
+
+const spendRule = (over: Row = {}): Row => {
+    return {
+        _id: "rule_1",
+        channel: "email",
+        destination: "ops@example.com",
+        enabled: true,
+        name: "Budget",
+        organizationId: "org_1",
+        target: "spend",
+        ...over,
+    };
+};
+
+const inserted = (ops: Op[], table: string): Row[] => ops.flatMap((op) => (op.kind === "insert" && op.table === table ? [op.document] : []));
+
+describe("usage.enforceSpendCaps soft cap (plan 365 W2)", () => {
+    it("fires the org's spend rules once when spend reaches the warn threshold, and latches the period", async () => {
+        const { ctx, ops } = makeCtx({
+            alertRules: [spendRule(), spendRule({ _id: "rule_off", enabled: false })],
+            organizations: [organization({ name: "Acme", spendCapMinor: 1_000_000, spendWarnMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toStrictEqual({ suspended: 0, unsuspended: 0, warned: 1 });
+
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "org_1", patch: { spendWarnedPeriod: thisPeriod() } });
+        expect(inserted(ops, "auditLog")).toMatchObject([{ action: "organization.spend_warn", actorUserId: "system:spend-cap" }]);
+
+        // The disabled rule stays quiet; the enabled one is queued for the drain.
+        const alerts = inserted(ops, "alerts");
+
+        expect(alerts).toHaveLength(1);
+        expect(alerts[0]).toMatchObject({ organizationId: "org_1", ruleId: "rule_1", status: "firing", target: "spend" });
+        expect(String(alerts[0]?.["subject"])).toContain("spend warning");
+    });
+
+    it("does not warn again in a period it already warned in", async () => {
+        const { ctx, ops } = makeCtx({
+            alertRules: [spendRule()],
+            organizations: [organization({ spendCapMinor: 1_000_000, spendWarnedPeriod: thisPeriod(), spendWarnMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ warned: 0 });
+        expect(ops).toStrictEqual([]);
+    });
+
+    it("fires a breach alert with the suspension and latches the warning with it", async () => {
+        const { ctx, ops } = makeCtx({
+            alertRules: [spendRule()],
+            organizations: [organization({ name: "Acme", spendCapMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toStrictEqual({ suspended: 1, unsuspended: 0, warned: 0 });
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ patch: { spendWarnedPeriod: thisPeriod(), suspendedReason: "spend-cap" } });
+        expect(String(inserted(ops, "alerts")[0]?.["subject"])).toContain("suspended");
+    });
+
+    /**
+     * A `.global()` row answers NULL for an unset override. Read as an explicit
+     * override, that NULL made every org without one uncapped.
+     */
+    it("caps an org whose override columns are NULL at its plan default", async () => {
+        const { ctx } = makeCtx({
+            organizations: [organization({ spendCapMinor: null, spendWarnMinor: null })],
+            platformUsage: [usageRow("u1", 20_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })],
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ suspended: 1 });
+    });
+});
+
+describe("usage.setSpendWarning", () => {
+    const memberCtx = (role: string): ReturnType<typeof makeCtx> =>
+        makeCtx({ members: [{ _id: "m1", organizationId: "org_1", role, userId: "user_1" }], organizations: [organization()] }, undefined, "user_1");
+
+    it("stores the threshold on the verified org, re-arms the latch and audits who set it", async () => {
+        const { ctx, ops } = memberCtx("admin");
+
+        await setSpendWarning.handler(ctx, { organizationId: "org_1", warnMinor: 2500 } as never);
+
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "org_1", patch: { spendWarnedPeriod: null, spendWarnMinor: 2500 } });
+        expect(inserted(ops, "auditLog")).toMatchObject([{ action: "organization.spend_warn_set", actorUserId: "user_1", target: "2500" }]);
+    });
+
+    it.each([[-1], [1.5], [1e12]])("rejects %s", async (warnMinor) => {
+        const { ctx } = memberCtx("owner");
+
+        await expect(setSpendWarning.handler(ctx, { organizationId: "org_1", warnMinor } as never)).rejects.toThrow("whole number of cents");
+    });
+
+    it("refuses a plain member", async () => {
+        const { ctx } = memberCtx("member");
+
+        await expect(setSpendWarning.handler(ctx, { organizationId: "org_1", warnMinor: 100 } as never)).rejects.toThrow("requires one of");
     });
 });
 

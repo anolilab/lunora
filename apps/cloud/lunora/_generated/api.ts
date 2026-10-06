@@ -8,7 +8,7 @@ import type { Id } from "./dataModel.js";
 
 export interface ApiTypes {
     alerts: {
-        createRule: FunctionReference<"mutation", { baselineWindows?: number; channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; functionPath?: unknown; mode?: "threshold" | "deviation"; name: unknown; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy"; threshold: number; windowMinutes?: number }, Id<"alertRules">>;
+        createRule: FunctionReference<"mutation", { baselineWindows?: number; channel: "email" | "webhook" | "slack" | "pagerduty"; comparator?: "gt" | "lt"; destination: unknown; functionPath?: unknown; mode?: "threshold" | "deviation"; name: unknown; organizationId: Id<"organizations">; target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend"; threshold: number; windowMinutes?: number }, Id<"alertRules">>;
         deleteRule: FunctionReference<"mutation", { id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, { _id: Id<"alerts">; channel: "email" | "pagerduty" | "slack" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "failed" | "firing" | "delivered"; subject: string; target: import("../../src/telemetry/alerts.js").AlertTarget }[]>;
         markDelivered: FunctionReference<"mutation", { deployKey: unknown; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }, { delivered: number; }>;
@@ -164,6 +164,8 @@ export interface ApiTypes {
     usage: {
         ingest: FunctionReference<"mutation", { deployKey: unknown; deploymentId?: Id<"deployments">; kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths"; organizationId: Id<"organizations">; periodStart: number; quantity: number }, Id<"platformUsage">>;
         series: FunctionReference<"query", { organizationId: Id<"organizations">; periodStart: number }, { costMinor: number; cpuMs: number; day: number; requests: number; }[]>;
+        setSpendWarning: FunctionReference<"mutation", { organizationId: Id<"organizations">; warnMinor: number | null }, void>;
+        spendStatus: FunctionReference<"query", { organizationId: Id<"organizations"> }, { periodStart: number; warnCustomized: boolean; level: import("../../src/billing/spend.js").SpendLevel; spendMinor: number; capMinor: number | null; warnMinor: number | null }>;
         summary: FunctionReference<"query", { organizationId: Id<"organizations">; periodStart: number }, import("../../src/billing/usage.js").UsageTotals>;
     };
 }
@@ -267,7 +269,7 @@ export interface InternalApiTypes {
         prune: FunctionReference<"mutation", {}, { pruned: number; }>;
     };
     usage: {
-        enforceSpendCaps: FunctionReference<"mutation", {}, { suspended: number; unsuspended: number; }>;
+        enforceSpendCaps: FunctionReference<"mutation", {}, { suspended: number; unsuspended: number; warned: number; }>;
         overageWatermark: FunctionReference<"query", { organizationId: Id<"organizations">; periodStart: number }, { debitedCredits: number; }>;
         record: FunctionReference<"mutation", { deploymentId?: Id<"deployments">; kind: "aeDataPoints" | "aeReadQueries" | "browserHours" | "containerCpuSeconds" | "containerDiskGbSeconds" | "containerMemoryGibSeconds" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "d1StorageGbMonths" | "doDurationGbS" | "doRequests" | "doRowsRead" | "doRowsWritten" | "doStorageGbMonths" | "imagesDelivered" | "imagesStored" | "imagesTransformations" | "kvDeletes" | "kvLists" | "kvReads" | "kvStorageGbMonths" | "kvWrites" | "logEvents" | "logpushRequests" | "queueOperations" | "r2ClassAOps" | "r2ClassBOps" | "r2StorageGbMonths" | "requests" | "vectorizeQueriedDimensions" | "vectorizeStoredDimensions" | "workersAiNeurons" | "workflowSteps" | "workflowStorageGbMonths"; organizationId: Id<"organizations">; periodStart: number; quantity: number }, Id<"platformUsage">>;
         recordOverageDebit: FunctionReference<"mutation", { debitedCredits: number; organizationId: Id<"organizations">; periodStart: number }, void>;

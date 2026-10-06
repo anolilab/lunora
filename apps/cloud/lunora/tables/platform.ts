@@ -45,6 +45,14 @@ export const platformTables = {
         // Aggregate period spend cap in minor units (GAPS.md C1). Unset = the
         // plan default; explicit 0 = uncapped (support escape hatch).
         spendCapMinor: v.optional(v.number()),
+        // Soft cap (plan 365 W2): the period spend at which the org's `spend`
+        // alert rules fire. Unset = 80% of the cap; explicit 0 = no warning.
+        // Owners/admins set it (`usage.setSpendWarning`); the cap itself stays
+        // support-only.
+        spendWarnMinor: v.optional(v.number()),
+        // The period (`periodStart`) the soft-cap warning last fired for — the
+        // latch that makes it fire once per period, not on every sweep.
+        spendWarnedPeriod: v.optional(v.number()),
         // Set by the spend-cap or dunning enforcement crons (or support); the
         // dispatcher serves 503 for a suspended org's tenants.
         suspendedAt: v.optional(v.number()),

@@ -43,6 +43,7 @@ const TARGET_LABELS: Record<RuleTarget, string> = {
     issue: "Issue count",
     latency_p95: "Latency p95 (ms)",
     llm_cost: "LLM cost budget",
+    spend: "Spend warning / cap (org thresholds)",
     uptime: "Uptime failures",
 };
 

@@ -44,6 +44,8 @@ export interface Doc_organizations {
     plan: "free" | "pro" | "enterprise";
     slug: string;
     spendCapMinor?: number;
+    spendWarnMinor?: number;
+    spendWarnedPeriod?: number;
     suspendedAt?: number;
     suspendedReason?: string;
     paymentFailedAt?: number;
@@ -472,7 +474,7 @@ export interface Doc_alertRules {
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -503,7 +505,7 @@ export interface Doc_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend";
     updatedAt: number;
 }
 
@@ -897,6 +899,8 @@ export interface Insert_organizations {
     plan: "free" | "pro" | "enterprise";
     slug: string;
     spendCapMinor?: number;
+    spendWarnMinor?: number;
+    spendWarnedPeriod?: number;
     suspendedAt?: number;
     suspendedReason?: string;
     paymentFailedAt?: number;
@@ -1325,7 +1329,7 @@ export interface Insert_alertRules {
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -1356,7 +1360,7 @@ export interface Insert_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend";
     updatedAt: number;
 }
 

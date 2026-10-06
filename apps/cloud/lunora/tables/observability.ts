@@ -250,7 +250,9 @@ export const observabilityTables = {
         // generation cost) over `windowMinutes`. Event: `deploy` (a build or a
         // deployment failed) — it carries
         // no threshold, because a failed release is not a quantity that crosses a
-        // line, it is one thing that happened.
+        // line, it is one thing that happened. Event: `spend` (the org's soft cap
+        // was reached, or its hard cap suspended it) — its threshold is the org's
+        // `spendWarnMinor` / cap, not the rule's.
         target: v.union(
             v.literal("issue"),
             v.literal("incident"),
@@ -259,6 +261,7 @@ export const observabilityTables = {
             v.literal("latency_p95"),
             v.literal("llm_cost"),
             v.literal("deploy"),
+            v.literal("spend"),
         ),
         // Count-crossing: fire when the source's count first reaches this value.
         // Metric-window: the value the window metric is compared against.
@@ -323,6 +326,7 @@ export const observabilityTables = {
             v.literal("latency_p95"),
             v.literal("llm_cost"),
             v.literal("deploy"),
+            v.literal("spend"),
         ),
         updatedAt: v.number(),
     })
