@@ -445,6 +445,26 @@ describe("shardDO admin export/import dispatch", () => {
         expect(body.result.errors).toEqual([]);
     });
 
+    it("audits a replace import as a replace, with what it deleted", async () => {
+        expect.assertions(2);
+
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.importShard, {
+                replaceTables: ["users"],
+                rows: [{ doc: { _id: "u2", email: "b@b.com", name: "Bob" }, table: "users" }],
+            }),
+        );
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAuditLog, {}));
+        const body = await response.json<{ result: { entries: { detail?: Record<string, unknown>; op: string }[] } }>();
+        const entry = body.result.entries.find((candidate) => candidate.op === "importShard");
+
+        expect(entry?.detail).toMatchObject({ inserted: { users: 1 }, mode: "replace", replaceTables: ["users"] });
+        expect(entry?.detail?.["deleted"]).toEqual(expect.objectContaining({ users: expect.any(Number) }));
+    });
+
     it("rejects without an admin token", async () => {
         expect.assertions(1);
 

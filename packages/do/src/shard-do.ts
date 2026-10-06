@@ -1526,6 +1526,17 @@ const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
     entry !== undefined && (entry.collector !== undefined || nonEmptyTallies(entry).length > 0);
 
 /**
+ * The `importShard` audit detail. A replace deletes and overwrites, so its entry
+ * says so — the mode, the tables it owned and what it removed — and never reads
+ * as if it were an append.
+ */
+const importAuditDetail = (args: RunShardImportArgs, result: ImportShardResult): Record<string, unknown> => {
+    const counts = { conflicts: result.conflicts, deleted: result.deleted, errors: result.errors.length, inserted: result.inserted };
+
+    return args.replaceTables === undefined ? { ...counts, mode: "append" } : { ...counts, mode: "replace", replaceTables: args.replaceTables };
+};
+
+/**
  * Base class for shard Durable Objects.
  *
  * Concrete subclasses implement `handleRpc` and may emit deltas via
@@ -8916,7 +8927,7 @@ abstract class ShardDO {
                 // touched tables; flush so live subscribers re-run.
                 await this.flushChangedTables();
 
-                this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
+                this.recordAudit("importShard", { detail: importAuditDetail(parsed, result) });
 
                 return adminResponse(result);
             }
