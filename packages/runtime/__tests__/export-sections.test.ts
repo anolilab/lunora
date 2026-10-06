@@ -133,7 +133,9 @@ const randomBytes = (size: number): Uint8Array<ArrayBuffer> => {
     return bytes;
 };
 
-describe("admin export — auth, KV and storage sections", () => {
+// Several cases push a 33 MiB object through chunking, sealing and a multipart
+// assembly: well under a second locally, past vitest's 5 s default on a loaded CI runner.
+describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, () => {
     it("leaves the auth section out of a whole-deployment export unless it is asked for by name", async () => {
         expect.hasAssertions();
 
