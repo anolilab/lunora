@@ -136,48 +136,58 @@ export const captureTenantSnapshot = async (options: {
 
 /** What a restore wrote, summed over its import batches. */
 export interface RestoreSummary {
-    /** Rows whose `_id` already existed and were left untouched (the import is append-only). */
-    conflicts: number;
-    /** Rows written. */
+    /** Rows the restore removed because the snapshot does not hold them. */
+    deleted: number;
+    /** Rows written (inserted, or overwritten with their snapshot version). */
     inserted: number;
     /** Rows read from the snapshot. */
     received: number;
-    /** Rows the tenant rejected (validation against the current schema, id collisions). */
-    rowErrors: number;
-    /** Shards an import batch could not reach — non-empty means part of the snapshot was not written. */
-    unreachableShards: number;
 }
 
 interface ImportResponseBody {
-    conflicts?: number;
+    deleted?: Record<string, number>;
     errors?: unknown[];
     failed?: unknown[];
     inserted?: Record<string, number>;
     received?: number;
 }
 
+const sum = (counts: Record<string, number> | undefined): number => Object.values(counts ?? {}).reduce((total, count) => total + count, 0);
+
 /**
- * Replay a gzipped snapshot into the tenant through its admin import, one
+ * Rewind the tenant to a gzipped snapshot through its admin import, one
  * {@link IMPORT_BATCH_BYTES} batch at a time.
  *
- * The import is append-only: a row whose `_id` already exists is skipped
- * (counted in `conflicts`), so re-running a restore is safe and a partially
- * applied one can simply be run again. A batch the tenant refuses outright
- * (anything but 200/207) stops the restore — earlier batches stay written.
+ * The first batch goes in `mode=replace` over every table: each shard (in one
+ * transaction) and the `.global()` tables end up holding exactly that batch, so
+ * rows created since the snapshot are deleted and rows edited since are
+ * overwritten. The remaining batches append the rest of the snapshot onto that.
+ * A snapshot that fits one batch is therefore an atomic rewind per shard; a
+ * larger one passes through a window where only part of the snapshot is back.
+ *
+ * Any batch that is refused, rejects a row, or misses a shard stops the restore:
+ * a rewind that skipped rows is not one. Running the restore again is safe — it
+ * starts over with a replace — and the pre-restore snapshot undoes it.
+ *
+ * ponytail: the multi-batch window; a staged import (load every batch, then swap
+ * per shard) closes it.
  */
 export const restoreTenantSnapshot = async (send: TenantSend, gzipped: ReadableStream<Uint8Array<ArrayBuffer>>): Promise<RestoreSummary> => {
-    const summary: RestoreSummary = { conflicts: 0, inserted: 0, received: 0, rowErrors: 0, unreachableShards: 0 };
+    const summary: RestoreSummary = { deleted: 0, inserted: 0, received: 0 };
     const encoder = new TextEncoder();
     let batch = "";
     let batchBytes = 0;
+    let batches = 0;
 
     const flush = async (): Promise<void> => {
-        if (batch === "") {
+        // The replace batch goes out even when empty: an empty snapshot empties the tenant.
+        if (batch === "" && batches > 0) {
             return;
         }
 
-        const response = await send(IMPORT_PATH, batch, "application/x-ndjson");
+        const response = await send(batches === 0 ? `${IMPORT_PATH}?mode=replace` : IMPORT_PATH, batch, "application/x-ndjson");
 
+        batches += 1;
         batch = "";
         batchBytes = 0;
 
@@ -187,11 +197,25 @@ export const restoreTenantSnapshot = async (send: TenantSend, gzipped: ReadableS
 
         const result = await readJson<ImportResponseBody>(response);
 
-        summary.conflicts += result.conflicts ?? 0;
-        summary.inserted += Object.values(result.inserted ?? {}).reduce((sum, count) => sum + count, 0);
+        // A runtime from before replace mode ignores `?mode=` and appends: the
+        // first batch still lands, but the rewind must not be reported as one.
+        if (batches === 1 && result.deleted === undefined) {
+            throw new TenantAdminError("the tenant's runtime predates replace-mode import, so it cannot be rewound — redeploy it and restore again", 0);
+        }
+
+        summary.deleted += sum(result.deleted);
+        summary.inserted += sum(result.inserted);
         summary.received += result.received ?? 0;
-        summary.rowErrors += result.errors?.length ?? 0;
-        summary.unreachableShards += result.failed?.length ?? 0;
+
+        const rowErrors = result.errors?.length ?? 0;
+        const unreachable = result.failed?.length ?? 0;
+
+        if (rowErrors > 0 || unreachable > 0) {
+            throw new TenantAdminError(
+                `restore stopped at import batch ${String(batches)}: ${String(rowErrors)} row(s) rejected, ${String(unreachable)} shard(s) unreachable — run it again, or restore the pre-restore snapshot`,
+                response.status,
+            );
+        }
     };
 
     // Batches go out in snapshot order, one at a time, as the snapshot streams in.

@@ -222,23 +222,42 @@ What it does, in order:
 
 1. Takes a **pre-restore snapshot** of the current data. If that fails, nothing
    is restored.
-2. Replays the chosen snapshot through the tenant's `POST /_lunora/admin/import`
-   in batches under its 1 MiB body limit.
+2. Rewinds the tenant to the chosen snapshot through its
+   `POST /_lunora/admin/import`, in batches under its 1 MiB body limit. The
+   first batch goes in **replace mode** (`?mode=replace`) over every table in
+   the schema; the rest are appended onto it.
 
-**The import is append-only, so a restore is not a rewind.**
+**A restore is a rewind.** Afterwards every table holds exactly what the
+snapshot holds:
 
 - A row deleted since the snapshot **comes back**, with its original `_id`.
-- A row that still exists **keeps its current contents** — an edit made since
-  the snapshot is not reverted (it counts as "already present").
-- A row created since the snapshot **stays**.
-- A row that no longer validates against the current schema is **rejected** and
-  counted; the rest still land.
+- A row edited since the snapshot **gets its snapshot contents back**.
+- A row created since the snapshot **is deleted**.
+- A table the snapshot holds no rows for **is emptied**.
 
-Re-running a restore is safe (already-present rows are skipped), which is the
-remedy for a partial one (reported as such when a batch could not reach a
-shard). The pre-restore snapshot preserves exactly what was there before; it is
-downloadable, but restoring it would not undo the restore — rows the restore
-brought back would stay. To truly go back, reconcile by hand from the two files.
+How atomic that is depends on the storage:
+
+- **Each shard** applies its replace batch in one Durable Object transaction:
+  every write and delete lands, or none does.
+- **`.global()` D1 tables** have no interactive transactions. Every row is
+  validated before anything is written, the writes go first, and the deletes
+  run only once every write has landed — a failure part-way leaves extra rows,
+  never missing ones.
+- **A snapshot larger than one batch** (about 900 KB of NDJSON) is not atomic as
+  a whole: between the replace batch and the last appended one, only part of the
+  snapshot is back.
+
+The restore **stops** at the first batch that is refused, rejects a row (one
+that no longer validates against the current schema, for example), or cannot
+reach a shard, and is recorded `failed` with the reason. If the replace batch
+itself failed on a shard, that shard was rolled back and the `.global()` tables
+were not touched. Re-running a restore is safe — it starts over with a replace.
+
+The pre-restore snapshot preserves exactly what was there before, and restoring
+it is a rewind too, so it **undoes** the restore. A tenant whose runtime predates
+replace-mode import cannot be rewound: the restore says so after its first batch
+(which was appended, so rows deleted since the snapshot are back) — redeploy the
+project and restore again.
 
 ### Downloading, and restoring by hand
 
@@ -253,9 +272,19 @@ gunzip acme-20260930T120000000Z.ndjson.gz
 LUNORA_ADMIN_TOKEN=<its admin token> lunora import acme-20260930T120000000Z.ndjson --url <worker-url> --yes
 ```
 
-`lunora import` is the same append-only import. For a real rewind, restore into
-an **empty** deployment (a fresh project, or after clearing the tables), where
-append and replace are the same thing.
+`lunora import` appends: a row whose `_id` already exists is skipped. For a
+rewind, either restore into an **empty** deployment (a fresh project, or after
+clearing the tables), where append and replace are the same thing, or post a
+snapshot that fits one request (1 MiB) in replace mode yourself:
+
+```bash
+curl -X POST "<worker-url>/_lunora/admin/import?mode=replace" \
+  -H "authorization: Bearer <its admin token>" -H "content-type: application/x-ndjson" \
+  --data-binary @acme-20260930T120000000Z.ndjson
+```
+
+`?tables=a,b` narrows a replace to those tables; without it every table in the
+schema is replaced.
 
 If the control-plane D1 is gone, the snapshots are still in R2:
 
@@ -277,7 +306,9 @@ wrangler r2 object get <OFFSITE_BUCKET>/tenant-backups/<org>/<alias>/<timestamp>
   `BACKUP_OFFSITE_*` secrets, snapshots live only in the cell's own account and
   an account-level loss takes them too. Restoring from the off-site copy is by
   hand (above); the studio restores from the primary bucket only.
-- **No point-in-time rewind.** Needs a replace-mode import in the runtime.
+- **Multi-batch restores are not atomic.** A snapshot over one import batch
+  passes through a partly-restored window; a staged import (load every batch,
+  then swap per shard) would close it.
 - **Not covered:** R2 objects, KV, Vectorize (table above).
 - **The tenant export itself** still materialises every shard's rows inside
   the tenant Worker, so a very large tenant can exhaust the tenant side before

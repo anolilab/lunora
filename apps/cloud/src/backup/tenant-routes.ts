@@ -129,10 +129,10 @@ export const handleBackupNowRoute = async (request: Request, environment: Router
  * production Worker.
  *
  * Takes a snapshot of the current data FIRST and refuses to touch anything if
- * that fails. Then replays the chosen snapshot through the tenant's append-only
- * import: rows missing since the snapshot come back with their original ids;
- * rows that still exist keep their CURRENT contents; rows created since are left
- * alone. It is a "bring back what was deleted" restore, not a rewind.
+ * that fails. Then rewinds the tenant to the chosen snapshot through its
+ * replace-mode import: rows deleted since come back, rows edited since get their
+ * snapshot contents, rows created since are removed. Restoring the pre-restore
+ * snapshot the same way undoes it.
  */
 export const handleRestoreRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
@@ -185,20 +185,9 @@ export const handleRestoreRoute = async (request: Request, environment: RouterEn
         return jsonError(502, reason);
     }
 
-    const partial = summary.unreachableShards > 0;
+    await settle(context, organizationId, started.restoreId, { restoreInserted: summary.inserted, status: "succeeded" });
 
-    await settle(context, organizationId, started.restoreId, {
-        ...(partial ? { error: `${String(summary.unreachableShards)} import batch(es) could not reach a shard — the restore is partial; run it again` } : {}),
-        restoreConflicts: summary.conflicts,
-        restoreInserted: summary.inserted,
-        restoreRowErrors: summary.rowErrors,
-        status: partial ? "failed" : "succeeded",
-    });
-
-    return Response.json(
-        { ok: !partial, preRestoreBackupId: started.preRestoreBackupId, restoreId: started.restoreId, summary },
-        { status: partial ? 207 : 200 },
-    );
+    return Response.json({ ok: true, preRestoreBackupId: started.preRestoreBackupId, restoreId: started.restoreId, summary });
 };
 
 /** `POST /v1/backups/download` — stream one snapshot (gzipped NDJSON) to an owner/admin. */

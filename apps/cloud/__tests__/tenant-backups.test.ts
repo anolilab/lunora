@@ -515,24 +515,64 @@ describe("tenant backup off-site copy", () => {
 });
 
 describe(restoreTenantSnapshot, () => {
-    it("replays the snapshot in batches under the tenant's body limit and sums the outcome", async () => {
-        const line = `${JSON.stringify({ doc: { _id: "x", pad: "y".repeat(1000) }, table: "t" })}\n`;
-        const snapshot = line.repeat(2000);
-        const bodies: string[] = [];
-        const send: TenantSend = async (_path, body) => {
+    /** A tenant import that accepts every row; a replace batch reports one deletion per table. */
+    const accepting =
+        (paths: string[], bodies: string[]): TenantSend =>
+        async (path, body) => {
+            paths.push(path);
             bodies.push(body);
 
             const rows = body.split("\n").filter(Boolean).length;
 
-            return Response.json({ conflicts: 1, errors: [], failed: [], inserted: { t: rows - 1 }, received: rows });
+            return Response.json({
+                ...(path.endsWith("?mode=replace") ? { deleted: { t: 3 } } : {}),
+                errors: [],
+                failed: [],
+                inserted: { t: rows },
+                received: rows,
+            });
         };
 
-        const summary = await restoreTenantSnapshot(send, new Blob([await gzip(snapshot)]).stream());
+    it("replaces with the first batch, appends the rest under the tenant's body limit, and sums the outcome", async () => {
+        const line = `${JSON.stringify({ doc: { _id: "x", pad: "y".repeat(1000) }, table: "t" })}\n`;
+        const snapshot = line.repeat(2000);
+        const paths: string[] = [];
+        const bodies: string[] = [];
+
+        const summary = await restoreTenantSnapshot(accepting(paths, bodies), new Blob([await gzip(snapshot)]).stream());
 
         expect(bodies.length).toBeGreaterThan(1);
+        expect(paths).toStrictEqual(["/_lunora/admin/import?mode=replace", ...Array.from({ length: bodies.length - 1 }).fill("/_lunora/admin/import")]);
         expect(bodies.every((body) => new TextEncoder().encode(body).byteLength <= IMPORT_BATCH_BYTES)).toBe(true);
         expect(bodies.join("")).toBe(snapshot);
-        expect(summary).toStrictEqual({ conflicts: bodies.length, inserted: 2000 - bodies.length, received: 2000, rowErrors: 0, unreachableShards: 0 });
+        expect(summary).toStrictEqual({ deleted: 3, inserted: 2000, received: 2000 });
+    });
+
+    it("still sends the replace for an empty snapshot, which empties the tenant", async () => {
+        const paths: string[] = [];
+        const bodies: string[] = [];
+
+        const summary = await restoreTenantSnapshot(accepting(paths, bodies), new Blob([await gzip("")]).stream());
+
+        expect(paths).toStrictEqual(["/_lunora/admin/import?mode=replace"]);
+        expect(bodies).toStrictEqual([""]);
+        expect(summary).toStrictEqual({ deleted: 3, inserted: 0, received: 0 });
+    });
+
+    it("stops on a batch that rejects a row or misses a shard", async () => {
+        const rejecting: TenantSend = () =>
+            Promise.resolve(Response.json({ deleted: {}, errors: [{ code: "VALIDATION_ERROR" }], failed: [], inserted: {}, received: 1 }));
+        const partial: TenantSend = () =>
+            Promise.resolve(Response.json({ deleted: {}, errors: [], failed: [{ shardKey: "c2" }], inserted: {}, received: 1 }, { status: 207 }));
+
+        await expect(restoreTenantSnapshot(rejecting, new Blob([await gzip(SECRET_ROW)]).stream())).rejects.toThrow(/1 row\(s\) rejected/u);
+        await expect(restoreTenantSnapshot(partial, new Blob([await gzip(SECRET_ROW)]).stream())).rejects.toThrow(/1 shard\(s\) unreachable/u);
+    });
+
+    it("refuses to report a rewind from a runtime that ignored replace mode", async () => {
+        const appendOnly: TenantSend = () => Promise.resolve(Response.json({ conflicts: 1, errors: [], failed: [], inserted: {}, received: 1 }));
+
+        await expect(restoreTenantSnapshot(appendOnly, new Blob([await gzip(SECRET_ROW)]).stream())).rejects.toThrow(/predates replace-mode/u);
     });
 
     it("stops on a batch the tenant refuses", async () => {
@@ -625,7 +665,7 @@ describe("tenant backup routes", () => {
                 Promise.resolve(
                     new URL(request.url).pathname.endsWith("/export")
                         ? new Response("current\n")
-                        : Response.json({ conflicts: 0, errors: [], failed: [], inserted: { users: 1 }, received: 1 }),
+                        : Response.json({ deleted: { users: 2 }, errors: [], failed: [], inserted: { users: 1 }, received: 1 }),
                 ),
         });
         const finished: Row[] = [];
@@ -646,6 +686,7 @@ describe("tenant backup routes", () => {
         });
 
         expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toMatchObject({ summary: { deleted: 2, inserted: 1, received: 1 } });
         expect(requests.map((request) => request.path)).toStrictEqual(["/_lunora/admin/export", "/_lunora/admin/import"]);
         await expect(gunzip(objects.get("pre.ndjson.gz")?.body ?? new Uint8Array())).resolves.toBe("current\n");
         expect(finished).toStrictEqual([

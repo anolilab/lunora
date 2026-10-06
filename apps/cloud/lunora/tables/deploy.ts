@@ -344,7 +344,7 @@ export const deployTables = {
         operation: v.union(v.literal("backup"), v.literal("restore")),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
-        // Restore rows: the snapshot restored, and what the append-only import did.
+        // Restore rows: the snapshot restored, and what the import wrote.
         restoredFrom: v.optional(v.id("tenantBackups")),
         restoreConflicts: v.optional(v.number()),
         restoreInserted: v.optional(v.number()),

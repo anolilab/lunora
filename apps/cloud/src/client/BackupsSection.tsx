@@ -31,7 +31,7 @@ const post = async (path: string, body: Record<string, string>): Promise<Respons
         method: "POST",
     });
 
-    if (!response.ok && response.status !== 207) {
+    if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
 
         throw new Error(payload?.error ?? `request failed (${String(response.status)})`);
@@ -63,20 +63,17 @@ const describeRow = (row: BackupRow): string => {
         return "—";
     }
 
-    const rejected = row.restoreRowErrors ? ` · ${formatNumber(row.restoreRowErrors)} rejected` : "";
-
-    return `${formatNumber(row.restoreInserted)} rows back · ${formatNumber(row.restoreConflicts ?? 0)} already present${rejected}`;
+    return `${formatNumber(row.restoreInserted)} rows restored`;
 };
 
 /**
  * A project's production data backups: the daily snapshots, "Back up now",
  * download, and restore behind a confirm step that names the snapshot.
  *
- * The restore copy is deliberately explicit about what it does. The tenant
- * import is append-only, so a restore brings back rows deleted since the
- * snapshot and leaves everything else — including rows edited since — as it is.
- * Someone expecting a rewind would otherwise read "restored" as a promise the
- * platform does not keep.
+ * The restore copy is deliberately explicit about what it does: a restore is a
+ * rewind, so rows created since the snapshot are deleted and rows edited since
+ * lose those edits. What makes that safe to offer is the snapshot of the current
+ * data taken first, which can itself be restored to undo it.
  */
 export const BackupsSection = ({ organizationId, projectId, target }: { organizationId: OrgId; projectId: ProjectId; target: TargetId }): ReactElement => {
     // `undefined` while loading and after an identity switch — every read below guards it.
@@ -107,9 +104,9 @@ export const BackupsSection = ({ organizationId, projectId, target }: { organiza
             <CardHeader>
                 <CardTitle>Backups</CardTitle>
                 <CardDescription>
-                    Production data is snapshotted daily and kept per your plan. Restoring a snapshot brings back rows deleted since it was taken; rows that
-                    still exist keep their current values and newer rows are left alone. A snapshot of the current data is taken first. Files in storage buckets
-                    are not included.
+                    Production data is snapshotted daily and kept per your plan. Restoring a snapshot rewinds your data to it: rows deleted since come back,
+                    edits since are reverted, and rows created since are removed. A snapshot of the current data is taken first, so a restore can be undone by
+                    restoring that one. Files in storage buckets are not included.
                     {TARGETS[target].limitations.some((limitation) => limitation.id === "pitr")
                         ? " On your own server these snapshots are the recovery tier: celld keeps no point-in-time history, so you cannot rewind to an arbitrary moment."
                         : null}
@@ -137,8 +134,9 @@ export const BackupsSection = ({ organizationId, projectId, target }: { organiza
                     // react-doctor-disable-next-line react-doctor/prefer-html-dialog -- an inline confirmation inside the card, not a modal: nothing behind it is inert, so a top-layer `<dialog>` would misdescribe it
                     <div aria-label="Confirm restore" className="flex flex-col gap-3 rounded-md border border-warning/40 p-4 text-sm" role="alertdialog">
                         <p className="m-0">
-                            Restore the snapshot from <span className="font-medium">{formatDateTime(confirming.createdAt)}</span>? Rows deleted since then come
-                            back; nothing is removed or reverted. The current data is backed up first.
+                            Restore the snapshot from <span className="font-medium">{formatDateTime(confirming.createdAt)}</span>? Your data is rewound to it:
+                            changes made since then are reverted and rows created since are deleted. The current data is backed up first, and restoring that
+                            backup undoes this.
                         </p>
                         <div className="flex gap-2">
                             <Button
@@ -148,11 +146,9 @@ export const BackupsSection = ({ organizationId, projectId, target }: { organiza
 
                                     setConfirming(null);
                                     run(async () => {
-                                        const response = await post("/v1/backups/restore", { backupId: snapshot._id, organizationId });
+                                        await post("/v1/backups/restore", { backupId: snapshot._id, organizationId });
 
-                                        return response.status === 207
-                                            ? "Restore was partial — some data could not be written. Run it again."
-                                            : "Restore complete.";
+                                        return "Restore complete.";
                                     });
                                 }}
                                 size="sm"

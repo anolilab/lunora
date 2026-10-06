@@ -510,9 +510,10 @@ export (the one `lunora cloud eject` uses), as gzipped NDJSON under
 `tenant-backups/{org}/{alias}/{timestamp}.ndjson.gz`. Retention is
 `limits.backupRetention` in the plan catalog (free 3, pro 14, enterprise 30).
 Owners and admins can back up now, download, and restore from the project view;
-all three are audit-logged. A restore is **append-only** — it brings back rows
-deleted since the snapshot and does not revert or remove anything — and takes a
-snapshot of the current data first. What a snapshot covers, what it does not,
+all three are audit-logged. A restore is a **rewind** through the runtime's
+replace-mode import — rows deleted since the snapshot come back, edits since are
+reverted, rows created since are removed — and takes a snapshot of the current
+data first, which can be restored to undo it. What a snapshot covers, what it does not,
 and the manual recovery paths are in [`docs/RESTORE.md`](docs/RESTORE.md).
 
 Snapshots stream to R2 as multipart uploads, so their size is not capped by the
