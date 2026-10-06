@@ -4001,6 +4001,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AuthDataPort` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AuthImpersonation` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.

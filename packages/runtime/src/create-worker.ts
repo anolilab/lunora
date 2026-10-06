@@ -44,6 +44,8 @@ import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJson
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
+import type { AuthDataPort } from "./export-sections";
+import { exportSectionRows } from "./export-sections";
 import { prepareExportRows } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import type { HealthProbe } from "./health-routes";
@@ -394,7 +396,7 @@ type X402ChargeGate = (
 type StorageListFunction = (
     prefix?: string,
     options?: { bucket?: string; cursor?: string; limit?: number },
-) => Promise<{ cursor?: string; objects: StorageObject[] }>;
+) => Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }>;
 
 /**
  * Deletes one object from a storage bucket for the admin file browser.
@@ -413,7 +415,7 @@ type StorageDeleteFunction = (key: string, options?: { bucket?: string }) => Pro
 type StorageUploadFunction = (
     key: string,
     body: ArrayBuffer,
-    options?: { bucket?: string; contentType?: string; sha256?: string },
+    options?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string>; sha256?: string },
 ) => Promise<{ etag?: string; key: string }> | { etag?: string; key: string };
 
 /**
@@ -888,6 +890,16 @@ interface WorkerOptions {
      * Only meaningful alongside `authHandler`.
      */
     authBasePath?: string;
+
+    /**
+     * The auth tables that live outside the schema (better-auth's tables in the auth
+     * D1 database, or the DO-backed auth object's), read and written by the admin
+     * export / import as the `$auth` section — so a backup, restore and eject carry
+     * users, accounts and sessions with the app's own tables. Codegen wires it for
+     * both auth modes. Omit it and the export has no auth section, and an import's
+     * `$auth` rows are reported as `AUTH_NOT_CONFIGURED`.
+     */
+    authData?: AuthDataPort;
 
     /**
      * Optional prebound `@lunora/auth` handler for the OAuth discovery documents
@@ -3818,6 +3830,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         queryCoordinator,
         resolveForwardContext: resolveAdminForwardContext,
         shardDO,
+        exportSectionRows: (sections) => exportSectionRows(options, sections),
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
         streamingImport: (request, headers, replaceTables) => streamingImport(request, options, queryCoordinator, headers, shardDO, replaceTables),
         syncGlobals: options.syncGlobals,

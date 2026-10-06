@@ -54,6 +54,7 @@ import { LunoraError } from "@lunora/errors";
 import { contentDigest } from "../../../shared/content-digest";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { insertAuthRows } from "./data-port";
 import type { DoStorageLike } from "./do-store";
 
 /** The internal route both halves of the move are served on. Not part of `/api/auth/*`. */
@@ -643,7 +644,7 @@ const assertNotPurged = (storage: DoStorageLike): void => {
 };
 
 /** The ops served by the un-pinned object. */
-const SOURCE_OPS = new Set(["fingerprints", "manifest", "page", "purge"]);
+const SOURCE_OPS = new Set(["fingerprints", "manifest", "page", "purge", "tables"]);
 
 /**
  * Target: markers and the copy order, plus — only when asked, since it reads every
@@ -698,6 +699,23 @@ const safeCause = (error: unknown): string => {
     return error instanceof Error ? error.name : "unknown";
 };
 
+/** `user`, `account`, `session` first; the unbounded audit and rate-limit tables last; the rest by name. */
+const sortTables = (tables: MovableTable[], order: MoveOrder): MovableTable[] => {
+    const rank = (name: string): number => {
+        const first = order.first.indexOf(name);
+
+        if (first !== -1) {
+            return first;
+        }
+
+        const last = order.last.indexOf(name);
+
+        return last === -1 ? order.first.length : order.first.length + 1 + last;
+    };
+
+    return tables.toSorted((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
+};
+
 const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext): Promise<unknown> => {
     if (SOURCE_OPS.has(String(body["op"]))) {
         assertNotPurged(storage);
@@ -711,6 +729,17 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
         }
         case "fingerprints": {
             return { fingerprints: Object.fromEntries(tableNames(storage).map((table) => [table, sourceFingerprint(storage, table)])) };
+        }
+        // The admin export / import of the auth tables (`./data-port`) reuses `page` and
+        // adds these two: the table list in copy order, and an append-only write.
+        case "import": {
+            context.prepare();
+
+            return insertAuthRows(
+                { all: (query, parameters) => Promise.resolve(all(storage, query, ...parameters)) },
+                (body["rows"] ?? []) as { doc: Row; table: string }[],
+                (table) => !isReservedTable(table),
+            );
         }
         case "manifest": {
             return { tables: listMovableTables(storage) };
@@ -732,6 +761,11 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
         }
         case "status": {
             return status(storage, context, body["fingerprints"] === true);
+        }
+        case "tables": {
+            context.prepare();
+
+            return { tables: sortTables(listMovableTables(storage), context.order()).map((table) => table.name) };
         }
         case "write": {
             return writePage(storage, assertKnownTable(storage, body["table"]), {
@@ -777,23 +811,6 @@ const handleMoveRequest = async (storage: DoStorageLike, body: Row, context: Mov
 type MoveSide = "source" | "target";
 
 type StatusReply = ReturnType<typeof status>;
-
-/** `user`, `account`, `session` first; the unbounded audit and rate-limit tables last; the rest by name. */
-const sortTables = (tables: MovableTable[], order: MoveOrder): MovableTable[] => {
-    const rank = (name: string): number => {
-        const first = order.first.indexOf(name);
-
-        if (first !== -1) {
-            return first;
-        }
-
-        const last = order.last.indexOf(name);
-
-        return last === -1 ? order.first.length : order.first.length + 1 + last;
-    };
-
-    return tables.toSorted((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
-};
 
 const emptyReport = (table: MovableTable, targetRows: number): AuthMoveTableReport => {
     return { conflicts: 0, copied: 0, deleted: 0, sourceRows: table.rows, table: table.name, targetRows, unchanged: 0, updated: 0 };

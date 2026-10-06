@@ -11,6 +11,8 @@
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
+import type { SectionRow } from "./export-sections";
+import { assertSupportedHeader, HEADER_TABLE, importSectionRows, isSectionTable } from "./export-sections";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
@@ -101,6 +103,12 @@ interface BucketedImport {
      * failed row twice — once in its bucket and again as an error.
      */
     received: number;
+
+    /**
+     * Section lines (`$lunora` / `$auth` / `$kv` / `$storage`, see
+     * `./export-sections`), in file order.
+     */
+    sectionRows: SectionRow[];
 }
 
 /**
@@ -126,6 +134,7 @@ const bucketImportStream = async (
     // only describe rows physically contiguous from the first one.
     const globalRows: { doc: Record<string, unknown>; line: number; table: string }[] = [];
     const perShard = new Map<string, AdminBatch>();
+    const sectionRows: SectionRow[] = [];
     let received = 0;
     // Physical 1-based source line index. Incremented for EVERY line handled,
     // including blank ones, so `error.line` / `startLine` always point at the
@@ -134,7 +143,7 @@ const bucketImportStream = async (
     let physicalLine = 0;
 
     if (!request.body) {
-        return { errors, globalRows, perShard, received };
+        return { errors, globalRows, perShard, received, sectionRows };
     }
 
     const reader = request.body.getReader();
@@ -167,6 +176,17 @@ const bucketImportStream = async (
         }
 
         const { doc: documentRow, table } = row;
+
+        if (isSectionTable(table)) {
+            // A header from a newer format is refused here, before anything is written.
+            if (table === HEADER_TABLE) {
+                assertSupportedHeader(documentRow);
+            }
+
+            sectionRows.push({ doc: documentRow, line: physicalLine, table });
+
+            return;
+        }
 
         if (replaceScope !== undefined && !replaceScope.has(table)) {
             errors.push({ code: "BAD_ROW", line: physicalLine, message: `table "${table}" is not in this replace import's tables`, table });
@@ -239,7 +259,7 @@ const bucketImportStream = async (
         handleLine(buffer);
     }
 
-    return { errors, globalRows, perShard, received };
+    return { errors, globalRows, perShard, received, sectionRows };
 };
 
 /**
@@ -395,7 +415,7 @@ const streamingImport = async (
         });
     }
 
-    const { errors, globalRows, perShard, received } = await bucketImportStream(
+    const { errors, globalRows, perShard, received, sectionRows } = await bucketImportStream(
         request,
         options,
         defaultShard,
@@ -443,6 +463,10 @@ const streamingImport = async (
     }
 
     await importGlobalPlane(options, totals, warnings, globalRows, globalScope);
+
+    if (sectionRows.length > 0) {
+        mergeImportResult(totals, await importSectionRows(options, sectionRows));
+    }
 
     // `received` is the honest denominator, counted as each line was read (see
     // `BucketedImport.received`). Without it the response asserted success by

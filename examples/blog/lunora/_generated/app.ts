@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { authDiscoveryPathsFor, authTableNames, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";
 import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
@@ -444,7 +444,7 @@ class AppBuilder<Env extends object> {
                 ? (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT"; origin?: string }) =>
                       pick(opts?.bucket, opts?.origin).getSignedUrl(key, { contentType: opts?.contentType, expiresInSeconds: opts?.expiresInSeconds, method: opts?.method })
                 : undefined,
-            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
+            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string>; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
         };
     }
 
@@ -535,6 +535,9 @@ class AppBuilder<Env extends object> {
             // Set only once auth is pinned to a jurisdiction: copies the users left in the
             // un-pinned object across (`__lunora_admin__:copyAuthToJurisdiction`).
             options.authJurisdictionMove = authWiring.jurisdictionMove;
+            // Every table of the object, for the admin export / import (`$auth`), so a
+            // backup, restore or eject carries users and sessions with the app's data.
+            options.authData = authWiring.dataPort;
             // `authAdmin` stays D1-only: its ~30 methods read the auth tables directly
             // from the worker, which DO storage does not allow. The studio's auth pages
             // therefore report "not configured" in this mode rather than silently
@@ -597,6 +600,14 @@ class AppBuilder<Env extends object> {
 
             options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
             options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
+            // better-auth's tables for the admin export / import (`$auth`). A table the
+            // schema declares (`authTables(...)`) already travels as a `.global()` row.
+            options.authData = authInstance
+                ? createSqlAuthDataPort(
+                      d1Executor(authD1(env) as never),
+                      authTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
+                  )
+                : undefined;
         }
 
         for (const fn of this.extendFns) {

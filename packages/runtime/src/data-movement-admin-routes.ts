@@ -18,6 +18,8 @@ import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
 import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage, shardCdcPageSize } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import { LunoraError } from "./errors";
+import type { ExportSection } from "./export-sections";
+import { EXPORT_SECTIONS } from "./export-sections";
 import type { ExportRow } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import { runExportTap } from "./export-tap";
@@ -43,16 +45,34 @@ type ImportShardFailure = { message: string; shardKey: string; timedOut: boolean
 const NDJSON_ENCODER = new TextEncoder();
 
 interface ExportBody {
+    /** Non-table sections to include; `undefined` → every section for a whole-deployment export, none when `tables` names some. */
+    sections: ReadonlyArray<ExportSection> | undefined;
     tables: ReadonlyArray<string> | undefined;
 }
+
+const parseExportSections = (raw: unknown): ExportSection[] | undefined => {
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(raw) || raw.some((entry) => !EXPORT_SECTIONS.includes(entry as ExportSection))) {
+        throw new LunoraError(`Export \`sections\` must be an array of ${EXPORT_SECTIONS.map((section) => `"${section}"`).join(", ")}`, {
+            code: "BAD_REQUEST",
+            status: 400,
+        });
+    }
+
+    return raw as ExportSection[];
+};
 
 const parseExportBody = async (request: Request): Promise<ExportBody> => {
     const body = await readLooseJsonBody(request, "Export");
 
-    const candidate = (body ?? {}) as { tables?: unknown };
+    const candidate = (body ?? {}) as { sections?: unknown; tables?: unknown };
+    const sections = parseExportSections(candidate.sections);
 
     if (candidate.tables === undefined) {
-        return { tables: undefined };
+        return { sections, tables: undefined };
     }
 
     if (!Array.isArray(candidate.tables)) {
@@ -69,7 +89,7 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
         tables.push(entry);
     }
 
-    return { tables };
+    return { sections, tables };
 };
 
 /** Narrow an untrusted `tables` value to its string entries, or `undefined` when it isn't an array. */
@@ -86,6 +106,8 @@ interface DataMovementAdminRouteDeps {
     defaultShardKey: string;
     /** Durable per-shard cursor store backing the continuous export tap; absent → the tap route reports not-configured. */
     exportCursorStore?: ExportCursorStore;
+    /** The format header and the non-table section records (auth, KV, storage); neither when no requested section is configured. */
+    exportSectionRows: (sections: ReadonlyArray<ExportSection>) => { header: ExportRow | undefined; rows: AsyncIterable<ExportRow> };
     /** Named export sinks (webhook / R2 / custom) the tap can drain to; absent / empty → the tap route reports not-configured. */
     exportSinks?: Record<string, ExportSink>;
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
@@ -129,6 +151,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         applyGlobals,
         defaultShardKey,
         exportCursorStore,
+        exportSectionRows,
         exportSinks,
         knownTables,
         queryCoordinator: coordinator,
@@ -160,16 +183,37 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         // Caveat: each shard returns a single materialised envelope, so peak
         // worker memory scales with the total shard-local row count — the
         // streaming only keeps the *response* from being buffered.
-        const rows = await prepareExportRows(forwardedHeaders, body.tables);
+        const tableRows = await prepareExportRows(forwardedHeaders, body.tables);
+        // A whole-deployment export carries every section the worker can read; one
+        // that names tables carries none unless it asks.
+        const sections = exportSectionRows(body.sections ?? (body.tables === undefined ? EXPORT_SECTIONS : []));
+        const rows = (async function* ordered(): AsyncGenerator<ExportRow> {
+            // The header, when any section is present, is the file's first line.
+            if (sections.header) {
+                yield sections.header;
+            }
 
+            yield* tableRows;
+            yield* sections.rows;
+        })();
+
+        // One row per pull, so the stream's backpressure reaches the producers: a
+        // storage object is read off its body only as fast as the client takes the
+        // lines, instead of the whole export queueing up in the isolate.
+        const iterator = rows[Symbol.asyncIterator]();
         const stream = new ReadableStream<Uint8Array>({
+            async cancel() {
+                await iterator.return(undefined);
+            },
             async pull(controller) {
                 try {
-                    for await (const row of rows) {
-                        controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
-                    }
+                    const next = await iterator.next();
 
-                    controller.close();
+                    if (next.done) {
+                        controller.close();
+                    } else {
+                        controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(next.value)}\n`));
+                    }
                 } catch (error: unknown) {
                     controller.error(error);
                 }

@@ -304,6 +304,29 @@ interface AuthConfigInfo {
 }
 ```
 
+### `AuthDataPort` (interface)
+
+```ts
+interface AuthDataPort {
+    exportRows: () => AsyncIterable<{
+        doc: Record<string, unknown>;
+        table: string;
+    }>;
+    importRows: (rows: ReadonlyArray<{
+        doc: Record<string, unknown>;
+        table: string;
+    }>) => Promise<{
+        conflicts: number;
+        errors: ReadonlyArray<{
+            index: number;
+            message: string;
+            table: string;
+        }>;
+        inserted: number;
+    }>;
+}
+```
+
 ### `AuthImpersonation` (interface)
 
 ```ts
@@ -1064,6 +1087,7 @@ interface KvIntrospector {
         namespace: string;
     }) => Promise<void>;
     getValue: (options: {
+        encoding?: "base64";
         key: string;
         namespace: string;
     }) => Promise<KvValueResult>;
@@ -1075,6 +1099,7 @@ interface KvIntrospector {
     }) => Promise<KvKeyListResult>;
     listNamespaces: () => Promise<KvNamespaceSummary[]>;
     putValue: (options: {
+        encoding?: "base64";
         expiration?: number;
         expirationTtl?: number;
         key: string;
@@ -2136,6 +2161,7 @@ type StorageListFunction = (prefix?: string, options?: {
 }) => Promise<{
     cursor?: string;
     objects: StorageObject[];
+    truncated?: boolean;
 }>;
 ```
 
@@ -2252,6 +2278,7 @@ interface WorkerOptions {
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;
+    authData?: AuthDataPort;
     authDiscoveryHandler?: (request: Request) => Promise<Response | undefined>;
     authHandler?: (request: Request) => Promise<Response | undefined>;
     authJurisdictionMove?: AuthJurisdictionMove;
@@ -3250,6 +3277,7 @@ type StorageSignedUrlFunction = (key: string, options?: {
 type StorageUploadFunction = (key: string, body: ArrayBuffer, options?: {
     bucket?: string;
     contentType?: string;
+    customMetadata?: Record<string, string>;
     sha256?: string;
 }) => Promise<{
     etag?: string;

@@ -374,7 +374,7 @@ class AppBuilder<Env extends object> {
                 ? (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT"; origin?: string }) =>
                       pick(opts?.bucket, opts?.origin).getSignedUrl(key, { contentType: opts?.contentType, expiresInSeconds: opts?.expiresInSeconds, method: opts?.method })
                 : undefined,
-            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
+            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string>; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
         };
     }
 

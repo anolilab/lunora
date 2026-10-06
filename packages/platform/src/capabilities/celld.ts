@@ -86,6 +86,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Same coordinator + relay tier as on Cloudflare, over cells rather than Durable Objects. It rides namespace stubs, so the celld gap that would bite — an RPC stub cannot cross an isolate boundary — does not apply to the fetch-shaped hops the tier makes; a remote cell call cannot be retried once its body starts streaming, because celld keeps no replay copy. Shard keys come from ShardRegistryDO exactly as on Cloudflare: each shard registers on its first write to a .shardBy() table, so one written before the registry was bound is not listed until it is written again",
         },
+        dataExportSections: {
+            level: "emulated",
+            note: "Same sections and limits as on Cloudflare, over celld's KV and R2 bindings, which are native here. Vectorize is not a celld binding, so there is no index to export either way",
+        },
         durableStreams: {
             level: "emulated",
             note: "Same shape as Cloudflare: each chunk lands in the cell's SQLite under a monotonic seq and the producer outlives the socket via `waitUntil`. celld has no streaming primitive of its own, and a cell released under memory pressure mid-flight ends the run as STREAM_INTERRUPTED",

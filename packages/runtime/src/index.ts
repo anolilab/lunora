@@ -90,6 +90,7 @@ export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynami
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
 export type { LunoraErrorBody } from "./errors";
 export { LunoraError, toErrorResponse } from "./errors";
+export type { AuthDataPort } from "./export-sections";
 export type { ExportBatch, ExportChange, ExportCursorStore, ExportSink, ExportTapFailure, ExportTapResult, RunExportTapOptions } from "./export-tap";
 export { createKvCursorStore, createMemoryCursorStore, defineExportSink, r2Sink, runExportTap, sanitizeChange, webhookExportSink } from "./export-tap";
 export type { HealthAuthPosture, HealthBody, HealthCheckReport, HealthProbe, HealthProbeKind, HealthProbeResult, HealthRouteDeps } from "./health-routes";

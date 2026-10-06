@@ -373,6 +373,21 @@ interface AuthConfigInfo {
 }
 ```
 
+### `AuthDataPortLike` (interface)
+
+```ts
+interface AuthDataPortLike {
+    exportRows: () => AsyncIterable<{
+        doc: Row;
+        table: string;
+    }>;
+    importRows: (rows: ReadonlyArray<{
+        doc: Row;
+        table: string;
+    }>) => Promise<AuthImportResult>;
+}
+```
+
 ### `AuthDoOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -382,6 +397,20 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ```ts
 interface AuthDoState {
     storage: DoStorageLike;
+}
+```
+
+### `AuthImportResult` (interface)
+
+```ts
+interface AuthImportResult {
+    conflicts: number;
+    errors: {
+        index: number;
+        message: string;
+        table: string;
+    }[];
+    inserted: number;
 }
 ```
 
@@ -633,6 +662,7 @@ const DEFAULT_AUTH_BASE_PATH: string;
 interface DoAuthWiring {
     auditReader: AuthAuditReader;
     authHandler: (request: Request) => Promise<Response | undefined>;
+    dataPort?: AuthDataPortLike;
     discoveryHandler: (request: Request) => Promise<Response | undefined>;
     jurisdictionMove?: AuthJurisdictionMove;
     resolveIdentity: (request: Request) => Promise<null | {
@@ -939,6 +969,12 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `authTableNames` (const)
+
+```ts
+const authTableNames: (options: LunoraAuthOptions) => string[];
+```
+
 ### `authTables` (const)
 
 ```ts
@@ -1002,6 +1038,12 @@ const createSignUpInvitation: (auth: LunoraAuth, input: {
     expiresInSeconds?: number;
     invitedBy?: string;
 }) => Promise<IssuedSignUpInvitation>;
+```
+
+### `createSqlAuthDataPort` (const)
+
+```ts
+const createSqlAuthDataPort: (executor: SqlExecutor, tables: ReadonlyArray<string>) => AuthDataPortLike;
 ```
 
 ### `createSqlAuthStore` (const)
@@ -1880,6 +1922,12 @@ interface MiddlewareNext<ContextIn> {
         ctx: Extension;
     }): Promise<ContextIn & Extension>;
 }
+```
+
+### `Row` (type)
+
+```ts
+type Row = Record<string, unknown>;
 ```
 
 ### `TransactionRunner` (type)
