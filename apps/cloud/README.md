@@ -520,10 +520,23 @@ cap, so the next plan refresh refuses the org (at most the resolver's 60 s TTL)
 without waiting up to an hour for the sweep. A row for any other period does
 not move the total, so a tenant cannot reset it with a chosen `periodStart`.
 The sweep rewrites the total from the ledger each hour, which corrects any
-increment a concurrent writer lost. The lookup also fails closed: an org row it
-cannot find answers `"suspended"`, and the dispatcher's plan cache keeps
-refusing a tenant last seen suspended when a refresh fails, instead of failing
-open to the free tier.
+increment a concurrent writer lost.
+
+Admission fails closed. The dispatcher serves only a verified `free`, `pro` or
+`enterprise` answer, and refuses everything else:
+
+- A suspended, over-cap or missing org answers `"suspended"` (503).
+- A script that no verified row serves answers `"unknown"` (404, cached 5 s).
+  The serving release is the alias's `aliasOwnership` owner's live release, and
+  releases of two organizations under one script are refused.
+- A failed, timed-out or malformed lookup answers `"unavailable"` (503). The
+  last verified answer stands in for at most `PLAN_STALE_GRACE_MS` (5 min)
+  past its TTL, and a `suspended` one until a refresh succeeds.
+
+A suspended org's custom domains, redirect-only ones included, are refused
+through `routeForHostname`. Answers are cached per script and per hostname for
+60 s, so a suspension, a breach or an alias or hostname changing owners reaches
+every dispatcher isolate within that window. The isolates cannot be told sooner.
 
 **Edge block.** A cell can also enforce a suspension in front of the Worker, so
 an attack on a suspended tenant stops costing a billed request each time. The

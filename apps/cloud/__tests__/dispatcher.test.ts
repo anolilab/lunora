@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { limitsForPlan } from "../src/billing/plans";
-import { createPlanResolver, resolveTenant } from "../src/targets/cloudflare-wfp/route";
+import { createPlanResolver, PLAN_STALE_GRACE_MS, resolveTenant, UNAVAILABLE_PLAN } from "../src/targets/cloudflare-wfp/route";
 
 describe(resolveTenant, () => {
     it("maps a single-label subdomain to its script", async () => {
@@ -89,18 +89,67 @@ describe(createPlanResolver, () => {
     });
 
     /**
-     * Fails OPEN, on both axes. A control-plane blip must not take the data plane
-     * down, which means it also cannot gate every protected preview behind a 503 —
-     * the password itself is never bypassed, only the decision to ask for it.
+     * Fails CLOSED. A tenant never seen is not served on a lookup that did not
+     * happen, and neither is a protected preview: both answer the unservable
+     * `unavailable` plan, which the dispatcher refuses.
      */
-    it("falls back to no facts on a failed lookup", async () => {
-        const resolve = createPlanResolver({
-            controlPlaneToken: "t",
-            controlPlaneUrl: "https://cp",
-            fetch: async () => new Response("nope", { status: 500 }),
-        });
+    it.each([
+        ["a 5xx", (): Promise<Response> => Promise.resolve(new Response("nope", { status: 500 }))],
+        ["a thrown fetch", (): Promise<Response> => Promise.reject(new Error("timeout"))],
+        ["a malformed body", (): Promise<Response> => Promise.resolve(new Response("<html>", { status: 200 }))],
+        ["an unknown plan name", (): Promise<Response> => Promise.resolve(Response.json({ plan: "platinum" }))],
+        ["a non-boolean protected flag", (): Promise<Response> => Promise.resolve(Response.json({ plan: "pro", protected: "no" }))],
+    ])("answers unavailable on %s with nothing cached", async (_label, failure) => {
+        const resolve = createPlanResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch: failure });
 
-        await expect(resolve("acme-app")).resolves.toStrictEqual({});
+        await expect(resolve("acme-app")).resolves.toStrictEqual({ plan: UNAVAILABLE_PLAN });
+    });
+
+    /** A blip keeps a healthy tenant (and its protection) up for the grace, then refuses it. */
+    it("serves the last verified answer through a failed refresh for the grace window only", async () => {
+        let clock = 0;
+        const fetchMock = vi
+            .fn<typeof globalThis.fetch>()
+            .mockResolvedValueOnce(Response.json({ plan: "pro", protected: true }))
+            .mockRejectedValue(new Error("down"));
+        const resolve = createPlanResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch: fetchMock, now: () => clock, ttlMs: 10 });
+
+        await resolve("acme-pr");
+        clock = 10 + PLAN_STALE_GRACE_MS - 1;
+
+        await expect(resolve("acme-pr")).resolves.toStrictEqual({ plan: "pro", protected: true });
+
+        clock = 10 + PLAN_STALE_GRACE_MS;
+
+        await expect(resolve("acme-pr")).resolves.toStrictEqual({ plan: UNAVAILABLE_PLAN });
+    });
+
+    it("caches an unknown answer only briefly, so a first deploy is served within seconds", async () => {
+        let clock = 0;
+        const fetchMock = vi
+            .fn<typeof globalThis.fetch>()
+            .mockResolvedValueOnce(Response.json({ plan: "unknown" }))
+            .mockResolvedValueOnce(Response.json({ plan: "free" }));
+        const resolve = createPlanResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch: fetchMock, now: () => clock });
+
+        await expect(resolve("acme-new")).resolves.toStrictEqual({ plan: "unknown" });
+
+        clock = 5000;
+
+        await expect(resolve("acme-new")).resolves.toStrictEqual({ plan: "free" });
+    });
+
+    /** Keyed by the script it was resolved for: one script's answer is never another's. */
+    it("never serves one script's cached answer for another", async () => {
+        const fetchMock = vi.fn<typeof globalThis.fetch>(async (input) => {
+            const url = input instanceof Request ? input.url : input.toString();
+
+            return Response.json({ plan: url.includes("script=acme-a") ? "pro" : "suspended" });
+        });
+        const resolve = createPlanResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch: fetchMock });
+
+        await expect(resolve("acme-a")).resolves.toStrictEqual({ plan: "pro" });
+        await expect(resolve("acme-b")).resolves.toStrictEqual({ plan: "suspended" });
     });
 
     /**

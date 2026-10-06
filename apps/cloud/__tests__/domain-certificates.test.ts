@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "../lunora/_generated/api.js";
-import { add, recordCertificate, removalTarget, remove, verifyTarget } from "../lunora/domains";
+import { add, recordCertificate, removalTarget, remove, routeForHostname, verifyTarget } from "../lunora/domains";
 import { purgeDeleted } from "../lunora/organizations";
 import { remove as removeProject } from "../lunora/projects";
 import { certificateBadge } from "../src/client/domains";
@@ -357,6 +357,46 @@ describe("domains.recordCertificate / removalTarget / remove", () => {
                 add.handler(ctx, { hostname: "new.example.com", organizationId: "org_1" as never, projectId: "proj_1" as never }),
             ).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("suspended") as unknown });
             expect(ops.filter((op) => op.kind === "insert" && op.table === "domains")).toStrictEqual([]);
+        });
+
+        it.each(Object.entries(organizations))("routes a %s organization's domain to a refusal, redirects included", async (_state, organization) => {
+            const { ctx } = makeCtx(
+                {
+                    domains: [
+                        {
+                            _id: "dom_1",
+                            hostname: "app.example.com",
+                            organizationId: "org_1",
+                            projectId: "proj_1",
+                            redirectTo: "https://x.example/",
+                            verifiedAt: 1,
+                        },
+                    ],
+                    organizations: organization === undefined ? [] : [organization],
+                },
+                { now: Date.now() },
+            );
+
+            await expect(routeForHostname.handler(ctx, { hostname: "app.example.com" })).resolves.toStrictEqual({ suspended: true });
+        });
+
+        it("routes a serving org's domain only to a project of that org", async () => {
+            const domains = [{ _id: "dom_1", hostname: "app.example.com", organizationId: "org_1", projectId: "proj_1", verifiedAt: 1 }];
+            const route = async (projectOrg: string) =>
+                routeForHostname.handler(
+                    makeCtx(
+                        {
+                            domains,
+                            organizations: [{ _id: "org_1", plan: "free" }],
+                            projects: [{ _id: "proj_1", activeScriptName: "acme", organizationId: projectOrg }],
+                        },
+                        { now: Date.now() },
+                    ).ctx,
+                    { hostname: "app.example.com" },
+                );
+
+            await expect(route("org_1")).resolves.toStrictEqual({ scriptName: "acme" });
+            await expect(route("org_2")).resolves.toBeNull();
         });
 
         it("lets an owner of a serving organization verify, and refuses a plain member", async () => {

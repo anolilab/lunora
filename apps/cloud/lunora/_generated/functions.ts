@@ -1020,7 +1020,7 @@ export interface Caller {
         recordCertificate: (args: { customHostnameId?: unknown; error?: unknown; id: Id<"domains">; issuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; organizationId: Id<"organizations">; scope?: unknown; sslStatus: unknown }) => Promise<void>;
         removalTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ certificateIssuer?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: string; customHostnameId?: string; hostname: string; projectId: Id<"projects"> }>;
         remove: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<void>;
-        routeForHostname: (args: { hostname: unknown }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; } | null>;
+        routeForHostname: (args: { hostname: unknown }) => Promise<{ redirectStatusCode?: number; redirectTo?: string; scriptName?: string; suspended?: true; } | null>;
         verifyTarget: (args: { id: Id<"domains">; organizationId: Id<"organizations"> }) => Promise<{ domain: { _id: Id<"domains">; certificateError?: null | string; certificateIssuer?: null | "celld-vps" | "cloudflare-wfp" | "cloudflare-workers"; certificateScope?: null | string; certificateStatus?: null | string; createdAt: number; customHostnameId?: null | string; edgeBlockedAt?: null | number; edgeBlockError?: null | string; hostname: string; organizationId: Id<"organizations">; projectId: Id<"projects">; redirectStatusCode?: number; redirectTo?: string; txtToken: string; updatedAt: number; verifiedAt?: number }; organizationId: Id<"organizations"> }>;
     };
     fanout: {

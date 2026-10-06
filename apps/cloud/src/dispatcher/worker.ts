@@ -2,7 +2,7 @@ import { limitsForPlan } from "../billing/plans";
 import type { AnalyticsEngineDatasetLike } from "../targets/cloudflare-wfp/analytics";
 import { normalizeHostname, normalizeRoutePath, recordRequestUsage, statusClass } from "../targets/cloudflare-wfp/analytics";
 import type { CustomDomainRoute, ScriptFacts } from "../targets/cloudflare-wfp/route";
-import { createCustomDomainResolver, createPlanResolver, resolveTenant } from "../targets/cloudflare-wfp/route";
+import { createCustomDomainResolver, createPlanResolver, resolveTenant, SERVABLE_PLANS } from "../targets/cloudflare-wfp/route";
 import { recordDispatch } from "../telemetry/platform-metrics";
 import { previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "./preview-auth";
 
@@ -41,6 +41,8 @@ interface DispatcherEnv {
 }
 
 const NOT_FOUND = (message: string): Response => new Response(message, { status: 404 });
+
+const SUSPENDED = (): Response => new Response("this deployment is suspended — see your billing page", { status: 503 });
 
 /**
  * Trim trailing slashes before joining a path onto a base URL.
@@ -289,6 +291,11 @@ const redirectOnlyDomain = async (url: URL, appDomain: string): Promise<Response
 
     const custom = await customDomainResolver(url.hostname.toLowerCase());
 
+    // Refused before any redirect: a suspended org's redirect domains answer as its tenants do.
+    if (custom?.suspended === true) {
+        return SUSPENDED();
+    }
+
     if (!custom?.redirectTo) {
         return undefined;
     }
@@ -325,10 +332,23 @@ const serve = async (request: Request, env: DispatcherEnv): Promise<Response> =>
         return NOT_FOUND("no tenant for this hostname");
     }
 
-    // Spend-cap / abuse suspension (GAPS.md C1): the control plane encodes
-    // a suspended org as the sentinel plan "suspended".
-    if (route.plan === "suspended") {
-        return new Response("this deployment is suspended — see your billing page", { status: 503 });
+    // Admission (GAPS.md C1, plan 365 W3): only a verified servable plan is
+    // served. `suspended` is a suspended or over-cap org; `unknown` a script no
+    // verified row serves; anything else a lookup that failed or answered
+    // nonsense — refused, never served on a default tier. With no control plane
+    // configured at all (local dev) there is nothing to ask, and the free tier applies.
+    const plan = planResolver === undefined ? "free" : route.plan;
+
+    if (plan === "suspended") {
+        return SUSPENDED();
+    }
+
+    if (plan === "unknown") {
+        return NOT_FOUND("no tenant for this hostname");
+    }
+
+    if (plan === undefined || !SERVABLE_PLANS.has(plan)) {
+        return new Response("this deployment is temporarily unavailable", { headers: { "retry-after": "30" }, status: 503 });
     }
 
     // Deployment protection. A preview URL is publicly addressable the moment
@@ -353,7 +373,7 @@ const serve = async (request: Request, env: DispatcherEnv): Promise<Response> =>
     try {
         // Per-plan runtime caps (§4): CPU + subrequests scale with the tenant's
         // plan, falling back to the free tier when the plan is unknown.
-        const limits = limitsForPlan(route.plan);
+        const limits = limitsForPlan(plan);
         const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
         // A WebSocket upgrade returns a 101 response carrying `webSocket`;
         // returning it verbatim hands the hibernatable socket back to the

@@ -76,20 +76,79 @@ describe("deployments.cleanupExpiredPreviews", () => {
  */
 describe("deployments.planForScript", () => {
     const period = periodStartOf(Date.now());
-    const queryCtx = (organization: null | Row): QueryCtx =>
-        ({
+    const live: Row = { _id: "d1", createdAt: 2, kind: "production", organizationId: "org_1", projectId: "p1", scriptName: "app", status: "live" };
+    const queryCtx = (organization: null | Row, world: { deployments?: Row[]; ledger?: Row[]; organizations?: Row[]; projects?: Row[] } = {}): QueryCtx => {
+        const rows = [...(world.organizations ?? (organization === null ? [] : [{ _id: "org_1", ...organization }])), ...(world.projects ?? [])];
+        const page = (all: Row[]) => Promise.resolve({ continueCursor: null, isDone: true, page: all });
+
+        return {
             db: {
-                deployments: { findMany: () => Promise.resolve({ page: [{ _id: "d1", kind: "production", organizationId: "org_1", scriptName: "app" }] }) },
-                get: () => Promise.resolve(organization),
-                subscriptions: { findMany: () => Promise.resolve({ page: [] }) },
+                aliasOwnership: { findMany: () => page(world.ledger ?? []) },
+                deployments: { findMany: () => page(world.deployments ?? [live]) },
+                get: (id: string) => Promise.resolve(rows.find((row) => row["_id"] === id) ?? null),
+                subscriptions: { findMany: () => page([]) },
             },
             now: Date.now(),
-        }) as unknown as QueryCtx;
-    const plan = async (organization: null | Row): Promise<string> => {
-        const facts = await planForScript.handler(queryCtx(organization), { scriptName: "app" });
-
-        return facts.plan;
+        } as unknown as QueryCtx;
     };
+    const facts = async (organization: null | Row, world: Parameters<typeof queryCtx>[1] = {}) =>
+        planForScript.handler(queryCtx(organization, world), { scriptName: "app" });
+    const plan = async (organization: null | Row, world: Parameters<typeof queryCtx>[1] = {}): Promise<string> => {
+        const answer = await facts(organization, world);
+
+        return answer.plan;
+    };
+
+    /**
+     * Every release of an alias shares its script name, so the row the plan comes
+     * from must be the one the alias's verified owner serves — never whichever
+     * row a page happens to start with.
+     */
+    describe("which deployment a script serves for", () => {
+        const serving = { plan: "free" };
+        const suspended = { _id: "org_old", plan: "free", suspendedAt: 1 };
+
+        it("answers unknown for a script no standing release serves, instead of a default tier", async () => {
+            await expect(plan(serving, { deployments: [] })).resolves.toBe("unknown");
+            await expect(plan(serving, { deployments: [{ ...live, status: "destroyed" }] })).resolves.toBe("unknown");
+        });
+
+        it("reads the alias's ledger owner, not another organization's leftover row", async () => {
+            const leftover = { ...live, _id: "d0", createdAt: 1, organizationId: "org_old", status: "destroyed" };
+
+            await expect(
+                plan(null, {
+                    deployments: [leftover, live],
+                    ledger: [{ alias: "app", organizationId: "org_1" }],
+                    organizations: [{ _id: "org_1", plan: "free" }, suspended],
+                }),
+            ).resolves.toBe("free");
+        });
+
+        it("refuses when the ledger owner has no release here", async () => {
+            await expect(plan(serving, { ledger: [{ alias: "app", organizationId: "org_other" }] })).resolves.toBe("unknown");
+        });
+
+        it("refuses a script whose standing releases belong to two organizations", async () => {
+            await expect(
+                plan(null, {
+                    deployments: [live, { ...live, _id: "d2", organizationId: "org_old", status: "superseded" }],
+                    organizations: [{ _id: "org_1", plan: "free" }, suspended],
+                }),
+            ).resolves.toBe("unknown");
+        });
+
+        it("takes the live release's protection, not an older one's", async () => {
+            const preview = { ...live, _id: "d3", kind: "preview" };
+
+            await expect(
+                facts(serving, {
+                    deployments: [{ ...live, createdAt: 9, kind: "production", status: "superseded" }, preview],
+                    projects: [{ _id: "p1", previewPasswordHash: "h" }],
+                }),
+            ).resolves.toStrictEqual({ plan: "free", protected: true });
+        });
+    });
 
     it("serves an org under its cap", async () => {
         await expect(plan({ _id: "org_1", plan: "free", spendNanoCents: 1e9, spendPeriod: period })).resolves.toBe("free");

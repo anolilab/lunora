@@ -15,6 +15,7 @@ import { fireDeployAlerts } from "./alerts";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
+import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
 
 type DeploymentStatus = "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying";
@@ -240,19 +241,48 @@ const previewProtectionEnabled = async (context: QueryContext, projectId: Id<"pr
 };
 
 /**
+ * The one deployment a dispatch script serves for, resolved from verified rows
+ * only — or `null` when that cannot be stated. A script is an alias, and every
+ * release of it shares the name, including those of an organization that held
+ * the alias before it was released and re-claimed. So the owner is the alias's
+ * `aliasOwnership` row where there is one, and the deployment is the owner's
+ * live release (else its newest one that is not destroyed). Every release still
+ * standing must belong to one organization. Anything else — no standing
+ * release, a ledger owner with none, releases of two organizations — is not
+ * guessed at.
+ */
+const servingDeployment = async (context: QueryContext, scriptName: string): Promise<DeploymentRow | null> => {
+    const rows = await collectAll<DeploymentRow>((cursor) => context.db.deployments.findMany({ cursor, where: { scriptName } }));
+    const standing = rows.filter((row) => row.status !== "destroyed");
+    const { page: ledger } = await context.db.aliasOwnership.findMany({ where: { alias: scriptName } });
+    const owner = ledger.at(0)?.organizationId;
+    const candidates = owner === undefined ? standing : standing.filter((row) => row.organizationId === owner);
+
+    if (candidates.length === 0 || new Set(standing.map((row) => row.organizationId)).size > 1) {
+        return null;
+    }
+
+    return candidates.find((row) => row.status === "live") ?? candidates.toSorted((a, b) => b.createdAt - a.createdAt)[0] ?? null;
+};
+
+/**
  * Resolve a dispatch-namespace script id to its org's plan name, for the
- * dispatcher's per-plan runtime limits (§4). Public + unauthenticated by design
- * (returns only a non-sensitive plan tier); the dispatcher reaches it through a
- * bearer-gated control-plane endpoint. Unknown scripts resolve to `free`.
+ * dispatcher's per-plan runtime limits (§4) and its admission check. Public +
+ * unauthenticated by design (returns only a non-sensitive plan tier); the
+ * dispatcher reaches it through a bearer-gated control-plane endpoint.
+ *
+ * Fails closed: a script whose serving deployment cannot be stated from
+ * verified rows answers `"unknown"` (the dispatcher 404s it rather than serving
+ * it on a default tier), and a suspended, over-cap or missing organization
+ * answers `"suspended"`.
  */
 export const planForScript = query
     .input({ scriptName: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string; protected?: boolean }> => {
-        const { page } = await context.db.deployments.findMany({ where: { scriptName } });
-        const deployment = page[0];
+        const deployment = await servingDeployment(context, scriptName);
 
         if (!deployment) {
-            return { plan: "free" };
+            return { plan: "unknown" };
         }
 
         // A suspended org (spend cap breached / abuse, GAPS.md C1) resolves to the

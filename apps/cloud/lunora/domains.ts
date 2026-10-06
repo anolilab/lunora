@@ -49,6 +49,7 @@ interface DomainRow {
 interface ProjectRow {
     _id: Id<"projects">;
     activeScriptName?: string;
+    organizationId?: Id<"organizations">;
 }
 
 const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
@@ -332,22 +333,37 @@ export const recordCertificate = internalMutation
  */
 export const routeForHostname = query
     .input({ hostname: boundedString(LIMITS.hostname) })
-    .query(async ({ ctx: context, args: { hostname } }): Promise<null | { redirectStatusCode?: number; redirectTo?: string; scriptName?: string }> => {
-        const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase().trim() } });
-        const domain = page[0];
+    .query(
+        async ({
+            ctx: context,
+            args: { hostname },
+        }): Promise<null | { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; suspended?: true }> => {
+            const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase().trim() } });
+            const domain = page[0];
 
-        if (domain?.verifiedAt == null) {
-            return null;
-        }
+            if (domain?.verifiedAt == null) {
+                return null;
+            }
 
-        if (domain.redirectTo) {
-            return { redirectStatusCode: domain.redirectStatusCode ?? 308, redirectTo: domain.redirectTo };
-        }
+            // A suspended, over-cap or missing organization's domains are refused
+            // here too — redirects included, which the dispatcher answers before any
+            // plan lookup and so would otherwise skip the suspension check.
+            try {
+                await assertServing(context, domain.organizationId);
+            } catch {
+                return { suspended: true };
+            }
 
-        const project = (await context.db.get(domain.projectId)) as ProjectRow | null;
+            if (domain.redirectTo) {
+                return { redirectStatusCode: domain.redirectStatusCode ?? 308, redirectTo: domain.redirectTo };
+            }
 
-        return project?.activeScriptName ? { scriptName: project.activeScriptName } : null;
-    });
+            const project = (await context.db.get(domain.projectId)) as ProjectRow | null;
+
+            // The project must be the domain's organization's: a row that disagrees routes nowhere.
+            return project?.activeScriptName && project.organizationId === domain.organizationId ? { scriptName: project.activeScriptName } : null;
+        },
+    );
 
 /**
  * Which edge-block mode this cell runs in (members): how a suspended
