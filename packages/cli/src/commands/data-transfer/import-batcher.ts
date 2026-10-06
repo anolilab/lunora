@@ -42,6 +42,8 @@ interface ImportShardFailure {
 /** The admin import endpoint's response body. */
 interface AdminImportResponse {
     conflicts?: number;
+    /** Replace mode only: rows removed per table because the import did not carry them. */
+    deleted?: Record<string, number>;
     errors?: ImportRowError[];
     /** Shards the fan-out never reached — non-empty means the endpoint answered 207. */
     failed?: ImportShardFailure[];
@@ -53,6 +55,8 @@ interface AdminImportResponse {
 /** Everything a run accumulated across its batches. */
 interface ImportTotals {
     conflicts: number;
+    /** Rows a replace removed, per table — `undefined` for an append run. */
+    deleted: Record<string, number> | undefined;
     errors: ImportRowError[];
     /** Shards no batch could reach. Non-empty means rows are missing, not merely rejected. */
     failed: ImportShardFailure[];
@@ -67,6 +71,13 @@ interface ImportBatcherConfig {
     fetchImpl: StreamingFetchLike;
     /** Byte ceiling per POST, so wide rows do not exceed the endpoint's body cap. */
     maxBatchBytes: number;
+
+    /**
+     * Replace mode: the first POST goes here (`?mode=replace…`) and the rest to
+     * `requestUrl`, appending — so the end state is exactly the file. The first
+     * POST goes out even with no rows, since an empty replace empties the tables.
+     */
+    replaceUrl?: string;
     requestUrl: string;
     token: string;
 }
@@ -80,14 +91,29 @@ interface ImportBatcher {
 }
 
 const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
-    const totals: ImportTotals = { conflicts: 0, errors: [], failed: [], inserted: {}, received: 0, warnings: [] };
+    const totals: ImportTotals = {
+        conflicts: 0,
+        deleted: config.replaceUrl === undefined ? undefined : {},
+        errors: [],
+        failed: [],
+        inserted: {},
+        received: 0,
+        warnings: [],
+    };
     let batch: string[] = [];
     let batchBytes = 0;
+    let requests = 0;
 
     /** Fold one admin-import response into the run's running totals. */
     const merge = (json: AdminImportResponse): void => {
         for (const [table, count] of Object.entries(json.inserted ?? {})) {
             totals.inserted[table] = (totals.inserted[table] ?? 0) + count;
+        }
+
+        if (totals.deleted !== undefined) {
+            for (const [table, count] of Object.entries(json.deleted ?? {})) {
+                totals.deleted[table] = (totals.deleted[table] ?? 0) + count;
+            }
         }
 
         totals.errors.push(...(json.errors ?? []));
@@ -107,7 +133,9 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
     };
 
     const flush = async (): Promise<void> => {
-        if (batch.length === 0) {
+        const replaceUrl = requests === 0 ? config.replaceUrl : undefined;
+
+        if (batch.length === 0 && replaceUrl === undefined) {
             return;
         }
 
@@ -115,8 +143,16 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
 
         batch = [];
         batchBytes = 0;
+        requests += 1;
 
-        const response = await config.fetchImpl(config.requestUrl, {
+        // Only the first request replaces — each shard swaps atomically to that
+        // batch — and the rest append onto it, so readers see a partial dataset
+        // in between.
+        if (config.replaceUrl !== undefined && requests === 2) {
+            totals.warnings.push("the replace did not fit one request: the first batch replaced the tables and the rest were appended after it");
+        }
+
+        const response = await config.fetchImpl(replaceUrl ?? config.requestUrl, {
             body,
             headers: { authorization: `Bearer ${config.token}`, "content-type": "application/x-ndjson" },
             method: "POST",
@@ -139,6 +175,11 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         }
 
         const json = (await response.json()) as AdminImportResponse;
+
+        // A worker from before replace mode ignores `?mode=` and appends.
+        if (replaceUrl !== undefined && json.deleted === undefined) {
+            throw new LunoraError("INTERNAL", "the worker predates replace-mode import, so it appended instead of replacing — redeploy it and re-run");
+        }
 
         merge(json);
 

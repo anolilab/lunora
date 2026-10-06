@@ -341,6 +341,31 @@ the `$auth` / `$kv` / `$storage` records. An entry holds the mode, the tables,
 per-table inserted and deleted counts, and the number of errors. Row values
 are never recorded.
 
+### Replacing instead of appending
+
+A plain import only adds rows: an `_id` that already exists is skipped as a
+conflict. `--replace` makes the file the exact contents of its tables instead.
+Rows the file carries overwrite theirs, and every other row in those tables is
+deleted. `--tables` limits it to the tables you name, and `--table` to its one
+table. Without either, every table in the schema is in scope, and a table the
+file has no rows for is emptied.
+
+```bash
+lunora import ./backup.ndjson --replace                      # asks before it deletes anything
+lunora import ./backup.ndjson --replace --tables users --yes # restore one table from a full backup
+```
+
+The command asks for confirmation first. `--yes` skips the prompt, and without
+a terminal to ask on, `--yes` is required. With `--tables`, rows of other tables
+in the file are skipped and counted, and so are the `$auth` / `$kv` / `$storage`
+records. The summary lists how many rows were deleted from each table.
+
+The first request is the replace. Each shard swaps to that batch in one
+transaction, and any further batches are appended after it, so an import larger
+than one request goes through a window where only part of the file is back. The
+command warns when that happens. Raise `--batch-size` to keep a small dataset to
+one request (the body cap of about 1 MiB still applies).
+
 ## Streaming data out continuously
 
 Snapshots are point-in-time. To keep an external warehouse or ETL sink in step

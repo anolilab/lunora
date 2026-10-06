@@ -579,6 +579,178 @@ describe("lunora data-transfer", () => {
             expect(calls).toHaveLength(1);
         });
 
+        describe("--replace", () => {
+            /** A worker that answers each POST with what a replace-aware endpoint reports, recording the call. */
+            const replaceFetch =
+                (calls: { body: string; url: string }[], replaceAware = true): StreamingFetchLike =>
+                async (url, init) => {
+                    calls.push({ body: bodyText(init?.body), url });
+
+                    const rows = bodyText(init?.body)
+                        .split("\n")
+                        .filter((line) => line.trim().length > 0);
+
+                    return {
+                        body: null,
+                        json: async () => {
+                            return {
+                                conflicts: 0,
+                                errors: [],
+                                inserted: rows.length === 0 ? {} : { users: rows.length },
+                                ...(url.includes("mode=replace") && replaceAware ? { deleted: { users: 2 } } : {}),
+                                received: rows.length,
+                            };
+                        },
+                        ok: true,
+                        status: 200,
+                        text: async () => "",
+                    };
+                };
+
+            const writeRows = (rows: ReadonlyArray<unknown>): string => {
+                const file = join(workDir, "replace.ndjson");
+
+                writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n"), "utf8");
+
+                return file;
+            };
+
+            it("replaces only --tables with the first request, appends the rest, and reports what it deleted", async () => {
+                expect.assertions(5);
+
+                const file = writeRows([
+                    { doc: { _id: "u1" }, table: "users" },
+                    { doc: { _id: "m1" }, table: "messages" },
+                    { doc: { key: "k", namespace: "CACHE", value: "AQ==" }, table: "$kv" },
+                    { doc: { _id: "u2" }, table: "users" },
+                ]);
+                const calls: { body: string; url: string }[] = [];
+                const infos: string[] = [];
+                const warnings: string[] = [];
+
+                const result = await runImportCommand({
+                    batchSize: 1,
+                    fetchImpl: replaceFetch(calls),
+                    file,
+                    logger: { ...silentLogger(), info: (message) => infos.push(message), warn: (message) => warnings.push(message) },
+                    replace: true,
+                    tables: "users",
+                    token: "t",
+                    url: "http://localhost:8787",
+                    yes: true,
+                });
+
+                expect(result.code).toBe(0);
+                expect(calls.map((call) => call.url)).toStrictEqual([
+                    "http://localhost:8787/_lunora/admin/import?mode=replace&tables=users",
+                    "http://localhost:8787/_lunora/admin/import",
+                ]);
+                expect(result.body?.deleted).toStrictEqual({ users: 2 });
+                expect(infos).toContain("replace: deleted 2 row(s) from users");
+                expect(warnings).toStrictEqual(
+                    expect.arrayContaining([
+                        expect.stringContaining("did not fit one request"),
+                        "replace: skipped 1 row(s) of messages, which is not in --tables",
+                        "replace: skipped 1 row(s) of $kv, which is not in --tables",
+                    ]),
+                );
+            });
+
+            it("sends an empty replace, since an empty file empties the tables", async () => {
+                expect.assertions(2);
+
+                const calls: { body: string; url: string }[] = [];
+
+                const result = await runImportCommand({
+                    fetchImpl: replaceFetch(calls),
+                    file: writeRows([]),
+                    logger: silentLogger(),
+                    replace: true,
+                    token: "t",
+                    url: "http://localhost:8787",
+                    yes: true,
+                });
+
+                expect(result.code).toBe(0);
+                expect(calls).toStrictEqual([{ body: "", url: "http://localhost:8787/_lunora/admin/import?mode=replace" }]);
+            });
+
+            it("asks first, and writes nothing when the prompt is declined", async () => {
+                expect.assertions(3);
+
+                const calls: { body: string; url: string }[] = [];
+                const prompts: string[] = [];
+
+                const result = await runImportCommand({
+                    confirm: async (prompt) => {
+                        prompts.push(prompt);
+
+                        return false;
+                    },
+                    fetchImpl: replaceFetch(calls),
+                    file: writeRows([{ doc: { _id: "u1" }, table: "users" }]),
+                    logger: silentLogger(),
+                    replace: true,
+                    table: "users",
+                    token: "t",
+                    url: "http://localhost:8787",
+                });
+
+                expect(result.code).toBe(EXIT_CODE.CANCELLED);
+                expect(prompts[0]).toContain("the table(s) users");
+                expect(calls).toHaveLength(0);
+            });
+
+            it("refuses without --yes when there is no TTY to ask on", async () => {
+                expect.assertions(2);
+
+                const calls: { body: string; url: string }[] = [];
+                const { isTTY } = process.stdin;
+
+                process.stdin.isTTY = false;
+
+                try {
+                    const result = await runImportCommand({
+                        fetchImpl: replaceFetch(calls),
+                        file: writeRows([{ doc: { _id: "u1" }, table: "users" }]),
+                        logger: silentLogger(),
+                        replace: true,
+                        token: "t",
+                        url: "http://localhost:8787",
+                    });
+
+                    expect(result.code).toBe(EXIT_CODE.USAGE);
+                    expect(calls).toHaveLength(0);
+                } finally {
+                    process.stdin.isTTY = isTTY;
+                }
+            });
+
+            it("refuses --tables without --replace", async () => {
+                expect.assertions(1);
+
+                const result = await runImportCommand({ file: writeRows([]), logger: silentLogger(), tables: "users", token: "t" });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+            });
+
+            it("fails when the worker appended instead of replacing", async () => {
+                expect.assertions(1);
+
+                const result = await runImportCommand({
+                    fetchImpl: replaceFetch([], false),
+                    file: writeRows([{ doc: { _id: "u1" }, table: "users" }]),
+                    logger: silentLogger(),
+                    replace: true,
+                    token: "t",
+                    url: "http://localhost:8787",
+                    yes: true,
+                });
+
+                expect(result.code).toBe(1);
+            });
+        });
+
         it("returns a non-zero exit code when the server reports errors", async () => {
             expect.assertions(1);
 
