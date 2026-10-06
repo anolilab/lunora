@@ -10,7 +10,8 @@ import { noSandboxUsage, scanImportDeclaration } from "./sandbox";
 /**
  * Code-usage signals for every optional, package-backed feature, in a single
  * pass over the `lunora/` source set. Each flag is `true` when a source imports
- * the feature's `@lunora/*` package or reads its generated `ctx.*` helper. This
+ * the feature's `@lunora/*` package (for more than its binding-free helpers —
+ * see {@link sourceCapabilitySignals}) or reads its generated `ctx.*` helper. This
  * is the one detection path for all of them — it subsumes the old standalone
  * `discoverAiUsage` / `discoverPaymentUsage` probes (which were line-for-line
  * copies of this same import-or-`ctx.X` check).
@@ -136,6 +137,38 @@ const compilesAway = (declaration: ExportDeclaration | ImportDeclaration): boole
     );
 };
 
+/** Each capability package's `bindingFreeExports` (see {@link CAPABILITIES}), keyed by its specifier. */
+const BINDING_FREE_EXPORTS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+    CAPABILITIES.flatMap(({ bindingFreeExports, moduleSpecifier }) =>
+        bindingFreeExports === undefined ? [] : [[moduleSpecifier, new Set(bindingFreeExports)] as const],
+    ),
+);
+
+/**
+ * Whether a surviving import or re-export names only its package's binding-free
+ * helpers (`import { buildSignedUrl } from "@lunora/storage"`), which use no
+ * binding and so must not mark the capability used. A non-empty named list is
+ * required — a default, namespace or side-effect import, or an `export *`, may
+ * reach anything and counts; `type`-qualified specifiers are skipped (they
+ * compile away). The imported name is matched, not a local alias.
+ */
+const namesOnlyBindingFreeExports = (declaration: ExportDeclaration | ImportDeclaration, moduleSpecifier: string): boolean => {
+    const allowed = BINDING_FREE_EXPORTS.get(moduleSpecifier);
+
+    if (allowed === undefined) {
+        return false;
+    }
+
+    if (Node.isImportDeclaration(declaration) && (declaration.getDefaultImport() !== undefined || declaration.getNamespaceImport() !== undefined)) {
+        return false;
+    }
+
+    // `export * from` and a side-effect import have no named list, so they fall out with the empty case.
+    const named = Node.isExportDeclaration(declaration) ? declaration.getNamedExports() : declaration.getNamedImports();
+
+    return named.length > 0 && named.every((specifier) => specifier.isTypeOnly() || allowed.has(specifier.getName()));
+};
+
 /** The literal specifiers of a file's dynamic `import("…")` calls (a computed specifier names nothing and is skipped). */
 const dynamicImportSpecifiers = (sourceFile: SourceFile): Set<string> => {
     const specifiers = new Set<string>();
@@ -164,7 +197,12 @@ interface SourceCapabilitySignals {
     dynamicImports: ReadonlySet<string>;
     /** The `@lunora/agent` sandbox tools the file value-imports — the same reading as `discoverSandboxUsage`. */
     sandboxTools: Readonly<SandboxUsage>;
-    /** Module specifiers of the file's static imports and re-exports (`export … from "…"`) that survive compilation — see {@link compilesAway}. */
+
+    /**
+     * Module specifiers of the file's static imports and re-exports (`export … from "…"`)
+     * that survive compilation ({@link compilesAway}) and name more than binding-free
+     * helpers ({@link namesOnlyBindingFreeExports}).
+     */
     valueImports: ReadonlySet<string>;
 }
 
@@ -195,7 +233,7 @@ const sourceCapabilitySignals = (sourceFile: SourceFile): SourceCapabilitySignal
             [...imports, ...sourceFile.getExportDeclarations()].flatMap((declaration) => {
                 const specifier = declaration.getModuleSpecifierValue();
 
-                return specifier === undefined || compilesAway(declaration) ? [] : [specifier];
+                return specifier === undefined || compilesAway(declaration) || namesOnlyBindingFreeExports(declaration, specifier) ? [] : [specifier];
             }),
         ),
     };

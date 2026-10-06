@@ -1128,6 +1128,17 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             expect(result.config).toStrictEqual(result.codegen);
             expect([result.config.pipelines, result.config.kv, result.config.aiSearch]).toStrictEqual([true, true, true]);
         });
+
+        it("agree: an import of binding-free helpers only infers no binding", async () => {
+            expect.assertions(2);
+
+            const helpers = await verdicts(
+                `import { buildSignedUrl } from "@lunora/storage";\nimport { buildSignedImageUrl } from "@lunora/bindings/images";\nexport const used = [buildSignedUrl, buildSignedImageUrl];`,
+            );
+
+            expect(helpers.config).toStrictEqual(helpers.codegen);
+            expect([helpers.config.storage, helpers.config.images]).toStrictEqual([false, false]);
+        });
     });
 
     // Config detects a superset of codegen: a lazily loaded package needs its
