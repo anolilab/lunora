@@ -54,7 +54,7 @@ import { LunoraError } from "@lunora/errors";
 import { contentDigest } from "../../../shared/content-digest";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { insertAuthRows, isUnmovableAuthTable } from "./data-port";
+import { insertAuthRows, isUnmovableAuthTable, replaceAuthRows } from "./data-port";
 import type { DoStorageLike } from "./do-store";
 
 /** The internal route both halves of the move are served on. Not part of `/api/auth/*`. */
@@ -760,6 +760,29 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
             context.onPurge();
 
             return result;
+        }
+        // The replace of a staged import's commit: every auth table (sessions and
+        // one-time tokens included) emptied and refilled in one storage transaction.
+        case "replace": {
+            context.prepare();
+
+            const tables = sortTables(listMovableTables(storage), context.order()).map((table) => table.name);
+            const reader = { all: (query: string, parameters: ReadonlyArray<unknown>) => Promise.resolve(all(storage, query, ...parameters)) };
+
+            return replaceAuthRows(
+                reader,
+                async (statements) =>
+                    storage.transaction(() => {
+                        for (const statement of statements) {
+                            run(storage, statement.sql, ...statement.params);
+                        }
+
+                        return Promise.resolve();
+                    }),
+                (body["rows"] ?? []) as { doc: Row; table: string }[],
+                tables,
+                [],
+            );
         }
         case "rescan": {
             return rescan(storage, (body["tables"] ?? []) as string[]);

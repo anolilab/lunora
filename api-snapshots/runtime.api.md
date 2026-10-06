@@ -324,6 +324,18 @@ interface AuthDataPort {
         }>;
         inserted: number;
     }>;
+    replaceRows?: (rows: ReadonlyArray<{
+        doc: Record<string, unknown>;
+        table: string;
+    }>) => Promise<{
+        deleted: number;
+        errors: ReadonlyArray<{
+            index: number;
+            message: string;
+            table: string;
+        }>;
+        inserted: number;
+    }>;
 }
 ```
 
@@ -832,7 +844,6 @@ type GlobalExportFunction = (request: {
 
 ```ts
 type GlobalImportFunction = (request: {
-    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
@@ -841,7 +852,6 @@ type GlobalImportFunction = (request: {
     startLine?: number;
 }) => Promise<{
     conflicts: number;
-    deleted?: Record<string, number>;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -850,6 +860,51 @@ type GlobalImportFunction = (request: {
     }>;
     inserted: Record<string, number>;
 }>;
+```
+
+### `GlobalImportStaging` (interface)
+
+```ts
+interface GlobalImportStaging {
+    abort: (request: {
+        generation: string;
+        session: string;
+    }) => Promise<void>;
+    commit: (request: {
+        generation: string;
+        session: string;
+        staged: boolean;
+        tables: ReadonlyArray<string>;
+    }) => Promise<{
+        conflicts: number;
+        deleted?: Record<string, number>;
+        errors: ReadonlyArray<{
+            code: string;
+            line: number;
+            message: string;
+            table: string;
+        }>;
+        inserted: Record<string, number>;
+    }>;
+    stage: (request: {
+        generation: string;
+        rows: ReadonlyArray<{
+            doc: Record<string, unknown>;
+            line: number;
+            table: string;
+        }>;
+        session: string;
+        tables: ReadonlyArray<string>;
+    }) => Promise<{
+        errors: ReadonlyArray<{
+            code: string;
+            line: number;
+            message: string;
+            table: string;
+        }>;
+        staged: Record<string, number>;
+    }>;
+}
 ```
 
 ### `GlobalIntrospector` (interface)
@@ -1052,10 +1107,6 @@ interface ImportFanOutRequest {
         startLine?: number;
     }>;
     headers?: Record<string, string>;
-    replace?: {
-        defaultShardKey: DefaultShardKey;
-        tables: ReadonlyArray<string>;
-    };
 }
 ```
 
@@ -1064,7 +1115,6 @@ interface ImportFanOutRequest {
 ```ts
 interface ImportFanOutResult {
     conflicts: number;
-    deleted: Record<string, number>;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1075,6 +1125,33 @@ interface ImportFanOutResult {
     inserted: Record<string, number>;
     ok: number;
     shards: ReadonlyArray<ShardImportOutcome>;
+}
+```
+
+### `ImportSessionFanOutRequest` (interface)
+
+```ts
+interface ImportSessionFanOutRequest {
+    calls: ReadonlyArray<{
+        args: Record<string, unknown>;
+        shardKey: string;
+    }>;
+    functionPath: string;
+    headers?: Record<string, string>;
+}
+```
+
+### `ImportSessionShardOutcome` (interface)
+
+```ts
+interface ImportSessionShardOutcome {
+    error?: {
+        code: string;
+        message: string;
+        timedOut: boolean;
+    };
+    shardKey: string;
+    value?: unknown;
 }
 ```
 
@@ -1577,11 +1654,13 @@ interface QueryCoordinator {
     orchestrateCdcSync: (namespace: ShardNamespaceInput, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
     orchestrateExport: (namespace: ShardNamespaceInput, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
     orchestrateImport: (namespace: ShardNamespaceInput, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
+    orchestrateImportSession: (namespace: ShardNamespaceInput, request: ImportSessionFanOutRequest) => Promise<ReadonlyArray<ImportSessionShardOutcome>>;
     orchestrateMigration: (namespace: ShardNamespaceInput, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
     orchestrateRank: (namespace: ShardNamespaceInput, request: RankFanOutRequest) => Promise<RankFanOutResult>;
     orchestrateRankPage: (namespace: ShardNamespaceInput, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
     orchestrateShardTraffic: (namespace: ShardNamespaceInput, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
     readonly registry: ShardRegistry;
+    shardKeysForTables: (tables: ReadonlyArray<string>, defaultShardKey: DefaultShardKey) => Promise<ReadonlyArray<string>>;
 }
 ```
 
@@ -1993,7 +2072,6 @@ interface ShardImportOutcome {
     };
     result?: {
         conflicts: number;
-        deleted?: Record<string, number>;
         errors: ReadonlyArray<{
             code: string;
             line: number;
@@ -2301,6 +2379,7 @@ interface WorkerOptions {
     httpRouter?: HttpRouterLike;
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
+    importGlobalsStaging?: GlobalImportStaging;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;

@@ -89,7 +89,9 @@ interface RunShardExportArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface RunShardImportArgs {
-    /** Replace mode: these tables end up holding exactly `rows` (see `@lunora/shard-engine`'s `ImportShardArgs`). */
+    /** Replace prune: the `_id`s kept besides `rows`' own (see `@lunora/shard-engine`'s `ImportShardArgs`). */
+    keepIds?: ReadonlySet<string>;
+    /** Replace mode: rows of these tables overwrite by `_id` (see `@lunora/shard-engine`'s `ImportShardArgs`). */
     replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
@@ -701,6 +703,9 @@ const parseOptionalNames = (value: unknown, field: string): string[] | undefined
     return value;
 };
 
+/** An import session id: what a staged replace's audit entry may name, never data. */
+const IMPORT_SESSION_ID = /^[\w-]{1,64}$/u;
+
 /**
  * Validate the `__lunora_admin__:recordImportAudit` payload — the worker's
  * record of the halves of `POST /_lunora/admin/import` no shard sees: the
@@ -718,6 +723,12 @@ const parseRecordImportAuditArgs = (args: Record<string, unknown>): { detail: Re
 
     const replaceTables = parseOptionalNames(args["replaceTables"], "replaceTables");
     const tables = parseOptionalNames(args["tables"], "tables");
+    const { session } = args;
+
+    // A staged replace's commit names its session; an id, never data.
+    if (session !== undefined && (typeof session !== "string" || !IMPORT_SESSION_ID.test(session))) {
+        throw new LunoraError("BAD_REQUEST", "recordImportAudit: `session` must be an import session id");
+    }
 
     return {
         detail: {
@@ -728,6 +739,7 @@ const parseRecordImportAuditArgs = (args: Record<string, unknown>): { detail: Re
             ...(tables === undefined ? {} : { tables }),
             ...(replaceTables === undefined ? {} : { mode: "replace", replaceTables }),
             ...(replaceTables === undefined && op === "importGlobal" ? { mode: "append" } : {}),
+            ...(typeof session === "string" ? { session } : {}),
         },
         op,
     };

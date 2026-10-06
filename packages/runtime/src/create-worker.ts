@@ -52,6 +52,9 @@ import type { HealthProbe } from "./health-routes";
 import { buildHealthRoutes, d1Probe, durableObjectProbe, presenceProbe } from "./health-routes";
 import type { IdentityContractLike, ResolvedIdentity } from "./identity-resolvers";
 import { wrapResolverWithContract } from "./identity-resolvers";
+import type { ImportSessionContext } from "./import-session";
+import { abortImport, commitImport, replaceImport, stageImport } from "./import-session";
+import type { RecordImportAudit } from "./import-stream";
 import { streamingImport } from "./import-stream";
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
 import type { KvIntrospector } from "./kv-admin-routes";
@@ -270,18 +273,37 @@ type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, 
  * `startLine` field is the line of the FIRST global row, retained only as a
  * backward-compatible fallback for importers that haven't adopted per-row lines.
  */
-type GlobalImportFunction = (request: {
-    /** Replace mode: these `.global()` tables end up holding exactly `rows` (see `@lunora/d1`'s `importGlobalRows`). */
-    replaceTables?: ReadonlyArray<string>;
-    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
-    startLine?: number;
-}) => Promise<{
+type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => Promise<{
     conflicts: number;
-    /** Replace mode only: rows removed per table because the import did not carry them. */
-    deleted?: Record<string, number>;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
 }>;
+
+/**
+ * The `.global()` half of a staged replace import (`/_lunora/admin/import?mode=replace`),
+ * over `@lunora/d1`'s `stageGlobalRows` / `commitStagedGlobalRows` /
+ * `abortStagedGlobalRows`. A failure that carries a string `code`
+ * (`IMPORT_SESSION_EXPIRED`, `IMPORT_SESSION_STALE`, …) is answered with it.
+ * Every call names the session's `generation`; rows of another are refused.
+ */
+interface GlobalImportStaging {
+    /** Forget a session's staged rows (of that generation only). */
+    abort: (request: { generation: string; session: string }) => Promise<void>;
+    /** Swap the staged rows in for `tables` (writes, then prune); `staged` says whether the session staged any row here. */
+    commit: (request: { generation: string; session: string; staged: boolean; tables: ReadonlyArray<string> }) => Promise<{
+        conflicts: number;
+        deleted?: Record<string, number>;
+        errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
+        inserted: Record<string, number>;
+    }>;
+    /** Validate and stage one request's rows; any refused row stages none. */
+    stage: (request: {
+        generation: string;
+        rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+        session: string;
+        tables: ReadonlyArray<string>;
+    }) => Promise<{ errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>; staged: Record<string, number> }>;
+}
 
 /** One R2 object as the storage browser surfaces it. Mirrors `@lunora/storage`'s `R2ObjectLike`. */
 interface StorageObject {
@@ -1168,6 +1190,12 @@ interface WorkerOptions {
      * rows targeting global tables are reported as hard errors.
      */
     importGlobals?: GlobalImportFunction;
+
+    /**
+     * Stage and commit `.global()` rows for a replace import. When omitted, a
+     * replace import whose scope holds a `.global()` table is refused.
+     */
+    importGlobalsStaging?: GlobalImportStaging;
 
     /**
      * Restrict every Durable Object this worker reaches — shard DOs, the
@@ -3843,6 +3871,28 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // import) live in a sibling module; the export/import row producers are
     // injected because they close over the worker options and are shared with
     // the scheduled R2 backup (mirroring the other extracted clusters).
+    /** Audit an import half no shard records itself, on the default shard, under the importer's own headers. */
+    const recordImportAudit =
+        (headers: Record<string, string>): RecordImportAudit =>
+        async (args) => {
+            const response = await forwardToShard(shardDO, defaultShard, shardRpcRequest(RECORD_IMPORT_AUDIT_OP, args, headers));
+
+            if (!response.ok) {
+                throw new LunoraError(`the default shard answered HTTP ${String(response.status)}`, { code: "INTERNAL", status: 500 });
+            }
+        };
+
+    /** A staged import's context: the effective admin token seals its staged chunks, and its global / section halves are audited. */
+    const importSessionContext = (headers: Record<string, string>): ImportSessionContext => {
+        return {
+            coordinator: queryCoordinator,
+            headers,
+            namespace: shardDO,
+            options: { ...options, adminToken: effectiveAdminToken() },
+            recordAudit: recordImportAudit(headers),
+        };
+    };
+
     const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
         applyGlobals: options.applyGlobals,
         assertAdmin: assertAdminAuthorized,
@@ -3860,24 +3910,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         shardDO,
         exportSectionRows: (sections) => exportSectionRows(options, sections),
         prepareExportRows: async (headers, tables) => prepareExportRows(options, queryCoordinator, headers, tables, shardDO),
-        streamingImport: (request, headers, replaceTables) =>
-            streamingImport(
-                request,
-                // The effective admin token (option or env): restore staging seals its chunks under it.
-                { ...options, adminToken: effectiveAdminToken() },
-                queryCoordinator,
-                headers,
-                shardDO,
-                async (args) => {
-                    // Under the importer's own headers, so the shard attributes the entry to them.
-                    const response = await forwardToShard(shardDO, defaultShard, shardRpcRequest(RECORD_IMPORT_AUDIT_OP, args, headers));
-
-                    if (!response.ok) {
-                        throw new LunoraError(`the default shard answered HTTP ${String(response.status)}`, { code: "INTERNAL", status: 500 });
-                    }
-                },
-                replaceTables,
-            ),
+        importSession: {
+            abort: async (headers, session) => abortImport(importSessionContext(headers), session),
+            commit: async (headers, session) => commitImport(importSessionContext(headers), session),
+            replace: async (request, headers, tables) => replaceImport(request, importSessionContext(headers), tables),
+            stage: async (request, headers, session, tables) => stageImport(request, importSessionContext(headers), session, tables),
+        },
+        streamingImport: async (request, headers) =>
+            // The effective admin token (option or env): restore staging seals its chunks under it.
+            streamingImport(request, { ...options, adminToken: effectiveAdminToken() }, queryCoordinator, headers, shardDO, recordImportAudit(headers)),
         syncGlobals: options.syncGlobals,
     });
 
@@ -6256,6 +6297,7 @@ export type {
     GlobalFacetResult,
     GlobalFilterClause,
     GlobalImportFunction as GlobalImportFn,
+    GlobalImportStaging,
     GlobalIntrospector,
     GlobalTableInfo,
     GlobalTablePage,

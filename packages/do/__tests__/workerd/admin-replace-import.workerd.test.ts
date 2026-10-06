@@ -5,7 +5,20 @@
  * the platform's, not a test double's.
  */
 import type { SchemaLike, SqlExec } from "@lunora/shard-engine";
-import { createShardCtxDb, importShardRows, runShardMigrations } from "@lunora/shard-engine";
+import {
+    advanceImportManifest,
+    createShardCtxDb,
+    importShardRows,
+    markShardImportCommitted,
+    readImportManifest,
+    readShardImportSession,
+    runShardMigrations,
+    stagedImportIds,
+    stagedImportPage,
+    stageImportRows,
+    sweepImportStaging,
+    touchImportManifest,
+} from "@lunora/shard-engine";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
@@ -45,7 +58,9 @@ describe("replace import on workerd", () => {
         await withShard("replace-commit", async (state) => {
             await seed(state);
 
-            const result = await state.storage.transaction(async () => importShardRows(writerOf(state), schema, { replaceTables: ["notes"], rows }));
+            const result = await state.storage.transaction(async () =>
+                importShardRows(writerOf(state), schema, { keepIds: new Set(), replaceTables: ["notes"], rows }),
+            );
 
             expect(result.deleted).toStrictEqual({ notes: 1 });
             await expect(titles(state)).resolves.toStrictEqual({ "deleted-since": "back", kept: "as snapshotted" });
@@ -60,13 +75,73 @@ describe("replace import on workerd", () => {
 
             await state.storage
                 .transaction(async () => {
-                    await importShardRows(writerOf(state), schema, { replaceTables: ["notes"], rows });
+                    await importShardRows(writerOf(state), schema, { keepIds: new Set(), replaceTables: ["notes"], rows });
 
                     throw new Error("refused");
                 })
                 .catch(() => undefined);
 
             await expect(titles(state)).resolves.toStrictEqual({ "created-since": "new", kept: "edited since" });
+        });
+    });
+
+    it("stages, pages, commits and sweeps a session on workerd's SQLite", async () => {
+        expect.assertions(6);
+
+        await withShard("staged-session", async (state) => {
+            const sql = state.storage.sql as unknown as SqlExec;
+            const now = Date.now();
+
+            const opened = touchImportManifest(sql, "s1", { begin: true, sections: ["kv"], shards: ["root"], tables: ["notes"] }, now).manifest;
+
+            stageImportRows(
+                sql,
+                "s1",
+                opened.generation,
+                [
+                    ...rows.map((row, index) => {
+                        return { ...row, line: index + 1 };
+                    }),
+                    { doc: { key: "k" }, line: 3, table: "$kv" },
+                ],
+                now,
+            );
+            touchImportManifest(sql, "s1", { begin: false, tables: ["notes"] }, now);
+
+            expect(stagedImportPage(sql, "s1", { afterSeq: 0, limit: 10 }).rows.map((row) => row.doc["_id"])).toStrictEqual(["kept", "deleted-since"]);
+            expect([...stagedImportIds(sql, "s1")].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["deleted-since", "kept"]);
+
+            advanceImportManifest(sql, "s1", { batches: opened.batches, state: "committing" }, now);
+            await state.storage.transaction(async () => {
+                markShardImportCommitted(sql, "s1", opened.generation, { inserted: { notes: 2 } }, now);
+            });
+            advanceImportManifest(sql, "s1", { state: "committed" }, now);
+
+            expect(readShardImportSession(sql, "s1")?.state).toBe("committed");
+            // The section records went with the manifest's commit.
+            expect(stagedImportPage(sql, "s1", { afterSeq: 0, limit: 10, sections: ["$kv"] }).rows).toStrictEqual([]);
+
+            const expired = sweepImportStaging(sql, now + 2 * 60 * 60 * 1000);
+
+            expect(expired.map((manifest) => manifest.session)).toStrictEqual(["s1"]);
+            expect(readImportManifest(sql, "s1", now)).toBeUndefined();
+        });
+    });
+
+    it("never sweeps a shard session or a manifest whose state it cannot read", async () => {
+        expect.assertions(2);
+
+        await withShard("unreadable-session", async (state) => {
+            const sql = state.storage.sql as unknown as SqlExec;
+            const now = Date.now();
+
+            stageImportRows(sql, "odd", "g1", [{ doc: { _id: "a" }, line: 1, table: "notes" }], now);
+            touchImportManifest(sql, "garbled", { begin: true, tables: ["notes"] }, now);
+            [...state.storage.sql.exec(`UPDATE "__lunora_import_session__" SET state = 'mystery', expires_at = 0 WHERE session = 'odd'`)];
+            [...state.storage.sql.exec(`UPDATE "__lunora_import_manifest__" SET manifest = 'not json', expires_at = 0 WHERE session = 'garbled'`)];
+
+            expect(sweepImportStaging(sql, now + 48 * 60 * 60 * 1000)).toStrictEqual([]);
+            expect([...stagedImportIds(sql, "odd")]).toStrictEqual(["a"]);
         });
     });
 });

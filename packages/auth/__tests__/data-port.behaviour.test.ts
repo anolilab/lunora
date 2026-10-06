@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { AUTH_AUDIT_TABLE } from "../src/audit";
 import { LunoraAuthDO } from "../src/auth-do";
 import type { AuthDataPortLike } from "../src/data-port";
-import { authTableNames, createDoAuthDataPort, createSqlAuthDataPort } from "../src/data-port";
+import { authCredentialTableNames, authTableNames, createDoAuthDataPort, createSqlAuthDataPort } from "../src/data-port";
 import { createDoAuthWiring } from "../src/do-wiring";
 import type { SqlExecutor } from "../src/sql-store";
 import createDoStorage from "./helpers/do-storage";
@@ -18,6 +18,28 @@ const executorOver = (database: DatabaseSync): SqlExecutor => {
         all: async (sql, parameters) => database.prepare(sql).all(...(parameters as never[])),
         run: async (sql, parameters) => {
             database.prepare(sql).run(...(parameters as never[]));
+        },
+    };
+};
+
+/** An executor whose `batch` is one SQLite transaction, as D1's is. */
+const batchingExecutorOver = (database: DatabaseSync): SqlExecutor => {
+    return {
+        ...executorOver(database),
+        batch: async (statements) => {
+            database.exec("BEGIN");
+
+            try {
+                for (const { params, sql } of statements) {
+                    database.prepare(sql).run(...(params as never[]));
+                }
+
+                database.exec("COMMIT");
+            } catch (error) {
+                database.exec("ROLLBACK");
+
+                throw error;
+            }
         },
     };
 };
@@ -198,5 +220,144 @@ describe("auth data port", () => {
         await expect(target.port.importRows(rows)).resolves.toStrictEqual({ conflicts: 0, errors: [], inserted: 1 });
         expect(target.database.prepare(`SELECT "email" FROM "user"`).all()).toEqual([{ email: "ada@example.test" }]);
         await expect(target.port.importRows(rows)).resolves.toStrictEqual({ conflicts: 1, errors: [], inserted: 0 });
+    });
+
+    it("names the live credential tables a replace clears", () => {
+        expect.hasAssertions();
+
+        expect(authCredentialTableNames({ secret: SECRET }).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["session", "verification"]);
+    });
+
+    it("replaces D1 auth tables in one batch, clearing sessions, and offers no replace without one", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+
+        createTables(database);
+        database.exec("PRAGMA foreign_keys = ON");
+        database.prepare(`INSERT INTO "user" VALUES ('kept', 'edited@since.test', NULL), ('created-since', 'new@since.test', NULL)`).run();
+        database.prepare(`INSERT INTO "session" VALUES ('s1', 'created-since', 1)`).run();
+
+        expect(createSqlAuthDataPort(executorOver(database), ["user"]).replaceRows).toBeUndefined();
+
+        const port = createSqlAuthDataPort(batchingExecutorOver(database), ["user"], ["session"]);
+        const result = await port.replaceRows!([
+            { doc: { email: "as@snapshotted.test", id: "kept" }, table: "user" },
+            { doc: { email: "back@again.test", id: "deleted-since" }, table: "user" },
+        ]);
+
+        expect(result).toStrictEqual({ deleted: 2, errors: [], inserted: 2 });
+        expect(database.prepare(`SELECT "id", "email" FROM "user" ORDER BY "id"`).all()).toEqual([
+            { email: "back@again.test", id: "deleted-since" },
+            { email: "as@snapshotted.test", id: "kept" },
+        ]);
+        expect(database.prepare(`SELECT * FROM "session"`).all()).toEqual([]);
+    });
+
+    it("changes nothing when one statement of the replace fails", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+
+        createTables(database);
+        database.prepare(`INSERT INTO "user" VALUES ('kept', 'edited@since.test', NULL)`).run();
+
+        const result = await createSqlAuthDataPort(batchingExecutorOver(database), ["user"]).replaceRows!([
+            { doc: { email: "same@twice.test", id: "a" }, table: "user" },
+            { doc: { email: "same@twice.test", id: "b" }, table: "user" },
+        ]);
+
+        expect(result.errors).toMatchObject([{ message: "auth replace rolled back: UNIQUE constraint failed" }]);
+        expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "kept" }]);
+    });
+
+    it("replaces the DO-backed auth object's tables in one storage transaction", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+        const object = new LunoraAuthDO(
+            { storage: createDoStorage(database) },
+            () => {
+                return { secret: SECRET };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
+        const { dataPort } = createDoAuthWiring({
+            internalSecret: INTERNAL_SECRET,
+            namespace: {
+                get: () => {
+                    return { fetch: async (request: Request) => object.fetch(request) };
+                },
+                idFromName: (name) => name,
+            },
+        });
+
+        // The first read materialises the object's schema.
+        await collect(dataPort!);
+        database
+            .prepare(
+                `INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('created-since', 'New', 'new@example.test', 1, 1, 1)`,
+            )
+            .run();
+
+        const result = await dataPort!.replaceRows!([
+            { doc: { createdAt: 1, email: "ada@example.test", emailVerified: 1, id: "u1", name: "Ada", updatedAt: 1 }, table: "user" },
+        ]);
+
+        expect(result).toMatchObject({ deleted: 1, errors: [], inserted: 1 });
+        expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "u1" }]);
+    });
+
+    it("never writes or deletes the audit log in a replace, and refuses rows of unmovable tables", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+
+        createTables(database);
+        database.exec(`CREATE TABLE "${AUTH_AUDIT_TABLE}" ("seq" INTEGER PRIMARY KEY, "event" text)`);
+        database.prepare(`INSERT INTO "${AUTH_AUDIT_TABLE}" VALUES (1, 'sign-in')`).run();
+        database.prepare(`INSERT INTO "user" VALUES ('kept', 'kept@since.test', NULL)`).run();
+        database.prepare(`INSERT INTO "session" VALUES ('s1', 'kept', 1)`).run();
+
+        // The SQL port is handed the whole table list, the audit log and sessions included.
+        const port = createSqlAuthDataPort(batchingExecutorOver(database), ["user", "session", AUTH_AUDIT_TABLE], ["session"]);
+        const refused = await port.replaceRows!([
+            { doc: { email: "a@b.test", id: "u1" }, table: "user" },
+            { doc: { event: "forged", seq: 2 }, table: AUTH_AUDIT_TABLE },
+            { doc: { id: "s2", userId: "u1" }, table: "session" },
+        ]);
+
+        expect(refused.errors.map((error) => error.table)).toStrictEqual([AUTH_AUDIT_TABLE, "session"]);
+        expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "kept" }]);
+
+        const replaced = await port.replaceRows!([{ doc: { email: "a@b.test", id: "u1" }, table: "user" }]);
+
+        expect(replaced.errors).toStrictEqual([]);
+        expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "u1" }]);
+        expect(database.prepare(`SELECT * FROM "session"`).all()).toEqual([]);
+        expect(database.prepare(`SELECT "event" FROM "${AUTH_AUDIT_TABLE}"`).all()).toEqual([{ event: "sign-in" }]);
+    });
+
+    it("matches replace rows against its own tables exactly, and unmovable ones in any case", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+
+        createTables(database);
+        database.prepare(`INSERT INTO "user" VALUES ('kept', 'kept@since.test', NULL)`).run();
+
+        const port = createSqlAuthDataPort(batchingExecutorOver(database), ["user"], ["session"]);
+        const result = await port.replaceRows!([
+            { doc: { id: "s2", userId: "kept" }, table: "SESSION" },
+            { doc: { email: "a@b.test", id: "u1" }, table: "User" },
+        ]);
+
+        expect(result.errors.map((error) => error.table)).toStrictEqual(["SESSION"]);
+        expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "kept" }]);
+
+        const mixed = await port.replaceRows!([{ doc: { email: "a@b.test", id: "u1" }, table: "User" }]);
+
+        expect(mixed.errors).toStrictEqual([{ index: 0, message: `"User" is not an auth table`, table: "User" }]);
+        expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "kept" }]);
     });
 });

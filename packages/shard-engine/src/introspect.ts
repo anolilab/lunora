@@ -105,7 +105,12 @@ const ADMIN_FUNCTIONS = {
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
     ignoreIssue: "__lunora_admin__:ignoreIssue",
+    importAbort: "__lunora_admin__:importAbort",
+    importCommit: "__lunora_admin__:importCommit",
+    importManifest: "__lunora_admin__:importManifest",
     importShard: "__lunora_admin__:importShard",
+    importStage: "__lunora_admin__:importStage",
+    importStagedRows: "__lunora_admin__:importStagedRows",
     listFlags: "__lunora_admin__:listFlags",
     listReactors: "__lunora_admin__:listReactors",
     listQueues: "__lunora_admin__:listQueues",

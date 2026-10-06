@@ -364,12 +364,15 @@ const sweepStaleStaging = async (store: StagingStore, buckets: ReadonlyArray<str
 
 export type { ChunkRecord, StagingStore };
 export {
+    chunkKey,
     collectChunks,
     currentSession,
     deleteSession,
     fixedChunks,
     listAll,
     parseChunk,
+    RESTORE_STAGING_PREFIX,
+    seal,
     stageChunk,
     stagedChunks,
     stagingRoot,

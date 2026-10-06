@@ -409,6 +409,13 @@ interface QueryCoordinator {
      * other tables fall back to the runtime's default `__root__` shard.
      */
     orchestrateImport: (namespace: ShardNamespaceInput, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
+
+    /**
+     * Send each shard its own staged-import session RPC (bounded concurrency,
+     * the per-shard timeout) and return every shard's outcome in call order.
+     */
+    orchestrateImportSession: (namespace: ShardNamespaceInput, request: ImportSessionFanOutRequest) => Promise<ReadonlyArray<ImportSessionShardOutcome>>;
+
     /** Fan a migration admin RPC out to every live shard of a table and roll up the per-shard outcomes. */
     orchestrateMigration: (namespace: ShardNamespaceInput, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
 
@@ -441,7 +448,15 @@ interface QueryCoordinator {
      * set's request volumes (a failed shard surfaces as `requests: 0`).
      */
     orchestrateShardTraffic: (namespace: ShardNamespaceInput, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
+
     readonly registry: ShardRegistry;
+
+    /**
+     * Every live shard holding any of `tables` (the registry, plus the default
+     * shard for a table it cannot list) — the shards a replace import must reach
+     * so that one the import does not mention is still emptied.
+     */
+    shardKeysForTables: (tables: ReadonlyArray<string>, defaultShardKey: DefaultShardKey) => Promise<ReadonlyArray<string>>;
 }
 
 /**
@@ -553,21 +568,29 @@ interface ImportFanOutRequest {
      */
     batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
     headers?: Record<string, string>;
+}
 
-    /**
-     * Replace mode: every shard holding any of `tables` (registry discovery, plus
-     * `defaultShardKey`) is sent its batch — an empty one when the import has no
-     * rows for it — so a shard the import does not mention is still emptied of
-     * those tables. Each shard applies its replace in one transaction.
-     */
-    replace?: { defaultShardKey: DefaultShardKey; tables: ReadonlyArray<string> };
+/**
+ * One staged-import session RPC per shard (`__lunora_admin__:importStage`,
+ * `importCommit`, `importAbort`, …), each with its own args.
+ */
+interface ImportSessionFanOutRequest {
+    calls: ReadonlyArray<{ args: Record<string, unknown>; shardKey: string }>;
+    functionPath: string;
+    headers?: Record<string, string>;
+}
+
+/** One shard's answer to an {@link ImportSessionFanOutRequest}: its unwrapped result, or why it failed. */
+interface ImportSessionShardOutcome {
+    error?: { code: string; message: string; timedOut: boolean };
+    shardKey: string;
+    value?: unknown;
 }
 
 interface ShardImportOutcome {
     error?: { message: string; timedOut: boolean };
     result?: {
         conflicts: number;
-        deleted?: Record<string, number>;
         errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
         inserted: Record<string, number>;
     };
@@ -577,8 +600,6 @@ interface ShardImportOutcome {
 interface ImportFanOutResult {
     /** Total conflicts (skipped `_id`s) across shards. */
     conflicts: number;
-    /** Replace mode: per-table summed counts of rows removed because the import did not carry them. */
-    deleted: Record<string, number>;
     /** Errors merged across all per-shard outcomes. */
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     failed: number;
@@ -1144,7 +1165,6 @@ const rollUpShardTraffic = (results: ReadonlyArray<ShardRpcOutcome>): ShardTraff
 const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResult => {
     const shards: ShardImportOutcome[] = [];
     const inserted: Record<string, number> = {};
-    const deleted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;
     let ok = 0;
@@ -1163,7 +1183,6 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
             | undefined
             | {
                   conflicts?: number;
-                  deleted?: Record<string, number>;
                   errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
                   inserted?: Record<string, number>;
               };
@@ -1171,10 +1190,6 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
 
         for (const [table, count] of Object.entries(shardInserted)) {
             inserted[table] = (inserted[table] ?? 0) + count;
-        }
-
-        for (const [table, count] of Object.entries(payload?.deleted ?? {})) {
-            deleted[table] = (deleted[table] ?? 0) + count;
         }
 
         const payloadErrors = payload?.errors;
@@ -1188,7 +1203,6 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         shards.push({
             result: {
                 conflicts: payload?.conflicts ?? 0,
-                ...(payload?.deleted === undefined ? {} : { deleted: payload.deleted }),
                 errors: payload?.errors ?? [],
                 inserted: shardInserted,
             },
@@ -1196,7 +1210,7 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         });
     }
 
-    return { conflicts, deleted, errors, failed, inserted, ok, shards };
+    return { conflicts, errors, failed, inserted, ok, shards };
 };
 
 interface ShardRpcOk {
@@ -1877,32 +1891,14 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // `runBoundedFanOut` because that helper sends the same args to
             // every shard. The structure mirrors it: bounded `Promise.all`
             // workers pulling jobs off a shared cursor.
-            const { replace } = request;
-            let { batches } = request;
-
-            if (replace) {
-                // Discovered before any shard is written, so a registry that cannot
-                // list a `.shardBy()` table refuses the replace instead of leaving
-                // the shards it could not name holding their old rows.
-                const keys = withDefaultShard(await unionShardKeys(options.registry, replace.tables, replace.defaultShardKey), replace.defaultShardKey);
-                const named = new Set(batches.map((batch) => batch.shardKey));
-
-                batches = [
-                    ...batches,
-                    ...keys
-                        .filter((key) => !named.has(key))
-                        .map((shardKey) => {
-                            return { rows: [], shardKey };
-                        }),
-                ];
-            }
+            const { batches } = request;
 
             const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) =>
                 callOneShard(
                     namespace,
                     batch.shardKey,
                     prepareShardRpc({
-                        args: { rows: [...batch.rows], startLine: batch.startLine ?? 1, ...(replace ? { replaceTables: [...replace.tables] } : {}) },
+                        args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
                         functionPath: "__lunora_admin__:importShard",
                         headers: request.headers,
                     }),
@@ -1911,6 +1907,22 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             );
 
             return rollUpImport(outcomes);
+        },
+        async orchestrateImportSession(namespace: ShardNamespaceInput, request: ImportSessionFanOutRequest): Promise<ReadonlyArray<ImportSessionShardOutcome>> {
+            const outcomes = await runBoundedJobs(request.calls, maxConcurrency, async (call) =>
+                callOneShard(
+                    namespace,
+                    call.shardKey,
+                    prepareShardRpc({ args: call.args, functionPath: request.functionPath, headers: request.headers }),
+                    perShardTimeoutMs,
+                ),
+            );
+
+            return outcomes.map((outcome) =>
+                outcome.kind === "err"
+                    ? { error: { code: outcome.code, message: outcome.message, timedOut: outcome.timedOut }, shardKey: outcome.shardKey }
+                    : { shardKey: outcome.shardKey, value: unwrapResult(outcome.value) },
+            );
         },
         async orchestrateApplyCdc(namespace: ShardNamespaceInput, request: ApplyCdcFanOutRequest): Promise<ApplyCdcFanOutResult> {
             // Per-shard pre-bucketed batches — same worker-loop shape as
@@ -2076,6 +2088,9 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             return rollUpShardTraffic(results);
         },
         registry: options.registry,
+        async shardKeysForTables(tables: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): Promise<ReadonlyArray<string>> {
+            return withDefaultShard(await unionShardKeys(options.registry, tables, defaultShardKey), defaultShardKey);
+        },
     };
 };
 
@@ -2088,6 +2103,8 @@ export type {
     FanOutSpec,
     ImportFanOutRequest,
     ImportFanOutResult,
+    ImportSessionFanOutRequest,
+    ImportSessionShardOutcome,
     MergeStrategy,
     MigrationFanOutRequest,
     MigrationFanOutResult,

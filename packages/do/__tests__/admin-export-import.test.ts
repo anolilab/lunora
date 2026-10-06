@@ -445,24 +445,96 @@ describe("shardDO admin export/import dispatch", () => {
         expect(body.result.errors).toEqual([]);
     });
 
-    it("audits a replace import as a replace, with what it deleted", async () => {
+    const auditDetail = async (shard: ShardDO, op: string): Promise<Record<string, unknown> | undefined> => {
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAuditLog, {}));
+        const body = await response.json<{ result: { entries: { detail?: Record<string, unknown>; op: string }[] } }>();
+
+        return body.result.entries.find((candidate) => candidate.op === op)?.detail;
+    };
+
+    it("only ever appends through importShard, and audits it as an append", async () => {
         expect.assertions(2);
+
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        // A stale caller's `replaceTables` is not a replace any more: a replace is staged.
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.importShard, {
+                replaceTables: ["users"],
+                rows: [{ doc: { _id: "u1", email: "x@x.com", name: "X" }, table: "users" }],
+            }),
+        );
+
+        await expect(response.json()).resolves.toMatchObject({ result: { conflicts: 1, inserted: {} } });
+        await expect(auditDetail(shard, "importShard")).resolves.toMatchObject({ conflicts: 1, mode: "append" });
+    });
+
+    it("stages rows, swaps them in at commit, and audits both with the replace detail", async () => {
+        expect.assertions(4);
 
         const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(
-            adminRequest(ADMIN_FUNCTIONS.importShard, {
-                replaceTables: ["users"],
-                rows: [{ doc: { _id: "u2", email: "b@b.com", name: "Bob" }, table: "users" }],
+            adminRequest(ADMIN_FUNCTIONS.importStage, {
+                generation: "g1",
+                rows: [{ doc: { _id: "u3", email: "c@c.com", name: "Cy" }, line: 1, table: "users" }],
+                session: "s1",
+                tables: ["users"],
             }),
         );
 
-        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAuditLog, {}));
-        const body = await response.json<{ result: { entries: { detail?: Record<string, unknown>; op: string }[] } }>();
-        const entry = body.result.entries.find((candidate) => candidate.op === "importShard");
+        const committed = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.importCommit, { dryRun: false, generation: "g1", session: "s1", staged: true, tables: ["users"] }),
+        );
+        const exported = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.exportShard, { tables: ["users"] }));
 
-        expect(entry?.detail).toMatchObject({ inserted: { users: 1 }, mode: "replace", replaceTables: ["users"] });
-        expect(entry?.detail?.["deleted"]).toEqual(expect.objectContaining({ users: expect.any(Number) }));
+        await expect(committed.json()).resolves.toMatchObject({ result: { committed: true, deleted: { users: 1 }, inserted: { users: 1 } } });
+        await expect(exported.json()).resolves.toMatchObject({ result: { rows: [{ doc: { _id: "u3" }, table: "users" }] } });
+        await expect(auditDetail(shard, "importStage")).resolves.toMatchObject({
+            mode: "replace",
+            replaceTables: ["users"],
+            session: "s1",
+            staged: { users: 1 },
+        });
+        await expect(auditDetail(shard, "importCommit")).resolves.toMatchObject({
+            deleted: { users: 1 },
+            errors: 0,
+            inserted: { users: 1 },
+            mode: "replace",
+            replaceTables: ["users"],
+            session: "s1",
+        });
+    });
+
+    it("refuses to commit a session it should hold but does not (expired or aborted)", async () => {
+        expect.assertions(1);
+
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.importCommit, { generation: "g1", session: "gone", staged: true, tables: ["users"] }));
+
+        expect(response.status).toBe(410);
+    });
+
+    it("refuses a commit of another generation than the rows it holds, and one with no generation", async () => {
+        expect.assertions(3);
+
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.importStage, {
+                generation: "g1",
+                rows: [{ doc: { _id: "u3", email: "c@c.com", name: "Cy" }, line: 1, table: "users" }],
+                session: "s1",
+                tables: ["users"],
+            }),
+        );
+
+        const stale = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.importCommit, { generation: "g2", session: "s1", staged: false, tables: ["users"] }));
+        const bare = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.importCommit, { session: "s1", staged: true, tables: ["users"] }));
+        const exported = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.exportShard, { tables: ["users"] }));
+
+        expect(stale.status).toBe(409);
+        expect(bare.status).toBe(400);
+        await expect(exported.json()).resolves.toMatchObject({ result: { rows: [{ doc: { _id: "u1" }, table: "users" }] } });
     });
 
     it("audits a worker-side import half from counts alone, dropping anything else it is sent", async () => {

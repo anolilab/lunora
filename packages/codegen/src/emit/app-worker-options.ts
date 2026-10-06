@@ -96,6 +96,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // plane: the rows \`resolveTableSharding\` classifies as \`.global()\`
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
+                options.importGlobalsStaging = buildGlobalImportStaging(database, this.cdcEnabled);
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -283,6 +284,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 ? createSqlAuthDataPort(
                       d1Executor(authD1(env) as never),
                       authTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
+                      authCredentialTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
                   )
                 : undefined;
         }`,

@@ -39,7 +39,9 @@
  * 25 MiB) is assembled in memory: the KV port writes a base64 string, so there
  * is no stream to hand it. A storage object up to 32 MiB is assembled in memory
  * and written with one checksummed put; a larger one goes through a multipart
- * upload in parts of at least 5 MiB, holding one part at a time.
+ * upload in parts of at least 5 MiB, holding one part at a time. That is the
+ * append import; a replace import stages and commits sections exactly
+ * (`./import-session-sections`), with the same chunk records and assembly.
  *
  * Vectorize is not a section: the binding can query, upsert and fetch vectors by
  * id, but cannot enumerate them (only the account-token REST API can, which a
@@ -121,6 +123,18 @@ interface AuthDataPort {
     /** Insert rows, skipping any whose key already exists (append-only, like the table import). `index` is the row's position in `rows`. */
     importRows: (rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>) => Promise<{
         conflicts: number;
+        errors: ReadonlyArray<{ index: number; message: string; table: string }>;
+        inserted: number;
+    }>;
+
+    /**
+     * Make the auth tables hold exactly `rows`, in one transaction of the auth
+     * store: on any error nothing changed. Signed-in sessions and one-time tokens
+     * are cleared with them. Absent ⇒ a replace import of a snapshot carrying the
+     * `auth` section is refused.
+     */
+    replaceRows?: (rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>) => Promise<{
+        deleted: number;
         errors: ReadonlyArray<{ index: number; message: string; table: string }>;
         inserted: number;
     }>;
@@ -791,15 +805,24 @@ const importSectionRows = async (options: WorkerOptions, rows: ReadonlyArray<Sec
 /** Is this a section's pseudo-table (vs. a schema table)? */
 const isSectionTable = (table: string): boolean => SECTION_TABLES.has(table);
 
-export type { AuthDataPort, ExportSection, SectionRow };
+export type { AuthDataPort, ExportSection, SectionRow, StorageRecord };
 export {
     assertSupportedHeader,
+    AUTH_TABLE,
     DEFAULT_EXPORT_SECTIONS,
     EXPORT_FORMAT_VERSION,
     EXPORT_SECTIONS,
     exportSectionRows,
     HEADER_TABLE,
     importSectionRows,
+    isRecord,
     isSectionTable,
+    KV_MAX_VALUE_BYTES,
+    KV_MIN_EXPIRATION_SECONDS,
+    KV_TABLE,
+    kvKeys,
+    parseStorageRecord,
     SECTION_CHUNK_BYTES,
+    STORAGE_TABLE,
+    storageObjects,
 };

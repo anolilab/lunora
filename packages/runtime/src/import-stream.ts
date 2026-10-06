@@ -17,7 +17,8 @@ import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 interface AdminBatch {
-    rows: { doc: Record<string, unknown>; table: string }[];
+    /** Each row with its physical source line (a staged replace stores it for error attribution at commit). */
+    rows: { doc: Record<string, unknown>; line: number; table: string }[];
     shardKey: string;
     startLine: number;
 }
@@ -215,9 +216,9 @@ const bucketImportStream = async (
         const existing = perShard.get(resolved.shardKey);
 
         if (existing) {
-            existing.rows.push({ doc: documentRow, table });
+            existing.rows.push({ doc: documentRow, line: physicalLine, table });
         } else {
-            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, table }], shardKey: resolved.shardKey, startLine: physicalLine });
+            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, line: physicalLine, table }], shardKey: resolved.shardKey, startLine: physicalLine });
         }
     };
 
@@ -276,7 +277,6 @@ interface ImportShardFailure {
 
 interface ImportTotals {
     conflicts: number;
-    deleted: Record<string, number>;
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
@@ -301,16 +301,11 @@ const shardFailures = (shards: ReadonlyArray<{ error?: { message: string; timedO
  */
 const mergeImportResult = (
     totals: ImportTotals,
-    result: { conflicts: number; deleted?: Record<string, number>; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> },
+    result: { conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> },
 ): void => {
     for (const [table, count] of Object.entries(result.inserted)) {
         // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
         totals.inserted[table] = (totals.inserted[table] ?? 0) + count;
-    }
-
-    for (const [table, count] of Object.entries(result.deleted ?? {})) {
-        // eslint-disable-next-line no-param-reassign -- `totals` is the caller-owned accumulator threaded through both import planes
-        totals.deleted[table] = (totals.deleted[table] ?? 0) + count;
     }
 
     for (const rowError of result.errors) {
@@ -338,7 +333,7 @@ const auditPlane = async (
     warnings: string[],
     op: "importGlobal" | "importSections",
     result: { conflicts: number; deleted?: Record<string, number>; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> },
-    scope: { replaceTables?: ReadonlyArray<string>; tables?: ReadonlyArray<string> },
+    scope: { replaceTables?: ReadonlyArray<string>; session?: string; tables?: ReadonlyArray<string> },
 ): Promise<void> => {
     try {
         await recordAudit({
@@ -354,28 +349,15 @@ const auditPlane = async (
     }
 };
 
-/**
- * Hand the `.global()` rows to the user-supplied `importGlobals`, folding its
- * result into `totals` and auditing it as `importGlobal`. A replace
- * (`globalScope` non-empty) runs even with no rows — it empties those tables —
- * and is skipped once the shard-local half has failed, so a refused replace
- * does not go on to rewrite D1.
- */
+/** Hand the `.global()` rows to the user-supplied `importGlobals`, folding its result into `totals` and auditing it as `importGlobal`. */
 const importGlobalPlane = async (
     options: WorkerOptions,
     totals: ImportTotals,
     warnings: string[],
     globalRows: BucketedImport["globalRows"],
-    globalScope: ReadonlyArray<string>,
     recordAudit: RecordImportAudit,
 ): Promise<void> => {
-    if (globalScope.length > 0 && (totals.errors.length > 0 || totals.failed.length > 0)) {
-        warnings.push(`the .global() table(s) ${globalScope.join(", ")} were not replaced because the shard-local half of the replace failed`);
-
-        return;
-    }
-
-    if (globalRows.length === 0 && globalScope.length === 0) {
+    if (globalRows.length === 0) {
         return;
     }
 
@@ -396,18 +378,19 @@ const importGlobalPlane = async (
     // attribution is correct even when global rows are interspersed with shard
     // rows or blank lines. `startLine` is the first global row's line, retained
     // only as a backward-compat fallback.
-    const result = await options.importGlobals({
-        ...(globalScope.length > 0 ? { replaceTables: globalScope } : {}),
-        rows: globalRows,
-        startLine: globalRows[0]?.line ?? 1,
-    });
+    const result = await options.importGlobals({ rows: globalRows, startLine: globalRows[0]?.line ?? 1 });
 
     mergeImportResult(totals, result);
 
-    const tables = [...new Set([...globalScope, ...globalRows.map((row) => row.table)])].toSorted((a, b) => a.localeCompare(b));
+    const tables = [...new Set(globalRows.map((row) => row.table))].toSorted((a, b) => a.localeCompare(b));
 
-    await auditPlane(recordAudit, warnings, "importGlobal", result, { tables, ...(globalScope.length > 0 ? { replaceTables: globalScope } : {}) });
+    await auditPlane(recordAudit, warnings, "importGlobal", result, { tables });
 };
+
+/** Why a worker with no `resolveTableSharding` routed every row to the default shard. */
+const UNSHARDED_WARNING: string =
+    "no `resolveTableSharding` is configured, so every row was routed to the default shard and no row could be recognised as `.global()` — " +
+    "correct for a single-shard app, silent misplacement for a sharded one";
 
 /**
  * Stream the inbound NDJSON body, bucket rows per shard, and forward them to
@@ -415,12 +398,8 @@ const importGlobalPlane = async (
  * `importGlobals` callback (if present) so the two storage planes can run in
  * parallel.
  *
- * `replaceTables` switches to replace mode: those tables end up holding exactly
- * the imported rows — existing `_id`s overwritten, everything else deleted.
- * Nothing is written when any line is refused up front; each shard then replaces
- * in one transaction (rolled back on any row error), and the `.global()` half
- * runs only once every shard succeeded, so a failure stops at a shard boundary
- * rather than running on into D1.
+ * An append: an `_id` that already exists is a skipped conflict. A replace is a
+ * staged session (`./import-session`), which reuses {@link bucketImportStream}.
  */
 const streamingImport = async (
     request: Request,
@@ -429,11 +408,8 @@ const streamingImport = async (
     forwardedHeaders: Record<string, string>,
     namespace: ShardNamespaceLike,
     recordAudit: RecordImportAudit,
-    replaceTables?: ReadonlyArray<string>,
 ): Promise<{
     conflicts: number;
-    /** Replace mode only: rows removed per table because the import did not carry them. */
-    deleted?: Record<string, number>;
     errors: ImportRowError[];
     failed: ImportShardFailure[];
     inserted: Record<string, number>;
@@ -441,34 +417,10 @@ const streamingImport = async (
     warnings?: string[];
 }> => {
     const defaultShard = options.defaultShardKey ?? "__root__";
-    const isGlobal = (table: string): boolean => options.resolveTableSharding?.(table)?.mode.kind === "global";
-    const globalScope = replaceTables?.filter((table) => isGlobal(table)) ?? [];
-    const shardScope = replaceTables?.filter((table) => !isGlobal(table)) ?? [];
+    const { errors, globalRows, perShard, received, sectionRows } = await bucketImportStream(request, options, defaultShard, undefined);
 
-    // Refused before reading a byte: with no global importer the `.global()`
-    // tables could be neither written nor emptied, and a replace that silently
-    // skips half its scope is not a replace.
-    if (globalScope.length > 0 && !options.importGlobals) {
-        throw new LunoraError(`replace import covers .global() table(s) ${globalScope.join(", ")} but no \`importGlobals\` is configured`, {
-            code: "GLOBAL_NOT_CONFIGURED",
-            status: 400,
-        });
-    }
-
-    const { errors, globalRows, perShard, received, sectionRows } = await bucketImportStream(
-        request,
-        options,
-        defaultShard,
-        replaceTables === undefined ? undefined : new Set(replaceTables),
-    );
-
-    const totals: ImportTotals = { conflicts: 0, deleted: {}, errors, failed: [], inserted: {} };
+    const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {} };
     const warnings: string[] = [];
-
-    // A replace deletes, so it writes nothing at all unless every line parsed.
-    if (replaceTables !== undefined && errors.length > 0) {
-        return { conflicts: 0, deleted: {}, errors, failed: [], inserted: {}, received };
-    }
 
     // A worker with no `resolveTableSharding` cannot tell a `.global()` table
     // from a shard-local one, so every row routes to the default shard. That is
@@ -478,31 +430,24 @@ const streamingImport = async (
     // cancelling out each other's diagnostics is why this read as a 200 with
     // nothing written and nothing wrong.
     if (options.resolveTableSharding === undefined && perShard.size > 0) {
-        warnings.push(
-            "no `resolveTableSharding` is configured, so every row was routed to the default shard and no row could be recognised as `.global()` — " +
-                "correct for a single-shard app, silent misplacement for a sharded one",
-        );
+        warnings.push(UNSHARDED_WARNING);
     }
 
     // Fan shard-local batches out via the coordinator. The order of batches
     // is insertion order so error line numbers reflect the source NDJSON.
-    if (perShard.size > 0 || shardScope.length > 0) {
+    if (perShard.size > 0) {
         // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
         // pins it once). Fanning out through it keeps import writing to the SAME DOs
         // the app reads — using the raw `options.shardDO` would land rows in the
         // un-pinned global DOs, outside the residency boundary and unreachable by
         // the live worker (a fail-open leak).
-        const result = await coordinator.orchestrateImport(namespace, {
-            batches: [...perShard.values()],
-            headers: forwardedHeaders,
-            ...(shardScope.length > 0 ? { replace: { defaultShardKey: defaultShard, tables: shardScope } } : {}),
-        });
+        const result = await coordinator.orchestrateImport(namespace, { batches: [...perShard.values()], headers: forwardedHeaders });
 
         mergeImportResult(totals, result);
         totals.failed.push(...shardFailures(result.shards));
     }
 
-    await importGlobalPlane(options, totals, warnings, globalRows, globalScope, recordAudit);
+    await importGlobalPlane(options, totals, warnings, globalRows, recordAudit);
 
     if (sectionRows.length > 0) {
         const sections = await importSectionRows(options, sectionRows);
@@ -525,7 +470,6 @@ const streamingImport = async (
     // rather than a result. The endpoint answers 207 in that case.
     return {
         conflicts: totals.conflicts,
-        ...(replaceTables === undefined ? {} : { deleted: totals.deleted }),
         errors: totals.errors,
         failed: totals.failed,
         inserted: totals.inserted,
@@ -534,5 +478,5 @@ const streamingImport = async (
     };
 };
 
-export type { ImportRowError, RecordImportAudit };
-export { streamingImport };
+export type { BucketedImport, ImportRowError, ImportShardFailure, RecordImportAudit };
+export { auditPlane, bucketImportStream, streamingImport, UNSHARDED_WARNING };

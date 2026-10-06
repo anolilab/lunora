@@ -347,6 +347,7 @@ import {
 } from "./admin-rpc-args";
 import { buildBatchEntryRequest } from "./batch";
 import { CdcRetentionRunner } from "./cdc-retention";
+import { handleImportSessionRpc } from "./import-session-rpc";
 import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
@@ -1527,15 +1528,22 @@ const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
     entry !== undefined && (entry.collector !== undefined || nonEmptyTallies(entry).length > 0);
 
 /**
- * The `importShard` audit detail. A replace deletes and overwrites, so its entry
- * says so — the mode, the tables it owned and what it removed — and never reads
- * as if it were an append.
+ * The `importShard` audit detail. The RPC only appends — a replace is staged and
+ * audited as `importStage` / `importCommit` (`./import-session-rpc`) — so the
+ * entry says `mode: "append"` beside the counts.
  */
-const importAuditDetail = (args: RunShardImportArgs, result: ImportShardResult): Record<string, unknown> => {
-    const counts = { conflicts: result.conflicts, deleted: result.deleted, errors: result.errors.length, inserted: result.inserted };
-
-    return args.replaceTables === undefined ? { ...counts, mode: "append" } : { ...counts, mode: "replace", replaceTables: args.replaceTables };
+const importAuditDetail = (result: ImportShardResult): Record<string, unknown> => {
+    return { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted, mode: "append" };
 };
+
+/** The staged-import session RPCs, served by {@link handleImportSessionRpc}. */
+const IMPORT_SESSION_FUNCTIONS: ReadonlySet<string> = new Set([
+    ADMIN_FUNCTIONS.importAbort,
+    ADMIN_FUNCTIONS.importCommit,
+    ADMIN_FUNCTIONS.importManifest,
+    ADMIN_FUNCTIONS.importStage,
+    ADMIN_FUNCTIONS.importStagedRows,
+]);
 
 /**
  * Base class for shard Durable Objects.
@@ -8709,41 +8717,6 @@ abstract class ShardDO {
     }
 
     /**
-     * The `importShard` admin RPC. An append runs as it always has. A replace
-     * (`replaceTables`) is atomic on this shard: the overwrite-and-prune runs in
-     * one storage transaction, and any per-row error rolls the whole of it back —
-     * a replace that cannot write every row must not leave the shard half
-     * replaced. The refused result keeps its `errors` and reports nothing written.
-     */
-    private async runAdminImport(args: RunShardImportArgs): Promise<ImportShardResult> {
-        if (args.replaceTables === undefined) {
-            return this.runShardImport(args);
-        }
-
-        let refused: ImportShardResult | undefined;
-
-        try {
-            return await this.runInTransaction(async () => {
-                const result = await this.runShardImport(args);
-
-                if (result.errors.length > 0) {
-                    refused = result;
-
-                    throw new LunoraError("IMPORT_REFUSED", "replace import rolled back", { status: 400 });
-                }
-
-                return result;
-            });
-        } catch (error: unknown) {
-            if (refused === undefined) {
-                throw error;
-            }
-
-            return { conflicts: 0, deleted: {}, errors: refused.errors, inserted: {} };
-        }
-    }
-
-    /**
      * Serve the writer-routed BULK row ops — `deleteRows`, `clearTable`,
      * `patchRows`. One seam rather than three arms of {@link handleAdminRpc}'s
      * dispatch chain, because all three share the same shape: parse a predicate,
@@ -8921,14 +8894,33 @@ abstract class ShardDO {
             }
 
             if (functionPath === ADMIN_FUNCTIONS.importShard) {
-                const parsed = parseImportShardArgs(args);
-                const result = await this.runAdminImport(parsed);
+                const result = await this.runShardImport(parseImportShardArgs(args));
 
                 // The import inserts rows through the writer, which records
                 // touched tables; flush so live subscribers re-run.
                 await this.flushChangedTables();
 
-                this.recordAudit("importShard", { detail: importAuditDetail(parsed, result) });
+                this.recordAudit("importShard", { detail: importAuditDetail(result) });
+
+                return adminResponse(result);
+            }
+
+            if (IMPORT_SESSION_FUNCTIONS.has(functionPath)) {
+                const result = await handleImportSessionRpc(
+                    {
+                        recordAudit: (op, fields) => {
+                            this.recordAudit(op, fields);
+                        },
+                        runInTransaction: async (handler) => this.runInTransaction(handler),
+                        runShardImport: async (importArgs) => this.runShardImport(importArgs),
+                        sql: this.shardHost.sql,
+                    },
+                    functionPath,
+                    args,
+                );
+
+                // A commit swaps rows through the writer; flush so live subscribers re-run.
+                await this.flushChangedTables();
 
                 return adminResponse(result);
             }

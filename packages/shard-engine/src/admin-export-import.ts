@@ -51,9 +51,19 @@ interface ExportShardArgs {
 
 interface ImportShardArgs {
     /**
-     * Replace mode: these tables end up holding exactly `rows` — an existing row
-     * with the same `_id` is overwritten, and every row not in `rows` is deleted.
-     * Absent ⇒ append mode (an existing `_id` is a skipped conflict).
+     * Replace prune: with {@link ImportShardArgs.replaceTables}, once every row
+     * landed, every row of those tables whose `_id` is neither here nor in `rows`
+     * is deleted. A staged commit writes its rows page by page and prunes once,
+     * passing every staged `_id`; absent ⇒ no prune.
+     */
+    keepIds?: ReadonlySet<string>;
+
+    /**
+     * Replace mode: rows of these tables overwrite an existing row with the same
+     * `_id` instead of being skipped, and a row outside them (or without an
+     * `_id`) is refused. Absent ⇒ append mode (an existing `_id` is a skipped
+     * conflict). With {@link ImportShardArgs.keepIds} the tables end up holding
+     * exactly the kept rows.
      *
      * The helper does not open a transaction; the caller runs a replace inside
      * one and rolls it back when the result carries any error, so a refused
@@ -435,11 +445,11 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
     }
 
     // A failed replace is rolled back by the caller, so there is no point pruning.
-    if (replaceTables === undefined || errors.length > 0) {
+    if (replaceTables === undefined || args.keepIds === undefined || errors.length > 0) {
         return { conflicts, errors, inserted };
     }
 
-    const keep = new Set(args.rows.flatMap(({ doc }) => (typeof doc["_id"] === "string" ? [doc["_id"]] : [])));
+    const keep = new Set([...args.keepIds, ...args.rows.flatMap(({ doc }) => (typeof doc["_id"] === "string" ? [doc["_id"]] : []))]);
 
     return { conflicts, deleted: await pruneTables(writer, replaceTables, keep), errors, inserted };
 };
@@ -450,9 +460,8 @@ interface ExportShardAdminArgs {
     tables?: ReadonlyArray<string>;
 }
 
-/** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
+/** Arguments accepted by the `__lunora_admin__:importShard` admin RPC (an append; a replace is staged, see `./import-staging`). */
 interface ImportShardAdminArgs {
-    replaceTables?: ReadonlyArray<string>;
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -492,12 +501,9 @@ const parseImportShardArgs = (args: Record<string, unknown>): ImportShardAdminAr
     }
 
     const startLine = typeof args["startLine"] === "number" ? args["startLine"] : undefined;
-    const replaceTables = Array.isArray(args["replaceTables"])
-        ? (args["replaceTables"] as unknown[]).filter((entry): entry is string => typeof entry === "string")
-        : undefined;
 
-    return { replaceTables, rows, startLine };
+    return { rows, startLine };
 };
 
-export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, selectExportTables, validateImportRow };
+export { exportShardRows, importShardRows, parseExportShardArgs, parseImportShardArgs, replaceRefusal, selectExportTables, validateImportRow };
 export type { ExportRow, ExportShardAdminArgs, ExportShardArgs, ImportError, ImportShardAdminArgs, ImportShardArgs, ImportShardResult };

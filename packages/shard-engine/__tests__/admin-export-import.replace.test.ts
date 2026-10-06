@@ -6,9 +6,9 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * Replace mode makes the import the exact contents of its tables: an `_id` that
- * exists is overwritten, one the import does not carry is deleted, and a table
- * outside `replaceTables` is not touched.
+ * Replace mode: an `_id` that exists is overwritten, and with `keepIds` (a
+ * staged import's prune) every row of the tables the import does not keep is
+ * deleted. A table outside `replaceTables` is not touched.
  */
 const schema: SchemaLike = {
     tables: {
@@ -45,6 +45,7 @@ describe("shard admin import — replace mode", () => {
         expect.assertions(4);
 
         const result = await importShardRows(writer, schema, {
+            keepIds: new Set(),
             replaceTables: ["notes"],
             rows: [
                 { doc: { _creationTime: 1, _id: "kept", title: "as snapshotted" }, table: "notes" },
@@ -62,16 +63,38 @@ describe("shard admin import — replace mode", () => {
     it("empties a table in scope that the import holds no rows for", async () => {
         expect.assertions(2);
 
-        const result = await importShardRows(writer, schema, { replaceTables: ["notes"], rows: [] });
+        const result = await importShardRows(writer, schema, { keepIds: new Set(), replaceTables: ["notes"], rows: [] });
 
         expect(result.deleted).toStrictEqual({ notes: 2 });
         await expect(titles()).resolves.toStrictEqual({});
+    });
+
+    it("overwrites without pruning when no `keepIds` is given (a staged swap's write pages)", async () => {
+        expect.assertions(2);
+
+        const result = await importShardRows(writer, schema, {
+            replaceTables: ["notes"],
+            rows: [{ doc: { _id: "kept", title: "as snapshotted" }, table: "notes" }],
+        });
+
+        expect(result).toStrictEqual({ conflicts: 0, errors: [], inserted: { notes: 1 } });
+        await expect(titles()).resolves.toStrictEqual({ "created-since": "new", kept: "as snapshotted" });
+    });
+
+    it("keeps the ids an earlier page wrote when the prune runs on its own", async () => {
+        expect.assertions(2);
+
+        const result = await importShardRows(writer, schema, { keepIds: new Set(["kept"]), replaceTables: ["notes"], rows: [] });
+
+        expect(result.deleted).toStrictEqual({ notes: 1 });
+        await expect(titles()).resolves.toStrictEqual({ kept: "edited since" });
     });
 
     it("prunes nothing when a row is refused, so the caller's rollback has nothing to undo but the writes", async () => {
         expect.assertions(3);
 
         const result = await importShardRows(writer, schema, {
+            keepIds: new Set(),
             replaceTables: ["notes"],
             rows: [
                 { doc: { _id: "kept", title: "as snapshotted" }, table: "notes" },

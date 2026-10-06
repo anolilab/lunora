@@ -440,7 +440,7 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
  */
 const buildGlobalImporter =
     (database: D1DatabaseLike, cdc: boolean) =>
-    (request: { replaceTables?: ReadonlyArray<string>; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
+    (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
         // Same reason the PITR applier carries it: a bulk import that skips the
         // changelog restores rows no downstream consumer is ever told about.
@@ -448,11 +448,36 @@ const buildGlobalImporter =
 
         return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
             exec,
-            replaceTables: request.replaceTables,
             rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
             startLine: request.startLine,
         });
     };
+
+/**
+ * \`importGlobalsStaging\` for a staged replace import: the \`.global()\` rows wait
+ * in D1's staging table until the commit writes them through the same writer
+ * \`importGlobals\` uses (changelog included), then prunes. See \`@lunora/d1\`'s
+ * \`import-staging\` for what the commit guarantees without a transaction.
+ */
+const buildGlobalImportStaging = (database: D1DatabaseLike, cdc: boolean) => {
+    const globalSchema = schema as unknown as D1CtxDbOptions["schema"];
+
+    return {
+        abort: (request: { generation: string; session: string }) => abortStagedGlobalRows(buildExec(database), request.session, request.generation),
+        commit: (request: { generation: string; session: string; staged: boolean; tables: ReadonlyArray<string> }) => {
+            const exec = buildExec(database);
+
+            return commitStagedGlobalRows(createD1CtxDb({ cdc, exec, schema: globalSchema }), exec, globalSchema, request);
+        },
+        stage: (request: {
+            generation: string;
+            rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+            session: string;
+            tables: ReadonlyArray<string>;
+        }) =>
+            stageGlobalRows(buildExec(database), globalSchema, request),
+    };
+};
 
 /**
  * \`exportGlobals\` for the admin export endpoint (and the scheduled R2 backup,

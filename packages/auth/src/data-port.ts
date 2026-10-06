@@ -14,6 +14,12 @@
  * written in the order they arrive, and the export writes parents first (`user`,
  * then `account` and `session`), so foreign keys hold.
  *
+ * Replace (a staged replace import's commit) makes the auth tables hold exactly
+ * the rows given, in one transaction of the auth store — D1's `batch()`, or the
+ * Durable Object's storage transaction — and clears signed-in sessions and
+ * one-time tokens with them: a rewound user set must not keep logins the
+ * snapshot never had.
+ *
  * The return shape mirrors `@lunora/runtime`'s `AuthDataPort` structurally — no
  * dependency edge to the runtime.
  */
@@ -38,10 +44,19 @@ interface AuthImportResult {
     inserted: number;
 }
 
+/** What a replace did: rows removed because the snapshot does not hold them, rows written. Any error ⇒ nothing changed. */
+interface AuthReplaceResult {
+    deleted: number;
+    errors: { index: number; message: string; table: string }[];
+    inserted: number;
+}
+
 /** What the runtime's admin export / import reads and writes auth rows through. */
 interface AuthDataPortLike {
     exportRows: () => AsyncIterable<{ doc: Row; table: string }>;
     importRows: (rows: ReadonlyArray<{ doc: Row; table: string }>) => Promise<AuthImportResult>;
+    /** Absent when the store has no atomic unit to replace in (an executor without `batch`). */
+    replaceRows?: (rows: ReadonlyArray<{ doc: Row; table: string }>) => Promise<AuthReplaceResult>;
 }
 
 /** The read half of a SQL executor — all both D1 and Durable Object storage need here. */
@@ -83,6 +98,16 @@ const authTableNames = (options: LunoraAuthOptions): string[] => [
         .toSorted((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.modelName.localeCompare(b.modelName))
         .map((table) => table.modelName),
 ];
+
+/**
+ * The physical names of the {@link LIVE_CREDENTIAL_TABLES} — never exported, and
+ * cleared by a replace.
+ * @param options The resolved auth options — a built instance's `auth.options`.
+ */
+const authCredentialTableNames = (options: LunoraAuthOptions): string[] =>
+    Object.entries(getAuthTables(options))
+        .filter(([logical]) => LIVE_CREDENTIAL_TABLES.has(logical))
+        .map(([, table]) => table.modelName);
 
 /** A table's columns; empty when it does not exist. `PRAGMA table_info` rather than `pragma_table_info()`: D1's authorizer refuses the function form. */
 const columnsOf = async (sql: AuthSqlReader, table: string): Promise<string[]> => {
@@ -197,12 +222,151 @@ const insertAuthRows = async (
     return result;
 };
 
+type Statement = { params: ReadonlyArray<unknown>; sql: string };
+
+/** A row's primary-key tuple, as a string a `Set` can hold. */
+const keyOf = (row: Row, keyColumns: ReadonlyArray<string>): string => JSON.stringify(keyColumns.map((column) => row[column]));
+
+const primaryKeyOf = async (sql: AuthSqlReader, table: string): Promise<string[]> => {
+    const info = await sql.all(`PRAGMA table_info(${quoteIdentifier(table)})`, []);
+
+    return info
+        .filter((column) => Number(column["pk"]) > 0)
+        .toSorted((a, b) => Number(a["pk"]) - Number(b["pk"]))
+        .map((column) => String(column["name"]));
+};
+
+/** How many of `table`'s rows are not among `kept` (by primary key; every row when the table has none). */
+const countUnkept = async (sql: AuthSqlReader, table: string, kept: ReadonlyArray<Row>): Promise<number> => {
+    const keyColumns = await primaryKeyOf(sql, table);
+
+    if (keyColumns.length === 0) {
+        const [row] = await sql.all(`SELECT COUNT(*) AS "n" FROM ${quoteIdentifier(table)}`, []);
+
+        return Number(row?.["n"] ?? 0);
+    }
+
+    const keep = new Set(kept.map((row) => keyOf(row, keyColumns)));
+    const existing = await sql.all(`SELECT ${keyColumns.map((column) => quoteIdentifier(column)).join(", ")} FROM ${quoteIdentifier(table)}`, []);
+
+    return existing.filter((row) => !keep.has(keyOf(row, keyColumns))).length;
+};
+
+/**
+ * The statements that make `tables` hold exactly `rows` — every table (and
+ * `clearTables`) emptied children-first, then the rows inserted parents-first —
+ * plus what they will delete. Nothing runs here; the caller runs the list as
+ * one atomic unit.
+ */
+const planAuthReplace = async (
+    sql: AuthSqlReader,
+    rows: ReadonlyArray<{ doc: Row; table: string }>,
+    tables: ReadonlyArray<string>,
+    clearTables: ReadonlyArray<string>,
+): Promise<{ deleted: number; errors: AuthReplaceResult["errors"]; statements: Statement[] }> => {
+    const errors: AuthReplaceResult["errors"] = [];
+    const columns = new Map<string, string[]>();
+    const decoded: { row: Row; table: string }[] = [];
+
+    for (const table of [...clearTables, ...tables]) {
+        // eslint-disable-next-line no-await-in-loop -- once per table
+        columns.set(table, await columnsOf(sql, table));
+    }
+
+    for (const [index, { doc, table }] of rows.entries()) {
+        const known = tables.includes(table) ? (columns.get(table) ?? []) : [];
+
+        if (known.length === 0) {
+            errors.push({ index, message: tables.includes(table) ? `"${table}" does not exist` : `"${table}" is not an auth table`, table });
+            continue;
+        }
+
+        const row = decodeWire(doc) as Row;
+
+        decoded.push({ row: Object.fromEntries(Object.entries(row).filter(([name]) => known.includes(name))), table });
+    }
+
+    const present = [...clearTables, ...tables].filter((table) => (columns.get(table) ?? []).length > 0);
+    let deleted = 0;
+
+    for (const table of present) {
+        // eslint-disable-next-line no-await-in-loop -- once per table
+        deleted += await countUnkept(
+            sql,
+            table,
+            decoded.filter((entry) => entry.table === table).map((entry) => entry.row),
+        );
+    }
+
+    const statements: Statement[] = [
+        // The credential tables first (they reference users), then the carried ones children-first.
+        ...[...clearTables, ...tables.toReversed()]
+            .filter((table) => present.includes(table))
+            .map((table) => {
+                return { params: [], sql: `DELETE FROM ${quoteIdentifier(table)}` };
+            }),
+        ...decoded.map(({ row, table }) => {
+            const names = Object.keys(row);
+
+            return {
+                // eslint-disable-next-line unicorn/no-null -- SQL NULL
+                params: names.map((name) => row[name] ?? null),
+                sql: `INSERT INTO ${quoteIdentifier(table)} (${names.map((name) => quoteIdentifier(name)).join(", ")}) VALUES (${names.map(() => "?").join(", ")})`,
+            };
+        }),
+    ];
+
+    return { deleted, errors, statements };
+};
+
+/**
+ * Plan a replace, then run it as one unit through `atomic`; a failure there
+ * changed nothing. Only movable tables are written: a row of an unmovable one
+ * (`session`, `verification`, the audit log — {@link isUnmovableAuthTable}) is
+ * refused like `insertAuthRows` refuses it. The live-credential tables are
+ * cleared with the rest; the audit log is never written nor deleted.
+ */
+const replaceAuthRows = async (
+    sql: AuthSqlReader,
+    atomic: (statements: ReadonlyArray<Statement>) => Promise<void>,
+    rows: ReadonlyArray<{ doc: Row; table: string }>,
+    tables: ReadonlyArray<string>,
+    clearTables: ReadonlyArray<string>,
+): Promise<AuthReplaceResult> => {
+    const refused = rows.flatMap(({ table }, index) => (isUnmovableAuthTable(table) ? [{ index, message: `"${table}" is never restored`, table }] : []));
+
+    if (refused.length > 0) {
+        return { deleted: 0, errors: refused, inserted: 0 };
+    }
+
+    const carried = tables.filter((table) => !isUnmovableAuthTable(table));
+    const cleared = [...new Set([...clearTables, ...tables.filter((table) => isUnmovableAuthTable(table))])].filter(
+        (table) => table.toLowerCase() !== AUTH_AUDIT_TABLE.toLowerCase(),
+    );
+    const plan = await planAuthReplace(sql, rows, carried, cleared);
+
+    if (plan.errors.length > 0) {
+        return { deleted: 0, errors: plan.errors, inserted: 0 };
+    }
+
+    try {
+        await atomic(plan.statements);
+    } catch (error) {
+        return { deleted: 0, errors: [{ index: -1, message: `auth replace rolled back: ${safeCause(error)}`, table: "" }], inserted: 0 };
+    }
+
+    return { deleted: plan.deleted, errors: [], inserted: rows.length };
+};
+
 /**
  * The auth data port over the auth D1 database (or any {@link SqlExecutor}).
  * @param executor The auth database, e.g. `d1Executor(env.DB)`.
  * @param tables The auth tables to carry, parents first — {@link authTableNames}, minus any the schema already declares (those travel as ordinary table rows).
+ * @param credentialTables The live-credential tables a replace clears — {@link authCredentialTableNames}, minus the same.
  */
-const createSqlAuthDataPort = (executor: SqlExecutor, tables: ReadonlyArray<string>): AuthDataPortLike => {
+const createSqlAuthDataPort = (executor: SqlExecutor, tables: ReadonlyArray<string>, credentialTables: ReadonlyArray<string> = []): AuthDataPortLike => {
+    const { batch } = executor;
+
     return {
         exportRows: () =>
             readAuthTables(
@@ -210,6 +374,7 @@ const createSqlAuthDataPort = (executor: SqlExecutor, tables: ReadonlyArray<stri
                 tables.filter((table) => !isUnmovableAuthTable(table)),
             ),
         importRows: async (rows) => insertAuthRows(executor, rows, (table) => tables.includes(table)),
+        ...(batch === undefined ? {} : { replaceRows: async (rows) => replaceAuthRows(executor, batch, rows, tables, credentialTables) }),
     };
 };
 
@@ -257,8 +422,18 @@ const createDoAuthDataPort = (post: (body: Row) => Promise<Response>): AuthDataP
             }
         },
         importRows: async (rows) => call<AuthImportResult>({ op: "import", rows }),
+        replaceRows: async (rows) => call<AuthReplaceResult>({ op: "replace", rows }),
     };
 };
 
-export type { AuthDataPortLike, AuthImportResult, AuthSqlReader };
-export { PAGE_ROWS as AUTH_DATA_PAGE_ROWS, authTableNames, createDoAuthDataPort, createSqlAuthDataPort, insertAuthRows, isUnmovableAuthTable };
+export type { AuthDataPortLike, AuthImportResult, AuthReplaceResult, AuthSqlReader };
+export {
+    PAGE_ROWS as AUTH_DATA_PAGE_ROWS,
+    authCredentialTableNames,
+    authTableNames,
+    createDoAuthDataPort,
+    createSqlAuthDataPort,
+    insertAuthRows,
+    isUnmovableAuthTable,
+    replaceAuthRows,
+};
