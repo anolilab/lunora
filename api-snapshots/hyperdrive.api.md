@@ -150,16 +150,8 @@ type HyperdriveEngine = "mysql" | "postgres";
 
 ```ts
 type Mysql2Execute = Mysql2Like & {
-    config?: {
-        clientFlags?: number;
-    };
-    pool?: {
-        config?: {
-            connectionConfig?: {
-                clientFlags?: number;
-            };
-        };
-    };
+    config?: unknown;
+    pool?: unknown;
 };
 ```
 

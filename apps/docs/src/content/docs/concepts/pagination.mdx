@@ -18,14 +18,22 @@ are inserted or deleted ahead of the cursor.
 ```ts
 import { query, v } from "@/lunora/_generated/server";
 
-export const list = query.input({ channelId: v.id("channels"), paginationOpts: v.any() }).query(async ({ ctx, args: { channelId, paginationOpts } }) => {
-    return ctx.db
-        .query("messages")
-        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
-        .order("desc")
-        .paginate(paginationOpts);
-});
+const cursor = v.optional(v.union(v.string(), v.null()));
+
+export const list = query
+    .input({ channelId: v.id("channels"), paginationOpts: v.object({ cursor, endCursor: cursor, numItems: v.number() }) })
+    .query(async ({ ctx, args: { channelId, paginationOpts } }) => {
+        return ctx.db
+            .query("messages")
+            .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+            .order("desc")
+            .paginate(paginationOpts);
+    });
 ```
+
+Declare `paginationOpts` with a real validator: `v.any()` types it `unknown`,
+which `.paginate()` rejects, and `usePaginatedQuery` also sends `endCursor`,
+which input validation strips unless it is declared.
 
 `.paginate()` composes with `.withIndex()`, `.filter()`, and `.order()`: it pages
 within the active index in the chosen direction.

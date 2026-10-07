@@ -1,212 +1,185 @@
 ---
 name: lunora-performance-audit
-description: Diagnoses and fixes Lunora performance problems — full-table scans, missing
-    indexes, OCC write conflicts, oversized subscriptions, and sharding/`.global()`
-    scaling. Use when queries are slow, mutations conflict, `lunora insights`
-    reports a hot-spot, or `@lunora/advisor` flags a table.
+description: Diagnoses and fixes Lunora performance problems — full-table scans and missing indexes, expensive `ctx.db.related` traversals, OCC write conflicts (409 `CONFLICT`), live queries that re-run too often, hot shards, and choosing `.shardBy(key)` or `.global()` to scale. Starts from measured signal (`lunora insights`) and static signal (`lunora advisor`, `@lunora/advisor` lints such as `filter_without_index`, `unbounded_collect`, `unindexed_foreign_key`, `hot_shard`). Use when the user says a query or page is slow, mutations fail with conflicts under load, subscriptions are chatty, asks to "audit performance", "add the right index", or "should I shard this table", or when the Studio Advisors tab or `lunora advisor` flags something.
 ---
 
 # Lunora Performance Audit
 
-Systematically diagnose Lunora performance issues, route to the right fix, and
-apply it across sibling functions consistently.
+Find the measured problem, route it to the matching fix below, and apply the
+fix to every function that touches the same table.
 
-## When to Use
+If traffic is modest and nothing is measured as slow, prefer simpler code. Don't
+introduce sharding, digest tables or document splits on speculation.
 
-- Queries feel slow or read far more rows than they return.
-- Mutations conflict (409 `CONFLICT`) under load (OCC).
-- Subscriptions fan out updates too broadly or re-run too often.
-- The Lunora Studio **Advisors** tab or `@lunora/advisor` flags a table.
-
-## When Not to Use
-
-- Scale is small, traffic is modest, and there is no measured problem — prefer
-  simpler code. Do not introduce sharding, digests, or splits on speculation.
-
-## Core Workflow
+## Workflow
 
 1. **Scope** one concrete user flow with a clear entry and exit.
-2. **Trace** every `ctx.db` read and write in that flow.
-3. **Route** to the matching problem class below.
-4. **Fix siblings** consistently — every function touching the same table should
-   read it the same indexed way.
-5. **Verify** behavior is unchanged and the advisor finding clears.
+2. **Gather signal** with `lunora insights` (runtime) and `lunora advisor`
+   (static).
+3. **Trace** every `ctx.db` read and write in that flow.
+4. **Route** to the problem class below and fix it.
+5. **Fix siblings** so every function reads the table the same indexed way. A
+   half-migrated access pattern is its own bug.
+6. **Verify:** behaviour unchanged, the advisor finding cleared, and the
+   `insights` row improved after the fix has served traffic.
 
-## Signal Gathering
+## Signal
 
-### Runtime signal: `lunora insights`
+### Runtime: `lunora insights`
 
-When the worker is running and has served traffic, start here — it reports the
-measured problem, not a suspected one:
+Needs a running worker that has served traffic. It reports measured problems:
 
 ```bash
-lunora insights                      # against the local dev worker
-lunora insights --shard channel:demo # scope to one shard
-lunora insights --limit 25 --format json  # machine-readable, more rows
-lunora insights --prod --url https://app.example.com --token $LUNORA_ADMIN_TOKEN
+lunora insights                       # local dev worker (http://localhost:8787)
+lunora insights --shard channel:demo  # one shard instead of the root
+lunora insights --limit 25 --format json
+LUNORA_ADMIN_TOKEN=… lunora insights --prod --url https://app.example.com
 ```
 
-It ranks per-function **write-conflict hot-spots** (OCC contention — the
-sharding signal), **error rates**, and **latency outliers**. A function at the
-top of the write-conflict list is the direct input to the OCC section below; a
-latency outlier usually resolves to the read-amplification section.
+It ranks per-function **write-conflict hot-spots** (go to Write conflicts),
+**error rates**, and **latency outliers** (usually Read amplification). The
+Studio Issues panel and `lunora logs` give error detail once you know where to
+look.
 
-The Studio **Issues** panel and `lunora logs` cover the error side in more
-detail once `insights` tells you where to look.
+### Static: `lunora advisor` and `@lunora/advisor`
 
-### Static signal: the advisors
+No traffic needed. The Studio **Advisors** tab shows the same findings live in
+dev.
 
-These need no traffic, so they also work on a cold codebase:
+```bash
+lunora advisor                         # score + write lunora.advisor.map.json
+lunora advisor --entry messages#send   # one procedure (file#exportName)
+lunora advisor --baseline              # CI: fail on regression vs the committed map
+```
 
-- **Lunora Studio → Advisors tab** surfaces `@lunora/advisor` findings live in
-  dev.
-- `@lunora/advisor` runs ~90 static lints over `defineSchema` + discovered query
-  reads / insert writes (plus a few runtime lints). The performance/schema rules
-  most relevant here:
-    - `filter-without-index` — a query filters a table with no covering index.
-    - `unindexed-foreign-key` — a relation/FK column has no index.
-    - `duplicate-index` / `empty-index` — wasted or malformed indexes.
-    - `index-references-unknown-field`, `relation-references-unknown-field`,
-      `relation-references-unknown-table` — broken index/relation definitions.
-    - `table-without-insert` — a table is read but never written (often a
-      schema/typo signal).
+Lint ids are snake_case. The performance-relevant ones:
 
-## Problem Class: Read Amplification (the common one)
+| Lint                              | Meaning                                                                      |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| `filter_without_index`            | A query filters a table with no covering index.                              |
+| `unbounded_collect`               | `.collect()` with no index or filter loads every row (and re-sends it live). |
+| `filter_on_primary_key`           | Filtering on `_id` scans; use `ctx.db.get(id)`.                              |
+| `unindexed_foreign_key`           | An FK column has no index.                                                   |
+| `unindexed_relation_target`       | A `many` relation's target FK has no index, so `with:` reads scan.           |
+| `duplicate_index` / `empty_index` | Wasted or malformed index.                                                   |
+| `index_utilization` (runtime)     | A declared index nothing uses, or a hot table read with none.                |
+| `hot_shard` (runtime)             | One shard takes a disproportionate share of a sharded function's load.       |
+| `fan_out_breadth` (runtime)       | A shard set so wide a cross-shard read nears the subrequest limit.           |
 
-**Symptom:** a query reads the whole table to return a few rows;
-`filter-without-index` fires.
+## Read amplification (the common one)
 
-**Fix:** read through an index, not `.filter()`. Declare the index on the table
-and use `.withIndex()` with an equality/range on the leading columns.
+**Symptom:** a query reads the whole table to return a few rows; a latency
+outlier in `insights`, or `filter_without_index` / `unbounded_collect`.
+
+**Fix:** declare an index and read through it with `.withIndex()`:
 
 ```ts
-// Bad — scans every row, then filters in memory.
+// (auth / org membership check on `orgId` elided — see lunora-functions)
+// Scans every row, then filters in memory.
 const mine = (await ctx.db.query("documents").collect()).filter((d) => d.orgId === orgId);
 
-// Good — declare the index…
+// schema.ts
 documents: defineTable({ orgId: v.string(), createdAt: v.number() /* … */ }).index("by_org_created", ["orgId", "createdAt"]);
 
-// …and read through it.
+// Reads only the org's range.
 const mine = await ctx.db
     .query("documents")
     .withIndex("by_org_created", (q) => q.eq("orgId", orgId))
     .collect();
 ```
 
-Index columns are ordered: put equality columns first, then the range/sort
-column. Fix every sibling query on the table the same way.
+Put equality columns first, then the range/sort column. For a large range,
+paginate instead of `.collect()`.
 
-## Problem Class: Relation Traversal Cost
+## Relation traversal cost
 
-**Symptom:** a query calling `ctx.db.related` is slow, or one page of it reads
-far more rows than it returns.
+**Symptom:** a query using `ctx.db.related` is slow, or one page reads far more
+rows than it returns.
 
-A traversal is not one read. It is one batched `findMany` **per edge, per hop**,
-and the frontier grows multiplicatively — which is why every option is bounded,
-and why the bounds **refuse rather than clamp**:
+A traversal is one batched `findMany` per edge, per hop, and the frontier grows
+multiplicatively. The options are bounded, and an out-of-range value is rejected
+with `BAD_REQUEST` instead of being clamped, so a throwing traversal means the
+request is too big, not that there's a bug to route around.
 
-| Option        | Default | Cap      | What the cap is protecting                                                   |
-| ------------- | ------- | -------- | ---------------------------------------------------------------------------- |
-| `depth`       | `1`     | `4`      | Past 4 hops a real schema is bounded by request time, not by `limit`.        |
-| `limit`       | `50`    | `200`    | Nodes returned in one page.                                                  |
-| cursor offset | `0`     | `10 000` | The offset is re-walk work, not a skip: each hop reads `N + limit + 1` rows. |
+| Option        | Default | Cap      | Why                                                           |
+| ------------- | ------- | -------- | ------------------------------------------------------------- |
+| `depth`       | `1`     | `4`      | Past 4 hops, request time is the limit, not `limit`.          |
+| `limit`       | `50`    | `200`    | Nodes per page.                                               |
+| cursor offset | `0`     | `10 000` | The offset is re-walked: each hop reads `N + limit + 1` rows. |
 
-A caller asking for `depth: 9` gets a `BAD_REQUEST`, not a silent depth 4 — so a
-traversal that throws is a mis-sized request, not a bug to route around.
+Fixes, in order:
 
-**Fixes, in order of preference:**
+1. **Narrow `edges`** to the `"<table>.<column>"` edges the feature needs. One
+   unrelated `v.id(...)` column can double the frontier per hop.
+2. **Set `direction`** to `"in"` or `"out"` instead of the default `"both"`.
+3. **Lower `depth` before raising `limit`.** Hops multiply; a page is linear.
+4. **Index the foreign keys.** Every inward hop is a `WHERE fk IN (…)` read
+   (`unindexed_foreign_key`).
+5. **Stop deep-paging.** Needing an offset past 10 000 means the traversal is
+   the wrong tool; narrow the walk.
 
-1. **Narrow with `edges`.** Name only the `"<table>.<column>"` edges the feature
-   needs. Following every declared foreign key is the usual reason a walk is
-   wide — one unrelated `v.id(...)` column can double the frontier per hop.
-2. **Narrow with `direction`.** `"in"` or `"out"` instead of the default
-   `"both"` halves the edges expanded at each hop.
-3. **Drop `depth` before raising `limit`.** Each hop multiplies; a page is
-   linear.
-4. **Index the foreign keys.** Every inward hop is a `WHERE fk IN (…)` read, so
-   an unindexed FK makes each hop a scan. `@lunora/advisor` flags it as
-   `unindexed-foreign-key`.
-5. **Stop deep-paging.** An offset past 10 000 is refused outright. That is the
-   signal the traversal is the wrong tool for the job — narrow the walk instead
-   of paging through it.
+## Write conflicts (OCC)
 
-## Problem Class: Write Conflicts (OCC)
+**Symptom:** mutations on hot rows fail under concurrency, or a function tops
+the write-conflict list in `insights`.
 
-**Symptom:** mutations on hot rows fail under concurrency, or the function tops
-the write-conflict section of `lunora insights`. ShardDO uses optimistic
-concurrency control — concurrent writes to the same DO that touch overlapping
-state conflict. There is **no server-side retry loop**: the loser throws
-`ConflictError` (code `CONFLICT`, HTTP 409) and the caller decides, so a client
-that never handles it (`isConflictError` from `@lunora/client`) just surfaces
-409s to the user.
+ShardDO uses optimistic concurrency. When a concurrent write commits first, the
+mutation throws `ConflictError` (`code: "CONFLICT"`, HTTP 409). The runtime does
+not retry it; a mutation body runs at most once per call, and the caller
+decides what to do. On the client, check with `isConflictError(error)` from
+`@lunora/client` (also exported via `lunorash/client`).
 
-**Fixes, in order of preference:**
+Not every 409 is contention. On the server, `ConflictError.kind` is `"occ"` for
+real write contention, and `"unique"`, `"restrict"` or `"trigger"` for
+constraint and guard failures. The client only sees `code: "CONFLICT"` (`kind`
+is not part of the error envelope), so it cannot tell them apart. `insights` counts only `occ` as a write conflict, so fix a `unique`
+409 in the data or the insert logic, not by sharding.
 
-1. **Narrow the write.** Patch only the fields that changed; avoid read-modify-
-   write over rows another mutation also touches.
-2. **Partition with `.shardBy(key)`.** Move per-user / per-tenant / per-room
-   state into its own DO so writes for different keys never contend. This is the
-   primary horizontal-scale lever — most write contention is a single-DO
-   hotspot.
-3. **Avoid unbounded counters/aggregates in the hot path.** Accumulate in a
-   sharded/append shape and fold lazily rather than serializing every writer
-   through one row.
+Fixes, in order:
 
-## Problem Class: Subscription Cost
+1. **Narrow the write.** Patch only changed fields; avoid read-modify-write over
+   rows another mutation also writes.
+2. **Partition with `.shardBy(key)`.** Per-user / per-tenant / per-room state
+   in its own Durable Object never contends across keys. This is the main
+   horizontal-scale lever, since most contention is one hot DO.
+3. **Take counters and aggregates off the hot row.** Append and fold lazily
+   instead of serializing every writer through one row.
+
+If `hot_shard` fires on an already-sharded table, the key is skewed: re-shard on
+a higher-cardinality key or split the hot entity's state.
+
+## Subscription cost
 
 **Symptom:** a `useQuery` re-runs and re-pushes to many clients on unrelated
 writes.
 
-**Fixes:**
+- Scope query args tightly so a live query depends only on the rows it renders;
+  a query keyed by `orgId` shouldn't re-run on another org's write.
+- Read through indexes so the dependency is the index range, not the table.
+- Idle WebSockets are hibernated and cost nothing. The lever is how many rows
+  each live query depends on, not the connection count.
 
-- **Scope query args tightly** so a subscription only depends on the rows it
-  renders — a query keyed by `orgId` should not re-run for another org's write.
-- **Read through indexes** (above) so the reactive dependency is the narrow
-  index range, not the whole table.
-- ShardDO subscriptions are **hibernated WebSockets** — idle connections cost
-  nothing; the lever is _how many rows each live query depends on_, not raw
-  connection count.
+## Cross-region reads
 
-## Problem Class: Cross-Region Reads
+**Symptom:** read-heavy, rarely-written data is slow for distant users.
 
-**Symptom:** read-heavy, rarely-written data is slow for far-away users.
+**Fix:** `.global()` replicates the table to D1 for low-latency reads from the
+edge, with read-your-writes via D1 sessions. Use it only for read-mostly tables:
+it adds write-path cost and its own DDL flow (`lunora-migration-helper`). If the
+dataset outgrows D1, `.global({ backend: "hyperdrive" })` serves the same
+reactive contract from Postgres/MySQL (`lunora-setup-hyperdrive-global`).
 
-**Fix:** chain `.global()` on the table to replicate it to D1 for low-latency
-cross-region reads (with read-your-writes via the Sessions API). Reserve it for
-read-mostly tables — `.global()` adds the D1 migration flow (see the
-`lunora-migration-helper` skill) and write-path cost.
-
-If the dataset outgrows D1, `.global({ backend: "hyperdrive" })` serves the same
-reactive `.global()` contract from Postgres/MySQL over Cloudflare Hyperdrive —
-see the `lunora-setup-hyperdrive-global` skill (and `lunora migrate
-d1-to-hyperdrive` to move an existing dataset).
-
-### `.shardBy(key)` vs `.global()` — choose one per table
-
-- `.shardBy(key)`: partitions a table across Durable Objects by key — scales
-  _writes_ (e.g. messages per room). Reads are per-shard.
-- `.global()`: replicates a table to D1 — scales _cross-region reads_ with
-  read-your-writes (e.g. a mostly-read catalog).
-- They are not combined on the same table; the default (neither) is a single
-  root-scoped ShardDO.
-
-## Guardrails
-
-- Prefer simpler code when scale is small or the signal is weak.
-- Do not recommend structural changes (digest tables, document splitting,
-  sharding) without a measured signal or a known hot path.
-- When you change how one function reads/writes a table, change its siblings to
-  match — half-migrated access patterns are their own bug.
+`.shardBy(key)` scales writes (rows in one DO per key); `.global()` scales
+cross-region reads. A table can't have both; the default is the single root
+ShardDO. Switching an existing table's mode moves its rows, which is an
+export/import, not a schema edit (see `lunora-migration-helper`).
 
 ## Checklist
 
-- [ ] Scoped one concrete flow; traced every `ctx.db` read/write.
-- [ ] Ran `lunora insights` (if the worker has traffic) for the measured signal.
-- [ ] Checked the Studio Advisors tab / `@lunora/advisor` findings.
-- [ ] Read amplification: replaced `.filter()` with an indexed `.withIndex()`.
-- [ ] Relation traversals: narrowed with `edges` / `direction` before `depth`;
-      foreign keys indexed.
-- [ ] Write conflicts: narrowed writes and/or partitioned with `.shardBy(key)`.
-- [ ] Subscription cost: scoped query args so live queries depend on few rows.
-- [ ] Cross-region: applied `.global()` only to read-mostly tables.
-- [ ] Fixed sibling functions consistently; verified behavior unchanged.
+- [ ] Scoped one flow; traced every `ctx.db` read/write.
+- [ ] Checked `lunora insights` (if there's traffic) and `lunora advisor`.
+- [ ] Scans replaced with `.withIndex()` reads; FKs indexed.
+- [ ] Traversals narrowed with `edges` / `direction` before touching `depth`.
+- [ ] Write conflicts confirmed as `occ`, then writes narrowed and/or `.shardBy(key)` applied.
+- [ ] Live queries depend on few rows; `.global()` only on read-mostly tables.
+- [ ] Siblings fixed consistently; behaviour unchanged; finding cleared.

@@ -29,17 +29,24 @@ const CLIENT_FOUND_ROWS_FLAG = 0x00_00_00_02;
  */
 const warnedConnections = new WeakSet<object>();
 
+/** The undocumented driver internals {@link readMysqlClientFlags} probes; all optional. */
+type FlagProbeShape = Mysql2Like & {
+    config?: { clientFlags?: number };
+    pool?: { config?: { connectionConfig?: { clientFlags?: number } } };
+};
+
 /**
  * Read the merged client-flags bitmask off a real `mysql2/promise` connection or pool (see {@link Mysql2Execute}), trying the single-connection shape first and falling back to the pool's nested shape. Returns `undefined` when neither is present — the driver (or test double) doesn't expose flag introspection.
  */
 const readMysqlClientFlags = (connection: Mysql2Execute): number | undefined => {
-    const direct = connection.config?.clientFlags;
+    const probe = connection as FlagProbeShape;
+    const direct = probe.config?.clientFlags;
 
     if (typeof direct === "number") {
         return direct;
     }
 
-    const pooled = connection.pool?.config?.connectionConfig?.clientFlags;
+    const pooled = probe.pool?.config?.connectionConfig?.clientFlags;
 
     return typeof pooled === "number" ? pooled : undefined;
 };
@@ -120,13 +127,13 @@ export type RowClient = SqlClient;
  * probe would otherwise degrade silently to the warn branch and the OCC guard
  * would go unchecked.
  *
- * Both fields are optional so a minimal `Mysql2Like` test double (only
- * `execute`) safely resolves to "undeterminable" instead of a `TypeError`.
+ * The probe fields are typed `unknown` publicly: the paths are not in `mysql2`'s
+ * typings, so spelling them out made a real `createPool(...)` fail to type-check
+ * (TS2345, weak-type mismatch on `config`). {@link readMysqlClientFlags} reads
+ * them through the internal `FlagProbeShape` instead, and a minimal test double
+ * (only `execute`) resolves to "undeterminable" rather than a `TypeError`.
  */
-export type Mysql2Execute = Mysql2Like & {
-    config?: { clientFlags?: number };
-    pool?: { config?: { connectionConfig?: { clientFlags?: number } } };
-};
+export type Mysql2Execute = Mysql2Like & { config?: unknown; pool?: unknown };
 
 /**
  * Wrap a Postgres row-client (from `@lunora/hyperdrive`'s `fromPostgresJs` /
