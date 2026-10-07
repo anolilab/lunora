@@ -166,7 +166,7 @@ production. Each of these is merged, not planned:
   `lunora dev` / `vite dev` session, and deploy before the app. They replace
   the per-service URL + HMAC plumbing ([docs](./apps/docs/src/content/docs/concepts/services.mdx)).
 - **Modules and an architecture view** — `defineModule`, a call-graph manifest,
-  and a Studio Architecture diagram ([`456`](./plans/456-modules-catalog-architecture.md)).
+  and a Studio Architecture diagram ([docs](./apps/docs/src/content/docs/concepts/modules.mdx)).
 - **Pub/Sub topics over Cloudflare Queues** — fan-out to many subscribers.
 - **Cloudflare parity** — AI Search as `ctx.aiSearch`, Artifacts as
   `ctx.artifacts`, Analytics SQL as `ctx.analyticsSql`, AI Gateway routing with
