@@ -7,7 +7,7 @@
  */
 import { existsSync } from "node:fs";
 
-import type { SchemaIR } from "@lunora/codegen";
+import type { SchemaIR, ValidatorIR } from "@lunora/codegen";
 import { discoverSchema, isD1GlobalTable, isHyperdriveGlobalTable } from "@lunora/codegen";
 import { Project } from "ts-morph";
 
@@ -19,8 +19,9 @@ interface VectorMetadataDeclaration {
     index: string;
 
     /**
-     * The validator kind behind the column, or `undefined` when the column
-     * isn't in the owning table's shape. Callers map it to the Vectorize
+     * The validator kind behind the column, with `v.optional(...)` and a
+     * nullable union unwrapped (metadata columns are usually optional), or
+     * `undefined` when the column isn't in the owning table's shape. Callers map it to the Vectorize
      * metadata type; a kind that can't be filtered on is reported, not indexed.
      */
     kind: string | undefined;
@@ -64,6 +65,25 @@ interface DiscoverSchemaInfoResult {
 }
 
 /**
+ * The kind a metadata filter sees: an absent value is simply not filterable, so
+ * `v.optional(x)` and a `v.union(x, v.null())` index as `x`. A union whose other
+ * members all share one kind (a string enum) indexes as that kind.
+ */
+const filterableKind = (validator: ValidatorIR | undefined): string | undefined => {
+    if (validator?.kind === "optional") {
+        return filterableKind(validator.inner);
+    }
+
+    if (validator?.kind === "union") {
+        const kinds = new Set((validator.members ?? []).filter((member) => member.kind !== "null").map((member) => filterableKind(member)));
+
+        return kinds.size === 1 ? [...kinds][0] : validator.kind;
+    }
+
+    return validator?.kind;
+};
+
+/**
  * Discover {@link SchemaInfo} for a project. Returns `{ info: undefined }` when
  * the project declares no `schema.ts` (not an error), or `{ info: undefined,
  * error }` when a present schema could not be parsed — callers decide whether a
@@ -83,7 +103,7 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
         // wrangler validator consistent with what codegen emits.
         const schema = discoverSchema(project, schemaPath, projectRoot);
 
-        const shapeOf = (tableName: string): Record<string, { kind?: string }> => schema.tables.find((table) => table.name === tableName)?.shape ?? {};
+        const shapeOf = (tableName: string): Record<string, ValidatorIR> => schema.tables.find((table) => table.name === tableName)?.shape ?? {};
 
         return {
             info: {
@@ -93,7 +113,7 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
                 vectorIndexNames: schema.vectorIndexes.map((index) => index.name),
                 vectorMetadata: schema.vectorIndexes.flatMap((index) =>
                     (index.metadata ?? []).map((property) => {
-                        return { index: index.name, kind: shapeOf(index.table)[property]?.kind, property };
+                        return { index: index.name, kind: filterableKind(shapeOf(index.table)[property]), property };
                     }),
                 ),
             },
