@@ -164,9 +164,9 @@ type ComposedOut<Plugins extends ReadonlyArray<unknown>> = Plugins extends reado
  * `defineSchema` argument so a plugin can ship vector decls alongside its
  * tables.
  */
-export interface SchemaExtension<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
-    /** Stable key identifying the plugin that owns this extension. */
-    readonly key: string;
+export interface SchemaExtension<T extends Record<string, TableDefinition> = Record<string, TableDefinition>, Key extends string = string> {
+    /** Stable key identifying the plugin that owns this extension. Kept literal, so `.extend()` adds exactly `<key>_<table>`. */
+    readonly key: Key;
 
     /**
      * Extension tables, keyed by **bare** name (e.g. `buckets`). At merge time
@@ -187,10 +187,10 @@ export interface SchemaExtension<T extends Record<string, TableDefinition> = Rec
  * Build a {@link SchemaExtension}. The `key` is a runtime tag (used for
  * error messages on collision) and a type-level brand.
  */
-export const defineSchemaExtension = <T extends Record<string, TableDefinition>>(
-    key: string,
+export const defineSchemaExtension = <T extends Record<string, TableDefinition>, const Key extends string = string>(
+    key: Key,
     options: { tables: T; vectorIndexes?: Record<string, VectorIndexDefinition> },
-): SchemaExtension<T> => {
+): SchemaExtension<T, Key> => {
     if (!key) {
         throw new LunoraError("INTERNAL", "defineSchemaExtension: `key` is required and must be a non-empty string");
     }
@@ -246,10 +246,10 @@ export interface DefinePluginOptions<TExtension extends Record<string, TableDefi
  * that carry only middleware.
  */
 export interface DefinePluginFunction {
-    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
-        key: string,
-        options: DefinePluginOptions<TExtension, TContextIn, TContextOut> & { extension: SchemaExtension<TExtension> },
-    ): Plugin<TExtension, TContextIn, TContextOut> & { readonly extension: SchemaExtension<TExtension> };
+    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn, const Key extends string = string>(
+        key: Key,
+        options: DefinePluginOptions<TExtension, TContextIn, TContextOut> & { extension: SchemaExtension<TExtension, Key> },
+    ): Plugin<TExtension, TContextIn, TContextOut> & { readonly extension: SchemaExtension<TExtension, Key> };
     <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
         key: string,
         options: DefinePluginOptions<TExtension, TContextIn, TContextOut>,

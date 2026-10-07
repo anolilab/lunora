@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { DatabaseWriter, SchemaExtension } from "@lunora/server";
+import type { DatabaseWriter, SchemaExtension, TableDefinition } from "@lunora/server";
 import { defineSchemaExtension, defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
@@ -60,7 +60,13 @@ const ABANDONED_RUN_MS = 13 * 60 * 60 * 1000;
  * message is a no-op instead of a duplicate.
  * @experimental
  */
-const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KEY, {
+const agentExtension: SchemaExtension<
+    Record<
+        keyof typeof episodeTables | keyof typeof graphTables | typeof MESSAGES_BARE_TABLE | typeof RUN_QUEUE_BARE_TABLE | typeof THREADS_BARE_TABLE,
+        TableDefinition
+    >,
+    typeof AGENT_EXTENSION_KEY
+> = defineSchemaExtension(AGENT_EXTENSION_KEY, {
     tables: {
         [MESSAGES_BARE_TABLE]: defineTable({
             content: v.string(),

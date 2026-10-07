@@ -141,6 +141,14 @@ const CONFIG_ONLY_SOURCES = [
     // user-named `[vars]` entry — hint-only. Often loaded lazily on the paid route
     // alone, which still needs the hint — see FLAG_PACKAGES.
     ["usesX402Charge", "@lunora/x402/charge"],
+    // Each `@lunora/payment` adapter is its own subpath, and its import is what
+    // tells which provider's secrets belong in `.dev.vars.example` — the root
+    // import alone cannot say.
+    ["usesPaymentAutumn", "@lunora/payment/autumn"],
+    ["usesPaymentCreem", "@lunora/payment/creem"],
+    ["usesPaymentDodopayments", "@lunora/payment/dodopayments"],
+    ["usesPaymentPolar", "@lunora/payment/polar"],
+    ["usesPaymentStripe", "@lunora/payment/stripe"],
 ] as const;
 
 /** The import-driven capability flag names. */
@@ -301,8 +309,18 @@ interface InferredBindings {
     usesMail: boolean;
     /** `@lunora/notify` is imported or `ctx.notify` read (Web Push needs VAPID/FCM secrets in `.dev.vars`; no binding). */
     usesNotify: boolean;
+    /** `@lunora/payment/autumn` is imported → the Autumn secrets in `.dev.vars` (no binding). */
+    usesPaymentAutumn: boolean;
+    /** `@lunora/payment/creem` is imported → the Creem secrets in `.dev.vars` (no binding). */
+    usesPaymentCreem: boolean;
+    /** `@lunora/payment/dodopayments` is imported → the Dodo Payments secrets in `.dev.vars` (no binding). */
+    usesPaymentDodopayments: boolean;
+    /** `@lunora/payment/polar` is imported → the Polar secrets in `.dev.vars` (no binding). */
+    usesPaymentPolar: boolean;
     /** `@lunora/payment` is imported or `ctx.payments` read (provider secrets must be set in `.dev.vars`; no binding). */
     usesPayments: boolean;
+    /** `@lunora/payment/stripe` is imported → the Stripe secrets in `.dev.vars` (no binding). */
+    usesPaymentStripe: boolean;
     /** `@lunora/bindings/pipelines` is value-imported or `ctx.pipelines` read (binding needs an un-mintable remote pipeline name; hint-only). */
     usesPipelines: boolean;
     /** `@lunora/bindings/r2sql` is value-imported or `ctx.r2sql` read (needs the `R2_SQL_*` secrets in `.dev.vars`; no binding). */
