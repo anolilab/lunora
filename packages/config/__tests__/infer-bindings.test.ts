@@ -1232,6 +1232,24 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(hint).toContain('"jurisdiction": "eu"');
     });
 
+    it("treats a fedramp-pinned app like eu or us: create the namespace in that jurisdiction first", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/schema.ts", SCHEMA_NO_GLOBAL.replace("});\n", '}).jurisdiction("fedramp");\n'));
+        write(
+            "lunora/repos.ts",
+            `import { createArtifacts } from "@lunora/bindings/artifacts";\nexport const make = (env) => createArtifacts({ binding: env.ARTIFACTS });`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+        const hint = result.signals.find((signal) => signal.includes("ctx.artifacts"));
+
+        expect(result.usesArtifacts).toBe(true);
+        expect(hint).toContain('"jurisdiction": "fedramp"');
+    });
+
     it("does not infer artifacts from a type-only import of its event payload", async () => {
         expect.assertions(2);
 

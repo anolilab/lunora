@@ -571,6 +571,7 @@ interface AdvisorQueue {
     exportName: string;
     mode: "pull" | "push";
     name: string;
+    topic?: string;
     tuning: AdvisorQueueTuning;
 }
 ```
@@ -1814,6 +1815,12 @@ const storageUploadWithoutMaxSize: Lint;
 
 ```ts
 const tableWithoutInsert: Lint;
+```
+
+### `topicTooManySubscriptions` (const)
+
+```ts
+const topicTooManySubscriptions: Lint;
 ```
 
 ### `ttlFieldNotTimestamp` (const)
