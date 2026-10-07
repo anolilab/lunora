@@ -132,6 +132,23 @@ Instead of polling, subscribe a Queue to crawl events (`wrangler queues subscrip
 
 Browser Run sessions accept several connections at once. Hold a session open with `launch(fn, { keepAlive })`, then `connect(sessionId, fn)` from as many actions as you like. Open a context per caller (`browser.newContext()`) so pages and cookies stay apart, and close it when done. `connect(..., { close: true })` closes the browser for every connected client, so only the flow that owns the session should pass it.
 
+### Production posture: set `allowedHosts`
+
+**`allowedHosts` is the supported production configuration.** Browser Run enforces it on the session itself (`guardrails.allowedDomains`): every request the browser makes, redirect hops, sub-resources, service workers and raw CDP included, is checked by Cloudflare, not by code in your Worker.
+
+```ts
+createBrowser({ binding: env.BROWSER, launch, allowedHosts: ["example.com", "cdn.example.com"] });
+```
+
+Without `allowedHosts`, the guard below is a **best-effort check in the Worker**, and `createBrowser` warns once per isolate. Its known limits:
+
+- **Not everything is routed.** Speculation-rules prerenders and WebRTC (STUN/TURN, ICE candidates) do not pass through Playwright's request interception, so the guard never sees them.
+- **Cookie scope.** Requests are fetched by Playwright's request client in the Worker, which stores `Set-Cookie` through `context.addCookies`. How a cookie without a `Domain` attribute ends up scoped (host-only or widened to subdomains) is not verified.
+- **The lock is API-deep.** The browser `launch()` / `connect()` hand out is locked against Playwright's public API only; code that reaches Playwright's private objects can still remove the guard.
+- **Subrequest cost.** Every page asset becomes a Worker subrequest (plus a DoH lookup per host every 30 seconds), which counts against the Workers subrequest limit and adds a round trip per asset.
+
+The `browser_user_url_without_allowlist` advisor lint flags a `ctx.browser` call whose URL comes from `args` while the app's `createBrowser` has no `allowedHosts` (`resolveDns: true` no longer counts as containment).
+
 ### URL safety (SSRF guard)
 
 Every navigation URL is validated before the browser is launched: non-`http(s)` schemes, embedded credentials, and private/internal targets (loopback, RFC1918, link-local, CGNAT, `localhost`/`*.internal`/`*.local`) are rejected by default. IPv4-mapped IPv6 and octal/hex encodings are normalized first. Set `allowPrivateTargets: true` only when every URL is trusted.

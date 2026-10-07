@@ -129,6 +129,9 @@ const DOH_CACHE_TTL_MS = 30_000;
  */
 type DnsCache = Map<string, { expires: number; verdict: Promise<SsrfResolution> }>;
 
+/** Whether this isolate has already warned that a factory runs without `allowedHosts`. */
+let warnedNoAllowlist = false;
+
 /** Browsers whose members {@link pin} has already replaced. */
 const GUARDED_BROWSERS = new WeakSet<object>();
 
@@ -502,6 +505,16 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     // every request a browser makes is checked. Only `allowPrivateTargets`
     // without an allowlist leaves the browser unguarded, by request.
     const guarded = !allowPrivateTargets || allowedHosts !== undefined;
+
+    // The default posture is a best-effort guard in the Worker; `allowedHosts` is
+    // enforced by Browser Run itself. Say so once per isolate, not per factory call.
+    if (allowedHosts === undefined && !allowPrivateTargets && !warnedNoAllowlist) {
+        warnedNoAllowlist = true;
+        // eslint-disable-next-line no-console -- one-time SSRF-posture warning, mirrors @lunora/notify's allowedPushOrigins warning
+        console.warn(
+            "@lunora/browser: createBrowser() has no `allowedHosts`, so the SSRF guard is a best-effort check in the Worker (it cannot see speculative prerenders or WebRTC, and every page asset becomes a Worker subrequest). Set `allowedHosts` to the hosts the browser may reach: Browser Run enforces it on the session, and it is the supported production configuration.",
+        );
+    }
     // A configured `allowedHosts` is the STRONGER guard — an exact-origin
     // allowlist closes rebinding outright — and it may deliberately name an
     // internal host reachable over a Tunnel/private-network binding. Running
