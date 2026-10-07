@@ -68,6 +68,44 @@ const numberProperty = (expression: Expression, exportName: string, property: st
 };
 
 /**
+ * Cloudflare's accepted range for each numeric consumer setting
+ * (developers.cloudflare.com/queues/platform/limits). Checked here so an
+ * out-of-range value fails at codegen, pointing at the source, rather than at
+ * `wrangler deploy`. `maxBatchTimeout` is in seconds and may be fractional.
+ */
+const TUNING_RANGES = {
+    maxBatchSize: { integer: true, max: 100, min: 1 },
+    maxBatchTimeout: { integer: false, max: 60, min: 0 },
+    maxConcurrency: { integer: true, max: 250, min: 1 },
+    maxRetries: { integer: true, max: 100, min: 0 },
+    retryDelay: { integer: true, max: 86_400, min: 0 },
+} as const;
+
+/** Read each numeric consumer setting, range-checked against {@link TUNING_RANGES}. */
+const readNumericTuning = (argument: ObjectLiteralExpression, exportName: string): QueueIR["tuning"] => {
+    const tuning: QueueIR["tuning"] = {};
+
+    for (const [property, range] of Object.entries(TUNING_RANGES) as [keyof typeof TUNING_RANGES, (typeof TUNING_RANGES)[keyof typeof TUNING_RANGES]][]) {
+        const node = findObjectProperty(argument, property);
+
+        if (node && Node.isPropertyAssignment(node)) {
+            const value = numberProperty(node.getInitializerOrThrow(), exportName, property);
+
+            if (value < range.min || value > range.max || (range.integer && !Number.isInteger(value))) {
+                throw diagnosticAt(
+                    node,
+                    `queue "${exportName}": \`${property}\` must be ${range.integer ? "an integer" : "a number"} from ${range.min.toString()} to ${range.max.toString()} (got ${value.toString()})`,
+                );
+            }
+
+            tuning[property] = value;
+        }
+    }
+
+    return tuning;
+};
+
+/**
  * Resolve an explicit `name` override, or `undefined` when none is declared.
  * Mirrors the runtime `defineQueue` guard: an empty `name` would flow into the
  * registry key and the reconciled wrangler queue name, so it is rejected here
@@ -130,13 +168,7 @@ const queueFromConfig = (argument: ObjectLiteralExpression, exportName: string, 
         ir.tuning.deadLetterQueue = stringProperty(dlqProperty.getInitializerOrThrow(), exportName, "deadLetterQueue");
     }
 
-    for (const property of ["maxBatchSize", "maxBatchTimeout", "maxConcurrency", "maxRetries", "retryDelay"] as const) {
-        const node = findObjectProperty(argument, property);
-
-        if (node && Node.isPropertyAssignment(node)) {
-            ir.tuning[property] = numberProperty(node.getInitializerOrThrow(), exportName, property);
-        }
-    }
+    Object.assign(ir.tuning, readNumericTuning(argument, exportName));
 
     return ir;
 };
