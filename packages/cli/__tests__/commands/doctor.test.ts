@@ -1122,6 +1122,81 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("artifacts namespace jurisdiction", () => {
+        const credentials = { CLOUDFLARE_ACCOUNT_ID: "acc", CLOUDFLARE_API_TOKEN: "token" };
+
+        /** Answers the namespace lookups with `jurisdictions[namespace]` (a 404 when absent) and anything else with an empty success. */
+        const artifactsApi = (jurisdictions: Record<string, string>) =>
+            vi.fn<typeof globalThis.fetch>(async (url) => {
+                const namespace = /artifacts\/namespaces\/([^/?]+)/u.exec(url instanceof Request ? url.url : url.toString())?.[1];
+
+                if (namespace === undefined) {
+                    return Response.json({ result: [], result_info: { total_count: 0 }, success: true });
+                }
+
+                const jurisdiction = jurisdictions[namespace];
+
+                return jurisdiction === undefined
+                    ? Response.json({ errors: [{ message: "not found" }], success: false }, { status: 404 })
+                    : Response.json({ result: { jurisdiction, namespace }, success: true });
+            });
+
+        const artifactsFindings = async (wrangler: Record<string, unknown>, fetchImpl: typeof globalThis.fetch, jurisdiction?: string) => {
+            seed(workdir, JSON.stringify(wrangler));
+            seedSchema(
+                workdir,
+                `import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport const schema = defineSchema({ notes: defineTable({ body: v.string() }) })${jurisdiction === undefined ? "" : `.jurisdiction("${jurisdiction}")`};\n`,
+            );
+
+            const result = await runDoctor({ cwd: workdir, environment: credentials, fetch: fetchImpl, logger: makeLogger().logger });
+
+            return result.findings.filter((finding) => finding.code.startsWith("artifacts-"));
+        };
+
+        it("passes a namespace in the schema's jurisdiction and fails one elsewhere or missing", async () => {
+            expect.assertions(1);
+
+            const findings = await artifactsFindings(
+                {
+                    artifacts: [
+                        { binding: "ARTIFACTS", namespace: "eu-repos" },
+                        { binding: "OPEN", namespace: "open-repos" },
+                    ],
+                    env: { staging: { artifacts: [{ binding: "ARTIFACTS", namespace: "new-repos" }] } },
+                    name: "app",
+                },
+                artifactsApi({ "eu-repos": "eu", "open-repos": "unrestricted" }),
+                "eu",
+            );
+
+            expect(findings.map(({ code, level }) => [code, level])).toStrictEqual([
+                ["artifacts-jurisdiction-ok", "pass"],
+                ["artifacts-jurisdiction-mismatch", "fail"],
+                ["artifacts-namespace-missing", "fail"],
+            ]);
+        });
+
+        it("checks nothing for a schema without a jurisdiction", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = artifactsApi({});
+            const findings = await artifactsFindings({ artifacts: [{ binding: "ARTIFACTS", namespace: "repos" }], name: "app" }, fetchImpl);
+
+            expect(findings).toStrictEqual([]);
+            expect(fetchImpl.mock.calls.some(([url]) => (url instanceof Request ? url.url : url.toString()).includes("/artifacts/"))).toBe(false);
+        });
+
+        it("skips the check for a non-Cloudflare target", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+
+            const findings = await artifactsFindings({ artifacts: [{ binding: "ARTIFACTS", namespace: "repos" }], name: "app" }, artifactsApi({}), "eu");
+
+            expect(findings).toStrictEqual([]);
+        });
+    });
+
     /**
      * The codes are the machine-readable contract, so adding or renaming one has
      * to be a deliberate act rather than a side effect of editing a check. The
