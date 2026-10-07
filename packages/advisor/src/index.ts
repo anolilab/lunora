@@ -102,6 +102,7 @@ import storagePresignedUrlForPrivateContent from "./lints/static/storage-presign
 import storageUploadWithoutContentTypeAllowlist from "./lints/static/storage-upload-without-content-type-allowlist";
 import storageUploadWithoutMaxSize from "./lints/static/storage-upload-without-max-size";
 import tableWithoutInsert from "./lints/static/table-without-insert";
+import topicTooManySubscriptions from "./lints/static/topic-too-many-subscriptions";
 import ttlFieldNotTimestamp from "./lints/static/ttl-field-not-timestamp";
 import unboundedCollect from "./lints/static/unbounded-collect";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
@@ -245,6 +246,7 @@ export { default as storagePresignedUrlForPrivateContent } from "./lints/static/
 export { default as storageUploadWithoutContentTypeAllowlist } from "./lints/static/storage-upload-without-content-type-allowlist";
 export { default as storageUploadWithoutMaxSize } from "./lints/static/storage-upload-without-max-size";
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
+export { default as topicTooManySubscriptions } from "./lints/static/topic-too-many-subscriptions";
 export { default as ttlFieldNotTimestamp } from "./lints/static/ttl-field-not-timestamp";
 export { default as unboundedStringArgument } from "./lints/static/unbounded-string-argument";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
@@ -332,6 +334,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     tableWithoutInsert,
     workflowUnused,
     queueWithoutDlq,
+    topicTooManySubscriptions,
     filterOnPrimaryKey,
     filterWithoutIndex,
     unboundedCollect,
