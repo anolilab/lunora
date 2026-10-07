@@ -305,7 +305,7 @@ curl --request POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/a
   --data '{ "namespace": "my-eu-namespace", "jurisdiction": "eu" }'
 ```
 
-`lunora dev` prints this as a hint when it sees `ctx.artifacts` and no `artifacts` binding named `ARTIFACTS` (the name `ctx.artifacts` reads unless `.artifacts()` on `defineApp` points it at another binding), and it never writes the binding for you. A `.jurisdiction("fedramp")` schema that uses `ctx.artifacts` fails codegen, because Artifacts has no FedRAMP namespace.
+`lunora dev` prints this as a hint when it sees `ctx.artifacts` and no `artifacts` binding named `ARTIFACTS` (the name `ctx.artifacts` reads unless `.artifacts()` on `defineApp` points it at another binding), and it never writes the binding for you. A `.jurisdiction("fedramp")` schema is treated like `eu` / `us`: Cloudflare's API definition lists `fedramp` as a namespace jurisdiction, though the public docs name only `eu` and `us`, so create the namespace with `"jurisdiction": "fedramp"` first.
 
 With a pinned schema, `lunora deploy` looks up every namespace the deployed environment binds and stops when one is in another jurisdiction (an `unrestricted` namespace included) or does not exist yet. `lunora doctor` reports the same as `artifacts-jurisdiction-mismatch` / `artifacts-namespace-missing`. The lookup needs `CLOUDFLARE_API_TOKEN` with Artifacts read access and the account id. Without them, or when the API refuses, both commands warn and carry on, so a deploy authenticated through `wrangler login` alone is not blocked.
 

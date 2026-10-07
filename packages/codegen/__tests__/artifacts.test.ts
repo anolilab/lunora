@@ -5,8 +5,7 @@
  * The golden pins the three files the capability touches. The named assertions
  * pin the contract the plan states: the field rides ActionCtx only, at the type
  * AND the value level; a target that rates `artifacts` unsupported omits it with
- * a diagnostic; and a FedRAMP-pinned schema is refused, because Artifacts has no
- * FedRAMP namespace.
+ * a diagnostic; and a FedRAMP-pinned schema generates like an `eu` / `us` one.
  */
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -14,7 +13,6 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import assertArtifactsJurisdiction from "../src/assert-artifacts-jurisdiction";
 import type { CodegenResult } from "../src/index";
 import { runCodegen } from "../src/index";
 import { makeFixtureWorkdir } from "./golden-fixtures";
@@ -97,17 +95,17 @@ describe("artifacts gating", () => {
         expect(result.generated.shard).not.toContain("@lunora/bindings/artifacts");
     }, 300_000);
 
-    it("refuses a fedramp-pinned schema that uses ctx.artifacts", () => {
+    it("generates ctx.artifacts for a fedramp-pinned schema", () => {
         expect.assertions(1);
 
         const schemaPath = join(workdir, "lunora", "schema.ts");
 
         writeFileSync(schemaPath, readFileSync(schemaPath, "utf8").replace("});\n", '}).jurisdiction("fedramp");\n'), "utf8");
 
-        expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/supports only the "eu" and "us" jurisdictions/);
+        expect(runCodegen({ lint: false, projectRoot: workdir }).generated.server).toContain("readonly artifacts:");
     }, 300_000);
 
-    it("ignores a type-only import: no ctx.artifacts and no fedramp refusal", () => {
+    it("ignores a type-only import: no ctx.artifacts", () => {
         expect.assertions(2);
 
         // A queue consumer typing its messages with `ArtifactsEvent` never calls the binding.
@@ -126,31 +124,4 @@ describe("artifacts gating", () => {
         expect(result.generated.server).not.toContain("readonly artifacts:");
         expect(result.generated.shard).not.toContain("@lunora/bindings/artifacts");
     }, 300_000);
-});
-
-describe(assertArtifactsJurisdiction, () => {
-    it("allows eu, us, unpinned, and fedramp without artifacts", () => {
-        expect.assertions(4);
-
-        expect(() => {
-            assertArtifactsJurisdiction({ jurisdiction: "eu" }, true);
-        }).not.toThrow();
-        expect(() => {
-            assertArtifactsJurisdiction({ jurisdiction: "us" }, true);
-        }).not.toThrow();
-        expect(() => {
-            assertArtifactsJurisdiction({}, true);
-        }).not.toThrow();
-        expect(() => {
-            assertArtifactsJurisdiction({ jurisdiction: "fedramp" }, false);
-        }).not.toThrow();
-    });
-
-    it("throws a CODEGEN_DIAGNOSTIC for fedramp with artifacts", () => {
-        expect.assertions(1);
-
-        expect(() => {
-            assertArtifactsJurisdiction({ jurisdiction: "fedramp" }, true);
-        }).toThrow(expect.objectContaining({ code: "CODEGEN_DIAGNOSTIC" }));
-    });
 });

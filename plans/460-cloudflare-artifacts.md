@@ -182,10 +182,12 @@ Lunora has **config-level** support only. Nothing reads the binding at runtime.
    call with `"jurisdiction"`.
    _Rejected:_ self-describing auto-write, which is fine for `images` but not
    for a resource with an immutable residency property.
-6. **`fedramp` schemas get a codegen error when they use Artifacts.** Artifacts
-   offers only `eu`/`us`, so pairing a fedramp-pinned app with it is a
-   residency violation that codegen can see statically.
-   _Rejected:_ a warning, because residency is not best-effort.
+6. **`fedramp` schemas are treated like `eu` / `us`.** The first version refused
+   them in codegen because the public docs list only `eu`/`us`. Cloudflare's API
+   definition (the Fern SDK in `cloudflare/cf`) lists `fedramp` as a namespace
+   jurisdiction, so the refusal was removed: the setup hint tells a fedramp app to
+   create its namespace with `"jurisdiction": "fedramp"`, and D's equality check
+   verifies it at deploy. A live probe on a FedRAMP account is still unrun.
 7. **Events reuse `defineQueue`.** We only add the `ArtifactsEvent`
    discriminated union. The subscription itself is
    `wrangler queues subscription create --source artifacts[.repo] …`, which is
@@ -216,7 +218,7 @@ Codegen: add a `CAPABILITY_ROWS` row (`key: "artifacts"`, action-only
 entry `artifacts: "artifacts"`, and a golden fixture for an importing app.
 Config: add `usesArtifacts` to `CAPABILITY_SOURCES` as a hint (decision 5).
 Codegen diagnostic: `.jurisdiction("fedramp")` + artifacts usage is an error
-(decision 6).
+(decision 6; later removed, see decision 6).
 Testing: export a `createArtifactsFake()` from `@lunora/testing` (in-memory
 repos, tokens and files keyed by `ref:path`), because miniflare has no
 simulator. Gates: `api:check`, `dist:check`, `lint:package-json`.
@@ -235,8 +237,8 @@ is never copied into ours (it stays on `cause`), `code`/`numericCode` go in
 method, a uniform `shardBinding` facet — no bespoke emitter since #933 made
 codegen table-driven), `CAPABILITY_TO_FEATURE.artifacts`, and a new
 `artifacts` golden fixture (`app.ts`/`server.ts`/`shard.ts`); every existing
-golden is byte-identical. `assertArtifactsJurisdiction` refuses a `fedramp`
-schema that uses it (`CODEGEN_DIAGNOSTIC`). Config: `usesArtifacts` in
+golden is byte-identical. `assertArtifactsJurisdiction` refused a `fedramp`
+schema that uses it (`CODEGEN_DIAGNOSTIC`); removed per decision 6. Config: `usesArtifacts` in
 `CAPABILITY_SOURCES` (a ctx-access row: the `ctx.artifacts` read and a value
 import flip it, a type-only import does not), a hint-only signal + reconcile
 warning that, for a pinned schema, prints the REST
@@ -374,8 +376,8 @@ reports the same four outcomes (`artifacts-jurisdiction-ok` / `-mismatch` /
 _Deviations:_ Lunora still creates no namespaces (out of scope below), so there
 is no create call to thread `jurisdiction` into. The SDK lists `fedramp` as a
 namespace jurisdiction, but the public docs still say `eu` / `us`. Decision 6's
-codegen refusal stays until a live probe shows a FedRAMP namespace can be
-created. The equality rule already handles one if it shows up.
+codegen refusal was removed on that evidence; the equality rule covers a FedRAMP
+namespace like any other.
 
 **Explicitly out of scope** (each one waits for a real request): an
 Artifacts-backed agent fs tool, a `backups: { artifacts }` container mode, a
@@ -404,7 +406,7 @@ unsupported.
 | -------------------------------------- | ------------ | --------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `artifacts` (`ctx.artifacts`)          | native       | unsupported                 | unsupported | Cloudflare: Artifacts binding, open beta, Workers Paid only, and remote-only even in `lunora dev`. celld has no Artifacts binding type. node has no equivalent; a host would need a Git server with repo-scoped tokens, which no host contract (`ShardHost` … `SchedulerHost`) carries |
 | Artifacts events (`ArtifactsEvent`)    | native       | unsupported                 | unsupported | types only. Delivery rides the existing `queues` row; the subscription source exists only on Cloudflare                                                                                                                                                                                |
-| namespace jurisdiction (`eu` / `us`)   | native       | unsupported                 | unsupported | covered by the `artifacts` row. `fedramp` is unsupported on every target (decision 6). The deploy / doctor check (D) runs only for `target: "cloudflare"`; no new capability key                                                                                                       |
+| namespace jurisdiction (`eu` / `us`)   | native       | unsupported                 | unsupported | covered by the `artifacts` row. `fedramp` follows the same path as `eu` / `us` (decision 6). The deploy / doctor check (D) runs only for `target: "cloudflare"`; no new capability key                                                                                                 |
 | container ↔ repo recipe (workstream C) | native       | (existing `containers` row) | unsupported | no new surface. It is `exec` + `fetch`-reachable Git, already rated                                                                                                                                                                                                                    |
 
 `packages/platform-node/docs/index.mdx`'s capability table gets the new row in

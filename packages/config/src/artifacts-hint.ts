@@ -12,10 +12,9 @@ const ARTIFACTS_NAMESPACES_ENDPOINT = "https://api.cloudflare.com/client/v4/acco
  * Never an auto-write: the first `create()` against a missing namespace creates
  * it unrestricted, and its jurisdiction can't change afterwards. So a pinned
  * schema is told to create the namespace over REST with the matching
- * jurisdiction FIRST (wrangler has no `namespaces create`), and a FedRAMP one
- * that Artifacts has no FedRAMP namespace at all. Codegen's
- * `assertArtifactsJurisdiction` is what refuses that combination; this only
- * explains it.
+ * jurisdiction FIRST (wrangler has no `namespaces create`). `fedramp` takes the
+ * same path: Cloudflare's API definition lists it as a namespace jurisdiction even
+ * though the public docs name only `eu` / `us`.
  */
 const artifactsBindingHint = (jurisdiction: SchemaInfo["jurisdiction"]): string => {
     const binding =
@@ -23,10 +22,6 @@ const artifactsBindingHint = (jurisdiction: SchemaInfo["jurisdiction"]): string 
 
     if (jurisdiction === undefined) {
         return `ctx.artifacts is used; ${binding}. The namespace is created by the first repo create() if it does not exist yet.`;
-    }
-
-    if (jurisdiction === "fedramp") {
-        return 'ctx.artifacts is used, but the schema pins data to "fedramp" and Artifacts namespaces exist only in "eu" or "us" — codegen refuses this combination.';
     }
 
     return (
