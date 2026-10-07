@@ -88,9 +88,9 @@ deliberate, and mostly a set of go/no-go decisions:
     - Promise pipelining / batched round-trips ([`089`](./plans/089-promise-pipelining-batch.md)).
     - Custom scalar types ([`078`](./plans/078-custom-scalar-types.md)).
     - Live CDC and DO-consumes-DO composition ([`133`](./plans/133-live-cdc-and-do-consumes-do.md)).
-- **Run beyond Cloudflare.** A platform-abstraction layer and additional deploy
-  targets such as AWS ([`114`](./plans/114-multi-provider-platform.md)) — so
-  "your own account" isn't limited to one provider.
+- **Run beyond Cloudflare.** The platform-abstraction layer has shipped, with
+  `celld` and Node hosts on the experimental tier. Next is an in-process
+  runtime for browser and device targets ([`453`](./plans/453-embedded-runtime.md)).
 - **Open governance.** A public RFC process for surface-changing proposals, a
   contributor guide, and transparent stability-tier and deprecation decisions.
 
@@ -161,9 +161,24 @@ regardless of where it sits in the tier list above.
 Concrete evidence the project is actively maintained and hardening toward
 production. Each of these is merged, not planned:
 
+- **Typed service bindings** — sibling Workers declared in `lunora.config`
+  become a typed `ctx.services.<name>` (fetch or RPC), run in the same
+  `lunora dev` / `vite dev` session, and deploy before the app. They replace
+  the per-service URL + HMAC plumbing ([`457`](./plans/457-service-bindings.md)).
+- **Modules and an architecture view** — `defineModule`, a call-graph manifest,
+  and a Studio Architecture diagram ([`456`](./plans/456-modules-catalog-architecture.md)).
+- **Pub/Sub topics over Cloudflare Queues** — fan-out to many subscribers.
+- **Cloudflare parity** — AI Search as `ctx.aiSearch`, Artifacts as
+  `ctx.artifacts`, Analytics SQL as `ctx.analyticsSql`, AI Gateway routing with
+  per-function spend, Sandbox SDK 1.0 in `container`, resumable R2 uploads,
+  and `lunora dev --tunnel`.
+- **More hosts and bundlers** — `@lunora/platform-celld` is published and
+  tested against a live celld. `@lunora/rspack` adds an Rspack/webpack adapter
+  with Rsbuild templates.
+- **`payment` graduated** from experimental to Stable adapter, and every Core
+  and Stable-adapter package is now free of `@experimental` exports.
 - **Workerd integration CI gate** — a required check exercises the real
-  Cloudflare runtime across a 10-package matrix (runtime, do, d1, storage,
-  scheduler, client, queue, workflow, container, x402 boot-smoke).
+  Cloudflare runtime across a 14-package matrix.
 - **Public API-snapshot guard** — per-package `.d.ts` surface snapshots diffed in
   CI so breaking changes can't slip in as patches.
 - **Coverage ratchets + Codecov patch gate** — default 80% line / 70% branch
@@ -179,8 +194,9 @@ production. Each of these is merged, not planned:
 - **Promotion mechanics** — exact-version sibling peer pins replaced with
   promotion-safe ranges, guarded by a repo check, and the full release train
   dry-run rehearsed.
-- **Observability** — request traces and a metrics buffer/panel surfaced in
-  Studio (in progress on `feat/observability-traces-metrics`).
+- **Observability** — request traces with log correlation in Studio, `ctx.sql`
+  database telemetry, Cloudflare Ray IDs on logs and spans, and shard errors
+  reported with stacks to any tracker.
 
 ---
 

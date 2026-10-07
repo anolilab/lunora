@@ -300,40 +300,22 @@ deploy` does not deploy services there either.
 - **Limits lifted after review:** `vite build` no longer builds services (the
   auxiliary Workers are added on `serve` only), and the SvelteKit / Nuxt sidecar
   runs them (reconcile writes `wrangler.dev.jsonc`'s `services[]`, ownership
-  scope `dev:services`). Still open: an RPC service's sources join the app's
-  type check.
+  scope `dev:services`).
+- **RPC types from a declaration snapshot (§12 option 1).** Codegen emits the
+  service's declarations under its own tsconfig into `_generated/services/<key>/`
+  (`emit/service-declarations.ts`), and `server.ts` imports that, not the
+  sources. Every specifier in the snapshot is rewritten to the file it resolved
+  to from the service, so the service's own `node_modules` still resolve from
+  `_generated/`; an unresolved one (`cloudflare:workers`) is left as is. The
+  snapshot joins the in-memory Project before inference. The Vite plugin and the
+  `lunora dev` watcher regenerate on a source change in an RPC service's folder.
+- **Rejected: the Studio Home "Services" card (G).** The Architecture diagram
+  already shows services, and the card would need either the manifest for
+  module-less apps or a new `studioFeatures` field, for no new information.
 - **Not done here:** the neore-v2 migration itself (another repo).
 
 ## 12. What remains (checked 2026-10-07)
 
-Both in-repo items left need a decision before code. Neither is a mechanical
-follow-up.
-
-- **An RPC service's sources join the app's type check.** `emit/server.ts`
-  imports the service entry (`lunoraService_<key>` from `<dir>/src/index`) for
-  `ServiceRpc<typeof …>`. The app's `tsc` then checks the service's `.ts` files
-  under the app's compiler options, so a type error there, or a service built
-  against different `types`/paths, fails the app's check. `skipLibCheck` only skips `.d.ts`, so no import form avoids it
-  while the target is source. The options all change how a service is typed:
-    1. Codegen emits a declaration snapshot of the entrypoint
-       (`_generated/services/<key>.d.ts`, via a ts-morph declaration emit of
-       the service). The open question is how the snapshot's imports
-       (the service's own deps and relative files) resolve from `_generated/`.
-    2. TypeScript project references. The service gets a `composite` tsconfig
-       and the app references it. That puts a requirement on the service, which
-       §3 rules out ("services stay ordinary Workers").
-    3. Keep it documented (`concepts/services`), with `rpc: false` as the escape
-       hatch. This is the current behaviour.
-- **Studio Home "Services" bindings card (G).** Studio's only source for service
-  bindings is the architecture manifest, and codegen emits that only once the
-  app declares a module (`wantsArchitecture` in `run-codegen.ts`). A
-  services-only app such as `examples/services` has no data for the card. §11 G
-  deferred it because the card adds nothing the diagram lacks. Building it
-  needs one of these:
-    1. Emit the manifest when services are declared too. This changes that app's
-       `_generated/` output and the admin route, and shows the Architecture page
-       for apps with no module.
-    2. A `services` field on `studioFeatures`.
 - **The real celld fleet deploy (S3 bucket).** It cannot run here, and only
   `--dry-run` has been exercised.
 - **The neore-v2 migration (§8).** It lives in `anolilab/neore-v2`.
