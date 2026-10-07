@@ -165,6 +165,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Platform Hosts"]!,
         category: "Platform Hosts",
+        description:
+            "celld implementation of the Lunora platform contracts: the Cloudflare host adapters recomposed for celld (self-hosted distributed Durable Objects) under an honest capability matrix",
+        features: [],
+        name: "Platform Celld",
+        npmName: "@lunora/platform-celld",
+        slug: "platform-celld",
+    },
+    {
+        accentColor: categoryColors["Platform Hosts"]!,
+        category: "Platform Hosts",
         description: "Provider-neutral host contracts every Lunora deployment target implements.",
         docsPath: "/docs/packages/platform",
         features: ["ShardHost / SocketHost contracts", "Capability matrix", "Conformance TCK"],
