@@ -527,8 +527,8 @@ export default defineSchema({
             // The query-DSL bindings moved to server.ts so dataModel.ts stays free
             // of the server package — see its emitter docblock.
             expect(result.generated.server).toContain('from "@lunora/server/data-model"');
-            expect(result.generated.api).toContain('import { anyApi } from "@lunora/client";');
-            expect(result.generated.api).toContain('from "@lunora/client"');
+            expect(result.generated.api).toContain('import type { FunctionReference } from "@lunora/client";');
+            expect(result.generated.internal).toContain('from "@lunora/client"');
             expect(result.generated.shard).toContain('from "@lunora/do"');
             expect(result.generated.drizzleShard).toContain('from "@lunora/server/drizzle"');
         });
@@ -546,8 +546,8 @@ export default defineSchema({
             // Base surface routed through the umbrella…
             expect(result.generated.server).toContain('from "lunorash/server"');
             expect(result.generated.server).toContain('from "lunorash/server/data-model"');
-            expect(result.generated.api).toContain('import { anyApi } from "lunorash/client";');
-            expect(result.generated.api).toContain('from "lunorash/client"');
+            expect(result.generated.api).toContain('import type { FunctionReference } from "lunorash/client";');
+            expect(result.generated.internal).toContain('from "lunorash/client"');
             expect(result.generated.shard).toContain('from "lunorash/do"');
             expect(result.generated.drizzleShard).toContain('from "lunorash/server/drizzle"');
             // …and never the granular base specifiers.
@@ -676,7 +676,7 @@ export const listMessages = query
                 expect(result.generated.api).toContain('sendMessage: FunctionReference<"mutation",');
                 // A mutator is client-pushed, so it belongs on the public surface — not
                 // the server-only `internal` one.
-                expect(result.generated.api.split("export const api")[1]).not.toContain("sendMessage");
+                expect(result.generated.internal).not.toContain("sendMessage");
             });
 
             it("emits _generated/collections.ts (options factory + collection per shape) when @lunora/db is a dependency", () => {
@@ -1243,7 +1243,7 @@ export const mySubs = action({ args: { reference: v.string() }, handler: async (
             writeFileSync(
                 join(workdir, "lunora", "crons.ts"),
                 `import { cronJobs } from "@lunora/scheduler";
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 const crons = cronJobs();
 crons.cron("ping", "0 * * * *", internal.messages.list, {});
 export default crons;
@@ -1329,7 +1329,7 @@ export default createWorker({
             writeFileSync(
                 join(workdir, "lunora", "crons.ts"),
                 `import { cronJobs } from "@lunora/scheduler";
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 const crons = cronJobs();
 crons.cron("ping", "0 * * * *", internal.messages.list, {});
 export default crons;
@@ -1435,7 +1435,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             expect(result.generated.api).toContain('channelId: Id<"channels">');
             expect(result.generated.api).toContain("limit?: number");
             expect(result.generated.api).not.toContain("| undefined");
-            expect(result.generated.api).toContain("export const api = anyApi as unknown as ApiTypes;");
+            expect(result.generated.api).toContain('export const api: ApiTypes = {\n    messages: {\n        list: { __lunoraRef: "messages:list" },');
         });
 
         it("routes internal functions to `internal`/InternalApiTypes, keeping them off the public `api`", () => {
@@ -1443,8 +1443,9 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
 
             const result = runCodegen({ projectRoot: workdir });
 
-            // `purge` is an internalMutation — it must NOT appear in the public ApiTypes.
-            const [publicHalf, internalHalf] = result.generated.api.split("export interface InternalApiTypes");
+            // `purge` is an internalMutation — it must NOT appear in the public api.ts.
+            const publicHalf = result.generated.api;
+            const internalHalf = result.generated.internal;
 
             expect(publicHalf).toContain("list:");
             expect(publicHalf).toContain("send:");
@@ -1452,7 +1453,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
 
             // …and it must appear in the internal half, typed as a mutation.
             expect(internalHalf).toContain('purge: FunctionReference<"mutation"');
-            expect(result.generated.api).toContain("export const internal = anyApi as unknown as InternalApiTypes;");
+            expect(internalHalf).toContain('purge: { __lunoraRef: "messages:purge" },');
 
             // The dispatch table still registers it (so `ctx.runMutation` can reach it),
             // and the external paths gate on `visibility`.
@@ -2009,7 +2010,7 @@ export const schema = defineSchema({
         });
 
         it("output matches committed expected/ files (snapshot)", () => {
-            expect.assertions(12);
+            expect.assertions(13);
 
             // `lint: false` keeps the emitted `LUNORA_ADVISORIES` empty so the
             // snapshot stays decoupled from advisor behaviour (a lint change
@@ -2019,6 +2020,7 @@ export const schema = defineSchema({
 
             const expectedApp = readFileSync(join(expectedDirectory, "app.ts"), "utf8");
             const expectedApi = readFileSync(join(expectedDirectory, "api.ts"), "utf8");
+            const expectedInternal = readFileSync(join(expectedDirectory, "internal.ts"), "utf8");
             const expectedServer = readFileSync(join(expectedDirectory, "server.ts"), "utf8");
             const expectedFunctions = readFileSync(join(expectedDirectory, "functions.ts"), "utf8");
             const expectedDataModel = readFileSync(join(expectedDirectory, "dataModel.ts"), "utf8");
@@ -2032,6 +2034,7 @@ export const schema = defineSchema({
 
             expect(result.generated.app).toBe(expectedApp);
             expect(result.generated.api).toBe(expectedApi);
+            expect(result.generated.internal).toBe(expectedInternal);
             expect(result.generated.server).toBe(expectedServer);
             expect(result.generated.functions).toBe(expectedFunctions);
             expect(result.generated.dataModel).toBe(expectedDataModel);
@@ -2282,11 +2285,10 @@ export const authorize = onWhisper(async (ctx, event) => { void ctx; return even
             // A query, NOT a mutation: `handleRpc` transaction-wraps a mutation, so
             // misclassifying the authorizer would open a write span on every topic
             // join — and would let an authorization check write.
-            expect(result.generated.api).toContain('authorize: FunctionReference<"query"');
+            expect(result.generated.internal).toContain('authorize: FunctionReference<"query"');
 
-            // Internal: the namespace lands AFTER the `InternalApiTypes` opener, i.e.
-            // in the server-only surface rather than the client-facing `api`.
-            expect(result.generated.api.indexOf("whisper: {")).toBeGreaterThan(result.generated.api.indexOf("InternalApiTypes"));
+            // Internal: the namespace lands in the server-only `internal.ts`, never the client-facing `api`.
+            expect(result.generated.api).not.toContain("whisper: {");
         });
 
         it("emits self-referential FKs and Id-bearing json columns that typecheck under strict TS", () => {
@@ -2849,13 +2851,13 @@ export const raw = internalQuery
             const result = runCodegen({ projectRoot: workdir });
 
             // Both arms of the declared union survive to the caller.
-            expect(result.generated.api).toContain("hasAccess: true");
-            expect(result.generated.api).toContain("role: string");
-            expect(result.generated.api).toContain("hasAccess: false");
+            expect(result.generated.internal).toContain("hasAccess: true");
+            expect(result.generated.internal).toContain("role: string");
+            expect(result.generated.internal).toContain("hasAccess: false");
 
             // No `.output()` → the handler still supplies the type, so projects
             // that never declare one are unaffected.
-            expect(result.generated.api).toContain('raw: FunctionReference<"query", { id: string }, string>');
+            expect(result.generated.internal).toContain('raw: FunctionReference<"query", { id: string }, string>');
         });
 
         it("keeps a stream on its handler's yield type — `.output()` is inert on that terminal", () => {
@@ -2912,7 +2914,7 @@ export const page = internalQuery
             // The declared `v.string()` stays opaque — it is not re-branded as an
             // `Id<...>` by whatever the handler happened to return.
             expect(result.generated.functions).not.toContain('Id<"audit">');
-            expect(result.generated.api).toContain("cursor?: string");
+            expect(result.generated.internal).toContain("cursor?: string");
         });
 
         it("registers a default-exported procedure as <module>.default", () => {
@@ -2935,8 +2937,8 @@ export default executeTrigger;
 
             const result = runCodegen({ projectRoot: workdir });
 
-            expect(result.generated.api).toContain("execute: {");
-            expect(result.generated.api).toContain('default: FunctionReference<"action"');
+            expect(result.generated.internal).toContain("execute: {");
+            expect(result.generated.internal).toContain('default: FunctionReference<"action"');
         });
 
         it("reports an exported procedure the syntactic scan could not see", () => {
@@ -3338,7 +3340,7 @@ export default schema;
             // this locks that ordering in.
             const badCron = `import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 const crons = cronJobs();
 
@@ -3361,7 +3363,7 @@ export default crons;
             rmSync(join(workdir, "lunora", "crons.ts"));
             runCodegen({ projectRoot: workdir });
 
-            const goodApi = readFileSync(join(outputDirectory, "api.ts"), "utf8");
+            const goodApi = readFileSync(join(outputDirectory, "internal.ts"), "utf8");
 
             expect(goodApi).toContain("purge: FunctionReference<");
 
@@ -3370,7 +3372,7 @@ export default crons;
             expect(() => runCodegen({ projectRoot: workdir })).toThrow(/interval\.hours is capped at 23/u);
             // Deliberately re-read rather than trusting the throw: the failure mode
             // being guarded is a write that happened anyway.
-            expect(readFileSync(join(outputDirectory, "api.ts"), "utf8")).toBe(goodApi);
+            expect(readFileSync(join(outputDirectory, "internal.ts"), "utf8")).toBe(goodApi);
         });
 
         it("throws when schema.ts is missing", () => {

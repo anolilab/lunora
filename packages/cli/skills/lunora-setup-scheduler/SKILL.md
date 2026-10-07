@@ -33,13 +33,13 @@ which owns the alarm and durable storage.
 
 Available on `ctx.scheduler` in a **mutation or an action** — never a `query`,
 which is deterministic and re-runs. Target functions are passed by reference
-from the generated `api` / `internal` proxy (a `"file:fn"` path string also
+from the generated `api` / `internal` objects (a `"file:fn"` path string also
 works):
 
 ```ts
 import { mutation, v } from "#lunora/_generated/server.js";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 export const startTrial = mutation.input({ userId: v.string() }).mutation(async ({ ctx, args: { userId } }) => {
     // run an internal action 14 days from now
@@ -84,7 +84,7 @@ project — both **yours** to edit. No extra DO binding is required.
 ```ts
 import { cronJobs } from "@lunora/server";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 const crons = cronJobs();
 
@@ -98,8 +98,9 @@ export default crons;
 ```
 
 - `name` must be a non-empty **string literal**, unique across the project.
-- `fnRef` must be a static two-segment access on the proxy
-  (`internal.<file>.<fn>` or `api.<file>.<fn>`) so codegen can discover it.
+- `fnRef` must be a static property access on the generated object
+  (`internal.<…path>.<fn>` or `api.<…path>.<fn>`, one segment per folder and
+  file, e.g. `internal.crons.jobs.run`) so codegen can discover it.
   Cron targets must be **internal** functions — a client can never invoke them.
 - All schedules are UTC and validated at definition time
   (`hourUTC: 25` throws immediately).

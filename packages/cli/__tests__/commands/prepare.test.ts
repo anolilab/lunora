@@ -222,7 +222,7 @@ describe("lunora prepare", () => {
         writeFileSync(
             join(workdir, "lunora", "crons.ts"),
             `import { cronJobs } from "@lunora/scheduler";
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 const crons = cronJobs();
 

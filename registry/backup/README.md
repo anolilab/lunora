@@ -78,7 +78,7 @@ Managed PITR is two scheduled jobs: one that **takes** snapshots and one that **
 // lunora/crons.ts
 import { cronJobs } from "@lunora/server";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 const crons = cronJobs();
 

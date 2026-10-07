@@ -1527,12 +1527,6 @@ interface WorkflowStepDetail {
 type WsTokenProvider = () => Promise<string | undefined> | string | undefined;
 ```
 
-### `anyApi` (const)
-
-```ts
-const anyApi: Record<string, Record<string, unknown>>;
-```
-
 ### `applyDelta` (const)
 
 ```ts

@@ -3,6 +3,14 @@ import emit from "../../finding";
 import type { Lint } from "../../types";
 import { callSiteWhere } from "../helpers";
 
+/** A trailing `/index`, which codegen collapses into the folder's namespace. */
+const INDEX_SUFFIX = /\/index$/u;
+/** Any character that isn't valid in a JS identifier. */
+const NON_IDENTIFIER = /[^\dA-Za-z]/gu;
+
+/** A `lunora/`-relative file as its dispatch namespace (`ratelimit/index` → `ratelimit`, `my-module/x` → `my_module_x`), as codegen's `sanitizeNamespace` builds it. */
+const dispatchNamespace = (file: string): string => file.replace(INDEX_SUFFIX, "").replaceAll(NON_IDENTIFIER, "_");
+
 /**
  * Flags a `ctx.run`/`context.run` back into a Lunora function from inside a
  * `defineQueue` push handler or a `defineWorkflow` handler, when the dispatch's
@@ -29,6 +37,7 @@ import { callSiteWhere } from "../helpers";
  * only when the codegen feeder supplies dispatch evidence
  * (`context.privilegedDispatches`); a runtime caller flags nothing.
  */
+
 const privilegedDispatchUnvalidatedPayload: Lint = {
     categories: ["SECURITY"],
     description:
@@ -49,8 +58,16 @@ const privilegedDispatchUnvalidatedPayload: Lint = {
         // guard the system-identity handler skips. A target that isn't found in the
         // RLS-procedure evidence, or is found without `.use(rls(...))`, is not flagged:
         // its protection (arg validation, no row policy) survives the privileged call.
+        //
+        // Compared as dispatch namespaces: the target is read off an `api.*` path, so
+        // `lunora/ratelimit/index.ts` arrives as `ratelimit` and `lunora/my-module/x.ts`
+        // as `my_module/x`, while the procedure carries its real file path; both sides
+        // normalize to `my_module_x`.
         const targetUsesRls = (targetFile: string, targetExport: string): boolean =>
-            rlsProcedures.some((procedure) => procedure.usesRls && procedure.file === targetFile && procedure.exportName === targetExport);
+            rlsProcedures.some(
+                (procedure) =>
+                    procedure.usesRls && dispatchNamespace(procedure.file) === dispatchNamespace(targetFile) && procedure.exportName === targetExport,
+            );
 
         return context.privilegedDispatches
             .filter((dispatch) => targetUsesRls(dispatch.targetFile, dispatch.targetExport))

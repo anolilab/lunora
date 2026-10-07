@@ -189,6 +189,49 @@ export const movePaymentTables = internalMutation({
 });
 ```
 
+### `@lunora/codegen`: `api.*` nests by folder
+
+A function file in a folder used to be one underscore-joined key:
+`lunora/billing/invoices.ts` was `api.billing_invoices.*`. The generated
+`api`, `internal`, `httpStreams` and `createCaller` now nest by folder, so it is
+`api.billing.invoices.*`, the same shape as Convex. A trailing `index.ts` still
+collapses into its folder (`lunora/ratelimit/index.ts` stays `api.ratelimit.*`).
+
+Nothing changes at runtime: the dispatch key is still `billing_invoices:create`,
+so OpenAPI operation IDs, the wire protocol and the non-JS SDKs are unaffected.
+TypeScript flags every old reference after `lunora codegen`.
+
+**Migration:** replace each `api.<folder>_<file>.` / `internal.<folder>_<file>.`
+with `api.<folder>.<file>.` / `internal.<folder>.<file>.`. A file that exports a
+function named like a file in its sibling folder (`billing.ts` exporting
+`invoices` next to `billing/invoices.ts`) is now a codegen error, because both
+would be `api.billing.invoices`. Rename one of them. A cron job's reference
+must be written on the generated `api` / `internal` object itself; an aliased
+import (`import { internal as i }`) is no longer resolved.
+
+### `@lunora/codegen`: `internal` moved to `_generated/internal.ts`
+
+`internal` (and its `InternalApiTypes`) now lives in its own generated module,
+so a client bundle that imports `api` never carries internal function names.
+`api` and `internal` are plain objects of `{ __lunoraRef }` references rather
+than a proxy, which also means a reference can be stored, cloned and sent
+between Workers. `anyApi` and the `AnyApi` type are removed from
+`@lunora/server` and `@lunora/client`.
+
+**Migration:** import `internal` from the new module:
+
+```ts
+// before
+import { api, internal } from "./_generated/api";
+
+// after
+import { api } from "./_generated/api";
+import { internal } from "./_generated/internal";
+```
+
+Code that used `anyApi` to build a reference by hand can pass the dispatch
+key instead: `{ __lunoraRef: "billing_invoices:create" }`.
+
 ## Recommended (non-breaking) follow-ups
 
 - **Enforce ephemeral WS admin tokens.** The worker can now reject the raw

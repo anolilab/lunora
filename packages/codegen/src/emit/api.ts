@@ -4,61 +4,45 @@ import { agentComponent } from "@lunora/agent/component";
 import { LunoraError } from "@lunora/errors";
 
 import type { AgentIR, FunctionIR, HttpRouteIR, MutatorIR, ShapeIR, WorkflowIR } from "../ir";
-import sanitizeNamespace from "../paths";
+import { sanitizeNamespace } from "../paths";
 import { rebaseRelativeQualifiers, referencedDataModelImports, referenceReturnType, relocateBaseQualifiers } from "./qualifiers";
-import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, pascalCase, renderArgsType, renderObjectKey, renderPropertyKey } from "./shared";
-
-/** Group entries by `filePath`, entries sorted by file for deterministic output. */
-const groupByFileSorted = <T extends { filePath: string }>(entries: ReadonlyArray<T>): [string, T[]][] => {
-    const namespaces = new Map<string, T[]>();
-
-    for (const entry of entries) {
-        const list = namespaces.get(entry.filePath) ?? [];
-
-        list.push(entry);
-        namespaces.set(entry.filePath, list);
-    }
-
-    return [...namespaces.entries()].toSorted(([a], [b]) => a.localeCompare(b));
-};
+import {
+    assertIdentifier,
+    baseSpecifiers,
+    GENERATED_HEADER,
+    pascalCase,
+    renderArgsType,
+    renderNamespaceTree,
+    renderObjectKey,
+    renderPropertyKey,
+} from "./shared";
 
 /**
- * Render the grouped-by-namespace body of an api interface for a subset of
- * functions. Returns `""` when the subset is empty so the caller can emit an
- * empty `{}` interface.
+ * Render the nested body of an api interface for a subset of functions.
+ * Returns `""` when the subset is empty so the caller can emit an empty `{}`
+ * interface.
  */
-const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
-    const renderNamespace = ([file, list]: [string, FunctionIR[]]): string => {
-        // Sorted by export name so a namespace that mixes discovered functions with
-        // synthetic entries (agents, custom mutators — appended after the sorted
-        // discovery output) still emits in a stable, alphabetical order.
-        const members = list
-            .toSorted((a, b) => a.exportName.localeCompare(b.exportName))
-            .map((definition) => {
-                // We emit `FunctionReference<Kind, ArgsObj, Return>` so the
-                // generated `api.*` references plug directly into
-                // `useQuery`/`useMutation` from `@lunora/react` (and
-                // `client.query` / `client.mutation` from `@lunora/client`).
-                // The phantom `Kind`/`Args`/`Return` parameters carry the
-                // info downstream hooks need to infer call signatures.
-                const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
-                const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
+const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string =>
+    renderNamespaceTree(
+        functions,
+        (definition) => {
+            // We emit `FunctionReference<Kind, ArgsObj, Return>` so the
+            // generated `api.*` references plug directly into
+            // `useQuery`/`useMutation` from `@lunora/react` (and
+            // `client.query` / `client.mutation` from `@lunora/client`).
+            // The phantom `Kind`/`Args`/`Return` parameters carry the
+            // info downstream hooks need to infer call signatures.
+            const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
+            const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
-                return `        ${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
-            })
-            .join("\n");
-
+            return `${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
+        },
         // A namespace derived from a leading-digit filename (e.g. `2fa.ts`) is a
         // valid `__lunoraRef` string but not a bare TS key, so quote it when
         // needed — the string value (and thus the runtime dispatch key) is
         // unchanged.
-        return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    };`;
-    };
-
-    return groupByFileSorted(functions)
-        .map((entry) => renderNamespace(entry))
-        .join("\n");
-};
+        "type",
+    );
 
 /**
  * Render the scheduler-target reference block for `_generated/api.ts` (its
@@ -427,7 +411,7 @@ const syntheticMutatorApiFunctions = (mutators: ReadonlyArray<MutatorIR>, functi
 
 /**
  * Render the `httpStreams.*` typed-reference block for `_generated/api.ts` —
- * one entry per `httpRoute.<verb>(path).stream()` SSE route, grouped by source
+ * one entry per `httpRoute.<verb>(path).stream()` SSE route, nested by source
  * file the way `api.*` is. Each reference carries the verb + path at runtime
  * (what the client needs to open the endpoint) and the chunk / searchParams /
  * params types via `HttpStreamRef`'s phantom parameter, so
@@ -443,36 +427,22 @@ const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: 
         return { block: "", body: "" };
     }
 
-    const sortedNamespaces = groupByFileSorted(streams);
+    const typeBody = renderNamespaceTree(
+        streams,
+        (route) => {
+            const chunkType = rebaseRelativeQualifiers(route.chunkType ?? "unknown", route.filePath);
+            const searchParams = rebaseRelativeQualifiers(renderArgsType(route.searchParams), route.filePath);
+            const params = rebaseRelativeQualifiers(renderArgsType(route.params), route.filePath);
 
-    const typeBody = sortedNamespaces
-        .map(([file, list]) => {
-            const members = list
-                .map((route) => {
-                    const chunkType = rebaseRelativeQualifiers(route.chunkType ?? "unknown", route.filePath);
-                    const searchParams = rebaseRelativeQualifiers(renderArgsType(route.searchParams), route.filePath);
-                    const params = rebaseRelativeQualifiers(renderArgsType(route.params), route.filePath);
-
-                    return `        ${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${searchParams}, ${params}>;`;
-                })
-                .join("\n");
-
-            return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    };`;
-        })
-        .join("\n");
-
-    const valueBody = sortedNamespaces
-        .map(([file, list]) => {
-            const members = list
-                .map(
-                    (route) =>
-                        `        ${renderObjectKey(route.exportName)}: { method: ${JSON.stringify(route.method)}, path: ${JSON.stringify(route.path)} },`,
-                )
-                .join("\n");
-
-            return `    ${renderObjectKey(sanitizeNamespace(file))}: {\n${members}\n    },`;
-        })
-        .join("\n");
+            return `${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${searchParams}, ${params}>;`;
+        },
+        "type",
+    );
+    const valueBody = renderNamespaceTree(
+        streams,
+        (route) => `${renderObjectKey(route.exportName)}: { method: ${JSON.stringify(route.method)}, path: ${JSON.stringify(route.path)} },`,
+        "value",
+    );
 
     const block = `
 /** This project's HTTP-SSE stream routes (\`httpRoute.<verb>(path).stream()\`), addressable as typed references for \`client.httpStream\` / \`useHttpStream\`. */
@@ -489,13 +459,60 @@ ${valueBody}
 };
 
 /**
- * Emit `_generated/api.ts` — the typed `api.*` registry (public functions), the
- * `internal.*` registry, and (when the project declares them) the typed
- * `workflows.*` / `agents.*` scheduler-target reference objects. `api`/`internal` are the same `anyApi` proxy
- * at runtime (the `__lunoraRef` is identical); visibility is enforced
- * server-side at dispatch, not in the reference. Splitting the *types* keeps
- * internal functions off the client-facing `api` surface.
+ * The nested reference objects for a subset of functions — each leaf the plain
+ * `{ __lunoraRef: "<namespace>:<export>" }` the runtime dispatches on.
  */
+const renderApiValue = (functions: ReadonlyArray<FunctionIR>): string =>
+    renderNamespaceTree(
+        functions,
+        (definition) =>
+            `${renderObjectKey(definition.exportName)}: { __lunoraRef: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)} },`,
+        "value",
+    );
+
+/**
+ * Render one reference module: the `<typeName>` interface, the `<constName>`
+ * object it types, and the type-only imports they need. The object is plain
+ * data, so the module has no runtime import at all — `api.ts` is the file a
+ * sibling package (a web app, another Worker) imports, and it costs that package
+ * no dependency.
+ */
+const renderReferenceModule = (options: {
+    block?: string;
+    clientImports?: ReadonlyArray<string>;
+    constName: string;
+    docComment?: string;
+    functions: ReadonlyArray<FunctionIR>;
+    importLine?: string;
+    typeName: string;
+    typesBody?: string;
+    useUmbrella: boolean;
+}): string => {
+    const { block = "", constName, docComment: documentComment = "", functions, importLine = "", typeName, typesBody = "", useUmbrella } = options;
+    const types = renderApiBody(functions);
+    const value = renderApiValue(functions);
+
+    // Import only the dataModel helpers the rendered arg/return types actually
+    // reference: `Doc` appears when a function returns documents, `Id` when it
+    // takes or returns an id. Importing an unused one trips noUnusedLocals.
+    const dataModelImports = referencedDataModelImports(`${types}\n${typesBody}`);
+    const dataModelImportLine = dataModelImports.length > 0 ? `\nimport type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
+
+    // `FunctionReference` only when a function exists — a dangling import trips `noUnusedLocals`.
+    const clientImportNames = [...(types === "" ? [] : ["FunctionReference"]), ...(options.clientImports ?? [])];
+    const clientImportLine =
+        clientImportNames.length > 0 ? `import type { ${clientImportNames.join(", ")} } from "${baseSpecifiers(useUmbrella).client}";\n` : "";
+
+    return relocateBaseQualifiers(
+        `${GENERATED_HEADER}${clientImportLine}${importLine}${dataModelImportLine}
+${documentComment}export interface ${typeName} {${types ? `\n${types}\n` : ""}}
+
+export const ${constName}: ${typeName} = {${value ? `\n${value}\n` : ""}};
+${block}`,
+        useUmbrella,
+    );
+};
+
 interface EmitApiOptions {
     agents?: ReadonlyArray<AgentIR>;
     functions: ReadonlyArray<FunctionIR>;
@@ -507,65 +524,48 @@ interface EmitApiOptions {
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
+/**
+ * Emit `_generated/api.ts` — the `api.*` references to the public functions,
+ * and (when the project declares them) the typed `workflows.*` / `agents.*`
+ * scheduler-target reference objects and the `httpStreams.*` SSE routes.
+ * Internal functions live in `_generated/internal.ts` ({@link emitInternalApi}),
+ * so a client bundle that imports `api` never carries their names.
+ */
 const emitApi = (options: EmitApiOptions): string => {
     const { agents = [], functions, httpRoutes = [], mutators = [], useUmbrella = false, workflows = [] } = options;
-    const base = baseSpecifiers(useUmbrella);
-    const publicFunctions = [
-        ...functions.filter((definition) => definition.visibility !== "internal"),
-        ...syntheticAgentApiFunctions(agents, functions),
-        ...syntheticMutatorApiFunctions(mutators, functions),
-    ];
-    const internalFunctions = functions.filter((definition) => definition.visibility === "internal");
-
-    const publicBody = renderApiBody(publicFunctions);
-    const internalBody = renderApiBody(internalFunctions);
-
     const httpStreamsRef = renderHttpStreamsRef(httpRoutes);
-
-    // Import only the dataModel helpers the rendered arg/return types actually
-    // reference: `Doc` appears when a function returns documents, `Id` when it
-    // takes or returns an id. Importing an unused one trips noUnusedLocals.
-    const combinedBody = `${publicBody}\n${internalBody}\n${httpStreamsRef.body}`;
-    const dataModelImports = referencedDataModelImports(combinedBody);
-    const dataModelImportLine = dataModelImports.length > 0 ? `\nimport type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
-
-    const apiBlock = publicBody ? `\n${publicBody}\n` : "";
-    const internalBlock = internalBody ? `\n${internalBody}\n` : "";
-
     const schedulerReferences = renderSchedulerReferences(workflows, agents);
 
-    const fileBody = `export interface ApiTypes {${apiBlock}}
-
-export const api = anyApi as unknown as ApiTypes;
-
-/** Internal functions — callable only server-side via \`ctx.run*\`, never from a client. */
-export interface InternalApiTypes {${internalBlock}}
-
-export const internal = anyApi as unknown as InternalApiTypes;
-${schedulerReferences.block}${httpStreamsRef.block}`;
-
-    // Import only what the body references. `HttpStreamRef` needs a streaming
-    // route; `FunctionReference` needs at least one registered function, and a
-    // project with none (or one whose discovery found none) would otherwise
-    // carry a dangling import that trips `noUnusedLocals`.
-    const clientImportNames = [
-        ...(fileBody.includes("FunctionReference<") ? ["FunctionReference"] : []),
-        ...(httpStreamsRef.block === "" ? [] : ["HttpStreamRef"]),
-    ];
-    const clientImportLine = clientImportNames.length > 0 ? `import type { ${clientImportNames.join(", ")} } from "${base.client}";\n` : "";
-
-    // `anyApi` comes from the CLIENT package, not the server one. `api.ts` is the
-    // file a sibling package imports (a web app, another Worker), and its only
-    // runtime import should be one that package already depends on — the server
-    // specifier made a browser app resolve the server runtime for a proxy. Both
-    // packages re-export the same shared implementation.
-    return relocateBaseQualifiers(
-        `${GENERATED_HEADER}import { anyApi } from "${base.client}";
-${clientImportLine}${schedulerReferences.importLine}${dataModelImportLine}
-${fileBody}`,
+    return renderReferenceModule({
+        block: `${schedulerReferences.block}${httpStreamsRef.block}`,
+        clientImports: httpStreamsRef.block === "" ? [] : ["HttpStreamRef"],
+        constName: "api",
+        functions: [
+            ...functions.filter((definition) => definition.visibility !== "internal"),
+            ...syntheticAgentApiFunctions(agents, functions),
+            ...syntheticMutatorApiFunctions(mutators, functions),
+        ],
+        importLine: schedulerReferences.importLine,
+        typeName: "ApiTypes",
+        typesBody: httpStreamsRef.body,
         useUmbrella,
-    );
+    });
 };
+
+/**
+ * Emit `_generated/internal.ts` — the `internal.*` references, callable only
+ * server-side via `ctx.run*` / the scheduler. Visibility is enforced at
+ * dispatch; keeping them in their own module keeps their names out of any
+ * client bundle that imports `api`.
+ */
+const emitInternalApi = (options: { functions: ReadonlyArray<FunctionIR>; useUmbrella?: boolean }): string =>
+    renderReferenceModule({
+        constName: "internal",
+        docComment: "/** Internal functions — callable only server-side via `ctx.run*`, never from a client. */\n",
+        functions: options.functions.filter((definition) => definition.visibility === "internal"),
+        typeName: "InternalApiTypes",
+        useUmbrella: options.useUmbrella ?? false,
+    });
 
 /**
  * Emit `_generated/seed.ts` — a project-bound `createSeedClient` with this
@@ -726,4 +726,4 @@ ${factories}
 `;
 };
 
-export { emitApi, emitCollections, emitSeed, groupByFileSorted, renderAgentFunctionRegistry, renderSandboxFunctionRegistry };
+export { emitApi, emitCollections, emitInternalApi, emitSeed, renderAgentFunctionRegistry, renderSandboxFunctionRegistry };

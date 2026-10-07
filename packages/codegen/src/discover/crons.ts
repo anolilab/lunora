@@ -7,8 +7,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { CodegenDiagnosticError, diagnosticAt } from "../diagnostics";
 import type { AgentIR, CronJobIR, WorkflowIR } from "../ir";
 import { isCronSourceModule } from "../module-specifiers";
-import sanitizeNamespace from "../paths";
-import { listLunoraSourceFiles, propertyKeyName } from "./ast";
+import { functionKeyOf, listLunoraSourceFiles, propertyKeyName } from "./ast";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);
@@ -172,23 +171,17 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
         );
     }
 
-    // `root.namespace.fn` → `${namespace}:${fn}`. The leading root
-    // (`internal`/`api`) is dropped; namespaces are sanitized exactly as
-    // `emitApi`/`emitServer`/the anyApi proxy do, so the ref matches dispatch.
-    const functionName = argument.getName();
-    const receiver = argument.getExpression();
+    const key = functionKeyOf(argument);
 
-    if (!Node.isPropertyAccessExpression(receiver)) {
-        throw diagnosticAt(argument, `Cron job "${jobName}" function reference must be of the form internal.file.fn (two property accesses).`, {
+    if (key === undefined) {
+        throw diagnosticAt(argument, `Cron job "${jobName}" function reference must be of the form internal.<…path>.fn (or api.<…path>.fn).`, {
             code: "CRON_NON_STATIC_FN",
             name: "LunoraError",
             status: 500,
         });
     }
 
-    const namespace = receiver.getName();
-
-    return `${sanitizeNamespace(namespace)}:${functionName}`;
+    return key;
 };
 
 /** Build a workflow target IR from a resolved {@link WorkflowIR}. */

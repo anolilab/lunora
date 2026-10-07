@@ -2,7 +2,7 @@ import type { CallExpression, Project, SourceFile } from "ts-morph";
 
 import declaredOutputWins from "../../declared-output";
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "../../ir";
-import sanitizeNamespace from "../../paths";
+import { sanitizeNamespace } from "../../paths";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
 import { exportNamesByLocalOf, isAddressableExportName } from "../attribution";
 import { collectErasures, reportErasures } from "../erased-returns";

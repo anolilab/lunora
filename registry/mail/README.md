@@ -54,7 +54,7 @@ For Playwright / E2E tests, `@lunora/mail/testing` exposes `waitForMail({ to })`
 // lunora/users.ts
 import { mutation } from "@lunora/server";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 export const inviteUser = mutation({
     args: { email: v.string() },

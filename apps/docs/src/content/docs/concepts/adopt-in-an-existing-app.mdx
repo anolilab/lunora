@@ -109,7 +109,7 @@ hand-roll the protocol. Use the typed client:
 ```ts
 import { createShardClient } from "lunorash/runtime";
 
-import { internal } from "../lunora/_generated/api";
+import { internal } from "../lunora/_generated/internal";
 
 const shard = createShardClient(env.SHARD).as({ userId }).forShard(userId);
 const nodes = await shard.call(internal.mcp.listNodes, { userId });

@@ -667,7 +667,7 @@ describe("emitApi", () => {
         // A file `lunora/2fa.ts` sanitizes to namespace `2fa` — a valid
         // `__lunoraRef` string but NOT a bare TS object key. The interface key
         // must be quoted (`"2fa": {...}`), while the runtime dispatch ref keeps
-        // the raw `2fa:...` value (built by the `anyApi` proxy from the access
+        // the raw `2fa:...` value (the reference's `__lunoraRef`
         // path), so type and runtime still agree.
         const functions: ReadonlyArray<FunctionIR> = [
             {
@@ -685,6 +685,47 @@ describe("emitApi", () => {
         expect(rendered).toContain('verify: FunctionReference<"mutation"');
         // Never emit `2fa` as a bare (invalid) object key.
         expect(rendered).not.toContain("    2fa: {");
+    });
+
+    it("nests a folder's files under the folder's key, beside a same-named file's exports", () => {
+        expect.assertions(3);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "pay", filePath: "billing", kind: "mutation", returnType: "void" },
+            { args: {}, exportName: "create", filePath: "billing/invoices", kind: "mutation", returnType: "void" },
+            { args: {}, exportName: "list", filePath: "billing/invoices", kind: "query", returnType: "void" },
+        ];
+
+        expect(emitApi({ functions })).toContain(
+            [
+                "export interface ApiTypes {",
+                "    billing: {",
+                '        pay: FunctionReference<"mutation", {}, void>;',
+                "        invoices: {",
+                '            create: FunctionReference<"mutation", {}, void>;',
+                '            list: FunctionReference<"query", {}, void>;',
+                "        };",
+                "    };",
+                "}",
+            ].join("\n"),
+        );
+
+        const rendered = emitFunctions({ functions });
+
+        // The caller nests the same way; the dispatch key stays the `_`-joined namespace.
+        expect(rendered).toContain("        invoices: {\n            create: (args?: {}) => Promise<void>;");
+        expect(rendered).toContain('create: (args) => callRegistered(context, "billing_invoices:create", args),');
+    });
+
+    it("rejects an export and a folder's file that claim the same nested api path", () => {
+        expect.assertions(1);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "list", filePath: "billing", kind: "query", returnType: "void" },
+            { args: {}, exportName: "all", filePath: "billing/list", kind: "query", returnType: "void" },
+        ];
+
+        expect(() => emitApi({ functions })).toThrow('the export "list" of "billing" and "billing/list" both resolve to api.billing.list');
     });
 
     it("emits a typed `httpStreams.*` reference block for `.stream()` routes", () => {
@@ -720,9 +761,7 @@ describe("emitApi", () => {
         expect(rendered).not.toContain("HttpStreamsRef");
         expect(rendered).not.toContain("HttpStreamRef");
         // Nothing left to import as a TYPE from the client package, so that line
-        // goes away rather than dangling (`noUnusedLocals` would flag it). The
-        // `anyApi` value import stays — it is always needed, and it comes from
-        // the client package so a sibling consumer needs no server runtime.
+        // goes away rather than dangling (`noUnusedLocals` would flag it).
         expect(rendered).not.toContain('import type { } from "@lunora/client"');
         expect(rendered).not.toContain("FunctionReference");
     });

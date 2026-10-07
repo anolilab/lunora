@@ -204,7 +204,7 @@ it. So record the owner when the upload is created. In an
 import { createR2BindingUploadStorage, createUploadHandler } from "@lunora/storage/upload";
 import { httpAction, httpRouter } from "lunorash/server";
 import { env } from "cloudflare:workers";
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 // Writes through the Worker's R2 binding (`UPLOADS` in wrangler.jsonc): no S3
 // credentials, and the same under `lunora dev` / miniflare as in production.

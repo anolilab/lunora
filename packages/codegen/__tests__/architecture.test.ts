@@ -37,7 +37,8 @@ export default defineModule({ description: "Channels and messages", tables: ["me
     write(
         "chat/posts.ts",
         `import { mutation, query, v } from "@lunora/server";
-import { api, internal } from "../_generated/api";
+import { api } from "../_generated/api";
+import { internal } from "../_generated/internal";
 
 export const feed = query({
     args: {},
@@ -47,11 +48,11 @@ export const feed = query({
 export const post = mutation({
     args: { text: v.string() },
     handler: async (ctx, args) => {
-        await ctx.runQuery(api.accounts_users.me, {});
-        await ctx.scheduler.runAfter(1000, internal.accounts_users.touch, {});
+        await ctx.runQuery(api.accounts.users.me, {});
+        await ctx.scheduler.runAfter(1000, internal.accounts.users.touch, {});
         await ctx.topics.posted.publish({ text: args.text });
         await ctx.queues.jobs.send({});
-        const target = api.accounts_users.me;
+        const target = api.accounts.users.me;
         await ctx.runQuery(target, {});
         return ctx.db.insert("messages", { channelId: "c", text: args.text });
     },
@@ -168,12 +169,12 @@ describe("architecture manifest", () => {
         write(
             "accounts/queues.ts",
             `import { defineQueue, defineSubscription } from "@lunora/queue";
-import { internal } from "../_generated/api";
+import { internal } from "../_generated/internal";
 import { posted } from "../queues";
 
 export const welcome = defineSubscription(posted, { handler: async () => {} });
 export const audits = defineQueue({ handler: async (ctx) => {
-    await ctx.runMutation(internal.accounts_users.touch, {});
+    await ctx.runMutation(internal.accounts.users.touch, {});
 } });
 `,
         );
@@ -379,7 +380,7 @@ export default defineSchema({ invoices: defineTable({ amount: v.number() }) });
 
 export const onboard = async (ctx) => {
     await ctx.step.do("greet", () => undefined);
-    await ctx.runQuery(api.accounts_users.me, {});
+    await ctx.runQuery(api.accounts.users.me, {});
 };
 `,
         );
@@ -393,10 +394,10 @@ export const onboarding = defineWorkflow({ handler: onboard });
         );
         write(
             "jobs/process.ts",
-            `import { internal } from "../_generated/api";
+            `import { internal } from "../_generated/internal";
 
 export async function processJob(message, ctx) {
-    await ctx.runMutation(internal.accounts_users.touch, {});
+    await ctx.runMutation(internal.accounts.users.touch, {});
 }
 `,
         );
@@ -425,10 +426,10 @@ export const jobs = defineQueue({ handler: processJob });
         writeModules();
         write(
             "jobs/process.ts",
-            `import { internal } from "../_generated/api";
+            `import { internal } from "../_generated/internal";
 
 const run = async (message, ctx) => {
-    await ctx.runMutation(internal.accounts_users.touch, {});
+    await ctx.runMutation(internal.accounts.users.touch, {});
 };
 
 export { run as processJob };

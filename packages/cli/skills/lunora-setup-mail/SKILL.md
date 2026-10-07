@@ -86,7 +86,7 @@ I/O). From a mutation, schedule it as a follow-up so the request is not blocked:
 ```ts
 import { internalMutation, v } from "#lunora/_generated/server.js";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 export const inviteUser = internalMutation.input({ email: v.string() }).mutation(async ({ ctx, args: { email } }) => {
     // ...authenticate the caller and persist the invite, then send the mail as a

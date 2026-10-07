@@ -845,6 +845,18 @@ const functionReferenceSegments = (node: Node | undefined): string[] | undefined
     return Node.isIdentifier(current) && FUNCTION_REFERENCE_ROOTS.has(current.getText()) && segments.length >= 2 ? segments : undefined;
 };
 
+/**
+ * A static function reference as the `namespace:export` key the function
+ * registry uses: the path joined with `_` (`api.billing.invoices.create` →
+ * `billing_invoices:create`), the `__lunoraRef` the generated `api.ts` /
+ * `internal.ts` give that path.
+ */
+const functionKeyOf = (node: Node | undefined): string | undefined => {
+    const segments = functionReferenceSegments(node);
+
+    return segments === undefined ? undefined : `${segments.slice(0, -1).join("_")}:${String(segments.at(-1))}`;
+};
+
 export {
     bindingKeyName,
     chainRootOf,
@@ -853,6 +865,7 @@ export {
     collectSecurityCallRows,
     defaultExportExpression,
     findObjectProperty,
+    functionKeyOf,
     functionReferenceSegments,
     handlerOf,
     isConstDeclaration,

@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-import sanitizeNamespace from "./paths";
+import { sanitizeNamespace } from "./paths";
 
 /**
  * Reject two function files whose sanitized namespaces collide.

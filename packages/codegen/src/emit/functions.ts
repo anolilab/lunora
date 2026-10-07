@@ -2,11 +2,11 @@ import { LunoraError } from "@lunora/errors";
 
 import compileArgsValidator from "../compile-validator";
 import type { AgentIR, FunctionIR, MigrationIR, MutatorIR, ShapeIR } from "../ir";
-import sanitizeNamespace from "../paths";
-import { groupByFileSorted, renderAgentFunctionRegistry, renderSandboxFunctionRegistry } from "./api";
+import { sanitizeNamespace } from "../paths";
+import { renderAgentFunctionRegistry, renderSandboxFunctionRegistry } from "./api";
 import { rebaseRelativeQualifiers, referencedDataModelImports, referenceReturnType, relocateBaseQualifiers } from "./qualifiers";
 import emitServer from "./server";
-import { baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderArgsType, renderObjectKey, renderPropertyKey } from "./shared";
+import { baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderArgsType, renderNamespaceTree, renderObjectKey } from "./shared";
 
 /**
  * Convert a raw file path into a JS-identifier-safe alias used as the
@@ -203,51 +203,38 @@ const renderFunctionRegistry = (
  * correctly.
  */
 const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: string; types: string } => {
-    const ordered = groupByFileSorted(functions);
+    const types = renderNamespaceTree(
+        functions,
+        (definition) => {
+            const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
+            const optional = argsType === "{}" ? "?" : "";
+            const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
-    const types = ordered
-        .map(([file, list]) => {
-            const members = list
-                .map((definition) => {
-                    const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
-                    const optional = argsType === "{}" ? "?" : "";
-                    const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
+            // A `stream` handler returns an `AsyncIterable<T>` *synchronously*;
+            // `callRegistered` awaits the handler, and awaiting a non-thenable
+            // async-iterable yields the iterable itself. So the leaf resolves to
+            // `AsyncIterable<T>`, not a single element `T`. (Note `unwrapHandlerReturn`
+            // already unwrapped the iterable to its element type — and
+            // `referenceReturnType` keeps a stream on that inferred type rather
+            // than an inert `.output()`, so this is still the element type.)
+            if (definition.kind === "stream") {
+                return `${definition.exportName}: (args${optional}: ${argsType}) => Promise<AsyncIterable<${returnType}>>;`;
+            }
 
-                    // A `stream` handler returns an `AsyncIterable<T>` *synchronously*;
-                    // `callRegistered` awaits the handler, and awaiting a non-thenable
-                    // async-iterable yields the iterable itself. So the leaf resolves to
-                    // `AsyncIterable<T>`, not a single element `T`. (Note `unwrapHandlerReturn`
-                    // already unwrapped the iterable to its element type — and
-                    // `referenceReturnType` keeps a stream on that inferred type rather
-                    // than an inert `.output()`, so this is still the element type.)
-                    if (definition.kind === "stream") {
-                        return `        ${definition.exportName}: (args${optional}: ${argsType}) => Promise<AsyncIterable<${returnType}>>;`;
-                    }
+            return `${definition.exportName}: (args${optional}: ${argsType}) => Promise<${returnType}>;`;
+        },
+        "type",
+    );
 
-                    return `        ${definition.exportName}: (args${optional}: ${argsType}) => Promise<${returnType}>;`;
-                })
-                .join("\n");
-
-            return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    };`;
-        })
-        .join("\n");
-
-    const implementation = ordered
-        .map(([file, list]) => {
-            const namespace = sanitizeNamespace(file);
-            const leaves = list
-                .map(
-                    (definition) =>
-                        `        ${renderObjectKey(definition.exportName)}: (args) => callRegistered(context, "${namespace}:${definition.exportName}", args),`,
-                )
-                .join("\n");
-
-            // The object key is quoted when `namespace` isn't a bare identifier
-            // (leading-digit filename); the `"${namespace}:..."` dispatch ref
-            // strings above already embed the raw value, so both still agree.
-            return `    ${renderObjectKey(namespace)}: {\n${leaves}\n    },`;
-        })
-        .join("\n");
+    // The object keys are quoted when a segment isn't a bare identifier
+    // (leading-digit filename); the dispatch ref strings embed the `_`-joined
+    // namespace, the same `__lunoraRef` the generated `api.ts` carries.
+    const implementation = renderNamespaceTree(
+        functions,
+        (definition) =>
+            `${renderObjectKey(definition.exportName)}: (args) => callRegistered(context, "${sanitizeNamespace(definition.filePath)}:${definition.exportName}", args),`,
+        "value",
+    );
 
     return { implementation, types };
 };

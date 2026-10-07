@@ -4,7 +4,7 @@ import { moduleTagOf } from "./discover/modules";
 import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR, ModuleIR } from "./ir";
 import renderJsonData from "./json-data";
-import sanitizeNamespace from "./paths";
+import { sanitizeNamespace } from "./paths";
 import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
 // ─── OpenRPC document assembly ───────────────────────────────────────────────

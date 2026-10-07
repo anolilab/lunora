@@ -6,7 +6,7 @@ import { Node } from "ts-morph";
 import { moduleOf } from "../../../../shared/architecture-manifest";
 import { diagnosticAt } from "../diagnostics";
 import type { ModuleIR, SchemaIR } from "../ir";
-import sanitizeNamespace from "../paths";
+import { sanitizeNamespace } from "../paths";
 import { defaultExportExpression, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, unwrapToCallExpression } from "./ast";
 
 /** The marker file that makes its folder a module. */

@@ -7,7 +7,6 @@
 import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
-import { anyApi as sharedAnyApi } from "../../../shared/any-api";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
 import type { MutationStorage, ReadOnlyStorage, Storage, StorageMetadata } from "./storage/context";
 
@@ -2569,27 +2568,10 @@ interface ActionCtx {
     readonly workflows: Workflows;
 }
 
-// --- Generated API surface ---------------------------------------------------
-
-/**
- * Stand-in returned by codegen so projects can `import { api } from "./_generated/api"`.
- * The runtime value is opaque; the types are filled in by generated declarations.
- */
-type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValidator, unknown, FunctionKind>>>;
-
-// The proxy itself lives in `shared/any-api.ts` so `@lunora/client` can serve
-// the same value: the generated `api.ts` is what a sibling package imports, and
-// its runtime import should not be the server runtime. Re-exported here
-// unchanged, typed to this package's `AnyApi`.
-const anyApi = sharedAnyApi as unknown as AnyApi;
-
-export { anyApi };
-
 export type {
     ActionCtx,
     AggregateIndexDefinition,
     AggregateOp,
-    AnyApi,
     ArgsValidator,
     AuthState,
     CachePurge,

@@ -8,6 +8,7 @@ import { LunoraError } from "@lunora/errors";
 import { readJsonSync } from "@visulima/fs";
 import { Project } from "ts-morph";
 
+import type { ArchitectureManifest } from "../../../shared/architecture-manifest";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
@@ -97,6 +98,7 @@ import {
     emitDrizzleSchema,
     emitDurableObjects,
     emitFunctions,
+    emitInternalApi,
     emitQueues,
     emitScheduler,
     emitSeed,
@@ -440,6 +442,7 @@ const inferToFixpoint = (options: {
     agents: ReadonlyArray<AgentIR>;
     apiPath: string;
     generatedFunctionsPath: string;
+    internalPath: string;
     lunoraDirectory: string;
     migrations: ReadonlyArray<MigrationIR>;
     project: Project;
@@ -453,9 +456,11 @@ const inferToFixpoint = (options: {
     functions: ReadonlyArray<FunctionIR>;
     functionsContent: string;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
+    internalContent: string;
     mutators: ReadonlyArray<MutatorIR>;
 } => {
-    const { agents, apiPath, generatedFunctionsPath, lunoraDirectory, migrations, project, shapes, usesSandbox, useUmbrella, workflows } = options;
+    const { agents, apiPath, generatedFunctionsPath, internalPath, lunoraDirectory, migrations, project, shapes, usesSandbox, useUmbrella, workflows } =
+        options;
 
     // The three discoverers that read an inferred return type through
     // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
@@ -495,18 +500,22 @@ const inferToFixpoint = (options: {
     for (let pass = 1; ; pass += 1) {
         const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
         const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
+        const internalContent = emitInternalApi({ functions, useUmbrella });
 
         // Converged, or out of budget — either way this render is the answer, and
         // the budget check sits HERE so the final pass's re-inference is never
         // computed and then discarded.
         if (
             pass >= MAX_INFERENCE_PASSES ||
-            (projectFileMatches(project, apiPath, apiContent) && projectFileMatches(project, generatedFunctionsPath, functionsContent))
+            (projectFileMatches(project, apiPath, apiContent) &&
+                projectFileMatches(project, internalPath, internalContent) &&
+                projectFileMatches(project, generatedFunctionsPath, functionsContent))
         ) {
-            return { apiContent, erased, functions, functionsContent, httpRoutes, mutators };
+            return { apiContent, erased, functions, functionsContent, httpRoutes, internalContent, mutators };
         }
 
         syncProjectFile(project, apiPath, apiContent);
+        syncProjectFile(project, internalPath, internalContent);
         syncProjectFile(project, generatedFunctionsPath, functionsContent);
 
         ({
@@ -692,6 +701,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const dataModelPath = join(outputDirectory, "dataModel.ts");
     const serverPath = join(outputDirectory, "server.ts");
     const apiPath = join(outputDirectory, "api.ts");
+    const internalPath = join(outputDirectory, "internal.ts");
     const generatedFunctionsPath = join(outputDirectory, "functions.ts");
 
     // In MEMORY only — the disk write waits for the write phase with everything
@@ -732,10 +742,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // fixpoint below — unlike `discoverHttpRoutes`, which does.
     const shapes = discoverShapes(project, lunoraDirectory);
 
-    const { apiContent, erased, functions, functionsContent, httpRoutes, mutators } = inferToFixpoint({
+    const { apiContent, erased, functions, functionsContent, httpRoutes, internalContent, mutators } = inferToFixpoint({
         agents,
         apiPath,
         generatedFunctionsPath,
+        internalPath,
         lunoraDirectory,
         migrations,
         project,
@@ -1193,6 +1204,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         emit("app.ts", appContent);
         emit("dataModel.ts", dataModelContent);
         emit("api.ts", apiContent);
+        emit("internal.ts", internalContent);
         emit("server.ts", serverContent);
         emit("functions.ts", functionsContent);
         emit("shard.ts", shardContent);
@@ -1261,6 +1273,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         advisories,
         advisorContext,
         agents,
+        architecture: architectureDocument,
         containers,
         // Declared jobs plus the schedules `createWorker` is configured with
         // directly (`backupCron`, `crons` keys). Both need a wrangler trigger to
@@ -1278,6 +1291,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             drizzleGlobal: drizzleFiles.global,
             drizzleShard: drizzleFiles.shard,
             functions: functionsContent,
+            internal: internalContent,
             openApi: openApiContent,
             openApiModule: openApiModuleContent,
             openRpc: openRpcContent,
@@ -1407,6 +1421,13 @@ export interface CodegenResult {
     agents: ReadonlyArray<AgentIR>;
 
     /**
+     * The architecture manifest written to `_generated/architecture.json` —
+     * `lunora deploy` diffs it against the last deployed one. `undefined` when the
+     * app declares no module.
+     */
+    architecture?: ArchitectureManifest;
+
+    /**
      * Containers discovered from `defineContainer` exports in
      * `lunora/containers.ts` — the list the config layer reconciles into
      * wrangler's `containers[]`, `CONTAINER_*` Durable Object bindings, and
@@ -1436,6 +1457,8 @@ export interface CodegenResult {
         drizzleGlobal: string;
         drizzleShard: string;
         functions: string;
+        /** `internal.*` references to the internal functions (`_generated/internal.ts`), kept out of `api.ts` so a client bundle never carries them. */
+        internal: string;
         /** OpenAPI 3.1.0 document (`_generated/openapi.json`), pretty-printed JSON. */
         openApi: string;
 

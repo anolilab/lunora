@@ -12,8 +12,8 @@ import type { ExecutionContextLike, ScheduledControllerLike, ShardNamespaceLike 
 import { createShardClient } from "lunorash/runtime";
 import { serveStorageObject } from "lunorash/server";
 
-import { internal } from "../../lunora/_generated/api.js";
 import { defineApp } from "../../lunora/_generated/app.js";
+import { internal } from "../../lunora/_generated/internal.js";
 import { rememberIssuedJob, wasJobIssued } from "./issued-jobs";
 
 // The registry of which shards hold `.shardBy()` rows — `.shardRegistry(...)`

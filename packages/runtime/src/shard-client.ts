@@ -18,7 +18,7 @@
  *
  * ```ts
  * import { createShardClient } from "@lunora/runtime";
- * import { internal } from "../lunora/_generated/api";
+ * import { internal } from "../lunora/_generated/internal";
  *
  * // As the signed-in user: RLS and ownership apply exactly as on the client path.
  * const shard = createShardClient(env.SHARD).as({ userId }).forShard(userId);

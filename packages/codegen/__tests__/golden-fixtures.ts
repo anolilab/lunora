@@ -108,6 +108,7 @@ const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string, ReadonlyArray<str
 const GOLDEN_OUTPUTS: ReadonlyArray<readonly [string, keyof CodegenResult["generated"]]> = [
     ["app.ts", "app"],
     ["api.ts", "api"],
+    ["internal.ts", "internal"],
     ["server.ts", "server"],
     ["dataModel.ts", "dataModel"],
     ["drizzle.global.ts", "drizzleGlobal"],

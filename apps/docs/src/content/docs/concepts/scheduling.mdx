@@ -28,7 +28,7 @@ checked against what actually exists, where a path string is not.
 clients, are the usual choice for follow-up work.
 
 ```ts
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 import { mutation, v } from "@/lunora/_generated/server";
 
 export const publishPost = mutation.input({ postId: v.id("posts") }).mutation(async ({ ctx, args: { postId } }) => {
@@ -147,7 +147,7 @@ through the `SchedulerDO`:
 ```ts
 import { createCronTrigger } from "@lunora/scheduler";
 
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 export const triggers = [
     createCronTrigger({ schedule: "0 3 * * *", fn: internal.cleanup.cleanupOldMessages }),

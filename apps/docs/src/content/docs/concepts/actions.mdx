@@ -18,7 +18,8 @@ commits on its own.
 
 ```ts
 import { action, v } from "@/lunora/_generated/server";
-import { api, internal } from "@/lunora/_generated/api";
+import { api } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 export const syncWithStripe = action.input({ customerId: v.string() }).action(async ({ ctx, args }) => {
     // 1. Read current state via a query, so the read runs in a transaction.
@@ -75,7 +76,8 @@ enforced:
 
 ```ts
 import { action, v } from "@/lunora/_generated/server";
-import { api, internal } from "@/lunora/_generated/api";
+import { api } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 export const importContacts = action.input({ url: v.string() }).action(async ({ ctx, args }) => {
     const response = await ctx.fetch(args.url);
