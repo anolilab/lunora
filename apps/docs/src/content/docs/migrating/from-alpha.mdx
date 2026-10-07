@@ -152,6 +152,43 @@ table (offering the tables declared in `lunora/schema.ts`); non-interactively
 lunora migrate create backfill_read_by --table messages
 ```
 
+### `@lunora/payment`: store tables moved to `payment_*`
+
+The payment store now reads and writes the tables of `paymentExtension`, which
+`.extend()` prefixes with its key: `payment_customers`, `payment_events`,
+`payment_sessions`, `payment_subscriptions` and `payment_usageEvents`. An app
+that declared the store tables itself under the bare names (`customers`,
+`events`, `paymentSessions`, `subscriptions`, `usageEvents`) still typechecks,
+then fails on every store access with `unknown table: payment_subscriptions`.
+
+**Migration:** extend the schema with `paymentExtension`:
+
+```ts
+// lunora/schema.ts
+import { paymentExtension } from "@lunora/payment";
+
+export default defineSchema({
+    // …your tables, plus the old payment tables until the move below finishes
+}).extend(paymentExtension);
+```
+
+If the old tables hold data, keep them declared and move the rows with
+`migrateLegacyPaymentTables` from an internal mutation. It moves up to
+`batchSize` rows (default 100) per call; call it until `remaining` is `false`,
+then delete the old tables from the schema:
+
+```ts
+// lunora/payments.ts
+import { migrateLegacyPaymentTables } from "@lunora/payment";
+
+import { internalMutation } from "./_generated/server";
+
+export const movePaymentTables = internalMutation({
+    args: {},
+    handler: async (ctx) => migrateLegacyPaymentTables(ctx.db),
+});
+```
+
 ## Recommended (non-breaking) follow-ups
 
 - **Enforce ephemeral WS admin tokens.** The worker can now reject the raw

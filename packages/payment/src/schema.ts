@@ -16,7 +16,7 @@
  * into its `sessions` row (`refundedMinor` + a `refunded`/`partially_refunded` state), not a separate
  * ledger table.
  */
-import type { SchemaExtension } from "@lunora/server";
+import type { SchemaExtension, TableDefinition } from "@lunora/server";
 import { defineSchemaExtension, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 
@@ -105,7 +105,12 @@ const usageEvents = defineTable({
     .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
     .index("by_reference_feature", ["referenceId", "featureId"]);
 
-const paymentExtension: SchemaExtension = defineSchemaExtension("payment", {
+// The table names and key stay literal so `.extend(paymentExtension)` adds exactly
+// `payment_customers | … | payment_usageEvents`; row types come from codegen.
+const paymentExtension: SchemaExtension<
+    Record<"customers" | "events" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>,
+    "payment"
+> = defineSchemaExtension("payment", {
     tables: { customers, events, sessions, subscriptions, usageEvents },
 });
 

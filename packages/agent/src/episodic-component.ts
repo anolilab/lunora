@@ -43,7 +43,7 @@ const clampRecall = (value: number | undefined): number => {
  * `--isolatedDeclarations` reason as `graphTables` (an exported const with a
  * computed key can't be inferred; see graph-component.ts).
  */
-const episodeTables: Record<string, TableDefinition> = {
+const episodeTables: Record<"episodes", TableDefinition> = {
     /**
      * One episode per completed run — a short natural-language summary of the
      * exchange, time-ordered for recency recall. `messageKey` (the extract
