@@ -3,10 +3,10 @@ import { LunoraError } from "@lunora/errors";
 import compileArgsValidator from "../compile-validator";
 import type { AgentIR, FunctionIR, MigrationIR, MutatorIR, ShapeIR } from "../ir";
 import { sanitizeNamespace } from "../paths";
-import { renderAgentFunctionRegistry, renderNamespaceTree, renderSandboxFunctionRegistry } from "./api";
+import { renderAgentFunctionRegistry, renderSandboxFunctionRegistry } from "./api";
 import { rebaseRelativeQualifiers, referencedDataModelImports, referenceReturnType, relocateBaseQualifiers } from "./qualifiers";
 import emitServer from "./server";
-import { baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderArgsType, renderObjectKey, renderPropertyKey } from "./shared";
+import { baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderArgsType, renderNamespaceTree, renderObjectKey } from "./shared";
 
 /**
  * Convert a raw file path into a JS-identifier-safe alias used as the
@@ -223,19 +223,17 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
 
             return `${definition.exportName}: (args${optional}: ${argsType}) => Promise<${returnType}>;`;
         },
-        renderPropertyKey,
-        ";",
+        "type",
     );
 
     // The object keys are quoted when a segment isn't a bare identifier
-    // (leading-digit filename); the `"${namespace}:..."` dispatch ref strings
-    // embed the joined namespace, so both still agree.
+    // (leading-digit filename); the dispatch ref strings embed the `_`-joined
+    // namespace, which is what the `anyApi` proxy builds from the same path.
     const implementation = renderNamespaceTree(
         functions,
         (definition) =>
             `${renderObjectKey(definition.exportName)}: (args) => callRegistered(context, "${sanitizeNamespace(definition.filePath)}:${definition.exportName}", args),`,
-        renderObjectKey,
-        ",",
+        "value",
     );
 
     return { implementation, types };

@@ -1,11 +1,10 @@
-/**
- * Sanitize a file path (relative to the lunora dir, no extension) into a
- * JS-identifier-safe namespace. Used in three places that MUST agree:
- * `emitApi` (the nested key path inside `ApiTypes`), `emitServer` (module-import
- * alias and dispatch-table key prefix), and the `anyApi` Proxy in
- * `@lunora/server` (emits `__lunoraRef = "${segments joined by _}:${fn}"`).
- *
- * If these ever disagree, runtime dispatch silently misses functions.
+/*
+ * How a function file's path (relative to `lunora/`, no extension) becomes its
+ * `api.*` key path (`namespaceSegments`) and its dispatch namespace
+ * (`sanitizeNamespace`, the segments joined by `_`). The emitted `api.ts` /
+ * `functions.ts`, codegen's `functionKeyOf`, and the `anyApi` proxy in
+ * `shared/any-api.ts` must all agree; if they ever disagree, runtime dispatch
+ * silently misses functions.
  */
 /** A feature/component directory's trailing `index` segment (collapsed to the dir name). */
 const INDEX_SUFFIX = /\/index$/u;

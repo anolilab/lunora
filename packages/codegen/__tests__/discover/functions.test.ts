@@ -57,29 +57,6 @@ describe("discoverFunctions", () => {
             expect((caught as { paths: string[] }).paths).toEqual(expect.arrayContaining(["foo-bar", "foo/bar"]));
         });
 
-        it("throws when an export and a folder's file claim the same nested api path", () => {
-            expect.assertions(1);
-
-            // `billing.ts`'s `list` and `billing/list.ts` are both `api.billing.list`.
-            writeFunction("billing.ts", tinyQuery);
-            writeFunction("billing/list.ts", tinyQuery);
-
-            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-
-            expect(() => discoverFunctions(project, workdir)).toThrow(/both resolve to api\.billing\.list/u);
-        });
-
-        it("lets a file and a folder share a name when no export clashes", () => {
-            expect.assertions(1);
-
-            writeFunction("billing.ts", tinyQuery);
-            writeFunction("billing/invoices.ts", tinyQuery);
-
-            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-
-            expect(discoverFunctions(project, workdir)).toHaveLength(2);
-        });
-
         it("distinct sanitized namespaces do not trip the collision guard", () => {
             expect.hasAssertions();
 

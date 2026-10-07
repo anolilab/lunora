@@ -234,9 +234,9 @@ interface CompleteDeployInputs {
     descriptor: SpawnDescriptor;
     mintedSecretsFile: string | undefined;
     options: DeployCommandOptions;
-    reblessSchemaBaseline: (() => void) | undefined;
+    reblessSchemaBaseline?: () => void;
     /** Records this deploy's architecture manifest as the next diff's baseline. */
-    recordArchitecture: (() => void) | undefined;
+    recordArchitecture?: () => void;
     /** Wrangler's captured stdout, or `undefined` when this run didn't capture it. */
     stdout: string | undefined;
     validation: DeployCommandResult["validation"];
@@ -286,12 +286,11 @@ const completeDeploy = async ({
     // Zero-effort linking: record the deployed URL, warn instead of clobbering
     // when an existing link disagrees. Skipped for `--temporary`: that account
     // is deleted in ~60 minutes, so its URL must never become the checkout's
-    // recorded target.
-    // The new code is live from here on, whatever the health check and
+    // recorded target — nor its architecture the next diff's baseline. Recorded
+    // now because the new code is live, whatever the health check and
     // migrations below decide.
-    recordArchitecture?.();
-
     if (options.temporary !== true) {
+        recordArchitecture?.();
         autoLinkFromDeployOutput({ cwd, env: options.env, logger: options.logger, url: deployment.url });
     }
 

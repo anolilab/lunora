@@ -26,7 +26,7 @@ import { Spinner } from "@visulima/spinner";
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
-import { reportArchitectureDiff } from "../../util/architecture-diff";
+import reportArchitectureDiff from "../../util/architecture-diff";
 import { checkArtifactsJurisdiction } from "../../util/artifacts-jurisdiction";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
@@ -802,7 +802,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return abortResult(pipeline.error, { ...extra, ...(pipeline.code === undefined ? {} : { code: pipeline.code }) });
     }
 
-    const { reblessSchemaBaseline, recordArchitecture, validation } = pipeline;
+    const { validation } = pipeline;
     const driver = resolveDeployDriver(pipeline.target);
 
     // The Artifacts lookup is read-only, so it runs on `--dry-run` too: a dry run
@@ -884,16 +884,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: result.code, descriptor, mintedSecretsFile, validation };
     }
 
-    const completed = await completeDeploy({
-        cwd,
-        descriptor,
-        mintedSecretsFile,
-        options,
-        reblessSchemaBaseline,
-        recordArchitecture,
-        stdout: result.stdout,
-        validation,
-    });
+    const completed = await completeDeploy({ ...pipeline, cwd, descriptor, mintedSecretsFile, options, stdout: result.stdout });
 
     return { ...completed, logsAvailable: driver.toolchain?.tail !== undefined };
 };

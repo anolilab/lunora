@@ -193,7 +193,7 @@ export const movePaymentTables = internalMutation({
 
 A function file in a folder used to be one underscore-joined key:
 `lunora/billing/invoices.ts` was `api.billing_invoices.*`. The generated
-`api`, `internal` and `createCaller` types now nest by folder, so it is
+`api`, `internal`, `httpStreams` and `createCaller` now nest by folder, so it is
 `api.billing.invoices.*`, the same shape as Convex. A trailing `index.ts` still
 collapses into its folder (`lunora/ratelimit/index.ts` stays `api.ratelimit.*`).
 
@@ -205,7 +205,15 @@ TypeScript flags every old reference after `lunora codegen`.
 with `api.<folder>.<file>.` / `internal.<folder>.<file>.`. A file that exports a
 function named like a file in its sibling folder (`billing.ts` exporting
 `invoices` next to `billing/invoices.ts`) is now a codegen error, because both
-would be `api.billing.invoices`. Rename one of them.
+would be `api.billing.invoices`. Rename one of them. So is a function or file
+named like an `Object` member (`toString`, `constructor`, …) two folders deep,
+which the nested path cannot reach.
+
+A reference is now a `Proxy` rather than a plain object, so `structuredClone`,
+Durable Object storage and `postMessage` reject it. Pass `ref.__lunoraRef`
+(the dispatch key string) across those boundaries instead. A cron job's
+reference must be written on the generated `api` / `internal` object itself;
+an aliased import (`import { internal as i }`) is no longer resolved.
 
 ## Recommended (non-breaking) follow-ups
 

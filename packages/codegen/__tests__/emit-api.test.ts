@@ -717,6 +717,29 @@ describe("emitApi", () => {
         expect(rendered).toContain('create: (args) => callRegistered(context, "billing_invoices:create", args),');
     });
 
+    it("rejects an export and a folder's file that claim the same nested api path", () => {
+        expect.assertions(1);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "list", filePath: "billing", kind: "query", returnType: "void" },
+            { args: {}, exportName: "all", filePath: "billing/list", kind: "query", returnType: "void" },
+        ];
+
+        expect(() => emitApi({ functions })).toThrow('the export "list" of "billing" and "billing/list" both resolve to api.billing.list');
+    });
+
+    it("rejects names the anyApi proxy cannot reach", () => {
+        expect.assertions(2);
+
+        expect(() => emitApi({ functions: [{ args: {}, exportName: "__raw", filePath: "users", kind: "query", returnType: "void" }] })).toThrow(
+            '"__raw" in "users" cannot be reached through api.*',
+        );
+
+        const functions: ReadonlyArray<FunctionIR> = [{ args: {}, exportName: "toString", filePath: "billing/invoices", kind: "query", returnType: "void" }];
+
+        expect(() => emitApi({ functions })).toThrow('"toString" in "billing/invoices" cannot be reached through api.*');
+    });
+
     it("emits a typed `httpStreams.*` reference block for `.stream()` routes", () => {
         expect.assertions(6);
 

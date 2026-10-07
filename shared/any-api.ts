@@ -11,7 +11,8 @@
  * Every node from depth two down is both a reference and a namespace, because a
  * file (`lunora/billing.ts`) and a folder (`lunora/billing/`) can share a name.
  * The reference is the node's own `__lunoraRef` property, so spreading or
- * serialising a reference still yields `{ __lunoraRef }`.
+ * serialising a reference still yields `{ __lunoraRef }`. Codegen builds the same
+ * key from source in `functionKeyOf` (`@lunora/codegen`); the two must agree.
  *
  * Lives here rather than in `@lunora/server` because the generated `api.ts` is
  * the file a SIBLING package imports (a web app, another Worker), and its only
@@ -30,9 +31,17 @@ const createNode = (segments: ReadonlyArray<string>): Record<string, unknown> =>
 
     return new Proxy(target, {
         get(_target, property: string | symbol) {
-            // Symbols and the object's own/inherited members (`__lunoraRef`,
-            // `toString`, …) read through, so a reference still behaves as a plain object.
-            if (typeof property === "symbol" || property in target) {
+            // Names that start with `__` or `$` are never path segments: they are
+            // how frameworks probe an object (Vue's `__v_raw`, React's `$$typeof`),
+            // and a child proxy would answer every probe with another truthy
+            // proxy, forever. Codegen rejects such names for functions and files.
+            //
+            // A reference node also keeps its inherited members (`toString`, …)
+            // so it still behaves as a plain object. The root and first level are
+            // never references, so every other name there is a path segment — a
+            // function may be exported as `toString`. Codegen rejects that name
+            // deeper down, where it would hit the inherited member.
+            if (typeof property === "symbol" || property.startsWith("__") || property.startsWith("$") || (segments.length >= 2 && property in target)) {
                 return Reflect.get(target, property) as unknown;
             }
 

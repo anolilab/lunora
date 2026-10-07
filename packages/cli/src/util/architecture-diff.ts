@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { ArchitectureEdge, ArchitectureManifest } from "../../../../shared/architecture-manifest";
+import { EMPTY_ARCHITECTURE } from "../../../../shared/architecture-manifest";
 import type { Logger } from "./logger";
 
 /** Lines listed per section before the rest collapse into a count. */
@@ -81,7 +82,10 @@ const readBaseline = (path: string): ArchitectureManifest | undefined => {
     }
 
     try {
-        return JSON.parse(readFileSync(path, "utf8")) as ArchitectureManifest;
+        const manifest = JSON.parse(readFileSync(path, "utf8")) as Partial<ArchitectureManifest>;
+
+        // Another version or shape is skipped rather than misread; the success path overwrites it.
+        return manifest.version === 1 && Array.isArray(manifest.modules) && Array.isArray(manifest.edges) ? (manifest as ArchitectureManifest) : undefined;
     } catch {
         // A corrupt baseline only costs this run's diff; the success path overwrites it.
         return undefined;
@@ -91,7 +95,7 @@ const readBaseline = (path: string): ArchitectureManifest | undefined => {
 /**
  * Print what this deploy changes in the architecture, and return the thunk that
  * records the current manifest as the new baseline — to be invoked only once the
- * deploy succeeded. `undefined` when the app declares no module.
+ * deploy succeeded. `undefined` when the app declares no module and never did.
  */
 const reportArchitectureDiff = (options: {
     current: ArchitectureManifest | undefined;
@@ -99,14 +103,16 @@ const reportArchitectureDiff = (options: {
     environment: string | undefined;
     logger: Logger;
 }): (() => void) | undefined => {
-    const { current, cwd, environment, logger } = options;
+    const { cwd, environment, logger } = options;
+    const path = baselinePath(cwd, environment);
+    const previous = readBaseline(path);
+    // Codegen emits no manifest once the last module is gone; diff that as empty
+    // so the removal is reported and the baseline follows it.
+    const current = options.current ?? (previous === undefined ? undefined : EMPTY_ARCHITECTURE);
 
     if (current === undefined) {
         return undefined;
     }
-
-    const path = baselinePath(cwd, environment);
-    const previous = readBaseline(path);
     const message = previous === undefined ? undefined : formatArchitectureDiff(diffArchitecture(previous, current));
 
     if (message !== undefined) {
@@ -114,9 +120,14 @@ const reportArchitectureDiff = (options: {
     }
 
     return () => {
-        mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, `${JSON.stringify(current, undefined, 2)}\n`, "utf8");
+        // The deploy is already live; a baseline that cannot be written only costs the next diff.
+        try {
+            mkdirSync(dirname(path), { recursive: true });
+            writeFileSync(path, `${JSON.stringify(current, undefined, 2)}\n`, "utf8");
+        } catch (error) {
+            logger.warn(`could not record the deployed architecture at ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        }
     };
 };
 
-export { diffArchitecture, formatArchitectureDiff, reportArchitectureDiff };
+export default reportArchitectureDiff;

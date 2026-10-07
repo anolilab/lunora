@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ArchitectureManifest } from "../../../../shared/architecture-manifest";
-import { reportArchitectureDiff } from "../../src/util/architecture-diff";
+import reportArchitectureDiff from "../../src/util/architecture-diff";
 
 const manifest = (modules: string[], edges: ArchitectureManifest["edges"]): ArchitectureManifest => {
     return {
@@ -55,7 +55,23 @@ describe(reportArchitectureDiff, () => {
         record?.();
 
         expect(JSON.parse(readFileSync(join(cwd, ".lunora", "architecture.json"), "utf8"))).toStrictEqual(current);
-        expect(reportArchitectureDiff({ current: undefined, cwd, environment: undefined, logger: log })).toBeUndefined();
+        expect(reportArchitectureDiff({ current: undefined, cwd: tempDirectory(), environment: undefined, logger: log })).toBeUndefined();
+    });
+
+    it("reports the last module's removal, and ignores a malformed baseline", () => {
+        expect.assertions(2);
+
+        const cwd = tempDirectory();
+        const log = logger();
+
+        reportArchitectureDiff({ current: manifest(["billing"], []), cwd, environment: undefined, logger: log })?.();
+        reportArchitectureDiff({ current: undefined, cwd, environment: undefined, logger: log });
+
+        expect(log.info).toHaveBeenCalledWith("architecture changes since the last deploy:\nmodules removed:\n  - billing");
+
+        writeFileSync(join(cwd, ".lunora", "architecture.json"), '{"version":1}');
+
+        expect(() => reportArchitectureDiff({ current: manifest(["billing"], []), cwd, environment: undefined, logger: log })).not.toThrow();
     });
 
     it("lists added and removed modules and edges against the recorded baseline", () => {

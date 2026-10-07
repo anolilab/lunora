@@ -2,19 +2,8 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { CallEdgeIR } from "../ir";
-import { collectCallRows, collectNodeRows, functionReferenceSegments, RUN_METHODS } from "./ast";
+import { collectCallRows, collectNodeRows, functionKeyOf, RUN_METHODS } from "./ast";
 import { callSiteScopeOf } from "./attribution";
-
-/**
- * A function reference as the `namespace:export` key the function registry uses.
- * The path is joined with `_` (`api.billing.invoices.create` →
- * `billing_invoices:create`), as the `anyApi` proxy joins it at runtime.
- */
-const functionKeyOf = (node: TsNode | undefined): string | undefined => {
-    const segments = functionReferenceSegments(node);
-
-    return segments === undefined ? undefined : `${segments.slice(0, -1).join("_")}:${String(segments.at(-1))}`;
-};
 
 /** `ctx.<surface>.<name>.<method>(…)` → `name`, when the receiver chain is exactly that shape. */
 const surfaceMemberOf = (callee: TsNode, surface: string): string | undefined => {

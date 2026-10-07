@@ -4,76 +4,18 @@ import { agentComponent } from "@lunora/agent/component";
 import { LunoraError } from "@lunora/errors";
 
 import type { AgentIR, FunctionIR, HttpRouteIR, MutatorIR, ShapeIR, WorkflowIR } from "../ir";
-import { namespaceSegments, sanitizeNamespace } from "../paths";
+import { sanitizeNamespace } from "../paths";
 import { rebaseRelativeQualifiers, referencedDataModelImports, referenceReturnType, relocateBaseQualifiers } from "./qualifiers";
-import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, pascalCase, renderArgsType, renderObjectKey, renderPropertyKey } from "./shared";
-
-/** Group entries by `filePath`, entries sorted by file for deterministic output. */
-const groupByFileSorted = <T extends { filePath: string }>(entries: ReadonlyArray<T>): [string, T[]][] => {
-    const namespaces = new Map<string, T[]>();
-
-    for (const entry of entries) {
-        const list = namespaces.get(entry.filePath) ?? [];
-
-        list.push(entry);
-        namespaces.set(entry.filePath, list);
-    }
-
-    return [...namespaces.entries()].toSorted(([a], [b]) => a.localeCompare(b));
-};
-
-interface NamespaceNode<T> {
-    children: Map<string, NamespaceNode<T>>;
-    /** The functions of the file this node stands for, if one does. */
-    entries?: T[];
-}
-
-/**
- * Render functions grouped by file as nested `api.*` key paths:
- * `lunora/billing/invoices.ts` → `billing: { invoices: { … } }`. A file and a
- * folder of the same name share a node (`lunora/billing.ts` + `lunora/billing/`);
- * discovery has already rejected an export that clashes with a folder's file.
- *
- * `renderLeaf` renders one member without indentation; `terminator` closes a
- * nested block (`;` in an interface, `,` in an object literal).
- */
-const renderNamespaceTree = <T extends { exportName: string; filePath: string }>(
-    entries: ReadonlyArray<T>,
-    renderLeaf: (entry: T) => string,
-    renderKey: (key: string) => string,
-    terminator: string,
-): string => {
-    const root: NamespaceNode<T> = { children: new Map() };
-
-    for (const [file, list] of groupByFileSorted(entries)) {
-        let node = root;
-
-        for (const segment of namespaceSegments(file)) {
-            let child = node.children.get(segment);
-
-            if (child === undefined) {
-                child = { children: new Map() };
-                node.children.set(segment, child);
-            }
-
-            node = child;
-        }
-
-        node.entries = list;
-    }
-
-    const render = (node: NamespaceNode<T>, depth: number): string[] => {
-        const indent = "    ".repeat(depth);
-        const leaves = (node.entries ?? []).map((entry) => `${indent}${renderLeaf(entry)}`);
-        const nested = [...node.children.entries()]
-            .toSorted(([a], [b]) => a.localeCompare(b))
-            .map(([key, child]) => `${indent}${renderKey(key)}: {\n${render(child, depth + 1).join("\n")}\n${indent}}${terminator}`);
-
-        return [...leaves, ...nested];
-    };
-
-    return render(root, 1).join("\n");
-};
+import {
+    assertIdentifier,
+    baseSpecifiers,
+    GENERATED_HEADER,
+    pascalCase,
+    renderArgsType,
+    renderNamespaceTree,
+    renderObjectKey,
+    renderPropertyKey,
+} from "./shared";
 
 /**
  * Render the nested body of an api interface for a subset of functions.
@@ -102,8 +44,7 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string =>
         // valid `__lunoraRef` string but not a bare TS key, so quote it when
         // needed — the string value (and thus the runtime dispatch key) is
         // unchanged.
-        renderPropertyKey,
-        ";",
+        "type",
     );
 
 /**
@@ -473,7 +414,7 @@ const syntheticMutatorApiFunctions = (mutators: ReadonlyArray<MutatorIR>, functi
 
 /**
  * Render the `httpStreams.*` typed-reference block for `_generated/api.ts` —
- * one entry per `httpRoute.<verb>(path).stream()` SSE route, grouped by source
+ * one entry per `httpRoute.<verb>(path).stream()` SSE route, nested by source
  * file the way `api.*` is. Each reference carries the verb + path at runtime
  * (what the client needs to open the endpoint) and the chunk / searchParams /
  * params types via `HttpStreamRef`'s phantom parameter, so
@@ -489,36 +430,22 @@ const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: 
         return { block: "", body: "" };
     }
 
-    const sortedNamespaces = groupByFileSorted(streams);
+    const typeBody = renderNamespaceTree(
+        streams,
+        (route) => {
+            const chunkType = rebaseRelativeQualifiers(route.chunkType ?? "unknown", route.filePath);
+            const searchParams = rebaseRelativeQualifiers(renderArgsType(route.searchParams), route.filePath);
+            const params = rebaseRelativeQualifiers(renderArgsType(route.params), route.filePath);
 
-    const typeBody = sortedNamespaces
-        .map(([file, list]) => {
-            const members = list
-                .map((route) => {
-                    const chunkType = rebaseRelativeQualifiers(route.chunkType ?? "unknown", route.filePath);
-                    const searchParams = rebaseRelativeQualifiers(renderArgsType(route.searchParams), route.filePath);
-                    const params = rebaseRelativeQualifiers(renderArgsType(route.params), route.filePath);
-
-                    return `        ${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${searchParams}, ${params}>;`;
-                })
-                .join("\n");
-
-            return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    };`;
-        })
-        .join("\n");
-
-    const valueBody = sortedNamespaces
-        .map(([file, list]) => {
-            const members = list
-                .map(
-                    (route) =>
-                        `        ${renderObjectKey(route.exportName)}: { method: ${JSON.stringify(route.method)}, path: ${JSON.stringify(route.path)} },`,
-                )
-                .join("\n");
-
-            return `    ${renderObjectKey(sanitizeNamespace(file))}: {\n${members}\n    },`;
-        })
-        .join("\n");
+            return `${renderPropertyKey(route.exportName)}: HttpStreamRef<${chunkType}, ${searchParams}, ${params}>;`;
+        },
+        "type",
+    );
+    const valueBody = renderNamespaceTree(
+        streams,
+        (route) => `${renderObjectKey(route.exportName)}: { method: ${JSON.stringify(route.method)}, path: ${JSON.stringify(route.path)} },`,
+        "value",
+    );
 
     const block = `
 /** This project's HTTP-SSE stream routes (\`httpRoute.<verb>(path).stream()\`), addressable as typed references for \`client.httpStream\` / \`useHttpStream\`. */
@@ -772,4 +699,4 @@ ${factories}
 `;
 };
 
-export { emitApi, emitCollections, emitSeed, groupByFileSorted, renderAgentFunctionRegistry, renderNamespaceTree, renderSandboxFunctionRegistry };
+export { emitApi, emitCollections, emitSeed, renderAgentFunctionRegistry, renderSandboxFunctionRegistry };

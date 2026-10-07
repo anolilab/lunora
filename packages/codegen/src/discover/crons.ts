@@ -7,7 +7,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { CodegenDiagnosticError, diagnosticAt } from "../diagnostics";
 import type { AgentIR, CronJobIR, WorkflowIR } from "../ir";
 import { isCronSourceModule } from "../module-specifiers";
-import { listLunoraSourceFiles, propertyKeyName } from "./ast";
+import { functionKeyOf, listLunoraSourceFiles, propertyKeyName } from "./ast";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);
@@ -171,26 +171,17 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
         );
     }
 
-    // `root.<…path>.fn` → `${path joined by _}:${fn}`. The leading root
-    // (`internal`/`api`) is dropped; the path is joined exactly as
-    // `emitApi`/`emitServer`/the anyApi proxy do, so the ref matches dispatch.
-    const segments: string[] = [];
-    let current: Node = argument;
+    const key = functionKeyOf(argument);
 
-    while (Node.isPropertyAccessExpression(current)) {
-        segments.unshift(current.getName());
-        current = current.getExpression();
-    }
-
-    if (segments.length < 2) {
-        throw diagnosticAt(argument, `Cron job "${jobName}" function reference must be of the form internal.file.fn (at least two property accesses).`, {
+    if (key === undefined) {
+        throw diagnosticAt(argument, `Cron job "${jobName}" function reference must be of the form internal.<…path>.fn (or api.<…path>.fn).`, {
             code: "CRON_NON_STATIC_FN",
             name: "LunoraError",
             status: 500,
         });
     }
 
-    return `${segments.slice(0, -1).join("_")}:${String(segments.at(-1))}`;
+    return key;
 };
 
 /** Build a workflow target IR from a resolved {@link WorkflowIR}. */
