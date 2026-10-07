@@ -129,6 +129,7 @@ interface CodegenResult {
         drizzleGlobal: string;
         drizzleShard: string;
         functions: string;
+        internal: string;
         openApi: string;
         openApiModule: string;
         openRpc: string;
@@ -1399,6 +1400,15 @@ const emitDrizzleSchema: (schema: SchemaIR, useUmbrella?: boolean) => {
 
 ```ts
 const emitFunctions: (options: EmitFunctionsOptions) => string;
+```
+
+### `emitInternalApi` (const)
+
+```ts
+const emitInternalApi: (options: {
+    functions: ReadonlyArray<FunctionIR>;
+    useUmbrella?: boolean;
+}) => string;
 ```
 
 ### `emitOpenApi` (const)

@@ -1,4 +1,4 @@
-export { emitApi, emitCollections, emitSeed } from "./api";
+export { emitApi, emitCollections, emitInternalApi, emitSeed } from "./api";
 export { emitDataModel } from "./data-model";
 export { default as emitDrizzleSchema } from "./drizzle";
 export { default as emitFunctions } from "./functions";

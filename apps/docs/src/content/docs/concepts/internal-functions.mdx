@@ -55,7 +55,7 @@ Internal functions are addressed through the generated `internal` namespace
 
 ```ts
 import { action, v } from "@/lunora/_generated/server";
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 export const syncCustomer = action.input({ stripeId: v.string() }).action(async ({ ctx, args }) => {
     const customer = await ctx.runQuery(internal.customers.byStripeId, args);
@@ -77,7 +77,7 @@ always internal. Schedule an `internal*` reference from a mutation or action:
 
 ```ts
 import { mutation, v } from "@/lunora/_generated/server";
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 export const enqueueReport = mutation.input({ accountId: v.id("accounts") }).mutation(async ({ ctx, args }) => {
     // Build the report off the request path — and don't expose the builder to clients.

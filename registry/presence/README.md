@@ -70,7 +70,7 @@ function Room({ roomId }: { roomId: string }) {
 // lunora/crons.ts
 import { cronJobs } from "@lunora/server";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 const crons = cronJobs();
 

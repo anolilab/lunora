@@ -228,7 +228,7 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
 
     // The object keys are quoted when a segment isn't a bare identifier
     // (leading-digit filename); the dispatch ref strings embed the `_`-joined
-    // namespace, which is what the `anyApi` proxy builds from the same path.
+    // namespace, the same `__lunoraRef` the generated `api.ts` carries.
     const implementation = renderNamespaceTree(
         functions,
         (definition) =>

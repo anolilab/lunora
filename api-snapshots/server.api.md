@@ -152,12 +152,6 @@ interface AggregateIndexOptions {
 type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
 ```
 
-### `AnyApi` (type)
-
-```ts
-type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValidator, unknown, FunctionKind>>>;
-```
-
 ### `ArgsValidator` (type)
 
 ```ts
@@ -3105,12 +3099,6 @@ const actionCacheExtension: SchemaExtension<{
 const allowAll: () => WhereInput;
 ```
 
-### `anyApi` (const)
-
-```ts
-const anyApi: AnyApi;
-```
-
 ### `asBucketStorage` (const)
 
 ```ts
@@ -4892,10 +4880,6 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
-### `AnyApi` (type)
-
-Re-exported from `@lunora/server` — signature tracked in that section.
-
 ### `ArgsValidator` (type)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -5478,10 +5462,6 @@ interface X402ProcedureConfig {
     readonly price: number | string;
 }
 ```
-
-### `anyApi` (const)
-
-Re-exported from `@lunora/server` — signature tracked in that section.
 
 ## Referenced internal declarations
 

@@ -43,7 +43,7 @@ describe("quoted object keys read as their runtime key", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.daily("digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, { "batch": 10, 'mode': "full", plain: true });
             export default crons;
@@ -66,7 +66,7 @@ describe("quoted object keys read as their runtime key", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.daily("digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, { 0x10: "hex", 1e3: "exp", 1_000_000: "sep", 0b11: "bin", 1.50: "frac", 7: "plain" });
             export default crons;

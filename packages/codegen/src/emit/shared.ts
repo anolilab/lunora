@@ -190,20 +190,6 @@ const renderNamespaceTree = <T extends { exportName: string; filePath: string }>
             );
         }
 
-        // The `anyApi` proxy never resolves a `__`/`$` name (framework probes),
-        // and from the third path segment on a key is read off a node that is
-        // also a reference, where it serves inherited object members.
-        const unreachable = [...list.map((entry) => entry.exportName), ...node.children.keys()].find(
-            (key) => key.startsWith("__") || key.startsWith("$") || (depth >= 3 && key in Object.prototype),
-        );
-
-        if (unreachable !== undefined) {
-            throw new LunoraError(
-                "NAMESPACE_COLLISION",
-                `"${unreachable}" in "${path || fileUnder(node)}" cannot be reached through api.*: names starting with "__" or "$", and Object.prototype members two folders deep, are reserved. Rename it.`,
-            );
-        }
-
         const leaves = list.map((entry) => `${indent}${renderLeaf(entry)}`);
         const nested = [...node.children.entries()]
             .toSorted(([a], [b]) => a.localeCompare(b))

@@ -164,5 +164,3 @@ operator and do not ship with the app.
 ## Deferred for v0.2
 
 - Real auth route handler wiring (the `Login.tsx` form posts to a stub).
-- Generated `api.*` references — the client uses `anyApi` until codegen
-  produces typed references for this project.

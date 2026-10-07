@@ -2,9 +2,8 @@
  * How a function file's path (relative to `lunora/`, no extension) becomes its
  * `api.*` key path (`namespaceSegments`) and its dispatch namespace
  * (`sanitizeNamespace`, the segments joined by `_`). The emitted `api.ts` /
- * `functions.ts`, codegen's `functionKeyOf`, and the `anyApi` proxy in
- * `shared/any-api.ts` must all agree; if they ever disagree, runtime dispatch
- * silently misses functions.
+ * `internal.ts` / `functions.ts` and codegen's `functionKeyOf` must all agree;
+ * if they ever disagree, runtime dispatch silently misses functions.
  */
 /** A feature/component directory's trailing `index` segment (collapsed to the dir name). */
 const INDEX_SUFFIX = /\/index$/u;
@@ -25,7 +24,7 @@ const namespaceSegments = (filePath: string): string[] =>
         .split("/")
         .map((segment) => segment.replaceAll(NON_IDENTIFIER, "_"));
 
-/** The dispatch namespace: the key path joined by `_` (`billing/invoices` → `billing_invoices`), as the `anyApi` proxy joins it. */
+/** The dispatch namespace: the key path joined by `_` (`billing/invoices` → `billing_invoices`). */
 const sanitizeNamespace = (filePath: string): string => namespaceSegments(filePath).join("_");
 
 export { namespaceSegments, sanitizeNamespace };

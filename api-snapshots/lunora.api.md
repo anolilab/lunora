@@ -53,10 +53,6 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `AnyApi` (type)
-
-Re-exported from `@lunora/server` — signature tracked at its source.
-
 ### `ArgsValidator` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1161,10 +1157,6 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `anyApi` (const)
-
-Re-exported from `@lunora/server` — signature tracked at its source.
-
 ### `asBucketStorage` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1912,10 +1904,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `WsTokenProvider` (type)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `anyApi` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -5043,10 +5031,6 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `AnyApi` (type)
-
-Re-exported from `@lunora/server` — signature tracked at its source.
-
 ### `ArgsValidator` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6148,10 +6132,6 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `allowAll` (const)
-
-Re-exported from `@lunora/server` — signature tracked at its source.
-
-### `anyApi` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -7445,10 +7425,6 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
-### `AnyApi` (type)
-
-Re-exported from `@lunora/server` — signature tracked at its source.
-
 ### `ArgsValidator` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7986,10 +7962,6 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `X402ProcedureConfig` (interface)
-
-Re-exported from `@lunora/server` — signature tracked at its source.
-
-### `anyApi` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

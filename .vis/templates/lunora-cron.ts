@@ -19,7 +19,7 @@ import { insertCronJob } from "./_helpers/insert-cron.js";
 
 const freshCrons = (jobName: string): string => `import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 /**
  * Code-first cron registry. Each registration runs the referenced internal

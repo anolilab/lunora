@@ -30,7 +30,7 @@ Codegen discovers the `crons.interval(...)` registration by AST, compiles its sc
 ```ts
 import { cronJobs } from "@lunora/server";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 const crons = cronJobs();
 

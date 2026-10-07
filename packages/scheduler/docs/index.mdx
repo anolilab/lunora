@@ -82,7 +82,7 @@ never edit wrangler by hand:
 ```ts
 import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 const crons = cronJobs();
 
@@ -126,7 +126,7 @@ returns the snippet and dispatcher metadata for a single recurring function:
 ```ts
 import { createCronTrigger } from "@lunora/scheduler";
 
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 const trigger = createCronTrigger({
     schedule: "0 3 * * *",
@@ -152,7 +152,7 @@ as the runtime reports completions:
 ```ts
 import { createWorkpool } from "@lunora/scheduler";
 
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 const pool = createWorkpool({
     namespace: env.SCHEDULER,
@@ -204,7 +204,7 @@ than in code:
 ```ts
 import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "@lunora/scheduler";
 
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 // Producer (inside an action / Worker).
 const queue = createQueueWorkpool({ queue: env.JOBS });

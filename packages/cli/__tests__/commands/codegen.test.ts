@@ -28,7 +28,7 @@ const cronsFile = (count: number): string => {
         (_unused, index) => `crons.daily("job ${String(index)}", { hourUTC: ${String(index)}, minuteUTC: 0 }, internal.jobs.run${String(index)}, {});`,
     );
 
-    return `import { cronJobs } from "@lunora/scheduler";\n\nimport { internal } from "./_generated/api.js";\n\nconst crons = cronJobs();\n\n${lines.join("\n")}\n\nexport default crons;\n`;
+    return `import { cronJobs } from "@lunora/scheduler";\n\nimport { internal } from "./_generated/internal.js";\n\nconst crons = cronJobs();\n\n${lines.join("\n")}\n\nexport default crons;\n`;
 };
 
 const here = dirname(fileURLToPath(import.meta.url));

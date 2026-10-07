@@ -38,7 +38,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
             crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, { batch: 10 });
@@ -68,7 +68,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.hourly("sweep sessions", { minuteUTC: 17 }, internal.presence.sweep, {});
             export default crons;
@@ -88,7 +88,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/server";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("heartbeat", { hours: 1 }, internal.jobs.run, {});
             export default crons;
@@ -107,7 +107,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs as defineCrons } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const c = defineCrons();
             c.weekly("report", { dayOfWeek: "monday", hourUTC: 8, minuteUTC: 0 }, internal.email.report, {});
             export default c;
@@ -126,7 +126,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons
                 .interval("a", { hours: 1 }, internal.jobs.a, {})
@@ -164,7 +164,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("dup", { minutes: 1 }, internal.a.b, {});
             export default crons;
@@ -174,7 +174,7 @@ describe("discover/crons", () => {
             "more-crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("dup", { minutes: 2 }, internal.a.c, {});
             export default crons;
@@ -206,7 +206,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.cron(\`nightly\`, \`0 * * * *\`, internal.presence.clear, {});
             export default crons;
@@ -225,7 +225,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.cron("bad", "every minute", internal.a.b, {});
             export default crons;
@@ -247,7 +247,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.interval("tick", { seconds: 30 }, internal.jobs.tick, {});
             export default crons;
@@ -285,7 +285,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const crons = cronJobs();
             crons.cron("sub-minute", "*/30 * * * * *", internal.jobs.tick, {});
             export default crons;
@@ -321,7 +321,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const name = "dyn";
             const crons = cronJobs();
             crons.interval(name, { minutes: 1 }, internal.a.b, {});
@@ -342,7 +342,7 @@ describe("discover/crons", () => {
             "crons.ts",
             `
             import { cronJobs } from "@lunora/scheduler";
-            import { internal } from "./_generated/api.js";
+            import { internal } from "./_generated/internal.js";
             const everyMinutes = 30;
             const crons = cronJobs();
             crons.interval("clear presence", { minutes: everyMinutes }, internal.presence.clear, {});

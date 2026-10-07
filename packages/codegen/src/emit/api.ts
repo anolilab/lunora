@@ -462,13 +462,60 @@ ${valueBody}
 };
 
 /**
- * Emit `_generated/api.ts` — the typed `api.*` registry (public functions), the
- * `internal.*` registry, and (when the project declares them) the typed
- * `workflows.*` / `agents.*` scheduler-target reference objects. `api`/`internal` are the same `anyApi` proxy
- * at runtime (the `__lunoraRef` is identical); visibility is enforced
- * server-side at dispatch, not in the reference. Splitting the *types* keeps
- * internal functions off the client-facing `api` surface.
+ * The nested reference objects for a subset of functions — each leaf the plain
+ * `{ __lunoraRef: "<namespace>:<export>" }` the runtime dispatches on.
  */
+const renderApiValue = (functions: ReadonlyArray<FunctionIR>): string =>
+    renderNamespaceTree(
+        functions.toSorted((a, b) => a.exportName.localeCompare(b.exportName)),
+        (definition) =>
+            `${renderObjectKey(definition.exportName)}: { __lunoraRef: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)} },`,
+        "value",
+    );
+
+/**
+ * Render one reference module: the `<typeName>` interface, the `<constName>`
+ * object it types, and the type-only imports they need. The object is plain
+ * data, so the module has no runtime import at all — `api.ts` is the file a
+ * sibling package (a web app, another Worker) imports, and it costs that package
+ * no dependency.
+ */
+const renderReferenceModule = (options: {
+    block?: string;
+    clientImports?: ReadonlyArray<string>;
+    constName: string;
+    docComment?: string;
+    functions: ReadonlyArray<FunctionIR>;
+    importLine?: string;
+    typeName: string;
+    typesBody?: string;
+    useUmbrella: boolean;
+}): string => {
+    const { block = "", constName, docComment: documentComment = "", functions, importLine = "", typeName, typesBody = "", useUmbrella } = options;
+    const types = renderApiBody(functions);
+    const value = renderApiValue(functions);
+
+    // Import only the dataModel helpers the rendered arg/return types actually
+    // reference: `Doc` appears when a function returns documents, `Id` when it
+    // takes or returns an id. Importing an unused one trips noUnusedLocals.
+    const dataModelImports = referencedDataModelImports(`${types}\n${typesBody}`);
+    const dataModelImportLine = dataModelImports.length > 0 ? `\nimport type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
+
+    // `FunctionReference` only when a function exists — a dangling import trips `noUnusedLocals`.
+    const clientImportNames = [...(types === "" ? [] : ["FunctionReference"]), ...(options.clientImports ?? [])];
+    const clientImportLine =
+        clientImportNames.length > 0 ? `import type { ${clientImportNames.join(", ")} } from "${baseSpecifiers(useUmbrella).client}";\n` : "";
+
+    return relocateBaseQualifiers(
+        `${GENERATED_HEADER}${clientImportLine}${importLine}${dataModelImportLine}
+${documentComment}export interface ${typeName} {${types ? `\n${types}\n` : ""}}
+
+export const ${constName}: ${typeName} = {${value ? `\n${value}\n` : ""}};
+${block}`,
+        useUmbrella,
+    );
+};
+
 interface EmitApiOptions {
     agents?: ReadonlyArray<AgentIR>;
     functions: ReadonlyArray<FunctionIR>;
@@ -480,65 +527,48 @@ interface EmitApiOptions {
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
+/**
+ * Emit `_generated/api.ts` — the `api.*` references to the public functions,
+ * and (when the project declares them) the typed `workflows.*` / `agents.*`
+ * scheduler-target reference objects and the `httpStreams.*` SSE routes.
+ * Internal functions live in `_generated/internal.ts` ({@link emitInternalApi}),
+ * so a client bundle that imports `api` never carries their names.
+ */
 const emitApi = (options: EmitApiOptions): string => {
     const { agents = [], functions, httpRoutes = [], mutators = [], useUmbrella = false, workflows = [] } = options;
-    const base = baseSpecifiers(useUmbrella);
-    const publicFunctions = [
-        ...functions.filter((definition) => definition.visibility !== "internal"),
-        ...syntheticAgentApiFunctions(agents, functions),
-        ...syntheticMutatorApiFunctions(mutators, functions),
-    ];
-    const internalFunctions = functions.filter((definition) => definition.visibility === "internal");
-
-    const publicBody = renderApiBody(publicFunctions);
-    const internalBody = renderApiBody(internalFunctions);
-
     const httpStreamsRef = renderHttpStreamsRef(httpRoutes);
-
-    // Import only the dataModel helpers the rendered arg/return types actually
-    // reference: `Doc` appears when a function returns documents, `Id` when it
-    // takes or returns an id. Importing an unused one trips noUnusedLocals.
-    const combinedBody = `${publicBody}\n${internalBody}\n${httpStreamsRef.body}`;
-    const dataModelImports = referencedDataModelImports(combinedBody);
-    const dataModelImportLine = dataModelImports.length > 0 ? `\nimport type { ${dataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
-
-    const apiBlock = publicBody ? `\n${publicBody}\n` : "";
-    const internalBlock = internalBody ? `\n${internalBody}\n` : "";
-
     const schedulerReferences = renderSchedulerReferences(workflows, agents);
 
-    const fileBody = `export interface ApiTypes {${apiBlock}}
-
-export const api = anyApi as unknown as ApiTypes;
-
-/** Internal functions — callable only server-side via \`ctx.run*\`, never from a client. */
-export interface InternalApiTypes {${internalBlock}}
-
-export const internal = anyApi as unknown as InternalApiTypes;
-${schedulerReferences.block}${httpStreamsRef.block}`;
-
-    // Import only what the body references. `HttpStreamRef` needs a streaming
-    // route; `FunctionReference` needs at least one registered function, and a
-    // project with none (or one whose discovery found none) would otherwise
-    // carry a dangling import that trips `noUnusedLocals`.
-    const clientImportNames = [
-        ...(fileBody.includes("FunctionReference<") ? ["FunctionReference"] : []),
-        ...(httpStreamsRef.block === "" ? [] : ["HttpStreamRef"]),
-    ];
-    const clientImportLine = clientImportNames.length > 0 ? `import type { ${clientImportNames.join(", ")} } from "${base.client}";\n` : "";
-
-    // `anyApi` comes from the CLIENT package, not the server one. `api.ts` is the
-    // file a sibling package imports (a web app, another Worker), and its only
-    // runtime import should be one that package already depends on — the server
-    // specifier made a browser app resolve the server runtime for a proxy. Both
-    // packages re-export the same shared implementation.
-    return relocateBaseQualifiers(
-        `${GENERATED_HEADER}import { anyApi } from "${base.client}";
-${clientImportLine}${schedulerReferences.importLine}${dataModelImportLine}
-${fileBody}`,
+    return renderReferenceModule({
+        block: `${schedulerReferences.block}${httpStreamsRef.block}`,
+        clientImports: httpStreamsRef.block === "" ? [] : ["HttpStreamRef"],
+        constName: "api",
+        functions: [
+            ...functions.filter((definition) => definition.visibility !== "internal"),
+            ...syntheticAgentApiFunctions(agents, functions),
+            ...syntheticMutatorApiFunctions(mutators, functions),
+        ],
+        importLine: schedulerReferences.importLine,
+        typeName: "ApiTypes",
+        typesBody: httpStreamsRef.body,
         useUmbrella,
-    );
+    });
 };
+
+/**
+ * Emit `_generated/internal.ts` — the `internal.*` references, callable only
+ * server-side via `ctx.run*` / the scheduler. Visibility is enforced at
+ * dispatch; keeping them in their own module keeps their names out of any
+ * client bundle that imports `api`.
+ */
+const emitInternalApi = (options: { functions: ReadonlyArray<FunctionIR>; useUmbrella?: boolean }): string =>
+    renderReferenceModule({
+        constName: "internal",
+        docComment: "/** Internal functions — callable only server-side via `ctx.run*`, never from a client. */\n",
+        functions: options.functions.filter((definition) => definition.visibility === "internal"),
+        typeName: "InternalApiTypes",
+        useUmbrella: options.useUmbrella ?? false,
+    });
 
 /**
  * Emit `_generated/seed.ts` — a project-bound `createSeedClient` with this
@@ -699,4 +729,4 @@ ${factories}
 `;
 };
 
-export { emitApi, emitCollections, emitSeed, renderAgentFunctionRegistry, renderSandboxFunctionRegistry };
+export { emitApi, emitCollections, emitInternalApi, emitSeed, renderAgentFunctionRegistry, renderSandboxFunctionRegistry };

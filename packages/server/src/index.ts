@@ -124,7 +124,6 @@ export type {
     ActionCtx,
     AggregateIndexDefinition,
     AggregateOp,
-    AnyApi,
     ArgsValidator,
     AuthState,
     CachePurge,
@@ -251,7 +250,6 @@ export type {
     Workflows,
     WorkflowStatusResult,
 } from "./types";
-export { anyApi } from "./types";
 export type { RegisteredWhisperAuthorizer, WhisperAuthorizeHandler } from "./whisper";
 export { onWhisper } from "./whisper";
 // `LunoraError` is the ONE canonical error class, owned by `@lunora/errors` and

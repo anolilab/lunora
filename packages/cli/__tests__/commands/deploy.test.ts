@@ -111,7 +111,7 @@ const VALID_WRANGLER = `{
 
 /** A `lunora/crons.ts` declaring one schedule, for the trigger-reconciliation tests. */
 const CRONS_FIXTURE = `import { cronJobs } from "@lunora/scheduler";
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 const crons = cronJobs();
 

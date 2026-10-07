@@ -33,13 +33,13 @@ which owns the alarm and durable storage.
 
 Available on `ctx.scheduler` in a **mutation or an action** — never a `query`,
 which is deterministic and re-runs. Target functions are passed by reference
-from the generated `api` / `internal` proxy (a `"file:fn"` path string also
+from the generated `api` / `internal` objects (a `"file:fn"` path string also
 works):
 
 ```ts
 import { mutation, v } from "#lunora/_generated/server.js";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 export const startTrial = mutation.input({ userId: v.string() }).mutation(async ({ ctx, args: { userId } }) => {
     // run an internal action 14 days from now
@@ -84,7 +84,7 @@ project — both **yours** to edit. No extra DO binding is required.
 ```ts
 import { cronJobs } from "@lunora/server";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 const crons = cronJobs();
 

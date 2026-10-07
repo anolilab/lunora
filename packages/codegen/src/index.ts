@@ -72,6 +72,7 @@ export {
     emitDataModel,
     emitDrizzleSchema,
     emitFunctions,
+    emitInternalApi,
     emitScheduler,
     emitServer,
     emitShard,

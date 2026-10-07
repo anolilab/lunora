@@ -37,7 +37,8 @@ export default defineModule({ description: "Channels and messages", tables: ["me
     write(
         "chat/posts.ts",
         `import { mutation, query, v } from "@lunora/server";
-import { api, internal } from "../_generated/api";
+import { api } from "../_generated/api";
+import { internal } from "../_generated/internal";
 
 export const feed = query({
     args: {},
@@ -168,7 +169,7 @@ describe("architecture manifest", () => {
         write(
             "accounts/queues.ts",
             `import { defineQueue, defineSubscription } from "@lunora/queue";
-import { internal } from "../_generated/api";
+import { internal } from "../_generated/internal";
 import { posted } from "../queues";
 
 export const welcome = defineSubscription(posted, { handler: async () => {} });
@@ -393,7 +394,7 @@ export const onboarding = defineWorkflow({ handler: onboard });
         );
         write(
             "jobs/process.ts",
-            `import { internal } from "../_generated/api";
+            `import { internal } from "../_generated/internal";
 
 export async function processJob(message, ctx) {
     await ctx.runMutation(internal.accounts.users.touch, {});
@@ -425,7 +426,7 @@ export const jobs = defineQueue({ handler: processJob });
         writeModules();
         write(
             "jobs/process.ts",
-            `import { internal } from "../_generated/api";
+            `import { internal } from "../_generated/internal";
 
 const run = async (message, ctx) => {
     await ctx.runMutation(internal.accounts.users.touch, {});

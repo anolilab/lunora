@@ -848,8 +848,8 @@ const functionReferenceSegments = (node: Node | undefined): string[] | undefined
 /**
  * A static function reference as the `namespace:export` key the function
  * registry uses: the path joined with `_` (`api.billing.invoices.create` →
- * `billing_invoices:create`). Must agree with the `anyApi` proxy
- * (`shared/any-api.ts`), which builds the same key at runtime.
+ * `billing_invoices:create`), the `__lunoraRef` the generated `api.ts` /
+ * `internal.ts` give that path.
  */
 const functionKeyOf = (node: Node | undefined): string | undefined => {
     const segments = functionReferenceSegments(node);

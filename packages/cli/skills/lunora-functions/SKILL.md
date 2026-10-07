@@ -88,7 +88,8 @@ import type { Id } from "#lunora/_generated/server.js";
 import { action, mutation, query, v } from "#lunora/_generated/server.js";
 
 // `api` / `internal` come from codegen:
-// import { api, internal } from "./_generated/api";
+// import { api } from "./_generated/api";
+// import { internal } from "./_generated/internal";
 
 export const listByChannel = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) =>
     ctx.db
@@ -254,7 +255,7 @@ dead-letter queue.
 // lunora/queues.ts
 import { defineSubscription, defineTopic } from "@lunora/queue";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 export const signups = defineTopic<{ userId: string }>();
 
@@ -351,7 +352,7 @@ never mount.
 // lunora/http.ts
 import { httpAction, httpRouter } from "@lunora/server";
 
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/internal";
 
 const app = httpRouter();
 

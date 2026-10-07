@@ -38,7 +38,7 @@ vi.mock(import("@lunora/config"), async (importOriginal) => {
 });
 
 const CRONS_SOURCE = `import { cronJobs } from "@lunora/scheduler";
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 const crons = cronJobs();
 crons.interval("clear presence", { minutes: 30 }, internal.messages.send, {});
