@@ -78,6 +78,32 @@ describe("schema info", () => {
             ]);
         });
 
+        it("indexes an optional or nullable metadata column as its inner kind (#1033)", () => {
+            expect.assertions(1);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        docs: defineTable({
+            body: v.string(),
+            userId: v.optional(v.string()),
+            score: v.optional(v.number()),
+            tag: v.union(v.string(), v.null()),
+            status: v.optional(v.union(v.literal("draft"), v.literal("live"))),
+        }).vectorize("body", { dimensions: 1024, embed, index: "docs-body", metadata: ["userId", "score", "tag", "status"], metric: "cosine" }),
+    });
+    `);
+
+            // Metadata columns are usually optional (not every row has the value);
+            // reading the wrapper's kind dropped their index, so every filter on
+            // them silently matched nothing.
+            expect(discoverSchemaInfo(workdir, "lunora").info?.vectorMetadata).toStrictEqual([
+                { index: "docs-body", kind: "string", property: "userId" },
+                { index: "docs-body", kind: "number", property: "score" },
+                { index: "docs-body", kind: "string", property: "tag" },
+                { index: "docs-body", kind: "literal", property: "status" },
+            ]);
+        });
+
         it("reports a metadata property that names no column, rather than dropping it", () => {
             expect.assertions(1);
 
