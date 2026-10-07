@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 import { sqliteEncode } from "@lunora/sql-store";
+import type { Pool } from "mysql2/promise";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { mysqlDialect, postgresDialect } from "../src/global-dialect";
@@ -360,7 +361,7 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
     // warn branch and the OCC guard goes unchecked. So pin the real thing:
     // `createPool` is lazy, so this needs no MySQL server.
     /** A real (never-connected) `mysql2` pool built with the given wire flags. */
-    const realPool = async (flag: string): Promise<{ end: () => Promise<void>; pool: unknown }> => {
+    const realPool = async (flag: string): Promise<{ end: () => Promise<void>; pool: Pool }> => {
         const { createPool } = await import("mysql2/promise");
         const pool = createPool({ database: "d", flags: [flag], host: "127.0.0.1", user: "u" });
 
@@ -379,7 +380,7 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
         const { end, pool } = await realPool("FOUND_ROWS");
 
         try {
-            expect(() => buildMysqlExec(pool as never)).not.toThrow();
+            expect(() => buildMysqlExec(pool)).not.toThrow();
 
             // The probe was DETERMINATE — a relocated driver internal would fall
             // through to the "could not determine" warning instead.
@@ -396,7 +397,7 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
         const { end, pool } = await realPool("-FOUND_ROWS");
 
         try {
-            expect(() => buildMysqlExec(pool as never)).toThrow(LunoraError);
+            expect(() => buildMysqlExec(pool)).toThrow(LunoraError);
             expect(warn).not.toHaveBeenCalled();
         } finally {
             await end();
