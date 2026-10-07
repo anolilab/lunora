@@ -59,7 +59,7 @@ export type {
 
 import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
 import type { ServiceFetcher, ServiceRpc } from "lunorash/server";
-import type * as lunoraService_gateway from "../../services/gateway/src/index.js";
+import type * as lunoraService_gateway from "./services/gateway/src/index.js";
 
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
 

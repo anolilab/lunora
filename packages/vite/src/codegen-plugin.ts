@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import {
     CodegenDiagnosticError,
@@ -8,6 +8,7 @@ import {
     fingerprintSchemaSources,
     isTestPath,
     PROJECT_CONFIG_FILENAMES,
+    readServiceBindings,
     refreshCodegenProject,
     runCodegen,
 } from "@lunora/codegen";
@@ -27,6 +28,9 @@ import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Matches a project-variant tsconfig filename (`tsconfig.build.json`, …). */
 const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
+
+/** A TypeScript source an RPC service's declaration snapshot is emitted from. */
+const SERVICE_SOURCE_RE = /\.[cm]?tsx?$/u;
 
 /**
  * Compose the dev error-overlay message for declared-but-not-re-exported
@@ -468,6 +472,13 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
             server.watcher.add(absoluteSchemaDirectory);
 
+            // A service folder may sit outside the Vite root, where nothing watches it yet.
+            const rpcServiceDirectories = readServiceBindings(options.projectRoot)
+                .services.filter((service) => service.rpcEntrypoint !== undefined)
+                .map((service) => dirname(service.wranglerPath));
+
+            server.watcher.add(rpcServiceDirectories);
+
             // Baseline the config-drift fingerprint from the current on-disk state
             // before any watcher event can fire (buildStart re-baselines it after
             // its binding write). See the config watcher wired at the end of this
@@ -718,28 +729,36 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
-                // Only react to changes inside the schema dir from here on, and
-                // ignore generated output.
-                if (!isInside(normalized, absoluteSchemaDirectory)) {
-                    return;
-                }
+                // An RPC service's sources feed its `_generated/services/` snapshot.
+                const inRpcService =
+                    SERVICE_SOURCE_RE.test(normalized) &&
+                    !normalized.includes(`${sep}node_modules${sep}`) &&
+                    rpcServiceDirectories.some((directory) => isInside(normalized, directory));
 
-                if (isInside(normalized, absoluteGeneratedDirectory)) {
-                    return;
-                }
+                if (!inRpcService) {
+                    // Only react to changes inside the schema dir from here on, and
+                    // ignore generated output.
+                    if (!isInside(normalized, absoluteSchemaDirectory)) {
+                        return;
+                    }
 
-                if (!normalized.endsWith(".ts")) {
-                    return;
-                }
+                    if (isInside(normalized, absoluteGeneratedDirectory)) {
+                        return;
+                    }
 
-                // Skip test files — codegen does not read them as source (the
-                // same rule it walks with), so a save there would rerun it for
-                // nothing on every keystroke of a test. The one reader that does
-                // see them is secret discovery: a key pasted into a test is
-                // reported on the next regeneration (another save, `lunora
-                // codegen`, or the deploy gate), not on the test's own save.
-                if (isTestPath(relative(absoluteSchemaDirectory, normalized).split(sep).join("/"))) {
-                    return;
+                    if (!normalized.endsWith(".ts")) {
+                        return;
+                    }
+
+                    // Skip test files — codegen does not read them as source (the
+                    // same rule it walks with), so a save there would rerun it for
+                    // nothing on every keystroke of a test. The one reader that does
+                    // see them is secret discovery: a key pasted into a test is
+                    // reported on the next regeneration (another save, `lunora
+                    // codegen`, or the deploy gate), not on the test's own save.
+                    if (isTestPath(relative(absoluteSchemaDirectory, normalized).split(sep).join("/"))) {
+                        return;
+                    }
                 }
 
                 // …and skip anything the project's `postcodegen` wrote, so a hook

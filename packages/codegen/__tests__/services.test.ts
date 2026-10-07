@@ -76,12 +76,51 @@ describe("services", () => {
         const server = generated("server.ts");
         const shard = generated("shard.ts");
 
-        expect(server).toContain(`import type * as lunoraService_llmGateway from "../../services/llm-gateway/src/index.js";`);
+        expect(server).toContain(`import type * as lunoraService_llmGateway from "./services/llmGateway/src/index.js";`);
         expect(server).toContain("readonly llmGateway: ServiceRpc<typeof lunoraService_llmGateway.Gateway>;");
         expect(server).toContain("readonly parser: ServiceFetcher;");
         expect(server.match(/readonly services: LunoraServices;/gu)).toHaveLength(1);
         expect(shard).toContain(`{ binding: "SERVICE_LLM_GATEWAY", name: "llmGateway", rpc: true }`);
         expect(shard).toContain(`{ binding: "SERVICE_PARSER", name: "parser" }`);
+    });
+
+    it("types an RPC service from a declaration snapshot whose imports resolve from _generated", () => {
+        expect.assertions(6);
+
+        writeServices();
+        write("services/llm-gateway/src/types.ts", `export interface Completion { text: string }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/package.json", `{ "name": "llm-kit", "types": "index.d.ts" }\n`);
+        write("services/llm-gateway/node_modules/llm-kit/index.d.ts", `export interface Usage { tokens: number }\n`);
+        write(
+            "services/llm-gateway/src/index.ts",
+            `import type { Usage } from "llm-kit";
+import type { Completion } from "./types";
+
+// A type error in the service must not stop its snapshot.
+const broken: number = "not a number";
+
+export class Gateway {
+    async complete(prompt: string): Promise<Completion & { usage: Usage }> {
+        return { text: prompt, usage: { tokens: broken } };
+    }
+}
+`,
+        );
+        runCodegen({ projectRoot: workdir });
+
+        const entry = generated("services/llmGateway/src/index.d.ts");
+
+        expect(entry).toContain(`from "./types.js"`);
+        expect(entry).toContain(`from "../../../../../services/llm-gateway/node_modules/llm-kit/index.js"`);
+        expect(entry).toContain("complete(prompt: string): Promise<Completion & {");
+        expect(generated("services/llmGateway/src/types.d.ts")).toContain("export interface Completion");
+
+        // The snapshot goes once the service is no longer RPC.
+        write("lunora.config.ts", `export default { services: { parser: { dir: "./services/parser" } } };\n`);
+        runCodegen({ projectRoot: workdir });
+
+        expect(() => generated("services/llmGateway/src/index.d.ts")).toThrow(/ENOENT/u);
+        expect(() => generated("services")).toThrow(/ENOENT/u);
     });
 
     it("binds a named entrypoint declared rpc: false as a fetcher, without importing the service's sources", () => {
@@ -169,9 +208,10 @@ export const parse = action({
             "services/llm-gateway/wrangler.jsonc",
             `{ "name": "neore-llm-gateway", "main": "src/index.mts", "routes": ["llm.example.com/*"], "env": { "staging": { "name": "gw-staging", "routes": [], "workers_dev": true } } }\n`,
         );
+        write("services/llm-gateway/src/index.mts", `export class Gateway {\n    complete(prompt: string): string {\n        return prompt;\n    }\n}\n`);
         runCodegen({ projectRoot: workdir });
 
-        expect(generated("server.ts")).toContain(`from "../../services/llm-gateway/src/index.mjs";`);
+        expect(generated("server.ts")).toContain(`from "./services/llmGateway/src/index.mjs";`);
         expect(generated("shard.ts")).toContain(`{ binding: "SERVICE_LLM_GATEWAY", name: "llmGateway", rpc: true }`);
         // Routed at the top level, but `staging` clears the routes and turns workers.dev back on.
         expect(resolveServiceBindings(workdir).find((service) => service.name === "llmGateway")).toMatchObject({

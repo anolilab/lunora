@@ -1421,7 +1421,7 @@ const emitScheduler: (hasScheduler: boolean) => string;
 ### `emitServer` (const)
 
 ```ts
-const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags, hasNotify, identity, queues, schema, generatedDirectory, services, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
+const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags, hasNotify, identity, queues, schema, services, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
 ```
 
 ### `emitShard` (const)
@@ -2277,7 +2277,6 @@ interface EmitServerOptions {
     capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
     env?: EnvIR;
-    generatedDirectory?: string;
     hasFlags?: boolean;
     hasNotify?: boolean;
     hasVectors?: boolean;

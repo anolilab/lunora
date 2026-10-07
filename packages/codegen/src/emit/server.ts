@@ -1,15 +1,9 @@
-import { isAbsolute, relative, sep } from "node:path";
-
-import { LunoraError } from "@lunora/errors";
-
 import type { CapabilityKey, CapabilityTier } from "../capabilities";
 import { CAPABILITIES } from "../capabilities";
 import type { AgentIR, ContainerIR, EnvIR, IdentityIR, QueueIR, SchemaIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
 import { plainQueues } from "../ir";
+import { serviceDeclarationSpecifier } from "./service-declarations";
 import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, unwrapOptional } from "./shared";
-
-/** A TypeScript source extension, swapped for its JS twin (`.ts`→`.js`, `.mts`→`.mjs`, `.cts`→`.cjs`) in an emitted import specifier. */
-const TS_EXTENSION_RE = /\.([cm]?)tsx?$/u;
 
 /**
  * Emit `_generated/server.ts` — re-exports of the user-facing factories
@@ -85,9 +79,6 @@ interface EmitServerOptions {
      */
     env?: EnvIR;
 
-    /** Absolute `_generated/` directory, so an RPC service's entry module is imported by a path relative to it. Required with `services`. */
-    generatedDirectory?: string;
-
     /** The project declares `lunora/flags.ts` — wires `ctx.flags` (OpenFeature) onto every ctx. */
     hasFlags?: boolean;
     /** The project declares `lunora/notify.ts` — wires `ctx.notify` + its `ctx.push` alias (`@lunora/notify`) onto every ctx. */
@@ -129,7 +120,6 @@ const emitServer = ({
     identity,
     queues = [],
     schema,
-    generatedDirectory = "",
     services = [],
     storageRuleBuckets = [],
     topics = [],
@@ -333,35 +323,16 @@ ${topics.map((topic) => `    readonly ${topic.exportName}: TopicPublisher<QueueB
 
     // Services (plan 457) are action-only, like `ctx.browser`: a cross-Worker call
     // is non-deterministic I/O a query re-run or a mutation rollback cannot undo.
-    // An RPC service is typed from its own entry module, which pulls that service's
-    // sources (and its `cloudflare:workers` import) into the app's type check: a
-    // type error there fails the app's. A fetch service needs no import.
+    // An RPC service is typed from its declaration snapshot under
+    // `_generated/services/`, so the app's type check never compiles its sources.
     const hasServices = services.length > 0;
-    // The service's entry module as a `.js`-suffixed relative specifier from
-    // `_generated/` — the form generated imports use under NodeNext.
-    const serviceTypeImport = (main: string): string => {
-        if (generatedDirectory === "") {
-            throw new LunoraError("INTERNAL", "@lunora/codegen: emitServer needs `generatedDirectory` to import an RPC service's types");
-        }
-
-        const fromGenerated = relative(generatedDirectory, main);
-
-        // Another Windows drive has no relative path; an absolute one is not a valid specifier.
-        if (isAbsolute(fromGenerated)) {
-            throw new LunoraError("INTERNAL", `@lunora/codegen: an RPC service's entry (${main}) must be on the same drive as the app`);
-        }
-
-        const relativePath = fromGenerated.split(sep).join("/").replace(TS_EXTENSION_RE, ".$1js");
-
-        return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
-    };
-    // Only an RPC service imports its sources; a fetch one (named entrypoint or
-    // not) is a `ServiceFetcher`, so the app's type check never reaches into it.
+    // Only an RPC service imports its snapshot; a fetch one (named entrypoint or
+    // not) is a `ServiceFetcher`.
     const rpcServices = services.filter((service) => service.rpcEntrypoint !== undefined);
     const serviceTypeNames = rpcServices.length > 0 ? "ServiceFetcher, ServiceRpc" : "ServiceFetcher";
     const servicesTypeImport = hasServices
         ? `import type { ${serviceTypeNames} } from "${base.server}";\n${rpcServices
-              .map((service) => `import type * as lunoraService_${service.name} from ${JSON.stringify(serviceTypeImport(service.main))};\n`)
+              .map((service) => `import type * as lunoraService_${service.name} from ${JSON.stringify(serviceDeclarationSpecifier(service))};\n`)
               .join("")}`
         : "";
     const servicesTypeBlock = hasServices

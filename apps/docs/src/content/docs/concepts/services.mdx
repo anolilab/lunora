@@ -39,11 +39,12 @@ export default {
 - `dir` is the service's folder. Its `wrangler.jsonc` supplies the Worker
   `name` and `main`, so there is one source of truth for both.
 - `entrypoint` (optional) makes it an RPC service, typed from that class.
-  Codegen imports the service's entry module for those types, so the service's
-  sources join the app's type check: a type error there fails the app's.
+  Codegen emits a declaration snapshot of the service into
+  `_generated/services/<key>/`, compiled with the service's own `tsconfig.json`,
+  so the app's type check never compiles the service's sources. `lunora dev` and
+  `vite dev` refresh it when a file in the service's folder changes.
 - `rpc: false` (with `entrypoint`) binds that named entrypoint but calls it with
-  plain `fetch`: `ctx.services.<key>` is a fetcher and codegen imports none of
-  the service's sources. Use it for internal routes that must be reachable only
+  plain `fetch`: `ctx.services.<key>` is a fetcher and codegen snapshots nothing. Use it for internal routes that must be reachable only
   through the binding. Cloudflare cannot tell a binding call from an internet
   request on the default `fetch` handler, so such routes live on a separate
   `WorkerEntrypoint` class, which a Hono app or another fetch client can still
