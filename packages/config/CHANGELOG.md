@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.318](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.317...@lunora/config@1.0.0-alpha.318) (2026-10-07)
+
+### Bug Fixes
+
+* **config:** scaffold only the imported payment adapter's secrets ([#1026](https://github.com/anolilab/lunora/issues/1026)) ([05173b1](https://github.com/anolilab/lunora/commit/05173b15aa1c72866e96284fffe6e9da5ed67fc9))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.274
+* **@lunora/seed:** upgraded to 1.0.0-alpha.199
+* **@lunora/studio:** upgraded to 1.0.0-alpha.273
+
 ## @lunora/config [1.0.0-alpha.317](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.316...@lunora/config@1.0.0-alpha.317) (2026-10-07)
 
 ### Features

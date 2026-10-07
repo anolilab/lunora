@@ -1,3 +1,14 @@
+## @lunora/payment [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.184...@lunora/payment@1.0.0-alpha.185) (2026-10-07)
+
+### Bug Fixes
+
+* **server:** keep schema extension keys literal through extend() ([#1025](https://github.com/anolilab/lunora/issues/1025)) ([d717390](https://github.com/anolilab/lunora/commit/d717390fdc722495832823fe57a09d88f35d4065))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.184
+
 ## @lunora/payment [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.183...@lunora/payment@1.0.0-alpha.184) (2026-10-06)
 
 

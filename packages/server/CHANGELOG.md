@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.183...@lunora/server@1.0.0-alpha.184) (2026-10-07)
+
+### Bug Fixes
+
+* **server:** keep schema extension keys literal through extend() ([#1025](https://github.com/anolilab/lunora/issues/1025)) ([d717390](https://github.com/anolilab/lunora/commit/d717390fdc722495832823fe57a09d88f35d4065))
+
 ## @lunora/server [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.182...@lunora/server@1.0.0-alpha.183) (2026-10-06)
 
 

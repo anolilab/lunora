@@ -1,3 +1,16 @@
+## @lunora/vite [1.0.0-alpha.316](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.315...@lunora/vite@1.0.0-alpha.316) (2026-10-07)
+
+### Features
+
+* **codegen:** type rpc services from a declaration snapshot ([#1024](https://github.com/anolilab/lunora/issues/1024)) ([6c6e766](https://github.com/anolilab/lunora/commit/6c6e7660fb4a33c48a6c3798254b4c6d91559593))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.274
+* **@lunora/config:** upgraded to 1.0.0-alpha.318
+* **@lunora/studio:** upgraded to 1.0.0-alpha.273
+
 ## @lunora/vite [1.0.0-alpha.315](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.314...@lunora/vite@1.0.0-alpha.315) (2026-10-07)
 
 
