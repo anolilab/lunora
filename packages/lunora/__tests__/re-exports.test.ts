@@ -55,6 +55,10 @@ const OPT_OUT = new Map<string, string>([
         "the behavioural TCK versions in lockstep with the @lunora/platform contracts it asserts, not the umbrella's opinionated re-export surface — a host author consumes @lunora/platform/conformance directly",
     ],
     [upstreamKey("@lunora/platform", "./conformance/suite"), "same as ./conformance above — the workerd-safe pure suite is part of the same TCK"],
+    [
+        upstreamKey("@lunora/server", "./in-process"),
+        "the in-process engine seam @lunora/testing runs functions on — tooling consumes it from @lunora/server directly, an app never imports it",
+    ],
 ]);
 
 /**
