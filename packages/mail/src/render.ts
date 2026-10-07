@@ -5,9 +5,9 @@ import type { ReactElement } from "react";
  * provider payload. Wraps `@react-email/render` so we can swap to
  * `@visulima/email`'s react-email template engine without touching callers.
  *
- * The renderer is imported lazily: its workerd build evaluates prettier and
- * html-to-text at module top (~400 KiB), which an app sending pre-rendered
- * HTML should never pay for on cold start.
+ * The renderer is imported lazily so its top-level evaluation (prettier and
+ * html-to-text, in its workerd build) is deferred until the first React render
+ * instead of running on cold start. Bundlers may still include the code.
  */
 const renderEmail = async (element: ReactElement): Promise<{ html: string; text: string }> => {
     const { render } = await import("@react-email/render");

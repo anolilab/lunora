@@ -12,7 +12,8 @@
  *     latency-tolerant sends (a verification link, a receipt).
  *   - **queueEmail** (internalAction) — hand the send off to a Cloudflare Queue
  *     and return immediately, so the request isn't blocked. Requires a Queue
- *     binding wired into `createMailer({ queue })` (see the README).
+ *     binding passed as `createMailerFromEnv(env, { queue })` in `mailer()` below
+ *     (see the README).
  *
  * **These are `internalAction`s, not public RPC, on purpose.** A general-purpose
  * mailer that lets the caller pick recipients, subject, and body is an open
@@ -85,13 +86,10 @@ const cloudflareSend = async (from: string, to: string, raw: string): Promise<vo
  * Pass a `queue` binding in `createMailerFromEnv`'s options to enable
  * {@link queueEmail}.
  *
- * Only hand `createMailerFromEnv` the `cloudflareSend` callback when a
- * `SEND_EMAIL` binding actually exists: that helper prefers `cloudflareSend`
- * over `RESEND_API_KEY` whenever it's supplied, so passing it unconditionally
- * would make a Resend-only deployment (no `SEND_EMAIL` binding) throw inside
- * `cloudflareSend` instead of falling back to Resend.
+ * `cloudflareSend` is used only when the `SEND_EMAIL` binding exists, so a
+ * Resend-only deployment falls back to `RESEND_API_KEY`.
  */
-const mailer = (): Mailer => createMailerFromEnv(env, env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend });
+const mailer = (): Mailer => createMailerFromEnv(env, { cloudflareSend });
 
 /**
  * Validator for the email payload. Mirrors `@lunora/mail`'s `SendOptions` minus

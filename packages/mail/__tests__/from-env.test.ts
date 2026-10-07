@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createCaptureSink, createMailerFromEnv, shouldCaptureMail } from "../src/from-env";
+import { consumeQueuedSend } from "../src/queue";
 
 describe("shouldCaptureMail", () => {
     it("captures in a dev environment (WORKER_ENV=development)", () => {
@@ -180,13 +181,24 @@ describe("createMailerFromEnv", () => {
         expect(() => createMailerFromEnv({ WORKER_ENV: "development" })).toThrow(/MAIL_FROM/);
     });
 
-    it("throws on send() in production when no transport is configured", async () => {
+    it("throws in production when neither a transport nor a queue is configured", () => {
         expect.assertions(1);
 
-        // Prod, no cloudflareSend, no RESEND_API_KEY ⇒ loud failure, not silent capture.
-        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" });
+        // Prod, no cloudflareSend, no RESEND_API_KEY, no queue ⇒ loud failure, not silent capture.
+        expect(() => createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" })).toThrow(/transport is required/);
+    });
+
+    it("ignores cloudflareSend when no SEND_EMAIL binding is present", async () => {
+        expect.assertions(2);
+
+        const cloudflareSend = vi.fn<(from: string, to: string, raw: string) => Promise<void>>(async () => undefined);
+        const mailer = createMailerFromEnv(
+            { MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" },
+            { cloudflareSend, queue: { send: async () => undefined } },
+        );
 
         await expect(mailer.send({ subject: "Hi", text: "x", to: "a@x.test" })).rejects.toThrow(/no transport/);
+        expect(cloudflareSend).not.toHaveBeenCalled();
     });
 
     it("lets a producer-only worker queue() without a delivery transport", async () => {
@@ -199,13 +211,60 @@ describe("createMailerFromEnv", () => {
         expect(send).toHaveBeenCalledTimes(1);
     });
 
-    it("uses the cloudflareSend transport in production when supplied", () => {
+    it("uses the cloudflareSend transport in production when SEND_EMAIL is bound", async () => {
         expect.assertions(1);
 
-        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" }, { cloudflareSend: async () => undefined });
+        const cloudflareSend = vi.fn<(from: string, to: string, raw: string) => Promise<void>>(async () => undefined);
+        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", SEND_EMAIL: {}, WORKER_ENV: "production" }, { cloudflareSend });
 
-        // Constructing succeeds (the transport is built lazily); a no-op send binding is wired.
-        expect(mailer).toHaveProperty("send");
+        await mailer.send({ subject: "Hi", text: "x", to: "a@x.test" });
+
+        expect(cloudflareSend).toHaveBeenCalledTimes(1);
+    });
+
+    it("captures queued mail in dev at consume time, never reaching the real transport", async () => {
+        expect.assertions(4);
+
+        const fetch = vi.fn<() => Promise<{ json: () => Promise<unknown> }>>(async () => {
+            return {
+                json: async () => {
+                    return { result: { id: "captured-1" } };
+                },
+            };
+        });
+        const env = {
+            LUNORA_ADMIN_TOKEN: "secret",
+            MAIL_FROM: "noreply@x.test",
+            SEND_EMAIL: {},
+            SHARD: {
+                get: () => {
+                    return { fetch };
+                },
+                idFromName: () => 0,
+            },
+            WORKER_ENV: "development",
+        };
+        const cloudflareSend = vi.fn<(from: string, to: string, raw: string) => Promise<void>>(async () => undefined);
+        const bodies: unknown[] = [];
+
+        // Producer: the message goes through the queue, not straight to capture.
+        await createMailerFromEnv(env, {
+            cloudflareSend,
+            queue: {
+                send: async (body) => {
+                    bodies.push(body);
+                },
+            },
+        }).queue({ subject: "Queued", text: "x", to: "a@x.test" });
+
+        expect(fetch).not.toHaveBeenCalled();
+
+        // Consumer: the dev mailer captures what it drains.
+        const result = await consumeQueuedSend(createMailerFromEnv(env, { cloudflareSend }), bodies[0]);
+
+        expect(result).toStrictEqual({ id: "captured-1" });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(cloudflareSend).not.toHaveBeenCalled();
     });
 
     it("forwards the queue binding so mailer.queue() works in production", async () => {

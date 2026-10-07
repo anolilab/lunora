@@ -8,6 +8,7 @@ import type { MailTransport, QueueLike, SendPayload } from "../src/types";
 const FROM_PATTERN = /from/;
 const API_KEY_PATTERN = /apiKey/;
 const QUEUE_PATTERN = /queue/;
+const NO_TRANSPORT_PATTERN = /no transport configured/;
 const RECIPIENT_PATTERN = /at least one recipient/;
 
 const fakeTransport = (id: string = "msg-1"): { sent: SendPayload[]; transport: MailTransport } => {
@@ -34,6 +35,17 @@ describe("createMailer", () => {
         expect.assertions(1);
 
         expect(() => createMailer({ from: "noreply@x.test" })).toThrow(API_KEY_PATTERN);
+    });
+
+    it("builds a producer-only mailer from a queue alone: queue() works, send() rejects", async () => {
+        expect.assertions(3);
+
+        const enqueue = vi.fn<QueueLike["send"]>(async () => undefined);
+        const mailer = createMailer({ from: "noreply@x.test", queue: { send: enqueue } });
+
+        await expect(mailer.queue({ subject: "Hi", text: "x", to: "a@x.test" })).resolves.toStrictEqual({ queued: true });
+        expect(enqueue).toHaveBeenCalledTimes(1);
+        await expect(mailer.send({ subject: "Hi", text: "x", to: "a@x.test" })).rejects.toThrow(NO_TRANSPORT_PATTERN);
     });
 
     it("send() forwards to the transport with the default `from`", async () => {

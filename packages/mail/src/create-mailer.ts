@@ -14,8 +14,11 @@ import type { LunoraMailOptions, Mailer, MailTransport, SendOptions, SendPayload
  * preference order encodes "Cloudflare Email Workers is the default provider":
  * `cloudflareSend` selects the Cloudflare Email Workers transport (the
  * scaffolded default; `send_email` binding wired in the project); `apiKey`
- * selects the Resend transport (bring-your-own-provider escape hatch). Anything
- * else is a misconfiguration — fail loudly with an actionable message.
+ * selects the Resend transport (bring-your-own-provider escape hatch).
+ *
+ * With none of those, a mailer that has a `queue` is a producer-only one (it
+ * enqueues, a consumer delivers): it is still built, and only `send()` rejects.
+ * Without a queue either, nothing could ever go out — fail loudly at construction.
  */
 const buildDefaultTransport = (options: LunoraMailOptions): MailTransport => {
     if (options.cloudflareSend) {
@@ -26,9 +29,21 @@ const buildDefaultTransport = (options: LunoraMailOptions): MailTransport => {
         return createResendTransport(options.apiKey, options.from);
     }
 
+    if (options.queue) {
+        return {
+            send: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "INTERNAL",
+                        "@lunora/mail: no transport configured — this mailer can only queue(); pass `transport`, `cloudflareSend` (a SEND_EMAIL binding) or `apiKey` (Resend) to send()",
+                    ),
+                ),
+        };
+    }
+
     throw new LunoraError(
         "INTERNAL",
-        "@lunora/mail: a transport is required — pass `transport`, `cloudflareSend` (Cloudflare Email Workers, the default), or `apiKey` (Resend)",
+        "@lunora/mail: a transport is required — pass `transport`, `cloudflareSend` (Cloudflare Email Workers, the default), or `apiKey` (Resend), or a `queue` for a producer-only mailer",
     );
 };
 

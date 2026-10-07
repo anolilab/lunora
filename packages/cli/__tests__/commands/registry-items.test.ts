@@ -231,22 +231,6 @@ const emittedDependencies = (): { needed: string[]; undeclared: string[] } => {
     return { needed, undeclared };
 };
 
-/** Every `createMailerFromEnv(` call site in the registry, split by whether it guards `cloudflareSend`. */
-const mailerCallSites = (): { guarded: string[]; unguarded: string[] } => {
-    const guarded: string[] = [];
-    const unguarded: string[] = [];
-
-    for (const { from, name, source } of itemSources) {
-        const calls = source.split("\n").filter((line) => line.includes("createMailerFromEnv(") && !line.trimStart().startsWith("*"));
-
-        for (const line of calls) {
-            (line.includes('["SEND_EMAIL"] === undefined') ? guarded : unguarded).push(`${name} → ${from}: ${line.trim()}`);
-        }
-    }
-
-    return { guarded, unguarded };
-};
-
 /** The message shapes that mark a throw as an authorization refusal rather than a server fault. */
 const AUTHORIZATION_MESSAGE = /requires an authenticated user|belongs to a different user|is not allowed/iu;
 
@@ -445,22 +429,6 @@ describe("shipped registry items", () => {
         // green instead of red. Demand the two signals that are really there — one
         // from a scaffolded file, one from a manifest's `docs`.
         expect(needed).toStrictEqual(expect.arrayContaining(["crons → @lunora/scheduler (crons.ts)", "backup → @lunora/scheduler (docs)"]));
-    });
-
-    it("no item hands `createMailerFromEnv` an unguarded `cloudflareSend`", () => {
-        expect.assertions(2);
-
-        // `createMailerFromEnv` prefers `cloudflareSend` over `RESEND_API_KEY`
-        // whenever it is supplied (`packages/mail/src/from-env.ts`), so passing it
-        // unconditionally makes the documented Resend path unreachable: a deploy
-        // with no `SEND_EMAIL` binding throws inside the callback while
-        // `RESEND_API_KEY` is set. The base `auth` item shipped exactly that while
-        // its three siblings guarded the call.
-        const { guarded, unguarded } = mailerCallSites();
-
-        expect(unguarded).toStrictEqual([]);
-        // Guard the guard: a renamed helper must not turn this into a vacuous pass.
-        expect(guarded).toHaveLength(4);
     });
 
     it("authorization guards throw a coded error, not a bare `Error`", () => {

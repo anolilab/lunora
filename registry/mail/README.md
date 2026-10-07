@@ -110,20 +110,19 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     ```ts
     import type { QueueLike } from "@lunora/mail";
 
-    const mailer = (): Mailer =>
-        createMailerFromEnv(env, { ...(env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }), queue: env["MAIL_QUEUE"] as QueueLike });
+    const mailer = (): Mailer => createMailerFromEnv(env, { cloudflareSend, queue: env["MAIL_QUEUE"] as QueueLike });
     ```
 
-    Dev capture keeps working. A producer-only Worker (it enqueues, the consumer delivers) needs no delivery transport: `queue()` works without one, and only `send()` throws `no transport configured`.
+    A producer-only Worker (it enqueues, the consumer delivers) needs no delivery transport: `queue()` works without one, and only `send()` throws `no transport configured`.
 
-3. In your Worker's `queue()` handler, drain the batch with `consumeQueuedSend` from `@lunora/mail`:
+3. In your Worker's `queue()` handler, build the mailer with `createMailerFromEnv` as well and drain the batch with `consumeQueuedSend` from `@lunora/mail`:
 
     ```ts
-    import { consumeQueuedSend, createMailer } from "@lunora/mail";
+    import { consumeQueuedSend, createMailerFromEnv } from "@lunora/mail";
 
     export default {
         queue: async (batch, env) => {
-            const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: env.MAIL_FROM });
+            const mailer = createMailerFromEnv(env, { cloudflareSend });
 
             for (const message of batch.messages) {
                 await consumeQueuedSend(mailer, message.body);
@@ -134,6 +133,8 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
         },
     };
     ```
+
+    Dev capture keeps working: in `lunora dev` the message still goes through the queue, and the consumer's mailer captures it into the studio Mail inbox instead of delivering it (`consumeQueuedSend` sends through the mailer, and `createMailerFromEnv` picks capture in dev).
 
 The registry item doesn't add the Queue binding for you — a queue is an opt-in piece of infrastructure with a name you choose, so it's documented here rather than guessed into your `wrangler.jsonc`.
 
