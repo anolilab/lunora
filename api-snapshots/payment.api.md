@@ -914,7 +914,7 @@ const nextSubscriptionState: (from: SubscriptionState, action: SubscriptionActio
 ### `paymentExtension` (const)
 
 ```ts
-const paymentExtension: SchemaExtension;
+const paymentExtension: SchemaExtension<Record<"customers" | "events" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>, "payment">;
 ```
 
 ### `paymentsFromContext` (const)

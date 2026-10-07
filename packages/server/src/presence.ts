@@ -225,7 +225,7 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
             // heartbeat's oldest-first opportunistic reap.
             .index("byRoomLastSeen", ["roomId", "lastSeen"]),
     },
-}) as unknown as SchemaExtension<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }>;
+}) as unknown as SchemaExtension<{ [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable> }, typeof PRESENCE_KEY>;
 
 // The presence functions are built with the procedure builders (no generated
 // server here, so bind the base contexts via `initLunora.dataModel().create()`).

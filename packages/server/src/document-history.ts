@@ -263,7 +263,7 @@ const documentHistoryExtension = defineSchemaExtension(DOCUMENT_HISTORY_KEY, {
             // Drives `vacuum`'s oldest-first scan.
             .index("byRecordedAt", ["recordedAt"]),
     },
-}) as unknown as SchemaExtension<{ [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable> }>;
+}) as unknown as SchemaExtension<{ [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable> }, typeof DOCUMENT_HISTORY_KEY>;
 
 // No generated server here, so bind the base contexts via the builder factory —
 // same as `definePresence`.
