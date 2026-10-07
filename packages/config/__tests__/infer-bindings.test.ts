@@ -13,7 +13,7 @@ import { discoverFeatureUsage } from "../../codegen/src/discover/feature-usage";
 import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import { validateWranglerProject } from "../src/cloudflare/wrangler-project";
 import type { InferredBindings } from "../src/infer-bindings";
-import { inferLunoraBindings, packageNamesFromBindings } from "../src/infer-bindings";
+import { inferLunoraBindings, secretSourcesFromBindings } from "../src/infer-bindings";
 
 const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
@@ -691,7 +691,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             `import { createPayment } from "@lunora/payment";\nimport { creem } from "@lunora/payment/creem";\nexport const payment = () => [createPayment, creem];`,
         );
 
-        const packages = packageNamesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
 
         expect(packages).toContain("@lunora/payment/creem");
         expect(packages.filter((name) => name.startsWith("@lunora/payment/"))).toStrictEqual(["@lunora/payment/creem"]);
@@ -1188,7 +1188,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.usesBrowser).toBe(true);
         expect(result.usesMail).toBe(true);
         // `@lunora/mail` is what carries `RESEND_API_KEY` into `.dev.vars.example`.
-        expect(packageNamesFromBindings(result)).toContain("@lunora/mail");
+        expect(secretSourcesFromBindings(result)).toContain("@lunora/mail");
     });
 
     it("counts a value re-export of a capability package", async () => {
@@ -1328,23 +1328,40 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
     });
 
     it("infers notify from a @lunora/notify import, keying its secrets by the configured channel (#1039)", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
         write("lunora/notify.ts", `import { defineNotify, webPushFromEnv } from "@lunora/notify";\nexport default defineNotify({ webPush: webPushFromEnv });`);
 
         const result = await inferLunoraBindings({ projectRoot: root });
-        const packages = packageNamesFromBindings(result);
+        const packages = secretSourcesFromBindings(result);
 
-        // `packageNamesFromBindings` is the ONLY producer feeding `requiredSecrets`,
+        // `secretSourcesFromBindings` is the ONLY producer feeding `requiredSecrets`,
         // so the channel key is what gets the VAPID secrets into `.dev.vars.example`
         // and the missing-secret pre-flight — and a webPush-only app is not told
         // to set FCM_*.
         expect(result.usesNotify).toBe(true);
         expect(result.usesNotifyFcm).toBe(false);
-        expect(packages).toContain("@lunora/notify#webPush");
-        expect(packages).not.toContain("@lunora/notify#fcm");
+        expect(packages).toContain("@lunora/notify:webPush");
+        expect(packages).not.toContain("@lunora/notify:fcm");
+        // The package itself carries no secret, so it is not a secret source.
+        expect(packages).not.toContain("@lunora/notify");
+    });
+
+    it("reports both notify channels when defineNotify's config is not a plain object literal", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/notify.ts",
+            `import { defineNotify, webPushFromEnv } from "@lunora/notify";\nconst base = { webPush: webPushFromEnv };\nexport default defineNotify({ ...base });`,
+        );
+
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(packages.filter((name) => name.startsWith("@lunora/notify:"))).toStrictEqual(["@lunora/notify:fcm", "@lunora/notify:webPush"]);
     });
 
     it("reports both notify channels when defineNotify configures webPush and fcm", async () => {
@@ -1357,9 +1374,9 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             `import { defineNotify, fcmFromEnv, webPushFromEnv } from "@lunora/notify";\nexport default defineNotify({ fcm: fcmFromEnv, webPush: webPushFromEnv });`,
         );
 
-        const packages = packageNamesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
 
-        expect(packages.filter((name) => name.startsWith("@lunora/notify#"))).toStrictEqual(["@lunora/notify#fcm", "@lunora/notify#webPush"]);
+        expect(packages.filter((name) => name.startsWith("@lunora/notify:"))).toStrictEqual(["@lunora/notify:fcm", "@lunora/notify:webPush"]);
     });
 
     it("infers r2sql from a ctx.r2sql access so its R2_SQL_* secrets reach the pre-flights", async () => {
@@ -1374,7 +1391,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         const result = await inferLunoraBindings({ projectRoot: root });
 
         expect(result.usesR2sql).toBe(true);
-        expect(packageNamesFromBindings(result)).toContain("@lunora/bindings/r2sql");
+        expect(secretSourcesFromBindings(result)).toContain("@lunora/bindings/r2sql");
     });
 
     it("infers AI Search from a ctx.aiSearch access, the only signal an app gives", async () => {

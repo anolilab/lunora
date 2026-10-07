@@ -1475,12 +1475,6 @@ const isRunnableTarget: (target: string) => boolean;
 const lunoraLine: (message: string) => string;
 ```
 
-### `packageNamesFromBindings` (const)
-
-```ts
-const packageNamesFromBindings: (bindings: InferredBindings) => string[];
-```
-
 ### `padBadge` (const)
 
 ```ts
@@ -1719,6 +1713,12 @@ const runnableTargetIds: () => ReadonlyArray<string>;
 
 ```ts
 const scaffoldPolicyFile: (edit: ScaffoldPolicyEdit, serverModule: string) => ScaffoldFileResult;
+```
+
+### `secretSourcesFromBindings` (const)
+
+```ts
+const secretSourcesFromBindings: (bindings: InferredBindings) => string[];
 ```
 
 ### `secretsForPackages` (const)

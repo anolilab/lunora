@@ -272,7 +272,7 @@ describe("ensureDevVarsExample", () => {
     it("emits only the configured notify channel's secrets (#1039)", () => {
         expect.assertions(2);
 
-        const added = ensureDevVarsExample(dir, ["@lunora/notify", "@lunora/notify#webPush"]);
+        const added = ensureDevVarsExample(dir, ["@lunora/notify", "@lunora/notify:webPush"]);
 
         expect(added).toStrictEqual(expect.arrayContaining(["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"]));
         expect(added.filter((key) => key.startsWith("FCM_"))).toStrictEqual([]);
