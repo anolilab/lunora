@@ -26,7 +26,16 @@
  * `__tests__/support/memory-driver.ts`.
  */
 import type { TenantSend } from "../backup/tenant-transport";
+import type { ControlPlaneStore } from "../d1-store";
+import type { EdgeProtection } from "../edge/protection";
 import type { TargetId, TenantDeploymentSpec } from "../provision-contract";
+
+/** What one edge-block tick did (`TargetFleet.edgeBlock`). */
+export interface EdgeBlockResult {
+    blocked: number;
+    failed: number;
+    unblocked: number;
+}
 
 /** One line a target reports while it converges or tears down. */
 export type ProgressLine = (line: string) => void;
@@ -165,6 +174,24 @@ export interface TargetFleet {
      * fanned out (the cron tick is skipped, a queue batch is retried).
      */
     dispatch?: (tenant: Pick<TenantHandle, "adminToken" | "resourceRef">) => TenantSend;
+
+    /**
+     * The platform edge in front of this target's hostnames — firewall events and
+     * per-organization edge rules (plan 365 W7). Absent on a target whose traffic
+     * the platform's edge does not front (`celld-vps`, `cloudflare-workers`), or
+     * on a deployment without the zone and token configured.
+     */
+    edge?: EdgeProtection;
+
+    /**
+     * Stop a suspended organization's traffic before it reaches (and bills) a
+     * Worker, and restore it on recovery (plan 365 W8): converge the edge to the
+     * suspensions in the store, idempotently. `cloudflare-wfp` only, and only
+     * where this deployment holds the SaaS zone or the suspended-hostnames list.
+     * Absent elsewhere: a box serves its own traffic, a connected account is the
+     * customer's, and the suspension still holds through the plan lookup.
+     */
+    edgeBlock?: (database: ControlPlaneStore, options: { log: (line: string) => void; now: number }) => Promise<EdgeBlockResult>;
 
     readonly id: TargetId;
 

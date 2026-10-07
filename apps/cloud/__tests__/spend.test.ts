@@ -10,6 +10,7 @@ import {
     isUsageMeter,
     RATE_CARD,
     spendBreakdown,
+    spendLimits,
     USAGE_METERS,
 } from "../src/billing/spend";
 
@@ -108,12 +109,12 @@ describe(evaluateSpendCap, () => {
     it("suspends a free org past the default cap and not below it", () => {
         const over = evaluateSpendCap({ plan: "free", usage: { requests: 20_000_000 } }); // ~$6
 
-        expect(over.suspend).toBe(true);
+        expect(over.level).toBe("breach");
         expect(over.capMinor).toBe(DEFAULT_SPEND_CAP_MINOR["free"]);
 
         const under = evaluateSpendCap({ plan: "free", usage: { requests: 1_000_000 } }); // ~$0.30
 
-        expect(under.suspend).toBe(false);
+        expect(under.level).toBe("ok");
     });
 
     it("catches a runaway that never touches the compute meters", () => {
@@ -122,31 +123,65 @@ describe(evaluateSpendCap, () => {
         const decision = evaluateSpendCap({ plan: "free", usage: { doDurationGbS: 10_000_000 } }); // $125
 
         expect(decision.spendMinor).toBe(12_500);
-        expect(decision.suspend).toBe(true);
+        expect(decision.level).toBe("breach");
     });
 
     it("never suspends enterprise (uncapped default)", () => {
         const decision = evaluateSpendCap({ plan: "enterprise", usage: { cpuMs: 1e12, requests: 1e12 } });
 
-        expect(decision.suspend).toBe(false);
+        expect(decision.level).toBe("ok");
         expect(decision.capMinor).toBeNull();
     });
 
     it("honors an org override, and treats an explicit 0 as uncapped", () => {
         const tightened = evaluateSpendCap({ capMinorOverride: 100, plan: "pro", usage: { requests: 10_000_000 } }); // ~$3
 
-        expect(tightened.suspend).toBe(true);
+        expect(tightened.level).toBe("breach");
 
         const uncapped = evaluateSpendCap({ capMinorOverride: 0, plan: "free", usage: { requests: 1e12 } });
 
-        expect(uncapped.suspend).toBe(false);
+        expect(uncapped.level).toBe("ok");
         expect(uncapped.capMinor).toBeNull();
     });
 
     it("caps unknown plans at the free default (never uncapped by accident)", () => {
         const decision = evaluateSpendCap({ plan: "mystery", usage: { requests: 20_000_000 } });
 
-        expect(decision.suspend).toBe(true);
+        expect(decision.level).toBe("breach");
         expect(decision.capMinor).toBe(DEFAULT_SPEND_CAP_MINOR["free"]);
+    });
+});
+
+describe("soft cap (plan 365 W2)", () => {
+    it("warns at 80% of the cap by default, before it breaches", () => {
+        // free cap 500 → default warn 400; 15M requests ≈ 450 cents.
+        const decision = evaluateSpendCap({ plan: "free", usage: { requests: 15_000_000 } });
+
+        expect(decision.warnMinor).toBe(400);
+        expect(decision.level).toBe("warn");
+    });
+
+    it("honors an explicit warn threshold, and treats 0 as off", () => {
+        expect(evaluateSpendCap({ plan: "free", usage: { requests: 1_000_000 }, warnMinorOverride: 10 }).level).toBe("warn");
+        expect(evaluateSpendCap({ plan: "free", usage: { requests: 15_000_000 }, warnMinorOverride: 0 }).level).toBe("ok");
+    });
+
+    it("lets breach win over warn", () => {
+        expect(evaluateSpendCap({ plan: "free", usage: { requests: 20_000_000 }, warnMinorOverride: 10 }).level).toBe("breach");
+    });
+
+    it("warns an uncapped org that set a threshold", () => {
+        const decision = evaluateSpendCap({ plan: "enterprise", usage: { requests: 1e9 }, warnMinorOverride: 100 });
+
+        expect(decision.capMinor).toBeNull();
+        expect(decision.level).toBe("warn");
+    });
+
+    /**
+     * A `.global()` row answers SQL NULL for an unset column. Reading that as an
+     * explicit override turned every org without one into an uncapped org.
+     */
+    it("reads a NULL override as unset, never as uncapped", () => {
+        expect(spendLimits({ capMinorOverride: null, plan: "free", warnMinorOverride: null })).toStrictEqual({ capMinor: 500, warnMinor: 400 });
     });
 });

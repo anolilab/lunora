@@ -222,33 +222,154 @@ export const DEFAULT_SPEND_CAP_MINOR: Record<string, null | number> = {
     pro: 20_000, // $200 — a runaway pro app stops before a four-digit bill
 };
 
-export interface SpendCapInput {
-    /** Org-level override; `undefined` falls back to the plan default. */
-    capMinorOverride?: number;
+/**
+ * Where an org's period spend sits against its two thresholds (plan 365 D2):
+ * `warn` notifies (the `spend` alert target), `breach` suspends.
+ */
+export type SpendLevel = "breach" | "ok" | "warn";
+
+/**
+ * The warn threshold an org gets when it sets none: this percentage of its cap.
+ * Every capped org is told before it is suspended — going from serving traffic
+ * to a 503 with nothing in between is the gap the soft cap closes.
+ */
+export const DEFAULT_SPEND_WARN_PERCENT = 80;
+
+/** Largest threshold an org may set (minor units): $1B. Bounds a tenant-supplied number before it is stored. */
+export const MAX_SPEND_THRESHOLD_MINOR = 100_000_000_000;
+
+/**
+ * An org's two thresholds as its row stores them. Both overrides accept `null`
+ * because a `.global()` row answers SQL NULL for an unset column — and reading
+ * that NULL as an explicit override is what made every org without one uncapped.
+ */
+export interface SpendLimitsInput {
+    /** Org-level cap override; unset falls back to the plan default, explicit `0` disables the cap. */
+    capMinorOverride?: null | number;
     plan: string;
-    usage: PeriodUsage;
+    /** Org-level warn threshold; unset falls back to {@link DEFAULT_SPEND_WARN_PERCENT} of the cap, explicit `0` disables it. */
+    warnMinorOverride?: null | number;
 }
 
-export interface SpendCapDecision {
+export interface SpendLimits {
     capMinor: null | number;
-    spendMinor: number;
-    suspend: boolean;
+    warnMinor: null | number;
 }
 
 /**
- * Whether the org's estimated period spend breaches its cap. An explicit
- * override of `0` disables the cap (support escape hatch); unknown plans get
- * the free-tier default so an unrecognized tier is never uncapped.
+ * Resolve an org's cap and warn threshold. An explicit cap of `0` disables the
+ * cap (support escape hatch); unknown plans get the free-tier default so an
+ * unrecognized tier is never uncapped. A warn threshold applies even to an
+ * uncapped org — it is a notification, not a stop.
  */
-export const evaluateSpendCap = (input: SpendCapInput): SpendCapDecision => {
+export const spendLimits = (input: SpendLimitsInput): SpendLimits => {
     const planDefault = input.plan in DEFAULT_SPEND_CAP_MINOR ? DEFAULT_SPEND_CAP_MINOR[input.plan] : DEFAULT_SPEND_CAP_MINOR["free"];
-    let capMinor: null | number | undefined = planDefault;
+    let capMinor: null | number = planDefault ?? null;
 
-    if (input.capMinorOverride !== undefined) {
+    if (input.capMinorOverride != null) {
         capMinor = input.capMinorOverride === 0 ? null : input.capMinorOverride;
     }
 
+    let warnMinor: null | number = capMinor === null ? null : Math.floor((capMinor * DEFAULT_SPEND_WARN_PERCENT) / 100);
+
+    if (input.warnMinorOverride != null) {
+        warnMinor = input.warnMinorOverride === 0 ? null : input.warnMinorOverride;
+    }
+
+    return { capMinor, warnMinor };
+};
+
+/** The level `spendMinor` reaches against `limits`; breach wins over warn. */
+export const spendLevel = (spendMinor: number, limits: SpendLimits): SpendLevel => {
+    if (limits.capMinor !== null && spendMinor >= limits.capMinor) {
+        return "breach";
+    }
+
+    return limits.warnMinor !== null && spendMinor >= limits.warnMinor ? "warn" : "ok";
+};
+
+export interface SpendCapInput extends SpendLimitsInput {
+    usage: PeriodUsage;
+}
+
+export interface SpendCapDecision extends SpendLimits {
+    level: SpendLevel;
+    spendMinor: number;
+}
+
+/** Price an org's period usage and place it against its thresholds — the one evaluator the sweep and the reads share. */
+export const evaluateSpendCap = (input: SpendCapInput): SpendCapDecision => {
+    const limits = spendLimits(input);
     const spendMinor = estimatedSpendMinor(input.usage);
 
-    return { capMinor: capMinor ?? null, spendMinor, suspend: typeof capMinor === "number" && spendMinor >= capMinor };
+    return { ...limits, level: spendLevel(spendMinor, limits), spendMinor };
 };
+
+/** Epoch ms of the first instant of `now`'s UTC month — the usage period bucket. */
+export const periodStartOf = (now: number): number => {
+    const date = new Date(now);
+
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+};
+
+/**
+ * The running current-period spend an organization row carries for the
+ * admission fast path (plan 365 D4): `spendNanoCents` accrued since
+ * `spendPeriod` began. An estimate kept beside the ledger, never instead of it —
+ * the hourly sweep recomputes it from the ledger and overwrites it.
+ */
+export interface SpendAccrual {
+    spendNanoCents?: null | number;
+    spendPeriod?: null | number;
+}
+
+/**
+ * The accrual after one ledger row lands, or `null` when the row does not move
+ * it: a row for any period but the current one (a tenant-supplied future
+ * `periodStart` must not reset the running total), an unknown meter, or a
+ * non-positive quantity.
+ */
+export const accruedSpend = (
+    accrual: SpendAccrual,
+    row: { kind: string; periodStart: number; quantity: number },
+    now: number,
+): null | { spendNanoCents: number; spendPeriod: number } => {
+    const period = periodStartOf(now);
+
+    if (row.periodStart !== period || !isUsageMeter(row.kind) || !Number.isFinite(row.quantity) || row.quantity <= 0) {
+        return null;
+    }
+
+    const base = accrual.spendPeriod === period ? (accrual.spendNanoCents ?? 0) : 0;
+
+    return { spendNanoCents: base + row.quantity * RATE_CARD[row.kind].nanoCentsPerUnit, spendPeriod: period };
+};
+
+/**
+ * Whether an organization row's running spend already breaches its cap — the
+ * breach bit the dispatcher's plan lookup carries, so an over-cap org is
+ * refused at admission as soon as the ledger write lands rather than at the
+ * next hourly sweep. A stale period's accrual never counts.
+ */
+export const accrualBreached = (organization: SpendAccrual & { plan: string; spendCapMinor?: null | number }, now: number): boolean =>
+    organization.spendPeriod === periodStartOf(now) &&
+    spendLevel(
+        Math.round((organization.spendNanoCents ?? 0) / NANO_CENTS_PER_CENT),
+        spendLimits({ capMinorOverride: organization.spendCapMinor, plan: organization.plan }),
+    ) === "breach";
+
+/** The organization columns admission reads. `.global()` rows answer SQL NULL for an unset column. */
+export interface AdmissionRow extends SpendAccrual {
+    plan: string;
+    spendCapMinor?: null | number;
+    suspendedAt?: null | number;
+}
+
+/**
+ * Whether an organization may serve traffic right now: its row exists, it is
+ * not suspended (spend cap, dunning, overage, support), and its running spend
+ * does not already breach its cap (plan 365 W3). The one admission test the
+ * dispatcher's plan lookup, the domain routes and the box routing table share.
+ */
+export const organizationServing = (organization: AdmissionRow | null, now: number): boolean =>
+    organization !== null && organization.suspendedAt == null && !accrualBreached(organization, now);

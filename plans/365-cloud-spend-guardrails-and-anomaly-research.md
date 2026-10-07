@@ -3,8 +3,9 @@
 **Baseline:** `18ec7965` — the head of [PR #85](https://github.com/anolilab/lunora/pull/85)
 (`claude/cloud-platform-dx-ojvkmu`), which carries `apps/cloud` itself. This plan
 stacks on that PR, not on `alpha`.
-**Status:** IN PROGRESS — W1 (metering fix) and W0 (full rate card) shipped;
-W2–W7 open
+**Status:** DONE (code) — W0–W8 shipped on PR #1003 (2026-10-06); open only the
+live checks in §4b (an Enterprise zone for the WAF hostname list, the token
+scopes for firewall events and edge rules, a deployed Outbound Worker)
 
 Research pass over five capabilities Vercel shipped as a bundle (soft/hard spend
 caps, anomaly alerting, function recursion protection, billing usage APIs for
@@ -552,19 +553,49 @@ What it touched:
 
 Gates: `tsc --noEmit` clean, 464/464 cloud tests pass.
 
+## 4b. What shipped (W2–W8, 2026-10-06)
+
+- **W2 soft cap.** `spendWarnMinor` (unset 80% of the cap, `0` off), `evaluateSpendCap` → `level`
+  (`ok`/`warn`/`breach`), a `spend` alert target on the existing channels, once per period, and a
+  Usage-tab card (owner/admin). Fixed on the way: an unset `spendCapMinor` read as NULL had made
+  every org without an override uncapped.
+- **W3 admission.** A running per-period accrual on the org row; `planForScript` answers
+  `suspended` once it reaches the cap, so the dispatcher refuses within its 60 s cache. Every
+  admission path fails closed (missing org, malformed or failed lookup, a stale `ok` past a 5 min
+  grace), and the cache is keyed by the verified owner.
+- **W8 edge block.** Cloudflare cannot deactivate a custom hostname, so a cell runs in one of three
+  modes: `dispatcher` (default — the 503 is the block, domains are never touched), `list` (an
+  Enterprise WAF hostname list) or `delete-hostnames` (opt-in only). Every block re-reads its
+  identity mapping first. Boxes (`celld-vps`) enforce suspension by dropping the org's aliases from
+  the routes push (fleets stop, never deleted), serialised per box with drift healing.
+- **W6 agent billing.** `usage.summary` and `usage.cloudflare-costs` MCP tools, org-wide deploy
+  key only.
+- **W4 anomalies.** A rolling per-org baseline, hourly z-scores with a volume floor and warm-up,
+  `usage_anomaly` / `error_anomaly` targets, silences (owner/admin, bounded).
+- **W7 edge.** Firewall events (org-filtered, no client IPs), a per-org DDoS sensitivity override
+  (never off) and an anomaly-armed rate limit. One reconciler writes Cloudflare, every answer is
+  checked and fails closed, rules are bound to the rows that entitle each hostname, and nothing is
+  written until an operator sets the per-cell budgets.
+- **W5 recursion.** A dispatcher-decided depth carried to an Outbound Worker as a binding
+  parameter and re-signed per hop; `508` + metric + audit at depth 16 (`terminate`, or per-org
+  `allow`). Inert without `LUNORA_LINEAGE_SECRET`. Blind spot: DO stubs, service bindings, queues
+  and workflows bypass the Outbound Worker; enabling it disables `connect()` for tenants.
+- **Targets.** None of the edge features reach `celld-vps` or `cloudflare-workers`; both list it
+  as a target limitation in the studio and the BYO docs. Anomalies work on both.
+
 ## 5. Workstreams
 
-| #   | Workstream                                                                                                                                                                                                            | Size | Depends on |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ---------- |
-| W0  | ✅ **Full-bill rate card** (D1b, D1c) — 35-meter `RATE_CARD`, widened ledger, per-product breakdown. **Done** — see §4a.                                                                                              | M    | —          |
-| W1  | ✅ **Fix AE metering aggregation** (D1) — `SUM(_sample_interval)` over `index1`, with a test asserting the emitted SQL. **Done** — see §4a.                                                                           | S    | —          |
-| W2  | **Soft cap** (D2, D3) — `spendWarnMinor` field, `evaluateSpendCap` → `level`, `spend` alert target, warn branch in `enforceSpendCaps`, console control.                                                               | M    | W1         |
-| W3  | **Fast-path breach at admission** (D4) — carry the breach bit through `resolveTenant`'s plan lookup.                                                                                                                  | S    | W2         |
-| W4  | **Anomaly score + targets** (D5, D6) — rolling baseline store, online z-score, min-volume floor, `usage_anomaly` / `error_anomaly` rule targets, silence rules.                                                       | L    | W1         |
-| W5  | **Recursion protection** (D7, D8) — Outbound Worker on the dispatch namespace, lineage in the outbound `parameters`, depth cap, `508` + metric + audit event, per-org `terminate`/`allow`, docs incl. the blind spot. | M    | —          |
-| W6  | **Agent-queryable billing** (D10) — MCP opt-in on the usage/spend/cost reads + current-period projection (`spendBreakdown` is the payload).                                                                           | S    | W0         |
-| W7  | **DDoS visibility & config** (D9) — firewall-events read, per-org L7 sensitivity override, anomaly → rate-limit-rule action.                                                                                          | M    | W4         |
-| W8  | **Edge-block suspension** (D11) — deactivate the custom hostname on suspend (and reactivate on recovery); WAF-list block where the zone plan allows; keep the 503 as fallback.                                        | M    | —          |
+| #   | Workstream                                                                                                                                                                                                               | Size | Depends on |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- | ---------- |
+| W0  | ✅ **Full-bill rate card** (D1b, D1c) — 35-meter `RATE_CARD`, widened ledger, per-product breakdown. **Done** — see §4a.                                                                                                 | M    | —          |
+| W1  | ✅ **Fix AE metering aggregation** (D1) — `SUM(_sample_interval)` over `index1`, with a test asserting the emitted SQL. **Done** — see §4a.                                                                              | S    | —          |
+| W2  | ✅ **Soft cap** (D2, D3) — `spendWarnMinor` field, `evaluateSpendCap` → `level`, `spend` alert target, warn branch in `enforceSpendCaps`, console control.                                                               | M    | W1         |
+| W3  | ✅ **Fast-path breach at admission** (D4) — carry the breach bit through `resolveTenant`'s plan lookup.                                                                                                                  | S    | W2         |
+| W4  | ✅ **Anomaly score + targets** (D5, D6) — rolling baseline store, online z-score, min-volume floor, `usage_anomaly` / `error_anomaly` rule targets, silence rules.                                                       | L    | W1         |
+| W5  | ✅ **Recursion protection** (D7, D8) — Outbound Worker on the dispatch namespace, lineage in the outbound `parameters`, depth cap, `508` + metric + audit event, per-org `terminate`/`allow`, docs incl. the blind spot. | M    | —          |
+| W6  | ✅ **Agent-queryable billing** (D10) — MCP opt-in on the usage/spend/cost reads + current-period projection (`spendBreakdown` is the payload).                                                                           | S    | W0         |
+| W7  | ✅ **DDoS visibility & config** (D9) — firewall-events read, per-org L7 sensitivity override, anomaly → rate-limit-rule action.                                                                                          | M    | W4         |
+| W8  | ✅ **Edge-block suspension** (D11) — deactivate the custom hostname on suspend (and reactivate on recovery); WAF-list block where the zone plan allows; keep the 503 as fallback.                                        | M    | —          |
 
 W0 and W1 are done. W2/W3/W4/W6 read the ledger those two corrected. W5 and W8
 are independent of everything else and of each other — the two best candidates

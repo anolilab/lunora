@@ -1,10 +1,14 @@
 import { LunoraError } from "@lunora/server";
 
+import type { AdmissionRow } from "../src/billing/spend";
+import { organizationServing } from "../src/billing/spend";
 import { randomSecret } from "../src/deploy/keys";
+import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
+import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
 import type { TargetId } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
+import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -30,6 +34,8 @@ interface DomainRow {
     certificateStatus?: null | string;
     createdAt: number;
     customHostnameId?: null | string;
+    edgeBlockedAt?: null | number;
+    edgeBlockError?: null | string;
     hostname: string;
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
@@ -43,6 +49,7 @@ interface DomainRow {
 interface ProjectRow {
     _id: Id<"projects">;
     activeScriptName?: string;
+    organizationId?: Id<"organizations">;
 }
 
 const HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u;
@@ -59,6 +66,21 @@ const isRedirectTarget = (value: string): boolean => {
     }
 };
 
+/**
+ * Refuse a domain write that would put an organization back on the edge while
+ * it is suspended or its running spend already breaches its cap (plan 365
+ * W8/W3) — adding a domain, verifying one, or issuing its certificate. Read from
+ * the organization row; a missing row is refused too.
+ * @throws {LunoraError} `FORBIDDEN` while the organization is suspended or over its cap.
+ */
+const assertServing = async (context: QueryContext, organizationId: Id<"organizations">): Promise<void> => {
+    const organization = (await context.db.get(organizationId)) as AdmissionRow | null;
+
+    if (!organizationServing(organization, context.now)) {
+        throw new LunoraError("FORBIDDEN", "this organization is suspended; custom domains cannot be added or verified until it recovers");
+    }
+};
+
 export const add = mutation
     .use(rateLimit("provision"))
     .input({
@@ -72,6 +94,7 @@ export const add = mutation
         const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
         await assertRowInOrg(context, arguments_.projectId, arguments_.organizationId, "project");
+        await assertServing(context, member.organizationId);
 
         // Custom domains are a plan feature (GAPS.md B1) — enforce the
         // entitlement, not just the flag on the pricing page.
@@ -129,6 +152,24 @@ export const list = query
         const { page } = await context.db.domains.findMany({ where: { organizationId, projectId } });
 
         return page;
+    });
+
+/**
+ * The domain the verify route checks and may request a certificate for
+ * (owner/admin, under the caller's session; SYSTEM only). Refused while the
+ * organization is suspended or over its cap, so verifying cannot undo an edge
+ * block. Returns the organization from the verified membership, which the
+ * route's later writes are scoped by.
+ */
+export const verifyTarget = internalQuery
+    .input({ id: v.id("domains"), organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { id, organizationId } }): Promise<{ domain: DomainRow; organizationId: Id<"organizations"> }> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        await assertRowInOrg(context, id, member.organizationId, "domain");
+        await assertServing(context, member.organizationId);
+
+        return { domain: (await context.db.get(id)) as DomainRow, organizationId: member.organizationId };
     });
 
 /**
@@ -291,21 +332,51 @@ export const recordCertificate = internalMutation
  */
 export const routeForHostname = query
     .input({ hostname: boundedString(LIMITS.hostname) })
-    .query(async ({ ctx: context, args: { hostname } }): Promise<null | { redirectStatusCode?: number; redirectTo?: string; scriptName?: string }> => {
-        const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase().trim() } });
-        const domain = page[0];
+    .query(
+        async ({
+            ctx: context,
+            args: { hostname },
+        }): Promise<null | { redirectStatusCode?: number; redirectTo?: string; scriptName?: string; suspended?: true }> => {
+            const { page } = await context.db.domains.findMany({ where: { hostname: hostname.toLowerCase().trim() } });
+            const domain = page[0];
 
-        if (domain?.verifiedAt == null) {
-            return null;
-        }
+            if (domain?.verifiedAt == null) {
+                return null;
+            }
 
-        if (domain.redirectTo) {
-            return { redirectStatusCode: domain.redirectStatusCode ?? 308, redirectTo: domain.redirectTo };
-        }
+            // A suspended, over-cap or missing organization's domains are refused
+            // here too — redirects included, which the dispatcher answers before any
+            // plan lookup and so would otherwise skip the suspension check.
+            try {
+                await assertServing(context, domain.organizationId);
+            } catch {
+                return { suspended: true };
+            }
 
-        const project = (await context.db.get(domain.projectId)) as ProjectRow | null;
+            if (domain.redirectTo) {
+                return { redirectStatusCode: domain.redirectStatusCode ?? 308, redirectTo: domain.redirectTo };
+            }
 
-        return project?.activeScriptName ? { scriptName: project.activeScriptName } : null;
+            const project = (await context.db.get(domain.projectId)) as ProjectRow | null;
+
+            // The project must be the domain's organization's: a row that disagrees routes nowhere.
+            return project?.activeScriptName && project.organizationId === domain.organizationId ? { scriptName: project.activeScriptName } : null;
+        },
+    );
+
+/**
+ * Which edge-block mode this cell runs in (members): how a suspended
+ * organization's domains are blocked (`src/domains/edge-block-mode.ts`). An
+ * action because the settings are Worker vars, which only actions read. Says
+ * nothing about any organization.
+ */
+export const edgeBlockMode = action
+    .use(rateLimit("api"))
+    .input({ organizationId: v.id("organizations") })
+    .action(async ({ ctx: context, args: { organizationId } }): Promise<EdgeBlockMode> => {
+        await assertMember(context, organizationId);
+
+        return edgeBlockModeOf(context.env ?? {});
     });
 
 /** A single domain row (members) — the edge verify route reads the TXT token through this. */

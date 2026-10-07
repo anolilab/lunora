@@ -76,6 +76,10 @@ const HANDLED_ELSEWHERE = new Set([
     // erased one's tenant and data.
     "aliasOwnership",
     "deployments",
+    // An applied edge rule is still on the zone, covering hostnames another
+    // organization may claim next: `releaseEdgeRules` deletes only the rows whose
+    // rule is off, and the edge-rule reconciler removes the rest, then their rows.
+    "edgeRules",
     // Each row points at a snapshot object in R2, which a mutation cannot delete.
     // The purge deletes the org's projects; the tenant backup sweep then deletes
     // every snapshot whose project is gone, object first, then the row. Purging
@@ -89,6 +93,11 @@ describe("organizations.purgeDeleted", () => {
         const missing = expected.filter((table) => !purgedTables().includes(table));
 
         expect(missing).toStrictEqual([]);
+    });
+
+    it("releases the edge rules that are off the zone and leaves the applied ones to the reconciler", () => {
+        expect(purgedTables()).not.toContain("edgeRules");
+        expect(ORGANIZATIONS).toContain("await releaseEdgeRules(context, organizationId);");
     });
 
     it("does not hard-delete deployments — teardown needs the row", () => {

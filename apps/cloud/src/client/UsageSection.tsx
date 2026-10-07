@@ -1,8 +1,11 @@
 import type { ReturnOf } from "@lunora/client";
-import { usePreloadedQuery, useQuery } from "@lunora/react";
+import { useMutation, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
+import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
@@ -12,7 +15,9 @@ import type { UsageTotals } from "../billing/usage";
 import { toPeriodUsage } from "../billing/usage";
 import { formatDate, formatNumber } from "./format";
 import { COLUMN_LABEL } from "./section-styles";
+import { Field, FieldForm, FormError, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
+import type { OrgId } from "./types";
 import { monthStart } from "./usage-period";
 
 /** Minor units → a plain dollar string. */
@@ -64,6 +69,106 @@ const CostByProduct = ({ totals }: { totals: UsageTotals }): ReactElement => {
             ) : null}
             <p className="text-muted-foreground m-0 font-mono text-[11px]">
                 Estimated at Cloudflare&apos;s marginal rates — your invoice is the authoritative number.
+            </p>
+        </div>
+    );
+};
+
+const LEVEL_TONE = { breach: "danger", ok: "success", warn: "warning" } as const;
+
+const LEVEL_LABEL = { breach: "Over cap — suspended", ok: "Under limits", warn: "Past warning" } as const;
+
+/**
+ * Spend limits (plan 365 W2): the period's estimated spend against the org's
+ * soft cap (a `spend` alert) and hard cap (suspension), with the one control a
+ * tenant has — the warning threshold. The cap is support-only, so it is shown,
+ * never edited. Owners/admins only; the mutation refuses anyone else and the
+ * form reports it.
+ */
+const SpendLimits = ({ organizationId }: { organizationId: OrgId }): ReactElement | null => {
+    const status = useQuery(api.usage.spendStatus, { organizationId });
+    const setSpendWarning = useMutation(api.usage.setSpendWarning);
+    const [draft, setDraft] = useState("");
+    const [error, setError] = useState<null | string>(null);
+
+    if (status === undefined) {
+        return null;
+    }
+
+    const save = (warnMinor: null | number): void => {
+        setError(null);
+
+        const run = async (): Promise<void> => {
+            await setSpendWarning.mutate({ organizationId, warnMinor });
+            setDraft("");
+        };
+
+        void run().catch((error_: unknown) => {
+            setError(error_ instanceof Error ? error_.message : "could not save the warning threshold");
+        });
+    };
+
+    return (
+        <div className="border-border flex flex-col gap-3 border-t pt-4">
+            <div className="flex items-baseline justify-between gap-4">
+                <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>Spend limits</span>
+                <StatusBadge tone={LEVEL_TONE[status.level]}>{LEVEL_LABEL[status.level]}</StatusBadge>
+            </div>
+            <dl className="m-0 grid grid-cols-3 gap-4 font-mono text-xs tabular-nums">
+                <div>
+                    <dt className="text-muted-foreground">Spent</dt>
+                    <dd className="m-0">{formatMinor(status.spendMinor)}</dd>
+                </div>
+                <div>
+                    <dt className="text-muted-foreground">Warn at{status.warnCustomized ? "" : " (default)"}</dt>
+                    <dd className="m-0">{status.warnMinor === null ? "off" : formatMinor(status.warnMinor)}</dd>
+                </div>
+                <div>
+                    <dt className="text-muted-foreground">Cap</dt>
+                    <dd className="m-0">{status.capMinor === null ? "none" : formatMinor(status.capMinor)}</dd>
+                </div>
+            </dl>
+            <FieldForm
+                action={() => {
+                    const dollars = Number(draft);
+
+                    save(Number.isFinite(dollars) ? Math.round(dollars * 100) : Number.NaN);
+                }}
+                className="max-w-md sm:grid-cols-[1fr_auto_auto] sm:items-end"
+            >
+                <Field htmlFor="spend-warn" label="Warn at ($, 0 = off)">
+                    <Input
+                        id="spend-warn"
+                        inputMode="decimal"
+                        min="0"
+                        onChange={(event) => {
+                            setDraft(event.target.value);
+                        }}
+                        placeholder={status.warnMinor === null ? "off" : (status.warnMinor / 100).toFixed(2)}
+                        required
+                        step="0.01"
+                        type="number"
+                        value={draft}
+                    />
+                </Field>
+                <Button type="submit" variant="outline">
+                    Save
+                </Button>
+                {status.warnCustomized ? (
+                    <Button
+                        onClick={() => {
+                            save(null);
+                        }}
+                        type="button"
+                        variant="ghost"
+                    >
+                        Use default
+                    </Button>
+                ) : null}
+            </FieldForm>
+            <FormError message={error} />
+            <p className="text-muted-foreground m-0 font-mono text-[11px]">
+                The warning fires your organization&apos;s &quot;spend&quot; alert rules once a period. Reaching the cap suspends every deployment.
             </p>
         </div>
     );
@@ -236,6 +341,8 @@ export const UsageSection = ({ organizationId, preloaded }: SectionProps<ReturnO
                     {series && series.length > 0 ? <UsageBars series={series} /> : null}
 
                     <CostByProduct totals={summary} />
+
+                    <SpendLimits organizationId={organizationId} />
                 </div>
             </CardContent>
         </Card>

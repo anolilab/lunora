@@ -1,6 +1,7 @@
 import type { ReturnOf } from "@lunora/client";
 
 import type { api } from "../../lunora/_generated/api.js";
+import type { EdgeBlockMode } from "../domains/edge-block-mode";
 
 /**
  * Pure helpers for the Domains tab (GAPS.md B1): how a verified domain's
@@ -9,6 +10,17 @@ import type { api } from "../../lunora/_generated/api.js";
  */
 
 export type DomainView = ReturnOf<typeof api.domains.list>[number];
+
+/**
+ * What the Domains tab says about this cell's edge-block mode (plan 365 W8):
+ * what happens to these domains if the organization is suspended.
+ */
+export const EDGE_BLOCK_MODE_NOTE: Record<EdgeBlockMode, string> = {
+    "delete-hostnames":
+        "If this organization is suspended, its custom hostnames are removed at the edge and recreated with a new certificate when it recovers.",
+    dispatcher: "If this organization is suspended, its domains answer 503 from the platform; nothing about them is changed.",
+    list: "If this organization is suspended, its domains are blocked at the edge by a firewall rule; certificates are kept.",
+};
 
 /** The status-chip tones `StatusBadge` knows. */
 type Tone = "danger" | "neutral" | "success" | "warning";
@@ -28,7 +40,9 @@ const PENDING = new Set(["initializing", "pending_deployment", "pending_issuance
  * unverified domain (no certificate is ever requested before it verifies), or
  * one whose target terminates TLS itself and records none (a box).
  */
-export const certificateBadge = (domain: Pick<DomainView, "certificateError" | "certificateStatus" | "verifiedAt">): CertificateBadge | null => {
+export const certificateBadge = (
+    domain: Pick<DomainView, "certificateError" | "certificateStatus" | "edgeBlockError" | "verifiedAt">,
+): CertificateBadge | null => {
     const status = domain.certificateStatus ?? undefined;
 
     if (domain.verifiedAt == null || status === undefined) {
@@ -45,6 +59,15 @@ export const certificateBadge = (domain: Pick<DomainView, "certificateError" | "
         return {
             detail: detail ?? "Cloudflare is validating and issuing the certificate; this takes a few minutes, sometimes longer. The page updates on its own.",
             label: "certificate pending",
+            tone: "warning",
+        };
+    }
+
+    // Edge-block suspension (plan 365 W8): the custom hostname is removed until the organization recovers.
+    if (status === "suspended") {
+        return {
+            detail: domain.edgeBlockError == null ? detail : `Restoring it failed and is retried hourly: ${domain.edgeBlockError}`,
+            label: "blocked: suspended",
             tone: "warning",
         };
     }

@@ -112,7 +112,7 @@ export const storedTarget = (stored: null | string | undefined): TargetId | unde
 
 /** A capability a target lacks as a whole (not a binding), with the reason the studio shows. */
 export interface TargetLimitation {
-    id: "customDomains" | "logs" | "pitr" | "runtimeLimits";
+    id: "customDomains" | "edgeProtection" | "logs" | "pitr" | "recursionProtection" | "runtimeLimits";
     label: string;
     reason: string;
 }
@@ -187,6 +187,16 @@ export const TARGETS = {
                 reason: "The CPU-time and subrequest caps your plan sets are applied by Lunora Cloud's dispatcher, which does not sit in front of your server. A request there is bounded by the machine's memory and celld's 128 MB isolate heap instead.",
             },
             { id: "pitr", label: "Point-in-time recovery", reason: CELLD_PITR_NOTE },
+            {
+                id: "recursionProtection",
+                label: "Recursion protection",
+                reason: "Loop detection runs in Lunora Cloud's dispatcher and the Outbound Worker of its dispatch namespace. Requests to your server reach celld directly, so a Worker that calls its own hostname in a loop is bounded only by celld's own limits.",
+            },
+            {
+                id: "edgeProtection",
+                label: "Edge firewall events and rules",
+                reason: "Your server is reached directly, not through Lunora Cloud's Cloudflare zone, so there are no firewall events to show and no DDoS override or anomaly rate limit to apply. Usage anomalies still alert.",
+            },
         ],
         metering: "pushed",
         placedOn: "box",
@@ -223,6 +233,16 @@ export const TARGETS = {
                 id: "logs",
                 label: "Runtime logs",
                 reason: "Lunora Cloud's tail consumer runs in its own account and cannot be attached to a Worker in yours, so runtime logs stay in your account's Workers Logs.",
+            },
+            {
+                id: "recursionProtection",
+                label: "Recursion protection",
+                reason: "Loop detection needs Lunora Cloud's dispatcher and an Outbound Worker on its dispatch namespace; a plain Worker in your account has neither. Only Cloudflare's per-invocation subrequest limit applies there.",
+            },
+            {
+                id: "edgeProtection",
+                label: "Edge firewall events and rules",
+                reason: "Your Worker is served from your account, not Lunora Cloud's zone, so its firewall events and DDoS settings live in your Cloudflare dashboard. Usage anomalies still alert.",
             },
         ],
         // Request counts are read back from the account's GraphQL Analytics API, and shown, never billed.

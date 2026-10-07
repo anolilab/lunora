@@ -1,8 +1,8 @@
 /* eslint-disable no-console -- a terminal gate: the list of unresolved ids it prints is the deliverable, not a stray debug statement. */
 /*
- * Pre-deploy gate for the three cloud wrangler configs.
+ * Pre-deploy gate for the four cloud wrangler configs.
  *
- * Every deployed environment in `wrangler.jsonc`, `dispatcher.wrangler.jsonc`
+ * Every deployed environment in `wrangler.jsonc`, `outbound.wrangler.jsonc`, `dispatcher.wrangler.jsonc`
  * and `tail.wrangler.jsonc` ships with `<replace-with-…>` placeholders where a
  * per-cell resource id or URL belongs — a D1 uuid, the control-plane hostname,
  * the account id. Wrangler happily publishes a Worker bound to a D1 database
@@ -28,8 +28,8 @@ import { fileURLToPath } from "node:url";
 
 import { parse as parseJsonc } from "jsonc-parser";
 
-/** The three deployables, in the order the workflow publishes them. */
-const CONFIGS = ["wrangler.jsonc", "dispatcher.wrangler.jsonc", "tail.wrangler.jsonc"] as const;
+/** The four deployables, in the order the workflow publishes them. */
+const CONFIGS = ["wrangler.jsonc", "outbound.wrangler.jsonc", "dispatcher.wrangler.jsonc", "tail.wrangler.jsonc"] as const;
 
 /** The marker every unfilled value carries — the `replace-with-…` placeholder convention the configs and `.dev.vars.example` share. */
 const PLACEHOLDER = /<replace-with-[^>]*>/u;

@@ -493,6 +493,293 @@ an hourly `usage.rollup` cron compacts closed periods, and `usage.summary` reads
 the total. The AE→ledger reader (`createHttpAnalyticsReader`) is the prod rollup
 seam (runs at the edge with the account token).
 
+**Spend caps** (`src/billing/spend.ts`, `usage.enforceSpendCaps`, plan 365) have
+two thresholds per org. `evaluateSpendCap` prices the period's billable ledger
+rows and returns a `level`:
+
+- `warn` — spend reached `organizations.spendWarnMinor` (unset: 80% of the cap;
+  `0`: off). The hourly sweep fires the org's `spend` alert rules once per
+  period (latched by `spendWarnedPeriod`), delivered over the rule's channel by
+  the alert drain, and writes `organization.spend_warn` to the audit log.
+  Owners/admins set the threshold from the Usage tab (`usage.setSpendWarning`,
+  whole cents, at most $1B). Nothing is paused.
+- `breach` — spend reached the cap (plan default `free $5` / `pro $200` /
+  `enterprise` uncapped; `spendCapMinor` override, support-only, `0` =
+  uncapped). The sweep suspends the org (`suspendedReason: "spend-cap"`), fires
+  the `spend` rules again, and lifts only its own suspensions once spend is back
+  under the cap (`organization.unsuspend`).
+
+`usage.spendStatus` is the console's read of the same decision.
+
+The hourly sweep is the authority, but breach is also caught **at admission**.
+Every billable ledger write (`usage.ingest`, `usage.record`, the readback sweep)
+adds its priced cost to `organizations.spendNanoCents` for the current
+`spendPeriod`. `deployments.planForScript`, the dispatcher's one cached
+control-plane lookup, answers `"suspended"` once that running total reaches the
+cap, so the next plan refresh refuses the org (at most the resolver's 60 s TTL)
+without waiting up to an hour for the sweep. A row for any other period does
+not move the total, so a tenant cannot reset it with a chosen `periodStart`.
+The sweep rewrites the total from the ledger each hour, which corrects any
+increment a concurrent writer lost.
+
+Admission fails closed. The dispatcher serves only a verified `free`, `pro` or
+`enterprise` answer, and refuses everything else:
+
+- A suspended, over-cap or missing org answers `"suspended"` (503).
+- A script that no verified row serves answers `"unknown"` (404, cached 5 s).
+  The serving release is the alias's `aliasOwnership` owner's live release, and
+  releases of two organizations under one script are refused.
+- A failed, timed-out or malformed lookup answers `"unavailable"` (503). The
+  last verified answer stands in for at most `PLAN_STALE_GRACE_MS` (5 min)
+  past its TTL, and a `suspended` one until a refresh succeeds.
+
+A suspended org's custom domains, redirect-only ones included, are refused
+through `routeForHostname`. Answers are cached per script and per hostname for
+60 s, so a suspension, a breach or an alias or hostname changing owners reaches
+every dispatcher isolate within that window. The isolates cannot be told sooner.
+
+**Edge block.** A cell can also enforce a suspension in front of the Worker, so
+an attack on a suspended tenant stops costing a billed request each time. The
+hourly sweep calls `TargetFleet.edgeBlock`, which only `cloudflare-wfp` has. A
+cell runs in one of three modes (`edgeBlockModeOf`). `domains.edgeBlockMode`
+reports it, and the Domains tab shows it:
+
+- `dispatcher`, the default: the edge block does nothing, and the dispatcher's
+  503 is the block. Customers' domains are never touched.
+- `list`: with an Enterprise hostname list (`LUNORA_SUSPENDED_HOSTS_LIST_ID`),
+  the org's platform hostnames and custom domains are listed for a single WAF
+  Block rule. Certificates are kept.
+- `delete-hostnames`: opt-in only, with `LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES=1`.
+  The org's custom hostnames are deleted and recreated on recovery. Cloudflare
+  cannot deactivate one in place, so recovery re-issues the certificate, which
+  makes this destructive.
+
+Setup, the trade-off and failure handling are in
+[RUNBOOK.md § 6b](RUNBOOK.md#6b-edge-block-suspension-optional).
+
+On `celld-vps` (customer boxes) none of this applies. Box-reported usage is
+display-only (plan 458 D12), so it never moves the cap, and boxes route their
+own traffic without going through the dispatcher. The box fleet has no
+`edgeBlock`, because a box's hostnames never cross the platform's zone.
+
+A box enforces suspension through its routing table instead. `routesForBox`
+reads each project's organization row at push time and leaves out the projects
+of an org that is suspended, over its cap at admission (W3) or missing. The
+daemon stops the fleets its table no longer names and never deletes them. It
+starts them again when a later push names them. Every push reads the rows
+afresh: deploys, domain changes, reconnects, and the every-minute suspension
+sweep (`src/boxes/suspension-sweep.ts`). The sweep pushes to any online box
+whose last push (`boxes.routesWithheld`) no longer matches, so a suspension or
+recovery reaches a connected box within a minute. Other orgs' projects on the
+same box are unaffected.
+
+The session serialises its pushes. Each one reads the rows and sends only after
+the previous push has finished, so an earlier in-flight push can never land on
+top of a newer table. The routes frame carries no version the box could
+compare, so ordering is the only guarantee.
+
+A push is recorded only once it has been sent. One that fails marks the box
+`routesStale`, and the sweep pushes it again until a push finishes. An org row
+that cannot be read counts as withheld. If a box's projects cannot be read at
+all, the push fails and the box keeps its last table; the sweep retries every
+minute. An empty table would stop every fleet on the box, so it is never sent
+in that case. `cloudflare-workers` tenants run on the customer's own
+account and are not edge-blocked.
+
+**Billing for agents** (plan 365 W6). Two read-only, deploy-key routes are
+opted in as tools on the MCP surface (`POST /v1/mcp`):
+
+| Tool                     | Route                             | Body                                         | Answers                                                                                                                                       |
+| ------------------------ | --------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `usage.summary`          | `POST /v1/usage/summary`          | `organizationId`, optional `periodStart`     | per-meter cost (`spendBreakdown`), `spendMinor`, `capMinor`, `warnMinor`, `level`, `suspended`, and `projectedSpendMinor` for the open period |
+| `usage.cloudflare-costs` | `POST /v1/usage/cloudflare-costs` | `organizationId`, `id` (a connected account) | the account's Billable Usage view for its latest charge period, as the costs tab shows it                                                     |
+
+Both take the key as `Authorization: Bearer`, and both need an
+organization-wide deploy key (`authorizeBillingKey`). An ingest key, a
+project-scoped key, a revoked one or another org's key is refused. Every row is
+read for the key's organization. The projection is linear over the elapsed
+part of the UTC month, with at least one hour elapsed. The cost route unseals
+the connected account's token at the edge and never returns it. It bounds
+Cloudflare's product lines before answering. `POST /v1/usage` (the metering
+write) and every admin-token route stay off the MCP surface.
+
+### Alerts & anomaly detection (`lunora/alerts.ts`, `src/telemetry/`)
+
+Alert rules fire on four kinds of condition (`alertFamily` in
+`src/telemetry/alerts.ts`): a count crossing a threshold (`issue`, `incident`,
+`uptime`), a metric window (`error_rate`, `latency_p95`, `llm_cost`, as a
+threshold or as a deviation from a trailing baseline), an event (`deploy`), and
+an **anomaly score** (`usage_anomaly`, `error_anomaly`, plan 365 W4). Every
+family is delivered the same way (email, webhook, Slack, PagerDuty) and latches
+in `alertRuleState`, so a sustained breach alerts once and clears on recovery.
+
+The anomaly detector follows the score-as-metric design (plan 365 D5/D6).
+`src/telemetry/anomaly-sweep.ts` runs hourly. It measures each organization's
+last completed hour and scores it as an online z-score against that
+organization's own rolling baseline: an EWMA mean and variance (decay 0.95)
+with σ floored at the Poisson spread `√mean`. It stores the advanced baseline
+in `anomalyBaselines`, one row per (organization, signal), and the anomaly
+rules threshold that score in standard deviations (`gt 4`, or `lt -4` for
+traffic that falls away). The noise controls are fixed by the platform:
+
+- **Minimum activity floor.** No anomaly can fire below 1,000 requests or 25
+  error spans in both the hour and its baseline. Organizations cannot change it.
+- **Warm-up.** A baseline scores nothing until it has folded in 24 hours.
+  Baselines exist only for organizations with an anomaly rule, so a new rule
+  arms a day after it is created.
+- **Silences** (`alerts.createSilence`, owners/admins, at most 20 per org, each
+  up to 30 days). The sweep skips a silenced hour entirely: it records no score
+  and does not update the baseline. Silencing a load test therefore keeps it
+  from paging anyone and from becoming the next day's "normal".
+
+The signals come from stores every target writes to. That makes the score
+target-agnostic:
+
+| Signal                        | Source                                                | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` (box)       |
+| ----------------------------- | ----------------------------------------------------- | ---------------- | -------------------------- | ----------------------- |
+| requests (`usage_anomaly`)    | `platformUsage` `requests` rows created in the hour   | AE readback      | readback of the account    | the box's usage reports |
+| error spans (`error_anomaly`) | error-level `observations` started in the hour (OTLP) | when telemetered | when telemetered           | when telemetered        |
+
+A box's rows are display-only (`billable: false`) and still count, because
+an anomaly is about traffic, not the invoice. The last hour of each month is
+not scored, because ledger compaction can fold the whole closed month into a
+row created in that hour. An hour with no usage report, for example from a box
+that went offline, scores as zero traffic, which an `lt` rule reads as a
+collapse.
+
+### Edge protection & DDoS (`lunora/edge.ts`, `src/edge/`, plan 365 W7)
+
+Every `cloudflare-wfp` tenant is behind Cloudflare's always-on L3/L4/L7 DDoS
+protection, because every request reaches the dispatcher through the SaaS zone
+(the zone of `LUNORA_APP_DOMAIN`). The platform builds no mitigation of its own.
+The Traffic tab's **Edge protection** card shows what the edge did and offers
+two settings:
+
+- **Firewall events** (`edge.firewall`, members). This is a read of the GraphQL
+  Analytics API's `firewallEventsAdaptive` on the SaaS zone over the last 24
+  hours, at most 100 events. It is filtered to the organization's own hostnames,
+  and rows for any other host are dropped a second time after the read. Client
+  IPs are never read. Without `LUNORA_SAAS_ZONE_ID` and a token the card says
+  "not configured". When the token or the zone's plan refuses the read, the card
+  shows Cloudflare's reason.
+- **HTTP DDoS sensitivity** (`edge.setDdosSensitivity`, owners/admins). This
+  sets `default`, `medium` or `low` on the HTTP DDoS managed ruleset, as a
+  `ddos_l7` entrypoint override scoped to the organization's hostnames. Turning
+  protection off is not offered.
+- **Anomaly → rate limit** (`edge.setAnomalyRateLimit`, owners/admins). While
+  armed, a firing `usage_anomaly` rule installs a per-IP rate limit
+  (`http_ratelimit`, 10 or 60 s window, block) on the organization's hostnames.
+  The rule's recovery, or disarming, removes it. This is the CrowdSec split: the
+  anomaly sweep detects, and Cloudflare enforces.
+
+The settings only record intent, on the organization's `edgeRules` row (one per
+kind). The reconciler (`src/edge/rules.ts`, every minute) is the only code that
+writes to the zone. It writes the row before it calls Cloudflare, applies each
+rule as an idempotent upsert or delete under a stable `ref`, and records every
+outcome (`applied`, `removed`, `failed`, `unavailable`) on the row and in the
+audit log. A failed or interrupted write is therefore never a rule nobody
+recorded: the next pass retries with backoff and finds the rule by its ref.
+Nothing is reused from an earlier pass. Every minute the reconciler re-derives
+each applied rule's hostnames from the organization's current deployment and
+domain rows. Each hostname is bound to the row id and project that gave it
+(`edgeRules.targets`). A domain that was deleted, moved, or re-added under
+another organization therefore drops off the old organization's rule within a
+minute. Writes never use a stored Cloudflare id. The zone is re-read on every
+call, and the rule is found by the organization's own ref. Every call fails
+closed. A Cloudflare error, a 10-second timeout, or a malformed or partial
+answer is recorded as `failed` and retried. It is never read as "no rule".
+The entrypoint is created only on an explicit 404 for a zone confirmed to
+exist. A write counts only if Cloudflare's answer holds the rule as sent, and
+a removal only if a fresh read no longer finds it. If the row takes a new
+intent while a write is in flight, it keeps that intent. The pass records only
+what the zone now holds, and the next pass reconciles. Two rules under one
+ref, or an id that cannot form an unambiguous ref, refuse the write. The row is
+also re-read right before the write and skipped if it changed. A rule covers at
+most 50 hostnames, and every hostname is re-validated before it enters a Rules
+expression. When an organization requests deletion, its rules come off, and that
+removal retries without a cap. The erasure purge deletes only the rows whose
+rule is already off. The reconciler deletes the rest once their rule is gone.
+
+Writes are off until an operator says what the zone's plan allows.
+`LUNORA_DDOS_OVERRIDE_BUDGET` and `LUNORA_RATE_LIMIT_RULE_BUDGET` cap how many
+organizations can hold each rule at once. Unset means 0, and the setting then
+shows "not enabled on this cell". Host-scoped DDoS overrides need Enterprise
+with Advanced DDoS Protection (10 rules). Host-scoped rate limits need Business
+or above. The cell's `CLOUDFLARE_API_TOKEN` needs Zone → Analytics:Read and
+Zone → WAF:Edit on the SaaS zone.
+
+| Target                     | Firewall events | DDoS override | Anomaly rate limit | Why                                                                    |
+| -------------------------- | --------------- | ------------- | ------------------ | ---------------------------------------------------------------------- |
+| `cloudflare-wfp`           | yes             | yes           | yes                | served from the platform's SaaS zone                                   |
+| `cloudflare-workers` (BYO) | no              | no            | no                 | served from the customer's own account, whose zone we do not manage    |
+| `celld-vps` (box)          | no              | no            | no                 | served from the customer's box, which the platform edge does not front |
+
+The card names a box or BYO project rather than leaving it out. Usage
+anomalies still fire for those projects (see above), but nothing is enforced at
+the edge for them.
+
+### Recursion protection (`src/dispatcher/lineage.ts`, `src/outbound/`, plan 365 W5)
+
+A tenant Worker that fetches its own hostname, or two tenants that call each
+other, can loop. Each hop is a fully billed request. Lunora Cloud counts the
+hops of every request chain, the way AWS Lambda's recursive loop detection does,
+and stops the chain after 16 invocations:
+
+1. The dispatcher decides each invocation's depth itself. A request from outside
+   is depth 0. A request that carries a verified lineage header continues its
+   chain. The dispatcher passes the depth to the dispatch namespace's **Outbound
+   Worker** (`outbound.wrangler.jsonc`) as the `lineage` binding parameter,
+   which tenant code can neither read nor set.
+2. Every `fetch()` a tenant Worker makes passes through the Outbound Worker. It
+   removes any lineage header the tenant set and stamps its own, signed with
+   `LUNORA_LINEAGE_SECRET` (HMAC-SHA256, valid for 60 seconds), one hop deeper.
+3. When the request comes back in, the dispatcher verifies the header. A forged,
+   altered or stale header gets `400` and the tenant never runs. At depth 16,
+   under the org's default `terminate` policy, the dispatcher answers
+   `508 Loop Detected` before the tenant runs. It records a `recursion` row in
+   `PLATFORM_METRICS` and an audit entry in the org's log
+   (`POST /v1/tenants/recursion`, at most one per script per minute).
+   Owners can switch the policy to `allow` (`edge.setRecursionPolicy`), in which
+   case the chain continues and the metric still records it.
+
+A tenant cannot forge a lower depth, because it has no key and the Outbound
+Worker overwrites its header. It cannot strip its depth either, because the
+Outbound Worker re-adds the header on every request. Enabling an Outbound Worker
+also **disables `connect()`** (raw TCP sockets) for tenant Workers. That closes
+the socket gap a header-only scheme leaves. It also means a tenant that opens
+raw TCP connections from a `cloudflare-wfp` Worker can no longer do so.
+
+**The blind spot.** Only requests that leave through `fetch()` and come back in
+through the dispatcher are counted. Calls to a Durable Object stub, a service
+binding, a queue or a workflow never touch the Outbound Worker or the
+dispatcher, so a loop through them is not detected. Neither is a loop through a
+third party that drops the header before calling back, where the chain restarts
+at depth 0. Cloudflare's per-invocation subrequest limit and the per-plan CPU
+limits still apply to those.
+
+Deployment is fail-safe in both directions. Without `LUNORA_LINEAGE_SECRET` on
+the dispatcher, lineage headers are stripped and ignored and nothing is refused.
+Without it on the Outbound Worker, nothing is stamped. Deploy the Outbound
+Worker before the dispatcher, because the dispatcher's namespace binding names
+it (`.github/workflows/deploy-cloud.yml` does this), and put the same secret on
+both:
+
+```bash
+wrangler deploy -c outbound.wrangler.jsonc --env <cell>
+wrangler secret put LUNORA_LINEAGE_SECRET -c outbound.wrangler.jsonc --env <cell>
+wrangler secret put LUNORA_LINEAGE_SECRET -c dispatcher.wrangler.jsonc --env <cell>
+```
+
+| Target                     | Recursion protection | Why                                                                               |
+| -------------------------- | -------------------- | --------------------------------------------------------------------------------- |
+| `cloudflare-wfp`           | yes                  | the dispatcher and the dispatch namespace's Outbound Worker see every hop         |
+| `cloudflare-workers` (BYO) | no                   | a plain Worker in the customer's account has no dispatcher and no Outbound Worker |
+| `celld-vps` (box)          | no                   | requests reach celld on the box directly; the platform sees no hop                |
+
+The two unsupported targets list this, and the missing edge protection, as
+target limitations (`TARGETS[…].limitations`). The studio shows those on the
+project's target card, and the Edge protection card names the affected projects.
+
 ### Tenant secrets (`lunora/secrets.ts`, `src/secrets/crypto.ts`, §7)
 
 Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:
@@ -1097,7 +1384,8 @@ once per cell with `wrangler secret put <NAME> --env <cell>`:
   there: every box gets its A/AAAA records at enrolment (plan 458 G13), and
   Zone → SSL and Certificates:Edit on the SaaS zone (`LUNORA_SAAS_ZONE_ID`, the
   zone of `LUNORA_APP_DOMAIN`) to create, read and delete the custom hostnames
-  that carry custom-domain certificates (GAPS.md B1). Scoping them per environment is what lets production carry a
+  that carry custom-domain certificates (GAPS.md B1). Edge protection (plan 365
+  W7) adds Zone → Analytics:Read and Zone → WAF:Edit on that same zone. Scoping them per environment is what lets production carry a
   required reviewer.
 - The gates run as `lunora verify` (wrangler validation, codegen dry-run, the
   ERROR-advisory gate, the schema-drift gate, `tsc --noEmit`) before anything is
