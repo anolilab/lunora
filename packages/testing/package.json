@@ -66,7 +66,7 @@
     "dependencies": {
         "@lunora/agent": "1.0.0-alpha.186",
         "@lunora/bindings": "1.0.0-alpha.100",
-        "@lunora/errors": ">=1.0.0-alpha.50 <2.0.0-0",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/mail": "1.0.0-alpha.100",
         "@lunora/scheduler": "1.0.0-alpha.113",
         "@lunora/server": "1.0.0-alpha.185"

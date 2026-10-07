@@ -85,7 +85,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": ">=1.0.0-alpha.50 <2.0.0-0",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/server": "1.0.0-alpha.185",
         "@lunora/values": "1.0.0-alpha.60",
         "dinero.js": "catalog:payment"

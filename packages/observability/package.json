@@ -58,7 +58,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/errors": ">=1.0.0-alpha.50 <2.0.0-0",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/fingerprint": "1.0.0-alpha.9",
         "@lunora/shard-engine": "1.0.0-alpha.116",
         "@visulima/redact": "catalog:redact"
