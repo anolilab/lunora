@@ -180,11 +180,23 @@ describe("createMailerFromEnv", () => {
         expect(() => createMailerFromEnv({ WORKER_ENV: "development" })).toThrow(/MAIL_FROM/);
     });
 
-    it("throws in production when no transport is configured", () => {
+    it("throws on send() in production when no transport is configured", async () => {
         expect.assertions(1);
 
         // Prod, no cloudflareSend, no RESEND_API_KEY ⇒ loud failure, not silent capture.
-        expect(() => createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" })).toThrow(/no transport/);
+        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" });
+
+        await expect(mailer.send({ subject: "Hi", text: "x", to: "a@x.test" })).rejects.toThrow(/no transport/);
+    });
+
+    it("lets a producer-only worker queue() without a delivery transport", async () => {
+        expect.assertions(2);
+
+        const send = vi.fn<(payload: unknown) => Promise<void>>(async () => undefined);
+        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" }, { queue: { send } });
+
+        await expect(mailer.queue({ subject: "Hi", text: "x", to: "a@x.test" })).resolves.toStrictEqual({ queued: true });
+        expect(send).toHaveBeenCalledTimes(1);
     });
 
     it("uses the cloudflareSend transport in production when supplied", () => {

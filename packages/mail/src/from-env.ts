@@ -173,8 +173,9 @@ const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD,
  * Build a {@link Mailer} from a Worker `env`. In a dev environment every send is
  * captured into the studio's Mail inbox; otherwise it delivers via the supplied
  * `cloudflareSend` (the `SEND_EMAIL` binding) or, failing that, `RESEND_API_KEY`.
- * Throws when neither a capture context nor a real transport is available, so a
- * misconfigured production deploy fails loudly instead of silently dropping mail.
+ * When neither a capture context nor a real transport is available, `send()`
+ * throws, so a misconfigured production deploy fails loudly instead of silently
+ * dropping mail — while `queue()` still works for a producer-only worker.
  *
  * `MAIL_FROM` is required (the default sender).
  */
@@ -195,10 +196,21 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
         return createMailer({ apiKey, from, queue: options.queue });
     }
 
-    throw new LunoraError(
-        "INTERNAL",
-        "@lunora/mail: no transport configured — provide `cloudflareSend` (a SEND_EMAIL binding) or RESEND_API_KEY, or run in a dev environment to capture.",
-    );
+    // No delivery transport: still build the mailer so a producer-only worker
+    // (it enqueues, a consumer delivers) can `queue()`. A `send()` fails loudly.
+    return createMailer({
+        from,
+        queue: options.queue,
+        transport: {
+            send: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "INTERNAL",
+                        "@lunora/mail: no transport configured — provide `cloudflareSend` (a SEND_EMAIL binding) or RESEND_API_KEY, or run in a dev environment to capture.",
+                    ),
+                ),
+        },
+    });
 };
 
 export { createCaptureSink, createMailerFromEnv, shouldCaptureMail };
