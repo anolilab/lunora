@@ -181,6 +181,57 @@ Unset, verified domains record that no certificate could be requested
 "certificate pending", then "certificate active" within the hour, and
 `https://<that hostname>` serves the project.
 
+## 6b. Edge-block suspension (optional)
+
+A suspended organization (spend cap, dunning, overage, support) is refused by
+the dispatcher with a 503, but that 503 is itself a billed Workers-for-Platforms
+request. The hourly edge-block sweep moves the stop in front of the Worker
+(`src/targets/cloudflare-wfp/edge-block.ts`). A cell runs in one of three
+modes (`src/domains/edge-block-mode.ts`), and the Domains tab says which:
+
+- **`dispatcher` (the default): nothing to set up.** With neither setting
+  below, the edge block does nothing and the dispatcher's 503 is the block.
+  Nothing about a customer's domains changes. Every request to a suspended
+  tenant is still billed.
+- **`delete-hostnames`: opt in with `LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES=1`**
+  (needs the SaaS zone, step 6a). A suspended org's custom hostnames are
+  deleted and recreated when it recovers. Cloudflare has no API to deactivate
+  a custom hostname, so deletion is the only edge stop without a WAF list.
+  **The trade-off:** this turns a billing suspension into a destructive change
+  to the customer's domains. Recovery re-issues every certificate (HTTP DV, a
+  few minutes while the CNAME is in place). If the customer moved their CNAME
+  while suspended, or the re-create fails, the domain stays broken until the
+  restore succeeds (retried hourly, shown on the domain). Turn it on only where
+  the requests a 503 costs outweigh that risk. Platform hostnames
+  (`{alias}.lunora.app`) keep the 503. Turning the setting off later stops new
+  deletions; domains it already blocked are still restored on recovery.
+- **`list`: the Enterprise suspended-hostnames list.** This covers platform
+  hostnames too, and certificates stay as they are. Once per cell:
+    1. Account → Manage Account → Configurations → Lists: create a list of type
+       **Hostname**, e.g. `lunora_suspended`. Nothing else may write to it: the
+       sweep removes every item it did not put there.
+    2. On the zone of `LUNORA_APP_DOMAIN`, add a WAF custom rule
+       `http.host in $lunora_suspended` → **Block**, with a custom JSON response
+       (status 503, e.g. `{"error":"this deployment is suspended — see your billing page"}`).
+    3. Worker var `LUNORA_SUSPENDED_HOSTS_LIST_ID` = the list's id, and give the
+       cell token **Account → Account Filter Lists:Edit**.
+
+Every block and restore writes an audit entry on the organization
+(`domain.edge_block` / `domain.edge_unblock`, or `organization.edge_block` /
+`organization.edge_unblock` for the list). A failed step never changes the
+suspension. It is retried every hour and logged as `[edge-block]` in Workers
+Logs. A failed custom-hostname step is also recorded on the domain row
+(`edgeBlockError`), which the Domains tab shows.
+
+The list takes precedence when both are set, and needs no deletion.
+
+**Check:** the Domains tab's note names the mode. In `list` or
+`delete-hostnames` mode, suspend a test org with a verified custom domain
+(support: `suspendedAt` set). Within the hour `https://<that domain>` fails at
+the edge. In `delete-hostnames` mode the domain also reads "blocked:
+suspended". Lift the suspension and, within the hour, the domain serves again
+(in `delete-hostnames` mode, with a fresh certificate).
+
 ## 7. `hostd` release signing key
 
 Exact steps in [`../hostd/README.md`](../hostd/README.md) § Releases & signing:

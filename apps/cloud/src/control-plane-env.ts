@@ -59,6 +59,10 @@ export type ControlPlaneEnv = OffsiteEnvironment &
         GOOGLE_CLIENT_SECRET?: string;
         /** Bearer token gating the admin endpoints the studio + platform tools call. */
         LUNORA_ADMIN_TOKEN?: string;
+        /** Per-org edge rules of each kind the platform zone may hold (plan 365 W7, `edgeBudget`); unset → 0 → none applied. */
+        LUNORA_DDOS_OVERRIDE_BUDGET?: string;
+
+        LUNORA_RATE_LIMIT_RULE_BUDGET?: string;
         /** Sender address for auth (verification / reset) email; captured in dev. */
         MAIL_FROM?: string;
         /** Platform self-metrics dataset (GAPS.md E1); absent → the queue-depth sample no-ops. */

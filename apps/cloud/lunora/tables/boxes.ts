@@ -58,6 +58,14 @@ export const boxesTables = {
         publicKey: v.string(),
         resources: v.optional(v.object({ diskFreeMb: v.number(), memMb: v.number() })),
         revokedAt: v.optional(v.number()),
+        // The organizations whose projects the last routing-table push left out
+        // because they were suspended or over their cap (plan 365), sorted. The
+        // suspension sweep pushes again whenever the current answer differs, so
+        // a suspension or a recovery reaches the box within a minute.
+        routesWithheld: v.optional(v.array(v.string())),
+        // `true` after a routing-table push that did not finish (a read or a
+        // write failed): the suspension sweep pushes again until one does.
+        routesStale: v.optional(v.boolean()),
         // `hostd enrol --single-trust`: the box skips the tenant isolation
         // self-check (plan 458 W8). Recorded so the studio can say so.
         singleTrust: v.boolean(),

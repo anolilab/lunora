@@ -1,12 +1,23 @@
 import { LunoraError } from "@lunora/server";
 
-import type { PeriodUsage, UsageMeter } from "../src/billing/spend";
-import { estimatedSpendMinor, evaluateSpendCap, isUsageMeter } from "../src/billing/spend";
+import type { PeriodUsage, SpendAccrual, SpendCapDecision, SpendLevel, SpendLimits, SpendLine, UsageMeter } from "../src/billing/spend";
+import {
+    accruedSpend,
+    estimatedSpendMinor,
+    estimatedSpendNanoCents,
+    evaluateSpendCap,
+    isUsageMeter,
+    MAX_SPEND_THRESHOLD_MINOR,
+    periodStartOf,
+    spendBreakdown,
+} from "../src/billing/spend";
 import type { UsageTotals } from "../src/billing/usage";
 import { aggregateUsage, isBillableUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
-import { assertMember, assertRowInOrg, authorizeDeployKeyRow } from "./authz";
+import { fireSpendAlerts } from "./alerts";
+import { assertMember, assertRowInOrg, authorizeBillingKey, authorizeDeployKeyRow } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
@@ -67,6 +78,29 @@ const kind = v.union(
     v.literal("workflowStorageGbMonths"),
 );
 
+/**
+ * Fold one billable ledger row into its org's running spend — the accrual the
+ * dispatcher's plan lookup refuses an over-cap org on (plan 365 W3), between
+ * hourly sweeps.
+ *
+ * ponytail: read-modify-write on the org row, so a concurrent writer outside
+ * this serialized mutation (the readback sweep) can lose an increment. That
+ * under-counts only the fast path; the hourly sweep rewrites the accrual from
+ * the ledger, which stays the authority. A per-org counter DO if it matters.
+ */
+const accrueSpend = async (
+    context: MutationContext,
+    organizationId: Id<"organizations">,
+    row: { kind: string; periodStart: number; quantity: number },
+): Promise<void> => {
+    const organization = (await context.db.get(organizationId)) as null | SpendAccrual;
+    const next = organization === null ? null : accruedSpend(organization, row, context.now);
+
+    if (next !== null) {
+        await context.db.patch(organizationId, next);
+    }
+};
+
 /** Record a metered event. SYSTEM only (internalMutation — cron/metering writer). */
 export const record = internalMutation
     .input({
@@ -76,16 +110,20 @@ export const record = internalMutation
         periodStart: v.number(),
         quantity: v.number(),
     })
-    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> =>
-        context.db.insert("platformUsage", {
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> => {
+        const id = await context.db.insert("platformUsage", {
             createdAt: context.now,
             deploymentId: arguments_.deploymentId,
             kind: arguments_.kind,
             organizationId: arguments_.organizationId,
             periodStart: arguments_.periodStart,
             quantity: arguments_.quantity,
-        }),
-    );
+        });
+
+        await accrueSpend(context, arguments_.organizationId, arguments_);
+
+        return id;
+    });
 
 /**
  * Ingest a metered event from the platform data plane (`POST /v1/usage`).
@@ -127,7 +165,7 @@ export const ingest = mutation
             await assertRowInOrg(context, arguments_.deploymentId, arguments_.organizationId, "deployment");
         }
 
-        return context.db.insert("platformUsage", {
+        const id = await context.db.insert("platformUsage", {
             createdAt: context.now,
             deploymentId: arguments_.deploymentId,
             kind: arguments_.kind,
@@ -135,6 +173,10 @@ export const ingest = mutation
             periodStart: arguments_.periodStart,
             quantity: arguments_.quantity,
         });
+
+        await accrueSpend(context, key.organizationId, arguments_);
+
+        return id;
     });
 
 interface PlatformUsageRow {
@@ -153,11 +195,7 @@ interface PlatformUsageRow {
 const ROLLUP_BATCH = 1000;
 
 /** Epoch ms for the first instant of the current UTC month. */
-const currentPeriodStart = (): number => {
-    const now = new Date();
-
-    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-};
+const currentPeriodStart = (): number => periodStartOf(Date.now());
 
 /**
  * Compact closed-period metering events. Per
@@ -246,6 +284,157 @@ export const summary = query
         );
     });
 
+/** The org's billable usage for one period, per meter — what the cap prices. Drains every page. */
+const orgPeriodUsage = async (context: QueryContext, organizationId: Id<"organizations">, periodStart: number): Promise<PeriodUsage> => {
+    const rows = await collectAll<PlatformUsageRow>((cursor) => context.db.platformUsage.findMany({ cursor, where: { organizationId, periodStart } }));
+    const usage: PeriodUsage = {};
+
+    for (const row of rows) {
+        if (isUsageMeter(row.kind) && isBillableUsage(row)) {
+            usage[row.kind] = (usage[row.kind] ?? 0) + row.quantity;
+        }
+    }
+
+    return usage;
+};
+
+/** An org's current-period spend against its two thresholds, as the console's spend-limits card shows it. */
+export interface SpendStatus extends SpendCapDecision {
+    periodStart: number;
+    /** True when the org set its own warn threshold (`spendWarnMinor`), false when it is the 80%-of-cap default. */
+    warnCustomized: boolean;
+}
+
+/**
+ * The org's current-period spend, cap, warn threshold and level (members) —
+ * the same `evaluateSpendCap` the enforcement sweep runs, over the same rows,
+ * so the console never shows a level the sweep would not act on.
+ */
+export const spendStatus = query
+    .input({ organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { organizationId } }): Promise<SpendStatus> => {
+        const member = await assertMember(context, organizationId);
+        const organization = (await context.db.get(member.organizationId)) as null | {
+            plan: string;
+            spendCapMinor?: null | number;
+            spendWarnMinor?: null | number;
+        };
+
+        if (!organization) {
+            throw new LunoraError("NOT_FOUND", "organization not found");
+        }
+
+        const periodStart = currentPeriodStart();
+        const decision = evaluateSpendCap({
+            capMinorOverride: organization.spendCapMinor,
+            plan: organization.plan,
+            usage: await orgPeriodUsage(context, member.organizationId, periodStart),
+            warnMinorOverride: organization.spendWarnMinor,
+        });
+
+        return { ...decision, periodStart, warnCustomized: organization.spendWarnMinor != null };
+    });
+
+/** Shortest elapsed span a projection extrapolates from, so the first minutes of a month do not project a runaway. */
+const MIN_PROJECTION_ELAPSED_MS = 60 * 60 * 1000;
+
+/** What an agent reads about one period's bill (`POST /v1/usage/summary`, Lago's `current_usage` shape). */
+export interface BillingSummary extends SpendLimits {
+    /** Per-meter cost, most expensive first — at most one line per rate-card meter. */
+    breakdown: SpendLine[];
+    level: SpendLevel;
+    periodEnd: number;
+    periodStart: number;
+    /** The period's spend extrapolated linearly to its end; equal to `spendMinor` for a closed period. */
+    projectedSpendMinor: number;
+    spendMinor: number;
+    suspended: boolean;
+}
+
+/**
+ * One period's usage, estimated spend, thresholds, level and current-period
+ * projection for an org (plan 365 W6) — the agent-facing read behind the
+ * `usage.summary` MCP tool. SYSTEM (the route), authorized by an org-wide deploy
+ * key; every row is read for the key's organization, never the request's.
+ * `periodStart` must be a month start no later than the current one.
+ */
+export const billingSummary = internalQuery
+    .input({ deployKey: boundedString(LIMITS.token), organizationId: v.id("organizations"), periodStart: v.optional(v.number()) })
+    .query(async ({ ctx: context, args: { deployKey, organizationId, periodStart: requested } }): Promise<BillingSummary> => {
+        const verified = await authorizeBillingKey(context, organizationId, deployKey);
+        const current = periodStartOf(context.now);
+        const periodStart = requested ?? current;
+
+        if (!Number.isFinite(periodStart) || periodStart < 0 || periodStart > current || periodStartOf(periodStart) !== periodStart) {
+            throw new LunoraError("BAD_REQUEST", "periodStart must be the first instant (UTC) of the current or an earlier month");
+        }
+
+        const organization = (await context.db.get(verified)) as null | {
+            plan: string;
+            spendCapMinor?: null | number;
+            spendWarnMinor?: null | number;
+            suspendedAt?: null | number;
+        };
+
+        if (!organization) {
+            throw new LunoraError("NOT_FOUND", "organization not found");
+        }
+
+        const usage = await orgPeriodUsage(context, verified, periodStart);
+        const decision = evaluateSpendCap({
+            capMinorOverride: organization.spendCapMinor,
+            plan: organization.plan,
+            usage,
+            warnMinorOverride: organization.spendWarnMinor,
+        });
+        // Any instant 32 days in falls in the next month; its month start is this period's end.
+        const periodEnd = periodStartOf(periodStart + 32 * 24 * 60 * 60 * 1000);
+        const elapsed = Math.max(context.now - periodStart, MIN_PROJECTION_ELAPSED_MS);
+        const projectedSpendMinor =
+            periodStart === current
+                ? Math.round((decision.spendMinor * (periodEnd - periodStart)) / Math.min(elapsed, periodEnd - periodStart))
+                : decision.spendMinor;
+
+        return {
+            breakdown: spendBreakdown(usage),
+            capMinor: decision.capMinor,
+            level: decision.level,
+            periodEnd,
+            periodStart,
+            projectedSpendMinor,
+            spendMinor: decision.spendMinor,
+            suspended: organization.suspendedAt != null,
+            warnMinor: decision.warnMinor,
+        };
+    });
+
+/**
+ * Set the org's soft-cap warning threshold in minor units (owners/admins): `0`
+ * turns the warning off, `null` returns to the 80%-of-cap default. Only the
+ * WARN threshold is tenant-settable — the cap is a platform blast-radius control
+ * and stays support-only. Re-arms the once-per-period latch, so a threshold
+ * moved above the current spend can still fire later this period.
+ */
+export const setSpendWarning = mutation
+    .use(rateLimit("api"))
+    .input({ organizationId: v.id("organizations"), warnMinor: v.union(v.number(), v.null()) })
+    .mutation(async ({ ctx: context, args: { organizationId, warnMinor } }): Promise<void> => {
+        const member = await assertMember(context, organizationId, ["owner", "admin"]);
+
+        if (warnMinor !== null && (!Number.isInteger(warnMinor) || warnMinor < 0 || warnMinor > MAX_SPEND_THRESHOLD_MINOR)) {
+            throw new LunoraError("BAD_REQUEST", `warnMinor must be a whole number of cents between 0 and ${String(MAX_SPEND_THRESHOLD_MINOR)}`);
+        }
+
+        await context.db.patch(member.organizationId, { spendWarnedPeriod: null, spendWarnMinor: warnMinor });
+        await context.db.insert("auditLog", {
+            action: "organization.spend_warn_set",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId: member.organizationId,
+            target: warnMinor === null ? "default" : String(warnMinor),
+        });
+    });
+
 /**
  * Enforce aggregate spend caps (GAPS.md C1). Estimates each org's current-
  * period spend from the metered platform usage and suspends orgs over their
@@ -254,7 +443,7 @@ export const summary = query
  * raised cap, upgraded plan) are unsuspended on the next run. SYSTEM only
  * (cron dispatch).
  */
-export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context }): Promise<{ suspended: number; unsuspended: number }> => {
+export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context }): Promise<{ suspended: number; unsuspended: number; warned: number }> => {
     const periodStart = currentPeriodStart();
     // Both reads drain every page. A single `findMany({})` page stops at 1000 rows, so
     // any organization past that boundary was never evaluated and its spend cap simply
@@ -283,42 +472,87 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         byOrg.set(row.organizationId, bucket);
     }
 
+    // `.global()` rows answer SQL NULL for an unset column, so every optional is `| null`.
     const organizations = await collectAll<{
-        _id: string;
+        _id: Id<"organizations">;
+        name: string;
         plan: string;
-        spendCapMinor?: number;
-        suspendedAt?: number;
-        suspendedReason?: string;
+        spendCapMinor?: null | number;
+        spendNanoCents?: null | number;
+        spendPeriod?: null | number;
+        spendWarnedPeriod?: null | number;
+        spendWarnMinor?: null | number;
+        suspendedAt?: null | number;
+        suspendedReason?: null | string;
     }>((cursor) => context.db.organizations.findMany({ cursor }));
 
     let suspended = 0;
     let unsuspended = 0;
+    let warned = 0;
 
     for (const organization of organizations) {
-        const usage = byOrg.get(organization._id) ?? {};
-        const decision = evaluateSpendCap({ capMinorOverride: organization.spendCapMinor, plan: organization.plan, usage });
+        const organizationId = organization._id;
+        const usage = byOrg.get(organizationId) ?? {};
+        const decision = evaluateSpendCap({
+            capMinorOverride: organization.spendCapMinor,
+            plan: organization.plan,
+            usage,
+            warnMinorOverride: organization.spendWarnMinor,
+        });
+        const audit = async (action: string, target: string): Promise<void> => {
+            await context.db.insert("auditLog", { action, actorUserId: "system:spend-cap", createdAt: context.now, organizationId, target });
+        };
+        const spendNanoCents = estimatedSpendNanoCents(usage);
 
-        if (decision.suspend && organization.suspendedAt == null) {
+        // The ledger is the authority: rewrite the admission fast path's running
+        // accrual (plan 365 W3) from it, correcting any increment a racing writer lost.
+        if (organization.spendPeriod !== periodStart || organization.spendNanoCents !== spendNanoCents) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: context.now, suspendedReason: "spend-cap" });
+            await context.db.patch(organizationId, { spendNanoCents, spendPeriod: periodStart });
+        }
+
+        if (decision.level === "breach" && organization.suspendedAt == null) {
+            // The warn latch is stamped with the suspension, so recovering inside the
+            // same period (a raised cap) does not then fire a stale soft-cap warning.
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(organizationId, { spendWarnedPeriod: periodStart, suspendedAt: context.now, suspendedReason: "spend-cap" });
             // eslint-disable-next-line no-await-in-loop -- one audit row per transition
-            await context.db.insert("auditLog", {
-                action: "organization.suspend",
-                actorUserId: "system:spend-cap",
-                createdAt: context.now,
-                organizationId: organization._id,
-                target: `spend ${String(decision.spendMinor)} >= cap ${String(decision.capMinor)}`,
+            await audit("organization.suspend", `spend ${String(decision.spendMinor)} >= cap ${String(decision.capMinor)}`);
+            // eslint-disable-next-line no-await-in-loop -- one alert fan-out per transition
+            await fireSpendAlerts(context, organizationId, periodStart, {
+                level: "breach",
+                organization: organization.name,
+                spendMinor: decision.spendMinor,
+                thresholdMinor: decision.capMinor ?? 0,
             });
             suspended += 1;
-        } else if (!decision.suspend && organization.suspendedAt != null && organization.suspendedReason === "spend-cap") {
+        } else if (decision.level !== "breach" && organization.suspendedAt != null && organization.suspendedReason === "spend-cap") {
             // Only lift our own suspensions — dunning/support ones stay (GAPS.md C2).
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organization._id as Id<"organizations">, { suspendedAt: null, suspendedReason: null });
+            await context.db.patch(organizationId, { suspendedAt: null, suspendedReason: null });
+            // eslint-disable-next-line no-await-in-loop -- one audit row per transition
+            await audit("organization.unsuspend", `spend ${String(decision.spendMinor)} < cap ${String(decision.capMinor)}`);
             unsuspended += 1;
+        }
+
+        // Soft cap (plan 365 D3): a notification, never an action — once per period.
+        if (decision.level === "warn" && organization.spendWarnedPeriod !== periodStart) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(organizationId, { spendWarnedPeriod: periodStart });
+            // eslint-disable-next-line no-await-in-loop -- one audit row per transition
+            await audit("organization.spend_warn", `spend ${String(decision.spendMinor)} >= warn ${String(decision.warnMinor)}`);
+            // eslint-disable-next-line no-await-in-loop -- one alert fan-out per transition
+            await fireSpendAlerts(context, organizationId, periodStart, {
+                level: "warn",
+                organization: organization.name,
+                spendMinor: decision.spendMinor,
+                thresholdMinor: decision.warnMinor ?? 0,
+            });
+            warned += 1;
         }
     }
 
-    return { suspended, unsuspended };
+    return { suspended, unsuspended, warned };
 });
 
 /**

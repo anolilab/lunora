@@ -18,7 +18,7 @@
 import type { BoxVersions } from "../hostd/protocol";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
-import type { AlertChannel, DeployRule } from "../telemetry/alerts";
+import type { AlertChannel, EventRule } from "../telemetry/alerts";
 import { fireDeployRules } from "../telemetry/alerts";
 import type { StoredReleaseSummary } from "./hostd-releases";
 import { newestStableRelease } from "./hostd-releases";
@@ -78,7 +78,7 @@ export const runOutdatedBoxAlerts = async (database: ControlPlaneDatabase, optio
 
         // eslint-disable-next-line no-await-in-loop -- see above
         const { page: rules } = await database.findMany("alertRules", { where: { organizationId: box.organizationId, target: "deploy" } });
-        const enabled: DeployRule[] = (rules as DeployRuleRow[])
+        const enabled: EventRule[] = (rules as DeployRuleRow[])
             .filter((rule) => rule.enabled)
             .map((rule) => {
                 return { channel: rule.channel, destination: rule.destination, name: rule.name, ruleId: rule._id };

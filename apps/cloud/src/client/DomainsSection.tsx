@@ -1,21 +1,22 @@
 import type { ReturnOf } from "@lunora/client";
-import { usePreloadedQuery, useQuery } from "@lunora/react";
+import { useLunora, usePreloadedQuery, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { EdgeBlockMode } from "../domains/edge-block-mode";
 import readJson from "../read-json";
 import { AsyncList } from "./AsyncList";
-import { certificateBadge } from "./domains";
+import { certificateBadge, EDGE_BLOCK_MODE_NOTE } from "./domains";
 import { COLUMN_LABEL } from "./section-styles";
 import { Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
-import type { ProjectId } from "./types";
+import type { OrgId, ProjectId } from "./types";
 
 interface TxtRecord {
     txtName: string;
@@ -68,6 +69,34 @@ const TxtRecordPanel = ({ onDismiss, record }: { onDismiss: () => void; record: 
     </div>
 );
 
+/** This cell's edge-block mode, through the `domains.edgeBlockMode` action; `undefined` until it answers, or if it fails (the note is then left out). */
+const useEdgeBlockMode = (organizationId: OrgId): EdgeBlockMode | undefined => {
+    const client = useLunora();
+    const [loaded, setLoaded] = useState<{ mode: EdgeBlockMode; organizationId: OrgId } | undefined>(undefined);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        void (async () => {
+            try {
+                const mode = await client.action(api.domains.edgeBlockMode, { organizationId });
+
+                if (!cancelled) {
+                    setLoaded({ mode, organizationId });
+                }
+            } catch {
+                // Fails soft: a missing note only leaves the mode unsaid.
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [client, organizationId]);
+
+    return loaded?.organizationId === organizationId ? loaded.mode : undefined;
+};
+
 export const DomainsSection = ({ organizationId, preloaded }: SectionProps<ReturnOf<typeof api.projects.listByOrg>>): ReactElement => {
     const projects = usePreloadedQuery(preloaded);
     // Plain `string`, not `ProjectId | ""`: Base UI's Select is generic over its value
@@ -76,6 +105,7 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
     const [projectId, setProjectId] = useState("");
     const domains = useQuery(api.domains.list, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip"); // gitleaks:allow -- a Lunora row id from app state; matches the Cypress project-id shape
 
+    const edgeBlockMode = useEdgeBlockMode(organizationId);
     const [hostname, setHostname] = useState("");
     const [txtRecord, setTxtRecord] = useState<TxtRecord | null>(null);
     const [pending, setPending] = useState(false);
@@ -147,6 +177,7 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
             <Card>
                 <CardHeader>
                     <CardTitle>Custom domains</CardTitle>
+                    {edgeBlockMode === undefined ? null : <CardDescription>{EDGE_BLOCK_MODE_NOTE[edgeBlockMode]}</CardDescription>}
                 </CardHeader>
                 <CardContent className="flex flex-col gap-6">
                     <Field htmlFor="domain-project" label="Project">

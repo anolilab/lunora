@@ -29,11 +29,16 @@ export const organizations = sqliteTable("organizations", {
     plan: text("plan", { mode: "json" }).$type<"free" | "pro" | "enterprise">().notNull(),
     slug: text("slug").notNull(),
     spendCapMinor: real("spendCapMinor"),
+    spendWarnMinor: real("spendWarnMinor"),
+    spendWarnedPeriod: real("spendWarnedPeriod"),
+    spendNanoCents: real("spendNanoCents"),
+    spendPeriod: real("spendPeriod"),
     suspendedAt: real("suspendedAt"),
     suspendedReason: text("suspendedReason"),
     paymentFailedAt: real("paymentFailedAt"),
     creditsAccountId: text("creditsAccountId"),
     deletionRequestedAt: real("deletionRequestedAt"),
+    recursionPolicy: text("recursionPolicy", { mode: "json" }).$type<"terminate" | "allow">(),
 }, (t) => ({
     by_slug: uniqueIndex("by_slug").on(t.slug),
 }));
@@ -252,6 +257,8 @@ export const domains = sqliteTable("domains", {
     certificateStatus: text("certificateStatus"),
     customHostnameId: text("customHostnameId"),
     createdAt: real("createdAt").notNull(),
+    edgeBlockedAt: real("edgeBlockedAt"),
+    edgeBlockError: text("edgeBlockError"),
     hostname: text("hostname").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
@@ -336,6 +343,8 @@ export const boxes = sqliteTable("boxes", {
     publicKey: text("publicKey").notNull(),
     resources: text("resources", { mode: "json" }).$type<{ diskFreeMb: number; memMb: number }>(),
     revokedAt: real("revokedAt"),
+    routesWithheld: text("routesWithheld", { mode: "json" }).$type<Array<string>>(),
+    routesStale: integer("routesStale", { mode: "boolean" }),
     singleTrust: integer("singleTrust", { mode: "boolean" }).notNull(),
     slug: text("slug").notNull(),
     status: text("status", { mode: "json" }).$type<"pending" | "online" | "offline" | "revoked">().notNull(),
@@ -523,7 +532,7 @@ export const alertRules = sqliteTable("alertRules", {
     mode: text("mode", { mode: "json" }).$type<"threshold" | "deviation">(),
     name: text("name").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly">().notNull(),
     threshold: real("threshold").notNull(),
     updatedAt: real("updatedAt").notNull(),
     windowMinutes: real("windowMinutes"),
@@ -559,10 +568,65 @@ export const alerts = sqliteTable("alerts", {
     ruleId: text("ruleId").references((): AnySQLiteColumn => alertRules._id).notNull(),
     status: text("status", { mode: "json" }).$type<"firing" | "delivered" | "failed">().notNull(),
     subject: text("subject").notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly">().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_status: index("by_status").on(t.status),
+    by_org: index("by_org").on(t.organizationId),
+}));
+
+export const anomalyBaselines = sqliteTable("anomalyBaselines", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    lastBucketStart: real("lastBucketStart").notNull(),
+    lastMean: real("lastMean").notNull(),
+    lastScore: real("lastScore").notNull(),
+    lastValue: real("lastValue").notNull(),
+    mean: real("mean").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    samples: real("samples").notNull(),
+    signal: text("signal", { mode: "json" }).$type<"requests" | "errors">().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+    variance: real("variance").notNull(),
+}, (t) => ({
+    by_org_signal: uniqueIndex("by_org_signal").on(t.organizationId, t.signal),
+}));
+
+export const edgeRules = sqliteTable("edgeRules", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    applied: integer("applied", { mode: "boolean" }).notNull(),
+    appliedAt: real("appliedAt"),
+    armed: integer("armed", { mode: "boolean" }),
+    attempts: real("attempts").notNull(),
+    cloudflareRuleId: text("cloudflareRuleId"),
+    createdAt: real("createdAt").notNull(),
+    engaged: integer("engaged", { mode: "boolean" }),
+    targets: text("targets", { mode: "json" }).$type<Array<{ hostname: string; projectId: string; rowId: string; source: "deployment" | "domain" }>>().notNull(),
+    kind: text("kind", { mode: "json" }).$type<"ddos_l7" | "rate_limit">().notNull(),
+    lastError: text("lastError"),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    periodSeconds: text("periodSeconds", { mode: "json" }).$type<10 | 60>(),
+    requestsPerPeriod: real("requestsPerPeriod"),
+    sensitivity: text("sensitivity", { mode: "json" }).$type<"default" | "medium" | "low">(),
+    status: text("status", { mode: "json" }).$type<"pending" | "applied" | "removed" | "failed" | "unavailable">().notNull(),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_org_kind: uniqueIndex("by_org_kind").on(t.organizationId, t.kind),
+}));
+
+export const anomalySilences = sqliteTable("anomalySilences", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    createdBy: text("createdBy").notNull(),
+    endsAt: real("endsAt").notNull(),
+    organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    reason: text("reason").notNull(),
+    startsAt: real("startsAt").notNull(),
+    target: text("target", { mode: "json" }).$type<"usage_anomaly" | "error_anomaly">().notNull(),
+}, (t) => ({
     by_org: index("by_org").on(t.organizationId),
 }));
 

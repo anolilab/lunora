@@ -31,6 +31,7 @@ interface DomainBody {
 interface DomainRowLike {
     certificateIssuer?: null | string;
     customHostnameId?: null | string;
+    edgeBlockedAt?: null | number;
     hostname: string;
     projectId: string; // secret-scanner:allow -- domain field name
     txtToken: string;
@@ -104,6 +105,23 @@ export const handleDomainAddRoute = async (request: Request, environment: Router
 };
 
 /**
+ * Request a verified domain's certificate. The domain is verified either way: a
+ * certificate the issuer refused is recorded on the row (and retried by the next
+ * verify), never a failed verify.
+ */
+const issueFor = async (driver: TargetDriver, domain: DomainRowLike): Promise<DomainCertificate | undefined> => {
+    try {
+        return await driver.domains.issue({
+            // Only a certificate this same target issued is its to re-read.
+            ...(domain.customHostnameId == null || domain.certificateIssuer !== driver.id ? {} : { customHostnameId: domain.customHostnameId }),
+            hostname: domain.hostname,
+        });
+    } catch (error) {
+        return { error: messageOf(error).slice(0, 256), sslStatus: "failed" };
+    }
+};
+
+/**
  * `POST /v1/domains/verify` — run the DNS checks for a domain (TXT token +
  * pointing at the platform) and record the outcome (GAPS.md B1). Runs under
  * the caller's session; the DNS lookups use DNS-over-HTTPS at the edge.
@@ -118,37 +136,27 @@ export const handleDomainVerifyRoute = async (request: Request, environment: Rou
     }
 
     try {
-        const domain = await context.runQuery<DomainRowLike | null>(api.domains.get, { id: body.id, organizationId: body.organizationId });
-
-        if (!domain) {
-            return jsonError(404, "domain not found");
-        }
+        // Owner/admin, the domain in the org, and the org serving (not suspended or
+        // over its cap): verifying must never undo an edge block (plan 365 W8). Every
+        // write below is scoped by the organization this verified, not the body.
+        const { domain, organizationId } = await context.runQuery<{ domain: DomainRowLike; organizationId: string }>(internal.domains.verifyTarget, {
+            id: body.id,
+            organizationId: body.organizationId,
+        });
 
         // The CNAME targets are the project's placement's: a box answers on its own hostname, WfP on the apex.
-        const driver = await driverFor(context, environment, body.organizationId, domain.projectId);
+        const driver = await driverFor(context, environment, organizationId, domain.projectId);
         const result = await verifyDomain(domain.hostname, {
             platformTargets: driver.domains.platformTargets(),
             resolve: createDohResolver(),
             txtToken: domain.txtToken,
         });
 
-        await context.runMutation(internal.domains.markVerified, { id: body.id, organizationId: body.organizationId, verified: result.verified });
+        await context.runMutation(internal.domains.markVerified, { id: body.id, organizationId, verified: result.verified });
 
-        // The domain is verified either way; a certificate the issuer refused is
-        // recorded on the row (and retried by the next verify), never a failed verify.
-        let certificate: DomainCertificate | undefined;
-
-        if (result.verified) {
-            try {
-                certificate = await driver.domains.issue({
-                    // Only a certificate this same target issued is its to re-read.
-                    ...(domain.customHostnameId == null || domain.certificateIssuer !== driver.id ? {} : { customHostnameId: domain.customHostnameId }),
-                    hostname: domain.hostname,
-                });
-            } catch (error) {
-                certificate = { error: messageOf(error).slice(0, 256), sslStatus: "failed" };
-            }
-        }
+        // A domain the suspension edge-blocked is restored by the edge-block sweep on
+        // recovery (plan 365 W8); issuing here would put a suspended org back on the edge.
+        const certificate = result.verified && domain.edgeBlockedAt == null ? await issueFor(driver, domain) : undefined;
 
         if (certificate !== undefined) {
             const issued = certificate.customHostnameId !== undefined && certificate.scope !== undefined;
@@ -157,7 +165,7 @@ export const handleDomainVerifyRoute = async (request: Request, environment: Rou
                 ...(issued ? { customHostnameId: certificate.customHostnameId, issuer: driver.id, scope: certificate.scope } : {}),
                 ...(certificate.error === undefined ? {} : { error: certificate.error }),
                 id: body.id,
-                organizationId: body.organizationId,
+                organizationId,
                 sslStatus: certificate.sslStatus,
             });
         }

@@ -1,7 +1,8 @@
+import { LunoraError } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { internal } from "../lunora/_generated/api.js";
-import { recordCertificate, removalTarget, remove } from "../lunora/domains";
+import { add, recordCertificate, removalTarget, remove, routeForHostname, verifyTarget } from "../lunora/domains";
 import { purgeDeleted } from "../lunora/organizations";
 import { remove as removeProject } from "../lunora/projects";
 import { certificateBadge } from "../src/client/domains";
@@ -35,6 +36,8 @@ const PURGED_TABLES = [
     "alertRuleState",
     "alertRules",
     "alerts",
+    "anomalyBaselines",
+    "anomalySilences",
     "aliasOwnership",
     "auditLog",
     "boxEnrolments",
@@ -44,6 +47,7 @@ const PURGED_TABLES = [
     "cloudflareAccounts",
     "dashboards",
     "deployKeys",
+    "edgeRules",
     "githubInstallations",
     "incidents",
     "invitations",
@@ -318,6 +322,99 @@ describe("domains.recordCertificate / removalTarget / remove", () => {
         await expect(removalTarget.handler(member, { id: "dom_1" as never, organizationId: "org_1" as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
+    /**
+     * A suspended or over-cap organization must not undo its edge block through
+     * the domain routes (plan 365 W8): no adding a domain, no verifying one —
+     * which is what would request a fresh custom hostname. Decided from the
+     * organization row, never from anything the caller sends.
+     */
+    describe("while the organization is suspended or over its cap", () => {
+        const period = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1);
+        const organizations = {
+            breached: { _id: "org_1", plan: "free", spendNanoCents: 600e9, spendPeriod: period },
+            missing: undefined,
+            suspended: { _id: "org_1", plan: "free", suspendedAt: 1 },
+        };
+
+        it.each(Object.entries(organizations))("refuses to verify a domain when the organization is %s", async (_state, organization) => {
+            const { ctx } = makeCtx({ ...world(), organizations: organization === undefined ? [] : [organization] }, { now: Date.now() });
+
+            await expect(verifyTarget.handler(ctx, { id: "dom_1" as never, organizationId: "org_1" as never })).rejects.toMatchObject({
+                code: "FORBIDDEN",
+                message: expect.stringContaining("suspended") as unknown,
+            });
+        });
+
+        it.each(Object.entries(organizations))("refuses to add a domain when the organization is %s", async (_state, organization) => {
+            const { ctx, ops } = makeCtx(
+                {
+                    ...world(),
+                    organizations: organization === undefined ? [] : [organization],
+                    projects: [{ _id: "proj_1", organizationId: "org_1" }],
+                    subscriptions: [{ _id: "sub_1", plan: "pro", referenceId: "org_1", status: "active" }],
+                },
+                { now: Date.now() },
+            );
+
+            await expect(
+                add.handler(ctx, { hostname: "new.example.com", organizationId: "org_1" as never, projectId: "proj_1" as never }),
+            ).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("suspended") as unknown });
+            expect(ops.filter((op) => op.kind === "insert" && op.table === "domains")).toStrictEqual([]);
+        });
+
+        it.each(Object.entries(organizations))("routes a %s organization's domain to a refusal, redirects included", async (_state, organization) => {
+            const { ctx } = makeCtx(
+                {
+                    domains: [
+                        {
+                            _id: "dom_1",
+                            hostname: "app.example.com",
+                            organizationId: "org_1",
+                            projectId: "proj_1",
+                            redirectTo: "https://x.example/",
+                            verifiedAt: 1,
+                        },
+                    ],
+                    organizations: organization === undefined ? [] : [organization],
+                },
+                { now: Date.now() },
+            );
+
+            await expect(routeForHostname.handler(ctx, { hostname: "app.example.com" })).resolves.toStrictEqual({ suspended: true });
+        });
+
+        it("routes a serving org's domain only to a project of that org", async () => {
+            const domains = [{ _id: "dom_1", hostname: "app.example.com", organizationId: "org_1", projectId: "proj_1", verifiedAt: 1 }];
+            const route = async (projectOrg: string) =>
+                routeForHostname.handler(
+                    makeCtx(
+                        {
+                            domains,
+                            organizations: [{ _id: "org_1", plan: "free" }],
+                            projects: [{ _id: "proj_1", activeScriptName: "acme", organizationId: projectOrg }],
+                        },
+                        { now: Date.now() },
+                    ).ctx,
+                    { hostname: "app.example.com" },
+                );
+
+            await expect(route("org_1")).resolves.toStrictEqual({ scriptName: "acme" });
+            await expect(route("org_2")).resolves.toBeNull();
+        });
+
+        it("lets an owner of a serving organization verify, and refuses a plain member", async () => {
+            const serving = { ...world(), organizations: [{ _id: "org_1", plan: "free" }] };
+            const { ctx } = makeCtx(serving);
+            const member = makeCtx({ ...serving, members: [{ ...owner("org_1"), role: "member" }] }).ctx;
+
+            await expect(verifyTarget.handler(ctx, { id: "dom_1" as never, organizationId: "org_1" as never })).resolves.toMatchObject({
+                domain: { _id: "dom_1" },
+                organizationId: "org_1",
+            });
+            await expect(verifyTarget.handler(member, { id: "dom_1" as never, organizationId: "org_1" as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        });
+    });
+
     it("are internal: a certificate is only released by the route that removes the domain", () => {
         expect(remove.visibility).toBe("internal");
         expect(removalTarget.visibility).toBe("internal");
@@ -360,10 +457,9 @@ describe("the domain routes", () => {
     const placement = { cellName: "default", target: "cloudflare-wfp" };
 
     it("requests a verified domain's certificate and records it", async () => {
-        const { api } = await import("../lunora/_generated/api.js");
         const { context, mutations } = contextAnswering(
             new Map<unknown, unknown>([
-                [api.domains.get, { hostname: "app.example.com", projectId: "proj_1", txtToken: "tok" }],
+                [internal.domains.verifyTarget, { domain: { hostname: "app.example.com", projectId: "proj_1", txtToken: "tok" }, organizationId: "org_1" }],
                 [internal.projects.placement, placement],
             ]),
         );
@@ -403,6 +499,77 @@ describe("the domain routes", () => {
             scope: ZONE,
             sslStatus: "initializing",
         });
+    });
+
+    /** Re-verifying an edge-blocked domain must not put a suspended org back on the edge (plan 365 W8). */
+    it("issues no certificate for a domain the suspension edge-blocked", async () => {
+        const { context, mutations } = contextAnswering(
+            new Map<unknown, unknown>([
+                [
+                    internal.domains.verifyTarget,
+                    { domain: { edgeBlockedAt: 9, hostname: "app.example.com", projectId: "proj_1", txtToken: "tok" }, organizationId: "org_1" },
+                ],
+                [internal.projects.placement, placement],
+            ]),
+        );
+        const cloudflare: string[] = [];
+
+        vi.stubGlobal("fetch", (input: FetchInput) => {
+            const url = input instanceof Request ? input.url : input.toString();
+
+            if (url.startsWith("https://cloudflare-dns.com/")) {
+                const answer = url.includes("type=TXT") ? [{ data: '"tok"', type: 16 }] : [{ data: "lunora.test.", type: 5 }];
+
+                return Promise.resolve(Response.json({ Answer: answer }));
+            }
+
+            cloudflare.push(url);
+
+            return Promise.resolve(Response.json({ result: [], success: true }));
+        });
+
+        const response = await handleDomainVerifyRoute(
+            new Request("https://cloud.test/v1/domains/verify", { body: JSON.stringify({ id: "dom_1", organizationId: "org_1" }), method: "POST" }),
+            environment(context),
+        );
+
+        await expect(readJson(response)).resolves.toMatchObject({ verified: true });
+        expect(cloudflare).toStrictEqual([]);
+        expect(mutations.map(({ reference }) => reference)).toStrictEqual([internal.domains.markVerified]);
+    });
+
+    /** The route asks the verified-row gate first; a suspended org gets a 403 and Cloudflare is never called. */
+    it("refuses to verify for a suspended organization before any DNS or Cloudflare call", async () => {
+        const mutations: unknown[] = [];
+        const context = {
+            runMutation: (reference: unknown) => {
+                mutations.push(reference);
+
+                return Promise.resolve(null);
+            },
+            runQuery: (reference: unknown) =>
+                reference === internal.domains.verifyTarget
+                    ? Promise.reject(
+                          new LunoraError("FORBIDDEN", "this organization is suspended; custom domains cannot be added or verified until it recovers"),
+                      )
+                    : Promise.reject(new Error("unexpected query")),
+        } as unknown as NonNullable<RouterEnv["__lunoraCtx"]>;
+        const fetched: string[] = [];
+
+        vi.stubGlobal("fetch", (input: FetchInput) => {
+            fetched.push(input instanceof Request ? input.url : input.toString());
+
+            return Promise.resolve(Response.json({}));
+        });
+
+        const response = await handleDomainVerifyRoute(
+            new Request("https://cloud.test/v1/domains/verify", { body: JSON.stringify({ id: "dom_1", organizationId: "org_1" }), method: "POST" }),
+            environment(context),
+        );
+
+        expect(response.status).toBe(403);
+        expect(fetched).toStrictEqual([]);
+        expect(mutations).toStrictEqual([]);
     });
 
     it("deletes the domain's custom hostname before the domain, and keeps the domain when that fails", async () => {
@@ -726,6 +893,17 @@ describe(certificateBadge, () => {
             detail: "CAA forbids it",
             label: "certificate error",
             tone: "danger",
+        });
+    });
+
+    it("reads an edge-blocked domain, and a restore that keeps failing", () => {
+        expect(certificateBadge({ certificateError: "suspended", certificateStatus: "suspended", verifiedAt: 1 })).toStrictEqual({
+            detail: "suspended",
+            label: "blocked: suspended",
+            tone: "warning",
+        });
+        expect(certificateBadge({ certificateStatus: "suspended", edgeBlockError: "HTTP 500", verifiedAt: 1 })).toMatchObject({
+            detail: "Restoring it failed and is retried hourly: HTTP 500",
         });
     });
 });

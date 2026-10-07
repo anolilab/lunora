@@ -32,11 +32,26 @@ export type MetricTarget = "error_rate" | "latency_p95" | "llm_cost";
  * total crosses a line and therefore needs a threshold; a failed release has no
  * running total, and forcing one on it would mean either a threshold every rule
  * sets to 1 or a latch that has to remember something that has already ended.
+ *
+ * `spend` (plan 365 W2) fires when the org's estimated period spend first
+ * reaches its soft cap (`organizations.spendWarnMinor`) and again when the hard
+ * cap suspends it. The threshold lives on the organization, not the rule: one
+ * number per org that every channel hears, set by the enforcement sweep's latch
+ * (`spendWarnedPeriod`) so it fires once per period.
  */
-export type EventAlertTarget = "deploy";
+export type EventAlertTarget = "deploy" | "spend";
 
-/** What a rule watches — a count-crossing counter, a metric window, or a one-off event. */
-export type AlertTarget = CountTarget | EventAlertTarget | MetricTarget;
+/**
+ * Anomaly targets (plan 365 D5) — threshold a derived **anomaly score**, not a raw
+ * metric. The score is an online z-score of one hourly signal against the org's
+ * own rolling baseline (`src/telemetry/anomaly.ts`): `usage_anomaly` scores
+ * requests, `error_anomaly` scores error spans. `threshold` is read in standard
+ * deviations: `gt 4` is "four sigma above normal", `lt -4` "traffic fell away".
+ */
+export type AnomalyTarget = "error_anomaly" | "usage_anomaly";
+
+/** What a rule watches — a count-crossing counter, a metric window, an anomaly score, or a one-off event. */
+export type AlertTarget = AnomalyTarget | CountTarget | EventAlertTarget | MetricTarget;
 
 /**
  * Which family a target belongs to, and the membership tests that decide it.
@@ -51,21 +66,28 @@ export type AlertTarget = CountTarget | EventAlertTarget | MetricTarget;
 export const METRIC_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["error_rate", "latency_p95", "llm_cost"]);
 
 /** Event targets carry no threshold: the rule is "tell me when this happens". */
-export const EVENT_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["deploy"]);
+export const EVENT_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["deploy", "spend"]);
 
-/** A rule target's family — the three shapes a rule's condition can take. */
-export type AlertFamily = "count" | "event" | "metric";
+/** Anomaly targets threshold the hourly score the anomaly sweep derives, never a raw window. */
+export const ANOMALY_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["error_anomaly", "usage_anomaly"]);
+
+/** A rule target's family — the four shapes a rule's condition can take. */
+export type AlertFamily = "anomaly" | "count" | "event" | "metric";
 
 /**
  * Classify a target into its family.
  *
  * Replaces the `(isMetric, isEvent)` boolean pair the validator used to take,
- * where `(true, true)` was representable and meaningless. One value, three arms,
- * no impossible states.
+ * where `(true, true)` was representable and meaningless. One value, one arm per
+ * family, no impossible states.
  */
 export const alertFamily = (target: AlertTarget): AlertFamily => {
     if (METRIC_TARGETS.has(target)) {
         return "metric";
+    }
+
+    if (ANOMALY_TARGETS.has(target)) {
+        return "anomaly";
     }
 
     return EVENT_TARGETS.has(target) ? "event" : "count";
@@ -153,8 +175,39 @@ export const renderDeployAlert = (rule: { name: string }, source: DeployAlertSou
     };
 };
 
-/** An enabled `deploy` rule, as either store returns it. */
-export interface DeployRule {
+/** What tripped a `spend` rule, for rendering. Amounts are minor units (cents). */
+export interface SpendAlertSource {
+    level: "breach" | "warn";
+    organization: string;
+    spendMinor: number;
+    /** The threshold crossed: the warn threshold for `warn`, the cap for `breach`. */
+    thresholdMinor: number;
+}
+
+const formatMinor = (minor: number): string => `$${(minor / 100).toFixed(2)}`;
+
+/** Render a fired `spend` alert — the soft-cap warning, or the hard-cap suspension. */
+export const renderSpendAlert = (rule: { name: string }, source: SpendAlertSource): { body: string; subject: string } => {
+    const spend = formatMinor(source.spendMinor);
+    const threshold = formatMinor(source.thresholdMinor);
+
+    return source.level === "warn"
+        ? {
+              body:
+                  `"${source.organization}" has spent an estimated ${spend} this period on Lunora Cloud, past its ${threshold} warning threshold. ` +
+                  `Nothing is paused yet; the organization is suspended if it reaches its spend cap.`,
+              subject: `[Lunora] ${rule.name}: ${source.organization} passed its ${threshold} spend warning`,
+          }
+        : {
+              body:
+                  `"${source.organization}" reached its ${threshold} spend cap on Lunora Cloud (estimated ${spend} this period) and is suspended: ` +
+                  `its deployments stop serving until the period rolls over or the cap is raised.`,
+              subject: `[Lunora] ${rule.name}: ${source.organization} suspended at its ${threshold} spend cap`,
+          };
+};
+
+/** An enabled event-target (`deploy` / `spend`) rule, as either store returns it. */
+export interface EventRule {
     channel: AlertChannel;
     destination: string;
     name: string;
@@ -162,24 +215,25 @@ export interface DeployRule {
 }
 
 /**
- * Fire every enabled `deploy` rule for one release-path failure: render the
- * notification and insert a `firing` alert row via the caller's `insertAlert`.
+ * Fire every enabled event rule for one occurrence: render the notification and
+ * insert a `firing` alert row via the caller's `insertAlert`.
  *
  * Deliberately here, next to {@link fireCrossedRules}, and with the same injected
  * `insertAlert`, so the row shape is written once however the caller holds the
  * database.
  *
- * Returns nothing to deliver, unlike the count path: a `deploy` alert is raised
+ * Returns nothing to deliver, unlike the count path: an event alert is raised
  * from inside mutations that have no `fetch`, so the drain sweep sends it.
  */
-export const fireDeployRules = async (
-    rules: ReadonlyArray<DeployRule>,
-    source: DeployAlertSource,
+const fireEventRules = async (
+    target: EventAlertTarget,
+    rules: ReadonlyArray<EventRule>,
+    render: (rule: EventRule) => { body: string; subject: string },
     context: { hash: string; now: number; organizationId: string },
     insertAlert: (row: Record<string, unknown>) => Promise<unknown>,
 ): Promise<number> => {
     for (const rule of rules) {
-        const rendered = renderDeployAlert(rule, source);
+        const rendered = render(rule);
 
         // eslint-disable-next-line no-await-in-loop -- an org configures a handful of rules; sequential keeps the writer simple
         await insertAlert({
@@ -192,13 +246,29 @@ export const fireDeployRules = async (
             ruleId: rule.ruleId,
             status: "firing",
             subject: rendered.subject,
-            target: "deploy",
+            target,
             updatedAt: context.now,
         });
     }
 
     return rules.length;
 };
+
+/** Fire every enabled `deploy` rule for one release-path failure. */
+export const fireDeployRules = async (
+    rules: ReadonlyArray<EventRule>,
+    source: DeployAlertSource,
+    context: { hash: string; now: number; organizationId: string },
+    insertAlert: (row: Record<string, unknown>) => Promise<unknown>,
+): Promise<number> => fireEventRules("deploy", rules, (rule) => renderDeployAlert(rule, source), context, insertAlert);
+
+/** Fire every enabled `spend` rule for one soft-cap warning or hard-cap suspension. */
+export const fireSpendRules = async (
+    rules: ReadonlyArray<EventRule>,
+    source: SpendAlertSource,
+    context: { hash: string; now: number; organizationId: string },
+    insertAlert: (row: Record<string, unknown>) => Promise<unknown>,
+): Promise<number> => fireEventRules("spend", rules, (rule) => renderSpendAlert(rule, source), context, insertAlert);
 
 /**
  * A fired alert to deliver (email/webhook) then mark delivered. `TId` is the
@@ -573,7 +643,7 @@ export interface MetricLevelEvaluation {
  * already firing). Named rather than nested so each arm reads as the state
  * change it is: fire on a fresh breach, clear on a recovery, otherwise hold.
  */
-const transitionFor = (breaching: boolean, wasFiring: boolean): MetricLevelEvaluation["action"] => {
+export const transitionFor = (breaching: boolean, wasFiring: boolean): MetricLevelEvaluation["action"] => {
     if (breaching) {
         return wasFiring ? "none" : "fire";
     }

@@ -1,0 +1,26 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // The dispatch namespace's Outbound Worker (plan 365 W5) — a SEPARATE deployable
+    // from the control plane (wrangler.jsonc) and the dispatcher
+    // (dispatcher.wrangler.jsonc). Every `fetch()` a tenant Worker makes passes
+    // through it; it stamps the signed lineage header the dispatcher's recursion
+    // protection verifies. Deploy it BEFORE the dispatcher, whose namespace binding
+    // names it as `outbound.service`:
+    //   wrangler deploy -c outbound.wrangler.jsonc --env <cell>
+    //   wrangler secret put LUNORA_LINEAGE_SECRET -c outbound.wrangler.jsonc --env <cell>
+    // and set the SAME secret on the dispatcher. Without it the worker stamps
+    // nothing and the dispatcher refuses nothing (inert).
+    //
+    // It has no bindings and no vars of its own: the `lineage` value it reads
+    // arrives per invocation as a binding parameter from the dispatcher.
+    "name": "lunora-outbound",
+    "main": "src/outbound/worker.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    // Deployed environments — see the note in `wrangler.jsonc`. Wrangler names each
+    // `lunora-outbound-<env>`, which is what the dispatcher's binding points at.
+    "env": {
+        "staging": { "workers_dev": false },
+        "production": { "workers_dev": false },
+    },
+}

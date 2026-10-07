@@ -5,8 +5,8 @@ import type { CloudflareAccountRow } from "../src/cloudflare-accounts/store";
 import { cloudflareAccountStore } from "../src/cloudflare-accounts/store";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
-import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
-import { assertMember, assertRowInOrg } from "./authz";
+import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import { assertMember, assertRowInOrg, authorizeBillingKey } from "./authz";
 import { pendingTeardown } from "./deployments";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -284,3 +284,28 @@ export const costs = action
             fetch: context.fetch,
         });
     });
+
+/**
+ * The connected account a deploy-key cost read (`POST /v1/usage/cloudflare-costs`,
+ * the `usage.cloudflare-costs` MCP tool, plan 365 W6) reads, with the sealed
+ * token the edge unseals — SYSTEM only, so the ciphertext never leaves the
+ * control plane's own route. Authorized by an organization-wide deploy key; the
+ * account must belong to the key's organization.
+ */
+export const costTarget = internalQuery
+    .input({ deployKey: boundedString(LIMITS.token), id: v.id("cloudflareAccounts"), organizationId: v.id("organizations") })
+    .query(
+        async ({
+            ctx: context,
+            args: { deployKey, id, organizationId },
+        }): Promise<{ accountId: string; ciphertext: string; iv: string; permissions: string[] }> => {
+            const verified = await authorizeBillingKey(context, organizationId, deployKey);
+            const row = await cloudflareAccountStore(context.db.cloudflareAccounts).lookup(id);
+
+            if (row?.organizationId !== verified) {
+                throw new LunoraError("NOT_FOUND", "Cloudflare account not found in this organization");
+            }
+
+            return { accountId: row.accountId, ciphertext: row.ciphertext, iv: row.iv, permissions: row.permissions };
+        },
+    );

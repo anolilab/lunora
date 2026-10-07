@@ -45,6 +45,21 @@ export const platformTables = {
         // Aggregate period spend cap in minor units (GAPS.md C1). Unset = the
         // plan default; explicit 0 = uncapped (support escape hatch).
         spendCapMinor: v.optional(v.number()),
+        // Soft cap (plan 365 W2): the period spend at which the org's `spend`
+        // alert rules fire. Unset = 80% of the cap; explicit 0 = no warning.
+        // Owners/admins set it (`usage.setSpendWarning`); the cap itself stays
+        // support-only.
+        spendWarnMinor: v.optional(v.number()),
+        // The period (`periodStart`) the soft-cap warning last fired for — the
+        // latch that makes it fire once per period, not on every sweep.
+        spendWarnedPeriod: v.optional(v.number()),
+        // Admission fast path (plan 365 W3): the running estimated spend, in
+        // nano-cents, accrued by every billable ledger write for `spendPeriod`
+        // (the current period only). The dispatcher's plan lookup refuses an org
+        // whose accrual breaches its cap before the hourly sweep suspends it; the
+        // sweep recomputes both from the ledger, which stays the authority.
+        spendNanoCents: v.optional(v.number()),
+        spendPeriod: v.optional(v.number()),
         // Set by the spend-cap or dunning enforcement crons (or support); the
         // dispatcher serves 503 for a suspended org's tenants.
         suspendedAt: v.optional(v.number()),
@@ -60,6 +75,10 @@ export const platformTables = {
         // Right-to-erasure (GAPS.md D3): an owner requested deletion; the purge
         // cron erases the org's data once the retention window passes.
         deletionRequestedAt: v.optional(v.number()),
+        // Recursion protection (plan 365 W5): what the dispatcher does with a chain
+        // that re-entered past the depth cap. Absent ⇒ `terminate` (508). Set by
+        // owners/admins through `edge.setRecursionPolicy`.
+        recursionPolicy: v.optional(v.union(v.literal("terminate"), v.literal("allow"))),
     })
         .global()
         .index("by_slug", ["slug"], { unique: true }),

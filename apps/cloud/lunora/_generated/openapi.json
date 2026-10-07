@@ -62,6 +62,69 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/_lunora/rpc#alerts:anomalyBaselines": {
+      "post": {
+        "description": "Invoke the `query` `alerts:anomalyBaselines` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "alerts:anomalyBaselines",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "alerts:anomalyBaselines",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: alerts:anomalyBaselines",
+        "tags": [
+          "alerts"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
     "/_lunora/rpc#alerts:createRule": {
       "post": {
         "description": "Invoke the `mutation` `alerts:createRule` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -158,6 +221,18 @@
                           {
                             "const": "deploy",
                             "type": "string"
+                          },
+                          {
+                            "const": "spend",
+                            "type": "string"
+                          },
+                          {
+                            "const": "usage_anomaly",
+                            "type": "string"
+                          },
+                          {
+                            "const": "error_anomaly",
+                            "type": "string"
                           }
                         ]
                       },
@@ -210,6 +285,90 @@
           }
         },
         "summary": "mutation: alerts:createRule",
+        "tags": [
+          "alerts"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#alerts:createSilence": {
+      "post": {
+        "description": "Invoke the `mutation` `alerts:createSilence` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "alerts:createSilence",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "endsAt": {
+                        "type": "number"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "reason": {},
+                      "startsAt": {
+                        "type": "number"
+                      },
+                      "target": {
+                        "anyOf": [
+                          {
+                            "const": "usage_anomaly",
+                            "type": "string"
+                          },
+                          {
+                            "const": "error_anomaly",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "endsAt",
+                      "organizationId",
+                      "target"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "alerts:createSilence",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: alerts:createSilence",
         "tags": [
           "alerts"
         ],
@@ -279,6 +438,75 @@
           }
         },
         "summary": "mutation: alerts:deleteRule",
+        "tags": [
+          "alerts"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#alerts:deleteSilence": {
+      "post": {
+        "description": "Invoke the `mutation` `alerts:deleteSilence` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "alerts:deleteSilence",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"anomalySilences\">",
+                        "type": "string",
+                        "x-lunora-table": "anomalySilences"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "alerts:deleteSilence",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: alerts:deleteSilence",
         "tags": [
           "alerts"
         ],
@@ -555,6 +783,69 @@
           "alerts"
         ],
         "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#alerts:silences": {
+      "post": {
+        "description": "Invoke the `query` `alerts:silences` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "alerts:silences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "alerts:silences",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: alerts:silences",
+        "tags": [
+          "alerts"
+        ],
+        "x-lunora-function-kind": "query"
       }
     },
     "/_lunora/rpc#audit_log:list": {
@@ -2963,6 +3254,69 @@
         "x-lunora-function-kind": "mutation"
       }
     },
+    "/_lunora/rpc#domains:edgeBlockMode": {
+      "post": {
+        "description": "Invoke the `action` `domains:edgeBlockMode` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "domains:edgeBlockMode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "domains:edgeBlockMode",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "action: domains:edgeBlockMode",
+        "tags": [
+          "domains"
+        ],
+        "x-lunora-function-kind": "action"
+      }
+    },
     "/_lunora/rpc#domains:get": {
       "post": {
         "description": "Invoke the `query` `domains:get` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -3156,6 +3510,437 @@
           "domains"
         ],
         "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#edge:firewall": {
+      "post": {
+        "description": "Invoke the `action` `edge:firewall` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "edge:firewall",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "from": {
+                        "type": "number"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "to": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "edge:firewall",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "action: edge:firewall",
+        "tags": [
+          "edge"
+        ],
+        "x-lunora-function-kind": "action"
+      }
+    },
+    "/_lunora/rpc#edge:recursionPolicy": {
+      "post": {
+        "description": "Invoke the `query` `edge:recursionPolicy` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "edge:recursionPolicy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "edge:recursionPolicy",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: edge:recursionPolicy",
+        "tags": [
+          "edge"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#edge:rules": {
+      "post": {
+        "description": "Invoke the `query` `edge:rules` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "edge:rules",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "edge:rules",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: edge:rules",
+        "tags": [
+          "edge"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#edge:setAnomalyRateLimit": {
+      "post": {
+        "description": "Invoke the `mutation` `edge:setAnomalyRateLimit` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "edge:setAnomalyRateLimit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "periodSeconds": {
+                        "anyOf": [
+                          {
+                            "const": 10
+                          },
+                          {
+                            "const": 60
+                          }
+                        ]
+                      },
+                      "requestsPerPeriod": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "enabled",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "edge:setAnomalyRateLimit",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: edge:setAnomalyRateLimit",
+        "tags": [
+          "edge"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#edge:setDdosSensitivity": {
+      "post": {
+        "description": "Invoke the `mutation` `edge:setDdosSensitivity` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "edge:setDdosSensitivity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "sensitivity": {
+                        "anyOf": [
+                          {
+                            "const": "default",
+                            "type": "string"
+                          },
+                          {
+                            "const": "medium",
+                            "type": "string"
+                          },
+                          {
+                            "const": "low",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "organizationId",
+                      "sensitivity"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "edge:setDdosSensitivity",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: edge:setDdosSensitivity",
+        "tags": [
+          "edge"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#edge:setRecursionPolicy": {
+      "post": {
+        "description": "Invoke the `mutation` `edge:setRecursionPolicy` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "edge:setRecursionPolicy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "policy": {
+                        "anyOf": [
+                          {
+                            "const": "terminate",
+                            "type": "string"
+                          },
+                          {
+                            "const": "allow",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "organizationId",
+                      "policy"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "edge:setRecursionPolicy",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: edge:setRecursionPolicy",
+        "tags": [
+          "edge"
+        ],
+        "x-lunora-function-kind": "mutation"
       }
     },
     "/_lunora/rpc#github_installations:claim": {
@@ -7550,6 +8335,143 @@
         "x-lunora-function-kind": "query"
       }
     },
+    "/_lunora/rpc#usage:setSpendWarning": {
+      "post": {
+        "description": "Invoke the `mutation` `usage:setSpendWarning` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "usage:setSpendWarning",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "warnMinor": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "organizationId",
+                      "warnMinor"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "usage:setSpendWarning",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: usage:setSpendWarning",
+        "tags": [
+          "usage"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#usage:spendStatus": {
+      "post": {
+        "description": "Invoke the `query` `usage:spendStatus` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "usage:spendStatus",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "usage:spendStatus",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: usage:spendStatus",
+        "tags": [
+          "usage"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
     "/_lunora/rpc#usage:summary": {
       "post": {
         "description": "Invoke the `query` `usage:summary` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -7662,6 +8584,10 @@
     {
       "description": "Operations declared in `lunora/domains`.",
       "name": "domains"
+    },
+    {
+      "description": "Operations declared in `lunora/edge`.",
+      "name": "edge"
     },
     {
       "description": "Operations declared in `lunora/github_installations`.",

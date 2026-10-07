@@ -6,6 +6,7 @@ import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 import { releaseIdleAliases } from "./deployments";
 import { queueCertificateReleases } from "./domains";
+import { releaseEdgeRules } from "./edge";
 import { rateLimit } from "./guards";
 import { purgeScopedRows } from "./purge";
 import { boundedString, LIMITS } from "./validators";
@@ -281,6 +282,8 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         "alertRuleState",
         "alertRules",
         "alerts",
+        "anomalyBaselines",
+        "anomalySilences",
         "auditLog",
         "boxEnrolments",
         "boxes",
@@ -316,6 +319,8 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         await purgeScopedRows(context, orgScopedTables, { organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above
         await releaseIdleAliases(context, { organizationId });
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await releaseEdgeRules(context, organizationId);
 
         // Deployments transition to destroyed (not hard-deleted) so the 🌐
         // teardown path still sees what to tear down; a later sweep removes rows.

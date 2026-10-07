@@ -10,7 +10,10 @@
  * Every row is read with its `target` (absent on rows that predate it, which
  * are `cloudflare-wfp`), so each sweep acts through the right driver.
  */
+import type { SpendAccrual } from "../billing/spend";
+import { accruedSpend } from "../billing/spend";
 import { isBilledTarget } from "../billing/usage";
+import type { ControlPlaneStore } from "../d1-store";
 import type { UsageAttribution, UsageRollbackPorts } from "../metering/rollback";
 import { runUsageRollback } from "../metering/rollback";
 import type { TargetId } from "../provision-contract";
@@ -239,8 +242,23 @@ export const usageAttributionOf = (deploymentRows: ReadonlyArray<AttributionRow>
  * never another scope's, so two sources of one target never skip each other's
  * windows.
  */
+/** Fold one billable ledger row into its org's running spend, read-modify-write through the store. */
+const accrueOrganizationSpend = async (
+    database: ControlPlaneStore,
+    organizationId: string,
+    row: { kind: string; periodStart: number; quantity: number },
+    now: number,
+): Promise<void> => {
+    const organization = (await database.get(organizationId, "organizations")) as null | SpendAccrual;
+    const next = organization === null ? null : accruedSpend(organization, row, now);
+
+    if (next !== null) {
+        await database.patch(organizationId, next, "organizations");
+    }
+};
+
 export const usageRollbackPorts = async (
-    database: ControlPlaneDatabase,
+    database: ControlPlaneStore,
     read: (sinceMs: number) => Promise<UsageRow[]>,
     options: { attribution: ReadonlyMap<string, UsageAttribution>; now: number; periodStart: number; scope: string; target: TargetId },
 ): Promise<UsageRollbackPorts> => {
@@ -264,6 +282,18 @@ export const usageRollbackPorts = async (
                 ...(attribution.placementRef === undefined ? {} : { placementRef: attribution.placementRef }),
                 quantity,
             });
+
+            if (billable) {
+                // The admission fast path's running spend (plan 365 W3). Best-effort
+                // and after the ledger write: the hourly cap sweep rewrites it from the
+                // ledger, so a lost accrual delays the fast path, never the cap.
+                await accrueOrganizationSpend(
+                    database,
+                    attribution.organizationId,
+                    { kind: "requests", periodStart: options.periodStart, quantity },
+                    options.now,
+                ).catch(() => undefined);
+            }
         },
         resolveResource: (resourceRef) => options.attribution.get(resourceRef),
     };
@@ -306,7 +336,7 @@ export interface ReadbackFleet {
  * reported through `onScopeFailed` (scope `*` when its scopes could not be listed).
  */
 export const runReadbackUsageSweep = async (
-    database: ControlPlaneDatabase,
+    database: ControlPlaneStore,
     fleets: ReadonlyArray<ReadbackFleet>,
     options: { now: number; onScopeFailed: (target: TargetId, scope: string, reason: unknown) => void; periodStart: number },
 ): Promise<void> => {
