@@ -238,7 +238,7 @@ const verifySignedUrl: (input: string | URL, secret: string, options?: {
 
 ```ts
 interface CreateUploadHandlerOptions {
-    authorize?: (context: UploadAuthzContext) => boolean | Promise<boolean>;
+    authorize?: (context: UploadAuthzContext) => UploadAuthorizeResult | Promise<UploadAuthorizeResult>;
     maxFileSize?: number;
     maxFileSizeFor?: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>;
     protocol?: UploadProtocol;
@@ -254,12 +254,12 @@ interface CreateUploadHandlerOptions {
 const DEFAULT_MAX_UPLOAD_BYTES: number;
 ```
 
-### `R2BindingUploadStorageOptions` (interface)
+### `R2BindingUploadStorageOptions` (type)
 
 ```ts
-interface R2BindingUploadStorageOptions extends Omit<BaseStorageOptions, "metaStorage"> {
+type R2BindingUploadStorageOptions = Omit<DeclaredKeys<BaseStorageOptions>, "metaStorage"> & {
     statePrefix?: string;
-}
+};
 ```
 
 ### `R2UploadBucket` (type)
@@ -287,6 +287,12 @@ interface R2UploadStorageOptions {
 const R2_PART_SIZE: number;
 ```
 
+### `UploadAuthorizeResult` (type)
+
+```ts
+type UploadAuthorizeResult = boolean | Response | UploadGrant;
+```
+
 ### `UploadAuthzContext` (interface)
 
 ```ts
@@ -295,6 +301,14 @@ interface UploadAuthzContext {
     protocol: UploadProtocol;
     request: Request;
     url: URL;
+}
+```
+
+### `UploadGrant` (interface)
+
+```ts
+interface UploadGrant {
+    context: unknown;
 }
 ```
 
@@ -349,11 +363,25 @@ const createR2UploadStorage: (options: R2UploadStorageOptions & {
 const createUploadHandler: (options: CreateUploadHandlerOptions) => UploadHandler;
 ```
 
+### `getUploadContext` (const)
+
+```ts
+const getUploadContext: () => unknown;
+```
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `DeclaredKeys` (type)
+
+```ts
+type DeclaredKeys<T> = {
+    [K in keyof T as string extends K ? never : number extends K ? never : K]: T[K];
+};
+```
 
 ### `UploadHandlerOptions` (type)
 

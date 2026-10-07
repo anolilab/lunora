@@ -285,14 +285,14 @@ client side, and the request-size limits. This is the reference.
 `fetch` on the route your client uploads to; one handler speaks one protocol, so
 each protocol needs its own route.
 
-| Option           | Meaning                                                                                                                                                                                                                                 |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `storage`        | The `@visulima/storage` provider the bytes land in: `createR2BindingUploadStorage(env.BUCKET)` (the Worker's R2 binding), `createR2UploadStorage(...)` (R2's S3 API, see below), or `@visulima/storage/provider/memory` in tests.       |
-| `authorize`      | `({ method, protocol, request, url }) => boolean \| Promise<boolean>`. Runs on every request (`POST` create, `PATCH` chunk, `HEAD` resume, `DELETE` cancel on TUS). Only `true` allows it; anything else, or a throw, answers `403`.    |
-| `protocol`       | `"tus"` (default, resumable), `"chunked-rest"` (resumable), or `"multipart"` (one request per file).                                                                                                                                    |
-| `maxFileSize`    | Bytes. Default 100 MiB, no unlimited setting; a value that is not a finite, non-negative number throws at construction.                                                                                                                 |
-| `maxFileSizeFor` | `({ contentType, metadata, declaredSize, method, request, … }) => number \| undefined`. A per-upload cap below `maxFileSize`, from what the create request declares (TUS `Upload-Metadata`, chunked-REST `X-File-Metadata`). See below. |
-| `public`         | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                              |
+| Option           | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `storage`        | The `@visulima/storage` provider the bytes land in: `createR2BindingUploadStorage(env.BUCKET)` (the Worker's R2 binding), `createR2UploadStorage(...)` (R2's S3 API, see below), or `@visulima/storage/provider/memory` in tests.                                                                                                                                                                                                  |
+| `authorize`      | `({ method, protocol, request, url }) => boolean \| Response \| { context }` (or a promise of one). Runs on every request (`POST` create, `PATCH` chunk, `HEAD` resume, `DELETE` cancel on TUS). `true` allows it, and so does `{ context }`, whose `context` the storage callbacks read with `getUploadContext()`. A `Response` is answered as it is (a `429` with `Retry-After`, say). Anything else, or a throw, answers `403`. |
+| `protocol`       | `"tus"` (default, resumable), `"chunked-rest"` (resumable), or `"multipart"` (one request per file).                                                                                                                                                                                                                                                                                                                               |
+| `maxFileSize`    | Bytes. Default 100 MiB, no unlimited setting; a value that is not a finite, non-negative number throws at construction.                                                                                                                                                                                                                                                                                                            |
+| `maxFileSizeFor` | `({ contentType, metadata, declaredSize, method, request, … }) => number \| undefined`. A per-upload cap below `maxFileSize`, from what the create request declares (TUS `Upload-Metadata`, chunked-REST `X-File-Metadata`). See below.                                                                                                                                                                                            |
+| `public`         | Confirms that omitting `authorize` is intentional (an open bucket) and silences the warning it logs. `silent` is an alias.                                                                                                                                                                                                                                                                                                         |
 
 An upload route is **write-only**. It answers only the methods its protocol
 needs to upload, and anything else gets a `405` before `authorize` runs:
@@ -394,6 +394,38 @@ uploads through the Worker's R2 binding, so it needs no S3 credentials and works
 the same under `wrangler dev` / miniflare, in tests and in production. The
 remaining options are `@visulima/storage`'s (`allowMIME`, `maxUploadSize`,
 `filename`, `onComplete`, …).
+
+Those callbacks get only the file. To name uploads per caller, have `authorize`
+answer `{ context }` and read it back with `getUploadContext()` inside the
+callback. It holds the context of the request being handled, so one handler and
+one provider serve every caller:
+
+```ts
+import { createR2BindingUploadStorage, createUploadHandler, getUploadContext } from "@lunora/storage/upload";
+
+const handler = createUploadHandler({
+    storage: createR2BindingUploadStorage(env.UPLOADS, {
+        filename: (file) => `uploads/${(getUploadContext() as { userId: string }).userId}/${file.id}`,
+    }),
+    authorize: async ({ request }) => {
+        const userId = await userIdFrom(request);
+
+        if (userId === undefined) {
+            return false;
+        }
+
+        if (await overLimit(userId)) {
+            return new Response(null, { headers: { "Retry-After": "30" }, status: 429 });
+        }
+
+        return { context: { userId } };
+    },
+});
+```
+
+`getUploadContext()` is `undefined` when `authorize` answered `true`, and
+outside an upload request. It returns `unknown`: cast it to what your `authorize`
+grants.
 
 - **Parts.** R2 requires every multipart part but the last to be at least 5 MiB
   and all of them the same size. Chunks of any size are coalesced into parts of

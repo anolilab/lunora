@@ -12,8 +12,8 @@ import { MemoryStorage } from "@visulima/storage/provider/memory";
 import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
-import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
+import type { UploadAuthorizeResult, UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
+import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES, getUploadContext } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
 import { TUS_ENDPOINT, tusDriver } from "./tus-driver";
 
@@ -449,7 +449,7 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     });
 
     describe("rLS enforcement (not admin-gated)", () => {
-        const authzHandler = (authorize: (context: UploadAuthzContext) => boolean | Promise<boolean>) =>
+        const authzHandler = (authorize: (context: UploadAuthzContext) => UploadAuthorizeResult | Promise<UploadAuthorizeResult>) =>
             createUploadHandler({ authorize, storage: new MemoryStorage({ path: "/upload" }) });
 
         it("rejects a non-admin caller without permission (403, no admin token)", async () => {
@@ -516,6 +516,86 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
 
             expect(response.status).toBe(403);
+        });
+
+        it("answers a Response the gate returns as it is, so it can rate-limit (429 + Retry-After)", async () => {
+            expect.hasAssertions();
+
+            const gated = authzHandler(() => new Response(null, { headers: { "Retry-After": "30" }, status: 429 }));
+
+            const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(response.status).toBe(429);
+            expect(response.headers.get("Retry-After")).toBe("30");
+        });
+
+        it("hands a grant's context to the storage callbacks, per request (#1040)", async () => {
+            expect.hasAssertions();
+
+            const seen: [callback: string, context: unknown][] = [];
+            const storage = new MemoryStorage({
+                filename: (file) => {
+                    seen.push(["filename", getUploadContext()]);
+
+                    return file.id;
+                },
+                onCreate: () => {
+                    seen.push(["onCreate", getUploadContext()]);
+                },
+                path: "/upload",
+            });
+            const route = createUploadHandler({
+                authorize: ({ request }) => {
+                    return { context: request.headers.get("x-user") };
+                },
+                maxFileSizeFor: () => {
+                    seen.push(["maxFileSizeFor", getUploadContext()]);
+
+                    return undefined;
+                },
+                storage,
+            });
+            const create = async (user: string) =>
+                route.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10", "x-user": user }, method: "POST" }));
+
+            const [first, second] = await Promise.all([create("alice"), create("bob")]);
+
+            expect([first.status, second.status]).toStrictEqual([201, 201]);
+            expect(seen).toHaveLength(6);
+            expect(seen).toStrictEqual(
+                expect.arrayContaining([
+                    ["filename", "alice"],
+                    ["filename", "bob"],
+                    ["maxFileSizeFor", "alice"],
+                    ["maxFileSizeFor", "bob"],
+                    ["onCreate", "alice"],
+                    ["onCreate", "bob"],
+                ]),
+            );
+            // Outside a request there is no context.
+            expect(getUploadContext()).toBeUndefined();
+        });
+
+        it("has no context when the gate answers `true`", async () => {
+            expect.hasAssertions();
+
+            let named: unknown = "unset";
+            const route = createUploadHandler({
+                authorize: () => true,
+                storage: new MemoryStorage({
+                    filename: (file) => {
+                        named = getUploadContext();
+
+                        return file.id;
+                    },
+                    path: "/upload",
+                }),
+            });
+
+            const response = await route.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(response.status).toBe(201);
+            expect(named).toBeUndefined();
         });
 
         it("surfaces the denial to the client adapter as a failed upload (403)", async () => {

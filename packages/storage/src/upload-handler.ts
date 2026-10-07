@@ -28,6 +28,8 @@
  * would change the method after that check. Downloads go through
  * `ctx.storage.download()` or a signed URL.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { LunoraError } from "@lunora/errors";
 import { ERRORS, File } from "@visulima/storage";
 import { Multipart, Rest, Tus } from "@visulima/storage/handler/http/fetch";
@@ -79,6 +81,36 @@ interface UploadAuthzContext {
 }
 
 /**
+ * What {@link CreateUploadHandlerOptions.authorize} answers to admit a request
+ * and hand its storage callbacks a value (the caller's id, say). The callbacks
+ * read it back with {@link getUploadContext}.
+ */
+interface UploadGrant {
+    context: unknown;
+}
+
+/** What {@link CreateUploadHandlerOptions.authorize} answers: allow, deny, a grant, or the response to refuse with. */
+type UploadAuthorizeResult = boolean | Response | UploadGrant;
+
+/** The admitted request's {@link UploadGrant.context}, for as long as the request runs. */
+const uploadContext = new AsyncLocalStorage<unknown>();
+
+/**
+ * The {@link UploadGrant.context} `authorize` admitted the current upload
+ * request with, or `undefined` when it answered `true` or when called outside
+ * an upload request. Call it from the storage provider's callbacks
+ * (`filename`, `onCreate`, `onComplete`, …) and from `maxFileSizeFor`, so one
+ * handler and one provider serve every caller:
+ *
+ * ```ts
+ * filename: (file) => `uploads/${(getUploadContext() as { userId: string }).userId}/${file.id}`,
+ * ```
+ */
+const getUploadContext = (): unknown => uploadContext.getStore();
+
+const isUploadGrant = (verdict: unknown): verdict is UploadGrant => typeof verdict === "object" && verdict !== null && "context" in verdict;
+
+/**
  * The context handed to {@link CreateUploadHandlerOptions.maxFileSizeFor}: the
  * authorization context plus what the create request declares about the file.
  * Everything here comes from the client, so it caps an upload by what the
@@ -107,15 +139,18 @@ interface UploadSizeContext extends UploadAuthzContext {
 interface CreateUploadHandlerOptions {
     /**
      * The RLS gate. Runs before every upload request and denies fail-closed:
-     * returning `false` **or throwing** yields a `403`. Omit only for a fully
-     * public bucket — the whole point of this handler over the admin path is
-     * that uploads are gated by *your* per-user policy, not an admin token.
+     * only `true` or an {@link UploadGrant} lets the request through; `false`,
+     * anything else, **or throwing** yields a `403`. A `Response` is answered
+     * as it is, instead of the `403` (say a `429` with `Retry-After`). Omit
+     * only for a fully public bucket — the whole point of this handler over
+     * the admin path is that uploads are gated by *your* per-user policy, not
+     * an admin token.
      *
      * Omitting it mounts an unauthenticated, unbounded-write endpoint, so
      * doing so logs a one-time warning (per handler) unless `silent`/`public`
      * says the omission is intentional.
      */
-    authorize?: (context: UploadAuthzContext) => boolean | Promise<boolean>;
+    authorize?: (context: UploadAuthzContext) => UploadAuthorizeResult | Promise<UploadAuthorizeResult>;
 
     /**
      * Maximum accepted file size in bytes. Forwarded to the multipart parser
@@ -533,38 +568,10 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         );
     }
 
-    const fetch = async (request: Request): Promise<Response> => {
-        const checked = checkBeforeGate(request, protocol, maxFileSize, policy);
-
-        if ("refusal" in checked) {
-            return checked.refusal;
-        }
-
-        const context: UploadAuthzContext = { method: request.method, protocol, request, url: new URL(request.url) };
-
-        if (authorize !== undefined) {
-            try {
-                // Read back as `unknown` and compared to `true`, never tested for
-                // truthiness. The gate is DECLARED to answer a boolean, but it is
-                // app code and untyped JavaScript reaches it: an
-                // `async ({ request }) => verifySignedUrl(new URL(request.url), secret)`
-                // that forgot its `.valid` hands back `{ valid: false }`, which is
-                // TRUTHY. This is the WRITE path, so passing that through is an
-                // attacker putting bytes in the bucket. Mirrors
-                // `@lunora/server`'s `isServeAuthorized` on the read path.
-                const allowed: unknown = await authorize(context);
-
-                if (allowed !== true) {
-                    return denyResponse(protocol);
-                }
-            } catch {
-                // A throwing RLS callback is a denial, never a 500 — fail closed.
-                return denyResponse(protocol);
-            }
-        }
-
+    /** The rest of a request `authorize` let through, run with its grant's context in {@link uploadContext}. */
+    const admitted = async (request: Request, context: UploadAuthzContext, declared: DeclaredFile): Promise<Response> => {
         if (maxFileSizeFor !== undefined && isCreateRequest(request, protocol)) {
-            const refused = await checkSizeFor(maxFileSizeFor, context, checked.declared, maxFileSize);
+            const refused = await checkSizeFor(maxFileSizeFor, context, declared, maxFileSize);
 
             if (refused !== undefined) {
                 return refused;
@@ -583,8 +590,59 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         return policy.finish(request, await handler.fetch(request));
     };
 
+    const fetch = async (request: Request): Promise<Response> => {
+        const checked = checkBeforeGate(request, protocol, maxFileSize, policy);
+
+        if ("refusal" in checked) {
+            return checked.refusal;
+        }
+
+        const context: UploadAuthzContext = { method: request.method, protocol, request, url: new URL(request.url) };
+        let granted: unknown;
+
+        if (authorize !== undefined) {
+            // Read back as `unknown`, and only an exact `true` or a grant
+            // (an object carrying `context`) allows, never a truthy value. The
+            // gate is app code and untyped JavaScript reaches it: an
+            // `async ({ request }) => verifySignedUrl(new URL(request.url), secret)`
+            // that forgot its `.valid` hands back `{ valid: false }`, which is
+            // TRUTHY. This is the WRITE path, so passing that through is an
+            // attacker putting bytes in the bucket. Mirrors
+            // `@lunora/server`'s `isServeAuthorized` on the read path.
+            let verdict: unknown;
+
+            try {
+                verdict = await authorize(context);
+            } catch {
+                // A throwing RLS callback is a denial, never a 500 — fail closed.
+                return denyResponse(protocol);
+            }
+
+            if (verdict instanceof Response) {
+                return verdict;
+            }
+
+            if (isUploadGrant(verdict)) {
+                granted = verdict.context;
+            } else if (verdict !== true) {
+                return denyResponse(protocol);
+            }
+        }
+
+        return uploadContext.run(granted, async () => admitted(request, context, checked.declared));
+    };
+
     return { fetch, protocol };
 };
 
-export type { CreateUploadHandlerOptions, UploadAuthzContext, UploadHandler, UploadProtocol, UploadSizeContext, UploadStorage };
-export { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES };
+export type {
+    CreateUploadHandlerOptions,
+    UploadAuthorizeResult,
+    UploadAuthzContext,
+    UploadGrant,
+    UploadHandler,
+    UploadProtocol,
+    UploadSizeContext,
+    UploadStorage,
+};
+export { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES, getUploadContext };

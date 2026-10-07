@@ -10,5 +10,14 @@ export type { R2BindingUploadStorageOptions, R2UploadBucket } from "./r2-binding
 export { createR2BindingUploadStorage, R2_PART_SIZE } from "./r2-binding-upload-storage";
 export type { R2UploadStorageOptions } from "./r2-s3-upload-storage";
 export { createR2UploadStorage } from "./r2-s3-upload-storage";
-export type { CreateUploadHandlerOptions, UploadAuthzContext, UploadHandler, UploadProtocol, UploadSizeContext, UploadStorage } from "./upload-handler";
-export { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "./upload-handler";
+export type {
+    CreateUploadHandlerOptions,
+    UploadAuthorizeResult,
+    UploadAuthzContext,
+    UploadGrant,
+    UploadHandler,
+    UploadProtocol,
+    UploadSizeContext,
+    UploadStorage,
+} from "./upload-handler";
+export { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES, getUploadContext } from "./upload-handler";
