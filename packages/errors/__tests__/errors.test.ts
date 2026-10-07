@@ -104,6 +104,37 @@ describe("lunoraError", () => {
     });
 });
 
+describe("instanceof LunoraError across copies", () => {
+    it("matches an error from a second copy of the package", () => {
+        expect.assertions(2);
+
+        // Stands in for a duplicate install: a separate class that sets the same global brand.
+        class SecondCopyLunoraError extends Error {
+            public constructor() {
+                super("from another copy");
+                Object.defineProperty(this, Symbol.for("@lunora/errors/LunoraError"), { value: true });
+            }
+        }
+
+        expect(new SecondCopyLunoraError()).toBeInstanceOf(LunoraError);
+        expect(new Error("plain")).not.toBeInstanceOf(LunoraError);
+    });
+
+    it("keeps subclass instanceof as prototype membership", () => {
+        expect.assertions(4);
+
+        class ConflictError extends LunoraError {}
+        class OtherError extends LunoraError {}
+
+        const conflict = new ConflictError("CONFLICT");
+
+        expect(conflict).toBeInstanceOf(LunoraError);
+        expect(conflict).toBeInstanceOf(ConflictError);
+        expect(conflict).not.toBeInstanceOf(OtherError);
+        expect(new LunoraError("CONFLICT")).not.toBeInstanceOf(ConflictError);
+    });
+});
+
 describe("isLunoraError", () => {
     it("matches a real LunoraError", () => {
         expect.assertions(1);

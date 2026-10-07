@@ -26,6 +26,13 @@
 import type { ErrorCatalogEntry, ErrorHint, LunoraErrorCode } from "./catalog";
 import { getCatalogEntry } from "./catalog";
 
+/**
+ * Cross-copy brand. `Symbol.for` resolves to the same symbol in every copy of
+ * this module, so two installed copies of `@lunora/errors` (or two bundles that
+ * each inline it) still recognise each other's errors via `instanceof LunoraError`.
+ */
+const LUNORA_ERROR_BRAND: unique symbol = Symbol.for("@lunora/errors/LunoraError");
+
 /** Source location for an error (mirrors `@visulima/error`'s `ErrorLocation`). */
 export interface ErrorLocation {
     column?: number;
@@ -60,6 +67,20 @@ export interface LunoraErrorOptions {
 export type LunoraErrorCodeInput = LunoraErrorCode | (string & {});
 
 export class LunoraError extends Error {
+    /**
+     * `instanceof LunoraError` checks the cross-copy brand instead of the prototype
+     * chain, so an error thrown by a duplicate copy of this package still matches.
+     * Subclasses inherit this method; for them it falls back to the default
+     * prototype check, so `x instanceof ConflictError` keeps meaning subclass membership.
+     */
+    public static override [Symbol.hasInstance](value: unknown): boolean {
+        if (this !== LunoraError) {
+            return Function.prototype[Symbol.hasInstance].call(this, value);
+        }
+
+        return typeof value === "object" && value !== null && (value as Record<symbol, unknown>)[LUNORA_ERROR_BRAND] === true;
+    }
+
     /**
      * Discriminator recognised by `@visulima/error`'s `renderError`/`isVisulimaError`
      * (`error.type === "VisulimaError"`), so a `LunoraError` renders like a native
@@ -108,5 +129,8 @@ export class LunoraError extends Error {
         this.status = options.status ?? entry?.status ?? 500;
         this.docsUrl = options.docsUrl ?? entry?.docsUrl;
         this.data = options.data;
+
+        // Non-enumerable so it never rides the wire codec or shows up in equality checks.
+        Object.defineProperty(this, LUNORA_ERROR_BRAND, { value: true });
     }
 }
