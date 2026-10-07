@@ -1,3 +1,4 @@
+export type { ArchitectureManifest } from "../../../shared/architecture-manifest";
 // The snapshot format + diff are defined in the bundler-inlined `shared/` module
 // (shared with `@lunora/studio`); re-exported here because this barrel is the
 // package's published API and the CLI consumes them through it.

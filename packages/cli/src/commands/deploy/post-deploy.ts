@@ -235,6 +235,8 @@ interface CompleteDeployInputs {
     mintedSecretsFile: string | undefined;
     options: DeployCommandOptions;
     reblessSchemaBaseline: (() => void) | undefined;
+    /** Records this deploy's architecture manifest as the next diff's baseline. */
+    recordArchitecture: (() => void) | undefined;
     /** Wrangler's captured stdout, or `undefined` when this run didn't capture it. */
     stdout: string | undefined;
     validation: DeployCommandResult["validation"];
@@ -252,6 +254,7 @@ const completeDeploy = async ({
     mintedSecretsFile,
     options,
     reblessSchemaBaseline,
+    recordArchitecture,
     stdout,
     validation,
 }: CompleteDeployInputs): Promise<DeployCommandResult> => {
@@ -284,6 +287,10 @@ const completeDeploy = async ({
     // when an existing link disagrees. Skipped for `--temporary`: that account
     // is deleted in ~60 minutes, so its URL must never become the checkout's
     // recorded target.
+    // The new code is live from here on, whatever the health check and
+    // migrations below decide.
+    recordArchitecture?.();
+
     if (options.temporary !== true) {
         autoLinkFromDeployOutput({ cwd, env: options.env, logger: options.logger, url: deployment.url });
     }

@@ -8,6 +8,7 @@ import { LunoraError } from "@lunora/errors";
 import { readJsonSync } from "@visulima/fs";
 import { Project } from "ts-morph";
 
+import type { ArchitectureManifest } from "../../../shared/architecture-manifest";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
@@ -1261,6 +1262,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         advisories,
         advisorContext,
         agents,
+        architecture: architectureDocument,
         containers,
         // Declared jobs plus the schedules `createWorker` is configured with
         // directly (`backupCron`, `crons` keys). Both need a wrangler trigger to
@@ -1405,6 +1407,13 @@ export interface CodegenResult {
      * so this adds no binding or migration. Empty when the project declares none.
      */
     agents: ReadonlyArray<AgentIR>;
+
+    /**
+     * The architecture manifest written to `_generated/architecture.json` —
+     * `lunora deploy` diffs it against the last deployed one. `undefined` when the
+     * app declares no module.
+     */
+    architecture?: ArchitectureManifest;
 
     /**
      * Containers discovered from `defineContainer` exports in

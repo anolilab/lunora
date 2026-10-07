@@ -26,6 +26,7 @@ import { Spinner } from "@visulima/spinner";
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
+import { reportArchitectureDiff } from "../../util/architecture-diff";
 import { checkArtifactsJurisdiction } from "../../util/artifacts-jurisdiction";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
@@ -482,6 +483,7 @@ type PreDeployPipelineResult =
           codegen?: CodegenResult;
           error?: never;
           reblessSchemaBaseline?: () => void;
+          recordArchitecture?: () => void;
           target: string;
           validation: DeployCommandResult["validation"];
       };
@@ -598,6 +600,8 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
         reblessSchemaBaseline = gate.rebless;
     }
 
+    const recordArchitecture = reportArchitectureDiff({ current: codegen?.architecture, cwd, environment: options.env, logger: options.logger });
+
     // Provisioning WRITES `wrangler.jsonc`. On a dry run those writes are rolled
     // back — but not here: the caller owns that window, because the artifacts
     // that have to read the provisioned config (the wrangler bundle, and
@@ -622,7 +626,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
         return { error: "wrangler validation failed", target, validation };
     }
 
-    return { codegen, reblessSchemaBaseline, target, validation };
+    return { codegen, reblessSchemaBaseline, recordArchitecture, target, validation };
 };
 
 /** Why this run deploys no services, or `undefined` when it deploys them. */
@@ -798,7 +802,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return abortResult(pipeline.error, { ...extra, ...(pipeline.code === undefined ? {} : { code: pipeline.code }) });
     }
 
-    const { reblessSchemaBaseline, validation } = pipeline;
+    const { reblessSchemaBaseline, recordArchitecture, validation } = pipeline;
     const driver = resolveDeployDriver(pipeline.target);
 
     // The Artifacts lookup is read-only, so it runs on `--dry-run` too: a dry run
@@ -880,7 +884,16 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: result.code, descriptor, mintedSecretsFile, validation };
     }
 
-    const completed = await completeDeploy({ cwd, descriptor, mintedSecretsFile, options, reblessSchemaBaseline, stdout: result.stdout, validation });
+    const completed = await completeDeploy({
+        cwd,
+        descriptor,
+        mintedSecretsFile,
+        options,
+        reblessSchemaBaseline,
+        recordArchitecture,
+        stdout: result.stdout,
+        validation,
+    });
 
     return { ...completed, logsAvailable: driver.toolchain?.tail !== undefined };
 };
