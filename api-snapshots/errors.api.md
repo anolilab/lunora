@@ -233,6 +233,11 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Invalid environment";
     };
+    readonly X402_FACILITATOR_ERROR: {
+        readonly internal: true;
+        readonly status: 502;
+        readonly title: "Payment facilitator error";
+    };
     readonly AUTH_HEADERS_MISSING: {
         readonly internal: true;
         readonly status: 500;
@@ -263,6 +268,10 @@ const ERROR_CATALOG: {
     readonly BROWSER_RUN_ERROR: {
         readonly status: 502;
         readonly title: "Browser Run API error";
+    };
+    readonly BROWSER_TOO_MANY_REDIRECTS: {
+        readonly status: 502;
+        readonly title: "Too many redirects";
     };
     readonly R2_SQL_ERROR: {
         readonly status: 502;
