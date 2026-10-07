@@ -172,11 +172,12 @@ interface NotifyChannels {
 /**
  * Read which push channels the project's `lunora/notify.ts` default export
  * (`defineNotify({...})`) wires, or `undefined` when the file is absent (the app
- * declares no notify config). The read is metadata-only and lenient (like
- * `discoverFlags`): a `webPush`/`fcm` property's mere presence counts as the
- * channel being wired; a non-literal config degrades to "unwired" rather than
- * throwing. `@lunora/config` reads this alone to scaffold only the configured
- * channels' secrets.
+ * declares no notify config). The read is metadata-only (like `discoverFlags`):
+ * a `webPush`/`fcm` property's mere presence counts as the channel being wired.
+ * When the channels can't be read statically — no `defineNotify(...)` default
+ * export, a non-literal argument, or a spread — BOTH channels are reported, so
+ * their secrets are scaffolded and preflighted rather than silently dropped.
+ * `@lunora/config` reads this alone to scaffold only the configured channels' secrets.
  */
 const discoverNotifyChannels = (project: Project, lunoraDirectory: string): NotifyChannels | undefined => {
     const notifyPath = join(lunoraDirectory, NOTIFY_FILENAME);
@@ -188,19 +189,13 @@ const discoverNotifyChannels = (project: Project, lunoraDirectory: string): Noti
     const source = project.getSourceFile(notifyPath) ?? project.addSourceFileAtPath(notifyPath);
     const exported = defaultExportExpression(source);
 
-    let hasWebPush = false;
-    let hasFcm = false;
+    const argument = exported && Node.isCallExpression(exported) ? exported.getArguments()[0] : undefined;
 
-    if (exported && Node.isCallExpression(exported)) {
-        const argument = exported.getArguments()[0];
-
-        if (argument && Node.isObjectLiteralExpression(argument)) {
-            hasWebPush = findObjectProperty(argument, "webPush") !== undefined;
-            hasFcm = findObjectProperty(argument, "fcm") !== undefined;
-        }
+    if (!argument || !Node.isObjectLiteralExpression(argument) || argument.getProperties().some((property) => Node.isSpreadAssignment(property))) {
+        return { hasFcm: true, hasWebPush: true };
     }
 
-    return { hasFcm, hasWebPush };
+    return { hasFcm: findObjectProperty(argument, "fcm") !== undefined, hasWebPush: findObjectProperty(argument, "webPush") !== undefined };
 };
 
 /**

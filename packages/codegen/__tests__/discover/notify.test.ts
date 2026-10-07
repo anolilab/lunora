@@ -169,4 +169,33 @@ export default defineNotify({});
 
         expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: false, usesPush: true });
     });
+
+    it.each([
+        [
+            "a variable argument",
+            `import { defineNotify } from "@lunora/notify";
+const config = { fcm: () => undefined };
+export default defineNotify(config);
+`,
+        ],
+        [
+            "a spread",
+            `import { defineNotify } from "@lunora/notify";
+import { base } from "./notify-base";
+export default defineNotify({ ...base, webPush: () => undefined });
+`,
+        ],
+        [
+            "a re-exported definition",
+            `import definition from "./notify-definition";
+export default definition;
+`,
+        ],
+    ])("reports both channels when they can't be read statically (%s)", (_label, source) => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), source, "utf8");
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+    });
 });
