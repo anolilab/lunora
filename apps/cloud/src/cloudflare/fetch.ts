@@ -47,6 +47,8 @@ export interface CloudflareRequest {
 
 /** A successful envelope's payload. `result` is absent where an endpoint answers none. */
 export interface CloudflareAnswer<T> {
+    /** `result_info.cursors.after` of a cursor-paginated listing (account lists); absent on the last page. */
+    cursorAfter?: string;
     result: T | undefined;
     /** `result_info.total_pages` of a paginated listing; 1 when the envelope carries none. */
     totalPages: number;
@@ -55,7 +57,7 @@ export interface CloudflareAnswer<T> {
 interface Envelope {
     errors?: { code?: number; message?: string }[];
     result?: unknown;
-    result_info?: { total_pages?: number };
+    result_info?: { cursors?: { after?: unknown }; total_pages?: number };
     success?: boolean;
 }
 
@@ -104,6 +106,12 @@ export const cloudflareFetch = (credentials: CloudflareCredentials): CloudflareF
             throw new Error(`Cloudflare ${method} ${pathOnly(path)} failed: ${describeErrors(envelope, response.status)}`);
         }
 
-        return { result: envelope?.result as T | undefined, totalPages: envelope?.result_info?.total_pages ?? 1 };
+        const after = envelope?.result_info?.cursors?.after;
+
+        return {
+            ...(typeof after === "string" && after !== "" ? { cursorAfter: after } : {}),
+            result: envelope?.result as T | undefined,
+            totalPages: envelope?.result_info?.total_pages ?? 1,
+        };
     };
 };

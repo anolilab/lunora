@@ -154,6 +154,9 @@ const refuseSocket = (socket: SessionSocket, code: string, message: string): voi
 export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implements BoxSession {
     private readonly jobs = new JobRegistry();
 
+    /** The last routes push requested; the next one chains onto it ({@link pushRoutes}). */
+    private routesPush: Promise<boolean> = Promise.resolve(false);
+
     /** Reports are recorded one at a time, so a replay racing its original is still seen as a replay. Never rejects. */
     private reports: Promise<void> = Promise.resolve();
 
@@ -342,29 +345,25 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
         return settled;
     }
 
-    /** Push the box's full routing table. `false` when the box is not connected; it gets the table when it authenticates. */
-    public async pushRoutes(): Promise<boolean> {
-        const database = this.database();
-        const sockets = this.readySockets();
-        const boxId = sockets.length === 0 ? undefined : attachmentOf(sockets[0]).boxId;
+    /**
+     * Push the box's full routing table. `false` when the box is not connected;
+     * it gets the table when it authenticates.
+     *
+     * Serialised per box: every push — a deploy's, a domain change's, a
+     * reconnect's, the suspension sweep's — waits for the one before it, then
+     * reads the rows and sends. The routes frame carries no version the box
+     * could compare, so ordering is the guarantee: a push requested later
+     * always reads later and sends later, and an earlier in-flight push can
+     * never land on top of a newer table. Rejects when the table could not be
+     * read or its record not written, so the caller retries; it never reports
+     * a push it did not finish.
+     */
+    public pushRoutes(): Promise<boolean> {
+        const next = this.routesPush.catch(() => false).then(async () => this.pushRoutesNow());
 
-        if (database === undefined || boxId === undefined) {
-            return false;
-        }
+        this.routesPush = next;
 
-        const box = await loadBox(database, boxId);
-
-        if (box === null) {
-            return false;
-        }
-
-        const table = await routesForBox(database, box, boxDomainOf(this.env));
-
-        for (const socket of sockets) {
-            sendFrame(socket, { table, type: "routes" });
-        }
-
-        return true;
+        return next;
     }
 
     /** Refuse every socket with `code` (revocation), and fail the jobs sent on them. */
@@ -407,6 +406,50 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
     }
 
     /** Sockets of an authenticated box that the control plane has not refused. */
+    /** One push, from the rows as they are now, to the sockets that are ready now. */
+    private async pushRoutesNow(): Promise<boolean> {
+        const database = this.database();
+        const first = this.readySockets().at(0);
+        const boxId = first === undefined ? undefined : attachmentOf(first).boxId;
+
+        if (database === undefined || boxId === undefined) {
+            return false;
+        }
+
+        try {
+            const box = await loadBox(database, boxId);
+
+            if (box === null) {
+                return false;
+            }
+
+            const { table, withheld } = await routesForBox(database, box, boxDomainOf(this.env), Date.now());
+            // Read after the table: a socket a reconnect superseded meanwhile is gone, the new one gets it.
+            const sockets = this.readySockets();
+
+            if (sockets.length === 0) {
+                return false;
+            }
+
+            for (const socket of sockets) {
+                sendFrame(socket, { table, type: "routes" });
+            }
+
+            // What this push withheld, so the suspension sweep can tell when a
+            // suspension or recovery has not reached the box yet.
+            await database.patch(boxId, { routesStale: null, routesWithheld: withheld }, "boxes");
+
+            return true;
+        } catch (error) {
+            // Not done: mark the box so the suspension sweep pushes it again,
+            // whatever its last record says. Best-effort — if even this write
+            // fails, the record is unchanged and the sweep still compares it.
+            await database.patch(boxId, { routesStale: true }, "boxes").catch(() => undefined);
+
+            throw error;
+        }
+    }
+
     private readySockets(): SessionSocket[] {
         return this.ctx.getWebSockets().filter((socket) => {
             const attachment = attachmentOf(socket);
@@ -470,7 +513,8 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
 
                 await recordHello(database, attachment.boxId, { ...effect.hello, ...(fleets === undefined ? {} : { fleets }) }, now);
                 await this.ctx.storage.put("seenWrittenAt", now);
-                await this.pushRoutes();
+                // A failed push leaves `routesWithheld` unwritten, so the suspension sweep retries it within a minute.
+                await this.pushRoutes().catch(() => false);
                 await this.pushConfig(database, attachment.boxId, now, true);
                 await this.replayDesiredRelease(database, socket, attachment.boxId, effect.hello.versions);
                 break;

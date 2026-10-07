@@ -1,7 +1,7 @@
-import type { ControlPlaneDatabase } from "../../src/store";
+import type { ControlPlaneStore } from "../../src/d1-store";
 
 /**
- * A {@link ControlPlaneDatabase} double that behaves like the real store.
+ * A {@link ControlPlaneStore} double that behaves like the real store.
  *
  * The previous version returned every row for every call — `where`, `limit`,
  * `orderBy` and `cursor` were all discarded. That made several suites green
@@ -111,13 +111,15 @@ const ordered = (rows: Row[], orderBy: Record<string, "asc" | "desc">[] | undefi
  */
 const fakeControlPlaneDb = (
     pages: Record<string, unknown[]>,
-    spies: Partial<ControlPlaneDatabase> = {},
+    spies: Partial<ControlPlaneStore> = {},
     options: { pageSize?: number } = {},
-): ControlPlaneDatabase => {
+): ControlPlaneStore => {
     const pageSize = options.pageSize ?? FAKE_PAGE_SIZE;
 
     return {
         delete: () => Promise.resolve(undefined),
+        get: (id, table) =>
+            Promise.resolve(((table === undefined ? Object.values(pages).flat() : (pages[table] ?? [])) as Row[]).find((row) => row["_id"] === id) ?? null),
         findMany: (table, args) => {
             const all = ordered((pages[table] ?? []) as Row[], args?.orderBy);
             const filtered = args?.where ? all.filter((row) => matches(row, args.where as Row)) : all;

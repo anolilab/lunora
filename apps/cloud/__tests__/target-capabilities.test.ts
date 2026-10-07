@@ -50,10 +50,10 @@ describe(refusedBindings, () => {
 });
 
 describe("target limitations", () => {
-    it("says a box has no per-plan runtime limits and no point-in-time recovery, citing celld's note", () => {
+    it("says a box has no per-plan runtime limits, point-in-time recovery, recursion or edge protection, citing celld's note", () => {
         const { limitations } = TARGETS["celld-vps"];
 
-        expect(limitations.map((entry) => entry.id)).toStrictEqual(["runtimeLimits", "pitr"]);
+        expect(limitations.map((entry) => entry.id)).toStrictEqual(["runtimeLimits", "pitr", "recursionProtection", "edgeProtection"]);
         expect(limitations.find((entry) => entry.id === "pitr")?.reason).toBe(CELLD_PITR_NOTE);
     });
 

@@ -163,9 +163,17 @@
               "working-directory": "apps/cloud"
               "run": "pnpm exec wrangler deploy -c dist/server/wrangler.json"
 
-            # The dispatcher and the tail consumer are plain Workers with no Vite
-            # build of their own, so these two deploy straight from their source
-            # configs and select the cell with `--env`.
+            # The dispatcher, the Outbound Worker and the tail consumer are plain
+            # Workers with no Vite build of their own, so they deploy straight from
+            # their source configs and select the cell with `--env`. The Outbound
+            # Worker goes first: the dispatcher's namespace binding names it.
+            - "name": "Deploy the Outbound Worker"
+              "working-directory": "apps/cloud"
+              "env":
+                  "TARGET": "${{ steps.target.outputs.name }}"
+              "run": |
+                  pnpm exec wrangler deploy -c outbound.wrangler.jsonc --env "${TARGET}"
+
             - "name": "Deploy the dispatcher"
               "working-directory": "apps/cloud"
               "env":

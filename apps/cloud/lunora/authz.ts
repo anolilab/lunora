@@ -115,6 +115,23 @@ export const authorizeDeployKeyRow = async (
     return row;
 };
 
+/**
+ * Authorize an organization's **billing read** with a deploy key (plan 365 W6,
+ * the agent-facing usage/spend/cost reads): a deploy-capable key for the org
+ * that is NOT project-scoped. Spend is organization-wide, so a key that may only
+ * touch one project does not read the whole org's bill. Returns the
+ * organization from the key's row, which is the only id the read is scoped by.
+ */
+export const authorizeBillingKey = async (context: QueryContext, organizationId: Id<"organizations">, key: string): Promise<Id<"organizations">> => {
+    const row = await authorizeDeployKeyRow(context, organizationId, key, "org-wide");
+
+    if (row.projectId != null) {
+        throw new LunoraError("FORBIDDEN", "billing reads need an organization-wide deploy key, not a project-scoped one");
+    }
+
+    return row.organizationId;
+};
+
 /** The id of the deploy key {@link authorizeDeployKeyRow} authorizes. */
 export const authorizeDeployKey = async (
     context: QueryContext,

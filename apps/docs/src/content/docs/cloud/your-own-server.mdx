@@ -236,6 +236,8 @@ Beyond bindings, this target does not have:
 
 - **Per-plan runtime limits.** The CPU-time and subrequest caps your plan sets are applied by Lunora Cloud's dispatcher, which does not sit in front of your server. A request there is bounded by the machine's memory and celld's 128 MB isolate heap instead.
 - **Point-in-time recovery.** celld's Durable Object storage has no bookmark API (`getBookmarkForTime` / `onNextSessionRestoreBookmark`), so getPitrBookmark / pitrRestore answer PITR_UNAVAILABLE. The fleet bucket's epoch-fenced replication is for durability and takeover, not an addressable history; `lunora backup` (objectStorageBackups) is the recovery tier here.
+- **Recursion protection.** Loop detection runs in Lunora Cloud's dispatcher and the Outbound Worker of its dispatch namespace. Requests to your server reach celld directly, so a Worker that calls its own hostname in a loop is bounded only by celld's own limits.
+- **Edge firewall events and rules.** Your server is reached directly, not through Lunora Cloud's Cloudflare zone, so there are no firewall events to show and no DDoS override or anomaly rate limit to apply. Usage anomalies still alert.
 
 {/* /generated:capabilities:celld-vps */}
 

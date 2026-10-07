@@ -54,6 +54,11 @@ Every 🔨 item still open below was built in one pass (branch `feat/cloud-gaps`
   provisioning failures go to the `PLATFORM_METRICS` dataset;
   `GET /v1/platform/metrics` reads them back (admin token).
 - **CLI.** `lunora import --replace [--tables …]`.
+- **Spend guardrails (plan 365 W2–W8).** A soft cap with `spend` alerts, over-cap
+  refusal at admission, suspension enforced at the edge (dispatcher by default;
+  the WAF list or hostname deletion only when configured) and on customer
+  boxes, anomaly alerts with silences, firewall events and per-org edge rules,
+  recursion protection through an Outbound Worker, and spend reads over MCP.
 
 Still open after it: Yarn PnP (refused by design), the deploy-key scope ceiling
 (a product call), and the 🌐 halves — secrets, SLOs, the status page, on-call,

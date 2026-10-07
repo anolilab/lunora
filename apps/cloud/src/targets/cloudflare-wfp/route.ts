@@ -15,6 +15,8 @@ export interface TenantRoute {
     plan?: string;
     /** True when this is a PREVIEW deployment whose project has a password set (deployment protection). */
     protected?: boolean;
+    /** `allow` when the org opted out of recursion termination (plan 365 W5); absent ⇒ `terminate`. */
+    recursion?: "allow";
     scriptName: string;
 }
 
@@ -22,6 +24,7 @@ export interface TenantRoute {
 export interface ScriptFacts {
     plan?: string;
     protected?: boolean;
+    recursion?: "allow";
 }
 
 export interface ResolveTenantOptions {
@@ -63,7 +66,12 @@ export const resolveTenant = async (hostname: string, options: ResolveTenantOpti
 
     const facts = (await options.resolvePlan?.(scriptName)) ?? {};
 
-    return { plan: facts.plan, scriptName, ...(facts.protected === true ? { protected: true } : {}) };
+    return {
+        plan: facts.plan,
+        scriptName,
+        ...(facts.protected === true ? { protected: true } : {}),
+        ...(facts.recursion === "allow" ? { recursion: "allow" as const } : {}),
+    };
 };
 
 export interface PlanResolverOptions {
@@ -83,13 +91,65 @@ export interface CustomDomainRoute {
     redirectStatusCode?: number;
     redirectTo?: string;
     scriptName?: string;
+    /** The domain's organization is suspended or over its cap: refuse, redirects included. */
+    suspended?: true;
 }
+
+/** The plan answers a tenant is served on. Anything else — `suspended`, `unknown`, a lookup that failed — is refused. */
+export const SERVABLE_PLANS: ReadonlySet<string> = new Set(["enterprise", "free", "pro"]);
+
+/** Every answer `GET /v1/tenants/plan` may give; any other body is malformed and treated as a failed lookup. */
+const KNOWN_PLANS: ReadonlySet<string> = new Set([...SERVABLE_PLANS, "suspended", "unknown"]);
+
+/**
+ * The plan the resolver answers when it has nothing verified to go on: a lookup
+ * that failed, timed out or came back malformed, with no fresh-enough answer
+ * cached. Not servable, so it is refused — never served on a default tier.
+ */
+export const UNAVAILABLE_PLAN = "unavailable";
+
+/**
+ * How long past its TTL a cached answer still stands in for a failed refresh:
+ * a control-plane blip keeps serving tenants it last saw healthy, for this
+ * long, then refuses them. A `suspended` answer stands until a refresh succeeds.
+ */
+export const PLAN_STALE_GRACE_MS = 5 * 60_000;
+
+/** TTL of an `unknown` answer, short so a first deploy is served within seconds of going live. */
+const UNKNOWN_TTL_MS = 5000;
+
+/** Longest script name and redirect target accepted from the control plane. */
+const MAX_SCRIPT_NAME = 64;
+const MAX_REDIRECT = 2048;
+
+/** A custom-domain answer, or `null` when it is not one the dispatcher can act on (→ 404). */
+const toCustomDomainRoute = (data: unknown): CustomDomainRoute | null => {
+    const body = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
+
+    if (body["suspended"] === true) {
+        return { suspended: true };
+    }
+
+    if (typeof body["redirectTo"] === "string" && body["redirectTo"].length <= MAX_REDIRECT) {
+        return {
+            redirectTo: body["redirectTo"],
+            ...(typeof body["redirectStatusCode"] === "number" ? { redirectStatusCode: body["redirectStatusCode"] } : {}),
+        };
+    }
+
+    return typeof body["scriptName"] === "string" && body["scriptName"] !== "" && body["scriptName"].length <= MAX_SCRIPT_NAME
+        ? { scriptName: body["scriptName"] }
+        : null;
+};
 
 /**
  * Build a cached custom-hostname resolver over the control plane's
- * `GET /v1/tenants/custom-domain` (GAPS.md B1). Returns the redirect or the
- * owning project's active script for a *verified* domain; unknown hostnames
- * and control-plane blips fail open to `null` (→ 404 at the dispatcher).
+ * `GET /v1/tenants/custom-domain` (GAPS.md B1). Returns the redirect, the
+ * owning project's active script, or the suspension of its organization, for a
+ * verified* domain. Unknown hostnames, malformed answers and control-plane
+ * blips resolve to `null` (→ 404 at the dispatcher): a hostname is never routed
+ * on a guess. Keyed by the hostname it was resolved for; a hostname that moves
+ * to another organization is re-resolved within the TTL.
  */
 export const createCustomDomainResolver = (options: PlanResolverOptions): ((hostname: string) => Promise<CustomDomainRoute | null>) => {
     const fetchImpl = options.fetch ?? fetch;
@@ -112,8 +172,7 @@ export const createCustomDomainResolver = (options: PlanResolverOptions): ((host
                 return null;
             }
 
-            const data = await readJson<CustomDomainRoute>(response);
-            const route = data.scriptName || data.redirectTo ? data : null;
+            const route = toCustomDomainRoute(await readJson<unknown>(response));
 
             cache.set(hostname, { expires: now() + ttl, route });
 
@@ -124,11 +183,34 @@ export const createCustomDomainResolver = (options: PlanResolverOptions): ((host
     };
 };
 
+/** A plan answer, or `undefined` when the body is not one `GET /v1/tenants/plan` gives. */
+const toScriptFacts = (data: unknown): ScriptFacts | undefined => {
+    const body = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
+    const { plan } = body;
+
+    if (typeof plan !== "string" || !KNOWN_PLANS.has(plan) || (body["protected"] !== undefined && typeof body["protected"] !== "boolean")) {
+        return undefined;
+    }
+
+    // Only an explicit `allow` opts out of recursion termination (plan 365 W5);
+    // anything else keeps it on — fail closed.
+    return { plan, ...(body["protected"] === true ? { protected: true } : {}), ...(body["recursion"] === "allow" ? { recursion: "allow" as const } : {}) };
+};
+
 /**
  * Build a cached `resolvePlan` that asks the control plane for a script's plan
- * tier (`GET /v1/tenants/plan`). Per-isolate TTL cache keeps the hot path off a
- * round-trip on every request; failures resolve to `undefined` (→ free tier),
- * so a control-plane blip never takes the data plane down.
+ * tier and admission (`GET /v1/tenants/plan`). Per-isolate TTL cache keeps the
+ * hot path off a round-trip on every request, keyed by the script name it was
+ * resolved for. The answer is only as fresh as the TTL: a suspension, a breach
+ * or an alias changing owners reaches this isolate within `ttlMs` (60 s).
+ *
+ * Fails closed. A failed, timed-out or malformed refresh serves the last
+ * verified answer only while it is within {@link PLAN_STALE_GRACE_MS} of its
+ * expiry (a `suspended` one indefinitely), and otherwise answers
+ * {@link UNAVAILABLE_PLAN}, which the dispatcher refuses — so neither a
+ * never-seen tenant nor a protected preview is ever served on a lookup that
+ * did not happen. A control-plane outage longer than the grace stops the data
+ * plane; that is the trade this makes for never serving unverified.
  */
 export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: string) => Promise<ScriptFacts>) => {
     const fetchImpl = options.fetch ?? fetch;
@@ -143,33 +225,30 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
             return cached.facts;
         }
 
+        const lastKnown = (): ScriptFacts =>
+            cached !== undefined && (cached.facts.plan === "suspended" || now() < cached.expires + PLAN_STALE_GRACE_MS)
+                ? cached.facts
+                : { plan: UNAVAILABLE_PLAN };
+
         try {
             const url = `${options.controlPlaneUrl}/v1/tenants/plan?script=${encodeURIComponent(scriptName)}`;
             const response = await fetchImpl(url, { headers: { authorization: `Bearer ${options.controlPlaneToken}` } });
 
             if (!response.ok) {
-                return {};
+                return lastKnown();
             }
 
-            const body = await readJson<{ plan?: string; protected?: boolean }>(response);
+            const facts = toScriptFacts(await readJson<unknown>(response));
 
-            if (typeof body.plan === "string") {
-                const facts: ScriptFacts = { plan: body.plan, ...(body.protected === true ? { protected: true } : {}) };
-
-                cache.set(scriptName, { expires: now() + ttl, facts });
-
-                return facts;
+            if (facts === undefined) {
+                return lastKnown();
             }
 
-            return {};
+            cache.set(scriptName, { expires: now() + (facts.plan === "unknown" ? Math.min(ttl, UNKNOWN_TTL_MS) : ttl), facts });
+
+            return facts;
         } catch {
-            // A control-plane blip must never take the data plane down, so this
-            // fails OPEN on the plan (→ free tier) — but note it also fails open on
-            // protection. That is the right trade for a gate whose job is keeping
-            // casual visitors out of a preview, not defending a secret: a platform
-            // outage that also 503s every protected preview would be worse. The
-            // password itself is never bypassed, only the decision to ask for it.
-            return {};
+            return lastKnown();
         }
     };
 };

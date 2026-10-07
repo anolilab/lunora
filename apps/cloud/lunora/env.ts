@@ -18,6 +18,17 @@ export const env = defineEnv({
     CLOUDFLARE_API_TOKEN: v.optional(v.string()),
 
     /**
+     * Edge-block suspension settings (plan 365 W8), read here only so the
+     * studio's Domains tab can say which mode this cell runs in
+     * (`domains.edgeBlockMode`, `src/domains/edge-block-mode.ts`); the sweep reads
+     * the Worker env directly. `LUNORA_SAAS_ZONE_ID` is also the zone the
+     * firewall-events read queries (plan 365 W7); absent → `edge.firewall` answers unconfigured.
+     */
+    LUNORA_EDGE_BLOCK_DELETE_HOSTNAMES: v.optional(v.string()),
+    LUNORA_SAAS_ZONE_ID: v.optional(v.string()),
+    LUNORA_SUSPENDED_HOSTS_LIST_ID: v.optional(v.string()),
+
+    /**
      * GitHub App id, and its PKCS#8 private key. The pair authenticates as the App
      * so the build dispatcher can mint an installation token — used both to fetch a
      * repository's source and to write the build's outcome back as a commit status.
@@ -41,6 +52,18 @@ export const env = defineEnv({
      * the routes, the box session and the scheduler read the Worker env directly.
      */
     LUNORA_ORIGIN_URL: v.optional(v.string()),
+    /** The platform apex (`{alias}.{this}`); read by `edge.firewall` to name an org's hostnames. Defaults to `lunora.app`. */
+    LUNORA_APP_DOMAIN: v.optional(v.string()),
+
+    /**
+     * How many per-org edge rules of each kind this cell's zone may hold (plan 365
+     * W7). Unset → 0 → the setting is shown as unavailable. Set only to what the
+     * zone's plan allows: host-scoped DDoS overrides need Enterprise with Advanced
+     * DDoS (10 rules), host-scoped rate limits Business or above.
+     */
+    LUNORA_DDOS_OVERRIDE_BUDGET: v.optional(v.string()),
+    LUNORA_RATE_LIMIT_RULE_BUDGET: v.optional(v.string()),
+
     /** Bearer token for R2 SQL (archived-span read-back). Absent → the archive read no-ops. A secret. */
     R2_SQL_TOKEN: v.optional(v.string()),
 

@@ -19,7 +19,8 @@ import { buildOverageReconcileData, overageFleetPorts } from "../billing/reconci
 import { runOutdatedBoxAlerts } from "../boxes/outdated";
 import { runBoxSweep, sixHourlyTickRunsBoxSweep } from "../boxes/reconcile";
 import { resumeHostdRollouts, upgradeDispatch } from "../boxes/rollout";
-import { retireBox } from "../boxes/session-client";
+import { boxSession, retireBox } from "../boxes/session-client";
+import { runBoxSuspensionSweep } from "../boxes/suspension-sweep";
 import { manifestUrlOf } from "../boxes/urls";
 import type { ControlPlaneEnv } from "../control-plane-env";
 import { controlPlaneDatabase } from "../d1-store";
@@ -29,6 +30,8 @@ import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
 import { runCertificateSweep } from "../domains/certificate-sweep";
 import { localIssuer } from "../domains/issuers";
+import { edgeBudget } from "../edge/protection";
+import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../edge/rules";
 import type { CronTarget, CronTick } from "../fanout/cron";
 import { fanOutCron } from "../fanout/cron";
 import type { LiveDeploymentRow } from "../fanout/live";
@@ -42,6 +45,7 @@ import { storeRowReader } from "../targets/placement";
 import { registeredFleet, registeredFleets, registeredTargets, resolveTargetDriver, targetCanConverge, targetFleet } from "../targets/registry";
 import { runAlertDrain } from "../telemetry/alert-drain";
 import type { AlertDelivery } from "../telemetry/alerts";
+import { runAnomalySweep } from "../telemetry/anomaly-sweep";
 import { readQueueDepth, recordQueueDepth } from "../telemetry/platform-metrics";
 import { runAlertSweep } from "../telemetry/sweep";
 import { runUptimeSweep } from "../uptime/sweep";
@@ -252,6 +256,53 @@ const sweepAlerts = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Anomaly sweep (plan 365 W4): score each organization's last completed hour
+ * against its rolling baseline and fire/clear its `usage_anomaly` /
+ * `error_anomaly` rules. Hourly, on the bucket the readback ledger is filled at.
+ */
+const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const now = Date.now();
+    const { deliveries, transitions } = await runAnomalySweep(database, { now });
+
+    await deliverFiredAlerts(env, database, deliveries, now);
+    // The anomaly → rate-limit action (plan 365 W7): intent only; `sweepEdgeRules` applies it.
+    await engageAnomalyRateLimits(database, transitions, now);
+};
+
+/**
+ * Converge each organization's edge rules on the platform zone onto their rows
+ * (plan 365 W7, `src/edge/rules.ts`). Every minute: pending and failed rows, and
+ * every applied rule's hostnames against the current rows; on the top-of-hour
+ * tick also rows that were unavailable. Without the zone and token, rows record
+ * why nothing was applied.
+ */
+const sweepEdgeRules = async (env: ControlPlaneEnv, controller: ScheduledControllerLike): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    // Only `cloudflare-wfp`'s fleet fronts tenants with the platform edge.
+    const edge = registeredFleet("cloudflare-wfp", env)?.edge;
+    const counts = await runEdgeRuleSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+        appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
+        budgets: { ddos_l7: edgeBudget(env.LUNORA_DDOS_OVERRIDE_BUDGET), rate_limit: edgeBudget(env.LUNORA_RATE_LIMIT_RULE_BUDGET) },
+        ...(edge ? { edge } : {}),
+        recheckUnavailable: new Date(controller.scheduledTime).getUTCMinutes() === 0,
+        now: Date.now(),
+    });
+
+    if (Object.keys(counts).length > 0) {
+        // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+        console.log("[edge-rules]", JSON.stringify(counts));
+    }
+};
+
+/**
  * Deliver `alerts` rows still sitting in `firing` past the drain grace.
  *
  * The release path raises its alerts from inside mutations, which have no
@@ -442,6 +493,63 @@ const sweepCertificates = async (env: ControlPlaneEnv): Promise<void> => {
 };
 
 /**
+ * Suspension on customer boxes (plan 365, `src/boxes/suspension-sweep.ts`):
+ * push a fresh routing table to every online box whose last one no longer
+ * matches its organizations' suspension, so a suspended org's fleets stop and
+ * a recovered one's start again. No-ops without the box sessions bound.
+ */
+const sweepBoxSuspensions = async (env: ControlPlaneEnv): Promise<void> => {
+    const namespace = env.BOX_SESSION;
+
+    if (!env.DB || namespace === undefined) {
+        return;
+    }
+
+    const result = await runBoxSuspensionSweep(controlPlaneDatabase(env.DB as D1DatabaseLike), {
+        log: (line) => {
+            // eslint-disable-next-line no-console -- a failed push is only visible here; the next tick retries it
+            console.warn(line);
+        },
+        now: Date.now(),
+        push: async (boxId) => boxSession(namespace, boxId).pushRoutes(),
+    });
+
+    if (result.pushed > 0 || result.failed > 0) {
+        // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+        console.log("[boxes] suspension pushes", JSON.stringify(result));
+    }
+};
+
+/**
+ * Edge-block suspension (plan 365 W8): block suspended organizations' hostnames
+ * in front of the Worker, and restore recovered ones, through every fleet that
+ * can (`cloudflare-wfp` with the SaaS zone or the suspended-hostnames list).
+ * Hourly, after the suspension crons on the same tick; the dispatcher's 503
+ * holds until the block lands.
+ */
+const sweepEdgeBlocks = async (env: ControlPlaneEnv): Promise<void> => {
+    if (!env.DB) {
+        return;
+    }
+
+    const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
+    const log = (line: string): void => {
+        // eslint-disable-next-line no-console -- a failed block or restore is only visible here and on the domain row
+        console.warn(line);
+    };
+
+    for (const fleet of registeredFleets(env)) {
+        if (fleet.edgeBlock !== undefined) {
+            // eslint-disable-next-line no-await-in-loop -- one fleet at a time keeps the API budget flat
+            const result = await fleet.edgeBlock(database, { log, now: Date.now() });
+
+            // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
+            console.log("[edge-block]", fleet.id, JSON.stringify(result));
+        }
+    }
+};
+
+/**
  * Sample the build and deploy queues into the platform's own metrics (GAPS.md
  * E1). Skipped — no D1 read at all — without the `PLATFORM_METRICS` binding.
  */
@@ -495,6 +603,12 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     { cron: EVERY_HOUR, run: sweepOutdatedBoxes },
     // Custom-domain certificates still validating or deploying (GAPS.md B1).
     { cron: EVERY_HOUR, run: sweepCertificates },
+    // Suspended organizations blocked at the edge, recovered ones restored (plan 365 W8).
+    { cron: EVERY_HOUR, run: sweepEdgeBlocks },
+    // Anomaly scores over the last completed hour (plan 365 W4). It reads the hour
+    // BEFORE this tick, so the usage rollback writing this tick's rows alongside
+    // it lands in the next bucket rather than racing this one.
+    { cron: EVERY_HOUR, run: sweepAnomalies },
     { cron: EVERY_MINUTE, run: sweepUptime },
     // Metric-window rules (error_rate/latency_p95/llm_cost) re-evaluated each
     // minute so quiet windows the ingest never re-examines still fire/clear —
@@ -504,8 +618,12 @@ const SCHEDULED_SWEEPS: { cron: string; run: (env: ControlPlaneEnv, controller: 
     // cannot be delivered where they are fired — plus anything an earlier
     // delivery dropped. Rides the existing every-minute trigger.
     { cron: EVERY_MINUTE, run: sweepAlertDrain },
+    // Edge rules (plan 365 W7): settings and anomaly engagements applied within a minute.
+    { cron: EVERY_MINUTE, run: sweepEdgeRules },
     // Queue depth for the platform's own metrics (GAPS.md E1), sampled once a minute.
     { cron: EVERY_MINUTE, run: sampleQueueDepth },
+    // A suspension or recovery reaches customer boxes within a minute (plan 365).
+    { cron: EVERY_MINUTE, run: sweepBoxSuspensions },
 ];
 
 /**

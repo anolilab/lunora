@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { RATE_CARD } from "../src/billing/spend";
 import { runReadbackUsageSweep, teardownPorts, USAGE_SCOPE_CONCURRENCY, usageAttributionOf, usageRollbackPorts } from "../src/deploy/sweeps";
 import { runTeardownSweep } from "../src/deploy/teardown";
 import type { TargetId } from "../src/provision-contract";
@@ -369,6 +370,26 @@ describe(usageRollbackPorts, () => {
             "platformUsage",
             expect.objectContaining({ billable: false, deploymentId: "dep_byo", placementRef: "cfa_1", quantity: 5 }),
         );
+    });
+
+    /** The admission fast path (plan 365 W3) sees readback usage the moment it lands, not at the next cap sweep. */
+    it("accrues a billable row into its org's running spend, and never a display-only one", async () => {
+        const now = Date.UTC(2026, 9, 6);
+        const period = Date.UTC(2026, 9, 1);
+        const run = async (target: TargetId): Promise<Parameters<ControlPlaneDatabase["patch"]>[]> => {
+            const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+            const database = fakeControlPlaneDb({ organizations: [{ _id: "org_a", spendNanoCents: 7, spendPeriod: period }], usageCheckpoints: [] }, { patch });
+            const ports = await usageRollbackPorts(database, reader([]), { attribution: new Map(), now, periodStart: period, scope: "s", target });
+
+            await ports.record({ attribution: { organizationId: "org_a" }, quantity: 4 });
+
+            return patch.mock.calls.filter((call) => call[2] === "organizations");
+        };
+
+        await expect(run("cloudflare-wfp")).resolves.toStrictEqual([
+            ["org_a", { spendNanoCents: 7 + 4 * RATE_CARD.requests.nanoCentsPerUnit, spendPeriod: period }, "organizations"],
+        ]);
+        await expect(run("cloudflare-workers")).resolves.toStrictEqual([]);
     });
 
     it("starts a scope with no checkpoint row from nothing, so the rollback reads its bootstrap window", async () => {

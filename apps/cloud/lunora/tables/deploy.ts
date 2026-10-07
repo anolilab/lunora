@@ -269,6 +269,13 @@ export const deployTables = {
         // requested it (`src/targets/cloudflare-wfp/certificates.ts`).
         customHostnameId: v.optional(v.string()),
         createdAt: v.number(),
+        // Edge-block suspension (plan 365 W8): when the organization's suspension
+        // removed this domain's custom hostname at the edge. Set until the
+        // recovery restores it — a failed restore keeps it and is retried hourly
+        // (`src/targets/cloudflare-wfp/edge-block.ts`).
+        edgeBlockedAt: v.optional(v.number()),
+        // Why the last edge block or restore failed, as Cloudflare said it.
+        edgeBlockError: v.optional(v.string()),
         hostname: v.string(),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),

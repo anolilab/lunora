@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
+import { EdgeProtectionCard } from "./EdgeProtectionCard";
 import { countryFlag, countryName, formatMs, formatNumber, formatTime } from "./format";
 import { COLUMN_LABEL } from "./section-styles";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
@@ -367,6 +368,8 @@ export const TrafficSection = ({ organizationId }: TrafficSectionProps): ReactEl
             ) : null}
 
             <LiveRequests live={live} />
+
+            <EdgeProtectionCard organizationId={organizationId} />
         </div>
     );
 };

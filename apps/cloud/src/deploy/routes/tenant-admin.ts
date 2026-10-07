@@ -72,6 +72,25 @@ export const handleTenantPlanRoute = async (request: Request, environment: Route
     return Response.json(result);
 };
 
+/**
+ * `POST /v1/tenants/recursion` — the dispatcher reports a request chain it
+ * terminated past the recursion depth cap (plan 365 W5), so it lands in the
+ * owning org's audit log. Admin-token gated like the rest of `/v1/tenants/*`.
+ * The body names only the script; the org comes from the control plane's rows.
+ */
+export const handleTenantRecursionRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = requireContext(environment);
+    const body = (await request.json().catch(() => null)) as null | { depth?: unknown; scriptName?: unknown };
+
+    if (typeof body?.scriptName !== "string" || body.scriptName === "" || typeof body.depth !== "number") {
+        return jsonError(400, "scriptName and depth are required");
+    }
+
+    const result = await context.runMutation<{ recorded: boolean }>(internal.edge.recordRecursionStop, { depth: body.depth, scriptName: body.scriptName });
+
+    return Response.json(result);
+};
+
 /** The `POST /v1/tenants/preview-auth` body — which preview, and the password being tried. */
 interface PreviewAuthBody {
     password?: string;

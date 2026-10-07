@@ -61,7 +61,11 @@ describe("dispatcher WebSocket pass-through", () => {
         await dispatcher.fetch(upgrade(), env as never);
 
         // free-tier limits are applied to the dispatched invocation…
-        expect(env.DISPATCHER.get).toHaveBeenCalledWith("acme", undefined, { limits: { cpuMs: 50, subRequests: 50 } });
+        expect(env.DISPATCHER.get).toHaveBeenCalledWith("acme", undefined, {
+            limits: { cpuMs: 50, subRequests: 50 },
+            // A request from outside is depth 0 of a fresh chain.
+            outbound: { lineage: expect.stringMatching(/^0\.[0-9a-f]{32}$/) },
+        });
         // …and the upgrade is metered exactly once (per-message invocations are
         // metered inside the DO, not re-counted on every frame here).
         expect(writeDataPoint).toHaveBeenCalledTimes(1);

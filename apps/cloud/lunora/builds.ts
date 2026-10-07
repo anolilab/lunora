@@ -32,13 +32,13 @@ interface BuildRow {
     deploymentId?: string;
     fromFork?: boolean;
     organizationId: Id<"organizations">;
+    pathFiltered?: boolean;
     processingBy?: string;
     processingStartedAt?: number;
     projectId: Id<"projects">;
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
-    pathFiltered?: boolean;
     skipReason?: string;
     status: BuildStatus;
     trigger?: BuildTrigger;
@@ -73,6 +73,18 @@ const pushChangesValidator = v.union(v.object({ files: v.array(v.string()) }), v
 /** `pathFiltered`: the skip is the path filter's — the commit has no other status, so the webhook posts one. */
 type RecordPushResult =
     null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string } | { duplicate: true; pathFiltered?: true; skipped?: string };
+
+/**
+ * A redelivery's answer. The first delivery's skip status may never have reached
+ * GitHub (its post is best-effort), so the recorded path-filter skip goes back
+ * with it for the webhook to post again — the same success status twice is harmless.
+ */
+const redelivered = async (context: MutationContext, projectId: Id<"projects">, commitSha: string, trigger: BuildTrigger): Promise<RecordPushResult> => {
+    const { page } = await context.db.builds.findMany({ where: { commitSha, projectId } }); // secret-scanner:allow -- domain field name
+    const skip = page.find((row) => row.status === "skipped" && row.pathFiltered === true && (row.trigger ?? "push") === trigger);
+
+    return skip?.skipReason === undefined ? { duplicate: true } : { duplicate: true, pathFiltered: true, skipped: skip.skipReason };
+};
 
 /**
  * How long a webhook delivery id is remembered. GitHub lets a delivery be
@@ -278,13 +290,7 @@ export const recordPush = internalMutation
             const { now } = context;
 
             if (deliveryId !== undefined && (await isRedelivery(context, deliveryId))) {
-                // The first delivery's skip status may never have reached GitHub (its post is
-                // best-effort): hand the recorded path-filter skip back so the webhook can post
-                // it again. Posting the same success status twice is harmless.
-                const { page: recorded } = await context.db.builds.findMany({ where: { commitSha, projectId: project._id } }); // secret-scanner:allow -- domain field name
-                const skip = recorded.find((row) => row.status === "skipped" && row.pathFiltered === true && (row.trigger ?? "push") === trigger);
-
-                return skip?.skipReason === undefined ? { duplicate: true } : { duplicate: true, pathFiltered: true, skipped: skip.skipReason };
+                return redelivered(context, project._id, commitSha, trigger);
             }
 
             const { rootDirectory, watchPaths } = project;
