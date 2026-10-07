@@ -59,7 +59,8 @@ interface SubscribeToPushOptions {
 
     /**
      * URL of the service worker script to register. Omit to reuse the page's
-     * already-active registration (`navigator.serviceWorker.ready`).
+     * existing registration (`navigator.serviceWorker.ready`); the call rejects
+     * when the page has none.
      */
     serviceWorkerUrl?: string;
 
@@ -109,9 +110,23 @@ const isPushSupported = (): boolean =>
     browserGlobals.navigator?.serviceWorker !== undefined && browserGlobals.PushManager !== undefined && browserGlobals.Notification !== undefined;
 
 /**
+ * The page's service-worker registration once it is active, or `undefined` when
+ * nothing is registered for this page. `navigator.serviceWorker.ready` alone never
+ * settles without a registration, so a caller would hang instead of failing.
+ */
+const existingRegistration = async (): Promise<ServiceWorkerRegistration | undefined> => {
+    if ((await navigator.serviceWorker.getRegistration()) === undefined) {
+        return undefined;
+    }
+
+    return navigator.serviceWorker.ready;
+};
+
+/**
  * Register (or reuse) a service worker and subscribe the browser to Web Push,
  * returning the subscription in serialisable form. Reuses an existing subscription
- * when present. Throws if push is unsupported or the user denies permission.
+ * when present. Throws if push is unsupported, no service worker is registered
+ * (without `serviceWorkerUrl`), or the user denies permission.
  */
 const subscribeToPush = async (options: SubscribeToPushOptions): Promise<SubscribeToPushResult> => {
     if (!isPushSupported()) {
@@ -121,7 +136,13 @@ const subscribeToPush = async (options: SubscribeToPushOptions): Promise<Subscri
     let registration: ServiceWorkerRegistration;
 
     if (options.serviceWorkerUrl === undefined) {
-        registration = await navigator.serviceWorker.ready;
+        const existing = await existingRegistration();
+
+        if (existing === undefined) {
+            throw new Error("@lunora/notify: no service worker is registered for this page — register one first, or pass `serviceWorkerUrl`");
+        }
+
+        registration = existing;
     } else {
         const registerOptions = options.scope === undefined ? undefined : { scope: options.scope };
 
@@ -170,7 +191,12 @@ const unsubscribeFromPush = async (): Promise<boolean> => {
         return false;
     }
 
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await existingRegistration();
+
+    if (registration === undefined) {
+        return false;
+    }
+
     const subscription = await registration.pushManager.getSubscription();
 
     return subscription === null ? false : subscription.unsubscribe();

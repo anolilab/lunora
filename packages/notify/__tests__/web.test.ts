@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isPushSupported, subscribeToPush } from "../src/web";
+import { isPushSupported, subscribeToPush, unsubscribeFromPush } from "../src/web";
 
 /**
  * Encode bytes as base64url — the inverse of `web.ts`'s `urlBase64ToUint8Array`,
@@ -63,7 +63,9 @@ const installBrowser = (existing: FakeSubscription | null): { subscribeCalls: { 
         },
     };
 
-    vi.stubGlobal("navigator", { serviceWorker: { ready: Promise.resolve({ pushManager }) } });
+    const registration = { pushManager };
+
+    vi.stubGlobal("navigator", { serviceWorker: { getRegistration: async () => registration, ready: Promise.resolve(registration) } });
     vi.stubGlobal("PushManager", () => {});
     vi.stubGlobal("Notification", { requestPermission: async () => "granted" });
 
@@ -145,6 +147,35 @@ describe("subscribeToPush — VAPID key rotation", () => {
 
         expect(isPushSupported()).toBe(false);
         await expect(subscribeToPush({ vapidPublicKey: VAPID_PUBLIC_KEY })).rejects.toThrow(/not supported in this browser/u);
+    });
+});
+
+describe("subscribeToPush — no service worker registered", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    /** A page with service-worker support but nothing registered: `ready` never settles. */
+    const installUnregistered = (): void => {
+        vi.stubGlobal("navigator", { serviceWorker: { getRegistration: async () => undefined, ready: new Promise(() => {}) } });
+        vi.stubGlobal("PushManager", () => {});
+        vi.stubGlobal("Notification", { requestPermission: async () => "granted" });
+    };
+
+    it("rejects instead of hanging on `navigator.serviceWorker.ready`", async () => {
+        expect.hasAssertions();
+
+        installUnregistered();
+
+        await expect(subscribeToPush({ vapidPublicKey: VAPID_PUBLIC_KEY })).rejects.toThrow(/no service worker is registered/u);
+    });
+
+    it("unsubscribeFromPush resolves false instead of hanging", async () => {
+        expect.hasAssertions();
+
+        installUnregistered();
+
+        await expect(unsubscribeFromPush()).resolves.toBe(false);
     });
 });
 
