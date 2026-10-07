@@ -623,7 +623,7 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
 
         throw new LunoraError(
             "INTERNAL",
-            `@lunora/queue: received a batch for queue "${batch.queue}" but no push handler is registered (${suffix}). A per-environment queue name routes only when a wrangler.jsonc producer maps the queue's declared binding to it — add that producer and rerun codegen.`,
+            `@lunora/queue: received a batch for queue "${batch.queue}" but no push handler is registered (${suffix}). Likely causes: the queue is declared \`pull\`, a renamed per-environment queue has no wrangler.jsonc producer with the declared binding, or codegen was not rerun.`,
         );
     }
 
