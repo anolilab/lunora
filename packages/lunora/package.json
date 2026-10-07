@@ -165,7 +165,7 @@
         "@lunora/cli": "1.0.0-alpha.362",
         "@lunora/client": "1.0.0-alpha.189",
         "@lunora/do": "1.0.0-alpha.199",
-        "@lunora/errors": "1.0.0-alpha.51",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/flags": "1.0.0-alpha.65",
         "@lunora/observability": "1.0.0-alpha.126",
         "@lunora/platform": "1.0.0-alpha.57",

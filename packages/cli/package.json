@@ -73,7 +73,7 @@
         "@lunora/config": "1.0.0-alpha.321",
         "@lunora/container": "1.0.0-alpha.70",
         "@lunora/d1": "1.0.0-alpha.167",
-        "@lunora/errors": "1.0.0-alpha.51",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/mcp": "1.0.0-alpha.223",
         "@lunora/runtime": "1.0.0-alpha.185",
         "@lunora/seed": "1.0.0-alpha.200",

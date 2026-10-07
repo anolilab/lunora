@@ -65,7 +65,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.51",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/platform": "1.0.0-alpha.57",
         "@visulima/storage": "catalog:storage",
         "aws4fetch": "catalog:storage"

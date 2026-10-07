@@ -65,7 +65,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.50",
+        "@lunora/errors": ">=1.0.0-alpha.50 <2.0.0-0",
         "@lunora/shard-engine": "1.0.0-alpha.116",
         "drizzle-orm": "catalog:drizzle"
     },

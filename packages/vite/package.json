@@ -62,7 +62,7 @@
         "@cloudflare/vite-plugin": "catalog:vite",
         "@lunora/codegen": "1.0.0-alpha.276",
         "@lunora/config": "1.0.0-alpha.321",
-        "@lunora/errors": "1.0.0-alpha.51",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@visulima/vite-overlay": "catalog:vite"
     },
     "devDependencies": {

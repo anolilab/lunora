@@ -141,7 +141,9 @@ for (const { dir, manifest } of manifests) {
 
         const current = versions[name];
 
-        if (!current || specifier === current) {
+        // A range (`>=1.0.0-alpha.50 <2.0.0-0`, used for `@lunora/errors` so every
+        // sibling dedupes onto one `LunoraError` class) cannot drift — only an exact pin can.
+        if (!current || specifier === current || !EXACT_VERSION_RE.test(specifier)) {
             continue;
         }
 
