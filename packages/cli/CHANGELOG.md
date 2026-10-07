@@ -1,3 +1,22 @@
+## @lunora/cli [1.0.0-alpha.358](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.357...@lunora/cli@1.0.0-alpha.358) (2026-10-07)
+
+### Features
+
+* **cli:** check artifacts namespace jurisdiction on deploy ([#1017](https://github.com/anolilab/lunora/issues/1017)) ([2a53718](https://github.com/anolilab/lunora/commit/2a53718e565c5b0f322b29915248940ab2b34e48))
+* **codegen:** discover queues declared in a module's queues.ts ([#1018](https://github.com/anolilab/lunora/issues/1018)) ([f5dc76c](https://github.com/anolilab/lunora/commit/f5dc76c6acdde00f6bae02e4b56852619feedb16))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.196
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.100
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.273
+* **@lunora/config:** upgraded to 1.0.0-alpha.317
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.221
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.184
+* **@lunora/seed:** upgraded to 1.0.0-alpha.198
+* **@lunora/testing:** upgraded to 1.0.0-alpha.241
+
 ## @lunora/cli [1.0.0-alpha.357](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.356...@lunora/cli@1.0.0-alpha.357) (2026-10-06)
 
 
