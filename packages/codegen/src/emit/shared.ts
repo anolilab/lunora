@@ -144,7 +144,8 @@ interface NamespaceNode<T> {
  * `api.billing.<name>`. Checked here rather than in discovery because synthetic
  * entries (agents, custom mutators) reach the tree too.
  *
- * `renderLeaf` renders one member without indentation. `position` picks the
+ * Members and nested keys both emit in alphabetical order, so the output is
+ * stable however the entries arrive. `renderLeaf` renders one member without indentation. `position` picks the
  * key quoting and block terminator: an interface (`type`) or an object literal
  * (`value`).
  */
@@ -190,7 +191,7 @@ const renderNamespaceTree = <T extends { exportName: string; filePath: string }>
             );
         }
 
-        const leaves = list.map((entry) => `${indent}${renderLeaf(entry)}`);
+        const leaves = list.toSorted((a, b) => a.exportName.localeCompare(b.exportName)).map((entry) => `${indent}${renderLeaf(entry)}`);
         const nested = [...node.children.entries()]
             .toSorted(([a], [b]) => a.localeCompare(b))
             .map(([key, child]) => `${indent}${renderKey(key)}: {\n${render(child, depth + 1).join("\n")}\n${indent}}${terminator}`);

@@ -161,6 +161,13 @@ regardless of where it sits in the tier list above.
 Concrete evidence the project is actively maintained and hardening toward
 production. Each of these is merged, not planned:
 
+- **Nested, plain-data `api`** — `lunora/billing/invoices.ts` is
+  `api.billing.invoices.*`, the same shape as Convex. References are plain
+  objects that can be stored and sent between Workers, and `internal` lives in
+  its own generated module so client bundles never carry internal function
+  names ([upgrade notes](./apps/docs/src/content/docs/migrating/from-alpha.mdx)).
+- **Architecture diff on deploy** — `lunora deploy` lists the modules and
+  call/table edges a deploy adds or removes, next to the schema-drift gate.
 - **Typed service bindings** — sibling Workers declared in `lunora.config`
   become a typed `ctx.services.<name>` (fetch or RPC), run in the same
   `lunora dev` / `vite dev` session, and deploy before the app. They replace

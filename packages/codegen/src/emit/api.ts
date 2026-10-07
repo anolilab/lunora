@@ -24,10 +24,7 @@ import {
  */
 const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string =>
     renderNamespaceTree(
-        // Sorted by export name so a namespace that mixes discovered functions with
-        // synthetic entries (agents, custom mutators — appended after the sorted
-        // discovery output) still emits in a stable, alphabetical order.
-        functions.toSorted((a, b) => a.exportName.localeCompare(b.exportName)),
+        functions,
         (definition) => {
             // We emit `FunctionReference<Kind, ArgsObj, Return>` so the
             // generated `api.*` references plug directly into
@@ -467,7 +464,7 @@ ${valueBody}
  */
 const renderApiValue = (functions: ReadonlyArray<FunctionIR>): string =>
     renderNamespaceTree(
-        functions.toSorted((a, b) => a.exportName.localeCompare(b.exportName)),
+        functions,
         (definition) =>
             `${renderObjectKey(definition.exportName)}: { __lunoraRef: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)} },`,
         "value",
