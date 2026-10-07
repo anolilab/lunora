@@ -1,3 +1,9 @@
+## @lunora/advisor [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.195...@lunora/advisor@1.0.0-alpha.196) (2026-10-07)
+
+### Features
+
+* **advisor:** flag topics with more than 10 subscriptions ([#1016](https://github.com/anolilab/lunora/issues/1016)) ([472b256](https://github.com/anolilab/lunora/commit/472b256f7f37bebbd8aee1ec32a02acef8cad8a4))
+
 ## @lunora/advisor [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.194...@lunora/advisor@1.0.0-alpha.195) (2026-10-06)
 
 
