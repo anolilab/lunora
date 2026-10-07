@@ -723,7 +723,12 @@ interface InferredBindings {
     usesKv: boolean;
     usesMail: boolean;
     usesNotify: boolean;
+    usesPaymentAutumn: boolean;
+    usesPaymentCreem: boolean;
+    usesPaymentDodopayments: boolean;
+    usesPaymentPolar: boolean;
     usesPayments: boolean;
+    usesPaymentStripe: boolean;
     usesPipelines: boolean;
     usesR2sql: boolean;
     usesScheduler: boolean;

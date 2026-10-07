@@ -174,31 +174,10 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-fcm-access-token>",
         },
     ],
-    "@lunora/payment": [
-        {
-            description: "Stripe secret key (sk_test_…). Required when using the Stripe adapter. Obtain at https://dashboard.stripe.com/apikeys",
-            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
-            key: "STRIPE_SECRET_KEY",
-            placeholderValue: "<your-stripe-secret-key>",
-        },
-        {
-            description: "Stripe webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://dashboard.stripe.com/webhooks",
-            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
-            key: "STRIPE_WEBHOOK_SECRET",
-            placeholderValue: "<your-stripe-webhook-secret>",
-        },
-        {
-            description: "Polar access token for the Polar payment adapter. Obtain at https://polar.sh/settings/tokens",
-            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
-            key: "POLAR_ACCESS_TOKEN",
-            placeholderValue: "<your-polar-access-token>",
-        },
-        {
-            description: "Polar webhook secret for verifying event payloads from Polar. Obtain at https://polar.sh/settings/webhooks",
-            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
-            key: "POLAR_WEBHOOK_SECRET",
-            placeholderValue: "<your-polar-webhook-secret>",
-        },
+    // `@lunora/payment` itself needs no secret: each provider's pair is keyed by
+    // the adapter SUBPATH an app imports, so `.dev.vars.example` lists only the
+    // provider in use (#1022), not all five.
+    "@lunora/payment/autumn": [
         {
             description: "Autumn secret key (am_sk_…) for the Autumn payment adapter. Obtain at https://app.useautumn.com/dev",
             docsUrl: "https://lunora.sh/docs/packages/payment#autumn",
@@ -211,6 +190,22 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             key: "AUTUMN_WEBHOOK_SECRET",
             placeholderValue: "<your-autumn-webhook-secret>",
         },
+    ],
+    "@lunora/payment/creem": [
+        {
+            description: "Creem API key for the Creem payment adapter. Obtain at https://www.creem.io/dashboard/developers",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_API_KEY",
+            placeholderValue: "<your-creem-api-key>",
+        },
+        {
+            description: "Creem webhook signing secret for verifying the creem-signature header. Obtain from your Creem dashboard webhook settings.",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_WEBHOOK_SECRET",
+            placeholderValue: "<your-creem-webhook-secret>",
+        },
+    ],
+    "@lunora/payment/dodopayments": [
         {
             description: "Dodo Payments API key (bearer token) for the Dodo Payments adapter. Obtain at https://app.dodopayments.com/developer/api-keys",
             docsUrl: "https://lunora.sh/docs/packages/payment#dodo-payments",
@@ -224,17 +219,33 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             key: "DODO_PAYMENTS_WEBHOOK_KEY",
             placeholderValue: "<your-dodo-payments-webhook-secret>",
         },
+    ],
+    "@lunora/payment/polar": [
         {
-            description: "Creem API key for the Creem payment adapter. Obtain at https://www.creem.io/dashboard/developers",
-            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
-            key: "CREEM_API_KEY",
-            placeholderValue: "<your-creem-api-key>",
+            description: "Polar access token for the Polar payment adapter. Obtain at https://polar.sh/settings/tokens",
+            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
+            key: "POLAR_ACCESS_TOKEN",
+            placeholderValue: "<your-polar-access-token>",
         },
         {
-            description: "Creem webhook signing secret for verifying the creem-signature header. Obtain from your Creem dashboard webhook settings.",
-            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
-            key: "CREEM_WEBHOOK_SECRET",
-            placeholderValue: "<your-creem-webhook-secret>",
+            description: "Polar webhook secret for verifying event payloads from Polar. Obtain at https://polar.sh/settings/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
+            key: "POLAR_WEBHOOK_SECRET",
+            placeholderValue: "<your-polar-webhook-secret>",
+        },
+    ],
+    "@lunora/payment/stripe": [
+        {
+            description: "Stripe secret key (sk_test_…). Required when using the Stripe adapter. Obtain at https://dashboard.stripe.com/apikeys",
+            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
+            key: "STRIPE_SECRET_KEY",
+            placeholderValue: "<your-stripe-secret-key>",
+        },
+        {
+            description: "Stripe webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://dashboard.stripe.com/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
+            key: "STRIPE_WEBHOOK_SECRET",
+            placeholderValue: "<your-stripe-webhook-secret>",
         },
     ],
 };

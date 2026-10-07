@@ -681,6 +681,22 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(result.signals.some((signal) => signal.includes("STRIPE_SECRET_KEY") && signal.includes("POLAR_ACCESS_TOKEN"))).toBe(true);
     });
 
+    it("reports the imported payment adapter's subpath, so only its secrets are scaffolded (#1022)", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/billing.ts",
+            `import { createPayment } from "@lunora/payment";\nimport { creem } from "@lunora/payment/creem";\nexport const payment = () => [createPayment, creem];`,
+        );
+
+        const packages = packageNamesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        expect(packages).toContain("@lunora/payment/creem");
+        expect(packages.filter((name) => name.startsWith("@lunora/payment/"))).toStrictEqual(["@lunora/payment/creem"]);
+    });
+
     it("does not infer payment for a project that does not import @lunora/payment", async () => {
         expect.assertions(1);
 
