@@ -53,9 +53,9 @@ deliberate, and mostly a set of go/no-go decisions:
       `svelte`, `astro`, `nuxt`, `auth`, `auth-ui`, `storage`, `scheduler`, `mail`,
       `notify`, `ratelimit`, `seed`, `db`, `sql-store`, `studio`, `advisor`, `mcp`,
       `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`,
-      `fingerprint`, `dispatch`, `payment`, `x402`, `browser`.
+      `fingerprint`, `dispatch`, `payment`, `x402`.
     - **Experimental (excluded from the 1.0 promise, iterating on their own track):**
-      `agent`, `replica`, `react-native`, `angular`, `ai`, `container`,
+      `agent`, `replica`, `react-native`, `angular`, `ai`, `browser`, `container`,
       `platform-celld`, `platform-node`, `rspack`.
 - **Cut the beta channel.** Feature-freeze the Core + Stable-adapter tiers and
   promote `alpha → beta`; the experimental tier keeps iterating on `alpha`.
@@ -133,21 +133,22 @@ against something written down rather than case by case.
 
 Where the tier stands today:
 
-| Package          | 1. Snapshotted (untracked `@experimental` exports) | 2. Verified on workerd                                                              |
-| ---------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `agent`          | yes (183)                                          | no                                                                                  |
-| `ai`             | yes (63)                                           | no                                                                                  |
-| `angular`        | yes (80)                                           | n/a — runs in the browser                                                           |
-| `container`      | yes (0 — fully tracked)                            | partial — starting a container needs Docker, so lifecycle and `exec` are unverified |
-| `platform-celld` | yes (0)                                            | n/a — verified by the `test:celld` TCK                                              |
-| `platform-node`  | yes (0)                                            | n/a — a Node host                                                                   |
-| `react-native`   | yes (5)                                            | n/a — runs on device                                                                |
-| `replica`        | yes (69)                                           | no                                                                                  |
-| `rspack`         | yes (0)                                            | n/a — a bundler plugin                                                              |
+| Package          | 1. Snapshotted (untracked `@experimental` exports) | 2. Verified on workerd                                                                                                                                                     |
+| ---------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`          | yes (183)                                          | no                                                                                                                                                                         |
+| `ai`             | yes (63)                                           | no                                                                                                                                                                         |
+| `angular`        | yes (80)                                           | n/a — runs in the browser                                                                                                                                                  |
+| `browser`        | yes (0 — fully tracked)                            | partial — blocked on a live Browser Run check: `route.fetch` inside a real session, and the service-worker, prerender and WebRTC paths, are unverified on the real service |
+| `container`      | yes (0 — fully tracked)                            | partial — starting a container needs Docker, so lifecycle and `exec` are unverified                                                                                        |
+| `platform-celld` | yes (0)                                            | n/a — verified by the `test:celld` TCK                                                                                                                                     |
+| `platform-node`  | yes (0)                                            | n/a — a Node host                                                                                                                                                          |
+| `react-native`   | yes (5)                                            | n/a — runs on device                                                                                                                                                       |
+| `replica`        | yes (69)                                           | no                                                                                                                                                                         |
+| `rspack`         | yes (0)                                            | n/a — a bundler plugin                                                                                                                                                     |
 
-`payment`, `x402` and `browser` graduated to Stable adapter (audit, workerd suite, no
-`@experimental` exports). `browser`'s workerd suite fakes the Browser Run binding and stops at
-the DevTools upgrade, since no Chrome runs locally; what lies past it is listed in its docs. No
+`payment` and `x402` graduated to Stable adapter (audit, workerd suite, no `@experimental`
+exports). `browser` has no tagged exports and a workerd suite against a fake binding, but stays
+experimental until `packages/browser/smoke` has passed against a real Browser Run binding. No
 Core or Stable-adapter export carries `@experimental`: `api:check` fails if one does. The
 per-package graduation order is in [`plans/463`](./plans/463-experimental-graduation.md).
 

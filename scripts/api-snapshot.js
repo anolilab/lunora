@@ -175,7 +175,6 @@ const TIER_2 = [
     // Graduated from TIER_3 (plan 463): full audit, workerd suite, no `@experimental` exports.
     "payment",
     "x402",
-    "browser",
 ];
 
 /**
@@ -218,7 +217,7 @@ const TIER_2 = [
  * `@lunora/react`, and a re-export is pinned by name + kind + source package
  * with its signature tracked in the owning snapshot.
  */
-const TIER_3 = ["agent", "ai", "angular", "container", "platform-celld", "platform-node", "react-native", "replica", "rspack"];
+const TIER_3 = ["agent", "ai", "angular", "browser", "container", "platform-celld", "platform-node", "react-native", "replica", "rspack"];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
@@ -1054,8 +1053,10 @@ const rendered = buildAll();
  */
 // Every Core and Stable-adapter package is here: their SemVer promise is only as wide as the
 // tracked signatures, so an `@experimental` tag in one of them is a silent hole in the 1.0
-// guarantee. `container` is the one experimental package that also documents the invariant.
-const FULLY_TRACKED_SNAPSHOTS = new Set([...TIER_1, ...TIER_2, "container"].map((dir) => snapshotFileName(dir)));
+// guarantee. `container` and `browser` are experimental packages that also document the
+// invariant: every export is untagged, and they stay experimental only on verification grounds
+// (Docker for `container`, a live Browser Run session for `browser`).
+const FULLY_TRACKED_SNAPSHOTS = new Set([...TIER_1, ...TIER_2, "browser", "container"].map((dir) => snapshotFileName(dir)));
 
 // A configured snapshot that no longer renders would make this check silently
 // inert — the loop below only sees what `rendered` contains, so a package
