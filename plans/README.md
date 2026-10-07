@@ -19,12 +19,11 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## In progress
 
-| Plan                                         | Title                                                  | Remaining                                                                   |
-| -------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
-| [456](./456-modules-catalog-architecture.md) | Modules catalog, call graph, architecture diagram      | core and per-module queues shipped; optional: nested `api.*`, deploy diff   |
-| [460](./460-cloudflare-artifacts.md)         | Cloudflare Artifacts as an action-only `ctx.artifacts` | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid) |
-| [463](./463-experimental-graduation.md)      | Graduate the experimental tier to stable               | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages       |
-| [166](./166-enterprise-auth-saml-scim.md)    | Enterprise auth: SAML SSO + SCIM                       | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated               |
+| Plan                                      | Title                                                  | Remaining                                                                   |
+| ----------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
+| [460](./460-cloudflare-artifacts.md)      | Cloudflare Artifacts as an action-only `ctx.artifacts` | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid) |
+| [463](./463-experimental-graduation.md)   | Graduate the experimental tier to stable               | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages       |
+| [166](./166-enterprise-auth-saml-scim.md) | Enterprise auth: SAML SSO + SCIM                       | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated               |
 
 ## Open (TODO)
 
@@ -49,22 +48,19 @@ When a plan ships: delete its file and remove its row here in the same change.
 Design docs and spike findings that gate unbuilt follow-on work. Delete one when the
 follow-on ships or is rejected.
 
-| Doc                                                                                    | Subject                                                                 |
-| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| [052](./052-streaming-hook-design.md)                                                  | Typed HTTP-SSE stream consumer (adapter parity, reconnect, POST bodies) |
-| [137](./137-release-train-rehearsal.md)                                                | Release-train rehearsal, feeds 135 Phase 3                              |
-| [162](./162-phase0-crosstabsync-design.md)                                             | crossTabSync subscribe relay (CLIENT-01)                                |
-| [234](./234-node-host-findings.md)                                                     | Node host findings                                                      |
-| [237](./237-admin-auth-hooks-design.md)                                                | Reactive admin/organization auth hooks; remaining adapters open         |
-| [238](./238-vector-reader-design.md)                                                   | `.withVectorIndex()` reader; codegen wiring + `define-rag` open         |
-| [241](./241-inapp-inbox-design.md)                                                     | In-app inbox read half; D1 backend open                                 |
-| [247](./247-event-store-design.md)                                                     | `defineEventStore`; not ratified                                        |
-| [333](./333-query-snapshot-coherence.md)                                               | Snapshot coherence for query subscriptions                              |
-| [334](./334-mutation-determinism.md)                                                   | Runtime determinism for query/mutation bodies                           |
-| [386](./386-queue-workpool-observability-design.md)                                    | Observability for the Queues-backed workpool                            |
-| [395](./395-sdk-stream-forms-design.md)                                                | Stream subscription forms for the non-Dart SDKs                         |
-| [435](./435-platform-budget-tck-design.md)                                             | Portability-budget leg of the platform TCK                              |
-| [445](./445-agent-approvals-inbox-design.md)                                           | Pending-approvals inbox for the HITL surface                            |
-| [convex-primitives-gap-analysis.md](./convex-primitives-gap-analysis.md)               | What Convex's "missing primitives" mean for Lunora                      |
-| [multi-platform-portability-assessment.md](./multi-platform-portability-assessment.md) | Multi-platform portability go/no-go                                     |
-| [audit-findings.md](./audit-findings.md)                                               | Bug-hunt ledger (rounds 5–11)                                           |
+| Doc                                                 | Subject                                                                 |
+| --------------------------------------------------- | ----------------------------------------------------------------------- |
+| [052](./052-streaming-hook-design.md)               | Typed HTTP-SSE stream consumer (adapter parity, reconnect, POST bodies) |
+| [137](./137-release-train-rehearsal.md)             | Release-train rehearsal, feeds 135 Phase 3                              |
+| [162](./162-phase0-crosstabsync-design.md)          | crossTabSync subscribe relay (CLIENT-01)                                |
+| [234](./234-node-host-findings.md)                  | Node host findings                                                      |
+| [237](./237-admin-auth-hooks-design.md)             | Reactive admin/organization auth hooks; remaining adapters open         |
+| [238](./238-vector-reader-design.md)                | `.withVectorIndex()` reader; codegen wiring + `define-rag` open         |
+| [241](./241-inapp-inbox-design.md)                  | In-app inbox read half; D1 backend open                                 |
+| [247](./247-event-store-design.md)                  | `defineEventStore`; not ratified                                        |
+| [333](./333-query-snapshot-coherence.md)            | Snapshot coherence for query subscriptions                              |
+| [334](./334-mutation-determinism.md)                | Runtime determinism for query/mutation bodies                           |
+| [386](./386-queue-workpool-observability-design.md) | Observability for the Queues-backed workpool                            |
+| [395](./395-sdk-stream-forms-design.md)             | Stream subscription forms for the non-Dart SDKs                         |
+| [435](./435-platform-budget-tck-design.md)          | Portability-budget leg of the platform TCK                              |
+| [445](./445-agent-approvals-inbox-design.md)        | Pending-approvals inbox for the HITL surface                            |
