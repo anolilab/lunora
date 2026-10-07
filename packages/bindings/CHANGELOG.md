@@ -1,3 +1,9 @@
+## @lunora/bindings [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.99...@lunora/bindings@1.0.0-alpha.100) (2026-10-07)
+
+### Features
+
+* **cli:** check artifacts namespace jurisdiction on deploy ([#1017](https://github.com/anolilab/lunora/issues/1017)) ([2a53718](https://github.com/anolilab/lunora/commit/2a53718e565c5b0f322b29915248940ab2b34e48))
+
 ## @lunora/bindings [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.98...@lunora/bindings@1.0.0-alpha.99) (2026-10-06)
 
 
