@@ -25,13 +25,11 @@ import { createChargeMiddleware } from "./middleware";
  * Charge config for the procedure gate: the worker-level settlement vocabulary
  * (network, recipient, facilitator) minus `price` — price is per-procedure and
  * arrives with each {@link X402ProcedureSpec}.
- * @experimental
  */
 export type X402ProcedureChargeConfig = Omit<X402ChargeConfig, "price">;
 
 /**
  * The per-RPC charge spec the runtime passes the gate for each paid dispatch.
- * @experimental
  */
 export interface X402ProcedureSpec {
     /** The `file:function` id of the paid procedure; becomes the x402 challenge `resource`. */
@@ -49,7 +47,6 @@ export interface X402ProcedureSpec {
  * (the mutation's commit) never runs at all — no committed-but-unpaid write is
  * possible. `deps.waitUntil`, when supplied (the request's `ctx.waitUntil`),
  * keeps the opt-in receipt sink alive past the response.
- * @experimental
  */
 export type X402ProcedureChargeGate = (
     request: Request,
@@ -66,7 +63,6 @@ export type X402ProcedureChargeGate = (
  * facilitator outage retries on the next request. Settlement runs before
  * `dispatch` (the `settleBeforeHandler` default) since `dispatch` commits the
  * procedure's real mutation — see `createChargeMiddleware`'s `ChargeMiddlewareOptions`.
- * @experimental
  */
 export const createProcedureChargeGate = (config: X402ProcedureChargeConfig): X402ProcedureChargeGate => {
     const middlewareByFunction = new Map<string, Promise<ChargeMiddleware>>();

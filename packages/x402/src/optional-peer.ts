@@ -47,7 +47,6 @@ const isModuleNotFound = (error: unknown, depth = 3): boolean => {
  *
  * Callers pass a thunk holding a literal specifier (`() => import("viem/accounts")`)
  * so the bundler still sees the dependency.
- * @experimental
  */
 export const importOptionalPeer = async <T>(load: () => Promise<T>, guidance: string): Promise<T> => {
     try {

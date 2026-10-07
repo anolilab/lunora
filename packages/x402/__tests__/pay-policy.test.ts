@@ -202,11 +202,13 @@ describe("buildSpendPolicy — asset gate (X402-01)", () => {
         }
     });
 
-    it("refuses the removed policy-wide `decimals` with a migration message", () => {
-        // Keeping it silently honoured would leave the mis-pricing hole open behind a
-        // field that reads like a formatting detail.
-        expect(() => buildSpendPolicy({ decimals: 18, maxPerCall: "$1" })).toThrow(/`decimals` is no longer supported/);
-        expect(() => buildPaymentGuard({ decimals: 18, maxPerRun: "$1" }, createSpendState())).toThrow(/`decimals` is no longer supported/);
+    it("ignores a stray policy-wide `decimals` from an untyped caller: caps still scale by the asset's own", () => {
+        // The field was removed; an old JS caller still passing it must not widen a cap.
+        // $1 of 6-decimal USDC is 1e6 units, whatever `decimals` claims.
+        const policy = buildSpendPolicy({ decimals: 18, maxPerCall: "$1" } as SpendPolicy);
+
+        expect(policy(2, [requirement({ amount: "1000000" })])).toHaveLength(1);
+        expect(policy(2, [requirement({ amount: "1000001" })])).toEqual([]);
     });
 });
 

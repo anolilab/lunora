@@ -12,6 +12,7 @@
  * the payment from `PAYMENT-SIGNATURE` alone, so a v1 client sending `X-PAYMENT`
  * is answered with a fresh `402` challenge and is never charged.
  */
+import { LunoraError } from "@lunora/errors";
 import type { HTTPAdapter, HTTPRequestContext, HTTPResponseInstructions, PaymentOption, ProcessSettleSuccessResponse, RouteConfig } from "@x402/core/http";
 import { x402HTTPResourceServer as X402HTTPResourceServer } from "@x402/core/http";
 
@@ -113,13 +114,11 @@ export const reportReceipt = (
 
 /**
  * Runs the protected resource handler, producing the Response to gate.
- * @experimental
  */
 export type ChargeHandler = () => Promise<Response> | Response;
 
 /**
  * Per-request platform seams `handle` can use, beyond the request/handler pair.
- * @experimental
  */
 export interface ChargeHandlerDeps {
     /**
@@ -132,7 +131,6 @@ export interface ChargeHandlerDeps {
 
 /**
  * A prepared, initialised paywall. Build once (it fetches facilitator support), reuse per request.
- * @experimental
  */
 export interface ChargeMiddleware {
     /** Gate `request`: challenge / verify / settle around `runHandler`. */
@@ -149,7 +147,7 @@ export const resolvePayTo = (config: X402ChargeConfig): string => {
     const address = evm ? config.recipient.evm : config.recipient.svm;
 
     if (address === undefined || address.length === 0) {
-        throw new Error(`x402 charge on "${config.network}" needs recipient.${evm ? "evm" : "svm"} set.`);
+        throw new LunoraError("ENV_INVALID", `x402 charge on "${config.network}" needs recipient.${evm ? "evm" : "svm"} set.`);
     }
 
     return address;
@@ -243,13 +241,11 @@ export const withHeaders = (response: Response, extra: Record<string, string>): 
  * names the paid function (x402 core falls back to the request URL otherwise —
  * every RPC POSTs to the same `/_lunora/rpc`, so the URL can't tell two paid
  * procedures apart).
- * @experimental
  */
 export type ChargeRouteOverrides = Pick<RouteConfig, "description" | "resource">;
 
 /**
  * Behaviour knobs for {@link createChargeMiddleware} beyond route metadata.
- * @experimental
  */
 export interface ChargeMiddlewareOptions {
     /**
@@ -280,7 +276,6 @@ export interface ChargeMiddlewareOptions {
  * and reuse the result across requests. `routeOverrides` layers extra route
  * metadata (e.g. `resource`) onto the generated catch-all route; `options`
  * controls settlement ordering (see {@link ChargeMiddlewareOptions}).
- * @experimental
  */
 export const createChargeMiddleware = async (
     config: X402ChargeConfig,

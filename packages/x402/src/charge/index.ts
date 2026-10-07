@@ -11,7 +11,6 @@
  */
 export type { EvmAddress, FacilitatorConfig, X402ChargeConfig, X402Price, X402Recipient } from "../config";
 export { DEFAULT_FACILITATOR_URL, resolveFacilitatorUrl } from "../config";
-export { createFacilitatorClient } from "../facilitator";
 export type { Caip2, X402Network } from "../networks";
 export { isEvmNetwork, isSvmNetwork, toCaip2 } from "../networks";
 export type { HttpActionHandler } from "./http-action";
@@ -21,4 +20,4 @@ export { createChargeMiddleware } from "./middleware";
 export type { X402ProcedureChargeConfig, X402ProcedureChargeGate, X402ProcedureSpec } from "./procedure";
 export { createProcedureChargeGate } from "./procedure";
 export type { PaymentEventRow, X402Receipt, X402ReceiptSink } from "./receipt";
-export { toPaymentEventRow, toReceipt } from "./receipt";
+export { toPaymentEventRow } from "./receipt";
