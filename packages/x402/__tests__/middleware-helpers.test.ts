@@ -16,9 +16,11 @@ describe("resolvePayTo", () => {
     });
 
     it("throws when the matching recipient is missing", () => {
-        expect(() => resolvePayTo({ network: "base", price: "0.01", recipient: {} })).toThrow(/recipient\.evm/);
+        expect(() => resolvePayTo({ network: "base", price: "0.01", recipient: {} })).toThrow(
+            expect.objectContaining({ code: "ENV_INVALID", message: expect.stringMatching(/recipient\.evm/) }),
+        );
         expect(() => resolvePayTo({ network: "solana", price: "0.01", recipient: { evm: "0x1111111111111111111111111111111111111111" } })).toThrow(
-            /recipient\.svm/,
+            expect.objectContaining({ code: "ENV_INVALID", message: expect.stringMatching(/recipient\.svm/) }),
         );
     });
 });

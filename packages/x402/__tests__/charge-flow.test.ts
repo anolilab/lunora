@@ -302,7 +302,8 @@ describe("x402 v2 wire headers", () => {
     const payer = "0x2222222222222222222222222222222222222222";
     const url = "https://api.example/report";
 
-    const settlingFacilitator = (): string[] => {
+    /** A facilitator that verifies and settles; `broken` swaps in a raw answer for one endpoint. */
+    const settlingFacilitator = (broken: Partial<Record<"settle" | "supported" | "verify", () => Response>> = {}): string[] => {
         const calls: string[] = [];
 
         vi.stubGlobal(
@@ -310,7 +311,15 @@ describe("x402 v2 wire headers", () => {
             vi.fn<(input: RequestInfo | URL) => Promise<Response>>((input) => {
                 const target = requestUrl(input);
 
-                calls.push(target.split("/").pop() ?? target);
+                const endpoint = target.split("/").pop() ?? target;
+
+                calls.push(endpoint);
+
+                const override = broken[endpoint as keyof typeof broken];
+
+                if (override !== undefined) {
+                    return Promise.resolve(override());
+                }
 
                 if (target.endsWith("/supported")) {
                     return Promise.resolve(Response.json({ kinds: [{ network: "eip155:8453", scheme: "exact", x402Version: 2 }] }));
@@ -358,6 +367,38 @@ describe("x402 v2 wire headers", () => {
         expect(paid.headers.get("payment-response")).not.toBeNull();
         expect(handler).toHaveBeenCalledTimes(1);
         expect(calls).toStrictEqual(["supported", "verify", "settle"]);
+    });
+
+    it.each(["verify", "settle"] as const)("answers a malformed facilitator %s with a 502 and never runs the handler", async (endpoint) => {
+        expect.assertions(2);
+
+        settlingFacilitator({ [endpoint]: () => new Response("<html>gateway error</html>", { status: 200 }) });
+
+        const middleware = await createChargeMiddleware(chargeConfig);
+        const handler = vi.fn<() => Response>(() => new Response("report"));
+        const challenge = await middleware.handle(new Request(url), handler);
+
+        await expect(middleware.handle(new Request(url, { headers: { "PAYMENT-SIGNATURE": signedPayment(challenge) } }), handler)).rejects.toMatchObject({
+            code: "X402_FACILITATOR_ERROR",
+            status: 502,
+        });
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("reports an unreachable facilitator at initialisation as a 502", async () => {
+        expect.assertions(1);
+
+        settlingFacilitator({ supported: () => new Response("down", { status: 503 }) });
+
+        await expect(createChargeMiddleware(chargeConfig)).rejects.toMatchObject({ code: "X402_FACILITATOR_ERROR", status: 502 });
+    });
+
+    it("reports a facilitator that does not settle the configured network as ENV_INVALID", async () => {
+        expect.assertions(1);
+
+        settlingFacilitator({ supported: () => Response.json({ kinds: [{ network: "eip155:1", scheme: "exact", x402Version: 2 }] }) });
+
+        await expect(createChargeMiddleware(chargeConfig)).rejects.toMatchObject({ code: "ENV_INVALID" });
     });
 
     it("answers the v1 X-PAYMENT name with a fresh challenge and charges nothing", async () => {

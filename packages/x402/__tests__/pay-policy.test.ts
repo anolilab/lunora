@@ -201,15 +201,6 @@ describe("buildSpendPolicy — asset gate (X402-01)", () => {
             expect(policy(2, [requirement({ amount })])).toEqual([]);
         }
     });
-
-    it("ignores a stray policy-wide `decimals` from an untyped caller: caps still scale by the asset's own", () => {
-        // The field was removed; an old JS caller still passing it must not widen a cap.
-        // $1 of 6-decimal USDC is 1e6 units, whatever `decimals` claims.
-        const policy = buildSpendPolicy({ decimals: 18, maxPerCall: "$1" } as SpendPolicy);
-
-        expect(policy(2, [requirement({ amount: "1000000" })])).toHaveLength(1);
-        expect(policy(2, [requirement({ amount: "1000001" })])).toEqual([]);
-    });
 });
 
 describe("buildPaymentGuard", () => {

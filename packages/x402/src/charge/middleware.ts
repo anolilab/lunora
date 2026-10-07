@@ -14,7 +14,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 import type { HTTPAdapter, HTTPRequestContext, HTTPResponseInstructions, PaymentOption, ProcessSettleSuccessResponse, RouteConfig } from "@x402/core/http";
-import { x402HTTPResourceServer as X402HTTPResourceServer } from "@x402/core/http";
+import { getFacilitatorResponseError, RouteConfigurationError, x402HTTPResourceServer as X402HTTPResourceServer } from "@x402/core/http";
 
 import type { X402ChargeConfig } from "../config";
 import { isEvmNetwork, toCaip2 } from "../networks";
@@ -59,6 +59,30 @@ const privateCacheControl = (value: string | null): string => {
         });
 
     return ["private", ...kept].join(", ");
+};
+
+/**
+ * Run a facilitator round trip, turning a malformed or timed-out facilitator
+ * answer (`@x402/core`'s `FacilitatorResponseError`) into a 502. Core rethrows
+ * that error out of `processHTTPRequest` / `processSettlement` rather than
+ * answering 402, so without this it reached the host as an anonymous 500. The
+ * caller has not run the handler when this throws.
+ */
+const facilitatorCall = async <T>(operation: string, call: () => Promise<T>): Promise<T> => {
+    try {
+        return await call();
+    } catch (error) {
+        const facilitatorError = getFacilitatorResponseError(error);
+
+        if (facilitatorError === null) {
+            throw error;
+        }
+
+        throw new LunoraError("X402_FACILITATOR_ERROR", `x402 charge: the facilitator failed during ${operation}: ${facilitatorError.message}`, {
+            cause: error,
+            status: 502,
+        });
+    }
 };
 
 /** Snapshot a `Headers` into a plain record (for the settlement transport context). */
@@ -285,7 +309,20 @@ export const createChargeMiddleware = async (
     const server = await buildResourceServer(config);
     const http = new X402HTTPResourceServer(server, { ...buildRoute(config), ...routeOverrides });
 
-    await http.initialize();
+    try {
+        await http.initialize();
+    } catch (error) {
+        // The facilitator answered, but does not settle this scheme on this network: config.
+        if (error instanceof RouteConfigurationError) {
+            throw new LunoraError("ENV_INVALID", `x402 charge: ${error.message}`, { cause: error });
+        }
+
+        throw new LunoraError(
+            "X402_FACILITATOR_ERROR",
+            `x402 charge: could not load the facilitator's supported payment kinds: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error, status: 502 },
+        );
+    }
 
     const settleBeforeHandler = options?.settleBeforeHandler ?? true;
 
@@ -314,7 +351,7 @@ export const createChargeMiddleware = async (
             paymentHeader: request.headers.get(PAYMENT_HEADER) ?? undefined,
         };
 
-        const result = await http.processHTTPRequest(context);
+        const result = await facilitatorCall("verification", async () => http.processHTTPRequest(context));
 
         if (result.type === "no-payment-required") {
             return runHandler();
@@ -333,9 +370,11 @@ export const createChargeMiddleware = async (
             // (no `responseHeaders` — there is no response yet). A settlement
             // failure here means `runHandler` never executes, so its effects
             // (e.g. a mutation's writes) can never be committed unpaid.
-            const settlement = await http.processSettlement(result.paymentPayload, result.paymentRequirements, result.declaredExtensions, {
-                request: context,
-            });
+            const settlement = await facilitatorCall("settlement", async () =>
+                http.processSettlement(result.paymentPayload, result.paymentRequirements, result.declaredExtensions, {
+                    request: context,
+                }),
+            );
 
             if (!settlement.success) {
                 return toResponse(settlement.response);
@@ -373,10 +412,15 @@ export const createChargeMiddleware = async (
             throw error;
         }
 
-        const settlement = await http.processSettlement(result.paymentPayload, result.paymentRequirements, result.declaredExtensions, {
-            request: context,
-            responseHeaders: headerRecord(response.headers),
-        });
+        // A facilitator failure here comes after the handler ran: the 502 withholds
+        // the resource, and whether the payment settled is unknown (a timeout may
+        // have landed), so it is not cancelled.
+        const settlement = await facilitatorCall("settlement", async () =>
+            http.processSettlement(result.paymentPayload, result.paymentRequirements, result.declaredExtensions, {
+                request: context,
+                responseHeaders: headerRecord(response.headers),
+            }),
+        );
 
         if (settlement.success) {
             reportReceipt(config.onReceipt, settlement, resource, deps?.waitUntil);

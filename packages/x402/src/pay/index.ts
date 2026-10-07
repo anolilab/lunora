@@ -58,7 +58,8 @@ export const createX402Pay = async (config: X402PayConfig, deps: X402PayDeps): P
  * memoises it: the viem/`@x402` signer imports + Secrets Store read are paid for
  * only when an action actually pays, and the single `SpendState` behind the
  * rail is shared across every payment for the lifetime of this ctx — so the
- * per-run cap scopes to the ctx, not to each request. A failed build (e.g. an
+ * per-run cap scopes to the ctx (one function invocation), not to each request
+ * and not across invocations. A failed build (e.g. an
  * unbounded policy) is memoised too, keeping the rail deterministically
  * fail-closed.
  */

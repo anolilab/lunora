@@ -1,66 +1,29 @@
 /**
- * Real-workerd boot smoke for `@lunora/x402`.
+ * Real-workerd boot smoke for `@lunora/x402`: the charge rail's challenge path.
  *
- * The Node unit suite covers the protocol flow against fetch stubs; this suite
- * proves the charge rail actually boots in workerd — `@x402/core` + the lazily
- * imported `@x402/evm` scheme module (viem) load and run in the real runtime.
- * Covered: the `withX402` HTTP-action wrapper initialises against a (mocked)
- * facilitator and challenges an unpaid request with a real 402 through a real
- * worker `fetch` handler (via `SELF` — the worker runs in the same isolate as
- * the tests, so the facilitator stub applies to it too); and the
- * `.x402({ price })` procedure seam (`createProcedureChargeGate`) challenges
- * an unpaid RPC with 402, names the `functionPath` as the challenge
- * `resource`, and never dispatches the shard forward.
+ * `@x402/core` and the lazily imported scheme modules (`@x402/evm` + viem,
+ * `@x402/svm`) load and run in the real runtime. Covered: the `withX402`
+ * HTTP-action wrapper initialises against the facilitator double and challenges
+ * an unpaid request with a real 402 through the test worker's `fetch` handler;
+ * the `.x402({ price })` procedure seam (`createProcedureChargeGate`) challenges
+ * an unpaid RPC, names the `functionPath` as the challenge `resource`, and never
+ * dispatches; and the SVM scheme challenges on a Solana network.
  *
- * Boundary (documented per the plan): the upstream x402 facilitator is mocked
- * at the fetch boundary (only `/supported` answers, so middleware init
- * succeeds; `/verify` + `/settle` reject). Verify + settle require a
- * client-signed `PAYMENT-SIGNATURE` payload and an on-chain settlement — no real chain
- * calls are made here; the settle-path logic is covered by the Node suite's
- * stubs.
+ * The facilitator answers only `/supported` here, so any `/verify` or `/settle`
+ * call fails the test. Paying the challenge is `x402-roundtrip.workerd.test.ts`.
  */
 import { SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { createChargeMiddleware } from "../../src/charge/middleware";
 import { createProcedureChargeGate } from "../../src/charge/procedure";
 import type { X402ChargeConfig } from "../../src/config";
+import { stubFacilitator } from "./_facilitator";
 
 const chargeConfig: X402ChargeConfig = {
     network: "base",
     price: "$0.01",
     recipient: { evm: "0x1111111111111111111111111111111111111111" },
-};
-
-const requestUrl = (input: RequestInfo | URL): string => {
-    if (typeof input === "string") {
-        return input;
-    }
-
-    return input instanceof URL ? input.href : input.url;
-};
-
-/**
- * A facilitator double at the fetch boundary: answers `/supported` with a
- * single `exact` kind on Base (all `initialize()` needs) and rejects `/verify`
- * + `/settle` — the unpaid paths under test never settle, so any settle call
- * is a bug we want to surface. No real network leaves the isolate.
- */
-const stubFacilitator = (): ReturnType<typeof vi.fn> => {
-    const supported = { kinds: [{ network: "eip155:8453", scheme: "exact", x402Version: 2 }] };
-
-    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>((input) => {
-        const url = requestUrl(input);
-
-        if (url.endsWith("/supported")) {
-            return Promise.resolve(Response.json(supported, { status: 200 }));
-        }
-
-        return Promise.reject(new Error(`unexpected facilitator call: ${url}`));
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    return fetchMock;
 };
 
 describe("@lunora/x402 (workerd)", () => {
@@ -71,7 +34,7 @@ describe("@lunora/x402 (workerd)", () => {
     it("withX402 boots in a real worker fetch handler and challenges unpaid requests with 402", async () => {
         expect.hasAssertions();
 
-        const fetchMock = stubFacilitator();
+        const facilitator = stubFacilitator();
 
         const first = await SELF.fetch("https://x402-smoke.test/paid/report");
 
@@ -86,13 +49,13 @@ describe("@lunora/x402 (workerd)", () => {
         const second = await SELF.fetch("https://x402-smoke.test/paid/report");
 
         expect(second.status).toBe(402);
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(facilitator.calls).toStrictEqual(["supported"]);
     });
 
     it("the .x402({ price }) procedure seam challenges an unpaid RPC and names the functionPath", async () => {
         expect.hasAssertions();
 
-        const fetchMock = stubFacilitator();
+        const facilitator = stubFacilitator();
         const gate = createProcedureChargeGate({ network: "base", recipient: { evm: "0x1111111111111111111111111111111111111111" } });
 
         let dispatched = 0;
@@ -108,7 +71,7 @@ describe("@lunora/x402 (workerd)", () => {
         expect(response.status).toBe(402);
         expect(dispatched).toBe(0);
         // Only /supported was hit — no verify/settle for an unpaid request.
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(facilitator.calls).toStrictEqual(["supported"]);
 
         const header = response.headers.get("payment-required");
 
@@ -122,8 +85,31 @@ describe("@lunora/x402 (workerd)", () => {
     it("charge config errors fail loudly in workerd (missing recipient for the network family)", async () => {
         expect.hasAssertions();
 
-        const { createChargeMiddleware } = await import("../../src/charge/middleware");
+        await expect(createChargeMiddleware({ ...chargeConfig, recipient: {} })).rejects.toMatchObject({
+            code: "ENV_INVALID",
+            message: expect.stringMatching(/needs recipient\.evm set/u),
+        });
+    });
 
-        await expect(createChargeMiddleware({ ...chargeConfig, recipient: {} })).rejects.toThrow(/needs recipient\.evm set/);
+    it("challenges an unpaid request on a Solana network", async () => {
+        expect.hasAssertions();
+
+        stubFacilitator({ supported: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1" });
+
+        const middleware = await createChargeMiddleware({
+            network: "solana-devnet",
+            price: "$0.01",
+            recipient: { svm: "GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB" },
+        });
+        const handler = vi.fn<() => Response>(() => new Response("paid-secret"));
+
+        const response = await middleware.handle(new Request("https://x402-smoke.test/paid/report"), handler);
+
+        expect(response.status).toBe(402);
+        expect(handler).not.toHaveBeenCalled();
+
+        const challenge = JSON.parse(atob(response.headers.get("payment-required") ?? "")) as { accepts: { network: string }[] };
+
+        expect(challenge.accepts[0]?.network).toBe("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1");
     });
 });

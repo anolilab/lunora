@@ -132,7 +132,14 @@ export interface SpendPolicy {
 
     /** Hard ceiling on a single payment, in USD. */
     readonly maxPerCall?: X402Price;
-    /** Hard ceiling on cumulative spend across this wallet's lifetime, in USD. */
+
+    /**
+     * Hard ceiling on cumulative spend by one pay rail, in USD. The ledger lives
+     * in memory on the rail, so the cap covers one `createX402Pay` result, and for
+     * `ctx.x402` one function invocation (codegen builds a rail per ctx). It is not
+     * a budget across invocations: for that, keep a counter in durable state (a
+     * Durable Object, a table) and check it in `onPaymentRequired`.
+     */
     readonly maxPerRun?: X402Price;
 
     /**
