@@ -13,7 +13,17 @@ interface RouteOutcome {
     /** Every handler fell through (`continue`, or `fallback` past the last): the browser fetches it, redirects and all. */
     continued: boolean;
     fetched: string[];
-    fulfilled?: { body?: string; contentType?: string; response?: FakeApiResponse; status?: number };
+    /** The options of every `route.fetch` call, in order. */
+    fetchOptions: ({ headers?: Record<string, string>; maxRedirects?: number; method?: string; postData?: string; url?: string } | undefined)[];
+    fulfilled?: { body?: string; contentType?: string; headers?: Record<string, string>; response?: FakeApiResponse; status?: number };
+}
+
+/** The request one dispatch hands the handlers. */
+interface DispatchKind {
+    frame?: unknown;
+    headers?: Record<string, string>;
+    method?: string;
+    navigation: boolean;
 }
 
 /** What the WebSocket handler did with one socket. */
@@ -42,6 +52,8 @@ interface ContextSpy extends BrowserContextLike {
 interface BrowserSpy extends BrowserLike {
     closed: number;
     contextList: ContextSpy[];
+    /** The options of every `newContext` call. */
+    contextOptions: unknown[];
     contextsOpened: number;
     /** Open a context on this browser the way another connection to the session would: behind our back. */
     openForeignContext: () => ContextSpy;
@@ -55,7 +67,7 @@ type RouteHandler = <TResponse extends RouteResponseLike>(route: RouteLike<TResp
 interface FakeLaunch extends BrowserLaunchLike {
     browsers: BrowserSpy[];
     /** Hand one request to the newest context's handlers, the way Playwright does, and report what they did. */
-    dispatch: (url: string, kind: { frame?: unknown; navigation: boolean }) => Promise<RouteOutcome>;
+    dispatch: (url: string, kind: DispatchKind) => Promise<RouteOutcome>;
     /** Hand one WebSocket to the newest context's WebSocket handler. */
     dispatchSocket: (url: string) => Promise<SocketOutcome>;
     /** Every `launch` options object the factory passed. */
@@ -131,7 +143,7 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
     };
 
     /** Follow `url` the way `route.fetch` does, up to `maxRedirects` hops. */
-    const fetchFrom = (url: string, maxRedirects: number, outcome: RouteOutcome): FakeApiResponse => {
+    const fetchFrom = (url: string, maxRedirects: number, outcome: Pick<RouteOutcome, "fetched">): FakeApiResponse => {
         let current = url;
 
         for (let hop = 0; ; hop += 1) {
@@ -150,8 +162,8 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
         }
     };
 
-    const runHandlers = async (handlers: AnyHandler[], url: string, kind: { frame?: unknown; navigation: boolean }): Promise<RouteOutcome> => {
-        const outcome: RouteOutcome = { continued: false, fetched: [] };
+    const runHandlers = async (handlers: AnyHandler[], url: string, kind: DispatchKind): Promise<RouteOutcome> => {
+        const outcome: RouteOutcome = { continued: false, fetched: [], fetchOptions: [] };
         let index = handlers.length - 1;
         let currentUrl = url;
 
@@ -176,12 +188,22 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
 
                 await (next as (route: unknown) => unknown)(route);
             },
-            fetch: async (options) => fetchFrom(options?.url ?? currentUrl, options?.maxRedirects ?? 20, outcome),
+            fetch: async (options) => {
+                outcome.fetchOptions.push(options);
+
+                return fetchFrom(options?.url ?? currentUrl, options?.maxRedirects ?? 20, outcome);
+            },
             fulfill: async (options) => {
                 outcome.fulfilled = options;
             },
             request: () => {
-                return { frame: () => kind.frame, isNavigationRequest: () => kind.navigation, url: () => currentUrl };
+                return {
+                    frame: () => kind.frame,
+                    headers: () => kind.headers ?? {},
+                    isNavigationRequest: () => kind.navigation,
+                    method: () => kind.method ?? "GET",
+                    url: () => currentUrl,
+                };
             },
         };
 
@@ -324,12 +346,14 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
             },
             closed: 0,
             contextList: [],
+            contextOptions: [],
             contexts: () => browser.contextList,
             contextsOpened: 0,
             newBrowserCDPSession: async () => {
                 return {};
             },
-            newContext: async () => {
+            newContext: async (options?: unknown) => {
+                browser.contextOptions.push(options);
                 browser.contextsOpened += 1;
 
                 const context = makeContext(browser.pages);
@@ -391,5 +415,5 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
     return launch;
 };
 
-export type { BrowserSpy, ContextSpy, FakeLaunch, FakeResponse, PageSpy, RouteHandler, RouteOutcome, SocketOutcome };
+export type { BrowserSpy, ContextSpy, DispatchKind, FakeLaunch, FakeResponse, PageSpy, RouteHandler, RouteOutcome, SocketOutcome };
 export { fakeBinding, fakeLaunch };

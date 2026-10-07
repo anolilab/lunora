@@ -148,6 +148,12 @@ A public hostname that resolves to a private/metadata IP passes the string guard
 
 The cost of the default mode: every page asset is a Worker subrequest, so a page with many assets counts against the Workers subrequest limit (and adds a Worker round trip per asset). DoH verdicts are cached per hostname for 30 seconds within a browser context, so a hundred assets from one CDN cost one lookup. WebSockets are checked before they connect, in both modes.
 
+What a Worker-fetched request looks like, so it matches a native load:
+
+- **Redirect hops follow browser rules.** A 303 of anything but GET/HEAD, and a 301/302 of a POST, continue as a GET without the body; a hop to another origin drops `Authorization` and `Proxy-Authorization`, takes its cookies from the context's jar for the new URL, sends an opaque `Origin`, and cuts `Referer` back to its origin. A navigation's redirect is a fresh browser navigation, so it is always a GET (a 307/308 of a form POST is not re-posted).
+- **Cookies are written once.** Playwright's request client stores every hop's `Set-Cookie` in the context's jar as it fetches; the guard does not hand those headers to the browser again, which would store a second copy under Chromium's own parsing. Not verified here: how a cookie without a `Domain` attribute is scoped when Playwright stores it (`context.addCookies` with the response host).
+- **Service workers are blocked.** A service worker fetches outside every route handler, so every context the factory opens, and every one opened from a guarded `launch()` / `connect()` browser, is created with `serviceWorkers: "block"`. A context another connection opened in a shared session keeps whatever it was created with.
+
 Every browser the factory launches also receives `allowedHosts` as Browser Run session guardrails (`guardrails.allowedDomains`), so Cloudflare itself blocks every off-list request the session makes, sub-resource redirects included. Guardrails accept at most 50 entries; a longer list is refused before launch.
 
 **Session ids are bearer secrets.** Browser Run cannot tag a session with an owner, so whoever holds an id can `connect` to it, read its pages and cookies, and close it. Keep ids server-side, keyed by the identity of the caller that opened the session; never send one to a client or accept one from it. The browser `connect` hands you carries the same SSRF guard as `launch`.

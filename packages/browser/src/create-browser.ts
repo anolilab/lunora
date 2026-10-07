@@ -63,6 +63,62 @@ const HTTP_URL = /^https?:/iu;
 /** A WebSocket scheme, mapped onto http(s) so the URL guards can classify it. */
 const WS_SCHEME = /^ws/iu;
 
+/** Headers a browser drops when a redirect crosses origins (the jar supplies cookies for the new URL). */
+const CROSS_ORIGIN_DROPPED_HEADERS = new Set(["authorization", "cookie", "proxy-authorization"]);
+
+/** Headers that describe a request body, dropped with the body when a redirect turns the method into GET. */
+const BODY_HEADERS = new Set(["content-encoding", "content-language", "content-length", "content-location", "content-type"]);
+
+/**
+ * The request a browser sends for a redirect hop (Fetch, "HTTP-redirect fetch"):
+ * a 303 of anything but GET/HEAD, and a 301/302 of a POST, become a GET without
+ * a body; a hop to another origin loses `Authorization` / `Proxy-Authorization`
+ * (and `Cookie`, which the context's jar re-derives for the new URL), its
+ * `Origin` turns opaque, and a `Referer` from another origin is cut back to that
+ * origin (the default `strict-origin-when-cross-origin` policy).
+ */
+const redirectRequest = (
+    status: number,
+    previous: { headers: Record<string, string>; method: string },
+    from: URL,
+    to: URL,
+): { dropBody: boolean; headers: Record<string, string>; method: string } => {
+    const toGet =
+        (status === 303 && previous.method !== "GET" && previous.method !== "HEAD") || ((status === 301 || status === 302) && previous.method === "POST");
+    const crossOrigin = from.origin !== to.origin;
+    const headers: Record<string, string> = {};
+
+    for (const [name, value] of Object.entries(previous.headers)) {
+        const lower = name.toLowerCase();
+
+        if (!(toGet && BODY_HEADERS.has(lower)) && !(crossOrigin && CROSS_ORIGIN_DROPPED_HEADERS.has(lower))) {
+            headers[lower] = value;
+        }
+    }
+
+    if (crossOrigin && headers["origin"] !== undefined) {
+        headers["origin"] = "null";
+    }
+
+    const { referer } = headers;
+
+    if (referer !== undefined && URL.canParse(referer) && new URL(referer).origin !== to.origin) {
+        headers["referer"] = `${new URL(referer).origin}/`;
+    }
+
+    return { dropBody: toGet, headers, method: toGet ? "GET" : previous.method };
+};
+
+/**
+ * The response headers to hand the browser for a Worker-fetched response, minus
+ * `Set-Cookie`. Playwright's request client already stored every hop's cookies in
+ * the context's jar when it fetched them; passing them on as well would write the
+ * same cookies a second time through Chromium, under its own attribute parsing,
+ * and leave two diverging copies of a session cookie.
+ */
+const withoutSetCookie = (headers: Record<string, string>): Record<string, string> =>
+    Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== "set-cookie"));
+
 /** How long a DoH verdict is reused within one guarded browser context. */
 const DOH_CACHE_TTL_MS = 30_000;
 
@@ -569,6 +625,21 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     };
 
     /**
+     * The checked target of a sub-resource redirect, or a throw when it may not
+     * be followed: refused by a guard, past {@link MAX_REDIRECTS}, or on another
+     * protocol (which `route.fetch` cannot follow).
+     */
+    const followableHop = async (location: string, current: string, protocol: string, hops: number, dohTimeout: number, cache: DnsCache): Promise<string> => {
+        const next = await assertTargetAllowed(new URL(location, current).href, dohTimeout, cache);
+
+        if (hops === MAX_REDIRECTS || new URL(next).protocol !== protocol) {
+            throw new LunoraError("FORBIDDEN", "@lunora/browser: sub-resource redirect cannot be followed under the SSRF guard");
+        }
+
+        return next;
+    };
+
+    /**
      * Fetch a sub-resource for the browser, one checked hop at a time: the URL
      * passes every guard (DNS included), each 3xx's `Location` passes them again
      * before it is requested, and the final response is handed to the browser.
@@ -584,7 +655,14 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         cache: DnsCache,
     ): Promise<void> => {
         const { protocol } = new URL(url);
+        const request = route.request();
         let current: string;
+        // What the next hop is sent as; the first is the browser's own request.
+        let hop: { dropBody: boolean; headers: Record<string, string>; method: string } = {
+            dropBody: false,
+            headers: request.headers?.() ?? {},
+            method: request.method?.() ?? "GET",
+        };
 
         try {
             current = await assertTargetAllowed(url, dohTimeout, cache);
@@ -599,7 +677,11 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- each hop is checked before the next is requested
-                response = await route.fetch(hops === 0 ? { maxRedirects: 0 } : { maxRedirects: 0, url: current });
+                response = await route.fetch(
+                    hops === 0
+                        ? { maxRedirects: 0 }
+                        : { headers: hop.headers, maxRedirects: 0, method: hop.method, url: current, ...(hop.dropBody ? { postData: "" } : {}) },
+                );
             } catch {
                 // eslint-disable-next-line no-await-in-loop -- terminal
                 await route.abort("failed");
@@ -611,19 +693,18 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
 
             if (location === undefined) {
                 // eslint-disable-next-line no-await-in-loop -- terminal
-                await route.fulfill({ response });
+                await route.fulfill({ headers: withoutSetCookie(response.headers()), response });
 
                 return;
             }
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- each hop is checked before the next is requested
-                const next = await assertTargetAllowed(new URL(location, current).href, dohTimeout, cache);
+                const next = await followableHop(location, current, protocol, hops, dohTimeout, cache);
+                const following = redirectRequest(response.status(), hop, new URL(current), new URL(next));
 
-                if (hops === MAX_REDIRECTS || new URL(next).protocol !== protocol) {
-                    throw new LunoraError("FORBIDDEN", "@lunora/browser: sub-resource redirect cannot be followed under the SSRF guard");
-                }
-
+                // Once dropped, a body stays dropped for the rest of the chain.
+                hop = { ...following, dropBody: following.dropBody || hop.dropBody };
                 current = next;
             } catch {
                 // eslint-disable-next-line no-await-in-loop -- terminal
@@ -720,7 +801,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             const location = REDIRECT_STATUSES.has(response.status()) ? response.headers()["location"] : undefined;
 
             if (location === undefined) {
-                await route.fulfill({ response });
+                await route.fulfill({ headers: withoutSetCookie(response.headers()), response });
 
                 return;
             }
@@ -896,8 +977,9 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         const newContext = browser.newContext.bind(browser);
         const contexts = browser.contexts?.bind(browser);
 
-        pin(browser, "newContext", async (...args: unknown[]): Promise<BrowserContextLike> => {
-            const context = await (Reflect.apply(newContext, browser, args) as Promise<BrowserContextLike>);
+        pin(browser, "newContext", async (contextOptions?: Record<string, unknown>): Promise<BrowserContextLike> => {
+            // Service workers fetch outside every route handler; a guarded context has none.
+            const context = await newContext({ ...contextOptions, serviceWorkers: "block" });
 
             await lockContext(context, dohTimeout, guardrailed);
             locked.add(context);
@@ -946,7 +1028,10 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         const target = await assertTargetAllowed(url, dohTimeout);
 
         return withBrowser(async (browser) => {
-            const context = await browser.newContext();
+            // Service workers fetch outside every route handler (Playwright documents
+            // that `route` cannot see a request a service worker handles), so a page's
+            // worker could reach a private host unchecked.
+            const context = await browser.newContext({ serviceWorkers: "block" });
             let page: PageLike | undefined;
             // Replaced per navigation, so what one hop learned cannot leak into the next.
             let outcome: NavigationOutcome = {};

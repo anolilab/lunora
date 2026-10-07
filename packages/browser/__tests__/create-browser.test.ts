@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../src/create-browser";
 import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike } from "../src/types";
-import type { FakeLaunch } from "./_helpers/fake-launch";
+import type { FakeLaunch, FakeResponse } from "./_helpers/fake-launch";
 import { fakeBinding, fakeLaunch } from "./_helpers/fake-launch";
 import { stubDohFetch } from "./_helpers/stub-doh";
 
@@ -309,6 +309,111 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
         await createBrowser({ binding, launch }).content("https://example.com/");
 
         await expect(launch.dispatch("://not a url", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
+    });
+});
+
+describe("requests the guard sends for the browser", () => {
+    const subresource = { navigation: false };
+
+    /** A network where `from` redirects with `status` to `to` and everything else answers 200, with a cookie. */
+    const redirecting = (from: string, status: number, to: string) =>
+        fakeLaunch({
+            network: (url): FakeResponse =>
+                url === from
+                    ? { headers: { location: to, "set-cookie": "hop=1; Path=/" }, status }
+                    : { headers: { "set-cookie": "sid=abc; Path=/; HttpOnly" }, status: 200 },
+        });
+
+    it("drops credentials, opaques Origin and trims Referer on a cross-origin redirect hop", async () => {
+        expect.assertions(1);
+
+        const launch = redirecting("https://api.example.com/data", 302, "https://cdn.example.net/data");
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        const outcome = await launch.dispatch("https://api.example.com/data", {
+            ...subresource,
+            headers: { authorization: "Bearer secret", origin: "https://example.com", referer: "https://example.com/private/page", "x-trace": "1" },
+        });
+
+        expect(outcome.fetchOptions[1]).toStrictEqual({
+            headers: { origin: "null", referer: "https://example.com/", "x-trace": "1" },
+            maxRedirects: 0,
+            method: "GET",
+            url: "https://cdn.example.net/data",
+        });
+    });
+
+    it("keeps Authorization on a same-origin redirect hop", async () => {
+        expect.assertions(1);
+
+        const launch = redirecting("https://api.example.com/v1", 307, "https://api.example.com/v2");
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        const outcome = await launch.dispatch("https://api.example.com/v1", { ...subresource, headers: { authorization: "Bearer secret" } });
+
+        expect(outcome.fetchOptions[1]?.headers).toStrictEqual({ authorization: "Bearer secret" });
+    });
+
+    it.each([
+        [302, "POST", "GET", true],
+        [303, "PUT", "GET", true],
+        [307, "POST", "POST", false],
+        [308, "POST", "POST", false],
+    ])("follows a %i of a %s as a %s, dropping the body: %s", async (status, method, expected, dropsBody) => {
+        expect.assertions(3);
+
+        const launch = redirecting("https://api.example.com/form", status, "https://api.example.com/done");
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        const outcome = await launch.dispatch("https://api.example.com/form", { ...subresource, headers: { "content-type": "application/json" }, method });
+        const follow = outcome.fetchOptions[1];
+
+        expect(follow?.method).toBe(expected);
+        expect(follow?.postData).toBe(dropsBody ? "" : undefined);
+        expect(follow?.headers?.["content-type"]).toBe(dropsBody ? undefined : "application/json");
+    });
+
+    it("does not pass Set-Cookie on to the browser: the request client already stored it in the context", async () => {
+        expect.assertions(2);
+
+        const launch = redirecting("https://cdn.example.net/a", 302, "https://cdn.example.net/b");
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        const asset = await launch.dispatch("https://cdn.example.net/a", subresource);
+        const page = await launch.dispatch("https://example.com/next", { navigation: true });
+
+        expect(asset.fulfilled?.headers).not.toHaveProperty("set-cookie");
+        expect(page.fulfilled?.headers).not.toHaveProperty("set-cookie");
+    });
+
+    it("refuses a redirect whose Location embeds credentials", async () => {
+        expect.assertions(1);
+
+        const launch = redirecting("https://cdn.example.net/a", 302, "https://user:pass@cdn.example.net/b"); // gitleaks:allow -- a fixture the guard must refuse, not a credential
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        await expect(launch.dispatch("https://cdn.example.net/a", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
+    });
+
+    it("opens every context with service workers blocked, which fetch outside every route handler", async () => {
+        expect.assertions(2);
+
+        const launch = fakeLaunch();
+        const browser = createBrowser({ binding, launch });
+
+        await browser.content("https://example.com/");
+        await browser.launch(async (raw) => {
+            // Asking for them back does not work on a guarded browser.
+            await (raw.newContext as (options: { serviceWorkers: string }) => Promise<unknown>)({ serviceWorkers: "allow" });
+        });
+
+        expect(launch.browsers[0]!.contextOptions).toStrictEqual([{ serviceWorkers: "block" }]);
+        expect(launch.browsers[1]!.contextOptions).toStrictEqual([{ serviceWorkers: "block" }]);
     });
 });
 

@@ -232,12 +232,18 @@ export interface RouteLike<TResponse extends RouteResponseLike = RouteResponseLi
     /** Allow the intercepted request to proceed. */
     continue: () => Promise<void>;
     /** Perform the request without following redirects past `maxRedirects`, and return the response unfulfilled. */
-    fetch: (options?: { maxRedirects?: number; url?: string }) => Promise<TResponse>;
+    fetch: (options?: { headers?: Record<string, string>; maxRedirects?: number; method?: string; postData?: string; url?: string }) => Promise<TResponse>;
     /** Answer the request with `response` (a {@link RouteLike.fetch} result) or a synthetic body. */
-    fulfill: (options: { body?: string; contentType?: string; response?: TResponse; status?: number }) => Promise<void>;
+    fulfill: (options: { body?: string; contentType?: string; headers?: Record<string, string>; response?: TResponse; status?: number }) => Promise<void>;
 
     /** The intercepted request: its URL, the frame it navigates, and whether it is a navigation. */
-    request: () => { frame?: () => unknown; isNavigationRequest?: () => boolean; url: () => string };
+    request: () => {
+        frame?: () => unknown;
+        headers?: () => Record<string, string>;
+        isNavigationRequest?: () => boolean;
+        method?: () => string;
+        url: () => string;
+    };
 }
 
 /**
@@ -287,7 +293,8 @@ export interface BrowserLike {
     close: () => Promise<void>;
     /** The contexts already open on the browser — on a re-attached session, other callers' too. */
     contexts?: () => BrowserContextLike[];
-    newContext: () => Promise<BrowserContextLike>;
+    /** Open a context. The guard passes `serviceWorkers: "block"`: a service worker fetches outside every route handler. */
+    newContext: (options?: { serviceWorkers?: "allow" | "block" }) => Promise<BrowserContextLike>;
 
     /**
      * The Browser Rendering session this browser is attached to, when the

@@ -69,7 +69,9 @@ type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, 
 interface BrowserLike {
     close: () => Promise<void>;
     contexts?: () => BrowserContextLike[];
-    newContext: () => Promise<BrowserContextLike>;
+    newContext: (options?: {
+        serviceWorkers?: "allow" | "block";
+    }) => Promise<BrowserContextLike>;
     sessionId?: () => string | undefined;
 }
 ```
@@ -324,18 +326,24 @@ interface RouteLike<TResponse extends RouteResponseLike = RouteResponseLike> {
     abort: (errorCode?: string) => Promise<void>;
     continue: () => Promise<void>;
     fetch: (options?: {
+        headers?: Record<string, string>;
         maxRedirects?: number;
+        method?: string;
+        postData?: string;
         url?: string;
     }) => Promise<TResponse>;
     fulfill: (options: {
         body?: string;
         contentType?: string;
+        headers?: Record<string, string>;
         response?: TResponse;
         status?: number;
     }) => Promise<void>;
     request: () => {
         frame?: () => unknown;
+        headers?: () => Record<string, string>;
         isNavigationRequest?: () => boolean;
+        method?: () => string;
         url: () => string;
     };
 }
