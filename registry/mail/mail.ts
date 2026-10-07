@@ -82,7 +82,7 @@ const cloudflareSend = async (from: string, to: string, raw: string): Promise<vo
  * The capture-vs-deliver decision + the inbox wiring live in `@lunora/mail`'s
  * `createMailerFromEnv`, so the same logic backs `@lunora/auth`'s email too.
  *
- * Pass a `queue` binding to `createMailer` (edit `@lunora/mail` usage) to enable
+ * Pass a `queue` binding in `createMailerFromEnv`'s options to enable
  * {@link queueEmail}.
  *
  * Only hand `createMailerFromEnv` the `cloudflareSend` callback when a

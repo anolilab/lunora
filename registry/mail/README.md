@@ -105,15 +105,16 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     }
     ```
 
-2. Give the copied `mailer()` a queue binding. `createMailerFromEnv` takes no `queue`, so swap it for `createMailer` in `lunora/mail/index.ts`:
+2. Pass the queue binding to `createMailerFromEnv` in the copied `mailer()` (`lunora/mail/index.ts`):
 
     ```ts
-    import { createMailer } from "@lunora/mail";
+    import type { QueueLike } from "@lunora/mail";
 
-    const mailer = (): Mailer => createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM as string, queue: env.MAIL_QUEUE as QueueLike });
+    const mailer = (): Mailer =>
+        createMailerFromEnv(env, { ...(env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }), queue: env["MAIL_QUEUE"] as QueueLike });
     ```
 
-    That trades away the dev capture-into-the-studio-inbox behaviour `createMailerFromEnv` gives you, so keep the env-based mailer for dev and only build the queue-bound one where you call `queueEmail`.
+    Dev capture keeps working. A producer-only Worker (it enqueues, the consumer delivers) needs no delivery transport: `queue()` works without one, and only `send()` throws `no transport configured`.
 
 3. In your Worker's `queue()` handler, drain the batch with `consumeQueuedSend` from `@lunora/mail`:
 
