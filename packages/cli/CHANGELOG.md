@@ -1,3 +1,18 @@
+## @lunora/cli [1.0.0-alpha.359](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.358...@lunora/cli@1.0.0-alpha.359) (2026-10-07)
+
+### Features
+
+* **codegen:** type rpc services from a declaration snapshot ([#1024](https://github.com/anolilab/lunora/issues/1024)) ([6c6e766](https://github.com/anolilab/lunora/commit/6c6e7660fb4a33c48a6c3798254b4c6d91559593))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.197
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.274
+* **@lunora/config:** upgraded to 1.0.0-alpha.318
+* **@lunora/seed:** upgraded to 1.0.0-alpha.199
+* **@lunora/testing:** upgraded to 1.0.0-alpha.242
+
 ## @lunora/cli [1.0.0-alpha.358](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.357...@lunora/cli@1.0.0-alpha.358) (2026-10-07)
 
 ### Features
