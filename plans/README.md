@@ -22,7 +22,7 @@ When a plan ships: delete its file and remove its row here in the same change.
 | Plan                                         | Title                                                  | Remaining                                                                   |
 | -------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- |
 | [456](./456-modules-catalog-architecture.md) | Modules catalog, call graph, architecture diagram      | core shipped (#917); see the plan for what remains                          |
-| [457](./457-service-bindings.md)             | Typed service bindings to sibling Workers              | phases 0–3 shipped (#918); neore-v2 migration                               |
+| [457](./457-service-bindings.md)             | Typed service bindings to sibling Workers              | phases 0–3 shipped; RPC type-check + Home card need a call; celld; neore-v2 |
 | [459](./459-ai-search-ga.md)                 | Cloudflare AI Search as a pass-through `ctx.aiSearch`  | A–D shipped (#925); live smoke on a real account                            |
 | [460](./460-cloudflare-artifacts.md)         | Cloudflare Artifacts as an action-only `ctx.artifacts` | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid) |
 | [463](./463-experimental-graduation.md)      | Graduate the experimental tier to stable               | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages       |
