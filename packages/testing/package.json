@@ -69,12 +69,12 @@
         "@lunora/errors": "1.0.0-alpha.50",
         "@lunora/mail": "1.0.0-alpha.100",
         "@lunora/scheduler": "1.0.0-alpha.113",
-        "@lunora/server": "1.0.0-alpha.185",
-        "@lunora/shard-engine": "1.0.0-alpha.116"
+        "@lunora/server": "1.0.0-alpha.185"
     },
     "devDependencies": {
         "@lunora/observability": "1.0.0-alpha.126",
         "@lunora/ratelimit": "1.0.0-alpha.118",
+        "@lunora/shard-engine": "1.0.0-alpha.116",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
