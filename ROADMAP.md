@@ -164,7 +164,7 @@ production. Each of these is merged, not planned:
 - **Typed service bindings** — sibling Workers declared in `lunora.config`
   become a typed `ctx.services.<name>` (fetch or RPC), run in the same
   `lunora dev` / `vite dev` session, and deploy before the app. They replace
-  the per-service URL + HMAC plumbing ([`457`](./plans/457-service-bindings.md)).
+  the per-service URL + HMAC plumbing ([docs](./apps/docs/src/content/docs/concepts/services.mdx)).
 - **Modules and an architecture view** — `defineModule`, a call-graph manifest,
   and a Studio Architecture diagram ([`456`](./plans/456-modules-catalog-architecture.md)).
 - **Pub/Sub topics over Cloudflare Queues** — fan-out to many subscribers.

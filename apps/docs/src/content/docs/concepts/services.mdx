@@ -152,6 +152,15 @@ browser or another client also calls it, start it on its own as well
 (`wrangler dev` in its folder). That is a second copy with its own local state
 (D1, KV, Durable Objects), so apply its migrations to both.
 
+## Smart Placement
+
+Cloudflare applies [placement](https://developers.cloudflare.com/workers/configuration/placement/)
+to a Worker's `fetch` handler only, not to RPC methods or named entrypoints. A
+service with `placement.mode: "smart"` keeps it when it is a fetch service. As
+an RPC service, or a named entrypoint with `rpc: false`, it runs next to the
+app instead. Keep a service that must run close to its database on its default
+`fetch` export.
+
 ## Platforms
 
 | Target       | Support                                                                                                                                                                                                                                                                                                                                                 |
