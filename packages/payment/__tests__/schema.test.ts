@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { defineSchema } from "@lunora/server";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { PAYMENT_TABLES } from "../src/database-store";
 import paymentExtension from "../src/schema";
@@ -43,5 +44,19 @@ describe("payment store signature columns (codegen drift guard)", () => {
 
         // `.extend()` prefixes each bare name with the key; PAYMENT_TABLES is what the store uses.
         expect(new Set(Object.keys(paymentTables).map((name) => `${paymentExtension.key}_${name}`))).toStrictEqual(new Set(Object.values(PAYMENT_TABLES)));
+    });
+});
+
+describe("paymentExtension", () => {
+    it("adds exactly the payment_* table names to an extended schema (#1021)", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({}).extend(paymentExtension);
+
+        expectTypeOf<keyof typeof schema.tables>().toEqualTypeOf<
+            "payment_customers" | "payment_events" | "payment_sessions" | "payment_subscriptions" | "payment_usageEvents"
+        >();
+
+        expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(Object.values(PAYMENT_TABLES).toSorted((a, b) => a.localeCompare(b)));
     });
 });

@@ -2031,8 +2031,8 @@ interface Schema<T extends Record<string, TableDefinition> = Record<string, Tabl
 ### `SchemaExtension` (interface)
 
 ```ts
-interface SchemaExtension<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
-    readonly key: string;
+interface SchemaExtension<T extends Record<string, TableDefinition> = Record<string, TableDefinition>, Key extends string = string> {
+    readonly key: Key;
     readonly tables: T;
     readonly vectorIndexes?: Record<string, VectorIndexDefinition>;
 }
@@ -3096,7 +3096,7 @@ interface Workflows {
 ```ts
 const actionCacheExtension: SchemaExtension<{
     [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable>;
-}>;
+}, typeof ACTION_CACHE_KEY>;
 ```
 
 ### `allowAll` (const)
@@ -3320,10 +3320,10 @@ const defineSchema: <T extends Record<string, TableDefinition>>(tables: T, vecto
 ### `defineSchemaExtension` (const)
 
 ```ts
-const defineSchemaExtension: <T extends Record<string, TableDefinition>>(key: string, options: {
+const defineSchemaExtension: <T extends Record<string, TableDefinition>, const Key extends string = string>(key: Key, options: {
     tables: T;
     vectorIndexes?: Record<string, VectorIndexDefinition>;
-}) => SchemaExtension<T>;
+}) => SchemaExtension<T, Key>;
 ```
 
 ### `defineShape` (const)
@@ -3367,7 +3367,7 @@ const deny: () => WhereInput;
 ```ts
 const documentHistoryExtension: SchemaExtension<{
     [DOCUMENT_HISTORY_BARE_TABLE]: ReturnType<typeof defineTable>;
-}>;
+}, typeof DOCUMENT_HISTORY_KEY>;
 ```
 
 ### `flushDeferredDeletes` (const)
@@ -3481,7 +3481,7 @@ const onWhisper: (handler: WhisperAuthorizeHandler) => RegisteredWhisperAuthoriz
 ```ts
 const presenceExtension: SchemaExtension<{
     [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable>;
-}>;
+}, typeof PRESENCE_KEY>;
 ```
 
 ### `protectPublic` (const)
@@ -5489,6 +5489,12 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `ACTION_CACHE_KEY` (const)
+
+```ts
+const ACTION_CACHE_KEY = "actionCache";
+```
+
 ### `ActionCacheIndexRange` (interface)
 
 ```ts
@@ -5605,6 +5611,12 @@ interface CountArgs {
 }
 ```
 
+### `DOCUMENT_HISTORY_KEY` (const)
+
+```ts
+const DOCUMENT_HISTORY_KEY = "documentHistory";
+```
+
 ### `DatabaseWriterLike` (interface)
 
 ```ts
@@ -5706,10 +5718,10 @@ interface DeferredScheduleContext {
 
 ```ts
 interface DefinePluginFunction {
-    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(key: string, options: DefinePluginOptions<TExtension, TContextIn, TContextOut> & {
-        extension: SchemaExtension<TExtension>;
+    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn, const Key extends string = string>(key: Key, options: DefinePluginOptions<TExtension, TContextIn, TContextOut> & {
+        extension: SchemaExtension<TExtension, Key>;
     }): Plugin<TExtension, TContextIn, TContextOut> & {
-        readonly extension: SchemaExtension<TExtension>;
+        readonly extension: SchemaExtension<TExtension, Key>;
     };
     <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(key: string, options: DefinePluginOptions<TExtension, TContextIn, TContextOut>): Plugin<TExtension, TContextIn, TContextOut>;
 }
@@ -5998,6 +6010,12 @@ type NestedSelectArgument<WK> = WK extends {
 type NestedWithArgument<WK> = WK extends {
     with: infer NW;
 } ? NW : {};
+```
+
+### `PRESENCE_KEY` (const)
+
+```ts
+const PRESENCE_KEY = "presence";
 ```
 
 ### `ProjectDoc` (type)

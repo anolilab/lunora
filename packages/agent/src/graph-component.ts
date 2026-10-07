@@ -20,14 +20,14 @@ const EDGES_TABLE: "agent_edges" = `${AGENT_EXTENSION_KEY}_${EDGES_BARE_TABLE}`;
  * RLS-exempt like the thread tables (package code, access-controlled inside the
  * dispatched functions).
  *
- * Explicitly typed as a `Record` of `TableDefinition` values because it is an
- * EXPORTED const with computed (`[BARE]`) keys — under `--isolatedDeclarations`
- * (packem's `.d.ts` emit) a bare exported object literal with computed keys
- * can't have its type inferred (TS9038). The annotation erases nothing that
- * matters: the consumer (`agentExtension`) is already typed `SchemaExtension`,
- * and codegen discovers these tables at runtime.
+ * Explicitly typed as a `Record` of `TableDefinition` values over its bare names
+ * because it is an EXPORTED const with computed (`[BARE]`) keys — under
+ * `--isolatedDeclarations` (packem's `.d.ts` emit) a bare exported object literal
+ * with computed keys can't have its type inferred (TS9038). The names stay
+ * literal so `.extend(agentExtension)` adds exact table names; row types come
+ * from codegen.
  */
-const graphTables: Record<string, TableDefinition> = {
+const graphTables: Record<typeof EDGES_BARE_TABLE | typeof ENTITIES_BARE_TABLE, TableDefinition> = {
     /**
      * Graph-memory nodes — one per normalized entity name per owner. `weight` is
      * salience, set once at insert and never updated (absolute, so replay is

@@ -277,7 +277,7 @@ const actionCacheExtension = defineSchemaExtension(ACTION_CACHE_KEY, {
             // Drives the opportunistic reap and `purgeExpired`, both oldest-first.
             .index("byExpiresAt", ["expiresAt"]),
     },
-}) as unknown as SchemaExtension<{ [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable> }>;
+}) as unknown as SchemaExtension<{ [ACTION_CACHE_BARE_TABLE]: ReturnType<typeof defineTable> }, typeof ACTION_CACHE_KEY>;
 
 // No generated server here, so bind the base context via the builder factory —
 // same as `definePresence`. `internalMutation`, NOT `mutation`: `purgeExpired`

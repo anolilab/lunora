@@ -1,5 +1,5 @@
 /** The schema-extension key the agent tables merge under (`agent_*` physical names). */
-const AGENT_EXTENSION_KEY = "agent";
+const AGENT_EXTENSION_KEY = "agent" as const;
 
 /**
  * Loose structural view of a registered Lunora function — wide enough for any
