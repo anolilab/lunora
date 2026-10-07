@@ -4,29 +4,30 @@
  * The Node suite drives `createBrowser` over plain-object doubles. This one runs
  * it on the runtime it ships to, against the real `@cloudflare/playwright` peer,
  * with `env.BROWSER` a real service binding to a fake Browser Run (see
- * `test-worker.ts`).
+ * `test-worker.ts`), and every global `fetch` leaving workerd for a fake internet
+ * (`fake-internet.ts`, wired as miniflare's `outboundService`).
  *
  * Verified here: the real `launch` / `connect` / `sessions` exports load in
  * workerd and put what `createBrowser` asked for on the wire to the binding
- * (`keep_alive` in milliseconds, `allowedHosts` as normalized session guardrails,
- * the session id on a re-attach); `quickAction` crosses the binding's RPC
- * boundary with the guarded URL, and an off-allowlist nested URL never reaches
- * it; workerd's timers and `AbortSignal.timeout` drive the operation deadline and
- * the DoH lookup ceiling, and its `fetch` the DoH re-check and the `/crawl` REST
- * client.
+ * (`keep_alive` in milliseconds, `allowedHosts` as normalized session guardrails
+ * at acquire, the session id on a re-attach); `quickAction` crosses the binding's
+ * RPC boundary with the guarded URL; the DoH re-check and the `/crawl` REST
+ * client run on workerd's own `fetch`, and the operation deadline and the DoH
+ * ceiling on its timers and `AbortSignal.timeout`.
  *
  * Not verified anywhere in this repo: anything past the DevTools WebSocket. The
  * fake refuses the upgrade because there is no Chrome behind it, so navigation,
- * screenshots, PDFs, `scrape` and the `page.route` redirect guard against a real
- * page are covered only by the Node suite's page doubles, and the provider's own
+ * screenshots, PDFs, `scrape` and the redirect guard against a real page are
+ * covered only by the Node suite's page doubles, and the provider's own
  * enforcement of guardrails and `keep_alive` only by Cloudflare.
  */
 import { connect, launch, sessions } from "@cloudflare/playwright";
 import { env } from "cloudflare:test";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../../src/create-browser";
-import type { BrowserLaunchLike, BrowserLike, PageLike } from "../../src/types";
+import type { BrowserLaunchLike, BrowserLike } from "../../src/types";
+import { fakeLaunch } from "../_helpers/fake-launch";
 import { SESSION_ID } from "./test-worker";
 
 const binding = env.BROWSER;
@@ -37,21 +38,9 @@ const fetchCalls = async () => {
     return calls.filter((call) => call.kind === "fetch");
 };
 
-/** Resolve DoH lookups for every host to `address` (an A record). */
-const stubDoh = (address: string): void => {
-    vi.stubGlobal(
-        "fetch",
-        vi.fn<typeof fetch>(async () => Response.json({ Answer: [{ data: address, type: 1 }] })),
-    );
-};
-
 describe("@lunora/browser (workerd)", () => {
     beforeEach(async () => {
         await binding.reset();
-    });
-
-    afterEach(() => {
-        vi.unstubAllGlobals();
     });
 
     describe("the real @cloudflare/playwright peer against the binding", () => {
@@ -72,17 +61,9 @@ describe("@lunora/browser (workerd)", () => {
                 method: "POST",
                 path: "/v1/devtools/browser?keep_alive=600000",
             });
-            // The upgrade attaches to the acquired session; guardrails were latched at acquire.
-            expect(upgrade).toMatchObject({ path: `/v1/devtools/browser/${SESSION_ID}`, upgrade: "websocket" });
-        });
-
-        it("refuses a keepAlive outside Browser Run's window before touching the binding", async () => {
-            expect.hasAssertions();
-
-            const browser = createBrowser({ allowedHosts: ["example.com"], binding, launch });
-
-            await expect(browser.launch(async () => undefined, { keepAlive: 3600 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-            await expect(fetchCalls()).resolves.toHaveLength(0);
+            // The upgrade attaches to the acquired session, so it carries no guardrails
+            // header: they were latched at acquire, for the session's lifetime.
+            expect(upgrade).toMatchObject({ guardrailsHeader: undefined, path: `/v1/devtools/browser/${SESSION_ID}`, upgrade: "websocket" });
         });
 
         it("lists sessions through the binding", async () => {
@@ -101,16 +82,6 @@ describe("@lunora/browser (workerd)", () => {
 
             await expect(browser.connect(SESSION_ID, async () => undefined)).rejects.toThrow(/Unable to connect to browser/u);
             await expect(fetchCalls()).resolves.toMatchObject([{ path: `/v1/devtools/browser/${SESSION_ID}`, upgrade: "websocket" }]);
-        });
-
-        it("refuses a private target before any request reaches the binding", async () => {
-            expect.hasAssertions();
-
-            const browser = createBrowser({ binding, launch });
-
-            // eslint-disable-next-line sonarjs/no-clear-text-protocols -- an SSRF fixture: the cloud-metadata endpoint is plain http
-            await expect(browser.screenshot("http://169.254.169.254/latest/meta-data/")).rejects.toMatchObject({ code: "FORBIDDEN" });
-            await expect(fetchCalls()).resolves.toHaveLength(0);
         });
     });
 
@@ -156,58 +127,41 @@ describe("@lunora/browser (workerd)", () => {
     });
 
     describe("workerd timers and fetch", () => {
-        /** A launch double over one page, counting closes through `close`. */
-        const launchOver = (page: Partial<PageLike>, close: () => Promise<void>): BrowserLaunchLike => {
-            const full: PageLike = {
-                content: async () => "",
-                evaluate: async () => {
-                    throw new Error("not driven by this test");
-                },
-                goto: async () => undefined,
-                pdf: async () => new Uint8Array(),
-                screenshot: async () => new Uint8Array(),
-                ...page,
-            };
-
-            return async () => {
-                return {
-                    close,
-                    newContext: async () => {
-                        return { newPage: async () => full };
-                    },
-                };
-            };
-        };
-
         it("aborts a trapped operation at the deadline and closes the session", async () => {
             expect.hasAssertions();
 
-            const close = vi.fn<() => Promise<void>>(async () => undefined);
-            const browser = createBrowser({
-                allowedHosts: ["example.com"],
-                binding,
-                launch: launchOver({ evaluate: async () => new Promise<never>(() => {}) }, close),
-            });
+            const launchDouble = fakeLaunch({ page: { evaluate: async () => new Promise<never>(() => {}) } });
+            const browser = createBrowser({ allowedHosts: ["example.com"], binding, launch: launchDouble });
 
             await expect(browser.scrape("https://example.com", () => document.title, { timeoutMs: 50 })).rejects.toMatchObject({
                 code: "BROWSER_TIMEOUT",
                 status: 504,
             });
-            expect(close).toHaveBeenCalledTimes(1);
+            expect(launchDouble.browsers[0]!.closed).toBe(1);
         });
 
         it("refuses a public name that resolves to a private address, before launching", async () => {
             expect.hasAssertions();
-
-            // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a private address the rebinding guard must refuse; no connection is made
-            stubDoh("10.0.0.7");
 
             const launchSpy = vi.fn<BrowserLaunchLike>();
             const browser = createBrowser({ binding, launch: launchSpy });
 
             await expect(browser.content("https://rebind.example")).rejects.toMatchObject({
                 code: "FORBIDDEN",
-                message: expect.stringMatching(/DNS-rebinding/u),
+                message: expect.stringMatching(/resolves to a private\/internal address \(10\.0\.0\.7\)/u),
+            });
+            expect(launchSpy).not.toHaveBeenCalled();
+        });
+
+        it("refuses a name whose lookup answers SERVFAIL", async () => {
+            expect.hasAssertions();
+
+            const launchSpy = vi.fn<BrowserLaunchLike>();
+            const browser = createBrowser({ binding, launch: launchSpy });
+
+            await expect(browser.content("https://servfail.example")).rejects.toMatchObject({
+                code: "FORBIDDEN",
+                message: expect.stringMatching(/did not resolve to any address/u),
             });
             expect(launchSpy).not.toHaveBeenCalled();
         });
@@ -215,34 +169,19 @@ describe("@lunora/browser (workerd)", () => {
         it("falls back to the string guard when a stalled DoH lookup hits its ceiling", async () => {
             expect.hasAssertions();
 
-            // Never answers; only the lookup's own AbortSignal.timeout can end it.
-            vi.stubGlobal(
-                "fetch",
-                vi.fn<typeof fetch>(
-                    async (_input, init) =>
-                        new Promise<Response>((_resolve, reject) => {
-                            init?.signal?.addEventListener("abort", () => {
-                                reject(new DOMException("The operation timed out.", "TimeoutError"));
-                            });
-                        }),
-                ),
-            );
+            // The fake internet answers this name only after 1.5s; the factory's 200ms
+            // budget caps the lookup, AbortSignal.timeout ends it, and the call proceeds.
+            const browser = createBrowser({ binding, timeoutMs: 200 });
+            const started = Date.now();
 
-            const close = vi.fn<() => Promise<void>>(async () => undefined);
-            const launchSpy = vi.fn<BrowserLaunchLike>(launchOver({ content: async () => "<html></html>" }, close));
-            const browser = createBrowser({ binding, launch: launchSpy, timeoutMs: 200 });
+            const response = await browser.quickAction("markdown", "https://slow-dns.example");
 
-            await expect(browser.content("https://slow-dns.example")).resolves.toBe("<html></html>");
-            expect(close).toHaveBeenCalledTimes(1);
+            expect(response.ok).toBe(true);
+            expect(Date.now() - started).toBeLessThan(1500);
         });
 
         it("surfaces a /crawl API failure as BROWSER_RUN_ERROR with the upstream status", async () => {
             expect.hasAssertions();
-
-            vi.stubGlobal(
-                "fetch",
-                vi.fn<typeof fetch>(async () => Response.json({ errors: [{ message: "rate limited" }], success: false }, { status: 429 })),
-            );
 
             const browser = createBrowser({ allowedHosts: ["example.com"], binding, restApi: { accountId: "acc", apiToken: "token" } });
 

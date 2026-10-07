@@ -1,102 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../src/create-browser";
-import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike, RouteLike } from "../src/types";
+import { fakeBinding, fakeLaunch } from "./_helpers/fake-launch";
 import { stubDohFetch } from "./_helpers/stub-doh";
-
-/**
- * A throwaway binding marker — the helpers never touch it directly; Playwright
- * consumes it. `fetch` is typed as the real `Fetcher.fetch`, so the double has to
- * return a `Response`; it is never invoked.
- */
-const fakeBinding = (): BrowserBindingLike => {
-    return { fetch: async () => new Response() };
-};
-
-interface PageSpy extends PageLike {
-    gotoCalls: string[];
-    gotoOptions: ({ timeout?: number; waitUntil?: string } | undefined)[];
-    screenshotCalls: Record<string, unknown>[];
-    viewportCalls: { height: number; width: number }[];
-}
-
-interface BrowserSpy extends BrowserLike {
-    closed: number;
-    pages: PageSpy[];
-}
-
-/**
- * Build a fake `@cloudflare/playwright` `launch` whose result yields a
- * browser → context → page chain. `gotoThrows` forces `page.goto` to reject so
- * the browser-level `finally` close path can be asserted. Records every
- * goto/screenshot/viewport call and the browser close count.
- */
-const fakeLaunch = (config: { gotoThrows?: boolean } = {}): BrowserLaunchLike & { browsers: BrowserSpy[] } => {
-    const browsers: BrowserSpy[] = [];
-
-    const launch = (async (_binding: BrowserBindingLike): Promise<BrowserLike> => {
-        const pages: PageSpy[] = [];
-
-        const makePage = (): PageSpy => {
-            const page: PageSpy = {
-                content: async () => "<html><body>hi</body></html>",
-                evaluate: async (fn) => (fn as () => unknown)() as never,
-                goto: async (url, gotoOptions) => {
-                    page.gotoCalls.push(url);
-                    page.gotoOptions.push(gotoOptions);
-
-                    if (config.gotoThrows) {
-                        throw new Error("navigation failed");
-                    }
-
-                    return undefined;
-                },
-                gotoCalls: [],
-                gotoOptions: [],
-                pdf: async () => new Uint8Array([37, 80, 68, 70]),
-                screenshot: async (screenshotOptions) => {
-                    page.screenshotCalls.push(screenshotOptions ?? {});
-
-                    return new Uint8Array([137, 80, 78, 71]);
-                },
-                screenshotCalls: [],
-                setViewportSize: async (viewport) => {
-                    page.viewportCalls.push(viewport);
-                },
-                viewportCalls: [],
-            };
-
-            return page;
-        };
-
-        const context: BrowserContextLike = {
-            newPage: async () => {
-                const page = makePage();
-
-                pages.push(page);
-
-                return page;
-            },
-        };
-
-        const browser: BrowserSpy = {
-            close: async () => {
-                browser.closed += 1;
-            },
-            closed: 0,
-            newContext: async () => context,
-            pages,
-        };
-
-        browsers.push(browser);
-
-        return browser;
-    }) as BrowserLaunchLike & { browsers: BrowserSpy[] };
-
-    launch.browsers = browsers;
-
-    return launch;
-};
 
 describe("createBrowser", () => {
     // `resolveDns` defaults ON, so every navigation would otherwise issue a REAL
@@ -481,80 +387,77 @@ describe("createBrowser", () => {
     /* eslint-enable sonarjs/no-hardcoded-ip */
 
     /* eslint-disable sonarjs/no-clear-text-protocols -- intentional test fixtures: the redirect target is an http metadata URL asserting the interception guard aborts it; no real connection is made */
-    describe("redirect-chain SSRF guard (page.route)", () => {
-        interface RedirectSpy {
-            aborted: string[];
-            continued: string[];
-        }
+    describe("redirect-chain SSRF guard", () => {
+        // Playwright never hands a redirect hop to the route handler (the fake
+        // models that), so a hop is only checked if the guard fetched the
+        // navigation itself and read the 3xx before anything requested its target.
+        const redirectTo = (location: string) => (url: string) =>
+            url === "https://public.example.com/" ? { headers: { location }, status: 302 } : { body: "<html>ok</html>", status: 200 };
 
-        /** A fake Playwright `Route` for a simulated main-frame redirect to `redirectTo`, recording abort/continue on `events`. */
-        const buildRoute = (redirectTo: string, events: RedirectSpy): RouteLike => {
-            return {
-                abort: async () => {
-                    events.aborted.push(redirectTo);
-                },
-                continue: async () => {
-                    events.continued.push(redirectTo);
-                },
-                request: () => {
-                    return { isNavigationRequest: () => true, url: () => redirectTo };
-                },
-            };
-        };
-
-        /**
-         * A launch whose page captures the `page.route` handler and, on `goto`,
-         * fires it once with a simulated main-frame redirect to `redirectTo` — so
-         * the interception guard can be exercised without a real browser. Records
-         * whether the intercepted redirect was aborted or continued.
-         */
-        const redirectingLaunch = (redirectTo: string): BrowserLaunchLike & { events: RedirectSpy } => {
-            const events: RedirectSpy = { aborted: [], continued: [] };
-            let routeHandler: ((route: RouteLike) => unknown) | undefined;
-
-            const page: PageLike = {
-                content: async () => "<html>ok</html>",
-                evaluate: async () => undefined as never,
-                // Simulate the browser following a 3xx: replay the redirect target through the registered interceptor.
-                goto: async () => routeHandler?.(buildRoute(redirectTo, events)),
-                pdf: async () => new Uint8Array(),
-                route: async (_pattern, handler) => {
-                    routeHandler = handler;
-                },
-                screenshot: async () => new Uint8Array(),
-            };
-
-            const context: BrowserContextLike = { newPage: async () => page };
-            const browser: BrowserLike = { close: async () => {}, newContext: async () => context };
-            const launch = (async (_binding: BrowserBindingLike) => browser) as BrowserLaunchLike & { events: RedirectSpy };
-
-            launch.events = events;
-
-            return launch;
-        };
-
-        it("aborts a redirect to a private/metadata host", async () => {
+        it("refuses a public URL that 302s to a private address, before the hop is requested", async () => {
             expect.assertions(2);
 
-            const launch = redirectingLaunch("http://169.254.169.254/latest/meta-data/");
+            const launch = fakeLaunch({ network: redirectTo("http://10.0.0.5/admin") });
             const browser = createBrowser({ binding: fakeBinding(), launch });
 
-            await browser.content("https://public.example.com");
-
-            expect(launch.events.aborted).toStrictEqual(["http://169.254.169.254/latest/meta-data/"]);
-            expect(launch.events.continued).toHaveLength(0);
+            await expect(browser.content("https://public.example.com")).rejects.toMatchObject({ code: "FORBIDDEN" });
+            expect(launch.requested).toStrictEqual(["https://public.example.com/"]);
         });
 
-        it("allows a redirect to another public host", async () => {
+        it("refuses a redirect to the metadata endpoint the same way", async () => {
             expect.assertions(2);
 
-            const launch = redirectingLaunch("https://cdn.example.net/final");
+            const launch = fakeLaunch({ network: redirectTo("http://169.254.169.254/latest/meta-data/") });
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await expect(browser.content("https://public.example.com")).rejects.toThrow(/private\/internal address/u);
+            expect(launch.requested).not.toContain("http://169.254.169.254/latest/meta-data/");
+        });
+
+        it("follows a redirect to another public host as a fresh, checked navigation", async () => {
+            expect.assertions(2);
+
+            const launch = fakeLaunch({ network: redirectTo("https://cdn.example.net/final") });
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await expect(browser.content("https://public.example.com")).resolves.toContain("hi");
+            expect(launch.browsers[0]!.pages[0]!.gotoCalls).toStrictEqual(["https://public.example.com/", "https://cdn.example.net/final"]);
+        });
+
+        it("resolves a relative Location against the redirecting URL", async () => {
+            expect.assertions(1);
+
+            const launch = fakeLaunch({ network: redirectTo("/next") });
             const browser = createBrowser({ binding: fakeBinding(), launch });
 
             await browser.content("https://public.example.com");
 
-            expect(launch.events.continued).toStrictEqual(["https://cdn.example.net/final"]);
-            expect(launch.events.aborted).toHaveLength(0);
+            expect(launch.browsers[0]!.pages[0]!.gotoCalls).toStrictEqual(["https://public.example.com/", "https://public.example.com/next"]);
+        });
+
+        it("gives up after 20 redirects", async () => {
+            expect.assertions(1);
+
+            let hop = 0;
+            const launch = fakeLaunch({
+                network: () => {
+                    hop += 1;
+
+                    return { headers: { location: `https://loop.example.com/${String(hop)}` }, status: 302 };
+                },
+            });
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await expect(browser.content("https://loop.example.com")).rejects.toMatchObject({ code: "BROWSER_TOO_MANY_REDIRECTS", status: 502 });
+        });
+
+        it("refuses a redirect off the allowlist", async () => {
+            expect.assertions(1);
+
+            const launch = fakeLaunch({ network: redirectTo("https://evil.example/steal") });
+            const browser = createBrowser({ allowedHosts: ["public.example.com"], binding: fakeBinding(), launch });
+
+            await expect(browser.content("https://public.example.com")).rejects.toMatchObject({ code: "FORBIDDEN" });
         });
     });
     /* eslint-enable sonarjs/no-clear-text-protocols */
@@ -594,15 +497,21 @@ describe("createBrowser", () => {
     });
 
     describe("launch escape hatch", () => {
-        it("hands the raw browser to the callback and closes it after", async () => {
-            expect.assertions(2);
+        it("hands the browser to the callback with the guard on every context it opens, and closes it after", async () => {
+            expect.assertions(3);
 
             const launch = fakeLaunch();
             const browser = createBrowser({ binding: fakeBinding(), launch });
 
-            const handle = await browser.launch(async (raw) => raw);
+            await browser.launch(async (raw) => {
+                const context = await raw.newContext();
+                const page = await context.newPage();
 
-            expect(launch.browsers[0]).toBe(handle);
+                // eslint-disable-next-line sonarjs/no-clear-text-protocols -- the private target under test; no connection is made
+                await expect(page.goto("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(/BLOCKEDBYCLIENT/u);
+            });
+
+            expect(launch.requested).toHaveLength(0);
             expect(launch.browsers[0]!.closed).toBe(1);
         });
 
@@ -622,21 +531,7 @@ describe("createBrowser", () => {
     });
 
     describe("a failing close", () => {
-        /** A launch whose browser's `close()` always rejects. */
-        const launchWithBrokenClose = (): BrowserLaunchLike => {
-            const launch = fakeLaunch();
-
-            return async (binding) => {
-                const browser = await launch(binding);
-
-                return {
-                    ...browser,
-                    close: async () => {
-                        throw new Error("close failed");
-                    },
-                };
-            };
-        };
+        const launchWithBrokenClose = () => fakeLaunch({ closeThrows: true });
 
         it("does not replace the result", async () => {
             expect.assertions(1);

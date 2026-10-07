@@ -26,6 +26,7 @@ export type {
     QuickActionName,
     QuickActionOptions,
     RouteLike,
+    RouteResponseLike,
     ScreenshotOptions,
     SnapshotFormat,
 } from "./types";

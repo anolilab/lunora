@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../src/create-browser";
-import type { BrowserBindingLike, BrowserLaunchLike, QuickActionName } from "../src/types";
+import type { BrowserBindingLike, QuickActionName } from "../src/types";
+import { fakeLaunch } from "./_helpers/fake-launch";
 import { stubDohFetch } from "./_helpers/stub-doh";
 
 /* eslint-disable vitest/require-top-level-describe -- every describe below stubs `fetch` */
@@ -22,6 +23,8 @@ const makeQuickBinding = () => {
 describe("quickAction", () => {
     it("checks a repeated nested URL once and refuses more than 50 distinct ones", async () => {
         expect.assertions(2);
+
+        stubDohFetch();
 
         const { binding, quickAction } = makeQuickBinding();
         const browser = createBrowser({ binding, launch: async () => ({}) as never });
@@ -124,19 +127,9 @@ describe("quickAction", () => {
 
 describe("guardrails", () => {
     const captureLaunch = () => {
-        const calls: (Record<string, unknown> | undefined)[] = [];
-        const launch: BrowserLaunchLike = async (_binding, options) => {
-            calls.push(options);
+        const launch = fakeLaunch();
 
-            return {
-                close: async () => {},
-                newContext: async () => {
-                    return { newPage: async () => ({}) as never };
-                },
-            };
-        };
-
-        return { calls, launch };
+        return { calls: launch.launchOptions, launch };
     };
 
     it("forwards allowedHosts as normalized session guardrails, even to the raw launch escape hatch", async () => {

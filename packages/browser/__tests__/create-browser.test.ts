@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../src/create-browser";
-import type { BrowserBindingLike, BrowserLaunchLike, PageLike, RouteLike } from "../src/types";
+import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike } from "../src/types";
+import { fakeBinding, fakeLaunch } from "./_helpers/fake-launch";
 import { stubDohFetch } from "./_helpers/stub-doh";
 
 // `resolveDns` defaults ON, so every navigation here would otherwise issue a REAL
@@ -19,146 +20,86 @@ afterEach(() => {
 });
 /* eslint-enable vitest/require-top-level-describe */
 
-// `fetch` is required on the marker type (it excludes a bare `{}`) and is typed
-// as the real `Fetcher.fetch` so the projections stay assignable from
-// `@cloudflare/playwright` (see __tests__/playwright-projection.test-d.ts). The
-// fake `launch` chain never calls it, so the body only has to satisfy the shape.
-const binding: BrowserBindingLike = { fetch: async () => new Response() };
+const binding: BrowserBindingLike = fakeBinding();
 
-/**
- * A fake `@cloudflare/playwright` `launch` chain (browser → context → page) that
- * records whether `page.route` was registered and captures the interceptor
- * handler, so a test can drive individual (redirect / sub-resource) requests
- * through it without a real headless browser.
- */
-interface Harness {
-    gotoCalls: string[];
-    launch: BrowserLaunchLike;
-    routeHandler?: (route: RouteLike) => unknown;
-    routeRegistered: boolean;
-}
-
-const makeHarness = (pageContent = "<html></html>"): Harness => {
-    const harness: Harness = {
-        gotoCalls: [],
-        launch: undefined as never,
-        routeRegistered: false,
-    };
-
-    const page: PageLike = {
-        content: async () => pageContent,
-        evaluate: async (function_) => function_(),
-        goto: async (url) => {
-            harness.gotoCalls.push(url);
-
-            return undefined;
-        },
-        pdf: async () => new Uint8Array(),
-        route: async (_pattern, handler) => {
-            harness.routeRegistered = true;
-            harness.routeHandler = handler;
-        },
-        screenshot: async () => new Uint8Array(),
-    };
-
-    const context = { newPage: async () => page };
-    const browser = { close: async () => {}, newContext: async () => context };
-
-    harness.launch = async () => browser;
-
-    return harness;
-};
-
-/** A fake `Route` (with spied `abort`/`continue`) for a single intercepted request. */
-const makeRoute = (url: string, isNavigation: boolean) => {
-    const abort = vi.fn<(errorCode?: string) => Promise<void>>(async () => {});
-    const continueFn = vi.fn<() => Promise<void>>(async () => {});
-
-    const route: RouteLike = {
-        abort,
-        continue: continueFn,
-        request: () => {
-            return { isNavigationRequest: () => isNavigation, url: () => url };
-        },
-    };
-
-    return { abort, continueFn, route };
-};
-
-describe("createBrowser SSRF redirect guard (finding #6)", () => {
-    it("registers the redirect interceptor when allowPrivateTargets is true AND allowedHosts is set", async () => {
+describe("createBrowser SSRF navigation guard (finding #6)", () => {
+    it("installs the guard when allowPrivateTargets is true AND allowedHosts is set", async () => {
         expect.assertions(1);
 
-        const harness = makeHarness();
-        const browser = createBrowser({
-            allowedHosts: ["example.com"],
-            allowPrivateTargets: true,
-            binding,
-            launch: harness.launch,
-        });
+        const launch = fakeLaunch();
+        const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch });
 
         await browser.content("https://example.com/");
 
-        expect(harness.routeRegistered).toBe(true);
+        expect(launch.routeHandlers).toHaveLength(1);
     });
 
-    it("does NOT register the interceptor when allowPrivateTargets is true and allowedHosts is unset (no regression)", async () => {
+    it("does NOT install it when allowPrivateTargets is true and allowedHosts is unset (no regression)", async () => {
         expect.assertions(1);
 
-        const harness = makeHarness();
-        const browser = createBrowser({
-            allowPrivateTargets: true,
-            binding,
-            launch: harness.launch,
-        });
+        const launch = fakeLaunch();
+        const browser = createBrowser({ allowPrivateTargets: true, binding, launch });
 
         await browser.content("https://example.com/");
 
-        expect(harness.routeRegistered).toBe(false);
+        expect(launch.routeHandlers).toHaveLength(0);
     });
 
-    it("aborts a redirect hop to an off-allowlist host under allowPrivateTargets + allowedHosts", async () => {
-        expect.assertions(3);
-
-        const harness = makeHarness();
-        const browser = createBrowser({
-            allowedHosts: ["example.com"],
-            allowPrivateTargets: true,
-            binding,
-            launch: harness.launch,
-        });
-
-        await browser.content("https://example.com/");
-
-        expect(harness.routeHandler).toBeDefined();
-
-        const evil = makeRoute("https://evil.example/steal", true);
-
-        await harness.routeHandler?.(evil.route);
-
-        expect(evil.abort).toHaveBeenCalledWith("blockedbyclient");
-        expect(evil.continueFn).not.toHaveBeenCalled();
-    });
-
-    it("continues a redirect hop that stays on the allowlist", async () => {
+    it("aborts a navigation to an off-allowlist host under allowPrivateTargets + allowedHosts, without requesting it", async () => {
         expect.assertions(2);
 
-        const harness = makeHarness();
-        const browser = createBrowser({
-            allowedHosts: ["example.com"],
-            allowPrivateTargets: true,
-            binding,
-            launch: harness.launch,
-        });
+        const launch = fakeLaunch();
+        const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch });
 
         await browser.content("https://example.com/");
 
-        const allowed = makeRoute("https://example.com/next", true);
+        const outcome = await launch.dispatch("https://evil.example/steal", { navigation: true });
 
-        await harness.routeHandler?.(allowed.route);
+        expect(outcome.aborted).toBe("blockedbyclient");
+        expect(outcome.fetched).toHaveLength(0);
+    });
 
-        expect(allowed.continueFn).toHaveBeenCalledTimes(1);
-        expect(allowed.abort).not.toHaveBeenCalled();
+    it("fetches an allowed navigation itself, one hop, and hands the response to the browser", async () => {
+        expect.assertions(3);
+
+        const launch = fakeLaunch();
+        const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch });
+
+        await browser.content("https://example.com/");
+
+        const outcome = await launch.dispatch("https://example.com/next", { navigation: true });
+
+        expect(outcome.fetched).toStrictEqual(["https://example.com/next"]);
+        expect(outcome.fulfilled?.response).toBeDefined();
+        expect(outcome.continued).toBe(false);
+    });
+
+    it("answers an iframe's allowed redirect with a fresh navigation, and aborts a private one", async () => {
+        expect.assertions(3);
+
+        const launch = fakeLaunch({
+            network: (url) => {
+                if (url === "https://example.com/frame-public") {
+                    return { headers: { location: "https://cdn.example.net/x" }, status: 302 };
+                }
+
+                if (url === "https://example.com/frame-private") {
+                    return { headers: { location: "http://169.254.169.254/latest/meta-data/" }, status: 302 };
+                }
+
+                return { status: 200 };
+            },
+        });
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        const iframe = { frame: "child" };
+        const allowed = await launch.dispatch("https://example.com/frame-public", { ...iframe, navigation: true });
+        const refused = await launch.dispatch("https://example.com/frame-private", { ...iframe, navigation: true });
+
+        expect(allowed.fulfilled?.body).toContain('content="0;url=https://cdn.example.net/x"');
+        expect(refused.aborted).toBe("blockedbyclient");
+        expect(launch.requested).not.toContain("http://169.254.169.254/latest/meta-data/");
     });
 
     it("does not run a per-hop DoH lookup when allowPrivateTargets is true (resolveDns gating companion edit)", async () => {
@@ -167,26 +108,18 @@ describe("createBrowser SSRF redirect guard (finding #6)", () => {
         const fetchSpy = vi.spyOn(globalThis, "fetch");
 
         try {
-            const harness = makeHarness();
-            const browser = createBrowser({
-                allowedHosts: ["example.com"],
-                allowPrivateTargets: true,
-                binding,
-                launch: harness.launch,
-                resolveDns: true,
-            });
+            const launch = fakeLaunch();
+            const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch, resolveDns: true });
 
             await browser.content("https://example.com/");
 
-            const hop = makeRoute("https://example.com/next", true);
-
-            await harness.routeHandler?.(hop.route);
+            const outcome = await launch.dispatch("https://example.com/next", { navigation: true });
 
             // The per-hop `resolveDns` branch is gated by `!allowPrivateTargets`,
             // so no DoH `fetch` fires for the intended internal host — the Tunnel
             // config isn't self-rejected.
             expect(fetchSpy).not.toHaveBeenCalled();
-            expect(hop.continueFn).toHaveBeenCalledTimes(1);
+            expect(outcome.fulfilled).toBeDefined();
         } finally {
             fetchSpy.mockRestore();
         }
@@ -194,170 +127,109 @@ describe("createBrowser SSRF redirect guard (finding #6)", () => {
 });
 
 describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
-    const defaultBrowser = (harness: Harness) => createBrowser({ binding, launch: harness.launch });
+    const subresource = { navigation: false };
 
     it("aborts a sub-resource request to a private/link-local host", async () => {
-        expect.assertions(3);
+        expect.assertions(1);
 
-        const harness = makeHarness();
+        const launch = fakeLaunch();
 
-        await defaultBrowser(harness).content("https://example.com/");
+        await createBrowser({ binding, launch }).content("https://example.com/");
 
-        expect(harness.routeHandler).toBeDefined();
-
-        const metadata = makeRoute("http://169.254.169.254/latest/meta-data/", false);
-
-        await harness.routeHandler?.(metadata.route);
-
-        expect(metadata.abort).toHaveBeenCalledWith("blockedbyclient");
-        expect(metadata.continueFn).not.toHaveBeenCalled();
+        await expect(launch.dispatch("http://169.254.169.254/latest/meta-data/", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
     });
 
     it("aborts a sub-resource request to a loopback / localhost host", async () => {
         expect.assertions(2);
 
-        const harness = makeHarness();
+        const launch = fakeLaunch();
 
-        await defaultBrowser(harness).content("https://example.com/");
+        await createBrowser({ binding, launch }).content("https://example.com/");
 
-        const loopback = makeRoute("http://localhost:6379/", false);
-        const rfc1918 = makeRoute("http://10.0.0.5/probe", false);
-
-        await harness.routeHandler?.(loopback.route);
-        await harness.routeHandler?.(rfc1918.route);
-
-        expect(loopback.abort).toHaveBeenCalledWith("blockedbyclient");
-        expect(rfc1918.abort).toHaveBeenCalledWith("blockedbyclient");
+        await expect(launch.dispatch("http://localhost:6379/", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
+        await expect(launch.dispatch("http://10.0.0.5/probe", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
     });
 
     it("continues a sub-resource request to a public host", async () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
-        const harness = makeHarness();
+        const launch = fakeLaunch();
 
-        await defaultBrowser(harness).content("https://example.com/");
+        await createBrowser({ binding, launch }).content("https://example.com/");
 
-        const cdn = makeRoute("https://cdn.example.net/app.js", false);
-
-        await harness.routeHandler?.(cdn.route);
-
-        expect(cdn.continueFn).toHaveBeenCalledTimes(1);
-        expect(cdn.abort).not.toHaveBeenCalled();
+        await expect(launch.dispatch("https://cdn.example.net/app.js", subresource)).resolves.toMatchObject({ continued: true });
     });
 
     it("continues non-http(s) sub-resources (data:/blob:) so inline assets keep rendering", async () => {
-        expect.assertions(4);
+        expect.assertions(2);
 
-        const harness = makeHarness();
+        const launch = fakeLaunch();
 
-        await defaultBrowser(harness).content("https://example.com/");
+        await createBrowser({ binding, launch }).content("https://example.com/");
 
-        const dataUri = makeRoute("data:image/png;base64,iVBORw0KGgo=", false);
-        const blob = makeRoute("blob:https://example.com/9f8c-uuid", false);
-
-        await harness.routeHandler?.(dataUri.route);
-        await harness.routeHandler?.(blob.route);
-
-        expect(dataUri.continueFn).toHaveBeenCalledTimes(1);
-        expect(dataUri.abort).not.toHaveBeenCalled();
-        expect(blob.continueFn).toHaveBeenCalledTimes(1);
-        expect(blob.abort).not.toHaveBeenCalled();
+        await expect(launch.dispatch("data:image/png;base64,iVBORw0KGgo=", subresource)).resolves.toMatchObject({ continued: true });
+        await expect(launch.dispatch("blob:https://example.com/9f8c-uuid", subresource)).resolves.toMatchObject({ continued: true });
     });
 
     it("aborts a public but off-allowlist sub-resource when allowedHosts is configured", async () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
-        const harness = makeHarness();
-        const browser = createBrowser({ allowedHosts: ["example.com"], binding, launch: harness.launch });
+        const launch = fakeLaunch();
 
-        await browser.content("https://example.com/");
+        await createBrowser({ allowedHosts: ["example.com"], binding, launch }).content("https://example.com/");
 
-        const offList = makeRoute("https://cdn.other.net/app.js", false);
-        const onList = makeRoute("https://example.com/app.js", false);
-
-        await harness.routeHandler?.(offList.route);
-        await harness.routeHandler?.(onList.route);
-
-        expect(offList.abort).toHaveBeenCalledWith("blockedbyclient");
-        expect(onList.continueFn).toHaveBeenCalledTimes(1);
-        expect(onList.abort).not.toHaveBeenCalled();
+        await expect(launch.dispatch("https://cdn.other.net/app.js", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
+        await expect(launch.dispatch("https://example.com/app.js", subresource)).resolves.toMatchObject({ continued: true });
     });
 
     it("continues an allowlisted private sub-resource under allowPrivateTargets (the Tunnel config)", async () => {
-        expect.assertions(6);
+        expect.assertions(3);
 
         // The documented internal-dashboard config: render an internal host
-        // reached over a Tunnel, pinned to an allowlist. Navigation is gated on
-        // `allowPrivateTargets`, so it succeeds — but the sub-resource guard used
-        // to run `isPrivateHost` ungated, aborting every /app.css, /app.js and
-        // image from the SAME allowlisted host. The returned PNG/PDF came back
-        // unstyled, script-less and image-less, with no error raised anywhere.
-        const harness = makeHarness();
-        const browser = createBrowser({
-            allowedHosts: ["dashboard.internal"],
-            allowPrivateTargets: true,
-            binding,
-            launch: harness.launch,
-        });
+        // reached over a Tunnel, pinned to an allowlist. The sub-resource guard
+        // used to run `isPrivateHost` ungated, aborting every asset from the SAME
+        // allowlisted host, so the render came back unstyled with no error.
+        const launch = fakeLaunch();
 
-        await browser.content("https://dashboard.internal/report");
+        await createBrowser({ allowedHosts: ["dashboard.internal"], allowPrivateTargets: true, binding, launch }).content("https://dashboard.internal/report");
 
-        const css = makeRoute("https://dashboard.internal/app.css", false);
-        const script = makeRoute("https://dashboard.internal/app.js", false);
-        const logo = makeRoute("https://dashboard.internal/logo.png", false);
-
-        await harness.routeHandler?.(css.route);
-        await harness.routeHandler?.(script.route);
-        await harness.routeHandler?.(logo.route);
-
-        expect(css.continueFn).toHaveBeenCalledTimes(1);
-        expect(css.abort).not.toHaveBeenCalled();
-        expect(script.continueFn).toHaveBeenCalledTimes(1);
-        expect(script.abort).not.toHaveBeenCalled();
-        expect(logo.continueFn).toHaveBeenCalledTimes(1);
-        expect(logo.abort).not.toHaveBeenCalled();
+        for (const asset of ["app.css", "app.js", "logo.png"]) {
+            // eslint-disable-next-line no-await-in-loop -- one request at a time, as the page issues them
+            await expect(launch.dispatch(`https://dashboard.internal/${asset}`, subresource)).resolves.toMatchObject({ continued: true });
+        }
     });
 
     it("still aborts an off-allowlist private sub-resource under allowPrivateTargets", async () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
-        // `allowPrivateTargets` relaxes the private-address arm, never the
-        // allowlist: the metadata endpoint is still off-list and still refused.
-        const harness = makeHarness();
-        const browser = createBrowser({
-            allowedHosts: ["dashboard.internal"],
-            allowPrivateTargets: true,
-            binding,
-            launch: harness.launch,
-        });
+        // `allowPrivateTargets` relaxes the private-address arm, never the allowlist.
+        const launch = fakeLaunch();
 
-        await browser.content("https://dashboard.internal/report");
+        await createBrowser({ allowedHosts: ["dashboard.internal"], allowPrivateTargets: true, binding, launch }).content("https://dashboard.internal/report");
 
-        const metadata = makeRoute("http://169.254.169.254/latest/meta-data/", false);
-
-        await harness.routeHandler?.(metadata.route);
-
-        expect(metadata.abort).toHaveBeenCalledWith("blockedbyclient");
-        expect(metadata.continueFn).not.toHaveBeenCalled();
+        await expect(launch.dispatch("http://169.254.169.254/latest/meta-data/", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
     });
 
     it("fails closed on an unparseable sub-resource URL, as the navigation sibling does", async () => {
+        expect.assertions(1);
+
+        const launch = fakeLaunch();
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        await expect(launch.dispatch("://not a url", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
+    });
+});
+
+describe("allowedHosts normalization", () => {
+    it("matches a Unicode (IDN) entry against the punycode hostname a URL carries", async () => {
         expect.assertions(2);
 
-        // Contract parity with `validateUrl` / `assertNavigationAllowed`, which
-        // both abort a hop they cannot parse. Playwright's `request.url()` is
-        // always absolute so this is not reachable in practice, but a guard whose
-        // docblock promises fail-closed must not fall open.
-        const harness = makeHarness();
+        const launch = fakeLaunch();
+        const browser = createBrowser({ allowedHosts: ["bücher.example"], binding, launch });
 
-        await defaultBrowser(harness).content("https://example.com/");
-
-        const junk = makeRoute("://not a url", false);
-
-        await harness.routeHandler?.(junk.route);
-
-        expect(junk.abort).toHaveBeenCalledWith("blockedbyclient");
-        expect(junk.continueFn).not.toHaveBeenCalled();
+        await expect(browser.content("https://bücher.example/")).resolves.toContain("hi");
+        expect(launch.launchOptions[0]).toMatchObject({ guardrails: { allowedDomains: ["xn--bcher-kva.example"] } });
     });
 });
 
@@ -367,17 +239,7 @@ describe("createBrowser operation timeout (finding #1)", () => {
 
         // A hostile page that traps the evaluated function: `page.evaluate` never
         // resolves. `page.goto` returns fine, so only the outer deadline bounds it.
-        const page: PageLike = {
-            content: async () => "<html></html>",
-            evaluate: () => new Promise<never>(() => {}),
-            goto: async () => undefined,
-            pdf: async () => new Uint8Array(),
-            screenshot: async () => new Uint8Array(),
-        };
-        const context = { newPage: async () => page };
-        const browser = { close: async () => {}, newContext: async () => context };
-        const launch: BrowserLaunchLike = async () => browser;
-
+        const launch = fakeLaunch({ page: { evaluate: async () => new Promise<never>(() => {}) } });
         const client = createBrowser({ binding, launch });
 
         await expect(client.scrape("https://example.com/", () => 1, { timeoutMs: 10 })).rejects.toThrow(/exceeded the 10ms timeout budget/);
@@ -386,27 +248,11 @@ describe("createBrowser operation timeout (finding #1)", () => {
     it("closes the browser when the deadline rejects (no leaked session)", async () => {
         expect.assertions(2);
 
-        let closed = false;
-        const page: PageLike = {
-            content: () => new Promise<never>(() => {}),
-            evaluate: async (function_) => function_(),
-            goto: async () => undefined,
-            pdf: async () => new Uint8Array(),
-            screenshot: async () => new Uint8Array(),
-        };
-        const context = { newPage: async () => page };
-        const browser = {
-            close: async () => {
-                closed = true;
-            },
-            newContext: async () => context,
-        };
-        const launch: BrowserLaunchLike = async () => browser;
-
+        const launch = fakeLaunch({ page: { content: async () => new Promise<never>(() => {}) } });
         const client = createBrowser({ binding, launch });
 
         await expect(client.content("https://example.com/", { timeoutMs: 10 })).rejects.toThrow(/timeout budget/);
-        expect(closed).toBe(true);
+        expect(launch.browsers[0]!.closed).toBe(1);
     });
 });
 
@@ -414,18 +260,17 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
     it("rejects a private/internal target as a FORBIDDEN 403 (message intact, not a redacted 500)", async () => {
         expect.assertions(2);
 
-        const harness = makeHarness();
-        const browser = createBrowser({ binding, launch: harness.launch });
+        const launch = fakeLaunch();
+        const browser = createBrowser({ binding, launch });
 
         await expect(browser.content("http://169.254.169.254/latest/meta-data/")).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
-        expect(harness.gotoCalls).toHaveLength(0);
+        expect(launch.browsers).toHaveLength(0);
     });
 
     it("rejects a non-http(s) scheme as a BAD_REQUEST 400", async () => {
         expect.assertions(1);
 
-        const harness = makeHarness();
-        const browser = createBrowser({ binding, launch: harness.launch });
+        const browser = createBrowser({ binding, launch: fakeLaunch() });
 
         await expect(browser.content("ftp://example.com/file")).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 });
     });
@@ -433,8 +278,7 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
     it("rejects embedded credentials as a BAD_REQUEST 400", async () => {
         expect.assertions(1);
 
-        const harness = makeHarness();
-        const browser = createBrowser({ binding, launch: harness.launch });
+        const browser = createBrowser({ binding, launch: fakeLaunch() });
 
         await expect(browser.content("https://user:pass@example.com/")).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 }); // gitleaks:allow -- test fixture asserting embedded-credential rejection, not a real secret
     });
@@ -447,10 +291,16 @@ describe("session reuse", () => {
      */
     const makeSessionHarness = () => {
         const closed = vi.fn<() => Promise<void>>(async () => {});
-        const browser = {
+        const inner = fakeLaunch();
+        const route = vi.fn<BrowserContextLike["route"]>(async () => {});
+        const browser: BrowserLike = {
             close: closed,
+            // A shared session: another caller's context is already open on it.
+            contexts: () => [{ newPage: async () => ({}) as never, route }],
             newContext: async () => {
-                return { newPage: async () => ({}) as PageLike };
+                const fresh = await inner(binding);
+
+                return fresh.newContext();
             },
         };
         const launchOptions: (Record<string, unknown> | undefined)[] = [];
@@ -458,6 +308,8 @@ describe("session reuse", () => {
         return {
             browser,
             closed,
+            requested: inner.requested,
+            route,
             connect: vi.fn<(binding: BrowserBindingLike, sessionId: string) => Promise<typeof browser>>(async () => browser),
             launch: (async (_binding, options) => {
                 launchOptions.push(options);
@@ -588,11 +440,12 @@ describe("session reuse", () => {
         expect(harness.closed).not.toHaveBeenCalled();
     });
 
-    it("throws when the handler throws with keepAlive set, leaving the session open", async () => {
+    it("closes a keepAlive session when the handler throws, and rethrows", async () => {
         expect.assertions(2);
 
-        // The `finally` close is deliberately skipped under keepAlive; make sure
-        // the error still propagates rather than being swallowed with it.
+        // A throw means nobody will `connect` to the session, and a held session
+        // is billed until `keepAlive` lapses, so it is closed, and the error
+        // still propagates.
         const harness = makeSessionHarness();
         const browser = createBrowser({ binding, launch: harness.launch });
 
@@ -605,7 +458,25 @@ describe("session reuse", () => {
             ),
         ).rejects.toThrow("boom");
 
-        expect(harness.closed).not.toHaveBeenCalled();
+        expect(harness.closed).toHaveBeenCalledTimes(1);
+    });
+
+    it("guards a re-attached session: its open contexts and every new one", async () => {
+        expect.assertions(3);
+
+        const harness = makeSessionHarness();
+        const browser = createBrowser({ binding, connect: harness.connect });
+
+        await browser.connect("sess-1", async (attached) => {
+            const context = await attached.newContext();
+            const page = await context.newPage();
+
+            await expect(page.goto("http://10.0.0.5/admin")).rejects.toThrow(/BLOCKEDBYCLIENT/u);
+        });
+
+        // The context that was already open got the guard too.
+        expect(harness.route).toHaveBeenCalledWith("**/*", expect.any(Function));
+        expect(harness.requested).toHaveLength(0);
     });
 
     it("lists live sessions", async () => {

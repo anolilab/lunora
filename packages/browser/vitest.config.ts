@@ -2,6 +2,7 @@ import { cloudflareTest } from "@cloudflare/vitest-plugin";
 import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
 import { DEFAULT_COVERAGE_THRESHOLDS } from "../../tools/get-vitest-config";
+import fakeInternet from "./__tests__/workerd/fake-internet";
 
 // Mirror of the shared `tools/get-vitest-config` coverage block. The workers
 // pool relies on `defineConfig` (not the shared helper, which would break the
@@ -34,7 +35,8 @@ const coverage = {
  *  - `workerd` — `createBrowser` in real workerd against the real
  *                `@cloudflare/playwright` peer, with `env.BROWSER` a service
  *                binding to a fake Browser Run that refuses the DevTools upgrade
- *                (there is no Chrome locally). See `__tests__/workerd/`.
+ *                (there is no Chrome locally), and every global `fetch` answered
+ *                by a fake internet (`outboundService`). See `__tests__/workerd/`.
  */
 const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 
@@ -59,6 +61,9 @@ export default defineConfig({
                       plugins: [
                           cloudflareTest({
                               main: "__tests__/workerd/test-worker.ts",
+                              // Every global `fetch` the package makes (DoH, the /crawl REST API)
+                              // leaves workerd for real and is answered by the fake internet.
+                              miniflare: { outboundService: fakeInternet },
                               wrangler: { configPath: "./__tests__/workerd/wrangler.jsonc" },
                           }),
                       ],

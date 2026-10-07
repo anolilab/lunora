@@ -53,6 +53,7 @@ type BrowserConnectLike = (binding: BrowserBindingLike, sessionId: string) => Pr
 ```ts
 interface BrowserContextLike {
     newPage: () => Promise<PageLike>;
+    route: (pattern: string, handler: <TResponse extends RouteResponseLike>(route: RouteLike<TResponse>) => unknown) => Promise<void>;
 }
 ```
 
@@ -67,6 +68,7 @@ type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, 
 ```ts
 interface BrowserLike {
     close: () => Promise<void>;
+    contexts?: () => BrowserContextLike[];
     newContext: () => Promise<BrowserContextLike>;
     sessionId?: () => string | undefined;
 }
@@ -274,8 +276,8 @@ interface PageLike {
         timeout?: number;
         waitUntil?: "commit" | "domcontentloaded" | "load" | "networkidle";
     }) => Promise<unknown>;
+    mainFrame?: () => unknown;
     pdf: (options?: Record<string, unknown>) => Promise<Uint8Array>;
-    route?: (pattern: string, handler: (route: RouteLike) => unknown) => Promise<void>;
     screenshot: (options?: Record<string, unknown>) => Promise<Uint8Array>;
     setViewportSize?: (viewport: {
         height: number;
@@ -318,13 +320,32 @@ interface QuickActionOptions {
 ### `RouteLike` (interface)
 
 ```ts
-interface RouteLike {
+interface RouteLike<TResponse extends RouteResponseLike = RouteResponseLike> {
     abort: (errorCode?: string) => Promise<void>;
     continue: () => Promise<void>;
+    fetch: (options?: {
+        maxRedirects?: number;
+    }) => Promise<TResponse>;
+    fulfill: (options: {
+        body?: string;
+        contentType?: string;
+        response?: TResponse;
+        status?: number;
+    }) => Promise<void>;
     request: () => {
+        frame?: () => unknown;
         isNavigationRequest?: () => boolean;
         url: () => string;
     };
+}
+```
+
+### `RouteResponseLike` (interface)
+
+```ts
+interface RouteResponseLike {
+    headers: () => Record<string, string>;
+    status: () => number;
 }
 ```
 
