@@ -100,7 +100,7 @@ deliberate, and mostly a set of go/no-go decisions:
 
 Published here because "experimental" is only a fair label if the way out of it
 is knowable in advance. An adopter whose core loop runs on `agent` + `ai` +
-`browser` + `container` is betting on the tier with the fewest guarantees while
+`replica` + `container` is betting on the tier with the fewest guarantees while
 the least interesting parts of their stack get the strongest ones; they are
 entitled to see what would change that, and to check the progress themselves.
 

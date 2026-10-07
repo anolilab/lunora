@@ -1,7 +1,7 @@
 # Plan 463 — Graduate the experimental tier to stable
 
 **Baseline:** `f65dd4fbd` (2026-10-06)
-**Status:** IN PROGRESS (A shipped in #1002; B1 `payment` graduated in #1001; B3 `x402` + `browser` graduated)
+**Status:** IN PROGRESS (A shipped in #1002; B1 `payment` graduated in #1001; B3 `x402` + `browser` graduated in code, pending maintainer sign-off on bar item 5)
 
 ## 0. Headline finding
 
@@ -56,7 +56,7 @@ additive options from here on.
 1. `payment` — DONE in #1001: full audit, thermos review, workerd suite over the real store,
    tags dropped, moved to `TIER_2`.
 2. `container` — already fully tracked; finish lifecycle/`exec` verification (needs Docker in CI).
-3. `x402`, `browser` — DONE: tags triaged, both moved to `TIER_2`. `x402` kept every export
+3. `x402`, `browser` — DONE for code, pending maintainer sign-off on bar item 5: tags triaged, both moved to `TIER_2`. `x402` kept every export
    except 13 rail internals (`createPayFetch`, `registerWallet`, `resolveEvmAccount`,
    `resolveSvmSigner`, `buildSpendPolicy`, `buildPaymentGuard`, `releaseSpendOnFailure`,
    `assertBoundedPolicy`, `createSpendState`, `SpendState`, `WalletDeps`,

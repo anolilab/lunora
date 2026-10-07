@@ -69,8 +69,8 @@ The pay rail's `signer` config selects wallet custody:
 
 The **pay** rail spends real money autonomously. It is `ActionCtx`-only and
 fail-closed: every payment is bounded by a spend policy (`maxPerCall`, a ceiling
-on a single payment, and `maxPerRun`, a ceiling on cumulative spend across the
-wallet's lifetime — the ctx, for `ctx.x402`; there is no windowed cap) and may
+on a single payment, and `maxPerRun`, a ceiling on cumulative spend by one rail:
+for `ctx.x402`, one function invocation, not a budget across invocations) and may
 require confirmation. The `policy` field is required, so you cannot
 wire a signer without one; an unbounded policy is refused at runtime (fail-closed)
 before any signer is resolved.
