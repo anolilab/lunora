@@ -113,8 +113,8 @@ const assertPushTargetResolvable = async (endpoint: string, allowedPushOrigins?:
     const pending = cached ?? resolveHostSsrf(hostname);
     const resolution = await pending;
 
-    // Cache only what was actually learned (see the memo's docblock).
-    if (cached === undefined && resolution.kind !== "unknown") {
+    // Cache only a settled verdict (see the memo's docblock): a SERVFAIL can be transient.
+    if (cached === undefined && (resolution.kind === "private" || resolution.kind === "public")) {
         evictOldestEntry(rebindVerdicts, REBIND_VERDICT_CAPACITY);
         rebindVerdicts.set(hostname, pending);
     }
@@ -123,6 +123,13 @@ const assertPushTargetResolvable = async (endpoint: string, allowedPushOrigins?:
         throw new LunoraError(
             "FORBIDDEN",
             `@lunora/notify: web-push endpoint host "${hostname}" resolves to a private/internal address (${resolution.address}); refusing to send (DNS-rebinding guard)`,
+        );
+    }
+
+    if (resolution.kind === "unresolved") {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/notify: web-push endpoint host "${hostname}" did not resolve to any address; refusing to send (DNS-rebinding guard)`,
         );
     }
 };

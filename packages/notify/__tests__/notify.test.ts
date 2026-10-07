@@ -657,6 +657,10 @@ describe("ctx.push.broadcast fault-tolerance", () => {
         return { endpoint: `https://push.example/${suffix}`, keys: { auth: "a", p256dh: "p" } };
     };
 
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("a throwing recipient does not abort the fan-out — others still deliver", async () => {
         expect.hasAssertions();
 
@@ -680,6 +684,20 @@ describe("ctx.push.broadcast fault-tolerance", () => {
 
     it("degrades a recipient whose channel is not configured to failed — others succeed", async () => {
         expect.hasAssertions();
+
+        // The router re-checks the web-push host over DoH; answer it with a public
+        // address so the send does not depend on the network.
+        vi.stubGlobal("fetch", async (input: string) => {
+            const type = Number(new URL(input).searchParams.get("type"));
+
+            return {
+                json: async () => {
+                    // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a public IP fixture so the guard passes; no connection is made
+                    return { Answer: type === 1 ? [{ data: "93.184.216.34", type: 1 }] : [] };
+                },
+                ok: true,
+            } as unknown as Response;
+        });
 
         const store = memorySubscriptionStore();
         // Only the web-push channel is wired; an FCM target hits the router's throw.
@@ -1045,6 +1063,31 @@ describe("web-push send-time DNS-rebinding guard", () => {
         ).rejects.toThrow(/resolves to a private\/internal address/);
 
         // The payload never reached the transport.
+        expect(inner.sends).toHaveLength(0);
+    });
+
+    it("refuses a host whose lookup answers with no address (SERVFAIL / NXDOMAIN)", async () => {
+        expect.hasAssertions();
+
+        // An attacker's nameserver can SERVFAIL the check and answer the sender's
+        // resolver a moment later, so "no address" fails closed rather than passing.
+        vi.stubGlobal(
+            "fetch",
+            async () =>
+                ({
+                    json: async () => {
+                        return { Status: 2 };
+                    },
+                    ok: true,
+                }) as unknown as Response,
+        );
+
+        const inner = mockPushProvider();
+        const router = routingPushProvider({ webPush: inner.provider });
+
+        await expect(
+            router.send({ body: "b", to: JSON.stringify({ endpoint: "https://servfail.push.test/p/1", keys: { auth: "a", p256dh: "p" } }) }),
+        ).rejects.toThrow(/did not resolve to any address/);
         expect(inner.sends).toHaveLength(0);
     });
 

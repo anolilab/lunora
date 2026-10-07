@@ -15,6 +15,10 @@
  *   "nothing private" and the caller leans on the string guard it already
  *   passed — a broken resolver must not take the feature down. It never
  *   fails open on an address that actually DID resolve to a private range.
+ * - A lookup that DID answer but carried no address — an empty answer, or a
+ *   non-NOERROR rcode such as SERVFAIL or NXDOMAIN — is `"unresolved"`, not
+ *   `"public"`. An attacker's authoritative server can SERVFAIL the check and
+ *   answer the connecting resolver a moment later, so callers refuse it.
  * - It is TOCTOU-imperfect: whoever connects afterwards re-resolves
  *   independently. An exact-host allowlist is the only hard guarantee.
  *
@@ -72,9 +76,10 @@ const dohLookup = async (hostname: string, type: number, timeoutMs: number): Pro
             return undefined;
         }
 
-        const body: { Answer?: { data: string; type: number }[] } = await response.json();
+        const body: { Answer?: { data: string; type: number }[]; Status?: number } = await response.json();
 
-        return body.Answer ?? [];
+        // A non-NOERROR rcode (SERVFAIL, NXDOMAIN, REFUSED) answered, with nothing usable.
+        return body.Status === undefined || body.Status === 0 ? (body.Answer ?? []) : [];
     } catch {
         return undefined;
     }
@@ -93,6 +98,8 @@ type SsrfResolution =
     | { address: string; kind: "private" }
     /** Resolved, and every returned address is public. */
     | { kind: "public" }
+    /** DoH answered, but with no A/AAAA address (empty answer, SERVFAIL, NXDOMAIN). Callers refuse this. */
+    | { kind: "unresolved" }
     /** Nothing was learned: an IP-literal host (skipped — it cannot rebind) or a failed lookup. */
     | { kind: "unknown" };
 
@@ -121,13 +128,16 @@ const resolveHostSsrf = async (hostname: string, timeoutMs: number = DOH_TIMEOUT
         return { kind: "unknown" };
     }
 
-    for (const answer of [...(aRecords ?? []), ...(aaaaRecords ?? [])]) {
-        if ((answer.type === DNS_TYPE_A || answer.type === DNS_TYPE_AAAA) && isPrivateResolvedIp(answer.data, answer.type)) {
+    // CNAME and other records ride along in `Answer`; only addresses decide.
+    const addresses = [...(aRecords ?? []), ...(aaaaRecords ?? [])].filter((answer) => answer.type === DNS_TYPE_A || answer.type === DNS_TYPE_AAAA);
+
+    for (const answer of addresses) {
+        if (isPrivateResolvedIp(answer.data, answer.type)) {
             return { address: answer.data, kind: "private" };
         }
     }
 
-    return { kind: "public" };
+    return addresses.length === 0 ? { kind: "unresolved" } : { kind: "public" };
 };
 
 export type { SsrfResolution };
