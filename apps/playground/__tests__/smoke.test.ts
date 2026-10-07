@@ -25,7 +25,7 @@ describe("playground compose smoke (Phase 7)", () => {
     it("runCodegen parses schema + functions and emits the _generated triad", () => {
         expect.assertions(7);
 
-        const result = runCodegen({ projectRoot });
+        const result = runCodegen({ projectRoot, wranglerQueueProducers: [] });
 
         expect(existsSync(join(result.outputDirectory, "dataModel.ts"))).toBe(true);
         expect(existsSync(join(result.outputDirectory, "api.ts"))).toBe(true);
@@ -50,7 +50,7 @@ describe("playground compose smoke (Phase 7)", () => {
         // `internalMutation` is the sibling pattern (`cleanup.ts`), and the mail
         // dispatcher already sends `x-lunora-system: 1`, which is exactly what
         // lets an internal target answer a server-initiated dispatch.
-        const { api, internal } = runCodegen({ projectRoot }).generated;
+        const { api, internal } = runCodegen({ projectRoot, wranglerQueueProducers: [] }).generated;
 
         // Not in the public `api.ts`…
         expect(api).not.toContain("onEmail");

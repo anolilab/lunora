@@ -39,7 +39,7 @@ describe("analytics-sql fixture", () => {
     // ONE codegen run for the file; `lint: false` matches `capture-expected.ts`.
     beforeAll(() => {
         workdir = makeFixtureWorkdir(fixtureRoot);
-        generated = runCodegen({ lint: false, projectRoot: workdir }).generated;
+        generated = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
     }, 300_000);
 
     afterAll(() => {
@@ -88,7 +88,7 @@ describe("analytics-sql fixture", () => {
         const nodeWorkdir = makeFixtureWorkdir(fixtureRoot);
 
         try {
-            const result = runCodegen({ lint: false, projectRoot: nodeWorkdir, target: "node" });
+            const result = runCodegen({ lint: false, projectRoot: nodeWorkdir, target: "node", wranglerQueueProducers: [] });
 
             expect(result.platformDiagnostics.filter((diagnostic) => diagnostic.feature === "analyticsSql").map((diagnostic) => diagnostic.name)).toStrictEqual(
                 ["platform_unsupported_feature"],

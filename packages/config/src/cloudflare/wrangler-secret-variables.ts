@@ -18,19 +18,11 @@
  * `lunora deploy`'s required-secrets pre-flight, while `STRIPE_PUBLISHABLE_KEY`
  * was exempt here and a blocking missing "secret" there.
  */
-import { relative } from "node:path";
-
 import type { WranglerVariableIR } from "@lunora/codegen";
 import { redact, secretKindOf } from "@lunora/codegen";
 
 import { isPublicKeyName, isSecretKeyName } from "../../../../shared/secret-key";
 import { isPlaceholderValue } from "../scaffold-dev-variables";
-import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
-
-/** Only the slice of the wrangler config this scanner needs (`vars` mirrors wrangler's literal key). */
-interface WranglerVariablesShape {
-    vars?: Record<string, unknown>;
-}
 
 /**
  * A secret value shorter than this is almost always benign config (a version tag,
@@ -86,27 +78,5 @@ const scanWranglerVariablesForSecrets = (variables: Record<string, unknown> | un
     return findings;
 };
 
-/**
- * Read the project's `wrangler.jsonc` and return its plaintext-secret `vars` as IR
- * for the `plaintext_secret_in_wrangler_vars` lint. Returns `[]` when there is no
- * wrangler config, it doesn't parse, or nothing looks like a secret. Scans the
- * top-level `vars` block (mirroring the existing `validateCorsVariables` scope);
- * per-environment `env.<name>.vars` overrides are out of scope for now.
- */
-const collectWranglerSecretVariables = (projectRoot: string): WranglerVariableIR[] => {
-    const wranglerPath = findWranglerFile(projectRoot);
-
-    if (wranglerPath === undefined) {
-        return [];
-    }
-
-    const { parsed } = readWranglerJsonc<WranglerVariablesShape>(wranglerPath);
-
-    if (parsed === undefined) {
-        return [];
-    }
-
-    return scanWranglerVariablesForSecrets(parsed.vars, relative(projectRoot, wranglerPath));
-};
-
-export { collectWranglerSecretVariables, scanWranglerVariablesForSecrets };
+// eslint-disable-next-line import/prefer-default-export -- named export by package convention; the index re-exports it
+export { scanWranglerVariablesForSecrets };

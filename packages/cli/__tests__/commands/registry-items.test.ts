@@ -542,7 +542,7 @@ describe("shipped registry items", () => {
             // nothing is emitted.
             await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: [name], yes: true });
 
-            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir });
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(advisories.filter((finding) => finding.level === "ERROR").map((finding) => `${finding.name}: ${finding.detail}`)).toStrictEqual([]);
         });

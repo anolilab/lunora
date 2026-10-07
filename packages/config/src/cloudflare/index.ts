@@ -46,6 +46,8 @@ export { default as CLOUDFLARE_TOOLCHAIN_VERSIONS } from "./toolchain-versions";
 export { withTailConsumer } from "./validate-settings";
 export type { WranglerCacheShape } from "./workers-cache";
 export { isCacheEnabled, WORKERS_CACHE_MIN_DATE } from "./workers-cache";
+export type { WranglerCodegenInputs } from "./wrangler-codegen-inputs";
+export { wranglerCodegenInputs } from "./wrangler-codegen-inputs";
 export type {
     ObservabilitySignalSampling,
     TailConsumer,
@@ -64,8 +66,7 @@ export type { ReadWranglerResult } from "./wrangler-path";
 export { findWranglerFile, readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
 export type { WranglerProjectValidationOptions, WranglerProjectValidationResult } from "./wrangler-project";
 export { UNEXPORTED_CLASS_MARKER, validateWranglerProject } from "./wrangler-project";
-export { collectWranglerQueueProducers } from "./wrangler-queue-producers";
-export { collectWranglerSecretVariables, scanWranglerVariablesForSecrets } from "./wrangler-secret-variables";
+export { scanWranglerVariablesForSecrets } from "./wrangler-secret-variables";
 export type { AlchemyTranslation, WranglerConfigShape } from "./wrangler-to-alchemy";
 export { wranglerToAlchemy } from "./wrangler-to-alchemy";
 export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig } from "./wrangler-validator";

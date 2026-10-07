@@ -2241,6 +2241,15 @@ interface WranglerCacheShape {
 }
 ```
 
+### `WranglerCodegenInputs` (interface)
+
+```ts
+interface WranglerCodegenInputs {
+    wranglerQueueProducers: WranglerQueueProducerIR[];
+    wranglerVariables: WranglerVariableIR[];
+}
+```
+
 ### `WranglerConfig` (interface)
 
 ```ts
@@ -2593,18 +2602,6 @@ const buildBindingManifest: (config: ManifestConfigShape) => BindingManifest;
 const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 ```
 
-### `collectWranglerQueueProducers` (const)
-
-```ts
-const collectWranglerQueueProducers: (projectRoot: string) => WranglerQueueProducerIR[];
-```
-
-### `collectWranglerSecretVariables` (const)
-
-```ts
-const collectWranglerSecretVariables: (projectRoot: string) => WranglerVariableIR[];
-```
-
 ### `describePreservedCrons` (const)
 
 ```ts
@@ -2750,6 +2747,12 @@ const warnCloudflareCliConfigOnce: (projectRoot: string, warn: (message: string)
 
 ```ts
 const withTailConsumer: (wrangler: WranglerConfig, consumer: TailConsumer) => WranglerConfig;
+```
+
+### `wranglerCodegenInputs` (const)
+
+```ts
+const wranglerCodegenInputs: (projectRoot: string) => WranglerCodegenInputs;
 ```
 
 ### `wranglerToAlchemy` (const)

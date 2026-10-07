@@ -104,7 +104,7 @@ interface CodegenOptions {
     projectRoot: string;
     target?: string;
     updateSchemaBaseline?: boolean;
-    wranglerQueueProducers?: ReadonlyArray<WranglerQueueProducerIR>;
+    wranglerQueueProducers: ReadonlyArray<WranglerQueueProducerIR>;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
 ```
@@ -1140,6 +1140,7 @@ interface WorkflowIR {
 ```ts
 interface WranglerQueueProducerIR {
     binding: string;
+    env?: string;
     queue: string;
 }
 ```

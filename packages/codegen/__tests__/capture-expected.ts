@@ -13,7 +13,7 @@ for (const [fixture, goldenDirectory, only] of GOLDEN_FIXTURES) {
 
     // `lint: false` keeps `LUNORA_ADVISORIES` empty in the captured fixture so the
     // snapshot stays decoupled from advisor behaviour — matches the snapshot test.
-    const result = runCodegen({ lint: false, projectRoot: workdir });
+    const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
     const expectedDirectory = join(fixtureRoot, goldenDirectory);
 
     mkdirSync(expectedDirectory, { recursive: true });

@@ -54,9 +54,10 @@ interface QueueConsumerEntry {
     type?: string;
 }
 
+/** A hand-edited JSONC array may hold a `null` (a trailing comma parses to one). */
 interface QueuesShape {
     consumers?: ReadonlyArray<QueueConsumerEntry>;
-    producers?: ReadonlyArray<QueueProducerEntry>;
+    producers?: ReadonlyArray<QueueProducerEntry | null>;
 }
 
 /** A wrangler `exports.<Class>` entry — only `type: "workflow"` ones are Lunora's to write. */

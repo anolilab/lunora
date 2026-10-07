@@ -104,7 +104,7 @@ describe("architecture manifest", () => {
     it("emits nothing for an app that declares no module", () => {
         expect.assertions(3);
 
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(existsSync(generated("architecture.json"))).toBe(false);
         expect(existsSync(generated("architecture.ts"))).toBe(false);
@@ -115,7 +115,7 @@ describe("architecture manifest", () => {
         expect.assertions(4);
 
         writeModules();
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         const { edges, nodes, modules } = manifest();
 
@@ -149,7 +149,7 @@ describe("architecture manifest", () => {
         expect.assertions(3);
 
         writeModules();
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         const app = readFileSync(generated("app.ts"), "utf8");
         const openApi = JSON.parse(readFileSync(generated("openapi.json"), "utf8")) as {
@@ -178,7 +178,7 @@ export const audits = defineQueue({ handler: async (ctx) => {
 } });
 `,
         );
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         const { edges, nodes } = manifest();
 
@@ -208,7 +208,7 @@ export const audits = defineQueue({ handler: async (ctx) => {
 
         writeModules();
 
-        const result = runCodegen({ projectRoot: workdir });
+        const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(result.advisories.filter((finding) => finding.name === "cross_module_table_write").map((finding) => finding.metadata)).toStrictEqual([
             { exportName: "touch", file: "accounts/users", owner: "chat", table: "messages", writer: "accounts" },
@@ -221,7 +221,7 @@ export const audits = defineQueue({ handler: async (ctx) => {
         write("chat/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({});\n`);
         write("chat/threads/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({});\n`);
 
-        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/"chat\/threads" is nested inside module "chat"/u);
+        expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/"chat\/threads" is nested inside module "chat"/u);
     });
 
     it("rejects a table claimed by two modules", () => {
@@ -230,7 +230,7 @@ export const audits = defineQueue({ handler: async (ctx) => {
         write("chat/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({ tables: ["users"] });\n`);
         write("accounts/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({ tables: ["users"] });\n`);
 
-        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/"users" is claimed by both/u);
+        expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/"users" is claimed by both/u);
     });
 
     it("rejects a claim on a table the schema does not define", () => {
@@ -238,7 +238,7 @@ export const audits = defineQueue({ handler: async (ctx) => {
 
         write("accounts/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({ tables: ["nope"] });\n`);
 
-        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/declares table "nope"/u);
+        expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/declares table "nope"/u);
     });
 
     it("rejects a shorthand table list instead of dropping the ownership", () => {
@@ -246,7 +246,7 @@ export const audits = defineQueue({ handler: async (ctx) => {
 
         write("accounts/module.ts", `import { defineModule } from "@lunora/server";\nconst tables = ["users"];\nexport default defineModule({ tables });\n`);
 
-        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/write `tables` inline/u);
+        expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/write `tables` inline/u);
     });
 
     it("attributes calls inside export default and inside a helper, and reports a helper no export calls", () => {
@@ -266,7 +266,7 @@ export const viaHelper = query({ args: {}, handler: async (ctx) => loadAll(ctx) 
 
         write("chat/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({});\n`);
         write("chat/feed.ts", feed);
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(manifest().edges).toContainEqual({ from: "function:chat_feed:default", kind: "read", to: "table:users" });
         expect(manifest().edges).toContainEqual({ from: "function:chat_feed:viaHelper", kind: "read", to: "table:messages" });
@@ -334,7 +334,7 @@ export default defineSchema({ invoices: defineTable({ amount: v.number() }) });
         expect.assertions(2);
 
         writeHelperWrites();
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         const writes = manifest().edges.filter((edge) => edge.kind === "write");
 
@@ -353,7 +353,7 @@ export default defineSchema({ invoices: defineTable({ amount: v.number() }) });
 
         writeHelperWrites();
 
-        const result = runCodegen({ projectRoot: workdir });
+        const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
         const signup = { file: "accounts/signup", owner: "billing", table: "invoices", writer: "accounts" };
 
         expect(
@@ -411,7 +411,7 @@ export const indexPost = defineSubscription(posted, { handler: async () => {} })
 export const jobs = defineQueue({ handler: processJob });
 `,
         );
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         const { edges, unresolved } = manifest();
 
@@ -446,7 +446,7 @@ export const jobs = defineQueue({ handler: processJob });
 export const retries = defineQueue({ handler: processJob });
 `,
         );
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(manifest().edges.filter((edge) => edge.to === "function:accounts_users:touch" && edge.kind === "call")).toStrictEqual([
             { from: "queue:jobs", kind: "call", to: "function:accounts_users:touch" },
@@ -483,7 +483,7 @@ export const cast = mutation({ args: { subject: v.string() }, handler: async (ct
 `,
         );
 
-        const result = runCodegen({ projectRoot: workdir });
+        const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
         const { modules, nodes } = manifest();
 
         expect(modules).toContainEqual({ installed: true, name: "voting", tables: ["voting_votes"] });
@@ -519,7 +519,7 @@ export const upvote = mutation({ args: { subject: v.string() }, handler: async (
 `,
         );
 
-        const result = runCodegen({ projectRoot: workdir });
+        const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(result.advisories.some((finding) => finding.name === "cross_module_table_write")).toBe(true);
         expect(existsSync(generated("architecture.json"))).toBe(false);
@@ -530,7 +530,7 @@ export const upvote = mutation({ args: { subject: v.string() }, handler: async (
 
         writeVotingSchema();
         write("voting/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({ description: "Our votes" });\n`);
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(manifest().modules).toStrictEqual([{ description: "Our votes", name: "voting", tables: ["voting_votes"] }]);
     });
@@ -541,7 +541,9 @@ export const upvote = mutation({ args: { subject: v.string() }, handler: async (
         writeVotingSchema();
         write("voting/admin/module.ts", `import { defineModule } from "@lunora/server";\nexport default defineModule({});\n`);
 
-        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/"voting\/admin" is nested inside installed component "voting"/u);
+        expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(
+            /"voting\/admin" is nested inside installed component "voting"/u,
+        );
     });
 
     it("rejects a file beside a module that shares its name", () => {
@@ -551,6 +553,6 @@ export const upvote = mutation({ args: { subject: v.string() }, handler: async (
         write("billing/invoices.ts", `import { query } from "@lunora/server";\nexport const list = query({ args: {}, handler: async () => [] });\n`);
         write("billing.ts", `import { query } from "@lunora/server";\nexport const summary = query({ args: {}, handler: async () => 0 });\n`);
 
-        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/lunora\/billing\.ts sits beside module "billing"/u);
+        expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/lunora\/billing\.ts sits beside module "billing"/u);
     });
 });

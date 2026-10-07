@@ -367,7 +367,7 @@ describe("project-declared target", () => {
     };
 
     const diagnosticNames = (target?: string): string[] =>
-        runCodegen({ projectRoot: workdir, target }).platformDiagnostics.map((diagnostic) => diagnostic.name);
+        runCodegen({ projectRoot: workdir, target, wranglerQueueProducers: [] }).platformDiagnostics.map((diagnostic) => diagnostic.name);
 
     it("gates against the project's declared target when the caller passes none", () => {
         expect.assertions(2);
@@ -700,7 +700,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         writeFileSync(schemaPath, `${text.slice(0, close)}${source}\n${text.slice(close)}`, "utf8");
     };
 
-    const codegen = (): ReturnType<typeof runCodegen> => runCodegen({ projectRoot: workdir });
+    const codegen = (): ReturnType<typeof runCodegen> => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
     it("gates a declared cron on a target where nothing dispatches one", () => {
         expect.assertions(3);

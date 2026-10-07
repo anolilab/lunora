@@ -4,6 +4,7 @@ import { isAbsolute, join } from "node:path";
 import type { AdvisorMap, BaselineComparison } from "@lunora/advisor";
 import { compareToBaseline, parseAdvisorMap, scoreAdvisor } from "@lunora/advisor";
 import { runCodegen } from "@lunora/codegen";
+import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -153,7 +154,7 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
         return { code: EXIT_CODE.USAGE, error: minScore.error };
     }
 
-    const { advisorContext, advisories } = runCodegen({ dryRun: true, projectRoot });
+    const { advisorContext, advisories } = runCodegen({ dryRun: true, projectRoot, ...wranglerCodegenInputs(projectRoot) });
 
     const map = scoreAdvisor(advisorContext?.procedureProtections ?? [], advisories, { generatedAt: options.generatedAt ?? STABLE_STAMP });
     const result: AdvisorCommandResult = { map };

@@ -64,7 +64,7 @@ describe("runCodegen — cold-start reproducibility (#283)", () => {
         expect.assertions(2);
 
         // Precondition: genuinely cold — no `_generated/` directory exists yet.
-        const result = runCodegen({ lint: false, projectRoot: workdir });
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(result.generated.api).not.toContain('getNote: FunctionReference<"query", {}, unknown>');
         expect(result.generated.api).toContain('getNote: FunctionReference<"query", {}, import("./dataModel.js").Doc_notes | null>;');
@@ -98,7 +98,7 @@ export const names = query({
             "utf8",
         );
 
-        const result = runCodegen({ lint: false, projectRoot: workdir });
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(result.generated.api).not.toContain('names: FunctionReference<"query", {}, unknown>');
         expect(result.generated.api).toContain('names: FunctionReference<"query", {}, "getNote">;');
@@ -126,7 +126,7 @@ export const feed = httpRoute.get("/api/feed").stream(async function* () {
             "utf8",
         );
 
-        const result = runCodegen({ lint: false, projectRoot: workdir });
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(result.generated.api).not.toContain("HttpStreamRef<unknown");
         expect(result.generated.api).toContain('HttpStreamRef<"getNote"');
@@ -135,12 +135,12 @@ export const feed = httpRoute.get("/api/feed").stream(async function* () {
     it("first-pass functions.ts/api.ts output equals a second pass's (fixpoint from pass 1)", () => {
         expect.assertions(2);
 
-        const first = runCodegen({ lint: false, projectRoot: workdir });
+        const first = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         // A second, fully independent invocation (no injected `project`, so this
         // constructs its own ts-morph Project exactly as a second `lunora codegen`
         // process would) reading back what pass 1 wrote.
-        const second = runCodegen({ lint: false, projectRoot: workdir });
+        const second = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(second.generated.functions).toBe(first.generated.functions);
         expect(second.generated.api).toBe(first.generated.api);
@@ -156,7 +156,7 @@ export const feed = httpRoute.get("/api/feed").stream(async function* () {
         // `lunora codegen` still needed two passes on a warm tree, and why a
         // project ends up wrapping the CLI in a run-until-the-hash-stops-changing
         // loop.
-        runCodegen({ lint: false, projectRoot: workdir });
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         writeFileSync(
             join(workdir, "lunora", "schema.ts"),
@@ -184,7 +184,7 @@ export const getProject = query({
             "utf8",
         );
 
-        const result = runCodegen({ lint: false, projectRoot: workdir });
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(result.generated.api).not.toContain('getProject: FunctionReference<"query", {}, unknown>');
         expect(result.generated.api).toContain('getProject: FunctionReference<"query", {}, import("./dataModel.js").Doc_projects | null>;');
@@ -199,7 +199,7 @@ export const getProject = query({
         // `api.ts`/`shard.ts` leaves the project failing to compile with errors
         // pointing at generated files rather than the real cause. Worst on a table
         // REMOVAL, where `Doc_x` vanishes while its referrers stay.
-        runCodegen({ lint: false, projectRoot: workdir });
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         const before = readFileSync(join(workdir, "lunora", "_generated", "dataModel.ts"), "utf8");
 
@@ -223,7 +223,7 @@ export const bad = query.input({ x: v.bogusKind() }).query(async () => 1);
             "utf8",
         );
 
-        expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/Unsupported validator kind/u);
+        expect(() => runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/Unsupported validator kind/u);
         expect(readFileSync(join(workdir, "lunora", "_generated", "dataModel.ts"), "utf8")).toBe(before);
     });
 
@@ -247,7 +247,7 @@ export const read = query({
 
         // First (cold) run creates the full \`_generated/\` output on disk,
         // including the \`hasKv\`-narrowed \`server.ts\`.
-        runCodegen({ lint: false, projectRoot: workdir });
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         // Spies on the module's own \`emitServer\` export: the bootstrap phase
         // calls it with only \`{ schema, useUmbrella }\` (no feature flags), the
@@ -262,7 +262,7 @@ export const read = query({
         // entirely — without it, the bootstrap phase would overwrite the full
         // content with a reduced one, and the final phase would immediately
         // write it back, touching disk twice for no observable change.
-        runCodegen({ lint: false, projectRoot: workdir });
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(emitServerSpy).toHaveBeenCalledTimes(1);
 

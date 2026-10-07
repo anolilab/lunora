@@ -1,8 +1,7 @@
 import type { CodegenOptions } from "@lunora/codegen";
 import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
 
-import { collectWranglerQueueProducers } from "../cloudflare/wrangler-queue-producers";
-import { collectWranglerSecretVariables } from "../cloudflare/wrangler-secret-variables";
+import { wranglerCodegenInputs } from "../cloudflare/wrangler-codegen-inputs";
 import { CODEGEN_ENV, isCodegenDisabled } from "../codegen-env";
 
 /** The request fields a studio endpoint carries that shape its codegen run. */
@@ -22,9 +21,9 @@ interface StudioCodegenRequest {
  * Both matter. `apiSpec` because codegen writes whichever spec file the mode
  * names and deletes the other: a studio edit that defaulted to `"openapi"`
  * deleted the `openrpc.json` an `apiSpec: "openrpc"` project had just
- * generated. `wranglerVariables` because the plaintext-secret lint reports
- * nothing when it is handed no evidence, so the edit would silently regenerate
- * with that security check disabled.
+ * generated. The wrangler inputs because the plaintext-secret lint reports
+ * nothing when it is handed no evidence, and the queue registry loses every
+ * per-environment queue name without the producers.
  *
  * `target` is deliberately absent: `runCodegen` resolves it from `lunora.config.*`
  * when omitted, which is the same value the host would pass.
@@ -34,8 +33,7 @@ const studioCodegenOptions = (request: StudioCodegenRequest): CodegenOptions => 
         apiSpec: request.apiSpec,
         lunoraDirectory: request.schemaDirectory ?? "lunora",
         projectRoot: request.projectRoot,
-        wranglerQueueProducers: collectWranglerQueueProducers(request.projectRoot),
-        wranglerVariables: collectWranglerSecretVariables(request.projectRoot),
+        ...wranglerCodegenInputs(request.projectRoot),
     };
 };
 

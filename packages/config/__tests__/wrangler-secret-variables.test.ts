@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { isPublicKeyName, isSecretKeyName } from "../../../shared/secret-key";
-import { collectWranglerSecretVariables, scanWranglerVariablesForSecrets } from "../src/cloudflare/wrangler-secret-variables";
+import { wranglerCodegenInputs } from "../src/cloudflare/wrangler-codegen-inputs";
+import { scanWranglerVariablesForSecrets } from "../src/cloudflare/wrangler-secret-variables";
 
 /**
  * The key-name classifier is `shared/secret-key.ts` — the SAME function
@@ -139,7 +140,7 @@ describe("scanWranglerVariablesForSecrets", () => {
     });
 });
 
-describe("collectWranglerSecretVariables", () => {
+describe("wranglerCodegenInputs — wranglerVariables", () => {
     let root: string;
 
     beforeEach(() => {
@@ -167,7 +168,7 @@ describe("collectWranglerSecretVariables", () => {
             "utf8",
         );
 
-        const findings = collectWranglerSecretVariables(root);
+        const findings = wranglerCodegenInputs(root).wranglerVariables;
 
         expect(findings).toHaveLength(1);
         expect(findings[0]).toMatchObject({ file: "wrangler.jsonc", key: "STRIPE_SECRET_KEY", kind: "stripe_live_key" });
@@ -175,6 +176,6 @@ describe("collectWranglerSecretVariables", () => {
 
     it("returns [] when no wrangler config exists", () => {
         expect.assertions(1);
-        expect(collectWranglerSecretVariables(root)).toHaveLength(0);
+        expect(wranglerCodegenInputs(root).wranglerVariables).toHaveLength(0);
     });
 });

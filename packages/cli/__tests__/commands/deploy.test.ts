@@ -184,6 +184,35 @@ describe("lunora deploy", () => {
     });
 
     describe("lunora deploy", () => {
+        it("routes a per-environment queue name in the registry its codegen step emits", async () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "lunora", "queues.ts"),
+                `import { defineQueue } from "@lunora/queue";\n\nexport const jobs = defineQueue({ handler: async () => {} });\n`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                validWranglerWithEnv("preview").replace(
+                    `"d1_databases": [{ "binding": "DB", "database_name": "x-preview"`,
+                    `"queues": { "producers": [{ "binding": "QUEUE_JOBS", "queue": "jobs-preview" }] },\n            "d1_databases": [{ "binding": "DB", "database_name": "x-preview"`,
+                ),
+                "utf8",
+            );
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            await runDeployCommand({ cwd: workdir, dryRun: true, env: "preview", logger, secretLister: noRemoteSecrets, spawner });
+
+            const codegen = vi.mocked(runCodegen).mock.results.at(-1);
+
+            expect(codegen?.type === "return" ? codegen.value.generated.queues : "").toContain(
+                '"jobs-preview": { binding: "QUEUE_JOBS", definition: jobs, exportName: "jobs" },',
+            );
+        });
+
         describe("deploy target", () => {
             it("rejects an unregistered target declared in lunora.config.ts", async () => {
                 expect.assertions(3);

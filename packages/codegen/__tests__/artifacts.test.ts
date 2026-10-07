@@ -35,7 +35,7 @@ describe("artifacts fixture", () => {
     // One codegen run for the golden assertions; `lint: false` matches `capture-expected.ts`.
     beforeAll(() => {
         workdir = makeFixtureWorkdir(fixtureRoot);
-        generated = runCodegen({ lint: false, projectRoot: workdir }).generated;
+        generated = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
     }, 300_000);
 
     afterAll(() => {
@@ -86,7 +86,7 @@ describe("artifacts gating", () => {
 
         writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
 
-        const result = runCodegen({ lint: false, projectRoot: workdir });
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
         const diagnostic = result.platformDiagnostics.find((entry) => entry.feature === "artifacts");
 
         expect(diagnostic?.name).toBe("platform_unsupported_feature");
@@ -102,7 +102,7 @@ describe("artifacts gating", () => {
 
         writeFileSync(schemaPath, readFileSync(schemaPath, "utf8").replace("});\n", '}).jurisdiction("fedramp");\n'), "utf8");
 
-        expect(runCodegen({ lint: false, projectRoot: workdir }).generated.server).toContain("readonly artifacts:");
+        expect(runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated.server).toContain("readonly artifacts:");
     }, 300_000);
 
     it("ignores a type-only import: no ctx.artifacts", () => {
@@ -119,7 +119,7 @@ describe("artifacts gating", () => {
 
         writeFileSync(schemaPath, readFileSync(schemaPath, "utf8").replace("});\n", '}).jurisdiction("fedramp");\n'), "utf8");
 
-        const result = runCodegen({ lint: false, projectRoot: workdir });
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(result.generated.server).not.toContain("readonly artifacts:");
         expect(result.generated.shard).not.toContain("@lunora/bindings/artifacts");

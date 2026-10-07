@@ -51,6 +51,7 @@ studio.
 | `procedure_type_check_unavailable`  | warn  | Types don't resolve for `lunora/` where codegen runs, so `procedure_not_registered` cannot report anything.                                                                                                                                                                              |
 | `procedure_arguments_unreadable`    | warn  | A registered procedure's `.input()` record could not be read, so `api.ts` types fewer arguments than the runtime enforces.                                                                                                                                                               |
 | `procedure_return_type_erased`      | warn  | A registered procedure's return type could neither be named nor reproduced in `_generated/`, so `api.ts` types it `unknown` while the runtime still returns the shape.                                                                                                                   |
+| `queue_alias_conflict`              | warn  | A wrangler.jsonc `queues.producers[]` entry maps a queue's binding to another queue's declared name, or two scopes alias one name to different queues; the batch goes to a handler other than the one wrangler.jsonc implies.                                                            |
 
 ### Performance
 

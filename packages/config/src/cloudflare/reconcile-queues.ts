@@ -202,7 +202,7 @@ const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyAr
     const existingProducers = existing.producers ?? [];
     const existingConsumers = existing.consumers ?? [];
 
-    const haveProducer = new Set(existingProducers.map((entry) => entry.binding));
+    const haveProducer = new Set(existingProducers.map((entry) => entry?.binding));
     const haveConsumer = new Set(existingConsumers.map((entry) => entry.queue));
 
     const missingProducers = queues.filter((queue) => !haveProducer.has(queue.bindingName));
@@ -277,13 +277,13 @@ const reconcileEnvQueues = (text: string, parsed: WranglerShape, queues: Readonl
     // another queue, a consumer that happens to carry the declared name is not
     // that queue's.
     const match = (entry: QueueConsumerEntry): InferredQueue | undefined => {
-        const binding = producers.find((producer) => producer.queue === entry.queue)?.binding;
+        const binding = producers.find((producer) => producer?.queue === entry.queue)?.binding;
 
         if (binding !== undefined) {
             return queues.find((queue) => queue.bindingName === binding);
         }
 
-        return queues.find((queue) => queue.name === entry.queue && !producers.some((producer) => producer.binding === queue.bindingName));
+        return queues.find((queue) => queue.name === entry.queue && !producers.some((producer) => producer?.binding === queue.bindingName));
     };
     const retune = retuneConsumers(text, consumers, ["env", environment, "queues", "consumers"], match, owned, new Set(["dead_letter_queue"]));
     const unmatched = consumers

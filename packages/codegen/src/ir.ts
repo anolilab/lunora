@@ -2304,6 +2304,8 @@ export interface WranglerVariableIR {
 export interface WranglerQueueProducerIR {
     /** The `Queue` producer binding, e.g. `QUEUE_JOBS`. */
     binding: string;
+    /** The `env.<name>` block the entry sits in; absent for the top level. */
+    env?: string;
     /** The queue name that binding sends to in that scope, e.g. `jobs-preview`. */
     queue: string;
 }

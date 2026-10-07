@@ -7,5 +7,5 @@ export { emitCrons, emitDurableObjects, emitScheduler, emitShardRegistry, emitVe
 export { default as emitServer } from "./server";
 export { default as emitShard } from "./shard";
 export { buildStorageColumns } from "./shard-metadata";
-export { emitAgents, emitContainers, emitQueues, emitWorkflows } from "./shard-runtime";
+export { emitAgents, emitContainers, emitQueues, emitWorkflows, queueAliasFindings } from "./shard-runtime";
 export { GENERATED_HEADER } from "./shared";

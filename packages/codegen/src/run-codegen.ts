@@ -107,6 +107,7 @@ import {
     emitVectors,
     emitWorkflows,
     emitWranglerCronTriggers,
+    queueAliasFindings,
 } from "./emit";
 import { emitServiceDeclarations } from "./emit/service-declarations";
 import { emitApp } from "./emit-app";
@@ -888,6 +889,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   // ("expansion produced nothing") exists only at the moment of
                   // the fallback, so it cannot be re-derived here.
                   ...erasedReturnFindings(erased, lunoraDirectory),
+                  // A wrangler.jsonc queue rename the registry cannot route as written.
+                  ...queueAliasFindings(queues, options.wranglerQueueProducers),
               ]);
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
@@ -1387,9 +1390,11 @@ export interface CodegenOptions {
      * `env.<name>` block. A producer naming a push queue's binding with another
      * queue name becomes an extra route in `_generated/queues.ts`, so a batch from
      * a per-environment rename (`jobs-preview`) reaches the `jobs` handler.
-     * Produced by `@lunora/config`; absent when there is no wrangler config.
+     * Produced by `@lunora/config`'s `wranglerCodegenInputs`; `[]` when there is
+     * no wrangler config. Required so a caller that writes `_generated/` cannot
+     * forget it and emit a registry without the renames.
      */
-    wranglerQueueProducers?: ReadonlyArray<WranglerQueueProducerIR>;
+    wranglerQueueProducers: ReadonlyArray<WranglerQueueProducerIR>;
 
     /**
      * Committed `wrangler.jsonc` `vars` entries that hold plaintext secrets — the
