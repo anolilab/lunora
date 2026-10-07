@@ -54,7 +54,7 @@ describe("browser_user_url_without_allowlist", () => {
         expect(findings).toHaveLength(0);
     });
 
-    it("suppresses all findings when a createBrowser pins resolveDns: true", () => {
+    it("still flags a createBrowser that only pins resolveDns: true — without allowedHosts the guard is best-effort", () => {
         expect.assertions(1);
 
         const findings = browserUserUrlWithoutAllowlist.run({
@@ -63,7 +63,7 @@ describe("browser_user_url_without_allowlist", () => {
             schema: schema(),
         });
 
-        expect(findings).toHaveLength(0);
+        expect(findings).toHaveLength(2);
     });
 
     it("does NOT suppress on `resolveDns: false` — the key is present but the guard is off", () => {
