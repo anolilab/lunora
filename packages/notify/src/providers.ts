@@ -500,12 +500,31 @@ const attemptGroup = async (channel: Provider<unknown, PushPayload>, group: Push
     }
 };
 
+const URGENCIES: ReadonlySet<unknown> = new Set<WebPushConfig["urgency"]>(["high", "low", "normal", "very-low"]);
+
+const isUrgency = (value: unknown): value is WebPushConfig["urgency"] => URGENCIES.has(value);
+
+/** A message's own push `ttl`, rejected with `BAD_REQUEST` unless it is a non-negative integer (seconds). */
+const checkPushTtl = (ttl: unknown): number | undefined => {
+    if (ttl !== undefined && (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < 0)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/notify: push ttl must be a non-negative integer number of seconds, got ${typeof ttl === "number" ? String(ttl) : typeof ttl}`,
+        );
+    }
+
+    return ttl;
+};
+
 /**
  * The Web Push provider, honouring a message's own `urgency` / `ttl`
  * ({@link PushContent}). Upstream reads both only from the provider config, so a
  * message that sets either is sent through a provider built with them overriding
  * the channel defaults. Building one is cheap: it holds no connection or key
  * state (the VAPID key is imported per send either way).
+ *
+ * ponytail: a provider per overriding send, and the fields read off a payload
+ * typed without them. Drop once `@visulima/notification` PushPayload carries ttl/urgency.
  */
 const webPushProvider = (config: WebPushConfig): Provider<unknown, PushPayload> => {
     const base = createWebPushProvider(config);
@@ -513,10 +532,18 @@ const webPushProvider = (config: WebPushConfig): Provider<unknown, PushPayload> 
     return {
         ...base,
         send: async (payload) => {
-            const { ttl, urgency } = payload as PushContent & PushPayload;
+            const ttl = checkPushTtl("ttl" in payload ? payload.ttl : undefined);
+            const urgency = "urgency" in payload ? payload.urgency : undefined;
 
             if (ttl === undefined && urgency === undefined) {
                 return base.send(payload);
+            }
+
+            if (urgency !== undefined && !isUrgency(urgency)) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `@lunora/notify: push urgency must be "very-low", "low", "normal" or "high", got ${JSON.stringify(urgency)}`,
+                );
             }
 
             return createWebPushProvider({ ...config, ...(ttl === undefined ? {} : { ttl }), ...(urgency === undefined ? {} : { urgency }) }).send(payload);
@@ -789,3 +816,5 @@ export const buildEngine = (resolved: ResolvedProviders): Notification => {
 
     return attachResilience(createNotification(providers));
 };
+
+export { checkPushTtl };

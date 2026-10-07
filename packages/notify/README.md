@@ -43,6 +43,10 @@ const { replacedEndpoint, subscription } = await subscribeToPush({ serviceWorker
 await client.mutation("registerDevice", { replacedEndpoint, subscription });
 ```
 
+Without `serviceWorkerUrl`, `subscribeToPush` uses the page's existing
+registration: await your own `navigator.serviceWorker.register()` first, or the
+call rejects with "no service worker is registered" instead of waiting for it.
+
 `replacedEndpoint` is set only after a **VAPID key rotation**: the stale browser
 subscription is dropped and a new one minted, and the new one has a new endpoint
 — hence a new store id — so it never upserts over the old row. Every send to that

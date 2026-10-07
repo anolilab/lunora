@@ -135,6 +135,17 @@ describe("ctx.push lifecycle", () => {
         await expect(push.send("nope", { body: "x" })).rejects.toThrow(/no registered subscription/u);
     });
 
+    it("rejects a non-integer or negative ttl with BAD_REQUEST before sending", async () => {
+        expect.hasAssertions();
+
+        const { push, sends } = setup();
+        const stored = await push.register({ subscription: okSub });
+
+        await expect(push.send(stored.id, { body: "x", ttl: -1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(push.broadcast({ body: "x", ttl: 1.5 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(sends).toHaveLength(0);
+    });
+
     it("unregisters the caller's own subscription", async () => {
         expect.hasAssertions();
 

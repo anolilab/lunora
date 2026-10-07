@@ -179,6 +179,59 @@ describe("subscribeToPush — no service worker registered", () => {
     });
 });
 
+describe("subscribeToPush — existing registration", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    /** `getRegistration()` hands back a push manager only once its worker is active; `ready` always does. */
+    const install = (active: object | null, ready: Promise<unknown>): void => {
+        const pushManager = { getSubscription: async () => null, subscribe: async () => fakeSubscription(null, "fresh") };
+        const registration = { active, pushManager: active === null ? undefined : pushManager };
+
+        vi.stubGlobal("navigator", {
+            serviceWorker: {
+                getRegistration: async () => registration,
+                ready: ready.then(() => {
+                    return { pushManager };
+                }),
+            },
+        });
+        vi.stubGlobal("PushManager", () => {});
+        vi.stubGlobal("Notification", { requestPermission: async () => "granted" });
+    };
+
+    it("uses an active registration directly, without waiting on `ready`", async () => {
+        expect.hasAssertions();
+
+        install({}, new Promise(() => {}));
+
+        await expect(subscribeToPush({ vapidPublicKey: VAPID_PUBLIC_KEY })).resolves.toMatchObject({
+            subscription: { endpoint: "https://push.example/fresh" },
+        });
+        await expect(unsubscribeFromPush()).resolves.toBe(false);
+    });
+
+    it("waits on `ready` while the registration has no active worker yet", async () => {
+        expect.hasAssertions();
+
+        let activate = (): void => {};
+
+        install(
+            null,
+            new Promise<void>((resolve) => {
+                activate = resolve;
+            }),
+        );
+
+        const pending = subscribeToPush({ vapidPublicKey: VAPID_PUBLIC_KEY });
+
+        activate();
+
+        await expect(pending).resolves.toMatchObject({ subscription: { endpoint: "https://push.example/fresh" } });
+    });
+});
+
 /**
  * The base64url decode helper is private, exercised here through
  * `subscribeToPush`'s key-match reuse path: a subscription minted with key bytes

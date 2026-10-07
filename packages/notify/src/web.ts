@@ -110,13 +110,16 @@ const isPushSupported = (): boolean =>
     browserGlobals.navigator?.serviceWorker !== undefined && browserGlobals.PushManager !== undefined && browserGlobals.Notification !== undefined;
 
 /**
- * The page's service-worker registration once it is active, or `undefined` when
- * nothing is registered for this page. `navigator.serviceWorker.ready` alone never
- * settles without a registration, so a caller would hang instead of failing.
+ * The page's service-worker registration, or `undefined` when nothing is
+ * registered for this page. `navigator.serviceWorker.ready` is awaited only while
+ * the registration has no active worker yet (Push needs one): it never settles
+ * without a registration, so a caller would hang instead of failing.
  */
 const existingRegistration = async (): Promise<ServiceWorkerRegistration | undefined> => {
-    if ((await navigator.serviceWorker.getRegistration()) === undefined) {
-        return undefined;
+    const registration = await navigator.serviceWorker.getRegistration();
+
+    if (registration?.active !== null) {
+        return registration;
     }
 
     return navigator.serviceWorker.ready;
@@ -127,6 +130,10 @@ const existingRegistration = async (): Promise<ServiceWorkerRegistration | undef
  * returning the subscription in serialisable form. Reuses an existing subscription
  * when present. Throws if push is unsupported, no service worker is registered
  * (without `serviceWorkerUrl`), or the user denies permission.
+ *
+ * Without `serviceWorkerUrl`, await your own `navigator.serviceWorker.register()`
+ * before calling this: a registration still in flight is not found yet, and the
+ * call rejects rather than waiting for it.
  */
 const subscribeToPush = async (options: SubscribeToPushOptions): Promise<SubscribeToPushResult> => {
     if (!isPushSupported()) {

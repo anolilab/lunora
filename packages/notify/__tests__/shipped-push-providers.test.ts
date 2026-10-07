@@ -204,5 +204,18 @@ describe("shipped push providers", () => {
 
             expect(requests[0]?.headers).toMatchObject({ TTL: "2419200", Urgency: "normal" });
         });
+
+        it.each([-1, 1.5, Number.NaN])("rejects a ttl of %s with BAD_REQUEST before sending", async (ttl) => {
+            expect.hasAssertions();
+
+            const keys = await vapidKeys();
+            const requests = stubFetch(() => true);
+
+            const message: PushContent & { to: string } = { body: "b", title: "t", to: subscription("good", keys.vapidPublicKey), ttl };
+            const result = await engineFor(keys).sendToChannel("push", message);
+
+            expect(result).toMatchObject({ errorMessages: [expect.stringContaining("push ttl must be a non-negative integer")], successful: false });
+            expect(requests).toHaveLength(0);
+        });
     });
 });
