@@ -38,7 +38,7 @@ describe("playground compose smoke (Phase 7)", () => {
     });
 
     it("keeps the inbound-email sink off the public api", () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         // `inbound:onEmail` is reached by the worker's `email()` export over the
         // root shard's ADMIN RPC, behind a DMARC/SPF/DKIM `verify` gate that only
@@ -50,14 +50,12 @@ describe("playground compose smoke (Phase 7)", () => {
         // `internalMutation` is the sibling pattern (`cleanup.ts`), and the mail
         // dispatcher already sends `x-lunora-system: 1`, which is exactly what
         // lets an internal target answer a server-initiated dispatch.
-        const { api } = runCodegen({ projectRoot }).generated;
-        const internalAt = api.indexOf("export interface InternalApiTypes");
+        const { api, internal } = runCodegen({ projectRoot }).generated;
 
-        expect(internalAt).toBeGreaterThan(-1);
-        // Not in the public `ApiTypes` block…
-        expect(api.slice(0, internalAt)).not.toContain("onEmail");
-        // …and present in the internal one.
-        expect(api.slice(internalAt)).toContain("onEmail");
+        // Not in the public `api.ts`…
+        expect(api).not.toContain("onEmail");
+        // …and present in the server-only `internal.ts`.
+        expect(internal).toContain("onEmail");
     });
 
     it("validateWranglerProject finds no problems for the shipped wrangler.jsonc", () => {

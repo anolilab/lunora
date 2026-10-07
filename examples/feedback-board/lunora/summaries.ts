@@ -3,8 +3,8 @@ import { LunoraError } from "@lunora/errors";
 import { rateLimit } from "lunorash/ratelimit";
 
 import { api } from "./_generated/api.js";
-import { internal } from "./_generated/internal.js";
 import type { Doc as Document_, Id } from "./_generated/dataModel.js";
+import { internal } from "./_generated/internal.js";
 import type { ActionCtx, MutationCtx } from "./_generated/server.js";
 import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
 import { makeRateLimiter } from "./ratelimit/schema.js";
