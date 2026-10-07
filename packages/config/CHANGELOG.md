@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.316](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.315...@lunora/config@1.0.0-alpha.316) (2026-10-06)
+
+### Features
+
+* **platform-celld:** publish the package and test against celld v0.6.1 ([#1013](https://github.com/anolilab/lunora/issues/1013)) ([e695d1c](https://github.com/anolilab/lunora/commit/e695d1ccf114755b1d8169d6ce635487eef11bbb))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.272
+* **@lunora/seed:** upgraded to 1.0.0-alpha.197
+* **@lunora/studio:** upgraded to 1.0.0-alpha.271
+
 ## @lunora/config [1.0.0-alpha.315](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.314...@lunora/config@1.0.0-alpha.315) (2026-10-06)
 
 ### ⚠ BREAKING CHANGES
