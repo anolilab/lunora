@@ -125,6 +125,11 @@ const emitServiceDeclarations = (service: ServiceBindingIR, generatedDirectory: 
         files[relative(generatedDirectory, output.filePath)] = `${GENERATED_HEADER}${text}`;
     }
 
+    // `server.ts` imports the entry's snapshot; name the cause here rather than leave an unresolved import in generated code.
+    if (files[relative(generatedDirectory, snapshotPathOf(snapshotDirectory, serviceDirectory, service.main))] === undefined) {
+        throw new Error(`@lunora/codegen: service "${service.name}": TypeScript emitted no declaration for its entry module ${service.main}`);
+    }
+
     return files;
 };
 

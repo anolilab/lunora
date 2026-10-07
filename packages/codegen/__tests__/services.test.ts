@@ -123,6 +123,17 @@ export class Gateway {
         expect(() => generated("services")).toThrow(/ENOENT/u);
     });
 
+    it("names the service when TypeScript emits no declaration for its entry", () => {
+        expect.assertions(1);
+
+        writeServices();
+        // A `.js` entry without `allowJs` is not compiled, so there is nothing for server.ts to import.
+        write("services/llm-gateway/wrangler.jsonc", `{ "name": "neore-llm-gateway", "main": "src/index.js" }\n`);
+        write("services/llm-gateway/src/index.js", `export class Gateway {}\n`);
+
+        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/service "llmGateway": TypeScript emitted no declaration/u);
+    });
+
     it("binds a named entrypoint declared rpc: false as a fetcher, without importing the service's sources", () => {
         expect.assertions(5);
 

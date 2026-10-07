@@ -38,8 +38,8 @@ import type { Spawner } from "./spawn";
 
 const DEFAULT_DEBOUNCE_MS = 100;
 
-/** A TypeScript source an RPC service's declaration snapshot is emitted from. */
-const SERVICE_SOURCE_RE = /\.[cm]?tsx?$/u;
+/** An input of an RPC service's declaration snapshot: a source (`.js` too, under `allowJs`) or a tsconfig. */
+const SERVICE_SOURCE_RE = /(?:\.[cm]?[jt]sx?|(?:^|[/\\])tsconfig(?:\..+)?\.json)$/u;
 
 /**
  * How long after a `postcodegen` run the watcher ignores changes under
@@ -288,17 +288,19 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
         for (const service of readServiceBindings(options.projectRoot).services) {
             if (service.rpcEntrypoint !== undefined) {
-                serviceWatchers.push(
-                    watch(dirname(service.wranglerPath), { recursive: true }, (_event, filename) => {
-                        if (
-                            typeof filename === "string" &&
-                            SERVICE_SOURCE_RE.test(filename) &&
-                            !filename.split(PATH_SEGMENT_SEPARATOR).includes("node_modules")
-                        ) {
-                            onEvent(filename);
-                        }
-                    }),
-                );
+                const serviceWatcher = watch(dirname(service.wranglerPath), { recursive: true }, (_event, filename) => {
+                    if (typeof filename === "string" && SERVICE_SOURCE_RE.test(filename) && !filename.split(PATH_SEGMENT_SEPARATOR).includes("node_modules")) {
+                        onEvent(filename);
+                    }
+                });
+
+                // A watcher error arrives as an event (a removed service folder on
+                // Windows), past the `try`; unhandled, it would end `lunora dev`.
+                serviceWatcher.on("error", (error) => {
+                    options.logger.warn(`codegen watch: stopped watching service "${service.name}" (${error.message})`);
+                    serviceWatcher.close();
+                });
+                serviceWatchers.push(serviceWatcher);
             }
         }
     } catch (error: unknown) {
