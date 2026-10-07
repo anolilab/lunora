@@ -47,9 +47,13 @@ export const emailQueue = defineQueue<{ to: string }>({
         }
     },
     // Push-consumer tuning (optional):
-    // maxBatchSize: 10, maxBatchTimeout: 5, maxRetries: 3, deadLetterQueue: "dlq",
+    // maxBatchSize: 10, maxBatchTimeout: 5, maxConcurrency: 5, maxRetries: 3, deadLetterQueue: "dlq",
 });
 ```
+
+Each tuning option you set is written onto the queue's `queues.consumers[]` entry in `wrangler.jsonc` (`maxConcurrency` → `max_concurrency`). An option you leave out is never written, so a value set by hand in `wrangler.jsonc` stays as it is.
+
+An environment can rename its queues (`jobs-preview` for `jobs`). Keep the producer binding the same in the `env.<name>` block, and codegen routes batches from the renamed queue to the same handler.
 
 The handler runs inside a Lunora context: call any query/mutation/action with `message.run(api.x.y, args)` (the dispatch goes through the same path the scheduler and workflows use). Each `message` is `ack`/`retry`-able for at-least-once processing.
 

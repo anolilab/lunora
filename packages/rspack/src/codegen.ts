@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import type { FindingLogger } from "@lunora/config";
 import { blockingFindingsMessage, LUNORA_TAG, reportCodegenFindings } from "@lunora/config";
-import { collectWranglerSecretVariables, reconcileWranglerExtras } from "@lunora/config/cloudflare";
+import { collectWranglerQueueProducers, collectWranglerSecretVariables, reconcileWranglerExtras } from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
 
 import type { ResolvedLunoraRspackOptions } from "./types";
@@ -44,6 +44,7 @@ const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLog
         project,
         projectRoot: options.projectRoot,
         target: options.target,
+        wranglerQueueProducers: collectWranglerQueueProducers(options.projectRoot),
         wranglerVariables: collectWranglerSecretVariables(options.projectRoot),
     });
 

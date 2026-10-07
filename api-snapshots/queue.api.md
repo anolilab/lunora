@@ -42,8 +42,8 @@ interface FunctionReference {
 ### `LunoraQueuesOptions` (interface)
 
 ```ts
-interface LunoraQueuesOptions {
-    bindings: Record<string, QueueBindingLike>;
+interface LunoraQueuesOptions<Name extends string = string> {
+    bindings: Record<Name, QueueBindingLike>;
 }
 ```
 
@@ -66,9 +66,9 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 ### `QueueBindingSpec` (interface)
 
 ```ts
-interface QueueBindingSpec {
+interface QueueBindingSpec<Name extends string = string> {
     binding: string;
-    exportName: string;
+    exportName: Name;
     name: string;
 }
 ```
@@ -111,6 +111,7 @@ interface QueueConsumerTuning {
     deadLetterQueue?: string;
     maxBatchSize?: number;
     maxBatchTimeout?: number;
+    maxConcurrency?: number;
     maxRetries?: number;
     retryDelay?: number;
 }
@@ -221,12 +222,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
-### `Queues` (interface)
+### `Queues` (type)
 
 ```ts
-interface Queues {
-    [exportName: string]: QueueProducer;
-}
+type Queues<Name extends string = string> = Readonly<Record<Name, QueueProducer>>;
 ```
 
 ### `RunFunctionOptions` (interface)
@@ -262,8 +261,8 @@ interface SubscriptionDefinition<Payload = unknown> extends QueueDefinition<Payl
 ### `TopicBindingSpec` (interface)
 
 ```ts
-interface TopicBindingSpec {
-    exportName: string;
+interface TopicBindingSpec<Name extends string = string> {
+    exportName: Name;
     subscriptions: ReadonlyArray<{
         binding: string;
         exportName: string;
@@ -289,12 +288,10 @@ interface TopicPublisher<Payload = unknown> {
 }
 ```
 
-### `Topics` (interface)
+### `Topics` (type)
 
 ```ts
-interface Topics {
-    [exportName: string]: TopicPublisher;
-}
+type Topics<Name extends string = string> = Readonly<Record<Name, TopicPublisher>>;
 ```
 
 ### `createQueueCaptureSink` (const)
@@ -306,7 +303,7 @@ const createQueueCaptureSink: (env: QueueEnv, options?: QueueCaptureOptions) => 
 ### `createQueueContext` (const)
 
 ```ts
-const createQueueContext: (env: Record<string, unknown>, specs: ReadonlyArray<QueueBindingSpec>) => Queues;
+const createQueueContext: <Name extends string>(env: Record<string, unknown>, specs: ReadonlyArray<QueueBindingSpec<Name>>) => Queues<Name>;
 ```
 
 ### `createQueueRunContext` (const)
@@ -318,13 +315,13 @@ const createQueueRunContext: (options: RunContextOptions) => QueueRunContext;
 ### `createQueues` (const)
 
 ```ts
-const createQueues: (options: LunoraQueuesOptions) => Queues;
+const createQueues: <Name extends string>(options: LunoraQueuesOptions<Name>) => Queues<Name>;
 ```
 
 ### `createTopicContext` (const)
 
 ```ts
-const createTopicContext: (env: Record<string, unknown>, specs: ReadonlyArray<TopicBindingSpec>) => Topics;
+const createTopicContext: <Name extends string>(env: Record<string, unknown>, specs: ReadonlyArray<TopicBindingSpec<Name>>) => Topics<Name>;
 ```
 
 ### `defineQueue` (const)

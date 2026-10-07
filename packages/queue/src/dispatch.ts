@@ -604,7 +604,9 @@ const resolveDeclinedBatch = async (
  * Look up the handler for `batch.queue` and invoke it with a fresh
  * `QueueRunContext`. Throws a directed error when no push handler is registered
  * for the delivered queue (a misconfiguration — the consumer was declared
- * `pull`, or the queue name drifted from the `defineQueue` export).
+ * `pull`, or the queue name drifted from the `defineQueue` export). The
+ * registry already carries every per-environment name wrangler.jsonc maps to a
+ * declared producer binding (see codegen's `emitQueues`), so the lookup stays exact.
  */
 const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegistry, options: DispatchOptions): Promise<void> => {
     // Guard the lookup with `Object.hasOwn`: the registry is an ordinary object
@@ -619,7 +621,10 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         const known = Object.keys(registry);
         const suffix = known.length === 0 ? "no push queues are declared" : `known push queues: ${known.join(", ")}`;
 
-        throw new LunoraError("INTERNAL", `@lunora/queue: received a batch for queue "${batch.queue}" but no push handler is registered (${suffix})`);
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/queue: received a batch for queue "${batch.queue}" but no push handler is registered (${suffix}). A per-environment queue name routes only when a wrangler.jsonc producer maps the queue's declared binding to it — add that producer and rerun codegen.`,
+        );
     }
 
     const { handler } = entry.definition;

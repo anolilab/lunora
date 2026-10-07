@@ -19,7 +19,7 @@ import type { QueueBindingLike, QueueBindingSpec, Queues } from "./types";
  * the missing queue is actually used.
  */
 // eslint-disable-next-line import/prefer-default-export -- named export by package convention; the index re-exports it
-export const createQueueContext = (env: Record<string, unknown>, specs: ReadonlyArray<QueueBindingSpec>): Queues => {
+export const createQueueContext = <Name extends string>(env: Record<string, unknown>, specs: ReadonlyArray<QueueBindingSpec<Name>>): Queues<Name> => {
     const bindings: Record<string, QueueBindingLike> = {};
 
     for (const spec of specs) {
@@ -30,5 +30,5 @@ export const createQueueContext = (env: Record<string, unknown>, specs: Readonly
         }
     }
 
-    return createQueues({ bindings });
+    return createQueues<Name>({ bindings });
 };

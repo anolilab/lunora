@@ -2,7 +2,7 @@ import type { Finding } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 import { applyLintIgnores, detectLintTools, inferLunoraBindings, resolveSchemaDirectory } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
-import { collectExportGaps, collectWranglerSecretVariables, warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
+import { collectExportGaps, collectWranglerQueueProducers, collectWranglerSecretVariables, warnCloudflareCliConfigOnce } from "@lunora/config/cloudflare";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
@@ -94,6 +94,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         apiSpec: options.apiSpec,
         projectRoot,
         target,
+        wranglerQueueProducers: collectWranglerQueueProducers(projectRoot),
         wranglerVariables: collectWranglerSecretVariables(projectRoot),
     });
     const commandResult: CodegenCommandResult = {

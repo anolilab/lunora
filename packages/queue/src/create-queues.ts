@@ -116,8 +116,12 @@ const resolveQueueBinding = (env: Record<string, unknown>, name: string): QueueB
  * what IS declared. Null-prototype, so a name like `constructor` can't resolve to
  * an inherited Object member.
  */
-const namedLookup = <T>(entries: Record<string, T>, noun: string, missing: (reject: () => Promise<never>) => T): Record<string, T> => {
-    const target: Record<string, T> = Object.assign(Object.create(null) as Record<string, T>, entries);
+const namedLookup = <Name extends string, T>(
+    entries: Record<Name, T>,
+    noun: string,
+    missing: (reject: () => Promise<never>) => T,
+): Readonly<Record<Name, T>> => {
+    const target: Record<Name, T> = Object.assign(Object.create(null) as Record<Name, T>, entries);
     const known = Object.keys(target);
     const suffix = known.length === 0 ? `no ${noun}s are declared` : `known ${noun}s: ${known.join(", ")}`;
 
@@ -129,7 +133,7 @@ const namedLookup = <T>(entries: Record<string, T>, noun: string, missing: (reje
             }
 
             if (Object.hasOwn(lookup, property)) {
-                return lookup[property];
+                return lookup[property as Name];
             }
 
             return missing(() => Promise.reject(new Error(`@lunora/queue: no ${noun} named "${property}" (${suffix})`)));
@@ -143,16 +147,16 @@ const namedLookup = <T>(entries: Record<string, T>, noun: string, missing: (reje
  * export whose binding is absent throws a directed error naming the declared
  * queues (raised lazily on first use).
  */
-const createQueues = (options: LunoraQueuesOptions): Queues => {
+const createQueues = <Name extends string>(options: LunoraQueuesOptions<Name>): Queues<Name> => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
-    const bindings = options.bindings ?? {};
+    const bindings: Record<string, QueueBindingLike> = options.bindings ?? {};
     const producers: Record<string, QueueProducer> = {};
 
     for (const [exportName, binding] of Object.entries(bindings)) {
         producers[exportName] = producerFor(binding);
     }
 
-    return namedLookup(producers, "queue", (reject) => {
+    return namedLookup<Name, QueueProducer>(producers, "queue", (reject) => {
         return { send: reject, sendBatch: reject };
     });
 };

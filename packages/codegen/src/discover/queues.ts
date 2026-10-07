@@ -130,7 +130,7 @@ const queueFromConfig = (argument: ObjectLiteralExpression, exportName: string, 
         ir.tuning.deadLetterQueue = stringProperty(dlqProperty.getInitializerOrThrow(), exportName, "deadLetterQueue");
     }
 
-    for (const property of ["maxBatchSize", "maxBatchTimeout", "maxRetries", "retryDelay"] as const) {
+    for (const property of ["maxBatchSize", "maxBatchTimeout", "maxConcurrency", "maxRetries", "retryDelay"] as const) {
         const node = findObjectProperty(argument, property);
 
         if (node && Node.isPropertyAssignment(node)) {

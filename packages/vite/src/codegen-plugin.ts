@@ -14,7 +14,13 @@ import {
 } from "@lunora/codegen";
 import { blockingFindingsMessage, CODEGEN_ENV, isCodegenDisabled, LUNORA_TAG, reportCodegenFindings, runPostCodegenHook } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
-import { collectWranglerSecretVariables, reconcileBindingsSafely, reconcileWranglerExtras, WRANGLER_FILES } from "@lunora/config/cloudflare";
+import {
+    collectWranglerQueueProducers,
+    collectWranglerSecretVariables,
+    reconcileBindingsSafely,
+    reconcileWranglerExtras,
+    WRANGLER_FILES,
+} from "@lunora/config/cloudflare";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
@@ -140,6 +146,7 @@ const runCodegenSafely = (
             project,
             projectRoot: options.projectRoot,
             target: options.target,
+            wranglerQueueProducers: collectWranglerQueueProducers(options.projectRoot),
             wranglerVariables: collectWranglerSecretVariables(options.projectRoot),
         });
 

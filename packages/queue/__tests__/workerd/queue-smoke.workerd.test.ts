@@ -26,14 +26,14 @@ describe("@lunora/queue (workerd)", () => {
 
         const queues = createQueues({ bindings: { smokeQueue: env.QUEUE_SMOKE_QUEUE as unknown as QueueBindingLike } });
 
-        await expect(queues.smokeQueue!.send({ text: "from-producer" })).resolves.toBeUndefined();
-        await expect(queues.smokeQueue!.sendBatch([{ body: { text: "batch-1" } }, { body: { text: "batch-2" } }])).resolves.toBeUndefined();
+        await expect(queues.smokeQueue.send({ text: "from-producer" })).resolves.toBeUndefined();
+        await expect(queues.smokeQueue.sendBatch([{ body: { text: "batch-1" } }, { body: { text: "batch-2" } }])).resolves.toBeUndefined();
     });
 
     it("an undeclared queue name rejects with a directed error", async () => {
         expect.hasAssertions();
 
-        const queues = createQueues({ bindings: { smokeQueue: env.QUEUE_SMOKE_QUEUE as unknown as QueueBindingLike } });
+        const queues = createQueues<string>({ bindings: { smokeQueue: env.QUEUE_SMOKE_QUEUE as unknown as QueueBindingLike } });
 
         await expect(queues.otherQueue!.send({ text: "nope" })).rejects.toThrow(/no queue named "otherQueue".*known queues: smokeQueue/);
     });
@@ -73,7 +73,7 @@ describe("@lunora/queue (workerd)", () => {
             },
         ]);
 
-        await topics.signups!.publish({ text: "fan-out" });
+        await topics.signups.publish({ text: "fan-out" });
 
         await vi.waitFor(
             () => {

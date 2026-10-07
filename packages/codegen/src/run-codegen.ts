@@ -122,6 +122,7 @@ import type {
     QueueIR,
     ShapeIR,
     WorkflowIR,
+    WranglerQueueProducerIR,
     WranglerVariableIR,
 } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
@@ -1023,7 +1024,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const containersContent = emitContainers(containers, schema.jurisdiction);
     const workflowsContent = emitWorkflows(workflows);
     const agentsContent = emitAgents(agents);
-    const queuesContent = emitQueues(queues);
+    const queuesContent = emitQueues(queues, options.wranglerQueueProducers);
     const cronsContent = emitCrons(crons);
     const schedulerContent = emitScheduler(studioFeatures.scheduler);
     const shardRegistryContent = emitShardRegistry(schema.tables, useUmbrella);
@@ -1380,6 +1381,15 @@ export interface CodegenOptions {
      * a breaking change. Ignored when `dryRun` is true.
      */
     updateSchemaBaseline?: boolean;
+
+    /**
+     * Every `queues.producers[]` entry of `wrangler.jsonc`, top level and each
+     * `env.<name>` block. A producer naming a push queue's binding with another
+     * queue name becomes an extra route in `_generated/queues.ts`, so a batch from
+     * a per-environment rename (`jobs-preview`) reaches the `jobs` handler.
+     * Produced by `@lunora/config`; absent when there is no wrangler config.
+     */
+    wranglerQueueProducers?: ReadonlyArray<WranglerQueueProducerIR>;
 
     /**
      * Committed `wrangler.jsonc` `vars` entries that hold plaintext secrets — the

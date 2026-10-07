@@ -104,6 +104,7 @@ interface CodegenOptions {
     projectRoot: string;
     target?: string;
     updateSchemaBaseline?: boolean;
+    wranglerQueueProducers?: ReadonlyArray<WranglerQueueProducerIR>;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
 ```
@@ -720,6 +721,7 @@ interface QueueIR {
         deadLetterQueue?: string;
         maxBatchSize?: number;
         maxBatchTimeout?: number;
+        maxConcurrency?: number;
         maxRetries?: number;
         retryDelay?: number;
     };
@@ -1130,6 +1132,15 @@ interface WorkflowIR {
     name: string;
     schedules?: ReadonlyArray<string>;
     steps: ReadonlyArray<WorkflowStepIR>;
+}
+```
+
+### `WranglerQueueProducerIR` (interface)
+
+```ts
+interface WranglerQueueProducerIR {
+    binding: string;
+    queue: string;
 }
 ```
 

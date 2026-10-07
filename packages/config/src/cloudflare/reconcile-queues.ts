@@ -16,6 +16,7 @@ import type { QueueConsumerEntry, QueuesShape, ReconcileStep, WranglerShape } fr
 const CONSUMER_TUNING_KEYS = [
     ["maxBatchSize", "max_batch_size"],
     ["maxBatchTimeout", "max_batch_timeout"],
+    ["maxConcurrency", "max_concurrency"],
     ["maxRetries", "max_retries"],
     ["deadLetterQueue", "dead_letter_queue"],
     ["retryDelay", "retry_delay"],

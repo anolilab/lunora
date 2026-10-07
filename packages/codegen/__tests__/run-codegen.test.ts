@@ -4940,6 +4940,28 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(registry).not.toContain("QUEUE_PULLED");
         });
 
+        it("routes a per-environment queue name to the queue whose producer binding it shares", () => {
+            expect.assertions(3);
+
+            const registry = emitQueues(
+                [
+                    { bindingName: "QUEUE_JOBS", exportName: "jobs", filePath: "queues", mode: "push", name: "jobs", tuning: {} },
+                    { bindingName: "QUEUE_MAIL", exportName: "mail", filePath: "queues", mode: "push", name: "mail", tuning: {} },
+                ],
+                [
+                    { binding: "QUEUE_JOBS", queue: "jobs" },
+                    { binding: "QUEUE_JOBS", queue: "jobs-preview" },
+                    // A rename onto another declared queue's name never shadows it.
+                    { binding: "QUEUE_JOBS", queue: "mail" },
+                    { binding: "QUEUE_OTHER", queue: "other-preview" },
+                ],
+            );
+
+            expect(registry).toContain('    "jobs-preview": { binding: "QUEUE_JOBS", definition: jobs, exportName: "jobs" },');
+            expect(registry).toContain('    "mail": { binding: "QUEUE_MAIL", definition: mail, exportName: "mail" },');
+            expect(registry).not.toContain("other-preview");
+        });
+
         it("emits the queues studio metadata constant + override when queues are declared, and omits both otherwise", () => {
             expect.assertions(5);
 

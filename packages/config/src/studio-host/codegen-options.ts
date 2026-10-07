@@ -1,6 +1,7 @@
 import type { CodegenOptions } from "@lunora/codegen";
 import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
 
+import { collectWranglerQueueProducers } from "../cloudflare/wrangler-queue-producers";
 import { collectWranglerSecretVariables } from "../cloudflare/wrangler-secret-variables";
 import { CODEGEN_ENV, isCodegenDisabled } from "../codegen-env";
 
@@ -33,6 +34,7 @@ const studioCodegenOptions = (request: StudioCodegenRequest): CodegenOptions => 
         apiSpec: request.apiSpec,
         lunoraDirectory: request.schemaDirectory ?? "lunora",
         projectRoot: request.projectRoot,
+        wranglerQueueProducers: collectWranglerQueueProducers(request.projectRoot),
         wranglerVariables: collectWranglerSecretVariables(request.projectRoot),
     };
 };

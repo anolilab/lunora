@@ -63,6 +63,18 @@ describe("discover/queues", () => {
         expect(discoverQueues(newProject(), workdir)[0]?.name).toBe("outbound");
     });
 
+    it("reads maxConcurrency with the other numeric tuning options", () => {
+        expect.assertions(1);
+
+        writeQueues(`
+            import { defineQueue } from "@lunora/queue";
+
+            export const jobs = defineQueue({ maxBatchSize: 20, maxConcurrency: 4, handler: async () => {} });
+        `);
+
+        expect(discoverQueues(newProject(), workdir)[0]?.tuning).toStrictEqual({ maxBatchSize: 20, maxConcurrency: 4 });
+    });
+
     it("rejects an empty static name, mirroring the runtime defineQueue guard", () => {
         expect.assertions(1);
 

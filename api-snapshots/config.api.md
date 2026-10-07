@@ -2593,6 +2593,12 @@ const buildBindingManifest: (config: ManifestConfigShape) => BindingManifest;
 const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 ```
 
+### `collectWranglerQueueProducers` (const)
+
+```ts
+const collectWranglerQueueProducers: (projectRoot: string) => WranglerQueueProducerIR[];
+```
+
 ### `collectWranglerSecretVariables` (const)
 
 ```ts
@@ -3201,6 +3207,7 @@ interface WranglerQueueConsumer {
     dead_letter_queue?: string;
     max_batch_size?: number;
     max_batch_timeout?: number;
+    max_concurrency?: number;
     max_retries?: number;
     queue?: string;
     retry_delay?: number;

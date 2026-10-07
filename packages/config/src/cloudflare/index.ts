@@ -64,6 +64,7 @@ export type { ReadWranglerResult } from "./wrangler-path";
 export { findWranglerFile, readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
 export type { WranglerProjectValidationOptions, WranglerProjectValidationResult } from "./wrangler-project";
 export { UNEXPORTED_CLASS_MARKER, validateWranglerProject } from "./wrangler-project";
+export { collectWranglerQueueProducers } from "./wrangler-queue-producers";
 export { collectWranglerSecretVariables, scanWranglerVariablesForSecrets } from "./wrangler-secret-variables";
 export type { AlchemyTranslation, WranglerConfigShape } from "./wrangler-to-alchemy";
 export { wranglerToAlchemy } from "./wrangler-to-alchemy";

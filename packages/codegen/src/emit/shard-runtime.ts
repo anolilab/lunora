@@ -1,6 +1,6 @@
 import type { QueuesResult, WorkflowsResult } from "@lunora/shard-engine";
 
-import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
+import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowIR, WranglerQueueProducerIR } from "../ir";
 import { subscriptionsOf } from "../ir";
 import renderJsonData from "../json-data";
 import { renderThrowingStub } from "./shard-bindings";
@@ -279,8 +279,15 @@ ${classes}`;
  * queues are consumed by an external worker, so they carry no handler and are
  * omitted here. Returns "" (and the file is not written) when no push queues are
  * declared — a pull-only or queue-free app keeps a clean `_generated/`.
+ *
+ * `producers` are wrangler's `queues.producers[]` entries from every scope (the
+ * top level and each `env.<name>` block). A producer that binds a push queue's
+ * binding to a different queue name (`jobs-preview` for `jobs`) adds that name
+ * as a second key for the same queue, so a per-environment rename still routes.
+ * This is the match the `--env` reconcile makes (`reconcileEnvQueues`): by the
+ * producer binding, since the name is what an environment changes.
  */
-const emitQueues = (queues: ReadonlyArray<QueueIR>): string => {
+const emitQueues = (queues: ReadonlyArray<QueueIR>, producers: ReadonlyArray<WranglerQueueProducerIR> = []): string => {
     const pushQueues = queues.filter((queue) => queue.mode === "push");
 
     if (pushQueues.length === 0) {
@@ -295,10 +302,22 @@ const emitQueues = (queues: ReadonlyArray<QueueIR>): string => {
     const imports = [...Map.groupBy(pushQueues, (queue) => queue.filePath)]
         .map(([filePath, declared]) => `import { ${declared.map((queue) => queue.exportName).join(", ")} } from "../${filePath}.js";`)
         .join("\n");
-    const entries = pushQueues
+    // Declared names first, so an alias never shadows a queue's own name; the
+    // first producer to claim an alias wins (a second key would be TS1117).
+    const routes = new Map(pushQueues.map((queue) => [queue.name, queue]));
+
+    for (const producer of producers) {
+        const queue = pushQueues.find((candidate) => candidate.bindingName === producer.binding);
+
+        if (queue !== undefined && !routes.has(producer.queue)) {
+            routes.set(producer.queue, queue);
+        }
+    }
+
+    const entries = [...routes]
         .map(
-            (queue) =>
-                `    ${JSON.stringify(queue.name)}: { binding: ${JSON.stringify(queue.bindingName)}, definition: ${queue.exportName}, exportName: ${JSON.stringify(queue.exportName)} },`,
+            ([name, queue]) =>
+                `    ${JSON.stringify(name)}: { binding: ${JSON.stringify(queue.bindingName)}, definition: ${queue.exportName}, exportName: ${JSON.stringify(queue.exportName)} },`,
         )
         .join("\n");
 
@@ -312,7 +331,7 @@ import type { QueueRegistry } from "@lunora/queue";
 
 ${imports}
 
-/** Stable wrangler queue name → { binding, definition, exportName } for batch routing. */
+/** Wrangler queue name (declared, or a per-environment rename) → { binding, definition, exportName } for batch routing. */
 export const LUNORA_QUEUE_REGISTRY: QueueRegistry = {
 ${entries}
 };

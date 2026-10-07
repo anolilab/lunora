@@ -1405,6 +1405,16 @@ describe("reconcileWranglerBindings", () => {
             expect(receiptConsumer()).toStrictEqual({ max_batch_size: 50, max_concurrency: 4, max_retries: 8, queue: "receipt-queue" });
         });
 
+        it("writes a declared maxConcurrency as max_concurrency", () => {
+            expect.assertions(1);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxConcurrency: 5 })] }));
+
+            expect(receiptConsumer()).toStrictEqual({ max_concurrency: 5, max_retries: 3, queue: "receipt-queue" });
+        });
+
         it("is a no-op once the existing consumer already matches defineQueue", () => {
             expect.assertions(1);
 
