@@ -8,7 +8,7 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import type { R2BindingUploadStorageOptions, R2UploadBucket } from "../src/r2-binding-upload-storage";
 import { createR2BindingUploadStorage, R2_PART_SIZE } from "../src/r2-binding-upload-storage";
-import { createUploadHandler, getUploadContext } from "../src/upload-handler";
+import { createUploadContext, createUploadHandler } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
 import { createFakeR2UploadBucket } from "./fake-r2-upload-bucket";
 import type { TusDriver } from "./tus-driver";
@@ -120,12 +120,11 @@ describe(createR2BindingUploadStorage, () => {
         expect.hasAssertions();
 
         const bucket = createFakeR2UploadBucket();
+        const caller = createUploadContext<{ userId: string }>();
         const handler = createUploadHandler({
-            authorize: ({ request }) => {
-                return { context: { userId: request.headers.get("x-user") ?? "" } };
-            },
+            authorize: ({ request }) => caller.grant({ userId: request.headers.get("x-user") ?? "" }),
             storage: createR2BindingUploadStorage(bucket, {
-                filename: (file) => `uploads/${(getUploadContext() as { userId: string }).userId}/${file.id}`,
+                filename: (file) => `uploads/${caller.get().userId}/${file.id}`,
             }),
         });
         const response = await handler.fetch(

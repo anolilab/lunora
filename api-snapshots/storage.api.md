@@ -237,10 +237,10 @@ const verifySignedUrl: (input: string | URL, secret: string, options?: {
 ### `CreateUploadHandlerOptions` (interface)
 
 ```ts
-interface CreateUploadHandlerOptions {
-    authorize?: (context: UploadAuthzContext) => UploadAuthorizeResult | Promise<UploadAuthorizeResult>;
+interface CreateUploadHandlerOptions<Context = unknown> {
+    authorize?: (context: UploadAuthzContext) => UploadAuthorizeResult<Context> | Promise<UploadAuthorizeResult<Context>>;
     maxFileSize?: number;
-    maxFileSizeFor?: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>;
+    maxFileSizeFor?: (context: UploadSizeContext<Context>) => number | undefined | Promise<number | undefined>;
     protocol?: UploadProtocol;
     public?: boolean;
     silent?: boolean;
@@ -290,7 +290,7 @@ const R2_PART_SIZE: number;
 ### `UploadAuthorizeResult` (type)
 
 ```ts
-type UploadAuthorizeResult = boolean | Response | UploadGrant;
+type UploadAuthorizeResult<Context = unknown> = boolean | Response | UploadGrant<Context>;
 ```
 
 ### `UploadAuthzContext` (interface)
@@ -304,11 +304,20 @@ interface UploadAuthzContext {
 }
 ```
 
+### `UploadContext` (interface)
+
+```ts
+interface UploadContext<Context> {
+    get: () => Context;
+    grant: (context: Context) => UploadGrant<Context>;
+}
+```
+
 ### `UploadGrant` (interface)
 
 ```ts
-interface UploadGrant {
-    context: unknown;
+interface UploadGrant<Context = unknown> {
+    readonly [GRANTED]: Context;
 }
 ```
 
@@ -330,9 +339,10 @@ type UploadProtocol = "chunked-rest" | "multipart" | "tus";
 ### `UploadSizeContext` (interface)
 
 ```ts
-interface UploadSizeContext extends UploadAuthzContext {
+interface UploadSizeContext<Context = unknown> extends UploadAuthzContext {
     contentType: string;
     declaredSize: number | undefined;
+    granted: Context | undefined;
     metadata: Record<string, string>;
 }
 ```
@@ -357,16 +367,16 @@ const createR2UploadStorage: (options: R2UploadStorageOptions & {
 }) => AwsLightStorage;
 ```
 
+### `createUploadContext` (const)
+
+```ts
+const createUploadContext: <Context>() => UploadContext<Context>;
+```
+
 ### `createUploadHandler` (const)
 
 ```ts
-const createUploadHandler: (options: CreateUploadHandlerOptions) => UploadHandler;
-```
-
-### `getUploadContext` (const)
-
-```ts
-const getUploadContext: () => unknown;
+const createUploadHandler: <Context = unknown>(options: CreateUploadHandlerOptions<Context>) => UploadHandler;
 ```
 
 ## Referenced internal declarations

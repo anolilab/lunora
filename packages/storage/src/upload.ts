@@ -14,10 +14,11 @@ export type {
     CreateUploadHandlerOptions,
     UploadAuthorizeResult,
     UploadAuthzContext,
+    UploadContext,
     UploadGrant,
     UploadHandler,
     UploadProtocol,
     UploadSizeContext,
     UploadStorage,
 } from "./upload-handler";
-export { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES, getUploadContext } from "./upload-handler";
+export { createUploadContext, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "./upload-handler";

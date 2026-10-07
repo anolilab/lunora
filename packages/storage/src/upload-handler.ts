@@ -80,35 +80,86 @@ interface UploadAuthzContext {
     url: URL;
 }
 
+declare const GRANTED: unique symbol;
+
 /**
- * What {@link CreateUploadHandlerOptions.authorize} answers to admit a request
- * and hand its storage callbacks a value (the caller's id, say). The callbacks
- * read it back with {@link getUploadContext}.
+ * A grant `authorize` answers to admit a request and hand the rest of it a
+ * `Context`. Opaque: only {@link UploadContext.grant} issues one, so a value
+ * the gate builds by hand, or picks up by mistake (`{ valid: false, context }`),
+ * is not a grant and is denied.
  */
-interface UploadGrant {
-    context: unknown;
+interface UploadGrant<Context = unknown> {
+    readonly [GRANTED]: Context;
 }
 
 /** What {@link CreateUploadHandlerOptions.authorize} answers: allow, deny, a grant, or the response to refuse with. */
-type UploadAuthorizeResult = boolean | Response | UploadGrant;
+type UploadAuthorizeResult<Context = unknown> = boolean | Response | UploadGrant<Context>;
 
-/** The admitted request's {@link UploadGrant.context}, for as long as the request runs. */
-const uploadContext = new AsyncLocalStorage<unknown>();
+/** A grant as the handler holds it: what it carries, and the {@link UploadContext} that issued it. */
+interface IssuedGrant {
+    readonly context: unknown;
+    readonly issuer: object;
+}
+
+/** Every grant issued, by its token. Membership is the brand: a hand-built object is never in it. */
+const issuedGrants = new WeakMap<object, IssuedGrant>();
+
+/** The grant the current upload request was admitted with, for as long as it runs. */
+const activeGrant = new AsyncLocalStorage<IssuedGrant | undefined>();
 
 /**
- * The {@link UploadGrant.context} `authorize` admitted the current upload
- * request with, or `undefined` when it answered `true` or when called outside
- * an upload request. Call it from the storage provider's callbacks
- * (`filename`, `onCreate`, `onComplete`, …) and from `maxFileSizeFor`, so one
- * handler and one provider serve every caller:
+ * A typed channel from `authorize` to the storage provider's callbacks
+ * (`filename`, `onCreate`, `onComplete`, …), which get only the file.
+ * `authorize` answers `grant(context)`, and the callbacks read the context back
+ * with `get()`, so one handler and one provider serve every caller.
+ */
+interface UploadContext<Context> {
+    /**
+     * The context the current request was granted. Throws when there is none:
+     * outside an upload request, or when `authorize` answered `true` or a grant
+     * from another `UploadContext`.
+     */
+    get: () => Context;
+    /** A grant that admits the request and carries `context` to {@link UploadContext.get}. */
+    grant: (context: Context) => UploadGrant<Context>;
+}
+
+/**
+ * Create an {@link UploadContext}, typed by what `authorize` grants:
  *
  * ```ts
- * filename: (file) => `uploads/${(getUploadContext() as { userId: string }).userId}/${file.id}`,
+ * const caller = createUploadContext<{ userId: string }>();
+ *
+ * filename: (file) => `uploads/${caller.get().userId}/${file.id}`,
+ * authorize: async ({ request }) => caller.grant({ userId: await userIdFrom(request) }),
  * ```
  */
-const getUploadContext = (): unknown => uploadContext.getStore();
+const createUploadContext = <Context>(): UploadContext<Context> => {
+    const channel: UploadContext<Context> = {
+        get: () => {
+            const active = activeGrant.getStore();
 
-const isUploadGrant = (verdict: unknown): verdict is UploadGrant => typeof verdict === "object" && verdict !== null && "context" in verdict;
+            if (active?.issuer !== channel) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    "@lunora/storage: no upload grant from this UploadContext is active. Read it from a storage callback of a request `authorize` admitted with its grant()",
+                );
+            }
+
+            // Only `grant` below stores a context under this issuer, and it takes a `Context`.
+            return active.context as Context;
+        },
+        grant: (context) => {
+            const token = Object.freeze({}) as UploadGrant<Context>;
+
+            issuedGrants.set(token, { context, issuer: channel });
+
+            return token;
+        },
+    };
+
+    return channel;
+};
 
 /**
  * The context handed to {@link CreateUploadHandlerOptions.maxFileSizeFor}: the
@@ -116,7 +167,7 @@ const isUploadGrant = (verdict: unknown): verdict is UploadGrant => typeof verdi
  * Everything here comes from the client, so it caps an upload by what the
  * client SAYS it is; `allowMIME` on the provider is what checks the type.
  */
-interface UploadSizeContext extends UploadAuthzContext {
+interface UploadSizeContext<Context = unknown> extends UploadAuthzContext {
     /**
      * The declared MIME type, resolved the way the stored file's type is: on
      * chunked REST the request's `Content-Type`; on TUS the `Upload-Metadata`
@@ -131,17 +182,23 @@ interface UploadSizeContext extends UploadAuthzContext {
      * reads as `Infinity`.
      */
     declaredSize: number | undefined;
+
+    /** The context `authorize` granted this request, or `undefined` when it answered `true` or there is no `authorize`. */
+    granted: Context | undefined;
     /** The decoded TUS `Upload-Metadata`, or the chunked-REST `X-File-Metadata` JSON, as strings. */
     metadata: Record<string, string>;
 }
 
 /** Options for {@link createUploadHandler}. */
-interface CreateUploadHandlerOptions {
+interface CreateUploadHandlerOptions<Context = unknown> {
     /**
      * The RLS gate. Runs before every upload request and denies fail-closed:
-     * only `true` or an {@link UploadGrant} lets the request through; `false`,
-     * anything else, **or throwing** yields a `403`. A `Response` is answered
-     * as it is, instead of the `403` (say a `429` with `Retry-After`). Omit
+     * only `true` or an {@link UploadGrant} (from {@link UploadContext.grant})
+     * lets the request through; `false`, anything else, **or throwing** yields
+     * a `403`. A `Response` is answered instead of the `403`, for a refusal of
+     * your own (say a `429` with `Retry-After`): it is passed through as it
+     * is, except that a TUS route adds `Tus-Resumable` when it has none. It is
+     * meant for 4xx/5xx; a 2xx would tell the client an upload happened. Omit
      * only for a fully public bucket — the whole point of this handler over
      * the admin path is that uploads are gated by *your* per-user policy, not
      * an admin token.
@@ -150,7 +207,7 @@ interface CreateUploadHandlerOptions {
      * doing so logs a one-time warning (per handler) unless `silent`/`public`
      * says the omission is intentional.
      */
-    authorize?: (context: UploadAuthzContext) => UploadAuthorizeResult | Promise<UploadAuthorizeResult>;
+    authorize?: (context: UploadAuthzContext) => UploadAuthorizeResult<Context> | Promise<UploadAuthorizeResult<Context>>;
 
     /**
      * Maximum accepted file size in bytes. Forwarded to the multipart parser
@@ -180,7 +237,7 @@ interface CreateUploadHandlerOptions {
      * returning something that is not a finite, non-negative number, denies the
      * request (`403`), fail-closed like `authorize`.
      */
-    maxFileSizeFor?: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>;
+    maxFileSizeFor?: (context: UploadSizeContext<Context>) => number | undefined | Promise<number | undefined>;
     /** Which protocol to speak. Default `"tus"` (the resumable, pause/resume-capable one). */
     protocol?: UploadProtocol;
 
@@ -473,9 +530,10 @@ const isCreateRequest = (request: Request, protocol: UploadProtocol): boolean =>
  * Apply {@link CreateUploadHandlerOptions.maxFileSizeFor} to a create request.
  * Returns the response that refuses it, or `undefined` to let it through.
  */
-const checkSizeFor = async (
-    maxFileSizeFor: NonNullable<CreateUploadHandlerOptions["maxFileSizeFor"]>,
+const checkSizeFor = async <Context>(
+    maxFileSizeFor: NonNullable<CreateUploadHandlerOptions<Context>["maxFileSizeFor"]>,
     context: UploadAuthzContext,
+    granted: Context | undefined,
     declared: DeclaredFile,
     maxFileSize: number,
 ): Promise<Response | undefined> => {
@@ -483,7 +541,7 @@ const checkSizeFor = async (
     let cap: unknown;
 
     try {
-        cap = await maxFileSizeFor({ ...context, ...describeFile(declared), declaredSize });
+        cap = await maxFileSizeFor({ ...context, ...describeFile(declared), declaredSize, granted });
     } catch {
         return denyResponse(context.protocol);
     }
@@ -497,6 +555,61 @@ const checkSizeFor = async (
     }
 
     return declaredSize === undefined || declaredSize > Math.min(cap, maxFileSize) ? tooLargeResponse(context.protocol) : undefined;
+};
+
+/**
+ * A `Response` the gate answered, passed through as it is. A TUS client reads
+ * `Tus-Resumable` on every response, so a TUS route adds it when it is missing.
+ */
+const gateResponse = (protocol: UploadProtocol, response: Response): Response => {
+    if (protocol !== "tus" || response.headers.has("Tus-Resumable")) {
+        return response;
+    }
+
+    // A copy: the gate's own response may have immutable headers (a `fetch` result, `Response.redirect`).
+    const copy = new Response(response.body, response);
+
+    copy.headers.set("Tus-Resumable", TUS_RESUMABLE);
+
+    return copy;
+};
+
+/**
+ * Run `authorize` and decide: the response that refuses the request, or the
+ * grant it was admitted with (`undefined` for a plain `true`).
+ *
+ * The verdict is read back as `unknown`, and only an exact `true` or a grant
+ * {@link createUploadContext} issued allows, never a truthy value or an object
+ * that merely looks like a grant. The gate is app code and untyped JavaScript
+ * reaches it: an `async ({ request }) => verifySignedUrl(new URL(request.url), secret)`
+ * that forgot its `.valid` hands back `{ valid: false }`, which is TRUTHY. This
+ * is the WRITE path, so passing that through is an attacker putting bytes in
+ * the bucket. Mirrors `@lunora/server`'s `isServeAuthorized` on the read path.
+ */
+const runGate = async <Context>(
+    authorize: NonNullable<CreateUploadHandlerOptions<Context>["authorize"]>,
+    context: UploadAuthzContext,
+): Promise<Response | { granted: IssuedGrant | undefined }> => {
+    let verdict: unknown;
+
+    try {
+        verdict = await authorize(context);
+    } catch {
+        // A throwing RLS callback is a denial, never a 500 — fail closed.
+        return denyResponse(context.protocol);
+    }
+
+    if (verdict instanceof Response) {
+        return gateResponse(context.protocol, verdict);
+    }
+
+    if (verdict === true) {
+        return { granted: undefined };
+    }
+
+    const granted = typeof verdict === "object" && verdict !== null ? issuedGrants.get(verdict) : undefined;
+
+    return granted === undefined ? denyResponse(context.protocol) : { granted };
 };
 
 const instantiateHandler = (protocol: UploadProtocol, handlerOptions: UploadHandlerOptions): { fetch: (request: Request) => Promise<Response> } => {
@@ -525,7 +638,7 @@ const routePolicy = (protocol: UploadProtocol, storage: UploadStorage): RoutePol
  * provider. Mount its {@link UploadHandler.fetch} on the route your client
  * uploads to and drive it with `@visulima/storage-client`.
  */
-const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler => {
+const createUploadHandler = <Context = unknown>(options: CreateUploadHandlerOptions<Context>): UploadHandler => {
     const protocol = options.protocol ?? "tus";
     const maxFileSize = options.maxFileSize ?? DEFAULT_MAX_UPLOAD_BYTES;
 
@@ -568,10 +681,11 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         );
     }
 
-    /** The rest of a request `authorize` let through, run with its grant's context in {@link uploadContext}. */
-    const admitted = async (request: Request, context: UploadAuthzContext, declared: DeclaredFile): Promise<Response> => {
+    /** The rest of a request `authorize` let through, run with its grant in {@link activeGrant}. */
+    const admitted = async (request: Request, context: UploadAuthzContext, granted: IssuedGrant | undefined, declared: DeclaredFile): Promise<Response> => {
         if (maxFileSizeFor !== undefined && isCreateRequest(request, protocol)) {
-            const refused = await checkSizeFor(maxFileSizeFor, context, declared, maxFileSize);
+            // Only a grant from an `UploadContext<Context>` reaches here (see `runGate`).
+            const refused = await checkSizeFor(maxFileSizeFor, context, granted?.context as Context | undefined, declared, maxFileSize);
 
             if (refused !== undefined) {
                 return refused;
@@ -598,38 +712,13 @@ const createUploadHandler = (options: CreateUploadHandlerOptions): UploadHandler
         }
 
         const context: UploadAuthzContext = { method: request.method, protocol, request, url: new URL(request.url) };
-        let granted: unknown;
+        const gate = authorize === undefined ? { granted: undefined } : await runGate(authorize, context);
 
-        if (authorize !== undefined) {
-            // Read back as `unknown`, and only an exact `true` or a grant
-            // (an object carrying `context`) allows, never a truthy value. The
-            // gate is app code and untyped JavaScript reaches it: an
-            // `async ({ request }) => verifySignedUrl(new URL(request.url), secret)`
-            // that forgot its `.valid` hands back `{ valid: false }`, which is
-            // TRUTHY. This is the WRITE path, so passing that through is an
-            // attacker putting bytes in the bucket. Mirrors
-            // `@lunora/server`'s `isServeAuthorized` on the read path.
-            let verdict: unknown;
-
-            try {
-                verdict = await authorize(context);
-            } catch {
-                // A throwing RLS callback is a denial, never a 500 — fail closed.
-                return denyResponse(protocol);
-            }
-
-            if (verdict instanceof Response) {
-                return verdict;
-            }
-
-            if (isUploadGrant(verdict)) {
-                granted = verdict.context;
-            } else if (verdict !== true) {
-                return denyResponse(protocol);
-            }
+        if (gate instanceof Response) {
+            return gate;
         }
 
-        return uploadContext.run(granted, async () => admitted(request, context, checked.declared));
+        return activeGrant.run(gate.granted, async () => admitted(request, context, gate.granted, checked.declared));
     };
 
     return { fetch, protocol };
@@ -639,10 +728,11 @@ export type {
     CreateUploadHandlerOptions,
     UploadAuthorizeResult,
     UploadAuthzContext,
+    UploadContext,
     UploadGrant,
     UploadHandler,
     UploadProtocol,
     UploadSizeContext,
     UploadStorage,
 };
-export { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES, getUploadContext };
+export { createUploadContext, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES };
