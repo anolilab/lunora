@@ -96,6 +96,8 @@ const readBaseline = (path: string): ArchitectureManifest | undefined => {
  * Print what this deploy changes in the architecture, and return the thunk that
  * records the current manifest as the new baseline — to be invoked only once the
  * deploy succeeded. `undefined` when the app declares no module and never did.
+ * Only call it after codegen ran: a skipped run has no manifest to compare, which
+ * is not the same as "every module removed".
  */
 const reportArchitectureDiff = (options: {
     current: ArchitectureManifest | undefined;

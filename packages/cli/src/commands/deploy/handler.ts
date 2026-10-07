@@ -600,7 +600,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
         reblessSchemaBaseline = gate.rebless;
     }
 
-    const recordArchitecture = reportArchitectureDiff({ current: codegen?.architecture, cwd, environment: options.env, logger: options.logger });
+    const recordArchitecture = codegen && reportArchitectureDiff({ current: codegen.architecture, cwd, environment: options.env, logger: options.logger });
 
     // Provisioning WRITES `wrangler.jsonc`. On a dry run those writes are rolled
     // back — but not here: the caller owns that window, because the artifacts

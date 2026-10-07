@@ -98,8 +98,9 @@ export default crons;
 ```
 
 - `name` must be a non-empty **string literal**, unique across the project.
-- `fnRef` must be a static two-segment access on the proxy
-  (`internal.<file>.<fn>` or `api.<file>.<fn>`) so codegen can discover it.
+- `fnRef` must be a static property access on the generated object
+  (`internal.<…path>.<fn>` or `api.<…path>.<fn>`, one segment per folder and
+  file, e.g. `internal.crons.jobs.run`) so codegen can discover it.
   Cron targets must be **internal** functions — a client can never invoke them.
 - All schedules are UTC and validated at definition time
   (`hourUTC: 25` throws immediately).

@@ -61,7 +61,8 @@ const privilegedDispatchUnvalidatedPayload: Lint = {
         //
         // Compared as dispatch namespaces: the target is read off an `api.*` path, so
         // `lunora/ratelimit/index.ts` arrives as `ratelimit` and `lunora/my-module/x.ts`
-        // as `my_module/x`, while the procedure carries its real file path.
+        // as `my_module/x`, while the procedure carries its real file path; both sides
+        // normalize to `my_module_x`.
         const targetUsesRls = (targetFile: string, targetExport: string): boolean =>
             rlsProcedures.some(
                 (procedure) =>
