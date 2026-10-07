@@ -74,6 +74,7 @@ outlier in `insights`, or `filter_without_index` / `unbounded_collect`.
 **Fix:** declare an index and read through it with `.withIndex()`:
 
 ```ts
+// (auth / org membership check on `orgId` elided — see lunora-functions)
 // Scans every row, then filters in memory.
 const mine = (await ctx.db.query("documents").collect()).filter((d) => d.orgId === orgId);
 

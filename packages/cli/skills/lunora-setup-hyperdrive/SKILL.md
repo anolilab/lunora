@@ -87,11 +87,21 @@ export const ShardDO = app.ShardDO;
 Then query from any action:
 
 ```ts
+import { LunoraError } from "lunorash/server";
+
 import { action, v } from "#lunora/_generated/server.js";
 
-export const listLegacyOrders = action
-    .input({ orgId: v.string() })
-    .action(async ({ ctx, args: { orgId } }) => ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]));
+export const listLegacyOrders = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
+    if (!ctx.auth.userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
+    // `orgId` comes from the client: the join scopes it to orgs the caller belongs to.
+    return ctx.sql.query<{ id: string; total: number }>(
+        "select o.id, o.total from orders o join org_members m on m.org_id = o.org where o.org = $1 and m.user_id = $2",
+        [orgId, ctx.auth.userId],
+    );
+});
 ```
 
 **Verify:** call the action from the studio's function runner and check that it returns rows.
@@ -104,12 +114,12 @@ Pick one approach:
 `defineSchema` table through a mutation. That write is tracked:
 
 ```ts
-import { api } from "#lunora/_generated/api.js";
+import { internal } from "#lunora/_generated/internal.js";
 
 const [row] = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where id = $1", [id]);
 
 // Re-runs live queries over `orders`. ctx.run* takes a generated reference, not a "file:fn" string.
-await ctx.runMutation(api.orders.upsert, { id: row.id, total: row.total });
+await ctx.runMutation(internal.orders.upsert, { id: row.id, total: row.total });
 ```
 
 **B. A `.source()` table.** This works when other systems also write the database. Lunora polls

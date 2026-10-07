@@ -67,11 +67,17 @@ dispatch at an arbitrary URL. Without it, every `runAfter`/`runAt` fails with
 ### Schedule from a mutation or action
 
 ```ts
-import { mutation, v } from "#lunora/_generated/server.js";
+import { LunoraError } from "lunorash/server";
 
 import { internal } from "#lunora/_generated/internal.js";
+import { mutation } from "#lunora/_generated/server.js";
 
-export const startTrial = mutation.input({ userId: v.string() }).mutation(async ({ ctx, args: { userId } }) => {
+export const startTrial = mutation.mutation(async ({ ctx }) => {
+    // the caller's own id, never one the client passes in
+    const { userId } = ctx.auth;
+    if (!userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
     // run an internal action 14 days from now; the id is a plain string
     const jobId = await ctx.scheduler.runAfter(14 * 24 * 60 * 60 * 1000, internal.billing.endTrial, { userId });
 

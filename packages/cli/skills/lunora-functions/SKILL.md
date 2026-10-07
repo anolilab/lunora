@@ -190,13 +190,19 @@ A paginated query takes a `paginationOpts` arg and returns `.paginate(...)`
 as-is; the client hook (`usePaginatedQuery`, see `lunora-realtime`) supplies it:
 
 ```ts
-export const page = query.input({ channelId: v.id("channels"), paginationOpts: v.any() }).query(async ({ ctx, args: { channelId, paginationOpts } }) =>
-    ctx.db
-        .query("messages")
-        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
-        .order("desc")
-        .paginate(paginationOpts),
-);
+// `v.any()` would type the arg `unknown`, which `.paginate()` rejects. The hook
+// also sends `endCursor`; an undeclared key is stripped, so declare it.
+const cursor = v.optional(v.union(v.string(), v.null()));
+
+export const page = query
+    .input({ channelId: v.id("channels"), paginationOpts: v.object({ cursor, endCursor: cursor, numItems: v.number() }) })
+    .query(async ({ ctx, args: { channelId, paginationOpts } }) =>
+        ctx.db
+            .query("messages")
+            .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+            .order("desc")
+            .paginate(paginationOpts),
+    );
 ```
 
 ### Following foreign keys: `ctx.db.related`
@@ -393,25 +399,55 @@ never mount.
 
 ```ts
 // lunora/http.ts
-import { httpAction, httpRouter } from "lunorash/server";
+import { httpRouter } from "lunorash/server";
 
 import { internal } from "./_generated/internal.js";
 
 const app = httpRouter();
+const encoder = new TextEncoder();
 
-app.post(
-    "/webhooks/stripe",
-    httpAction(async (ctx, request) => {
-        const event = await request.json();
+// Stripe's scheme: `stripe-signature: t=<unix>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">`.
+// The Stripe SDK's `stripe.webhooks.constructEventAsync` does the same check.
+const verifyStripe = async (secret: string, header: string | undefined, payload: string): Promise<boolean> => {
+    const fields = header?.split(",").map((part) => part.split("=", 2)) ?? [];
+    const t = fields.find(([k]) => k === "t")?.[1];
+    const v1 = fields.find(([k]) => k === "v1")?.[1];
 
-        await ctx.runMutation(internal.billing.record, { event });
+    if (!t || !v1 || !/^[\da-f]{64}$/.test(v1) || Math.abs(Date.now() / 1000 - Number(t)) > 300) {
+        return false; // missing, malformed, or outside the 5-minute replay window
+    }
 
-        return new Response("ok");
-    }),
-);
+    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+    const signature = Uint8Array.from(v1.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
+
+    return crypto.subtle.verify("HMAC", key, signature, encoder.encode(`${t}.${payload}`)); // constant-time
+};
+
+// A plain Hono handler, not `httpAction`: the action ctx (`c.var.lunora`) has
+// no env, while `c.env` is the Worker env.
+app.post("/webhooks/stripe", async (c) => {
+    const secret = c.env.STRIPE_WEBHOOK_SECRET;
+
+    if (typeof secret !== "string") {
+        throw new Error("STRIPE_WEBHOOK_SECRET is not set");
+    }
+
+    const payload = await c.req.text(); // the raw bytes the signature covers
+
+    if (!(await verifyStripe(secret, c.req.header("stripe-signature"), payload))) {
+        return c.text("invalid signature", 401);
+    }
+
+    await c.var.lunora.runMutation(internal.billing.record, { event: JSON.parse(payload) as unknown });
+
+    return c.text("ok");
+});
 
 export default app;
 ```
+
+A webhook route is public: verify the provider's signature over the raw body
+before any write, or anyone can forge events into `internal.*` functions.
 
 ## Checklist
 
