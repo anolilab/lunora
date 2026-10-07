@@ -159,7 +159,14 @@ describe("reconcileServices", () => {
     it("keeps both records when queue tuning and services are recorded in one pass", () => {
         expect.assertions(1);
 
-        const receipt = { bindingName: "QUEUE_RECEIPT", exportName: "receiptQueue", mode: "push" as const, name: "receipt-queue", tuning: { maxRetries: 5 } };
+        const receipt = {
+            bindingName: "QUEUE_RECEIPT",
+            exportName: "receiptQueue",
+            filePath: "queues",
+            mode: "push" as const,
+            name: "receipt-queue",
+            tuning: { maxRetries: 5 },
+        };
 
         reconcileWranglerBindings(root, { ...inferred([parser]), queues: [receipt] });
 

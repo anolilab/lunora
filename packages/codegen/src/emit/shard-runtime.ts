@@ -291,7 +291,10 @@ const emitQueues = (queues: ReadonlyArray<QueueIR>): string => {
         assertIdentifier(queue.exportName, `queue export "${queue.exportName}"`);
     }
 
-    const imports = pushQueues.map((queue) => queue.exportName).join(", ");
+    // One import per declaring file: `lunora/queues.ts` or a module's own `queues.ts`.
+    const imports = [...Map.groupBy(pushQueues, (queue) => queue.filePath)]
+        .map(([filePath, declared]) => `import { ${declared.map((queue) => queue.exportName).join(", ")} } from "../${filePath}.js";`)
+        .join("\n");
     const entries = pushQueues
         .map(
             (queue) =>
@@ -307,7 +310,7 @@ const emitQueues = (queues: ReadonlyArray<QueueIR>): string => {
  */
 import type { QueueRegistry } from "@lunora/queue";
 
-import { ${imports} } from "../queues.js";
+${imports}
 
 /** Stable wrangler queue name → { binding, definition, exportName } for batch routing. */
 export const LUNORA_QUEUE_REGISTRY: QueueRegistry = {

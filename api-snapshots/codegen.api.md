@@ -697,6 +697,7 @@ interface QueryReadIR {
 interface QueueIR {
     bindingName: string;
     exportName: string;
+    filePath: string;
     handlerSite?: HandlerSiteIR;
     mode: "pull" | "push";
     name: string;
@@ -1046,6 +1047,7 @@ interface TableSnapshot {
 ```ts
 interface TopicIR {
     exportName: string;
+    filePath: string;
 }
 ```
 

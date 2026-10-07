@@ -7,7 +7,6 @@
  */
 import type { ArchitectureEdge, ArchitectureEdgeKind, ArchitectureManifest, ArchitectureNode, UnresolvedEdge } from "../../../shared/architecture-manifest";
 import { moduleOf } from "../../../shared/architecture-manifest";
-import { QUEUES_FILENAME } from "./discover/queues";
 import { WORKFLOWS_FILENAME } from "./discover/workflows";
 import { GENERATED_HEADER } from "./emit";
 import type {
@@ -84,10 +83,9 @@ const CALL_TARGET_KIND: Readonly<Record<CallEdgeIR["kind"], string>> = {
     schedule: "function",
 };
 
-/** The module paths call sites inside `lunora/queues.ts` / `lunora/workflows.ts` handlers carry. */
-const QUEUES_MODULE = QUEUES_FILENAME.replace(/\.ts$/u, "");
 /** `cronJobs()` is registered from `lunora/crons.ts`; a cron edge reports against it. */
 const CRONS_MODULE = "crons";
+/** The module path call sites inside `lunora/workflows.ts` handlers carry. */
 const WORKFLOWS_MODULE = WORKFLOWS_FILENAME.replace(/\.ts$/u, "");
 
 /** The `namespace:export` key a call site's enclosing declaration resolves through. */
@@ -151,7 +149,7 @@ const declarationEdges = (input: ArchitectureInput): PendingEdge[] => [
             ? []
             : [
                   {
-                      file: QUEUES_MODULE,
+                      file: queue.filePath,
                       from: `topic:${queue.topic}`,
                       kind: "subscribe",
                       line: 0,
@@ -229,12 +227,15 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
     for (const queue of input.queues) {
         const detail = queue.topic === undefined ? {} : { detail: "subscription" };
 
-        add({ ...detail, id: `queue:${queue.exportName}`, kind: "queue", name: queue.exportName }, siteKey(QUEUES_MODULE, queue.exportName));
+        add(
+            withModule({ ...detail, id: `queue:${queue.exportName}`, kind: "queue", name: queue.exportName }, moduleOf(input.modules, queue.filePath)),
+            siteKey(queue.filePath, queue.exportName),
+        );
         addHandlerSite(queue.handlerSite, `queue:${queue.exportName}`);
     }
 
     for (const topic of input.topics) {
-        add({ id: `topic:${topic.exportName}`, kind: "topic", name: topic.exportName });
+        add(withModule({ id: `topic:${topic.exportName}`, kind: "topic", name: topic.exportName }, moduleOf(input.modules, topic.filePath)));
     }
 
     for (const workflow of input.workflows) {

@@ -31,6 +31,28 @@ Modules do not nest: a `module.ts` inside another module's folder is a codegen
 error, because a file would then belong to two modules. Files outside every
 module folder are shown as "outside any module".
 
+## Queues and topics
+
+A module can declare its own [queues](/docs/packages/queue), topics and
+subscriptions in a `queues.ts` directly inside its folder, next to
+`module.ts`. Codegen reads it alongside `lunora/queues.ts`, so the queues deploy,
+reconcile into `wrangler.jsonc` and dispatch exactly like root ones, and the
+Architecture view draws them in the module's lane.
+
+```ts
+// lunora/billing/queues.ts
+import { defineQueue, defineSubscription } from "@lunora/queue";
+
+import { signups } from "../queues"; // a topic declared in lunora/queues.ts
+
+export const invoiceEmails = defineQueue({ handler: async (ctx, batch) => {} });
+export const openAccount = defineSubscription(signups, { handler: async (ctx, batch) => {} });
+```
+
+Names stay app-wide: `ctx.queues.invoiceEmails`, not `ctx.queues.billing.…`. Two
+queues files exporting the same name is a codegen error that points at the
+second one. A `queues.ts` in a folder that is not a module is not read.
+
 ## What you get
 
 Once the app declares a module, codegen writes `_generated/architecture.json`

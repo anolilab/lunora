@@ -161,6 +161,47 @@ describe("architecture manifest", () => {
         expect(openApi.tags).toContainEqual({ description: "Channels and messages", name: "chat" });
     });
 
+    it("discovers a module's own queues.ts, places its queues in the module's lane and imports them from it", () => {
+        expect.assertions(5);
+
+        writeModules();
+        write(
+            "accounts/queues.ts",
+            `import { defineQueue, defineSubscription } from "@lunora/queue";
+import { internal } from "../_generated/api";
+import { posted } from "../queues";
+
+export const welcome = defineSubscription(posted, { handler: async () => {} });
+export const audits = defineQueue({ handler: async (ctx) => {
+    await ctx.runMutation(internal.accounts_users.touch, {});
+} });
+`,
+        );
+        runCodegen({ projectRoot: workdir });
+
+        const { edges, nodes } = manifest();
+
+        expect(nodes.filter((node) => node.module === "accounts" && node.kind === "queue").map((node) => node.id)).toStrictEqual([
+            "queue:audits",
+            "queue:welcome",
+        ]);
+        expect(edges).toStrictEqual(
+            expect.arrayContaining([
+                { from: "topic:posted", kind: "subscribe", to: "queue:welcome" },
+                { from: "queue:audits", kind: "call", to: "function:accounts_users:touch" },
+            ]),
+        );
+
+        const registry = readFileSync(generated("queues.ts"), "utf8");
+        const server = readFileSync(generated("server.ts"), "utf8");
+
+        expect(registry).toContain(`import { audits, welcome } from "../accounts/queues.js";\nimport { indexPost, jobs } from "../queues.js";`);
+        expect(server).toContain(
+            `import type * as lunoraQueueDefinitions from "../queues.js";\nimport type * as lunoraQueueDefinitions1 from "../accounts/queues.js";`,
+        );
+        expect(server).toContain("readonly audits: QueueProducer<QueueBodyOf<typeof lunoraQueueDefinitions1.audits>>;");
+    });
+
     it("reports a write into another module's table", () => {
         expect.assertions(1);
 
