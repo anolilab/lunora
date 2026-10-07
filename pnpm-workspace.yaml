@@ -111,6 +111,7 @@ overrides:
   brace-expansion@<1.1.18: ^1.1.21
   brace-expansion@>=2.0.0 <2.1.4: ^2.1.7
   brace-expansion@>=4.0.0 <5.0.9: ^5.0.12
+  compression@<1.8.2: ^1.8.2
   # query-string (via autumn-js) resolves decode-uri-component 0.4.1
   # (GHSA-vcc3-ghjq-m6fr). There is no 0.4.3; 0.5.0 is the fix and keeps 0.4's
   # ESM default export.
@@ -136,16 +137,24 @@ overrides:
   image-size@>=2.0.0 <2.0.3: ^2.0.3
   ip-address@<=10.3.0: ^10.7.1
   js-yaml@<=4.1.1: ^4.3.2
+  katex@>=0.11.0 <0.18.2: ^0.18.2
   lodash@<=4.17.23: ^4.17.24
   next@>=16.0.0 <16.2.11: ^16.2.11
   nuxt@>=4.0.0 <4.5.1: ^4.5.1
   postcss@<8.5.10: ^8.5.28
+  postcss-selector-parser@>=7.0.0 <7.1.6: ^7.1.6
   protobufjs: ">=7.6.5"
+  proxy-addr@<2.0.8: ^2.0.8
   # body-parser (via shadcn's MCP SDK / express) resolves qs 6.15.2;
   # GHSA-4mjr-xmp4-gh2g and GHSA-x5fp-wj9c-mxmx are fixed in 6.16.0.
   qs@>=6.0.0 <6.16.0: ^6.16.0
-  sharp@<0.35.0: ^0.35.4
-  shell-quote: ">=1.8.5"
+  # solid-js 1.9.15 pins seroval ~1.5.4 (GHSA fromJSON thenable bypass, TypedArray
+  # memory exhaustion); 1.9.16 moved to ~1.6.8, so this matches upstream's own bump.
+  seroval@<1.6.3: ^1.6.8
+  seroval-plugins@<1.6.3: ^1.6.8
+  sharp@<0.35.5: ^0.35.5
+  shell-quote: ">=1.11.0"
+  source-map-js@<1.2.2: ^1.2.2
   svgo@>=4.0.0 <4.0.2: ^4.1.0
   tar@<=7.5.20: ^7.5.21
   tmp@<0.2.6: ^0.2.6
