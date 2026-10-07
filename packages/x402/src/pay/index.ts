@@ -27,24 +27,11 @@ export { DEFAULT_FACILITATOR_URL, resolveFacilitatorUrl } from "../config";
 export type { Caip2, X402Network } from "../networks";
 export { isEvmNetwork, isSvmNetwork, toCaip2 } from "../networks";
 export type { PayFetch, X402PayDeps } from "./fetch";
-export { createPayFetch } from "./fetch";
-export type { AllowedAsset, SpendPolicy, SpendState } from "./policy";
-export {
-    assertBoundedPolicy,
-    buildPaymentGuard,
-    buildSpendPolicy,
-    createSpendState,
-    DEFAULT_ALLOWED_ASSETS,
-    DEFAULT_STABLECOIN_DECIMALS,
-    releaseSpendOnFailure,
-    usdToAtomic,
-} from "./policy";
-export type { WalletDeps } from "./wallet";
-export { registerWallet, resolveEvmAccount, resolveSvmSigner } from "./wallet";
+export type { AllowedAsset, SpendPolicy } from "./policy";
+export { DEFAULT_ALLOWED_ASSETS, DEFAULT_STABLECOIN_DECIMALS, usdToAtomic } from "./policy";
 
 /**
  * A configured pay rail: a payment-enabled `fetch` bounded by the spend policy.
- * @experimental
  */
 export interface X402Pay {
     /** A `fetch` that transparently pays for `402`-gated resources under the policy. */
@@ -55,7 +42,6 @@ export interface X402Pay {
  * Build a pay rail for `config`. The returned `fetch` answers `402` challenges by
  * signing and retrying, within `config.policy`. Throws (before touching the
  * signer) when the policy is unbounded.
- * @experimental
  */
 export const createX402Pay = async (config: X402PayConfig, deps: X402PayDeps): Promise<X402Pay> => {
     const fetch = await createPayFetch(config, deps);
@@ -72,10 +58,10 @@ export const createX402Pay = async (config: X402PayConfig, deps: X402PayDeps): P
  * memoises it: the viem/`@x402` signer imports + Secrets Store read are paid for
  * only when an action actually pays, and the single `SpendState` behind the
  * rail is shared across every payment for the lifetime of this ctx — so the
- * per-run cap scopes to the ctx, not to each request. A failed build (e.g. an
+ * per-run cap scopes to the ctx (one function invocation), not to each request
+ * and not across invocations. A failed build (e.g. an
  * unbounded policy) is memoised too, keeping the rail deterministically
  * fail-closed.
- * @experimental
  */
 export const lazyX402Pay = (config: X402PayConfig, deps: X402PayDeps): X402Pay => {
     let railPromise: Promise<X402Pay> | undefined;

@@ -65,10 +65,10 @@ const PUSH_ROUTER_ID = "lunora-push-router";
  * push-service origins across all of them — one DoH round-trip per host per
  * isolate instead of one per device.
  *
- * Only a CONCLUSIVE verdict is stored. A failed DoH lookup is deliberately not
- * cached: it is a fallback to the register-time string guard, not a finding, and
- * memoizing it would let one transient resolver blip disable the re-check for
- * that host for the isolate's life.
+ * Only a CONCLUSIVE verdict (`public` / `private`) is stored. A failed or
+ * address-less lookup refuses the send but is deliberately not cached: memoizing
+ * it would let one transient resolver blip block that host for the isolate's
+ * life.
  *
  * Bounded via the shared FIFO evictor — the key is a registration-time,
  * caller-influenced hostname, so an unbounded map would grow with distinct
@@ -113,8 +113,8 @@ const assertPushTargetResolvable = async (endpoint: string, allowedPushOrigins?:
     const pending = cached ?? resolveHostSsrf(hostname);
     const resolution = await pending;
 
-    // Cache only what was actually learned (see the memo's docblock).
-    if (cached === undefined && resolution.kind !== "unknown") {
+    // Cache only a settled verdict (see the memo's docblock): a SERVFAIL can be transient.
+    if (cached === undefined && (resolution.kind === "private" || resolution.kind === "public")) {
         evictOldestEntry(rebindVerdicts, REBIND_VERDICT_CAPACITY);
         rebindVerdicts.set(hostname, pending);
     }
@@ -123,6 +123,23 @@ const assertPushTargetResolvable = async (endpoint: string, allowedPushOrigins?:
         throw new LunoraError(
             "FORBIDDEN",
             `@lunora/notify: web-push endpoint host "${hostname}" resolves to a private/internal address (${resolution.address}); refusing to send (DNS-rebinding guard)`,
+        );
+    }
+
+    if (resolution.kind === "unresolved") {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/notify: web-push endpoint host "${hostname}" did not resolve to any address; refusing to send (DNS-rebinding guard)`,
+        );
+    }
+
+    // Fail closed: a stalled or blocked lookup is something the endpoint's own
+    // nameserver can cause, so it must not wave the send through. The verdict is
+    // not cached, so the next send after an outage re-checks.
+    if (resolution.kind === "failed") {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/notify: could not verify where web-push endpoint host "${hostname}" resolves (the DNS-over-HTTPS lookup failed); refusing to send (DNS-rebinding guard)`,
         );
     }
 };

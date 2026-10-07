@@ -53,10 +53,10 @@ deliberate, and mostly a set of go/no-go decisions:
       `svelte`, `astro`, `nuxt`, `auth`, `auth-ui`, `storage`, `scheduler`, `mail`,
       `notify`, `ratelimit`, `seed`, `db`, `sql-store`, `studio`, `advisor`, `mcp`,
       `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`,
-      `fingerprint`, `dispatch`, `payment`.
+      `fingerprint`, `dispatch`, `payment`, `x402`.
     - **Experimental (excluded from the 1.0 promise, iterating on their own track):**
-      `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`,
-      `container`, `platform-celld`, `platform-node`, `rspack`.
+      `agent`, `replica`, `react-native`, `angular`, `ai`, `browser`, `container`,
+      `platform-celld`, `platform-node`, `rspack`.
 - **Cut the beta channel.** Feature-freeze the Core + Stable-adapter tiers and
   promote `alpha → beta`; the experimental tier keeps iterating on `alpha`.
 - **Bake and dogfood.** Run a real application (the playground plus at least one
@@ -100,7 +100,7 @@ deliberate, and mostly a set of go/no-go decisions:
 
 Published here because "experimental" is only a fair label if the way out of it
 is knowable in advance. An adopter whose core loop runs on `agent` + `ai` +
-`browser` + `container` is betting on the tier with the fewest guarantees while
+`replica` + `container` is betting on the tier with the fewest guarantees while
 the least interesting parts of their stack get the strongest ones; they are
 entitled to see what would change that, and to check the progress themselves.
 
@@ -133,21 +133,22 @@ against something written down rather than case by case.
 
 Where the tier stands today:
 
-| Package          | 1. Snapshotted (untracked `@experimental` exports) | 2. Verified on workerd                                                              |
-| ---------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `agent`          | yes (183)                                          | no                                                                                  |
-| `ai`             | yes (63)                                           | no                                                                                  |
-| `angular`        | yes (80)                                           | n/a — runs in the browser                                                           |
-| `browser`        | yes (25)                                           | no                                                                                  |
-| `container`      | yes (0 — fully tracked)                            | partial — starting a container needs Docker, so lifecycle and `exec` are unverified |
-| `platform-celld` | yes (0)                                            | n/a — verified by the `test:celld` TCK                                              |
-| `platform-node`  | yes (0)                                            | n/a — a Node host                                                                   |
-| `react-native`   | yes (5)                                            | n/a — runs on device                                                                |
-| `replica`        | yes (69)                                           | no                                                                                  |
-| `rspack`         | yes (0)                                            | n/a — a bundler plugin                                                              |
-| `x402`           | yes (83)                                           | yes                                                                                 |
+| Package          | 1. Snapshotted (untracked `@experimental` exports) | 2. Verified on workerd                                                                                                                                                     |
+| ---------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`          | yes (183)                                          | no                                                                                                                                                                         |
+| `ai`             | yes (63)                                           | no                                                                                                                                                                         |
+| `angular`        | yes (80)                                           | n/a — runs in the browser                                                                                                                                                  |
+| `browser`        | yes (0 — fully tracked)                            | partial — blocked on a live Browser Run check: `route.fetch` inside a real session, and the service-worker, prerender and WebRTC paths, are unverified on the real service |
+| `container`      | yes (0 — fully tracked)                            | partial — starting a container needs Docker, so lifecycle and `exec` are unverified                                                                                        |
+| `platform-celld` | yes (0)                                            | n/a — verified by the `test:celld` TCK                                                                                                                                     |
+| `platform-node`  | yes (0)                                            | n/a — a Node host                                                                                                                                                          |
+| `react-native`   | yes (5)                                            | n/a — runs on device                                                                                                                                                       |
+| `replica`        | yes (69)                                           | no                                                                                                                                                                         |
+| `rspack`         | yes (0)                                            | n/a — a bundler plugin                                                                                                                                                     |
 
-`payment` graduated to Stable adapter (audit, workerd suite, no `@experimental` exports). No
+`payment` and `x402` graduated to Stable adapter (audit, workerd suite, no `@experimental`
+exports). `browser` has no tagged exports and a workerd suite against a fake binding, but stays
+experimental until `packages/browser/smoke` has passed against a real Browser Run binding. No
 Core or Stable-adapter export carries `@experimental`: `api:check` fails if one does. The
 per-package graduation order is in [`plans/463`](./plans/463-experimental-graduation.md).
 

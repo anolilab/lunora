@@ -186,6 +186,8 @@ export const ERROR_CATALOG = {
     SCHEMA_SNAPSHOT_PARSE: { status: 500, title: "Schema snapshot parse error" },
     /** Runtime-reachable (env.ts): message enumerates failing env key names — redact on the wire. */
     ENV_INVALID: { internal: true, status: 500, title: "Invalid environment" },
+    /** Runtime-reachable (`@lunora/x402` charge middleware): the facilitator failed to verify or settle; its message carries upstream detail — redact on the wire. */
+    X402_FACILITATOR_ERROR: { internal: true, status: 502, title: "Payment facilitator error" },
     /** Runtime-reachable (auth/middleware.ts): message carries auth-wiring guidance — redact on the wire. */
     AUTH_HEADERS_MISSING: { internal: true, status: 500, title: "Auth headers missing" },
 
@@ -232,6 +234,8 @@ export const ERROR_CATALOG = {
      */
     ANALYTICS_SQL_QUERY_ERROR: { status: 502, title: "Analytics SQL query error" },
     BROWSER_RUN_ERROR: { status: 502, title: "Browser Run API error" },
+    /** A navigation's redirect chain passed the SSRF guard's hop cap (`@lunora/browser`). */
+    BROWSER_TOO_MANY_REDIRECTS: { status: 502, title: "Too many redirects" },
     R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
     WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
 

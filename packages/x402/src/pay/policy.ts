@@ -57,7 +57,6 @@ const parseAtomicAmount = (raw: string): bigint | undefined => (ATOMIC_AMOUNT.te
  * This is only the *default* for the standalone {@link usdToAtomic} helper —
  * a spend policy never assumes it, and scales each requirement by the decimals of
  * the asset it actually names (see {@link SpendPolicy.allowedAssets}).
- * @experimental
  */
 export const DEFAULT_STABLECOIN_DECIMALS = 6;
 
@@ -71,7 +70,6 @@ export const DEFAULT_STABLECOIN_DECIMALS = 6;
  * to authorise a large transfer, so the caller states it per asset. Note
  * `@x402/evm`'s own `DEFAULT_STABLECOINS` registry is *not* uniformly 6-decimal
  * (MegaUSD and Mezo USD are 18), which is exactly why it can't be trusted as a gate.
- * @experimental
  */
 export interface AllowedAsset {
     /** Token contract (EVM) or mint (SVM) address. Matched case-insensitively on EVM, exactly on SVM. */
@@ -94,7 +92,6 @@ export interface AllowedAsset {
  *
  * `ethereum` (`eip155:1`) is absent — the SDK ships no default stablecoin for it, so
  * paying there needs an explicit {@link SpendPolicy.allowedAssets} entry.
- * @experimental
  */
 export const DEFAULT_ALLOWED_ASSETS: ReadonlyArray<AllowedAsset> = [
     { asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6, network: "base" },
@@ -112,7 +109,6 @@ export const DEFAULT_ALLOWED_ASSETS: ReadonlyArray<AllowedAsset> = [
  *
  * Caps are denominated in USD (the stablecoin's dollar value); addresses and
  * networks are matched against the requirement the server offers.
- * @experimental
  */
 export interface SpendPolicy {
     /**
@@ -134,16 +130,16 @@ export interface SpendPolicy {
     /** Recipient allowlist. When set, only these `payTo` addresses may be paid. */
     readonly allowedRecipients?: ReadonlyArray<string>;
 
-    /**
-     * @deprecated One policy-wide decimal count can't describe the assets a server may
-     * name, and guessing it is what let a small USD cap authorise a large transfer.
-     * Setting this now throws — put the asset in {@link SpendPolicy.allowedAssets} with
-     * its own `decimals` instead.
-     */
-    readonly decimals?: number;
     /** Hard ceiling on a single payment, in USD. */
     readonly maxPerCall?: X402Price;
-    /** Hard ceiling on cumulative spend across this wallet's lifetime, in USD. */
+
+    /**
+     * Hard ceiling on cumulative spend by one pay rail, in USD. The ledger lives
+     * in memory on the rail, so the cap covers one `createX402Pay` result, and for
+     * `ctx.x402` one function invocation (codegen builds a rail per ctx). It is not
+     * a budget across invocations: for that, keep a counter in durable state (a
+     * Durable Object, a table) and check it in `onPaymentRequired`.
+     */
     readonly maxPerRun?: X402Price;
 
     /**
@@ -156,7 +152,6 @@ export interface SpendPolicy {
 
 /**
  * A running spend ledger the per-run cap is measured (and reserved) against.
- * @experimental
  */
 export interface SpendState {
     /** Reserve a payment (atomic base units) against the running total, before it is signed. */
@@ -170,7 +165,6 @@ export interface SpendState {
 /**
  * A fresh spend ledger. One per wallet instance; the guard reserves into it and
  * releases from it.
- * @experimental
  */
 export const createSpendState = (): SpendState => {
     let spent = 0n;
@@ -193,7 +187,6 @@ export const createSpendState = (): SpendState => {
  * stablecoin base units, exactly — parsed digit-by-digit so no binary-float drift
  * can round a cap the wrong way. Throws on a malformed amount (including
  * exponential notation like `"1e-7"`, which a decimal string never needs).
- * @experimental
  */
 export const usdToAtomic = (usd: X402Price, decimals: number = DEFAULT_STABLECOIN_DECIMALS): bigint => {
     if (!Number.isInteger(decimals) || decimals < 0) {
@@ -220,14 +213,6 @@ export const usdToAtomic = (usd: X402Price, decimals: number = DEFAULT_STABLECOI
  * assets are payable or how an amount scales.
  */
 const buildAssetTable = (policy: SpendPolicy): Map<string, AllowedAsset> => {
-    // eslint-disable-next-line sonarjs/deprecation -- reading the deprecated field is the point: it must be refused, not silently honoured.
-    if (policy.decimals !== undefined) {
-        throw new LunoraError(
-            "BAD_REQUEST",
-            "x402 policy: `decimals` is no longer supported — a single policy-wide decimal count can't describe the assets a server may name. List the asset in `allowedAssets` with its own `decimals` instead.",
-        );
-    }
-
     const assets = policy.allowedAssets ?? DEFAULT_ALLOWED_ASSETS;
 
     if (assets.length === 0) {
@@ -302,7 +287,6 @@ const scaleCapPerDecimals = (usd: X402Price | undefined, table: Map<string, Allo
  * converted at an assumed decimal count mis-prices any asset that doesn't match the
  * assumption. Pinning the asset (and taking its decimals from the policy, not the
  * requirement) closes that.
- * @experimental
  */
 export const buildSpendPolicy = (policy: SpendPolicy): PaymentPolicy => {
     const assets = buildAssetTable(policy);
@@ -362,7 +346,6 @@ export const buildSpendPolicy = (policy: SpendPolicy): PaymentPolicy => {
  * The asset is re-checked here rather than trusted from {@link buildSpendPolicy}:
  * the two are registered on separate client seams, and a guard that assumed the
  * filter ran would be one wiring change away from signing an unpinned asset.
- * @experimental
  */
 export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): BeforePaymentCreationHook => {
     const assets = buildAssetTable(policy);
@@ -462,7 +445,6 @@ export const buildPaymentGuard = (policy: SpendPolicy, state: SpendState): Befor
  * reserved the amount. Without this, a failed signature would permanently
  * over-count against the per-run cap for the rest of the run — fail-closed, but
  * needlessly so when the client (`wrapFetchWithPayment`) may retry.
- * @experimental
  */
 export const releaseSpendOnFailure =
     (state: SpendState): OnPaymentCreationFailureHook =>
@@ -490,7 +472,6 @@ export const releaseSpendOnFailure =
  * authorises unlimited spend to any recipient it permits. Only `maxPerCall`,
  * `maxPerRun`, or a dynamic `onPaymentRequired` gate actually bound spend, so only
  * those count here.
- * @experimental
  */
 export const assertBoundedPolicy = (policy: SpendPolicy): void => {
     const bounded = policy.maxPerCall !== undefined || policy.maxPerRun !== undefined || policy.onPaymentRequired !== undefined;

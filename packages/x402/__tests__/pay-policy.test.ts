@@ -201,13 +201,6 @@ describe("buildSpendPolicy — asset gate (X402-01)", () => {
             expect(policy(2, [requirement({ amount })])).toEqual([]);
         }
     });
-
-    it("refuses the removed policy-wide `decimals` with a migration message", () => {
-        // Keeping it silently honoured would leave the mis-pricing hole open behind a
-        // field that reads like a formatting detail.
-        expect(() => buildSpendPolicy({ decimals: 18, maxPerCall: "$1" })).toThrow(/`decimals` is no longer supported/);
-        expect(() => buildPaymentGuard({ decimals: 18, maxPerRun: "$1" }, createSpendState())).toThrow(/`decimals` is no longer supported/);
-    });
 });
 
 describe("buildPaymentGuard", () => {

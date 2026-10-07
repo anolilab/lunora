@@ -108,6 +108,10 @@ const response = await ctx.browser.quickAction("snapshot", url, { formats: ["mar
 const { result } = await response.json();
 ```
 
+## Production posture
+
+Set `allowedHosts`. Browser Run enforces it on the session, so it holds for every request the browser makes; without it the guard is a best-effort check in the Worker (it cannot see prerenders or WebRTC, and every page asset becomes a Worker subrequest), and `createBrowser` warns once per isolate. See the [documentation](https://lunora.sh/docs/packages/browser) for the known limits of the default mode.
+
 ## URL safety (SSRF guard)
 
 Every navigation URL is validated before the browser is launched. Beyond rejecting non-`http(s)` schemes (`file:`, `javascript:`, `data:`, …) and embedded `user:pass@` credentials, the helper **default-denies private / internal targets** — loopback (`127.0.0.0/8`, `::1`), RFC1918 (`10/8`, `172.16/12`, `192.168/16`), link-local incl. the cloud-metadata address (`169.254.169.254`), CGNAT (`100.64/10`), IPv6 ULA/link-local, and `localhost` / `*.internal` / `*.local` literals (octal/hex/integer IPv4 and IPv4-mapped IPv6 encodings are normalized first, so they can't slip past). This matters because action `url` args are often caller-controlled. <!-- gitleaks:allow -- illustrative `user:pass@` in prose, not a credential -->
@@ -120,9 +124,11 @@ const browser = createBrowser({ binding: env.BROWSER, launch, allowPrivateTarget
 
 Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface.
 
-DNS rebinding is covered too: whenever `allowedHosts` is unset, the host is resolved over DoH and refused if it maps to a private address, before the browser launches and again on every redirect hop. Setting `allowedHosts` turns that re-check off, because an exact-host allowlist already closes rebinding and may deliberately name an internal host reachable over a Tunnel; pass `resolveDns: true` to force both. An empty `allowedHosts: []` is a configured allowlist with no members and refuses every navigation — omit the option to run without one.
+Redirects are checked before they are followed. Without `allowedHosts`, the guard fetches every request itself (navigations, images, scripts, XHR) without following redirects, refuses a `Location` that fails the same checks, and follows an allowed one as a fresh, checked request; WebSockets are checked before they connect. With `allowedHosts`, Browser Run enforces the list on every request and hop itself, so requests stay in the browser.
 
-Browsers the factory launches also get `allowedHosts` as Browser Run session guardrails, so Cloudflare blocks off-list redirects and sub-resources too, including inside the raw `launch()` escape hatch (at most 50 entries). Quick Actions and crawls have no guardrails: there, the starting URL is checked and nothing after it.
+DNS rebinding is covered too: whenever `allowedHosts` is unset, the host is resolved over DoH and refused if it maps to a private address or resolves to nothing (an empty answer, SERVFAIL, NXDOMAIN), before the browser launches and again on every navigation and redirect target. Setting `allowedHosts` turns that re-check off, because an exact-host allowlist already closes rebinding and may deliberately name an internal host reachable over a Tunnel; pass `resolveDns: true` to force both. An empty `allowedHosts: []` is a configured allowlist with no members and refuses every navigation — omit the option to run without one.
+
+Browsers the factory launches also get `allowedHosts` as Browser Run session guardrails, so Cloudflare blocks every off-list request the session makes (at most 50 entries). Entries are hosts, not origins: ports are not restricted. Quick Actions and crawls have no guardrails: there, the starting URL is checked and nothing after it.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/browser)**.
 

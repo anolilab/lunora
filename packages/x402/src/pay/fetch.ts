@@ -20,29 +20,27 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 
 import type { X402PayConfig } from "../config";
 import { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendState, releaseSpendOnFailure } from "./policy";
-import type { WalletDeps } from "./wallet";
 import { registerWallet } from "./wallet";
 
 /**
  * A payment-enabled `fetch`: same signature as the platform `fetch`.
- * @experimental
  */
 export type PayFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /**
  * Dependencies for building a pay-rail fetch: secret access, plus an optional base `fetch` to wrap.
- * @experimental
  */
-export interface X402PayDeps extends WalletDeps {
+export interface X402PayDeps {
     /** The `fetch` to wrap (defaults to `globalThis.fetch`). Inject to test or to chain transports. */
     readonly fetch?: typeof globalThis.fetch;
+    /** Read a secret (e.g. a private key) by name; `undefined` when unset. Wire it to `ctx.secrets.get`. */
+    readonly getSecret: (name: string) => Promise<string | undefined> | string | undefined;
 }
 
 /**
  * Build a payment-enabled `fetch` for `config`. Throws (before resolving a
  * signer) when `config.policy` is unbounded — an agent wallet is never built
  * with unlimited spend authority.
- * @experimental
  */
 export const createPayFetch = async (config: X402PayConfig, deps: X402PayDeps): Promise<PayFetch> => {
     assertBoundedPolicy(config.policy);
@@ -64,5 +62,16 @@ export const createPayFetch = async (config: X402PayConfig, deps: X402PayDeps): 
     client.onBeforePaymentCreation(paymentGuard);
     client.onPaymentCreationFailure(spendRelease);
 
-    return wrapFetchWithPayment(deps.fetch ?? globalThis.fetch, client);
+    const base = deps.fetch ?? globalThis.fetch;
+    const paying = wrapFetchWithPayment(base, client);
+
+    return async (input, init) => {
+        // A request that already carries a payment is the caller's own: `@x402/fetch`
+        // would answer its 402 by reserving and signing a new payment, then throw
+        // "Payment already attempted" with the amount still reserved against
+        // `maxPerRun`. Send it as-is and hand any 402 back instead.
+        const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+
+        return headers.has("PAYMENT-SIGNATURE") || headers.has("X-PAYMENT") ? base(input, init) : paying(input, init);
+    };
 };

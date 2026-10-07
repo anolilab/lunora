@@ -265,11 +265,22 @@ overspending. At least one bound must be set or the rail refuses to build:
 | Field               | Meaning                                                                                                                       |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `maxPerCall`        | Hard ceiling on a single payment, in USD.                                                                                     |
-| `maxPerRun`         | Hard ceiling on cumulative spend across the wallet's lifetime (the ctx, for `ctx.x402`).                                      |
+| `maxPerRun`         | Hard ceiling on cumulative spend by one rail: for `ctx.x402`, one function invocation (see below).                            |
 | `allowedAssets`     | Which stablecoins may be paid, each with its own `decimals`. Defaults to canonical USDC per friendly network.                 |
 | `allowedRecipients` | Only these `payTo` addresses may be paid.                                                                                     |
 | `allowedNetworks`   | Only these networks may be paid on.                                                                                           |
 | `onPaymentRequired` | Async approval gate called with the selected requirement before signing; return `false` to refuse. Use for human-in-the-loop. |
+
+**`maxPerRun` is per invocation, not per wallet.** The ledger lives in memory on the
+rail, and codegen builds `ctx.x402` once per function call, so every action
+invocation starts from zero. Nothing in the policy caps what a wallet spends
+across invocations or over time. For that budget, keep the running total in
+durable state (a Durable Object or a table) and check and debit it in
+`onPaymentRequired`, which runs before every signature.
+
+A request that already carries a `PAYMENT-SIGNATURE` (or `X-PAYMENT`) header is
+treated as paid by the caller: it is sent as-is, a `402` comes back to you
+unanswered, and nothing is reserved against `maxPerRun`.
 
 Only `maxPerCall`, `maxPerRun`, or `onPaymentRequired` count as a bound.
 `allowedRecipients` / `allowedNetworks` / `allowedAssets` narrow _where_ money can
@@ -319,3 +330,68 @@ requirement is filtered out, which looks like a silent failure to pay.
   wallet stays deterministically closed instead of retrying into a signature.
 - Prices are USD-denominated decimals (`"0.01"`, `"$0.01"`, or `0.01`);
   exponential notation is rejected.
+
+## Platform support
+
+The x402 protocol needs no host binding: both rails are `fetch` calls to a
+facilitator. The generated `ctx.x402`, though, reads its wallet key through
+`ctx.secrets`, so codegen gates it on the `secrets` rating of the capability
+matrix (`PlatformCapabilities` in `@lunora/platform`):
+
+| Target       | Charge rail | `ctx.x402` (codegen-wired pay rail)                                                     | `createX402Pay` called directly                                        |
+| ------------ | ----------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `cloudflare` | supported   | emitted; the wallet key is read from the Secrets Store                                  | supported, any custody                                                 |
+| `node`       | supported   | withheld, with a `platform_unsupported_feature` diagnostic (`secrets` is `unsupported`) | supported: `{ type: "signer" }` anywhere, or pass your own `getSecret` |
+| `celld`      | supported   | withheld, as on `node`                                                                  | as on `node`                                                           |
+
+On every target the `onReceipt` sink only outlives the response where the host
+hands the gate a `waitUntil` (Workers' `ctx.waitUntil`); without one the sink
+promise floats, as described under Receipts.
+
+What the workerd suite verifies: the HTTP-action, procedure and Solana gates
+challenge in a real worker, and the pay rail answers that challenge with a viem
+EIP-712 signature made inside workerd, through verify and settle, with the
+facilitator faked at the fetch boundary. A failed settlement withholds the
+resource, an over-cap price is never signed, the per-run cap holds across calls
+on one `lazyX402Pay` rail, and a request that already carries a payment reserves
+nothing. Not verified there: a Solana payment end to end (it needs a
+recent blockhash from a Solana RPC), and any real chain or facilitator.
+
+## Errors
+
+Every error this package throws itself is a `LunoraError` with a stable `code`;
+what passes through from the x402 SDKs is listed after the table. The
+`ENV_INVALID` ones are `internal`: the client sees a redacted 500 and the message
+lands in the Worker logs.
+
+| Code                     | When                                                                                                                                                                                                                                                  | What to do                                                                                                                                                     |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ENV_INVALID`            | `Unknown x402 network "…"`: the network is neither a friendly name nor a CAIP-2 id.                                                                                                                                                                   | Use one of the friendly names (`base`, `base-sepolia`, `polygon`, `arbitrum`, …) or a raw `namespace:reference` id.                                            |
+| `ENV_INVALID`            | `x402 charge on "…" needs recipient.evm` (or `.svm`) `set`: the payout address for the network's family is missing.                                                                                                                                   | Set `recipient.evm` for an EVM network, `recipient.svm` for Solana.                                                                                            |
+| `ENV_INVALID`            | `x402 pay: secret "…" is not set`: the wallet (or a CDP credential) secret is empty.                                                                                                                                                                  | Create the secret (`wrangler secret put` / Secrets Store), or point `secretName` at the one you have.                                                          |
+| `ENV_INVALID`            | The wallet key is malformed: not 32-byte hex (EVM), or not a base58 / JSON-array key of 32 or 64 bytes (Solana).                                                                                                                                      | Store the raw private key itself: 64 hex chars for EVM, the `solana-keygen` JSON array or a base58 secret for Solana.                                          |
+| `ENV_INVALID`            | A `{ type: "signer" }` signer's address belongs to the other family (a `0x…` signer on Solana, or the reverse).                                                                                                                                       | Pass a signer for the configured network's family, or change `network`.                                                                                        |
+| `ENV_INVALID`            | An optional peer is missing (`@x402/evm` + `viem`, `@x402/svm` + `@solana/kit`, `@coinbase/cdp-sdk`); the message names it and the alternative custody.                                                                                               | Install the named peer. A peer that is installed but fails to load rethrows its own error instead.                                                             |
+| `ENV_INVALID`            | The facilitator answered `/supported` but does not settle the configured scheme on the configured network (the charge rail's first request).                                                                                                          | Point `facilitator.url` at one that supports the network, or change `network`.                                                                                 |
+| `X402_FACILITATOR_ERROR` | The facilitator could not be reached at initialisation, or answered `/verify` or `/settle` with something that is not a valid response, or timed out (502). The handler did not run, except on the settle-after rail, where the resource is withheld. | Check the facilitator's status. A request that failed this way can be retried; one whose settlement timed out may have settled, so key retries on idempotency. |
+| `NOT_IMPLEMENTED`        | `{ type: "cdp" }` custody on a Solana network.                                                                                                                                                                                                        | Wrap your CDP Solana account in a `@solana/kit` signer and pass it as `{ type: "signer" }`, or use `raw-key`.                                                  |
+| `FORBIDDEN`              | `refusing to build a wallet with an unbounded spend policy`.                                                                                                                                                                                          | Set at least one of `maxPerCall`, `maxPerRun` or `onPaymentRequired`. Allowlists alone do not bound spend.                                                     |
+| `BAD_REQUEST`            | The policy cannot be enforced: a malformed USD amount, an empty `allowedAssets`, a negative or fractional `decimals`, or one asset listed twice with different `decimals`.                                                                            | Fix the policy as the message says. These fire when the rail is built, before any key is read.                                                                 |
+
+What passes through unwrapped:
+
+- **Pay-rail refusals at payment time** are plain `Error`s from `@x402/fetch`, not
+  `LunoraError`s. An offer over `maxPerCall`, in an unlisted asset, or to an
+  unlisted recipient is filtered out (`All payment requirements were filtered out
+by policies`); a payment past `maxPerRun` or declined by `onPaymentRequired` is
+  aborted with the policy's reason (for example `x402 policy: this payment (…)
+would exceed the per-run cap`). Either way nothing is signed.
+- **Network failures of your own `fetch`** (the resource server unreachable) reject
+  as they would without the pay rail.
+
+On the charge side, a payment the facilitator refuses goes back to the client as
+a `402` with a fresh `PAYMENT-REQUIRED` challenge: no payment, a payment that
+fails verification, and (on the settle-first rails) a settlement the facilitator
+declines. A facilitator that fails rather than declines is the
+`X402_FACILITATOR_ERROR` above. The handler runs in none of these cases, except
+that settle-after runs it before settling.

@@ -232,6 +232,56 @@ import { internal } from "./_generated/internal";
 Code that used `anyApi` to build a reference by hand can pass the dispatch
 key instead: `{ __lunoraRef: "billing_invoices:create" }`.
 
+### `@lunora/x402`: rail internals no longer exported
+
+`@lunora/x402` graduated to the Stable-adapter tier with a smaller surface. The
+pieces `createX402Pay` and `createChargeMiddleware` assemble internally are no
+longer exported, because exporting them would put `@x402/core`'s policy and hook
+types (`PaymentPolicy`, `BeforePaymentCreationHook`, …) under Lunora's SemVer
+promise:
+
+- from `@lunora/x402/pay`: `createPayFetch`, `registerWallet`,
+  `resolveEvmAccount`, `resolveSvmSigner`, `buildSpendPolicy`,
+  `buildPaymentGuard`, `releaseSpendOnFailure`, `assertBoundedPolicy`,
+  `createSpendState`, and the `SpendState` and `WalletDeps` types;
+- from `@lunora/x402/charge`: `createFacilitatorClient` and `toReceipt`.
+
+`SpendPolicy.decimals`, which already threw when set, is gone. Network and
+recipient misconfiguration (`Unknown x402 network`, `needs recipient.evm set`)
+now throws a `LunoraError` with code `ENV_INVALID` instead of a plain `Error`.
+A facilitator that fails rather than declines (unreachable at start-up, a
+malformed or timed-out `/verify` or `/settle` answer) throws
+`X402_FACILITATOR_ERROR` (502) instead of passing `@x402/core`'s error through
+as a 500. `ctx.x402` is no longer emitted on targets that rate `secrets`
+unsupported (`node`, `celld`); call `createX402Pay` directly there. `maxPerRun`
+was always per rail, which for `ctx.x402` means per function invocation; the
+docs no longer call it a wallet lifetime.
+
+**Migration:** build the pay rail with `createX402Pay(config, deps)` (or
+`lazyX402Pay`); it runs the same policy checks, wallet resolution and hooks. For
+a custom signer, pass it as `signer: { type: "signer", signer }`. A receipt is
+already normalized when it reaches your `onReceipt` sink, so `toReceipt` has no
+caller left. The `getSecret` field moved onto `X402PayDeps` itself, so code that
+typed its deps as `WalletDeps` should use `X402PayDeps`.
+
+### `@lunora/browser`: the SSRF guard moved to the context
+
+The redirect guard used `page.route`, which Playwright never calls for a
+redirect hop, so a public URL could 302 the browser to a private address. The
+guard now sits on the context (`context.route`), fetches each navigation itself
+without following redirects, and checks every `Location` before it is
+requested. It also covers the browsers `launch` and `connect` hand to your code.
+
+The structural projections changed with it: `BrowserContextLike` requires
+`route`, `PageLike` drops `route` and gains an optional `mainFrame`, and
+`RouteLike` gains `fetch` and `fulfill`. A `launch` keepAlive session whose
+callback throws is now closed. A DoH answer with no address (empty, SERVFAIL,
+NXDOMAIN) is refused instead of treated as public.
+
+**Migration:** test doubles passed as `launch` / `connect` need a context with
+`route`. The real `@cloudflare/playwright` exports satisfy the new shapes
+unchanged.
+
 ## Recommended (non-breaking) follow-ups
 
 - **Enforce ephemeral WS admin tokens.** The worker can now reject the raw

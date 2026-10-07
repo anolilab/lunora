@@ -13,100 +13,374 @@ SemVer promise until the package graduates.
 
 ### `Browser` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface Browser {
+    cancelCrawl: (jobId: string) => Promise<void>;
+    connect: <T>(sessionId: string, function_: (browser: BrowserLike) => Promise<T>, options?: {
+        close?: boolean;
+    }) => Promise<T>;
+    content: (url: string, options?: NavigateOptions) => Promise<string>;
+    crawl: (url: string, options?: CrawlOptions) => Promise<string>;
+    crawlResult: (jobId: string, options?: CrawlResultOptions) => Promise<CrawlJob>;
+    launch: <T>(function_: (browser: BrowserLike) => Promise<T>, options?: {
+        keepAlive?: number;
+    }) => Promise<T>;
+    pdf: (url: string, options?: PdfOptions) => Promise<Uint8Array>;
+    quickAction: (action: QuickActionName, url: string, options?: QuickActionOptions) => Promise<Response>;
+    scrape: <T>(url: string, function_: (...args: never[]) => T, options?: NavigateOptions) => Promise<T>;
+    screenshot: (url: string, options?: ScreenshotOptions) => Promise<Uint8Array>;
+    sessions: () => Promise<ReadonlyArray<BrowserSession>>;
+}
+```
 
 ### `BrowserBindingLike` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface BrowserBindingLike {
+    readonly fetch: typeof fetch;
+    quickAction?(action: QuickActionName, options: {
+        url: string;
+    }): Promise<Response>;
+}
+```
+
+### `BrowserConnectLike` (type)
+
+```ts
+type BrowserConnectLike = (binding: BrowserBindingLike, sessionId: string) => Promise<BrowserLike>;
+```
 
 ### `BrowserContextLike` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface BrowserContextLike {
+    newPage: () => Promise<PageLike>;
+    route: (pattern: string, handler: <TResponse extends RouteResponseLike>(route: RouteLike<TResponse>) => unknown) => Promise<void>;
+}
+```
 
 ### `BrowserLaunchLike` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, unknown>) => Promise<BrowserLike>;
+```
 
 ### `BrowserLike` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface BrowserLike {
+    close: () => Promise<void>;
+    contexts?: () => BrowserContextLike[];
+    newContext: (options?: {
+        serviceWorkers?: "allow" | "block";
+    }) => Promise<BrowserContextLike>;
+    sessionId?: () => string | undefined;
+}
+```
 
 ### `BrowserRestApiOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface BrowserRestApiOptions {
+    accountId: string;
+    apiToken: string;
+}
+```
 
 ### `BrowserRunCrawlEvent` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type BrowserRunCrawlEvent = (BrowserRunEventEnvelope & {
+    payload: {
+        completed: number;
+        crawlConfig: BrowserRunCrawlEventConfig;
+        createdAt: string;
+        errored: number;
+        finishedAt: string;
+        jobId: string;
+        jobStatus: CrawlJobStatus;
+        skipped: number;
+        total: number;
+    };
+    type: "cf.browserRun.crawl.finished";
+}) | (BrowserRunEventEnvelope & {
+    payload: {
+        crawlConfig: BrowserRunCrawlEventConfig;
+        createdAt: string;
+        jobId: string;
+    };
+    type: "cf.browserRun.crawl.started";
+}) | (BrowserRunEventEnvelope & {
+    payload: {
+        crawlStatus: CrawlRecordStatus;
+        httpStatus: number;
+        jobId: string;
+        url: string;
+    };
+    type: "cf.browserRun.crawl.updated";
+});
+```
 
 ### `BrowserRunCrawlEventConfig` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface BrowserRunCrawlEventConfig {
+    depth: number;
+    formats: CrawlFormat[];
+    limit: number;
+    render: boolean;
+    source: "all" | "links" | "sitemaps";
+    url: string;
+}
+```
 
 ### `BrowserRunEventEnvelope` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface BrowserRunEventEnvelope {
+    metadata: {
+        accountId: string;
+        eventSchemaVersion: number;
+        eventSubscriptionId: string;
+        eventTimestamp: string;
+    };
+    source: {
+        type: "browserRun";
+    };
+}
+```
+
+### `BrowserSession` (interface)
+
+```ts
+interface BrowserSession {
+    connectionId?: string;
+    sessionId: string;
+    startTime?: number;
+}
+```
+
+### `BrowserSessionsLike` (type)
+
+```ts
+type BrowserSessionsLike = (binding: BrowserBindingLike) => Promise<ReadonlyArray<BrowserSession>>;
+```
 
 ### `CrawlFormat` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type CrawlFormat = "html" | "json" | "markdown";
+```
 
 ### `CrawlJob` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface CrawlJob {
+    browserSecondsUsed?: number;
+    cursor?: number | string;
+    finished: number;
+    id: string;
+    records: CrawlRecord[];
+    status: CrawlJobStatus;
+    total: number;
+}
+```
 
 ### `CrawlJobStatus` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type CrawlJobStatus = "cancelled_by_user" | "cancelled_due_to_limits" | "cancelled_due_to_timeout" | "completed" | "errored" | "running";
+```
 
 ### `CrawlOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface CrawlOptions {
+    contentUse?: "full" | "reference";
+    crawlPurposes?: ReadonlyArray<"ai-input" | "ai-train" | "search">;
+    depth?: number;
+    formats?: ReadonlyArray<CrawlFormat>;
+    limit?: number;
+    options?: {
+        excludePatterns?: ReadonlyArray<string>;
+        includeExternalLinks?: boolean;
+        includePatterns?: ReadonlyArray<string>;
+        includeSubdomains?: boolean;
+    };
+    render?: boolean;
+    source?: "all" | "links" | "sitemaps";
+}
+```
 
 ### `CrawlRecord` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface CrawlRecord {
+    html?: string;
+    json?: unknown;
+    markdown?: string;
+    metadata?: {
+        status?: number;
+        title?: string;
+        url?: string;
+    };
+    status: CrawlRecordStatus;
+    url: string;
+}
+```
 
 ### `CrawlRecordStatus` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type CrawlRecordStatus = "cancelled" | "completed" | "disallowed" | "errored" | "queued" | "skipped";
+```
 
 ### `CrawlResultOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface CrawlResultOptions {
+    cursor?: number | string;
+    limit?: number;
+    status?: CrawlRecordStatus;
+}
+```
 
 ### `LunoraBrowserOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface LunoraBrowserOptions {
+    allowedHosts?: string[];
+    allowPrivateTargets?: boolean;
+    binding: BrowserBindingLike;
+    connect?: BrowserConnectLike;
+    launch?: BrowserLaunchLike;
+    resolveDns?: boolean;
+    restApi?: BrowserRestApiOptions;
+    sessions?: BrowserSessionsLike;
+    timeoutMs?: number;
+}
+```
 
 ### `NavigateOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface NavigateOptions {
+    timeoutMs?: number;
+    waitUntil?: "commit" | "domcontentloaded" | "load" | "networkidle";
+}
+```
 
 ### `PageLike` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface PageLike {
+    content: () => Promise<string>;
+    evaluate: <T>(function_: () => T) => Promise<T>;
+    goto: (url: string, options?: {
+        timeout?: number;
+        waitUntil?: "commit" | "domcontentloaded" | "load" | "networkidle";
+    }) => Promise<unknown>;
+    mainFrame?: () => unknown;
+    pdf: (options?: Record<string, unknown>) => Promise<Uint8Array>;
+    screenshot: (options?: Record<string, unknown>) => Promise<Uint8Array>;
+    setViewportSize?: (viewport: {
+        height: number;
+        width: number;
+    }) => Promise<void>;
+}
+```
 
 ### `PdfOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface PdfOptions extends NavigateOptions {
+    format?: string;
+    printBackground?: boolean;
+    viewport?: {
+        height: number;
+        width: number;
+    };
+}
+```
 
 ### `QuickActionName` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type QuickActionName = "accessibilityTree" | "content" | "json" | "links" | "markdown" | "pdf" | "scrape" | "screenshot" | "snapshot";
+```
 
 ### `QuickActionOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface QuickActionOptions {
+    [key: string]: unknown;
+    formats?: ReadonlyArray<SnapshotFormat>;
+    html?: never;
+    interestingOnly?: boolean;
+    url?: never;
+}
+```
+
+### `RouteLike` (interface)
+
+```ts
+interface RouteLike<TResponse extends RouteResponseLike = RouteResponseLike> {
+    abort: (errorCode?: string) => Promise<void>;
+    continue: () => Promise<void>;
+    fetch: (options?: {
+        headers?: Record<string, string>;
+        maxRedirects?: number;
+        method?: string;
+        postData?: string;
+        url?: string;
+    }) => Promise<TResponse>;
+    fulfill: (options: {
+        body?: string;
+        contentType?: string;
+        headers?: Record<string, string>;
+        response?: TResponse;
+        status?: number;
+    }) => Promise<void>;
+    request: () => {
+        frame?: () => unknown;
+        headers?: () => Record<string, string>;
+        isNavigationRequest?: () => boolean;
+        method?: () => string;
+        url: () => string;
+    };
+}
+```
+
+### `RouteResponseLike` (interface)
+
+```ts
+interface RouteResponseLike {
+    headers: () => Record<string, string>;
+    status: () => number;
+}
+```
 
 ### `ScreenshotOptions` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface ScreenshotOptions extends NavigateOptions {
+    fullPage?: boolean;
+    type?: "jpeg" | "png";
+    viewport?: {
+        height: number;
+        width: number;
+    };
+}
+```
 
 ### `SnapshotFormat` (type)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+type SnapshotFormat = "accessibilityTree" | "content" | "markdown" | "screenshot";
+```
 
 ### `createBrowser` (const)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+const createBrowser: (options: LunoraBrowserOptions) => Browser;
+```
