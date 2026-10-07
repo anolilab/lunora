@@ -7,12 +7,19 @@ interface FakeResponse {
     status: number;
 }
 
-/** What the guard did with one request it was handed. */
+/** What the handlers did with one request. */
 interface RouteOutcome {
     aborted?: string;
+    /** Every handler fell through (`continue`, or `fallback` past the last): the browser fetches it, redirects and all. */
     continued: boolean;
     fetched: string[];
     fulfilled?: { body?: string; contentType?: string; response?: FakeApiResponse; status?: number };
+}
+
+/** What the WebSocket handler did with one socket. */
+interface SocketOutcome {
+    closed?: { code?: number; reason?: string };
+    connected: boolean;
 }
 
 interface FakeApiResponse extends RouteResponseLike {
@@ -26,24 +33,37 @@ interface PageSpy extends PageLike {
     viewportCalls: { height: number; width: number }[];
 }
 
+interface ContextSpy extends BrowserContextLike {
+    /** The registered route handlers, oldest first (Playwright runs the newest first). */
+    handlers: AnyHandler[];
+    pages: () => PageSpy[];
+}
+
 interface BrowserSpy extends BrowserLike {
     closed: number;
+    contextList: ContextSpy[];
     contextsOpened: number;
+    /** Open a context on this browser the way another connection to the session would: behind our back. */
+    openForeignContext: () => ContextSpy;
     pages: PageSpy[];
 }
+
+type AnyHandler = (route: never) => unknown;
 
 type RouteHandler = <TResponse extends RouteResponseLike>(route: RouteLike<TResponse>) => unknown;
 
 interface FakeLaunch extends BrowserLaunchLike {
     browsers: BrowserSpy[];
-    /** Hand one request to the newest handler, the way Playwright does, and report what the guard did. */
+    /** Hand one request to the newest context's handlers, the way Playwright does, and report what they did. */
     dispatch: (url: string, kind: { frame?: unknown; navigation: boolean }) => Promise<RouteOutcome>;
+    /** Hand one WebSocket to the newest context's WebSocket handler. */
+    dispatchSocket: (url: string) => Promise<SocketOutcome>;
     /** Every `launch` options object the factory passed. */
     launchOptions: (Record<string, unknown> | undefined)[];
     /** Every URL that reached the fake network, in order: what an SSRF test must keep private hosts out of. */
     requested: string[];
     /** Every handler registered with `context.route`, across all contexts. */
-    routeHandlers: RouteHandler[];
+    routeHandlers: AnyHandler[];
 }
 
 interface FakeLaunchOptions {
@@ -70,12 +90,14 @@ const fakeBinding = (): BrowserBindingLike => {
 
 /**
  * A fake `@cloudflare/playwright` `launch` (browser → context → page) that models
- * the one Playwright behaviour the SSRF guard rests on: a `context.route` handler
- * is called for the FIRST request of a navigation only. Redirect hops, whether
- * the browser follows them after `route.continue()` or after a fulfilled 3xx,
- * reach the network without the handler seeing them. `route.fetch` follows up to
- * `maxRedirects` hops itself. Everything that reaches the network is recorded in
- * `requested`.
+ * the Playwright behaviour the SSRF guard rests on:
+ *
+ * A route handler is called for the FIRST request of a navigation only. Redirect
+ * hops, whether the browser follows them after `route.continue()` or after a
+ * fulfilled 3xx, reach the network without any handler seeing them.
+ * `route.fetch` follows up to `maxRedirects` hops itself. Handlers run newest
+ * first, and `fallback` passes to the next older one. Everything that reaches
+ * the network is recorded in `requested`.
  */
 const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
     const network =
@@ -85,7 +107,9 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
         });
     const browsers: BrowserSpy[] = [];
     const requested: string[] = [];
-    const routeHandlers: RouteHandler[] = [];
+    const routeHandlers: AnyHandler[] = [];
+    const contexts: ContextSpy[] = [];
+    const socketHandlers: ((socket: never) => unknown)[] = [];
 
     /** The browser fetching `url` on its own: every hop follows without a handler. */
     const browserLoad = (url: string): FakeResponse => {
@@ -106,43 +130,68 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
         throw new Error("net::ERR_TOO_MANY_REDIRECTS");
     };
 
-    const runHandler = async (handler: RouteHandler, url: string, kind: { frame?: unknown; navigation: boolean }): Promise<RouteOutcome> => {
-        const outcome: RouteOutcome = { continued: false, fetched: [] };
+    /** Follow `url` the way `route.fetch` does, up to `maxRedirects` hops. */
+    const fetchFrom = (url: string, maxRedirects: number, outcome: RouteOutcome): FakeApiResponse => {
+        let current = url;
 
-        const route: RouteLike<FakeApiResponse> = {
+        for (let hop = 0; ; hop += 1) {
+            requested.push(current);
+            outcome.fetched.push(current);
+
+            const response = network(current);
+
+            if (!isRedirect(response) || hop >= maxRedirects) {
+                const finalUrl = current;
+
+                return { headers: () => response.headers ?? {}, status: () => response.status, url: finalUrl };
+            }
+
+            current = new URL(response.headers?.["location"] ?? "", current).href;
+        }
+    };
+
+    const runHandlers = async (handlers: AnyHandler[], url: string, kind: { frame?: unknown; navigation: boolean }): Promise<RouteOutcome> => {
+        const outcome: RouteOutcome = { continued: false, fetched: [] };
+        let index = handlers.length - 1;
+        let currentUrl = url;
+
+        const route: RouteLike<FakeApiResponse> & { fallback: (options?: { url?: string }) => Promise<void> } = {
             abort: async (errorCode) => {
                 outcome.aborted = errorCode ?? "failed";
             },
             continue: async () => {
                 outcome.continued = true;
             },
-            fetch: async (options) => {
-                let current = url;
+            fallback: async (options) => {
+                currentUrl = options?.url ?? currentUrl;
+                index -= 1;
 
-                for (let hop = 0; ; hop += 1) {
-                    requested.push(current);
-                    outcome.fetched.push(current);
+                const next = handlers[index];
 
-                    const response = network(current);
+                if (next === undefined) {
+                    outcome.continued = true;
 
-                    if (!isRedirect(response) || hop >= (options?.maxRedirects ?? 20)) {
-                        const finalUrl = current;
-
-                        return { headers: () => response.headers ?? {}, status: () => response.status, url: finalUrl };
-                    }
-
-                    current = new URL(response.headers?.["location"] ?? "", current).href;
+                    return;
                 }
+
+                await (next as (route: unknown) => unknown)(route);
             },
+            fetch: async (options) => fetchFrom(options?.url ?? currentUrl, options?.maxRedirects ?? 20, outcome),
             fulfill: async (options) => {
                 outcome.fulfilled = options;
             },
             request: () => {
-                return { frame: () => kind.frame, isNavigationRequest: () => kind.navigation, url: () => url };
+                return { frame: () => kind.frame, isNavigationRequest: () => kind.navigation, url: () => currentUrl };
             },
         };
 
-        await handler(route);
+        const newest = handlers[index];
+
+        if (newest === undefined) {
+            outcome.continued = true;
+        } else {
+            await (newest as (route: unknown) => unknown)(route);
+        }
 
         return outcome;
     };
@@ -150,19 +199,9 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
     /** The one frame every fake page reports as its main frame. */
     const mainFrame = { main: true };
 
-    /**
-     * A page navigation as Chromium + Playwright run it: the route handler (if
-     * any) sees the first request only, and every redirect the browser follows
-     * afterwards reaches the network unseen.
-     */
-    const navigate = async (url: string, handler: RouteHandler | undefined): Promise<void> => {
-        if (handler === undefined) {
-            browserLoad(url);
-
-            return;
-        }
-
-        const outcome = await runHandler(handler, url, { frame: mainFrame, navigation: true });
+    /** A page navigation: the handlers see the first request only; the browser follows every redirect after unseen. */
+    const navigate = async (url: string, handlers: AnyHandler[]): Promise<void> => {
+        const outcome = await runHandlers(handlers, url, { frame: mainFrame, navigation: true });
 
         if (outcome.aborted !== undefined) {
             throw new Error(`net::ERR_${outcome.aborted.toUpperCase()} at ${url}`);
@@ -183,64 +222,99 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
         }
     };
 
-    const makePage = (handler: () => RouteHandler | undefined): PageSpy => {
-        const page: PageSpy = {
-            content: async () => PAGE_HTML,
-            evaluate: async (function_) => function_(),
-            goto: async (url, gotoOptions) => {
-                page.gotoCalls.push(url);
-                page.gotoOptions.push(gotoOptions);
+    const makeContext = (pages: PageSpy[]): ContextSpy => {
+        const handlers: AnyHandler[] = [];
+        const own: PageSpy[] = [];
+        const pageListeners: ((page: PageSpy) => unknown)[] = [];
+        let context: ContextSpy;
 
-                if (config.gotoThrows) {
-                    throw new Error("navigation failed");
-                }
+        const makePage = (): PageSpy => {
+            const page: PageSpy & { context: () => ContextSpy } = {
+                content: async () => PAGE_HTML,
+                context: () => context,
+                evaluate: async (function_) => function_(),
+                goto: async (url, gotoOptions) => {
+                    page.gotoCalls.push(url);
+                    page.gotoOptions.push(gotoOptions);
 
-                await navigate(url, handler());
+                    if (config.gotoThrows) {
+                        throw new Error("navigation failed");
+                    }
 
-                return undefined;
-            },
-            gotoCalls: [],
-            gotoOptions: [],
-            mainFrame: () => mainFrame,
-            pdf: async () => new Uint8Array([37, 80, 68, 70]),
-            screenshot: async (screenshotOptions) => {
-                page.screenshotCalls.push(screenshotOptions ?? {});
+                    await navigate(url, handlers);
 
-                return new Uint8Array([137, 80, 78, 71]);
-            },
-            screenshotCalls: [],
-            setViewportSize: async (viewport) => {
-                page.viewportCalls.push(viewport);
-            },
-            viewportCalls: [],
-            ...config.page,
+                    return undefined;
+                },
+                gotoCalls: [],
+                gotoOptions: [],
+                mainFrame: () => mainFrame,
+                pdf: async () => new Uint8Array([37, 80, 68, 70]),
+                screenshot: async (screenshotOptions) => {
+                    page.screenshotCalls.push(screenshotOptions ?? {});
+
+                    return new Uint8Array([137, 80, 78, 71]);
+                },
+                screenshotCalls: [],
+                setViewportSize: async (viewport) => {
+                    page.viewportCalls.push(viewport);
+                },
+                viewportCalls: [],
+                ...config.page,
+            };
+
+            return page;
         };
 
-        return page;
-    };
-
-    const makeContext = (pages: PageSpy[]): BrowserContextLike => {
-        let handler: RouteHandler | undefined;
-
-        return {
+        const spy: ContextSpy & Record<string, unknown> = {
+            handlers,
+            newCDPSession: async () => {
+                return {};
+            },
             newPage: async () => {
-                const page = makePage(() => handler);
+                const page = makePage();
 
+                own.push(page);
                 pages.push(page);
+
+                for (const listener of pageListeners) {
+                    listener(page);
+                }
 
                 return page;
             },
+            on: (event: string, listener: (page: PageSpy) => unknown) => {
+                if (event === "page") {
+                    pageListeners.push(listener);
+                }
+            },
+            pages: () => own,
             route: async (_pattern, registered) => {
-                handler = registered;
+                handlers.push(registered);
                 routeHandlers.push(registered);
             },
+            routeWebSocket: async (_pattern: string, handler: (socket: never) => unknown) => {
+                socketHandlers.push(handler);
+            },
+            unroute: async (_pattern: string, handler?: AnyHandler) => {
+                const kept = handlers.filter((registered) => handler !== undefined && registered !== handler);
+
+                handlers.splice(0, handlers.length, ...kept);
+            },
+            unrouteAll: async () => {
+                handlers.splice(0);
+            },
         };
+
+        context = spy;
+        contexts.push(spy);
+
+        return spy;
     };
 
     const launch = (async (_binding: BrowserBindingLike, launchOptions?: Record<string, unknown>): Promise<BrowserLike> => {
         launch.launchOptions.push(launchOptions);
 
-        const browser: BrowserSpy = {
+        const browser: BrowserSpy & Record<string, unknown> = {
             close: async () => {
                 browser.closed += 1;
 
@@ -249,11 +323,27 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
                 }
             },
             closed: 0,
+            contextList: [],
+            contexts: () => browser.contextList,
             contextsOpened: 0,
+            newBrowserCDPSession: async () => {
+                return {};
+            },
             newContext: async () => {
                 browser.contextsOpened += 1;
 
-                return makeContext(browser.pages);
+                const context = makeContext(browser.pages);
+
+                browser.contextList.push(context);
+
+                return context;
+            },
+            openForeignContext: () => {
+                const context = makeContext(browser.pages);
+
+                browser.contextList.push(context);
+
+                return context;
             },
             pages: [],
         };
@@ -268,17 +358,38 @@ const fakeLaunch = (config: FakeLaunchOptions = {}): FakeLaunch => {
     launch.requested = requested;
     launch.routeHandlers = routeHandlers;
     launch.dispatch = async (url, kind) => {
-        const handler = routeHandlers.at(-1);
+        const context = contexts.at(-1);
 
-        if (handler === undefined) {
+        if (context === undefined || context.handlers.length === 0) {
             throw new Error("no route handler registered");
         }
 
-        return runHandler(handler, url, kind);
+        return runHandlers(context.handlers, url, kind);
+    };
+    launch.dispatchSocket = async (url) => {
+        const handler = socketHandlers.at(-1);
+
+        if (handler === undefined) {
+            throw new Error("no WebSocket handler registered");
+        }
+
+        const outcome: SocketOutcome = { connected: false };
+
+        await (handler as (socket: unknown) => unknown)({
+            close: async (options?: { code?: number; reason?: string }) => {
+                outcome.closed = options ?? {};
+            },
+            connectToServer: () => {
+                outcome.connected = true;
+            },
+            url: () => url,
+        });
+
+        return outcome;
     };
 
     return launch;
 };
 
-export type { BrowserSpy, FakeLaunch, FakeResponse, PageSpy, RouteOutcome };
+export type { BrowserSpy, ContextSpy, FakeLaunch, FakeResponse, PageSpy, RouteHandler, RouteOutcome, SocketOutcome };
 export { fakeBinding, fakeLaunch };

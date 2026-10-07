@@ -331,8 +331,8 @@ describe("createBrowser", () => {
             await expect(browser.content("https://rebind.example.com")).rejects.toThrow(/DNS-rebinding guard/);
         });
 
-        it("falls back to the string guard (allows) when the DoH lookup fails", async () => {
-            expect.assertions(1);
+        it("refuses when the DoH lookup fails, before launching (fail closed)", async () => {
+            expect.assertions(2);
 
             const fetchMock = vi.fn<() => Promise<Response>>(async () => {
                 throw new Error("network down");
@@ -343,18 +343,20 @@ describe("createBrowser", () => {
             const launch = fakeLaunch();
             const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: true });
 
-            await browser.content("https://example.com");
-
-            expect(launch.browsers).toHaveLength(1);
+            // The name's nameserver can stall or break the check on purpose; that must not wave the request through.
+            await expect(browser.content("https://example.com")).rejects.toMatchObject({
+                code: "FORBIDDEN",
+                message: expect.stringMatching(/could not be verified/u),
+            });
+            expect(launch.browsers).toHaveLength(0);
         });
 
-        it("bounds the DoH lookup with an abort signal and falls back when it aborts (no hang)", async () => {
+        it("bounds the DoH lookup with an abort signal and refuses when it aborts (no hang)", async () => {
             expect.hasAssertions();
 
             // Simulate a stalled resolver: the lookup is cut short by the abort
-            // signal the factory now threads in. A time-bounded lookup must always
-            // pass an AbortSignal, and an abort surfaces as a rejection → the guard
-            // falls back to the (already-passed) string guard instead of hanging.
+            // signal the factory threads in. A time-bounded lookup must always pass
+            // an AbortSignal, and an abort surfaces as a refusal, not a hang.
             const fetchMock = vi.fn<(input: string, init: { signal?: AbortSignal }) => Promise<Response>>(async (_input, init) => {
                 expect(init.signal).toBeInstanceOf(AbortSignal);
 
@@ -366,9 +368,8 @@ describe("createBrowser", () => {
             const launch = fakeLaunch();
             const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: true });
 
-            await browser.content("https://example.com");
-
-            expect(launch.browsers).toHaveLength(1);
+            await expect(browser.content("https://example.com")).rejects.toMatchObject({ code: "FORBIDDEN" });
+            expect(launch.browsers).toHaveLength(0);
         });
 
         it("skips the DoH round-trip for an IP-literal host", async () => {
@@ -451,13 +452,19 @@ describe("createBrowser", () => {
             await expect(browser.content("https://loop.example.com")).rejects.toMatchObject({ code: "BROWSER_TOO_MANY_REDIRECTS", status: 502 });
         });
 
-        it("refuses a redirect off the allowlist", async () => {
-            expect.assertions(1);
+        it("leaves an allowlisted session's redirects to Browser Run's guardrails, which carry the list", async () => {
+            expect.assertions(2);
 
-            const launch = fakeLaunch({ network: redirectTo("https://evil.example/steal") });
+            // With `allowedHosts`, Browser Run enforces the list on every request the
+            // session makes, hops included, so the navigation is continued in the
+            // browser (keeping a Tunnel-reachable internal host reachable).
+            const launch = fakeLaunch();
             const browser = createBrowser({ allowedHosts: ["public.example.com"], binding: fakeBinding(), launch });
 
-            await expect(browser.content("https://public.example.com")).rejects.toMatchObject({ code: "FORBIDDEN" });
+            await browser.content("https://public.example.com");
+
+            expect(launch.launchOptions[0]).toMatchObject({ guardrails: { allowedDomains: ["public.example.com"] } });
+            await expect(launch.dispatch("https://public.example.com/next", { navigation: true })).resolves.toMatchObject({ continued: true, fetched: [] });
         });
     });
     /* eslint-enable sonarjs/no-clear-text-protocols */

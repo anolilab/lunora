@@ -232,7 +232,7 @@ export interface RouteLike<TResponse extends RouteResponseLike = RouteResponseLi
     /** Allow the intercepted request to proceed. */
     continue: () => Promise<void>;
     /** Perform the request without following redirects past `maxRedirects`, and return the response unfulfilled. */
-    fetch: (options?: { maxRedirects?: number }) => Promise<TResponse>;
+    fetch: (options?: { maxRedirects?: number; url?: string }) => Promise<TResponse>;
     /** Answer the request with `response` (a {@link RouteLike.fetch} result) or a synthetic body. */
     fulfill: (options: { body?: string; contentType?: string; response?: TResponse; status?: number }) => Promise<void>;
 
@@ -477,8 +477,9 @@ export interface LunoraBrowserOptions {
      * is the common shape and the string guard alone lets
      * `http://127.0.0.1.nip.io:8787/…` through to an internal service. It costs
      * one DNS round-trip per navigation and is TOCTOU-imperfect (the browser
-     * re-resolves independently), and if the DoH lookup itself fails it falls
-     * back to the string guard rather than allowing a resolved private IP.
+     * re-resolves independently). A lookup that fails (timeout, network error)
+     * or answers with no address is refused too: the name's nameserver can cause
+     * either on purpose, so neither may wave a request through.
      *
      * Configuring `allowedHosts` at all — an empty list included, since that
      * refuses every navigation outright — turns it OFF by default: an exact-origin
@@ -543,8 +544,8 @@ export interface Browser {
      * client or accept one from it.
      *
      * The browser handed to `fn` carries the same SSRF guard as every other
-     * entry point, on the contexts already open in the session and on every one
-     * opened from it.
+     * entry point, locked as on {@link Browser.launch}, on the contexts already
+     * open in the session and on every one opened from it.
      *
      * The session is deliberately **left open** afterwards — closing it is the
      * whole thing you are avoiding. `close: true` closes the browser itself, for
@@ -583,6 +584,10 @@ export interface Browser {
      * from it carries the SSRF guard: a navigation is checked, fetched by the
      * guard, and a redirect lands on a page that navigates to its checked target,
      * so wait for the final URL (`page.waitForURL`) before reading a redirected page.
+     * The guard is locked in place: `unrouteAll()`, `unroute()` without a
+     * handler, `routeFromHAR()`, `routeWebSocket()` and the CDP-session methods
+     * throw `FORBIDDEN`, and `continue()` in your own route handlers falls
+     * through to the guard.
      *
      * The browser is **always closed** when `fn` resolves or throws — unless
      * `keepAlive` is a number of seconds **between 10 and 600**, which holds the

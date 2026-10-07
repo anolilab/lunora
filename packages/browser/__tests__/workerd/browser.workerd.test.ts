@@ -166,18 +166,51 @@ describe("@lunora/browser (workerd)", () => {
             expect(launchSpy).not.toHaveBeenCalled();
         });
 
-        it("falls back to the string guard when a stalled DoH lookup hits its ceiling", async () => {
+        it("refuses when a stalled DoH lookup hits its ceiling, without waiting it out", async () => {
             expect.hasAssertions();
 
             // The fake internet answers this name only after 1.5s; the factory's 200ms
-            // budget caps the lookup, AbortSignal.timeout ends it, and the call proceeds.
+            // budget caps the lookup and AbortSignal.timeout ends it. A lookup the
+            // name's own nameserver can stall must not wave the call through.
             const browser = createBrowser({ binding, timeoutMs: 200 });
             const started = Date.now();
 
-            const response = await browser.quickAction("markdown", "https://slow-dns.example");
-
-            expect(response.ok).toBe(true);
+            await expect(browser.quickAction("markdown", "https://slow-dns.example")).rejects.toMatchObject({
+                code: "FORBIDDEN",
+                message: expect.stringMatching(/could not be verified/u),
+            });
             expect(Date.now() - started).toBeLessThan(1500);
+            await expect(binding.recorded()).resolves.toHaveLength(0);
+        });
+
+        it("costs one DoH lookup per host for a page's sub-resources, measured on workerd's fetch", async () => {
+            expect.hasAssertions();
+
+            const lookupsFor = async (name: string): Promise<number> => {
+                const response = await fetch(`https://fake-internet.test/lookups?name=${name}`);
+                const body: { count: number } = await response.json();
+
+                return body.count;
+            };
+
+            const launchDouble = fakeLaunch();
+
+            await createBrowser({ binding, launch: launchDouble }).content("https://example.com");
+
+            const started = Date.now();
+
+            for (let index = 0; index < 100; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- one request at a time, as a page issues them
+                await launchDouble.dispatch(`https://assets.example.net/${String(index)}.png`, { navigation: false });
+            }
+
+            const elapsed = Date.now() - started;
+
+            // One A and one AAAA query for the host, not two hundred.
+            await expect(lookupsFor("assets.example.net")).resolves.toBe(2);
+
+            // eslint-disable-next-line no-console -- the measurement the PR reports
+            console.info(`[measure] 100 sub-resources on one host: ${String(elapsed)}ms, DoH queries: 2`);
         });
 
         it("surfaces a /crawl API failure as BROWSER_RUN_ERROR with the upstream status", async () => {

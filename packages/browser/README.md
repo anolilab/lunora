@@ -118,7 +118,7 @@ const browser = createBrowser({ binding: env.BROWSER, launch, allowPrivateTarget
 
 Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface.
 
-Redirects are checked before they are followed: the guard fetches every navigation itself (a page's or an iframe's) without following redirects, refuses a `Location` that fails the same checks, and turns an allowed one into a fresh, checked navigation. Sub-resource redirects (an image or script answering 3xx) are not visible to it; set `allowedHosts` to have Cloudflare block those too.
+Redirects are checked before they are followed. Without `allowedHosts`, the guard fetches every request itself (navigations, images, scripts, XHR) without following redirects, refuses a `Location` that fails the same checks, and follows an allowed one as a fresh, checked request; WebSockets are checked before they connect. With `allowedHosts`, Browser Run enforces the list on every request and hop itself, so requests stay in the browser.
 
 DNS rebinding is covered too: whenever `allowedHosts` is unset, the host is resolved over DoH and refused if it maps to a private address or resolves to nothing (an empty answer, SERVFAIL, NXDOMAIN), before the browser launches and again on every navigation and redirect target. Setting `allowedHosts` turns that re-check off, because an exact-host allowlist already closes rebinding and may deliberately name an internal host reachable over a Tunnel; pass `resolveDns: true` to force both. An empty `allowedHosts: []` is a configured allowlist with no members and refuses every navigation — omit the option to run without one.
 

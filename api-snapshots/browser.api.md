@@ -325,6 +325,7 @@ interface RouteLike<TResponse extends RouteResponseLike = RouteResponseLike> {
     continue: () => Promise<void>;
     fetch: (options?: {
         maxRedirects?: number;
+        url?: string;
     }) => Promise<TResponse>;
     fulfill: (options: {
         body?: string;

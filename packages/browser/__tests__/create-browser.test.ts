@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../src/create-browser";
 import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike } from "../src/types";
+import type { FakeLaunch } from "./_helpers/fake-launch";
 import { fakeBinding, fakeLaunch } from "./_helpers/fake-launch";
 import { stubDohFetch } from "./_helpers/stub-doh";
 
@@ -59,11 +60,25 @@ describe("createBrowser SSRF navigation guard (finding #6)", () => {
         expect(outcome.fetched).toHaveLength(0);
     });
 
+    it("continues an allowed navigation under allowedHosts, which Browser Run's guardrails enforce on every hop", async () => {
+        expect.assertions(2);
+
+        const launch = fakeLaunch();
+        const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch });
+
+        await browser.content("https://example.com/");
+
+        const outcome = await launch.dispatch("https://example.com/next", { navigation: true });
+
+        expect(outcome.continued).toBe(true);
+        expect(outcome.fetched).toHaveLength(0);
+    });
+
     it("fetches an allowed navigation itself, one hop, and hands the response to the browser", async () => {
         expect.assertions(3);
 
         const launch = fakeLaunch();
-        const browser = createBrowser({ allowedHosts: ["example.com"], allowPrivateTargets: true, binding, launch });
+        const browser = createBrowser({ binding, launch });
 
         await browser.content("https://example.com/");
 
@@ -119,7 +134,7 @@ describe("createBrowser SSRF navigation guard (finding #6)", () => {
             // so no DoH `fetch` fires for the intended internal host — the Tunnel
             // config isn't self-rejected.
             expect(fetchSpy).not.toHaveBeenCalled();
-            expect(outcome.fulfilled).toBeDefined();
+            expect(outcome.continued).toBe(true);
         } finally {
             fetchSpy.mockRestore();
         }
@@ -150,14 +165,90 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
         await expect(launch.dispatch("http://10.0.0.5/probe", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
     });
 
-    it("continues a sub-resource request to a public host", async () => {
-        expect.assertions(1);
+    it("fetches a public sub-resource itself and hands the response to the browser", async () => {
+        expect.assertions(2);
 
         const launch = fakeLaunch();
 
         await createBrowser({ binding, launch }).content("https://example.com/");
 
-        await expect(launch.dispatch("https://cdn.example.net/app.js", subresource)).resolves.toMatchObject({ continued: true });
+        const outcome = await launch.dispatch("https://cdn.example.net/app.js", subresource);
+
+        expect(outcome.fetched).toStrictEqual(["https://cdn.example.net/app.js"]);
+        expect(outcome.fulfilled?.response?.url).toBe("https://cdn.example.net/app.js");
+    });
+
+    it("refuses an image that 302s to the metadata endpoint, before the hop is requested", async () => {
+        expect.assertions(2);
+
+        // The exfiltration path: a public page embeds an attacker URL that redirects
+        // to the metadata endpoint, and the browser renders the answer into a screenshot.
+        const launch = fakeLaunch({
+            network: (url) =>
+                url === "https://attacker.example/r" ? { headers: { location: "http://169.254.169.254/latest/meta-data/" }, status: 302 } : { status: 200 },
+        });
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        await expect(launch.dispatch("https://attacker.example/r", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
+        expect(launch.requested).not.toContain("http://169.254.169.254/latest/meta-data/");
+    });
+
+    it("follows a sub-resource's allowed redirect hop by hop and fulfills the final response", async () => {
+        expect.assertions(2);
+
+        const launch = fakeLaunch({
+            network: (url) => (url === "https://cdn.example.net/a.png" ? { headers: { location: "/b.png" }, status: 301 } : { status: 200 }),
+        });
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        const outcome = await launch.dispatch("https://cdn.example.net/a.png", subresource);
+
+        expect(outcome.fetched).toStrictEqual(["https://cdn.example.net/a.png", "https://cdn.example.net/b.png"]);
+        expect(outcome.fulfilled?.response?.url).toBe("https://cdn.example.net/b.png");
+    });
+
+    it("refuses a sub-resource redirect that changes protocol, which route.fetch cannot follow", async () => {
+        expect.assertions(1);
+
+        const launch = fakeLaunch({
+            network: (url) =>
+                url === "https://cdn.example.net/a.png" ? { headers: { location: "http://cdn.example.net/a.png" }, status: 302 } : { status: 200 },
+        });
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        await expect(launch.dispatch("https://cdn.example.net/a.png", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
+    });
+
+    it("resolves each host once per context, however many requests it serves", async () => {
+        expect.assertions(1);
+
+        const doh = stubDohFetch();
+        const launch = fakeLaunch();
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+        doh.mockClear();
+
+        for (let index = 0; index < 100; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- one request at a time, as a page issues them
+            await launch.dispatch(`https://cdn.example.net/${String(index)}.png`, subresource);
+        }
+
+        // One A and one AAAA lookup for cdn.example.net, not two hundred.
+        expect(doh).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a WebSocket to a private host and connects a public one", async () => {
+        expect.assertions(2);
+
+        const launch = fakeLaunch();
+
+        await createBrowser({ binding, launch }).content("https://example.com/");
+
+        await expect(launch.dispatchSocket("ws://169.254.169.254/socket")).resolves.toMatchObject({ closed: { code: 1008 }, connected: false });
+        await expect(launch.dispatchSocket("wss://chat.example.net/socket")).resolves.toMatchObject({ connected: true });
     });
 
     it("continues non-http(s) sub-resources (data:/blob:) so inline assets keep rendering", async () => {
@@ -218,6 +309,103 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
         await createBrowser({ binding, launch }).content("https://example.com/");
 
         await expect(launch.dispatch("://not a url", subresource)).resolves.toMatchObject({ aborted: "blockedbyclient" });
+    });
+});
+
+describe("guard lifetime on a handed-out browser", () => {
+    type Members = Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+    /** Open a page on the browser `launch()` hands out, and return the live objects. */
+    const openHandedOut = async (launch: FakeLaunch) => {
+        const browser = createBrowser({ binding, launch });
+        let handles: { browser: Members; context: Members; page: Members } | undefined;
+
+        await browser.launch(
+            async (raw) => {
+                const context = await raw.newContext();
+                const page = await context.newPage();
+
+                handles = { browser: raw as unknown as Members, context: context as unknown as Members, page: page as unknown as Members };
+            },
+            { keepAlive: 60 },
+        );
+
+        return handles!;
+    };
+
+    it.each(["unrouteAll", "routeFromHAR", "routeWebSocket", "newCDPSession"])("refuses context.%s, which would remove or bypass the guard", async (member) => {
+        expect.assertions(1);
+
+        const { context } = await openHandedOut(fakeLaunch());
+
+        expect(() => context[member]!("**/*")).toThrow(expect.objectContaining({ code: "FORBIDDEN" }));
+    });
+
+    it("refuses unroute() without a handler, and newBrowserCDPSession on the browser", async () => {
+        expect.assertions(2);
+
+        const { browser, context } = await openHandedOut(fakeLaunch());
+
+        await expect(context["unroute"]!("**/*")).rejects.toMatchObject({ code: "FORBIDDEN" });
+        expect(() => browser["newBrowserCDPSession"]!()).toThrow(expect.objectContaining({ code: "FORBIDDEN" }));
+    });
+
+    it("locks pages too, including their own routing, and cannot be undone by delete or assignment", async () => {
+        expect.assertions(3);
+
+        const { context, page } = await openHandedOut(fakeLaunch());
+
+        expect(() => page["unrouteAll"]!()).toThrow(expect.objectContaining({ code: "FORBIDDEN" }));
+        expect(Reflect.deleteProperty(context, "unrouteAll")).toBe(false);
+        expect(Reflect.set(context, "unrouteAll", async () => undefined)).toBe(false);
+    });
+
+    it("turns a caller route's continue() into a fall-through to the guard", async () => {
+        expect.assertions(2);
+
+        const launch = fakeLaunch();
+        const { context, page } = await openHandedOut(launch);
+
+        // A handler that waves everything through would have bypassed the guard.
+        await context["route"]!("**/*", async (route: { continue: () => Promise<void> }) => route.continue());
+
+        await expect(page["goto"]!("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(/BLOCKEDBYCLIENT/u);
+        expect(launch.requested).toHaveLength(0);
+    });
+
+    it("refuses route.fetch() inside a caller route, and lets the caller remove its own route", async () => {
+        expect.assertions(2);
+
+        const launch = fakeLaunch();
+        const { context } = await openHandedOut(launch);
+        const handler = vi.fn<(route: { fetch: () => Promise<unknown> }) => Promise<unknown>>(async (route) => route.fetch());
+
+        await context["route"]!("**/*", handler);
+
+        await expect(launch.dispatch("https://example.com/", { navigation: false })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+        await context["unroute"]!("**/*", handler);
+        handler.mockClear();
+        await launch.dispatch("https://example.com/", { navigation: false });
+
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("withholds a context another connection opened until its guard has landed", async () => {
+        expect.hasAssertions();
+
+        const launch = fakeLaunch();
+        const { browser } = await openHandedOut(launch);
+        const foreign = launch.browsers[0]!.openForeignContext() as unknown as Members;
+        const contexts = browser["contexts"] as unknown as () => unknown[];
+
+        expect(contexts()).not.toContain(foreign);
+
+        await vi.waitFor(() => {
+            expect(contexts()).toContain(foreign);
+        });
+
+        expect(() => foreign["unrouteAll"]!()).toThrow(expect.objectContaining({ code: "FORBIDDEN" }));
     });
 });
 

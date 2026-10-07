@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { isPrivateHost, normalizeHost } from "../../../shared/ssrf-host";
+import type { SsrfResolution } from "../../../shared/ssrf-resolve";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
 import createCrawlClient from "./crawl-client";
 import type {
@@ -56,6 +57,46 @@ const MAX_VIEWPORT_HEIGHT = 4320;
 const MIN_KEEP_ALIVE_SECONDS = 10;
 const MAX_KEEP_ALIVE_SECONDS = 600;
 
+/** An http(s) URL: the only kind a sub-resource fetch can reach the network with. */
+const HTTP_URL = /^https?:/iu;
+
+/** A WebSocket scheme, mapped onto http(s) so the URL guards can classify it. */
+const WS_SCHEME = /^ws/iu;
+
+/** How long a DoH verdict is reused within one guarded browser context. */
+const DOH_CACHE_TTL_MS = 30_000;
+
+/**
+ * DoH verdicts by hostname, for one guarded context: a page that loads a hundred
+ * assets from one CDN pays for one lookup. Promises, so concurrent requests for
+ * a host share the lookup in flight.
+ */
+type DnsCache = Map<string, { expires: number; verdict: Promise<SsrfResolution> }>;
+
+/** Browsers whose members {@link pin} has already replaced. */
+const GUARDED_BROWSERS = new WeakSet<object>();
+
+/** A Playwright member reached by name (the projections do not declare it). */
+type AnyFunction = (...args: unknown[]) => unknown;
+
+/** Refuse a Playwright member that could remove or step around the SSRF guard. */
+const refusedOnGuarded = (what: string) => (): never => {
+    throw new LunoraError(
+        "FORBIDDEN",
+        `@lunora/browser: ${what} is not available on a browser handed out under the SSRF guard: it would remove or bypass the guard. Configure allowedHosts (enforced by Browser Run itself) or allowPrivateTargets if you need it.`,
+    );
+};
+
+/**
+ * Replace `key` on this one object, beyond reach of assignment or `delete`.
+ * Instance-level, so the override holds however the object is reached
+ * (`page.context()`, `browser.contexts()`, an event payload): Playwright hands
+ * out the same object for the same remote context or page.
+ */
+const pin = (target: object, key: string, value: unknown): void => {
+    Object.defineProperty(target, key, { configurable: false, enumerable: false, value, writable: false });
+};
+
 /**
  * Hard ceiling on a single DoH lookup. Without it the `fetch` could stall
  * indefinitely and pin the worker before the browser even launches — a hung
@@ -75,9 +116,20 @@ const DOH_CEILING_MS = 5000;
  * string guard, never fail-open on an address that DID resolve private); this
  * only turns a `"private"` verdict into the package's own user-facing refusal.
  */
-const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DOH_CEILING_MS): Promise<void> => {
+const assertResolvedHostIsPublic = async (target: string, timeoutMs: number, cache?: DnsCache): Promise<void> => {
     const host = normalizeHost(new URL(target).hostname);
-    const resolution = await resolveHostSsrf(host, timeoutMs);
+    const now = Date.now();
+    const hit = cache?.get(host);
+    let pending: Promise<SsrfResolution>;
+
+    if (hit !== undefined && hit.expires > now) {
+        pending = hit.verdict;
+    } else {
+        pending = resolveHostSsrf(host, timeoutMs);
+        cache?.set(host, { expires: now + DOH_CACHE_TTL_MS, verdict: pending });
+    }
+
+    const resolution = await pending;
 
     if (resolution.kind === "private") {
         throw new LunoraError(
@@ -90,6 +142,17 @@ const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DO
     // name's nameserver can fail this lookup and answer the browser's a moment later.
     if (resolution.kind === "unresolved") {
         throw new LunoraError("FORBIDDEN", `@lunora/browser: url host "${host}" did not resolve to any address; refusing to navigate (DNS-rebinding guard)`);
+    }
+
+    // Fail closed: a stalled or blocked lookup is something the same nameserver
+    // can cause on purpose. Not cached, so the next request after an outage re-checks.
+    if (resolution.kind === "failed") {
+        cache?.delete(host);
+
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/browser: DNS for url host "${host}" could not be verified (the DNS-over-HTTPS lookup failed or timed out); refusing to navigate (DNS-rebinding guard)`,
+        );
     }
 };
 
@@ -397,11 +460,11 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
      * Shared by the initial navigation, every redirect hop, and the Quick Action
      * and crawl entry points, so no URL-taking method can skip a guard.
      */
-    const assertTargetAllowed = async (url: string, dohTimeout: number): Promise<string> => {
+    const assertTargetAllowed = async (url: string, dohTimeout: number, cache?: DnsCache): Promise<string> => {
         const target = validateUrl(url, allowPrivateTargets, allowedHosts);
 
         if (!allowPrivateTargets && resolveDns) {
-            await assertResolvedHostIsPublic(target, dohTimeout);
+            await assertResolvedHostIsPublic(target, dohTimeout, cache);
         }
 
         return target;
@@ -480,16 +543,10 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     };
 
     /**
-     * Sub-resource SSRF check. A rendered page autonomously issues img/fetch/
-     * link/xhr requests; each fires the route handler as a non-navigation
-     * request and must not be let through unchecked to a private/internal host.
-     *
-     * Deliberately narrower and string-only, unlike {@link validateUrl}: it must
-     * NOT refuse non-http(s) schemes (`data:`/`blob:`/`about:` inline assets are
-     * legitimate and network-unreachable), and it must NOT run a DoH lookup per
-     * sub-resource (a DoS footgun). It mirrors validateUrl's allowlist +
-     * `isPrivateHost` arms only, including the `allowPrivateTargets` gate on the
-     * latter. Returns `true` when the request should be aborted.
+     * String-only check for a sub-resource on a session Browser Run guards itself
+     * (see `guardContext`'s `guardrailed` mode): non-http(s) schemes pass
+     * (`data:`/`blob:` cannot reach a network host), the allowlist arm, then the
+     * private-target arm gated on `allowPrivateTargets`. `true` means abort.
      */
     const isBlockedSubresource = (rawUrl: string): boolean => {
         let parsed: URL;
@@ -497,7 +554,6 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         try {
             parsed = new URL(rawUrl);
         } catch {
-            // Fail closed, as the navigation sibling does.
             return true;
         }
 
@@ -509,38 +565,116 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             return true;
         }
 
-        // Gated on `allowPrivateTargets`, exactly as validateUrl's arm is, so the
-        // documented Tunnel config (`allowPrivateTargets` + an internal host on
-        // the allowlist) still loads that host's own stylesheets and scripts. The
-        // allowlist arm above is not relaxed by the flag.
         return !allowPrivateTargets && isPrivateHost(parsed.hostname);
     };
 
     /**
-     * Install the SSRF guard on `context`: every request any of its pages makes
-     * passes through it.
-     *
-     * A navigation (a page's or an iframe's) is checked with every URL guard,
-     * then FETCHED HERE with `maxRedirects: 0` rather than continued. Playwright
-     * calls a route handler only for the first request of a redirect chain; the
-     * hops Chromium follows by itself never reach it, so `route.continue()` would
-     * let a public URL 302 the browser to `169.254.169.254` unchecked. Instead a
-     * 3xx's `Location` is checked before anything requests it: refused, the
-     * navigation is aborted; allowed, the browser is answered with a page that
-     * navigates there afresh, and a fresh navigation comes back through this
-     * handler. A non-redirect response is handed to the browser as fetched.
-     *
-     * The cost: navigations are fetched by the Worker (Playwright's request
-     * client) rather than by the browser, and a redirect becomes a new
-     * navigation instead of a followed hop. `watch` lets `withPage` follow a
-     * main-frame redirect itself and report a refused one by its own error.
+     * Fetch a sub-resource for the browser, one checked hop at a time: the URL
+     * passes every guard (DNS included), each 3xx's `Location` passes them again
+     * before it is requested, and the final response is handed to the browser.
+     * Playwright never shows a route handler the hops Chromium follows itself, so
+     * this is the only way `<img src>` → 302 → metadata endpoint gets checked. A
+     * hop that changes protocol cannot be followed by `route.fetch` and is
+     * refused (fail closed), as is a chain past {@link MAX_REDIRECTS}.
      */
-    const guardContext = async (context: BrowserContextLike, dohTimeout: number, watch?: MainFrameWatch): Promise<void> => {
+    const fetchSubresource = async <TResponse extends RouteResponseLike>(
+        route: RouteLike<TResponse>,
+        url: string,
+        dohTimeout: number,
+        cache: DnsCache,
+    ): Promise<void> => {
+        const { protocol } = new URL(url);
+        let current: string;
+
+        try {
+            current = await assertTargetAllowed(url, dohTimeout, cache);
+        } catch {
+            await route.abort("blockedbyclient");
+
+            return;
+        }
+
+        for (let hops = 0; ; hops += 1) {
+            let response: TResponse;
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- each hop is checked before the next is requested
+                response = await route.fetch(hops === 0 ? { maxRedirects: 0 } : { maxRedirects: 0, url: current });
+            } catch {
+                // eslint-disable-next-line no-await-in-loop -- terminal
+                await route.abort("failed");
+
+                return;
+            }
+
+            const location = REDIRECT_STATUSES.has(response.status()) ? response.headers()["location"] : undefined;
+
+            if (location === undefined) {
+                // eslint-disable-next-line no-await-in-loop -- terminal
+                await route.fulfill({ response });
+
+                return;
+            }
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- each hop is checked before the next is requested
+                const next = await assertTargetAllowed(new URL(location, current).href, dohTimeout, cache);
+
+                if (hops === MAX_REDIRECTS || new URL(next).protocol !== protocol) {
+                    throw new LunoraError("FORBIDDEN", "@lunora/browser: sub-resource redirect cannot be followed under the SSRF guard");
+                }
+
+                current = next;
+            } catch {
+                // eslint-disable-next-line no-await-in-loop -- terminal
+                await route.abort("blockedbyclient");
+
+                return;
+            }
+        }
+    };
+
+    /**
+     * Install the SSRF guard on `context`: every request any of its pages makes,
+     * and every WebSocket they open, passes through it.
+     *
+     * Playwright calls a route handler only for the first request of a redirect
+     * chain; the hops Chromium follows by itself never reach it. Two modes cover
+     * that.
+     *
+     * `guardrailed`: the session was launched by this factory with `allowedHosts`,
+     * so Browser Run's session guardrails enforce the list on every request and
+     * hop. Requests are checked here (navigations with every guard, sub-resources
+     * string-only) and continued in the browser, which keeps the documented
+     * Tunnel config (an internal host on the allowlist) working: the Worker never
+     * has to reach it.
+     *
+     * Otherwise nothing behind this handler sees a hop, so it fetches each request
+     * itself (`route.fetch` with `maxRedirects: 0`) and checks every redirect
+     * before it is requested. A navigation's allowed redirect becomes a fresh,
+     * checked navigation (the browser is answered with a page that navigates
+     * there); a sub-resource's is followed hop by hop ({@link fetchSubresource}).
+     * Both are fetched by the Worker (Playwright's request client), not by
+     * Browser Run.
+     *
+     * DoH verdicts are cached per hostname for the context's life (30s TTL).
+     * `watch` lets `withPage` follow a main-frame redirect and report a refused
+     * one by its own error.
+     */
+    const guardContext = async (context: BrowserContextLike, dohTimeout: number, guardrailed: boolean, watch?: MainFrameWatch): Promise<void> => {
+        const cache: DnsCache = new Map();
+
         await context.route("**/*", async <TResponse extends RouteResponseLike>(route: RouteLike<TResponse>) => {
             const request = route.request();
 
             if (!(request.isNavigationRequest?.() ?? true)) {
-                await (isBlockedSubresource(request.url()) ? route.abort("blockedbyclient") : route.continue());
+                if (guardrailed || !HTTP_URL.test(request.url())) {
+                    await (isBlockedSubresource(request.url()) ? route.abort("blockedbyclient") : route.continue());
+
+                    return;
+                }
+
+                await fetchSubresource(route, request.url(), dohTimeout, cache);
 
                 return;
             }
@@ -560,9 +694,15 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             };
 
             try {
-                await assertTargetAllowed(request.url(), dohTimeout);
+                await assertTargetAllowed(request.url(), dohTimeout, cache);
             } catch (error) {
                 await refuse(error);
+
+                return;
+            }
+
+            if (guardrailed) {
+                await route.continue();
 
                 return;
             }
@@ -588,7 +728,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             let next: string;
 
             try {
-                next = await assertTargetAllowed(new URL(location, request.url()).href, dohTimeout);
+                next = await assertTargetAllowed(new URL(location, request.url()).href, dohTimeout, cache);
             } catch (error) {
                 await refuse(error);
 
@@ -605,55 +745,185 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
                 status: 200,
             });
         });
+
+        // WebSockets never reach a route handler; `routeWebSocket` is their only
+        // interception point. A refused socket is closed before it connects.
+        const routeWebSocket = Reflect.get(context, "routeWebSocket") as AnyFunction | undefined;
+
+        if (typeof routeWebSocket === "function") {
+            await routeWebSocket.call(
+                context,
+                "**",
+                async (socket: {
+                    close: (options?: { code?: number; reason?: string }) => Promise<void>;
+                    connectToServer: () => unknown;
+                    url: () => string;
+                }) => {
+                    try {
+                        await assertTargetAllowed(socket.url().replace(WS_SCHEME, "http"), dohTimeout, cache);
+                    } catch {
+                        await socket.close({ code: 1008, reason: "blocked by the @lunora/browser SSRF guard" });
+
+                        return;
+                    }
+
+                    socket.connectToServer();
+                },
+            );
+        }
     };
 
     /**
-     * A browser handed to caller code (`launch`, `connect`) with the guard on
-     * every context: the ones already open (a shared session's) and every one
-     * opened from it, including the implicit context of `browser.newPage()`.
-     * The session guardrails `allowedHosts` adds are enforced by Cloudflare on
-     * top; this is what guards a browser that has none.
+     * A caller's own route handler, given a `Route` that cannot step around the
+     * guard: `continue()` falls through to the guard (`fallback`), which checks
+     * and fetches the request, and `fetch()` — a Worker-side request with
+     * Playwright's redirect following — is refused.
      */
-    const guardBrowser = async (browser: BrowserLike): Promise<BrowserLike> => {
-        if (!guarded) {
-            return browser;
-        }
-
-        const dohTimeout = defaultDohTimeout();
-
-        for (const context of browser.contexts?.() ?? []) {
-            // eslint-disable-next-line no-await-in-loop -- each registration must land before the caller sees the browser
-            await guardContext(context, dohTimeout);
-        }
-
-        return new Proxy(browser, {
+    const callerRoute = (route: object): object =>
+        new Proxy(route, {
             get: (target, key) => {
-                if (key === "newContext") {
-                    return async (...args: unknown[]): Promise<BrowserContextLike> => {
-                        // Forwarded whole: the real `newContext` takes options this projection does not declare.
-                        const context = await (Reflect.apply(target.newContext, target, args) as Promise<BrowserContextLike>);
+                if (key === "continue") {
+                    return async (...args: unknown[]): Promise<unknown> => await (Reflect.get(target, "fallback") as AnyFunction).apply(target, args);
+                }
 
-                        await guardContext(context, dohTimeout);
-
-                        return context;
-                    };
+                if (key === "fetch") {
+                    return refusedOnGuarded("route.fetch() in your own route handler");
                 }
 
                 const value: unknown = Reflect.get(target, key, target);
 
-                if (key === "newPage" && typeof value === "function") {
-                    return async (...args: unknown[]): Promise<unknown> => {
-                        const page = await (value as (...rest: unknown[]) => Promise<{ context: () => BrowserContextLike }>).apply(target, args);
-
-                        await guardContext(page.context(), dohTimeout);
-
-                        return page;
-                    };
-                }
-
-                return typeof value === "function" ? (value as (...rest: unknown[]) => unknown).bind(target) : value;
+                return typeof value === "function" ? (value as AnyFunction).bind(target) : value;
             },
         });
+
+    /**
+     * Pin the routing members of a guarded context or page: caller routes still
+     * work (their `continue` falls through to the guard), but nothing can remove
+     * the guard's handler or route around it.
+     */
+    const lockRouting = (target: object): void => {
+        const route = Reflect.get(target, "route") as AnyFunction | undefined;
+        const unroute = Reflect.get(target, "unroute") as AnyFunction | undefined;
+        const wrapped = new WeakMap<object, AnyFunction>();
+
+        if (typeof route === "function") {
+            pin(target, "route", async (pattern: unknown, handler: AnyFunction, ...rest: unknown[]): Promise<unknown> => {
+                const guardedHandler: AnyFunction = async (routeObject, ...handlerArgs) => await handler(callerRoute(routeObject as object), ...handlerArgs);
+
+                wrapped.set(handler, guardedHandler);
+
+                return await route.call(target, pattern, guardedHandler, ...rest);
+            });
+        }
+
+        if (typeof unroute === "function") {
+            pin(target, "unroute", async (pattern: unknown, handler?: AnyFunction): Promise<unknown> => {
+                if (handler === undefined) {
+                    return refusedOnGuarded("unroute() without a handler")();
+                }
+
+                return await unroute.call(target, pattern, wrapped.get(handler) ?? handler);
+            });
+        }
+
+        pin(target, "unrouteAll", refusedOnGuarded("unrouteAll()"));
+        pin(target, "routeFromHAR", refusedOnGuarded("routeFromHAR()"));
+        pin(target, "routeWebSocket", refusedOnGuarded("routeWebSocket()"));
+    };
+
+    /**
+     * Guard `context` and lock it and its pages (present, and future ones,
+     * popups included, through its `page` event) against removing the guard.
+     * `newCDPSession` is refused: raw CDP can navigate and fetch without route
+     * handlers.
+     */
+    const lockContext = async (context: BrowserContextLike, dohTimeout: number, guardrailed: boolean): Promise<void> => {
+        await guardContext(context, dohTimeout, guardrailed);
+
+        const lockPage = (page: object): void => {
+            if (!Object.hasOwn(page, "unrouteAll")) {
+                lockRouting(page);
+            }
+        };
+
+        const pages = Reflect.get(context, "pages") as AnyFunction | undefined;
+
+        for (const page of typeof pages === "function" ? (pages.call(context) as object[]) : []) {
+            lockPage(page);
+        }
+
+        const on = Reflect.get(context, "on") as AnyFunction | undefined;
+
+        if (typeof on === "function") {
+            on.call(context, "page", lockPage);
+        }
+
+        lockRouting(context);
+        pin(context, "newCDPSession", refusedOnGuarded("newCDPSession()"));
+    };
+
+    /**
+     * A browser handed to caller code (`launch`, `connect`) with every context
+     * guarded and locked: the ones already open (a shared session's), every one
+     * opened from it (`newContext`, and `newPage`, which goes through it), and
+     * any another connection opens later, which `contexts()` withholds until its
+     * guard is in place. `newBrowserCDPSession` is refused. The same object is
+     * returned; its members are pinned, so they hold however code reaches it.
+     *
+     * This is a guard against the public Playwright API, not a sandbox: code that
+     * reaches Playwright's private channel objects can still go around it. Where
+     * the code driving the browser is untrusted, configure `allowedHosts`, which
+     * Browser Run enforces on the session itself.
+     */
+    const guardBrowser = async (browser: BrowserLike, guardrailed: boolean): Promise<BrowserLike> => {
+        // Already guarded (a second `connect` handing back the same object): its members are pinned.
+        if (!guarded || GUARDED_BROWSERS.has(browser)) {
+            return browser;
+        }
+
+        GUARDED_BROWSERS.add(browser);
+
+        const dohTimeout = defaultDohTimeout();
+        const locked = new WeakSet<object>();
+        const locking = new WeakSet<object>();
+
+        for (const context of browser.contexts?.() ?? []) {
+            // eslint-disable-next-line no-await-in-loop -- each lock must land before the caller sees the browser
+            await lockContext(context, dohTimeout, guardrailed);
+            locked.add(context);
+        }
+
+        const newContext = browser.newContext.bind(browser);
+        const contexts = browser.contexts?.bind(browser);
+
+        pin(browser, "newContext", async (...args: unknown[]): Promise<BrowserContextLike> => {
+            const context = await (Reflect.apply(newContext, browser, args) as Promise<BrowserContextLike>);
+
+            await lockContext(context, dohTimeout, guardrailed);
+            locked.add(context);
+
+            return context;
+        });
+        pin(browser, "contexts", (): BrowserContextLike[] => {
+            const all = contexts?.() ?? [];
+
+            // `contexts()` is synchronous and a guard is not: a context another
+            // connection opened is withheld until its guard has landed.
+            for (const context of all) {
+                if (!locked.has(context) && !locking.has(context)) {
+                    locking.add(context);
+                    // Settles on its own; a failed lock leaves the context withheld and retried on the next call.
+                    lockContext(context, dohTimeout, guardrailed)
+                        .then(() => locked.add(context))
+                        .catch(() => locking.delete(context));
+                }
+            }
+
+            return all.filter((context) => locked.has(context));
+        });
+        pin(browser, "newBrowserCDPSession", refusedOnGuarded("newBrowserCDPSession()"));
+
+        return browser;
     };
 
     /**
@@ -682,7 +952,8 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             let outcome: NavigationOutcome = {};
 
             if (guarded) {
-                await guardContext(context, dohTimeout, {
+                // `withBrowser` sent `allowedHosts` as session guardrails.
+                await guardContext(context, dohTimeout, allowedHosts !== undefined, {
                     page: () => page,
                     redirected: (next) => {
                         outcome.redirect = next;
@@ -776,7 +1047,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         withPage(url, navigateOptions, async (page) => page.evaluate(function_));
 
     const launch = async <T>(function_: (browser: BrowserLike) => Promise<T>, launchOptions: { keepAlive?: number } = {}): Promise<T> =>
-        withBrowser(async (browser) => function_(await guardBrowser(browser)), launchOptions.keepAlive);
+        withBrowser(async (browser) => function_(await guardBrowser(browser, allowedHosts !== undefined)), launchOptions.keepAlive);
 
     /**
      * Re-attach to an existing session. The browser is NOT closed on the way
@@ -787,11 +1058,11 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         const browser = await requirePeer(options.connect, "connect")(options.binding, sessionId);
 
         if (connectOptions.close !== true) {
-            return await function_(await guardBrowser(browser));
+            return await function_(await guardBrowser(browser, false));
         }
 
         try {
-            return await function_(await guardBrowser(browser));
+            return await function_(await guardBrowser(browser, false));
         } finally {
             await closeQuietly(browser);
         }
