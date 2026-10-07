@@ -89,8 +89,9 @@ deliberate, and mostly a set of go/no-go decisions:
     - Custom scalar types ([`078`](./plans/078-custom-scalar-types.md)).
     - Live CDC and DO-consumes-DO composition ([`133`](./plans/133-live-cdc-and-do-consumes-do.md)).
 - **Run beyond Cloudflare.** The platform-abstraction layer has shipped, with
-  `celld` and Node hosts on the experimental tier. Next is an in-process
-  runtime for browser and device targets ([`453`](./plans/453-embedded-runtime.md)).
+  `celld` and Node hosts on the experimental tier. An in-process runtime for
+  browser and device targets is demand-gated: its engine seam has shipped, the
+  target waits for a real user need ([`453`](./plans/453-embedded-runtime.md)).
 - **Open governance.** A public RFC process for surface-changing proposals, a
   contributor guide, and transparent stability-tier and deprecation decisions.
 

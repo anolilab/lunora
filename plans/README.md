@@ -31,7 +31,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 | ------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- |
 | [135](./135-stable-1.0-roadmap.md)                | Road to stable 1.0.0                                        | umbrella; phase/exit-criteria tracker for `alpha → main` |
 | [306](./306-pluggable-queue-drivers.md)           | Pluggable queue-driver package                              | P2                                                       |
-| [453](./453-embedded-runtime.md)                  | In-process runtime as an embedded (browser / device) target | design ratified, not started                             |
 | [332](./332-payment-conformance-spike.md)         | Spike: what a payment-provider conformance suite asserts    | spike; deliverable is a decision                         |
 | [168](./168-cross-shard-transactions-spike.md)    | Cross-shard transaction story                               | spike; decision first                                    |
 | [078](./078-custom-scalar-types.md)               | Custom scalar types (`v.custom`)                            | not shipped                                              |
@@ -42,6 +41,7 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [037](./037-realtime-calls-webrtc.md)             | Cloudflare Realtime / Calls (WebRTC)                        | P3, deferred                                             |
 | [133](./133-live-cdc-and-do-consumes-do.md)       | Live CDC ingest + DO-consumes-DO shape                      | P3, demand-gated                                         |
 | [169](./169-collab-crdt.md)                       | `@lunora/collab` (CRDT / collaborative editing)             | demand-gated                                             |
+| [453](./453-embedded-runtime.md)                  | In-process runtime as an embedded (browser / device) target | phase 1 shipped; rest demand-gated                       |
 
 ## Reference designs
 

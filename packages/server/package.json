@@ -60,6 +60,10 @@
             "types": "./dist/otel.d.ts",
             "import": "./dist/otel.mjs"
         },
+        "./in-process": {
+            "types": "./dist/in-process.d.ts",
+            "import": "./dist/in-process.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

@@ -4798,6 +4798,80 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+## `@lunora/server/in-process`
+
+### `FunctionKind` (type)
+
+```ts
+type FunctionKind = "action" | "mutation" | "query";
+```
+
+### `InProcessIdentity` (interface)
+
+```ts
+interface InProcessIdentity extends Record<string, unknown> {
+    userId?: null | string;
+}
+```
+
+### `InProcessRuntime` (interface)
+
+```ts
+interface InProcessRuntime {
+    createWriters: (identity: ResolvedIdentity) => {
+        database: DatabaseWriter;
+        rawDatabase: DatabaseWriter;
+    };
+    resetHeadroom: () => void;
+    runInTransaction: <R>(body: () => Promise<R> | R) => Promise<R>;
+}
+```
+
+### `InProcessRuntimeOptions` (interface)
+
+```ts
+interface InProcessRuntimeOptions {
+    enforceRls?: boolean;
+    scheduler?: unknown;
+    sql: SqlExec;
+}
+```
+
+### `ResolvedIdentity` (interface)
+
+```ts
+interface ResolvedIdentity {
+    readonly claims: Record<string, unknown> | null;
+    readonly userId: null | string;
+}
+```
+
+### `createInProcessRuntime` (const)
+
+```ts
+const createInProcessRuntime: (schema: Schema, options: InProcessRuntimeOptions) => InProcessRuntime;
+```
+
+### `registeredFunctionKind` (const)
+
+```ts
+const registeredFunctionKind: (value: unknown) => FunctionKind | undefined;
+```
+
+### `resolveInProcessIdentity` (const)
+
+```ts
+const resolveInProcessIdentity: (identity: InProcessIdentity | null) => ResolvedIdentity;
+```
+
+### `runRegisteredFunction` (const)
+
+```ts
+const runRegisteredFunction: (expected: FunctionKind, reference: {
+    handler: (context: unknown, args: never) => unknown;
+}, context: unknown, args: unknown, allowInternal: boolean) => Promise<unknown>;
+```
+
 ## `@lunora/server/otel`
 
 ### `LunoraTraceContext` (interface)

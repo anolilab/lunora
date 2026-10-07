@@ -5177,9 +5177,6 @@ importers:
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
-      '@lunora/shard-engine':
-        specifier: workspace:*
-        version: link:../shard-engine
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.63.0
@@ -5190,6 +5187,9 @@ importers:
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
