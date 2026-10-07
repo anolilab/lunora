@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import {
     CodegenDiagnosticError,
@@ -8,6 +8,7 @@ import {
     fingerprintSchemaSources,
     isTestPath,
     PROJECT_CONFIG_FILENAMES,
+    readServiceBindings,
     refreshCodegenProject,
     runCodegen,
 } from "@lunora/codegen";
@@ -27,6 +28,9 @@ import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Matches a project-variant tsconfig filename (`tsconfig.build.json`, …). */
 const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
+
+/** An input of an RPC service's declaration snapshot: a source (`.js` too, under `allowJs`) or a tsconfig. */
+const SERVICE_SOURCE_RE = /(?:\.[cm]?[jt]sx?|(?:^|[/\\])tsconfig(?:\..+)?\.json)$/u;
 
 /**
  * Compose the dev error-overlay message for declared-but-not-re-exported
@@ -468,6 +472,13 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
             server.watcher.add(absoluteSchemaDirectory);
 
+            // A service folder may sit outside the Vite root, where nothing watches it yet.
+            const rpcServiceDirectories = readServiceBindings(options.projectRoot)
+                .services.filter((service) => service.rpcEntrypoint !== undefined)
+                .map((service) => dirname(service.wranglerPath));
+
+            server.watcher.add(rpcServiceDirectories);
+
             // Baseline the config-drift fingerprint from the current on-disk state
             // before any watcher event can fire (buildStart re-baselines it after
             // its binding write). See the config watcher wired at the end of this
@@ -681,9 +692,11 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 },
             });
 
-            const onChange = (file: string): void => {
-                const normalized = resolve(file);
-
+            /**
+             * Whether a change outside any RPC service folder is one codegen should
+             * rerun for. A tsconfig change only drops the cached Project.
+             */
+            const isCodegenInput = (normalized: string): boolean => {
                 // A tsconfig change can move path aliases / compiler options out
                 // from under a reused Project, so drop the cache and rebuild it
                 // from scratch on the next run. Checked FIRST — before the
@@ -699,7 +712,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 if (TSCONFIG_VARIANT_RE.test(normalized)) {
                     cachedProject = undefined;
 
-                    return;
+                    return false;
                 }
 
                 // Only a file literally named `tsconfig.json` can possibly be the
@@ -715,21 +728,21 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 if (normalized.endsWith(`${sep}tsconfig.json`) && normalized === findTsconfig(absoluteSchemaDirectory)) {
                     cachedProject = undefined;
 
-                    return;
+                    return false;
                 }
 
                 // Only react to changes inside the schema dir from here on, and
                 // ignore generated output.
                 if (!isInside(normalized, absoluteSchemaDirectory)) {
-                    return;
+                    return false;
                 }
 
                 if (isInside(normalized, absoluteGeneratedDirectory)) {
-                    return;
+                    return false;
                 }
 
                 if (!normalized.endsWith(".ts")) {
-                    return;
+                    return false;
                 }
 
                 // Skip test files — codegen does not read them as source (the
@@ -739,6 +752,22 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 // reported on the next regeneration (another save, `lunora
                 // codegen`, or the deploy gate), not on the test's own save.
                 if (isTestPath(relative(absoluteSchemaDirectory, normalized).split(sep).join("/"))) {
+                    return false;
+                }
+
+                return true;
+            };
+
+            const onChange = (file: string): void => {
+                const normalized = resolve(file);
+
+                // An RPC service's sources and tsconfig feed its `_generated/services/` snapshot.
+                const inRpcService =
+                    SERVICE_SOURCE_RE.test(normalized) &&
+                    !normalized.includes(`${sep}node_modules${sep}`) &&
+                    rpcServiceDirectories.some((directory) => isInside(normalized, directory));
+
+                if (!inRpcService && !isCodegenInput(normalized)) {
                     return;
                 }
 

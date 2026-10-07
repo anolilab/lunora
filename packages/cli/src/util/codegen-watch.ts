@@ -25,10 +25,10 @@
  */
 import type { FSWatcher } from "node:fs";
 import { existsSync, watch } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { runCodegen } from "@lunora/codegen";
+import { readServiceBindings, runCodegen } from "@lunora/codegen";
 
 import { renderCodegenFailure } from "./codegen-error";
 import type { Logger } from "./logger";
@@ -37,6 +37,9 @@ import { runPostCodegenHook } from "./post-codegen-hook";
 import type { Spawner } from "./spawn";
 
 const DEFAULT_DEBOUNCE_MS = 100;
+
+/** An input of an RPC service's declaration snapshot: a source (`.js` too, under `allowJs`) or a tsconfig. */
+const SERVICE_SOURCE_RE = /(?:\.[cm]?[jt]sx?|(?:^|[/\\])tsconfig(?:\..+)?\.json)$/u;
 
 /**
  * How long after a `postcodegen` run the watcher ignores changes under
@@ -245,6 +248,34 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         return unavailable(`no such directory: ${watchDirectory}`);
     }
 
+    const onEvent = (filename: string | null): void => {
+        // Skip anything a `postcodegen` run wrote, so a hook that touches a
+        // watched file doesn't retrigger it: while it runs, and for a settle
+        // window after it exits. See HOOK_SETTLE_MS.
+        if (hookRunning || Date.now() - settledAt < HOOK_SETTLE_MS) {
+            // Also drop a debounce an earlier event already scheduled —
+            // otherwise the hook's first write still lands a queued rerun on
+            // the way in.
+            if (timer) {
+                clearTimeout(timer);
+                timer = undefined;
+            }
+
+            return;
+        }
+
+        if (timer) {
+            clearTimeout(timer);
+        }
+
+        timer = setTimeout(() => {
+            enqueue(`change: ${filename ?? "?"}`);
+        }, debounceMs);
+    };
+
+    // An RPC service's folder too: `_generated/services/` snapshots its types.
+    const serviceWatchers: FSWatcher[] = [];
+
     try {
         watcher = watch(watchDirectory, { recursive: true }, (_event, filename) => {
             // Skip writes to the generated output so regeneration doesn't retrigger itself.
@@ -252,30 +283,33 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 return;
             }
 
-            // …and skip anything a `postcodegen` run wrote, so a hook that
-            // touches a file under `lunora/` doesn't retrigger it either: while it
-            // runs, and for a settle window after it exits. See HOOK_SETTLE_MS.
-            if (hookRunning || Date.now() - settledAt < HOOK_SETTLE_MS) {
-                // Also drop a debounce an earlier event already scheduled —
-                // otherwise the hook's first write still lands a queued rerun on
-                // the way in.
-                if (timer) {
-                    clearTimeout(timer);
-                    timer = undefined;
-                }
-
-                return;
-            }
-
-            if (timer) {
-                clearTimeout(timer);
-            }
-
-            timer = setTimeout(() => {
-                enqueue(`change: ${filename ?? "?"}`);
-            }, debounceMs);
+            onEvent(filename);
         });
+
+        for (const service of readServiceBindings(options.projectRoot).services) {
+            if (service.rpcEntrypoint !== undefined) {
+                const serviceWatcher = watch(dirname(service.wranglerPath), { recursive: true }, (_event, filename) => {
+                    if (typeof filename === "string" && SERVICE_SOURCE_RE.test(filename) && !filename.split(PATH_SEGMENT_SEPARATOR).includes("node_modules")) {
+                        onEvent(filename);
+                    }
+                });
+
+                // A watcher error arrives as an event (a removed service folder on
+                // Windows), past the `try`; unhandled, it would end `lunora dev`.
+                serviceWatcher.on("error", (error) => {
+                    options.logger.warn(`codegen watch: stopped watching service "${service.name}" (${error.message})`);
+                    serviceWatcher.close();
+                });
+                serviceWatchers.push(serviceWatcher);
+            }
+        }
     } catch (error: unknown) {
+        watcher?.close();
+
+        for (const serviceWatcher of serviceWatchers) {
+            serviceWatcher.close();
+        }
+
         return unavailable(error instanceof Error ? error.message : String(error));
     }
 
@@ -293,6 +327,10 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             }
 
             liveWatcher.close();
+
+            for (const serviceWatcher of serviceWatchers) {
+                serviceWatcher.close();
+            }
 
             // Clearing `pending` stops the loop before its next iteration, and
             // the returned promise settles once the current one finishes. Nothing

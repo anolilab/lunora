@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import type { Finding, LintContext } from "@lunora/advisor";
@@ -106,6 +106,7 @@ import {
     emitWorkflows,
     emitWranglerCronTriggers,
 } from "./emit";
+import { emitServiceDeclarations } from "./emit/service-declarations";
 import { emitApp } from "./emit-app";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type {
@@ -172,6 +173,36 @@ const writeIfPresent = (filePath: string, content: string): void => {
     }
 
     writeIfChanged(filePath, content);
+};
+
+/**
+ * Write the RPC service declaration snapshots (`_generated/services/`, keyed
+ * relative to `_generated/`) and delete any file there this run did not emit —
+ * the whole folder once no RPC service is left.
+ */
+const writeServiceDeclarations = (outputDirectory: string, files: Record<string, string>): void => {
+    const directory = join(outputDirectory, "services");
+
+    if (Object.keys(files).length === 0) {
+        rmSync(directory, { force: true, recursive: true });
+
+        return;
+    }
+
+    if (existsSync(directory)) {
+        for (const entry of readdirSync(directory, { recursive: true, withFileTypes: true })) {
+            const path = join(entry.parentPath, entry.name);
+
+            if (entry.isFile() && files[relative(outputDirectory, path)] === undefined) {
+                rmSync(path);
+            }
+        }
+    }
+
+    for (const [path, content] of Object.entries(files)) {
+        mkdirSync(dirname(join(outputDirectory, path)), { recursive: true });
+        writeIfChanged(join(outputDirectory, path), content);
+    }
 };
 
 /**
@@ -677,6 +708,18 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     syncProjectFile(project, dataModelPath, dataModelContent);
     syncProjectFile(project, serverPath, serverContent);
 
+    // `server.ts` types each RPC service from its declaration snapshot, so the
+    // snapshots join the Project before any handler's type is inferred through them.
+    const serviceDeclarations: Record<string, string> = Object.fromEntries(
+        services
+            .filter((service) => service.rpcEntrypoint !== undefined)
+            .flatMap((service) => Object.entries(emitServiceDeclarations(service, outputDirectory))),
+    );
+
+    for (const [path, content] of Object.entries(serviceDeclarations)) {
+        syncProjectFile(project, join(outputDirectory, path), content);
+    }
+
     const migrations = discoverMigrations(project, lunoraDirectory);
 
     // Local-first sync engine (Phase 7): replication shapes (`lunora/shapes.ts`)
@@ -1175,6 +1218,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         emitOptional("seed.ts", seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
         emitOptional("collections.ts", collectionsContent);
+        writeServiceDeclarations(outputDirectory, serviceDeclarations);
+        writtenFiles.push(...Object.keys(serviceDeclarations));
 
         // The `.json` is the portable artifact for external tooling; the `.ts`
         // (same document, inlined) is what the worker imports and passes to

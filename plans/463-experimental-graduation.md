@@ -16,19 +16,19 @@ separate, post-1.0 track gated by the six-point bar in `ROADMAP.md`.
 Untracked exports per experimental package (`grep -c "signature not tracked" api-snapshots/<pkg>.api.md`)
 and whether the package has a `LUNORA_WORKERD_TESTS` vitest project:
 
-| Package          | Tagged exports | workerd suite            | Notes                                               |
-| ---------------- | -------------- | ------------------------ | --------------------------------------------------- |
-| `agent`          | 183            | no                       | largest surface; needs workerd before anything else |
-| `x402`           | 83             | yes                      |                                                     |
-| `angular`        | 80             | n/a (browser)            |                                                     |
-| `replica`        | 69             | no                       |                                                     |
-| `ai`             | 63             | no                       |                                                     |
-| `browser`        | 25             | no                       |                                                     |
-| `react-native`   | 5              | n/a (device)             | the rest re-exports `@lunora/react`, now tracked    |
-| `container`      | 0              | yes (partial: no Docker) | fully tracked already                               |
-| `platform-celld` | 0              | n/a (`test:celld` TCK)   |                                                     |
-| `platform-node`  | 0              | n/a (Node host)          |                                                     |
-| `rspack`         | 0              | n/a (bundler)            |                                                     |
+| Package          | Tagged exports | workerd suite            | Notes                                                                    |
+| ---------------- | -------------- | ------------------------ | ------------------------------------------------------------------------ |
+| `agent`          | 183            | no                       | largest surface; needs workerd before anything else                      |
+| `x402`           | 83             | yes                      |                                                                          |
+| `angular`        | 80             | n/a (browser)            |                                                                          |
+| `replica`        | 69             | no                       |                                                                          |
+| `ai`             | 63             | no                       |                                                                          |
+| `browser`        | 25             | no                       |                                                                          |
+| `react-native`   | 5              | n/a (device)             | the rest re-exports `@lunora/react`, now tracked                         |
+| `container`      | 0              | yes (partial: no Docker) | fully tracked already                                                    |
+| `platform-celld` | 0              | n/a (`test:celld` TCK)   | service deploy run with `--dry-run` only; needs a real fleet (S3) deploy |
+| `platform-node`  | 0              | n/a (Node host)          |                                                                          |
+| `rspack`         | 0              | n/a (bundler)            |                                                                          |
 
 ## 2. Existing seams (do not reinvent)
 

@@ -388,7 +388,6 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             identity,
             queues,
             schema,
-            generatedDirectory: join(lunoraDirectory, "_generated"),
             services: supportedServices,
             storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
             topics,
