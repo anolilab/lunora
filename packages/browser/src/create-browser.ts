@@ -291,8 +291,9 @@ const toGuardrails = (allowedHosts: ReadonlyArray<string>): { allowedDomains: st
 };
 
 /**
- * `createBrowser` is part of the experimental `@lunora/browser` API and may change without a major version bump.
- * @experimental
+ * Build the `ctx.browser` helper over a Browser Run binding. Every URL-taking method passes the
+ * SSRF guards documented on {@link LunoraBrowserOptions}; every Playwright session it opens is
+ * closed in a `finally` unless the caller asks to keep it alive.
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: the package barrel re-exports by name, per the repo's no-default-mixing convention
 export const createBrowser = (options: LunoraBrowserOptions): Browser => {

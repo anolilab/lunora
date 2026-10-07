@@ -621,10 +621,47 @@ describe("createBrowser", () => {
         });
     });
 
-    // Real `env.BROWSER` coverage is deliberately absent: workerd + the Browser
-    // Rendering binding require Cloudflare's edge (see vitest.config.ts), and a
-    // local harness would only re-mock what the fake-double suite above already
-    // covers. Tracked as a todo so the gap is visible in the run summary
-    // instead of reading as a green "live playwright" block.
+    describe("a failing close", () => {
+        /** A launch whose browser's `close()` always rejects. */
+        const launchWithBrokenClose = (): BrowserLaunchLike => {
+            const launch = fakeLaunch();
+
+            return async (binding) => {
+                const browser = await launch(binding);
+
+                return {
+                    ...browser,
+                    close: async () => {
+                        throw new Error("close failed");
+                    },
+                };
+            };
+        };
+
+        it("does not replace the result", async () => {
+            expect.assertions(1);
+
+            const browser = createBrowser({ binding: fakeBinding(), launch: launchWithBrokenClose() });
+
+            await expect(browser.content("https://example.com")).resolves.toContain("hi");
+        });
+
+        it("does not mask the caller's own error", async () => {
+            expect.assertions(1);
+
+            const browser = createBrowser({ binding: fakeBinding(), launch: launchWithBrokenClose() });
+
+            await expect(
+                browser.launch(async () => {
+                    throw new Error("boom");
+                }),
+            ).rejects.toThrow(/boom/);
+        });
+    });
+
+    // The workerd suite (`__tests__/workerd/`) runs the real `@cloudflare/playwright`
+    // peer against a fake binding up to the DevTools upgrade. Past it — a real page
+    // in a real Browser Run session — needs a deployed Worker. Tracked as a todo so
+    // the gap is visible in the run summary instead of reading as covered.
     it.todo("integration harness against a real env.BROWSER (needs a deployed Worker; model on packages/hyperdrive/__tests__/create-hyperdrive.test.ts)");
 });

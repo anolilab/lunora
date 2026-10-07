@@ -211,6 +211,7 @@
                 "package":
                     [
                         "auth",
+                        "browser",
                         "client",
                         "container",
                         "d1",
@@ -245,7 +246,7 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix is a hand-typed list of 14 packages, duplicated verbatim in
+            # The matrix is a hand-typed list of 15 packages, duplicated verbatim in
             # test.yml and nightly.yml, with nothing tying either copy to the packages
             # that actually declare a `workerd` vitest project. Drop a package from one
             # and its workerd suites stop running with every check green. Each leg

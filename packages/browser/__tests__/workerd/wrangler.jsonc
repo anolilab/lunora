@@ -1,0 +1,16 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin` to boot the
+// test Worker in real workerd. Not deployed.
+//
+// `BROWSER` is NOT a Browser Run binding: local workerd has no headless browser
+// without downloading Chrome, so the binding is a service binding to this
+// worker's own `FakeBrowserRun` entrypoint, which answers the HTTP contract
+// `@cloudflare/playwright` speaks to the binding (acquire, sessions, the
+// DevTools upgrade) and the `quickAction` RPC. See `test-worker.ts`.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-browser-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "services": [{ "binding": "BROWSER", "service": "lunora-browser-test-worker", "entrypoint": "FakeBrowserRun" }],
+}

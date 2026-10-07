@@ -2,6 +2,7 @@ export { createBrowser } from "./create-browser";
 export type {
     Browser,
     BrowserBindingLike,
+    BrowserConnectLike,
     BrowserContextLike,
     BrowserLaunchLike,
     BrowserLike,
@@ -9,6 +10,8 @@ export type {
     BrowserRunCrawlEvent,
     BrowserRunCrawlEventConfig,
     BrowserRunEventEnvelope,
+    BrowserSession,
+    BrowserSessionsLike,
     CrawlFormat,
     CrawlJob,
     CrawlJobStatus,
@@ -22,6 +25,7 @@ export type {
     PdfOptions,
     QuickActionName,
     QuickActionOptions,
+    RouteLike,
     ScreenshotOptions,
     SnapshotFormat,
 } from "./types";

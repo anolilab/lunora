@@ -142,3 +142,37 @@ A public hostname that resolves to a private/metadata IP passes the string guard
 - `allowedHosts: [...]` is a strict allowlist that refuses any hostname not exactly on the list (case-insensitive, trailing-dot- and IPv6-bracket-normalized). This is the only guard that _fully_ closes rebinding, so prefer it whenever you can enumerate the destinations. **`allowedHosts: []` allows nothing** — an empty list is a configured allowlist with no members, not an absent one, so every navigation is refused. Omit the option to run without an allowlist.
 
 Every browser the factory launches also receives `allowedHosts` as Browser Run session guardrails (`guardrails.allowedDomains`), so Cloudflare itself blocks off-list requests — redirects and sub-resources included, and also inside the raw `launch()` escape hatch. Guardrails accept at most 50 entries; a longer list is refused before launch.
+
+## Platform support
+
+`ctx.browser` is the `browser` key of the capability matrix (`PlatformCapabilities` in `@lunora/platform`):
+
+| Target       | Rating        | Notes                                                                                                                                                |
+| ------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cloudflare` | `native`      | Browser Run: Playwright sessions (with `allowedHosts` as session guardrails), Quick Actions through the binding, `/crawl` over the account REST API. |
+| `node`       | `unsupported` | No headless-browser binding.                                                                                                                         |
+| `celld`      | `unsupported` | Browser Rendering is not a celld binding type.                                                                                                       |
+
+On an `unsupported` target codegen omits `ctx.browser` and reports `platform_unsupported_feature` at build time.
+
+**What is tested where.** The workerd suite runs `createBrowser` with the real `@cloudflare/playwright` exports against a fake Browser Run behind a real service binding. It checks what reaches the binding: `keep_alive` in milliseconds, `allowedHosts` as normalized guardrails, the session id on `connect`, the session list, and `quickAction` arguments across the RPC boundary. It also checks the operation deadline, the DoH re-check and its timeout, and `/crawl` errors on workerd's timers and `fetch`. The fake cannot answer the DevTools WebSocket because no Chrome runs locally. Navigation, screenshots, PDFs, `scrape` and the redirect guard against a live page are covered only by the Node suite's page doubles, and Cloudflare's own enforcement of guardrails and `keep_alive` is not exercised by this repo.
+
+## Errors
+
+Refusals are `LunoraError`s with a stable `code`, thrown before a browser is launched wherever the input alone decides the answer. `INTERNAL` errors are redacted to a generic 500 on the wire and logged in full.
+
+| Code                | When                                                                                                                                                                  | What to do                                                                                                                                         |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BAD_REQUEST`       | The URL is empty, not absolute, not `http(s)`, or embeds `user:pass@`.                                                                                                | Pass an absolute `http(s)` URL without credentials.                                                                                                |
+| `BAD_REQUEST`       | `keepAlive` is positive but outside 10–600 seconds.                                                                                                                   | Use a value in that window, or `0` / omit it for the always-close path.                                                                            |
+| `BAD_REQUEST`       | `allowedHosts` has more than 50 entries or an entry containing `*` (thrown by `createBrowser`).                                                                       | List at most 50 exact hosts. Guardrails would read `*` as a wildcard the Lunora-side guard does not honour.                                        |
+| `BAD_REQUEST`       | `quickAction` got an `html` option, or its options nest more than 50 distinct URLs.                                                                                   | Pass a URL instead of inline HTML; trim the nested `addScriptTag` / `addStyleTag` URLs.                                                            |
+| `FORBIDDEN`         | The target is private or internal, off the `allowedHosts` list (or the list is empty), or its name resolves to a private address (the DNS-rebinding re-check).        | Use a public URL. For a trusted internal host, set `allowPrivateTargets: true` with an `allowedHosts` list naming it.                              |
+| `FORBIDDEN`         | `crawl` asked for `includeExternalLinks` / `includeSubdomains` while `allowedHosts` is set.                                                                           | Drop the option, or crawl without an allowlist.                                                                                                    |
+| `BROWSER_TIMEOUT`   | Navigation plus the operation ran past the timeout budget (504). The session is closed.                                                                               | Raise `timeoutMs` (capped at 120 s), use a cheaper `waitUntil`, or check the page for something that never settles.                                |
+| `BROWSER_RUN_ERROR` | The `/crawl` REST API answered non-2xx (the status is kept, 502 otherwise; the body is capped in the message and kept whole on `cause`), or returned no job id / job. | Read the upstream message: a 400 is usually Content Signals refusing the crawl, a 401/403 the API token's permissions, a 429 the account's limits. |
+| `INTERNAL`          | A peer export is missing (`launch`, `connect`, `sessions`), the binding has no `quickAction`, or `crawl` was called without `restApi`.                                | Pass the export from `@cloudflare/playwright`, set the binding's compatibility date to `2026-03-24` or later, or pass `restApi`.                   |
+
+`createBrowser({})` without a `binding` throws a plain `TypeError`: it is a wiring mistake, not a request error.
+
+Failures inside a Playwright session are not wrapped. If Browser Run refuses a session (for example the account's concurrent-session limit), `@cloudflare/playwright`'s own error (`Unable to create new browser: code: 429 …`) reaches the caller unchanged; a failure after launch still closes the session. Nothing is retried for you, because every retry is another billed session; retry in the action if the error is transient.

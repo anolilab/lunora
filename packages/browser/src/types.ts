@@ -12,7 +12,6 @@
  * always has one) so the marker actually excludes an arbitrary value like `{}` —
  * a bare object fails to type-check where a binding is required, catching the
  * misuse at the call site instead of deferring to an opaque launch error.
- * @experimental
  */
 export interface BrowserBindingLike {
     readonly fetch: typeof fetch;
@@ -33,14 +32,12 @@ export interface BrowserBindingLike {
  * The Browser Run Quick Actions reachable through the binding. `accessibilityTree`
  * is newer than the `@cloudflare/workers-types` overloads, so it is listed here
  * rather than derived from them.
- * @experimental
  */
 export type QuickActionName = "accessibilityTree" | "content" | "json" | "links" | "markdown" | "pdf" | "scrape" | "screenshot" | "snapshot";
 
 /**
  * The page representations `/snapshot` can return in one call. Browser Run's
  * default is `["content", "screenshot"]` and it requires at least two.
- * @experimental
  */
 export type SnapshotFormat = "accessibilityTree" | "content" | "markdown" | "screenshot";
 
@@ -50,7 +47,6 @@ export type SnapshotFormat = "accessibilityTree" | "content" | "markdown" | "scr
  * not accepted here: an inline `html` document would bypass the URL guard.
  * See https://developers.cloudflare.com/browser-run/quick-actions/ for every
  * action's fields.
- * @experimental
  */
 export interface QuickActionOptions {
     [key: string]: unknown;
@@ -66,7 +62,6 @@ export interface QuickActionOptions {
  * Cloudflare account credentials for the Browser Run REST API. The `/crawl`
  * endpoint has no binding method, so {@link Browser.crawl} and its siblings
  * call `api.cloudflare.com` with a bearer token instead.
- * @experimental
  */
 export interface BrowserRestApiOptions {
     accountId: string;
@@ -76,14 +71,12 @@ export interface BrowserRestApiOptions {
 
 /**
  * Output formats a crawl can return per page.
- * @experimental
  */
 export type CrawlFormat = "html" | "json" | "markdown";
 
 /**
  * Options for {@link Browser.crawl}, mirroring the `/crawl` request body.
  * See https://developers.cloudflare.com/browser-run/quick-actions/crawl-endpoint/.
- * @experimental
  */
 export interface CrawlOptions {
     /**
@@ -115,19 +108,16 @@ export interface CrawlOptions {
 
 /**
  * Status of a whole crawl job.
- * @experimental
  */
 export type CrawlJobStatus = "cancelled_by_user" | "cancelled_due_to_limits" | "cancelled_due_to_timeout" | "completed" | "errored" | "running";
 
 /**
  * Status of one crawled URL.
- * @experimental
  */
 export type CrawlRecordStatus = "cancelled" | "completed" | "disallowed" | "errored" | "queued" | "skipped";
 
 /**
  * One crawled page. Only the formats the crawl asked for are present.
- * @experimental
  */
 export interface CrawlRecord {
     html?: string;
@@ -140,7 +130,6 @@ export interface CrawlRecord {
 
 /**
  * A crawl job and one page of its records, as `GET /crawl/{id}` returns it.
- * @experimental
  */
 export interface CrawlJob {
     browserSecondsUsed?: number;
@@ -155,7 +144,6 @@ export interface CrawlJob {
 
 /**
  * Paging and filtering for {@link Browser.crawlResult}.
- * @experimental
  */
 export interface CrawlResultOptions {
     cursor?: number | string;
@@ -165,7 +153,6 @@ export interface CrawlResultOptions {
 
 /**
  * The crawl configuration Browser Run echoes in crawl lifecycle events.
- * @experimental
  */
 export interface BrowserRunCrawlEventConfig {
     depth: number;
@@ -178,7 +165,6 @@ export interface BrowserRunCrawlEventConfig {
 
 /**
  * Envelope fields shared by every Browser Run Queues event.
- * @experimental
  */
 export interface BrowserRunEventEnvelope {
     metadata: { accountId: string; eventSchemaVersion: number; eventSubscriptionId: string; eventTimestamp: string };
@@ -191,7 +177,6 @@ export interface BrowserRunEventEnvelope {
  * crawl.started,crawl.updated,crawl.finished`). Narrow on `type`. It carries
  * status, not page content — fetch that with {@link Browser.crawlResult}.
  * See https://developers.cloudflare.com/queues/event-subscriptions/events-schemas/.
- * @experimental
  */
 export type BrowserRunCrawlEvent =
     | (BrowserRunEventEnvelope & {
@@ -236,7 +221,6 @@ export interface RouteLike {
  * Minimal projection of a Playwright `Page` — just the methods the helpers drive.
  * Declared structurally so a test can inject a plain stub instead of a real
  * headless page (which needs workerd + the Browser Rendering binding).
- * @experimental
  */
 export interface PageLike {
     /** Return the page's serialized HTML after the navigation settles. */
@@ -265,7 +249,6 @@ export interface PageLike {
 /**
  * Minimal projection of a Playwright `BrowserContext`. Only `newPage` is used;
  * declared structurally for the same test-double reason as {@link PageLike}.
- * @experimental
  */
 export interface BrowserContextLike {
     newPage: () => Promise<PageLike>;
@@ -275,7 +258,6 @@ export interface BrowserContextLike {
  * Minimal projection of a Playwright `Browser` (the value `launch` resolves to).
  * Only `newContext`/`close` are used; declared structurally for the same
  * test-double reason as {@link PageLike}.
- * @experimental
  */
 export interface BrowserLike {
     close: () => Promise<void>;
@@ -303,7 +285,6 @@ export interface BrowserLike {
  * `@cloudflare/playwright` at module top — that keeps the heavy optional peer
  * dep out of the bundle for apps that never screenshot, and lets tests pass a
  * fake. Calling it with the Browser Rendering binding resolves a {@link BrowserLike}.
- * @experimental
  */
 export type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, unknown>) => Promise<BrowserLike>;
 
@@ -312,7 +293,6 @@ export type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<s
  * reports it. `connectionId` is set while a worker is connected. Sessions accept
  * several concurrent connections, so a set `connectionId` does not stop
  * {@link Browser.connect}; it only tells you the browser is shared.
- * @experimental
  */
 export interface BrowserSession {
     connectionId?: string;
@@ -324,20 +304,17 @@ export interface BrowserSession {
  * Structural projection of `@cloudflare/playwright`'s `connect` export —
  * re-attaches to an existing session rather than starting a new browser.
  * Injected like {@link BrowserLaunchLike} so the peer dep stays optional.
- * @experimental
  */
 export type BrowserConnectLike = (binding: BrowserBindingLike, sessionId: string) => Promise<BrowserLike>;
 
 /**
  * Structural projection of `@cloudflare/playwright`'s `sessions` export — lists
  * the account's live Browser Rendering sessions for this binding.
- * @experimental
  */
 export type BrowserSessionsLike = (binding: BrowserBindingLike) => Promise<ReadonlyArray<BrowserSession>>;
 
 /**
  * Options shared by the page-driving helpers ({@link Browser.screenshot} etc.).
- * @experimental
  */
 export interface NavigateOptions {
     /**
@@ -356,7 +333,6 @@ export interface NavigateOptions {
 
 /**
  * Options for {@link Browser.screenshot}.
- * @experimental
  */
 export interface ScreenshotOptions extends NavigateOptions {
     /** Capture the full scrollable page rather than just the viewport. */
@@ -373,7 +349,6 @@ export interface ScreenshotOptions extends NavigateOptions {
 
 /**
  * Options for {@link Browser.pdf}.
- * @experimental
  */
 export interface PdfOptions extends NavigateOptions {
     /** Paper format (`A4`, `Letter`, …) forwarded to Playwright. */
@@ -389,8 +364,8 @@ export interface PdfOptions extends NavigateOptions {
 }
 
 /**
- * `LunoraBrowserOptions` is part of the experimental `@lunora/browser` API and may change without a major version bump.
- * @experimental
+ * Options for `createBrowser`: the binding, the injected `@cloudflare/playwright` exports,
+ * the URL guards, and the REST credentials `/crawl` needs.
  */
 export interface LunoraBrowserOptions {
     /**
@@ -516,7 +491,6 @@ export interface LunoraBrowserOptions {
  * browser, opens a context + page, navigates, performs the op, and always
  * closes the browser in a `finally` (a leaked session is billed and
  * rate-limited).
- * @experimental
  */
 export interface Browser {
     /** Cancel a running crawl job. Needs {@link LunoraBrowserOptions.restApi}. */
