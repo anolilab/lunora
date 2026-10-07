@@ -55,6 +55,27 @@ describe("privileged_dispatch_unvalidated_payload", () => {
         expect(findings[0]?.detail).toContain("messages.send");
     });
 
+    it("matches a target in an index.ts or a hyphenated folder by its api.* path", () => {
+        expect.assertions(2);
+
+        // `internal.ratelimit.send` → target file `ratelimit`; the procedure lives in `ratelimit/index`.
+        expect(
+            privilegedDispatchUnvalidatedPayload.run({
+                privilegedDispatches: [dispatch({ targetFile: "ratelimit" })],
+                rlsProcedures: [procedure({ file: "ratelimit/index" })],
+                schema: schema(),
+            }),
+        ).toHaveLength(1);
+        // `internal.my_module.messages.send` → `my_module/messages`; the procedure lives in `my-module/messages`.
+        expect(
+            privilegedDispatchUnvalidatedPayload.run({
+                privilegedDispatches: [dispatch({ targetFile: "my_module/messages" })],
+                rlsProcedures: [procedure({ file: "my-module/messages" })],
+                schema: schema(),
+            }),
+        ).toHaveLength(1);
+    });
+
     it("does not flag when the dispatched target does not enforce RLS", () => {
         expect.assertions(1);
 
