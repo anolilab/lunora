@@ -1091,6 +1091,24 @@ describe("web-push send-time DNS-rebinding guard", () => {
         expect(inner.sends).toHaveLength(0);
     });
 
+    it("refuses a host whose lookup cannot be completed, instead of falling back to the string guard", async () => {
+        expect.hasAssertions();
+
+        // The endpoint's own nameserver can stall the check; a failed lookup must
+        // not wave the send through.
+        vi.stubGlobal("fetch", async () => {
+            throw new TypeError("network connection lost");
+        });
+
+        const inner = mockPushProvider();
+        const router = routingPushProvider({ webPush: inner.provider });
+
+        await expect(
+            router.send({ body: "b", to: JSON.stringify({ endpoint: "https://stalled.push.test/p/1", keys: { auth: "a", p256dh: "p" } }) }),
+        ).rejects.toThrow(/could not verify where web-push endpoint host "stalled.push.test" resolves/);
+        expect(inner.sends).toHaveLength(0);
+    });
+
     it("checks EVERY target of a multi-recipient `to`, not just the first", async () => {
         expect.hasAssertions();
 

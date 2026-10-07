@@ -8,23 +8,24 @@
  * `fetch` — no `node:dns`, so it runs on workerd) and re-classifying every
  * returned A/AAAA record against the same range tables.
  *
- * Best-effort by construction, and deliberately so:
+ * What it reports, and why each case is its own verdict:
  * - An IP-literal host can't rebind and was already classified by the string
- *   guard, so it is skipped.
- * - If BOTH lookups fail (network error / non-200 / unparseable), it returns
- *   "nothing private" and the caller leans on the string guard it already
- *   passed — a broken resolver must not take the feature down. It never
- *   fails open on an address that actually DID resolve to a private range.
+ *   guard, so it is `"skipped"`.
+ * - A lookup that could not complete (network error, timeout, non-200,
+ *   unparseable body) is `"failed"`. It is not a fallback to the string guard:
+ *   whoever controls the name's nameserver can stall the check on purpose and
+ *   answer the connecting resolver normally, so callers refuse it. One failed
+ *   family is enough — a stalled A lookup next to a public AAAA answer says
+ *   nothing about the address the connection will use.
  * - A lookup that DID answer but carried no address — an empty answer, or a
- *   non-NOERROR rcode such as SERVFAIL or NXDOMAIN — is `"unresolved"`, not
- *   `"public"`. An attacker's authoritative server can SERVFAIL the check and
- *   answer the connecting resolver a moment later, so callers refuse it.
+ *   non-NOERROR rcode such as SERVFAIL or NXDOMAIN — is `"unresolved"`, for
+ *   the same reason.
  * - It is TOCTOU-imperfect: whoever connects afterwards re-resolves
  *   independently. An exact-host allowlist is the only hard guarantee.
  *
  * Returns a verdict rather than throwing — no imports, no `LunoraError`, so it
- * stays inline-safe per the repo `shared/` convention. The caller wraps a
- * `"private"` result in its own user-facing error.
+ * stays inline-safe per the repo `shared/` convention. The caller wraps each
+ * refusal in its own user-facing error.
  */
 
 import { isPrivateIpv4, isPrivateIpv6, normalizeHost, parseIpv4 } from "./ssrf-host";
@@ -86,12 +87,10 @@ const dohLookup = async (hostname: string, type: number, timeoutMs: number): Pro
 };
 
 /**
- * The outcome of a rebinding re-check. Three states, not two, because "no private
- * address" and "we could not find out" are NOT the same fact: the first is a
- * verified result, the second is a fallback to the string guard. A caller that
- * merely refuses on `private` can treat them alike — but one that CACHES the
- * verdict must not, or a single DoH outage disables its guard for that host for
- * as long as the cache lives.
+ * The outcome of a rebinding re-check. Only `public` and `skipped` mean "go
+ * ahead"; `private`, `unresolved` and `failed` are refusals. A caller that
+ * caches verdicts should keep `failed` (and arguably `unresolved`) out of the
+ * cache: a DoH outage is transient, and a cached refusal outlives it.
  */
 type SsrfResolution =
     /** Resolved, and at least one address is private/internal. `address` is the first such. */
@@ -100,8 +99,10 @@ type SsrfResolution =
     | { kind: "public" }
     /** DoH answered, but with no A/AAAA address (empty answer, SERVFAIL, NXDOMAIN). Callers refuse this. */
     | { kind: "unresolved" }
-    /** Nothing was learned: an IP-literal host (skipped — it cannot rebind) or a failed lookup. */
-    | { kind: "unknown" };
+    /** The lookup could not complete (network error, timeout, non-200, unparseable body). Callers refuse this. */
+    | { kind: "failed" }
+    /** An IP-literal host: nothing to resolve, and it cannot rebind. */
+    | { kind: "skipped" };
 
 /**
  * Resolve `hostname` (a `new URL(x).hostname` value, NOT a full URL) over DoH and
@@ -117,19 +118,17 @@ const resolveHostSsrf = async (hostname: string, timeoutMs: number = DOH_TIMEOUT
     // IP literals can't rebind through DNS and were already classified by the
     // string guard; only a named host needs the resolved-address re-check.
     if (host.includes(":") || parseIpv4(host) !== undefined) {
-        return { kind: "unknown" };
+        return { kind: "skipped" };
     }
 
     const [aRecords, aaaaRecords] = await Promise.all([dohLookup(host, DNS_TYPE_A, timeoutMs), dohLookup(host, DNS_TYPE_AAAA, timeoutMs)]);
 
-    // Both lookups failed — fall back to the string guard (which already passed)
-    // rather than fail open. If either resolved, inspect what came back.
-    if (aRecords === undefined && aaaaRecords === undefined) {
-        return { kind: "unknown" };
+    if (aRecords === undefined || aaaaRecords === undefined) {
+        return { kind: "failed" };
     }
 
     // CNAME and other records ride along in `Answer`; only addresses decide.
-    const addresses = [...(aRecords ?? []), ...(aaaaRecords ?? [])].filter((answer) => answer.type === DNS_TYPE_A || answer.type === DNS_TYPE_AAAA);
+    const addresses = [...aRecords, ...aaaaRecords].filter((answer) => answer.type === DNS_TYPE_A || answer.type === DNS_TYPE_AAAA);
 
     for (const answer of addresses) {
         if (isPrivateResolvedIp(answer.data, answer.type)) {

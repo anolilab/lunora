@@ -269,9 +269,10 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      * `allowedPushOrigins` allowlist. Without it the posture is defence-in-depth
      * rather than a guarantee: a STRING classifier at register time
      * (`assertPushEndpoint` → shared `isPrivateHost`) plus a best-effort
-     * resolved-address re-check at send time. Both can be defeated (a DoH outage
-     * falls back to the string guard, and resolution is TOCTOU-imperfect); an
-     * exact-origin allowlist cannot.
+     * resolved-address re-check at send time (which refuses when the lookup
+     * fails). The re-check is TOCTOU-imperfect — the push service is re-resolved
+     * when the request goes out — and a DoH outage stops sends; an exact-origin
+     * allowlist has neither problem.
      * Guarded on the per-isolate runtime, mirroring the no-store fallback warning.
      */
     const warnNoPushOriginAllowlist = (): void => {
