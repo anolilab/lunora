@@ -2,6 +2,9 @@ import { createFcmProvider } from "@visulima/notification/providers/fcm";
 import { createWebPushProvider } from "@visulima/notification/providers/web-push";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { buildEngine } from "../src/providers";
+import type { PushContent } from "../src/types";
+
 /**
  * What the SHIPPED push providers do with a multi-target send where some targets
  * are accepted and some are not.
@@ -169,6 +172,37 @@ describe("shipped push providers", () => {
             // No `Topic`: a re-attempt is a fresh notification to the user agent,
             // it cannot replace the first one. Same exposure on both transports.
             expect(Object.keys(requests[0]?.headers ?? {}).map((header) => header.toLowerCase())).not.toContain("topic");
+        });
+    });
+
+    describe("per-message urgency / ttl (buildEngine's web-push channel)", () => {
+        const engineFor = (keys: { vapidPrivateKey: string; vapidPublicKey: string }) =>
+            // The allowlist skips the send-time DoH lookup, which would hit the stubbed `fetch`.
+            buildEngine({ allowedPushOrigins: ["https://push.example"], webPush: { ...keys, timeout: 2000, vapidSubject: "mailto:a@b.c" } });
+
+        it("sends the message's own Urgency and TTL headers", async () => {
+            expect.hasAssertions();
+
+            const keys = await vapidKeys();
+            const requests = stubFetch(() => true);
+
+            // What `ctx.push.send` hands the engine: the caller's `PushContent` plus the derived `to`.
+            const message: PushContent & { to: string } = { body: "b", title: "t", to: subscription("good", keys.vapidPublicKey), ttl: 60, urgency: "high" };
+
+            await engineFor(keys).sendToChannel("push", message);
+
+            expect(requests[0]?.headers).toMatchObject({ TTL: "60", Urgency: "high" });
+        });
+
+        it("keeps the channel defaults when the message sets neither", async () => {
+            expect.hasAssertions();
+
+            const keys = await vapidKeys();
+            const requests = stubFetch(() => true);
+
+            await engineFor(keys).sendToChannel("push", { body: "b", title: "t", to: subscription("good", keys.vapidPublicKey) });
+
+            expect(requests[0]?.headers).toMatchObject({ TTL: "2419200", Urgency: "normal" });
         });
     });
 });

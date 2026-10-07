@@ -11,6 +11,7 @@ import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { SsrfResolution } from "../../../shared/ssrf-resolve";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
 import { isGoneError } from "./subscriptions/normalize";
+import type { PushContent } from "./types";
 
 /**
  * The web-push `endpoint` of a routed target, or `undefined` when the target is
@@ -499,6 +500,30 @@ const attemptGroup = async (channel: Provider<unknown, PushPayload>, group: Push
     }
 };
 
+/**
+ * The Web Push provider, honouring a message's own `urgency` / `ttl`
+ * ({@link PushContent}). Upstream reads both only from the provider config, so a
+ * message that sets either is sent through a provider built with them overriding
+ * the channel defaults. Building one is cheap: it holds no connection or key
+ * state (the VAPID key is imported per send either way).
+ */
+const webPushProvider = (config: WebPushConfig): Provider<unknown, PushPayload> => {
+    const base = createWebPushProvider(config);
+
+    return {
+        ...base,
+        send: async (payload) => {
+            const { ttl, urgency } = payload as PushContent & PushPayload;
+
+            if (ttl === undefined && urgency === undefined) {
+                return base.send(payload);
+            }
+
+            return createWebPushProvider({ ...config, ...(ttl === undefined ? {} : { ttl }), ...(urgency === undefined ? {} : { urgency }) }).send(payload);
+        },
+    };
+};
+
 /** Options for {@link routingPushProvider}. */
 export interface RoutingPushOptions {
     /**
@@ -741,7 +766,7 @@ export const attachResilience = (engine: Notification, options: ResilienceOption
  * from the edge facade by construction.
  */
 export const buildEngine = (resolved: ResolvedProviders): Notification => {
-    const webPush = resolved.webPush === undefined ? undefined : createWebPushProvider(resolved.webPush);
+    const webPush = resolved.webPush === undefined ? undefined : webPushProvider(resolved.webPush);
     const fcm = resolved.fcm === undefined ? undefined : createFcmProvider(resolved.fcm);
 
     const providers: NotificationProviders = {};

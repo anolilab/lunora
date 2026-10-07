@@ -128,6 +128,12 @@ export const announce = action.input({ title: v.string(), body: v.string() }).ac
 await ctx.push.send(subscriptionId, { title: "Hi", body: "…" });
 ```
 
+`send` and `broadcast` take per-message Web Push delivery hints, overriding the channel's `urgency` / `ttl` (FCM targets ignore both):
+
+```ts
+await ctx.push.broadcast({ title: "Approval needed", body: "…", urgency: "high", ttl: 3600 }, { userId });
+```
+
 Multi-channel through `ctx.notify.send`:
 
 ```ts
