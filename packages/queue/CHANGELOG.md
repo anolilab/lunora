@@ -1,3 +1,10 @@
+## @lunora/queue [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.93...@lunora/queue@1.0.0-alpha.94) (2026-10-07)
+
+### Features
+
+* **advisor:** flag topics with more than 10 subscriptions ([#1016](https://github.com/anolilab/lunora/issues/1016)) ([472b256](https://github.com/anolilab/lunora/commit/472b256f7f37bebbd8aee1ec32a02acef8cad8a4))
+* **codegen:** discover queues declared in a module's queues.ts ([#1018](https://github.com/anolilab/lunora/issues/1018)) ([f5dc76c](https://github.com/anolilab/lunora/commit/f5dc76c6acdde00f6bae02e4b56852619feedb16))
+
 ## @lunora/queue [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.92...@lunora/queue@1.0.0-alpha.93) (2026-10-06)
 
 
