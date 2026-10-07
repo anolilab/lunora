@@ -160,8 +160,8 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * entry is **credential-based** (genuinely target-agnostic): it works
  * anywhere `fetch` works, given an API token, so it is never gated and
  * always emitted, on every target — feature flags (`flags`), the
- * Cloudflare-Access identity facade (`access`), payments (`payments`), and
- * x402 (`x402`). `r2sql` is deliberately unmapped for the same reason: the
+ * Cloudflare-Access identity facade (`access`) and payments (`payments`).
+ * `r2sql` is deliberately unmapped for the same reason: the
  * R2 SQL client is a plain HTTP client over an API token, not a binding.
  * `notify` is unmapped on the same criterion, and the contrast with `mail` —
  * which IS mapped — is what makes the line concrete: `@lunora/mail` holds a
@@ -190,6 +190,14 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * `Cf-Access-Jwt-Assertion` header — a plain HTTP check needing no host
  * support. Gating the facade on the rating would drop a surface that still
  * functions.
+ *
+ * `x402` maps to `secrets`, though the x402 protocol itself is plain `fetch`.
+ * The generated `ctx.x402` reads its wallet key through `ctx.secrets`
+ * (`getSecret: secrets.get`), so a target rating `secrets` unsupported would
+ * emit a rail whose raw-key and CDP custody fail on the first payment. Gating it
+ * there says so at build time instead. The `{ type: "signer" }` custody needs no
+ * secret and still works on such a target through `createX402Pay(config, deps)`
+ * called directly; it is only the codegen-wired `ctx.x402` that is withheld.
  *
  * `shardAlarms` is deliberately unmapped here, and not because it was
  * forgotten: `CapabilityKey` is derived from `CAPABILITY_ROWS`, which
@@ -227,8 +235,7 @@ const CAPABILITY_TO_FEATURE: Record<CapabilityKey, PlatformFeatureKey | null> = 
     storage: "objectStorage",
     vectors: "vectorStore",
     workflows: "workflows",
-    // eslint-disable-next-line unicorn/no-null -- see `access`
-    x402: null,
+    x402: "secrets",
 };
 
 /**

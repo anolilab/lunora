@@ -170,17 +170,33 @@ describe("gatePlatformFeatures", () => {
         expect.assertions(1);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        // flags / access / payments / x402 / r2sql / notify are credential-based
+        // flags / access / payments / r2sql / notify are credential-based
         // add-ons (they work anywhere fetch works), not platform primitives — they
         // must survive any target unchanged. `images` is NOT in this list: it is
         // binding-based (`env.IMAGES`) and gated like `browser`/`vectors`. The
         // list is spelled out here and derived from the source in "capability
         // classification" below, which is what stops the two drifting again.
-        const usage: FeatureUsage = { ...ALL_OFF, access: true, flags: true, notify: true, payments: true, r2sql: true, x402: true };
+        const usage: FeatureUsage = { ...ALL_OFF, access: true, flags: true, notify: true, payments: true, r2sql: true };
 
         const result = gatePlatformFeatures(usage, "cloudflare");
 
         expect(result.usage).toStrictEqual(usage);
+    });
+
+    it("gates ctx.x402 on a target without a secrets store", async () => {
+        expect.assertions(3);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        // The generated rail reads its wallet key through `ctx.secrets`, which `node`
+        // rates unsupported, so raw-key and CDP custody would fail on the first payment.
+        const usage: FeatureUsage = { ...ALL_OFF, x402: true };
+
+        expect(gatePlatformFeatures(usage, "cloudflare").usage.x402).toBe(true);
+
+        const node = gatePlatformFeatures(usage, "node");
+
+        expect(node.usage.x402).toBe(false);
+        expect(node.diagnostics).toMatchObject([{ feature: "x402", name: "platform_unsupported_feature" }]);
     });
 
     // Plan 234: `node` is a REGISTERED target (unlike the synthetic "partial"
