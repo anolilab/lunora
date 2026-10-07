@@ -4843,7 +4843,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("wires ctx.queues producers onto Mutation + Action ctx — never query — and the runtime specs into the shard", () => {
             expect.assertions(7);
 
-            const queues = [{ bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "push" as const, name: "email-queue", tuning: {} }];
+            const queues = [
+                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", filePath: "queues", mode: "push" as const, name: "email-queue", tuning: {} },
+            ];
             const withQueues = emitServer({ queues });
 
             // The typed producer lands on Mutation + Action (enqueue is a side effect), never the deterministic Query ctx.
@@ -4864,11 +4866,22 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect.assertions(9);
 
             const queues = [
-                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "push" as const, name: "email-queue", tuning: {} },
-                { bindingName: "QUEUE_AUDIT", exportName: "audit", mode: "push" as const, name: "audit", topic: "signups", tuning: {} },
-                { bindingName: "QUEUE_WELCOME", exportName: "welcome", mode: "push" as const, name: "welcome", topic: "signups", tuning: {} },
+                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", filePath: "queues", mode: "push" as const, name: "email-queue", tuning: {} },
+                { bindingName: "QUEUE_AUDIT", exportName: "audit", filePath: "queues", mode: "push" as const, name: "audit", topic: "signups", tuning: {} },
+                {
+                    bindingName: "QUEUE_WELCOME",
+                    exportName: "welcome",
+                    filePath: "queues",
+                    mode: "push" as const,
+                    name: "welcome",
+                    topic: "signups",
+                    tuning: {},
+                },
             ];
-            const topics = [{ exportName: "orders" }, { exportName: "signups" }];
+            const topics = [
+                { exportName: "orders", filePath: "queues" },
+                { exportName: "signups", filePath: "queues" },
+            ];
             const server = emitServer({ queues, topics });
 
             expect(server).toContain('import type { QueueProducer, TopicPublisher } from "@lunora/queue";');
@@ -4892,8 +4905,18 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("emits ctx.topics without ctx.queues when every queue is a subscription", () => {
             expect.assertions(4);
 
-            const queues = [{ bindingName: "QUEUE_WELCOME", exportName: "welcome", mode: "push" as const, name: "welcome", topic: "signups", tuning: {} }];
-            const topics = [{ exportName: "signups" }];
+            const queues = [
+                {
+                    bindingName: "QUEUE_WELCOME",
+                    exportName: "welcome",
+                    filePath: "queues",
+                    mode: "push" as const,
+                    name: "welcome",
+                    topic: "signups",
+                    tuning: {},
+                },
+            ];
+            const topics = [{ exportName: "signups", filePath: "queues" }];
             const server = emitServer({ queues, topics });
             const shard = emitShard({ queues, schema: { tables: [], vectorIndexes: [] }, topics });
 
@@ -4907,8 +4930,8 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect.assertions(2);
 
             const registry = emitQueues([
-                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "push", name: "email-queue", tuning: {} },
-                { bindingName: "QUEUE_PULLED", exportName: "pulled", mode: "pull", name: "pulled", tuning: {} },
+                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", filePath: "queues", mode: "push", name: "email-queue", tuning: {} },
+                { bindingName: "QUEUE_PULLED", exportName: "pulled", filePath: "queues", mode: "pull", name: "pulled", tuning: {} },
             ]);
 
             expect(registry).toContain('    "email-queue": { binding: "QUEUE_EMAIL", definition: emailQueue, exportName: "emailQueue" },');
@@ -4919,7 +4942,14 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect.assertions(5);
 
             const queues = [
-                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "pull" as const, name: "email-queue", tuning: { deadLetterQueue: "email-dlq" } },
+                {
+                    bindingName: "QUEUE_EMAIL",
+                    exportName: "emailQueue",
+                    filePath: "queues",
+                    mode: "pull" as const,
+                    name: "email-queue",
+                    tuning: { deadLetterQueue: "email-dlq" },
+                },
             ];
             const shard = emitShard({ queues, schema: { tables: [], vectorIndexes: [] } });
 

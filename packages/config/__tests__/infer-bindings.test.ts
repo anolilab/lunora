@@ -491,6 +491,22 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.signals.join(" ")).toContain("not exported by the worker entry");
     });
 
+    it("infers the queues a module's own queues.ts declares, with no root lunora/queues.ts", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/billing/module.ts", `import { defineModule } from "@lunora/server";\n\nexport default defineModule({});\n`);
+        write(
+            "lunora/billing/queues.ts",
+            `import { defineQueue } from "@lunora/queue";\n\nexport const invoices = defineQueue({ handler: async () => {} });\n`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.queues).toStrictEqual([expect.objectContaining({ bindingName: "QUEUE_INVOICES", filePath: "billing/queues", name: "invoices" })]);
+    });
+
     it("treats a class-A composed worker entry as exporting the declared classes", async () => {
         expect.assertions(3);
 

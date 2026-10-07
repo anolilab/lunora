@@ -771,6 +771,8 @@ export interface QueueIR {
     bindingName: string;
     /** The `lunora/queues.ts` export name, e.g. `emailQueue`. */
     exportName: string;
+    /** The declaring file, lunora-relative without `.ts`: `queues`, or `billing/queues` for a module's own. */
+    filePath: string;
 
     /** See {@link HandlerSiteIR}. */
     handlerSite?: HandlerSiteIR;
@@ -808,6 +810,8 @@ export interface QueueIR {
 export interface TopicIR {
     /** The `lunora/queues.ts` export name, e.g. `signups`. */
     exportName: string;
+    /** The declaring file, as {@link QueueIR.filePath}. */
+    filePath: string;
 }
 
 /** The queues published to through `ctx.queues` — every queue except a topic subscription. */
