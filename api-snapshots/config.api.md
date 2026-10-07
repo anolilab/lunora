@@ -723,6 +723,8 @@ interface InferredBindings {
     usesKv: boolean;
     usesMail: boolean;
     usesNotify: boolean;
+    usesNotifyFcm: boolean;
+    usesNotifyWebPush: boolean;
     usesPaymentAutumn: boolean;
     usesPaymentCreem: boolean;
     usesPaymentDodopayments: boolean;

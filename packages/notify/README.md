@@ -22,7 +22,7 @@ export default defineNotify({
 });
 ```
 
-`.dev.vars` (scaffolded by `lunora dev` from `@lunora/config`'s package-secrets registry):
+`.dev.vars` (scaffolded by `lunora dev` from `@lunora/config`'s package-secrets registry — only for the channels `defineNotify` configures):
 
 ```
 VAPID_PUBLIC_KEY=<your-vapid-public-key>

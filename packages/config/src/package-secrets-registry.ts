@@ -140,7 +140,25 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-resend-api-key>",
         },
     ],
-    "@lunora/notify": [
+    // `@lunora/notify` itself needs no secret: each push channel's are keyed by the
+    // channel `defineNotify` configures, so a webPush-only app is not told to set
+    // FCM_* (#1039) — the same reason the payment adapters are keyed by subpath.
+    "@lunora/notify#fcm": [
+        {
+            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_PROJECT_ID",
+            placeholderValue: "<your-firebase-project-id>",
+        },
+        {
+            description:
+                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_ACCESS_TOKEN",
+            placeholderValue: "<your-fcm-access-token>",
+        },
+    ],
+    "@lunora/notify#webPush": [
         {
             description:
                 "Public VAPID key (base64url) for Web Push. Generate a keypair once with: npx web-push generate-vapid-keys — the public key is also shipped to the browser to subscribe.",
@@ -159,19 +177,6 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             docsUrl: "https://lunora.sh/docs/packages/notify#web-push",
             key: "VAPID_SUBJECT",
             placeholderValue: "mailto:you@example.com",
-        },
-        {
-            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
-            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_PROJECT_ID",
-            placeholderValue: "<your-firebase-project-id>",
-        },
-        {
-            description:
-                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
-            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_ACCESS_TOKEN",
-            placeholderValue: "<your-fcm-access-token>",
         },
     ],
     // `@lunora/payment` itself needs no secret: each provider's pair is keyed by

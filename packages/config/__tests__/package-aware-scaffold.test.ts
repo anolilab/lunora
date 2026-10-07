@@ -269,6 +269,15 @@ describe("ensureDevVarsExample", () => {
         expect(content).toContain("AUTH_SECRET=");
     });
 
+    it("emits only the configured notify channel's secrets (#1039)", () => {
+        expect.assertions(2);
+
+        const added = ensureDevVarsExample(dir, ["@lunora/notify", "@lunora/notify#webPush"]);
+
+        expect(added).toStrictEqual(expect.arrayContaining(["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"]));
+        expect(added.filter((key) => key.startsWith("FCM_"))).toStrictEqual([]);
+    });
+
     it("emits only the core LUNORA_ADMIN_TOKEN for packages with no registered secrets", () => {
         expect.assertions(2);
 

@@ -163,16 +163,22 @@ const projectUsesPush = (project: Project, lunoraDirectory: string): boolean => 
     return false;
 };
 
+/** Which push channels `lunora/notify.ts` wires. */
+interface NotifyChannels {
+    hasFcm: boolean;
+    hasWebPush: boolean;
+}
+
 /**
- * Discover which push channels the project's `lunora/notify.ts` default export
- * (`defineNotify({...})`) wires plus whether any handler sends a push — the
- * `notify_missing_push_config` lint input. Returns `undefined` when the file is
- * absent (the app declares no notify config). The read is metadata-only and
- * lenient (like `discoverFlags`): a `webPush`/`fcm` property's mere presence
- * counts as the channel being wired; a non-literal config degrades to "unwired"
- * rather than throwing.
+ * Read which push channels the project's `lunora/notify.ts` default export
+ * (`defineNotify({...})`) wires, or `undefined` when the file is absent (the app
+ * declares no notify config). The read is metadata-only and lenient (like
+ * `discoverFlags`): a `webPush`/`fcm` property's mere presence counts as the
+ * channel being wired; a non-literal config degrades to "unwired" rather than
+ * throwing. `@lunora/config` reads this alone to scaffold only the configured
+ * channels' secrets.
  */
-const discoverNotifyConfig = (project: Project, lunoraDirectory: string): AdvisorNotifyConfig | undefined => {
+const discoverNotifyChannels = (project: Project, lunoraDirectory: string): NotifyChannels | undefined => {
     const notifyPath = join(lunoraDirectory, NOTIFY_FILENAME);
 
     if (!existsSync(notifyPath)) {
@@ -194,7 +200,19 @@ const discoverNotifyConfig = (project: Project, lunoraDirectory: string): Adviso
         }
     }
 
-    return { hasFcm, hasWebPush, usesPush: projectUsesPush(project, lunoraDirectory) };
+    return { hasFcm, hasWebPush };
 };
 
-export { discoverNotifyCalls, discoverNotifyConfig, NOTIFY_FILENAME };
+/**
+ * The channels {@link discoverNotifyChannels} reads, plus whether any handler sends a push — the
+ * `notify_missing_push_config` lint input. `undefined` when `lunora/notify.ts`
+ * is absent.
+ */
+const discoverNotifyConfig = (project: Project, lunoraDirectory: string): AdvisorNotifyConfig | undefined => {
+    const channels = discoverNotifyChannels(project, lunoraDirectory);
+
+    return channels === undefined ? undefined : { ...channels, usesPush: projectUsesPush(project, lunoraDirectory) };
+};
+
+export type { NotifyChannels };
+export { discoverNotifyCalls, discoverNotifyChannels, discoverNotifyConfig, NOTIFY_FILENAME };

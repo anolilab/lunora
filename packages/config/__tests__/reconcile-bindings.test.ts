@@ -36,6 +36,8 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesKv: false,
         usesMail: false,
         usesNotify: false,
+        usesNotifyFcm: false,
+        usesNotifyWebPush: false,
         usesPaymentAutumn: false,
         usesPaymentCreem: false,
         usesPaymentDodopayments: false,
