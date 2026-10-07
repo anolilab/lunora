@@ -1,48 +1,33 @@
 ---
 name: lunora-quickstart
-description: Creates or adds Lunora to an app. Use for new Lunora projects, `lunora init`,
-    framework/provider wiring, the first `lunora dev` run, env vars, or writing
-    the first schema + query/mutation round-trip.
+description: Creates a new Lunora project or adds Lunora to an existing app, then gets
+    the first schema + query/mutation round-trip running. Use when the user asks
+    to "start a Lunora app", "add Lunora to my Vite/Next/Nuxt/SvelteKit/Astro
+    app", runs `lunora init` (`--vite`, `-t`, `--here`, `--add`), needs the
+    client provider wired (`LunoraClient` + `LunoraProvider`), or is running
+    `lunora dev` for the first time (background mode, `lunora dev status`/`logs`/
+    `stop`, `VITE_LUNORA_URL`).
 ---
 
 # Lunora Quickstart
 
-Set up a working Lunora project as fast as possible.
+Get a working Lunora project with one live query/mutation round-trip.
 
-## When to Use
-
-- Starting a brand new project with Lunora.
-- Adding Lunora to an existing Vite, Next.js, Astro, Nuxt, SvelteKit, or
-  TanStack Start app.
-- Scaffolding a Lunora app for prototyping.
-
-## When Not to Use
-
-- The project already has Lunora installed and `lunora/` exists — just build,
-  and run `lunora codegen` after schema/function edits.
-- You only need to add auth to an existing Lunora app — use the
-  `lunora-setup-auth` skill.
+Skip this skill when `lunora/` already exists (just build, and run
+`lunora codegen` after edits) or when the task is only auth
+(`lunora-setup-auth`).
 
 ## Workflow
 
-1. Determine the starting point: new project or existing app.
-2. New project: scaffold with `lunora init` and pick a template.
-3. Existing app: run `lunora init --here` to patch the Vite config and wire
-   Lunora into the current project.
-4. Run `lunora codegen` to generate `lunora/_generated/` and typecheck the
-   schema + functions. This is the agent's feedback loop.
-5. Start the dev loop. As an agent, run `lunora dev --background` — it starts
-   the server as a managed detached process, blocks until it accepts requests,
-   prints the URL + PID, and returns (under a detected AI agent, plain
-   `lunora dev` does this automatically, with JSON logs). Never leave a bare
-   `lunora dev` running in your own shell — it is long-running and does not
-   exit.
-6. Verify a query/mutation round-trip works end to end.
+1. New project: `lunora init <name> --vite <framework>` or `-t <template>`.
+   Existing app: `lunora init --here`.
+2. `lunora codegen` to generate `lunora/_generated/`.
+3. Start the dev server in the background (`lunora dev --background`).
+4. Write or adapt a query + mutation and use them from a component.
+5. `lunora verify` (wrangler config + codegen dry-run + `tsc --noEmit`) passes,
+   and the client re-renders live after a mutation.
 
-## Path 1: New Project (Recommended)
-
-`lunora init` fetches a whole-project template (frontend + worker entry + Vite
-plugin + `lunora/` already wired together).
+## Path 1: new project
 
 ```bash
 lunora init my-app --vite react
@@ -50,133 +35,85 @@ cd my-app
 pnpm install
 ```
 
-### Pick a stack: `--vite` (SPA) or `-t` (bespoke template)
+Two scaffold paths take different flags.
 
-There are **two scaffold paths**, and they take different flags:
+`--vite <framework>` applies the Lunora layer over the official create-vite
+base. Use it for a plain SPA: `react` (the default), `vue`, `solid`, `svelte`,
+or `vanilla` (overlay-only, not in the picker). `-t react|vue|solid|svelte` is
+accepted as an alias for the same overlay.
 
-**`--vite <framework>` — the create-vite overlay.** Fetches the official
-create-vite base and applies the Lunora layer on top. Use it for a plain SPA:
-
-| `--vite` value | Stack                                           |
-| -------------- | ----------------------------------------------- |
-| `react`        | React SPA (**the default**)                     |
-| `vue`          | Vue SPA                                         |
-| `solid`        | Solid SPA                                       |
-| `svelte`       | Svelte SPA                                      |
-| `vanilla`      | No framework (overlay-only — not in the picker) |
-
-**`-t` / `--template <type>` — a bespoke Lunora template.** Whole-project
-templates fetched remotely (via `giget`) from
+`-t` / `--template <type>` fetches a whole-project template from
 `gh:anolilab/lunora/templates/<type>`:
 
-| `-t` value                    | Stack                                                      |
-| ----------------------------- | ---------------------------------------------------------- |
-| `next`                        | Next.js (App Router, OpenNext on Cloudflare)               |
-| `tanstack-start-react`        | TanStack Start (React) — SSR with live-loader routes       |
-| `tanstack-start-solid`        | TanStack Start (Solid)                                     |
-| `tanstack-start-react-rspack` | TanStack Start (React) on Rsbuild, single worker           |
-| `solid-v2`                    | Solid 2.0 SPA (`@solidjs/web`, `vite-plugin-solid` 3)      |
-| `rspack-react`                | React SPA on Rsbuild (`@lunora/rspack`)                    |
-| `react-router`                | React Router v7 (framework mode), SSR in the Lunora worker |
-| `astro`                       | Astro + a standalone Lunora worker                         |
-| `analog`                      | AnalogJS (Angular) — single worker, Lunora in Nitro        |
-| `nuxt`                        | Nuxt (Vue) — single worker, Lunora in Nitro                |
-| `sveltekit`                   | SvelteKit + a standalone Lunora worker                     |
-| `expo`                        | React Native (Expo) — iOS/Android/web + a Lunora worker    |
-| `standalone`                  | Worker-only Lunora backend, no frontend                    |
+| `-t` value                    | Stack                                                            |
+| ----------------------------- | ---------------------------------------------------------------- |
+| `next`                        | Next.js App Router (OpenNext) + a standalone Lunora worker       |
+| `vinext`                      | Next.js App Router on Vite (vinext), one worker (experimental)   |
+| `vinext-pages`                | Next.js Pages Router on Vite (vinext), one worker (experimental) |
+| `tanstack-start-react`        | TanStack Start (React), SSR with live-loader routes              |
+| `tanstack-start-solid`        | TanStack Start (Solid)                                           |
+| `tanstack-start-react-rspack` | TanStack Start (React) on Rsbuild, one worker                    |
+| `rspack-react`                | React SPA on Rsbuild (`@lunora/rspack`)                          |
+| `solid-v2`                    | Solid 2.0 SPA (`@solidjs/web`, `vite-plugin-solid` 3)            |
+| `react-router`                | React Router v7 framework mode, SSR in the Lunora worker         |
+| `astro`                       | Astro, Lunora composed into the adapter worker                   |
+| `sveltekit`                   | SvelteKit, Lunora composed into the adapter worker               |
+| `nuxt`                        | Nuxt (Vue), Lunora mounted in Nitro                              |
+| `analog`                      | AnalogJS (Angular), Lunora mounted in Nitro                      |
+| `expo`                        | React Native (Expo) app + a Lunora worker                        |
+| `standalone`                  | Worker-only backend, no frontend                                 |
 
-> There is **no `--template vite`.** SPAs go through `--vite <framework>`; `-t`
-> is only for the bespoke templates above. The one exception is `solid-v2`:
-> create-vite's Solid base is still 1.x, and Solid 2.0 needs its own renderer
-> package, `jsxImportSource`, and Vite plugin major — so it ships as a template
-> rather than an overlay. `--vite solid` stays on Solid 1.x.
+There is no `vite` template value; `-t vite` errors. Solid 2.0 is a template
+rather than an overlay because create-vite's Solid base is still 1.x, so
+`--vite solid` stays on Solid 1.x.
 
-With neither flag, an interactive run shows the framework picker (defaulting to
-the React overlay) and a **non-interactive run errors out** — so as an agent,
-always pass `--vite` or `-t` explicitly. If the user stated no preference,
-use `--vite react`.
+In a non-interactive shell, `init` errors unless it gets a name and a framework
+(or `--yes`, which takes the React overlay). As an agent, pass `--vite` or `-t`
+explicitly; if the user stated no preference, use `--vite react`.
 
-### Useful `init` flags
+Other flags:
 
 ```bash
-lunora init my-app --vite react --ci github     # + a GitHub Actions deploy pipeline (or --ci gitlab)
-lunora init my-app -t next --add auth,email     # scaffold capabilities non-interactively
+lunora init my-app --vite react --ci github     # add a deploy pipeline (or --ci gitlab)
+lunora init my-app -t next --add auth,email     # add capabilities without prompting
 lunora init my-app --vite react --yes           # skip the interactive auth/email offer
 lunora init my-app --vite react --dry-run       # walk every step, write nothing
 ```
 
-`--add` accepts a comma-separated list of `ai | auth | backup | browser |
-cloudflare-access | crons | email | flags | hyperdrive | payment | presence |
+`--add` takes a comma-separated list of `ai | auth | auth-ui | backup | browser
+| cloudflare-access | crons | email | flags | hyperdrive | payment | presence |
 queue | storage | workflow`. `--ref <branch|tag|commit>` pins the template
-source (e.g. `--ref alpha`); `--from <dir>` copies from a local templates root
-offline (expects `<type>/` subdirs).
+source (e.g. `--ref alpha`); `--from <dir>` copies from a local templates root.
 
-### Generate types and push the first run
-
-Run this yourself — it is one-shot and exits cleanly:
-
-```bash
-lunora codegen
-```
-
-It writes `lunora/_generated/` and typechecks your schema + functions. Read its
-output to find out whether the code you just wrote is valid.
-
-### Start the dev loop
-
-```bash
-lunora dev
-```
-
-`lunora dev` runs the Vite dev server with the Cloudflare Worker on the same
-origin, plus codegen-on-save and the Lunora Studio. It is long-running and does
-not exit, so:
-
-- **Local development (user at the keyboard):** ask the user to run `lunora dev`
-  in a terminal.
-- **Agents:** run `lunora dev --background`. It detaches the server, waits until
-  it answers HTTP, prints `Dev server running at <url> (pid <n>)`, and exits —
-  no orphaned shell, no PID bookkeeping. When Lunora detects an AI agent
-  (Claude Code, Cursor, Codex, …), plain `lunora dev` flips into this mode
-  automatically with JSON logs; `LUNORA_AGENT_MODE=0` opts out.
-
-Manage the running server afterwards:
-
-```bash
-lunora dev status --json   # machine-readable: url, pid, uptime, logFile
-lunora dev logs --lines 50 # tail the captured output (.lunora/dev.log)
-lunora dev stop            # idempotent — succeeds even if nothing runs
-```
-
-A second `lunora dev` never double-starts: it reports the existing instance
-(`.lunora/dev.json` is the lockfile). Probe readiness or liveness at
-`GET /_lunora/status` (`{"ok":true}`).
-
-Vite serves on `http://localhost:5173` by default; the Worker is served on the
-same origin via `@cloudflare/vite-plugin`.
-
-## Path 2: Add Lunora to an Existing App
-
-Use this when the user already has a Vite-based frontend and wants Lunora as the
-backend.
+## Path 2: add Lunora to an existing app
 
 ```bash
 lunora init --here
 ```
 
-This finds the existing `vite.config.*` (or creates a minimal one), patches in
-the Lunora Vite plugin, and scaffolds a starter `lunora/`. Then run
-`lunora codegen` and `lunora dev` as above.
+This detects the framework from `package.json`, scaffolds `lunora/schema.ts` and
+`lunora/messages.ts` (skipped if a schema exists), and patches or creates the
+Vite config with the `lunora()` plugin. SvelteKit, Nuxt and Astro wire Lunora
+through their server entry instead, so their Vite config is left alone. It then
+prints framework-specific next steps: the packages to install, the provider to
+mount, and how to compose the worker. Follow those; the CLI does not edit
+framework-owned files.
 
-### Wire up the client provider
+Templates and `--vite` overlays map `#lunora/*` to `./lunora/*` in
+`package.json` `imports`, which is why their function files import
+`#lunora/_generated/server.js`. A `--here` project has no such mapping; its
+starter uses the relative `./_generated/server`. Match whichever the project
+already uses.
 
-Create the `LunoraClient` once at module scope (never inside a component) and
-wrap the app with the framework provider. React example:
+### Client provider
+
+Create the `LunoraClient` once at module scope (not inside a component, or every
+render opens a new socket) and wrap the app in the framework provider:
 
 ```tsx
 // src/client/main.tsx
-import { LunoraClient } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
+import { LunoraClient } from "lunorash/client";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -195,16 +132,14 @@ createRoot(document.querySelector("#root")!).render(
 );
 ```
 
-Every client adapter has a matching provider: `@lunora/vue`, `@lunora/solid`,
-`@lunora/svelte`, `@lunora/angular` (`provideLunora` / `injectLunoraClient`),
-and `@lunora/react-native` (`createLunoraClient`, re-exporting `@lunora/react`).
-For meta-frameworks, `@lunora/astro` and `@lunora/nuxt` mount Lunora on the
-server side. `VITE_LUNORA_URL` is optional — it defaults to `location.origin`,
-which is correct for the single-origin dev setup.
+`LunoraClient` is also exported by `@lunora/client`. Other adapters:
+`@lunora/vue`, `@lunora/solid`, `@lunora/svelte`, `@lunora/angular`
+(`provideLunora` / `injectLunoraClient`), and `@lunora/react-native`
+(`createLunoraClient`, re-exporting `@lunora/react`). `@lunora/astro` and
+`@lunora/nuxt` mount Lunora server-side. `VITE_LUNORA_URL` is optional; the
+same-origin default is right for local dev.
 
-## Writing Your First Function
-
-Create a schema and a query/mutation to verify the full loop.
+## First function
 
 `lunora/schema.ts`:
 
@@ -223,27 +158,25 @@ export default defineSchema({
 `lunora/todos.ts`:
 
 ```ts
-import type { Id } from "#lunora/_generated/server.js";
 import { mutation, query, v } from "#lunora/_generated/server.js";
 
 export const list = query.query(async ({ ctx }) => ctx.db.query("todos").withIndex("by_creation").collect());
 
 export const add = mutation
-    .input({ text: v.string() })
-    .mutation(async ({ ctx, args: { text } }): Promise<Id<"todos">> => ctx.db.insert("todos", { text, done: false, createdAt: Date.now() }));
+    .input({ text: v.string().max(4096) })
+    .mutation(async ({ ctx, args }) => ctx.db.insert("todos", { text: args.text, done: false, createdAt: Date.now() }));
 ```
 
-Run `lunora codegen`, then use it in a component. The `api` object and `Doc` /
-`Id` types come from `lunora/_generated/`:
+Run `lunora codegen`, then call it from a component. Argument and return types
+are inferred from the generated `api`, so no casts are needed:
 
 ```tsx
 import { useMutation, useQuery } from "@lunora/react";
 
 import { api } from "../../lunora/_generated/api";
-import type { Doc } from "../../lunora/_generated/dataModel";
 
-function Todos() {
-    const todos = useQuery(api.todos.list, {}) as Doc<"todos">[] | undefined;
+export const Todos = () => {
+    const todos = useQuery(api.todos.list, {});
     const { mutate: add, pending } = useMutation(api.todos.add);
 
     return (
@@ -251,58 +184,58 @@ function Todos() {
             <button disabled={pending} onClick={() => add({ text: "New todo" })}>
                 Add
             </button>
-            {todos?.map((t) => (
-                <div key={t._id}>{t.text}</div>
+            {todos?.map((todo) => (
+                <div key={todo._id}>{todo.text}</div>
             ))}
         </div>
     );
-}
+};
 ```
 
-`useQuery` opens a live subscription: the list re-renders the instant any
-mutation changes the queried rows.
+`useQuery` returns `undefined` while loading, then re-renders whenever a
+mutation changes the queried rows. A function in a folder nests in `api`:
+`lunora/billing/invoices.ts` is `api.billing.invoices.*`.
 
-## Development vs Production
+## Dev server
 
-Use `lunora dev` during development. When ready to ship:
+`lunora dev` runs the worker (behind Vite via `@cloudflare/vite-plugin` in Vite
+projects), codegen-on-save, and the embedded Studio at `/__lunora`. It does not
+exit on its own.
+
+- User at the keyboard: ask them to run `lunora dev` in a terminal.
+- Agent: run `lunora dev --background`. It detaches, waits until the server
+  answers, prints `Dev server running at <url> (pid <n>)`, and exits. When an AI
+  agent is detected (Claude Code, Cursor, Codex, …), plain `lunora dev` does
+  this automatically with JSON logs; `LUNORA_AGENT_MODE=0` opts out. Avoid a
+  bare foreground `lunora dev` in your own shell, since it blocks until killed.
 
 ```bash
-lunora deploy
+lunora dev status --json   # url, pid, uptime, logFile
+lunora dev logs --lines 50 # tail .lunora/dev.log
+lunora dev stop            # idempotent
 ```
 
-`lunora deploy` runs codegen, the schema-drift gate, and `wrangler deploy`. Do
-not use it during day-to-day development.
+A second `lunora dev` reports the running instance instead of starting another
+(`.lunora/dev.json` is the lockfile). `GET /_lunora/status` returns
+`{"ok":true}` once the worker is up. Vite defaults to `http://localhost:5173`.
+`lunora dev --tunnel` shares the worker on a public `*.trycloudflare.com` URL
+(needs `cloudflared`).
 
-Before deploying, run the preflight:
+## Shipping
 
 ```bash
-lunora doctor
+lunora doctor   # preflight: SHARD DO binding, placeholder D1 ids, .dev.vars secrets, container exports
+lunora deploy   # codegen + schema-drift gate + wrangler deploy
 ```
 
-It checks `wrangler.jsonc` (the `SHARD` durable-object binding), D1 placeholder
-ids, `.dev.vars` secrets, and container exports.
+Use `lunora-deploy` for bindings, secrets and environments.
 
-## Next Steps
+## Next steps
 
-- Add authentication: use the `lunora-setup-auth` skill.
-- Add a prebuilt capability (mail, presence, storage, rate limit, crons):
-  `lunora registry add <item>` (see `lunora registry list`). For capabilities
-  with a dedicated skill, use it: `lunora-setup-mail`, `lunora-setup-storage`,
-  `lunora-setup-scheduler`. See the `lunora` router's capability entry for the
-  full routing.
-- Build your own reusable capability: use the `lunora-create-package` skill.
-- Plan a schema change: use the `lunora-migration-helper` skill.
-- Scaffold more functions: `vis generate lunora-query --name=listMessages`,
-  `lunora-mutation`, `lunora-action`, `lunora-table`, `lunora-cron` (always use
-  the `--name=value` form).
-
-## Checklist
-
-- [ ] Determined starting point: new project or existing app.
-- [ ] New project: scaffolded with `lunora init --vite <framework>` (SPA) or
-      `lunora init -t <template>` (bespoke) — never `--template vite`.
-- [ ] Existing app: ran `lunora init --here` and wired `LunoraProvider`.
-- [ ] Ran `lunora codegen`: `lunora/_generated/` exists and typecheck is clean.
-- [ ] Dev server is running — user terminal, or `lunora dev --background`
-      (check with `lunora dev status`).
-- [ ] Verified a query/mutation round-trip re-renders the client live.
+- Auth: `lunora-setup-auth`.
+- Add-ons: `lunora add <feature>` (e.g. `email`, `storage`, `crons`,
+  `presence`; `lunora registry list` for all). Mail, storage and scheduling have
+  their own skills: `lunora-setup-mail`, `lunora-setup-storage`,
+  `lunora-setup-scheduler`.
+- Schema and function rules: `lunora-functions`. Schema changes on live data:
+  `lunora-migration-helper`.

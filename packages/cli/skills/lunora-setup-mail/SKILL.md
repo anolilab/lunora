@@ -1,157 +1,116 @@
 ---
 name: lunora-setup-mail
-description: Adds transactional email to a Lunora app. Use for sending mail (verification, password reset, invites, notifications) via `lunora registry add mail`, the `sendEmail` / `queueEmail` actions, the `SEND_EMAIL` Cloudflare Email Workers binding, Resend, React email templates, and the dev mail catcher.
+description: Adds transactional email to a Lunora app with the `mail` registry item (`@lunora/mail`). Covers the server-only `internal.mail.sendEmail` / `queueEmail` actions, the `SEND_EMAIL` Cloudflare Email Workers binding, Resend via `RESEND_API_KEY`, `react-email` templates via `renderEmail`, the dev mail catcher (Studio Mail tab), E2E inbox helpers, and inbound mail. Use when the user wants to send verification, password-reset, invite or notification email, runs `lunora add email` or `lunora registry add mail`, edits `lunora/mail/index.ts`, asks why mail isn't delivered or doesn't show up in the Studio, or wants to receive email.
 ---
 
 # Lunora Setup Mail
 
-Wire transactional email into a Lunora app using the `mail` registry item, which
-is built on `@lunora/mail` (a Cloudflare Email Workers transport with
-header-injection-safe address handling) and exposes a `sendEmail` `internalAction`
-plus a fire-and-forget `queueEmail` `internalAction` — server-only, because a
-client-callable general-purpose mailer is an open relay. In dev, every send is captured into the
-Studio Mail tab instead of going out.
+The `mail` registry item wraps `@lunora/mail`, which validates addresses against
+header injection before sending. It exposes two `internalAction`s, `sendEmail`
+and `queueEmail`. Both are server-only on purpose: a mailer that lets the client
+pick the recipient, subject and body is an open relay for phishing through your
+verified domain. In dev, every send is captured into the Studio Mail tab and
+nothing is delivered.
 
-## When to Use
-
-- Sending app→user mail: invites, notifications, receipts.
-- Delivering verification / password-reset mail from `@lunora/auth`.
-- Using a React (`react-email`) template or a hosted provider (Resend).
-
-## When Not to Use
-
-- The project has no Lunora backend yet — use `lunora-quickstart` first.
-- Mail is already installed and you just want to send — call
-  `ctx.runAction(internal.mail.sendEmail, …)` from a server handler.
-
-## Workflow
-
-1. Add the `mail` item.
-2. Configure the `SEND_EMAIL` binding (or a provider) and `MAIL_FROM`.
-3. Regenerate types with `lunora codegen`.
-4. Send mail from a server function; render a React template if needed.
+If the project has no Lunora backend yet, start with `lunora-quickstart`.
 
 ## Step 1: Add the item
 
 ```bash
-lunora registry add mail
+lunora add email                          # asks for the verified destination address
+lunora add email --mail-to ops@example.com
+lunora registry add mail                  # low-level: leaves the REPLACE_ME@example.com placeholder
 ```
 
-This:
+Then run `pnpm install` and `lunora codegen`. The item does the following:
 
-1. Adds `@lunora/mail` and `@lunora/server` to `package.json` (run
-   `pnpm install` afterwards).
-2. Copies `lunora/mail/index.ts` (the `sendEmail` / `queueEmail`
-   **`internalAction`s**) into your project — it is **yours** to edit.
-3. Adds a `send_email` binding (`SEND_EMAIL`, with a `destination_address`
-   placeholder) to `wrangler.jsonc` and scaffolds `MAIL_FROM` (the default
-   sender) into `.dev.vars`.
+1. Adds `@lunora/mail` and `@lunora/server`.
+2. Copies `lunora/mail/index.ts` into the project. The project owns this file. It defines `sendEmail`, which returns `{ id }`, and `queueEmail`, which returns `{ queued: true }`.
+3. Adds a `send_email` binding named `SEND_EMAIL` (with `destination_address`) to `wrangler.jsonc`.
+4. Writes `MAIL_FROM` to `.dev.vars`.
 
-## Step 2: Configure delivery
+Codegen emits the two functions as `internal.mail.sendEmail` and
+`internal.mail.queueEmail`. They are not in the client-reachable `api`. A client
+call to them returns `FUNCTION_NOT_FOUND`.
 
-| Name             | Where                                | Notes                                                                             |
-| ---------------- | ------------------------------------ | --------------------------------------------------------------------------------- |
-| `SEND_EMAIL`     | `wrangler.jsonc` → `send_email[]`    | Cloudflare Email Workers binding. Single-recipient; only verified destinations.   |
-| `MAIL_FROM`      | var (`.dev.vars` / `wrangler.jsonc`) | Default sender address.                                                           |
-| `RESEND_API_KEY` | secret (optional)                    | Use a hosted provider instead — pass `apiKey` to `createMailer` in `lunora/mail`. |
+## Step 2: Choose the delivery path
 
-For production with Cloudflare Email Workers, set up
-[Email Routing](https://developers.cloudflare.com/email-routing/): verify a
-destination address and replace the `REPLACE_ME@example.com` placeholder. Prefer
-Resend? Pass `apiKey` (or a custom `transport`) to `createMailer` in your copied
-`lunora/mail/index.ts`.
+The copied file builds its mailer with `createMailerFromEnv`. That function
+picks the transport in this order:
 
-In `lunora dev` (`WORKER_ENV=development`) the scaffold swaps in `@lunora/mail`'s
-**capture transport** automatically: every send — including `@lunora/auth`'s
-verification and forgot-password mail — is intercepted and surfaced in the
-**Studio Mail tab**. Nothing leaves your machine and no provider setup is needed.
+| Condition                                                                                   | Transport                                           |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `LUNORA_MAIL_CAPTURE=1`, or every env-name var (`WORKER_ENV`, `NODE_ENV`, …) looks like dev | **Capture** into the Studio Mail tab                |
+| `SEND_EMAIL` binding present                                                                | Cloudflare Email Workers                            |
+| no binding, `RESEND_API_KEY` secret set                                                     | Resend                                              |
+| none of the above                                                                           | throws on send (production never captures silently) |
 
-## Step 3: Regenerate types
+- **Cloudflare Email Workers.** The binding sends to a single recipient, and only to verified [Email Routing](https://developers.cloudflare.com/email-routing/) destinations. That fits app-to-operator mail. Verify the address and replace the placeholder.
+- **Resend.** Use this to send to arbitrary users. Run `wrangler secret put RESEND_API_KEY` and remove the `send_email` binding. While the binding exists it takes precedence over Resend.
+- **Capture.** `lunora dev` sets `WORKER_ENV=development`, so capture is on in dev. Capture writes to the root shard. If `SHARD` or `LUNORA_ADMIN_TOKEN` is missing, captured mail is discarded and a one-time warning is logged. To deliver for real from dev, set `LUNORA_MAIL_CAPTURE=0`.
 
-```bash
-lunora codegen
-```
+`MAIL_FROM` is required on every path. It accepts `Name <addr@host>` or a bare
+address.
 
-The functions surface in the generated **`internal`** (server-only) namespace as
-`internal.mail.sendEmail` and `internal.mail.queueEmail` — they are deliberately
-**not** in the client-reachable `api`.
+## Step 3: Send from a server function
 
-## Step 4: Send mail
-
-### From another function
-
-`sendEmail` is an **`internalAction`** (sending is non-transactional network
-I/O). From a mutation, schedule it as a follow-up so the request is not blocked:
+`sendEmail` is an action because sending is non-transactional network I/O. From
+a mutation, schedule it so the send runs only after the mutation commits:
 
 ```ts
-import { internalMutation, v } from "#lunora/_generated/server.js";
+import { internal } from "#lunora/_generated/internal.js";
+import { mutation, v } from "#lunora/_generated/server.js";
 
-import { internal } from "./_generated/internal";
-
-export const inviteUser = internalMutation.input({ email: v.string() }).mutation(async ({ ctx, args: { email } }) => {
-    // ...authenticate the caller and persist the invite, then send the mail as a
-    // follow-up action. The recipient is decided server-side — never forward a
-    // client-chosen `to`/`from`/`html` straight through.
+export const inviteMember = mutation.input({ teamId: v.id("teams"), email: v.string() }).mutation(async ({ ctx, args }) => {
+    // Authorize the caller and persist the invite first. The server decides
+    // the recipient and the content: never forward a client-chosen to/from/html.
     await ctx.scheduler.runAfter(0, internal.mail.sendEmail, {
-        to: email,
+        to: args.email,
         subject: "You're invited",
         html: "<p>Click the link to join.</p>",
     });
 });
 ```
 
-### Not from a client
+From an action, call `await ctx.runAction(internal.mail.sendEmail, { … })`.
 
-There is no `client.action("mail/sendEmail", …)` path, and adding one is the
-mistake this item exists to prevent: a general-purpose mailer that lets the
-caller pick recipient, subject and body is an open relay for phishing through
-your verified domain. If you need a client-callable send, write a
-_purpose-specific_ public `action` that takes only safe business inputs (e.g.
-`{ orderId }`), checks `ctx.auth`/RBAC, derives the recipient server-side,
-rate-limits it (`@lunora/ratelimit`), and calls `internal.mail.sendEmail`.
+If a client needs to trigger a send, write a public action for that one purpose.
+It should take only business inputs (for example `{ orderId }`), check
+`ctx.auth`, derive the recipient on the server, rate-limit the call
+(`@lunora/ratelimit`), and then call `internal.mail.sendEmail`.
 
-### With a React email template
+### React templates
 
-React elements are not JSON-serializable across the RPC boundary, so the
-`sendEmail` args take `html` / `text`. To use a `react-email` template, render it
-where you call the mailer — edit `lunora/mail/index.ts` to pass `react` straight
-into `mailer.send`:
+A React element can't be serialized across the RPC boundary, so render it to
+`html` and `text` first. Rendering this way keeps dev capture working:
 
-```ts
-import { createMailer } from "@lunora/mail";
-import { env } from "cloudflare:workers";
+```tsx
+import { renderEmail } from "@lunora/mail"; // needs `react` installed
 
-import { WelcomeEmail } from "./emails/Welcome";
+import { WelcomeEmail } from "./emails/welcome";
 
-await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM as string }).send({
-    to: "alice@example.com",
-    subject: "Welcome",
-    react: <WelcomeEmail name="Alice" />,
-});
+const { html, text } = await renderEmail(<WelcomeEmail name={name} />);
+await ctx.runAction(internal.mail.sendEmail, { to, subject: "Welcome", html, text });
 ```
 
-## Common Pitfalls
+For the auth flows, `lunora add auth-emails` adds ready-made templates.
 
-1. **Expecting prod email to "just work".** Dev captures into the Studio;
-   production needs the `SEND_EMAIL` binding (a verified destination) or
-   `RESEND_API_KEY`.
-2. **Calling `sendEmail` from the client, or as a query/mutation.** It is an
-   `internalAction` — invoke it via `ctx.runAction` / `ctx.scheduler.runAfter`
-   from a server handler. A client `client.action("mail/sendEmail", …)` is not
-   reachable and answers `FUNCTION_NOT_FOUND`.
-3. **Using `queueEmail` without a Queue binding.** It requires a Cloudflare
-   Queue producer binding; until you add one, `@lunora/mail` throws
-   `` `queue` binding is required for mailer.queue() ``. The item does not add
-   the Queue for you — see the `mail` README's "Queueing" section.
-4. **Passing a React element through the action args.** Render it inside the
-   mailer (`mailer.send({ react })`), not across the RPC boundary.
+### Queueing (optional)
 
-## Checklist
+`queueEmail` requires a Cloudflare Queue producer binding passed as
+`createMailer({ queue })`, and the item doesn't add one. Without it, the call
+throws `` `queue` binding is required for mailer.queue() ``. A consumer drains
+the queue with `consumeQueuedSend(mailer, message.body)` and then calls
+`message.ack()` for each message. Queues deliver at least once, so a single
+throw would otherwise resend the whole batch. The full wiring is in the "Queueing"
+section of the item README.
 
-- [ ] `lunora registry add mail` run, `pnpm install` done.
-- [ ] `SEND_EMAIL` binding configured (verified destination) or
-      `RESEND_API_KEY` set; `MAIL_FROM` set.
-- [ ] `lunora codegen` run so `internal.mail.*` is generated.
-- [ ] Mail sent from a server function (`ctx.scheduler.runAfter` / `ctx.runAction`
-      with `internal.mail.sendEmail`) — never from the client.
-- [ ] Verified the send appears in the Studio Mail tab in dev.
+## Testing and inbound
+
+- **E2E.** `@lunora/mail/testing` exports `waitForMail({ baseUrl, adminToken, to, subjectMatch })` and `extractLink(mail, { match })`. Together they let you read the captured inbox and pull out a verification or reset link.
+- **Receiving mail.** `@lunora/mail/inbound` provides `createInboundEmailHandler`, `parseInboundEmail` and `dispatchToLunoraFunction`. They route Email Routing messages into a Lunora function. Mount them with the generated builder's `.onEmail(...)`.
+
+## Verify
+
+1. Run `lunora dev` and trigger a send. The message should appear in the Studio Mail tab.
+2. Before deploying, run `lunora doctor`. It flags the placeholder destination. Confirm that `MAIL_FROM` is set, and that either the binding uses a verified destination or `RESEND_API_KEY` is set with the binding removed.

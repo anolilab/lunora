@@ -1,108 +1,72 @@
 ---
 name: lunora-setup-storage
-description: Adds R2-backed file storage to a Lunora app. Use for uploads/downloads via `lunora registry add storage`, signed PUT/GET URLs, the `UPLOADS` R2 bucket binding, `STORAGE_SIGNING_SECRET`, per-tenant key scoping, and verifying downloads in the Worker.
+description: Adds R2-backed file storage to a Lunora app with the `storage` registry item (`@lunora/storage`). Covers worker-signed PUT/GET URLs, the `UPLOADS` R2 bucket binding, `STORAGE_SIGNING_SECRET` and `STORAGE_PUBLIC_BASE_URL`, per-user key scoping, and the `/storage/*` Worker route that verifies signatures and moves the bytes. Use when the user wants file or image uploads, avatars, attachments or gated downloads, runs `lunora add storage` or `lunora registry add storage`, edits `lunora/storage/index.ts`, or sees signed storage URLs return 404/403 or uploads fail CORS.
 ---
 
 # Lunora Setup Storage
 
-Wire R2-backed file storage into a Lunora app using the `storage` registry item,
-which is built on `@lunora/storage` (an R2 adapter plus HMAC signed-URL helpers)
-and exposes idiomatic Lunora functions for browser uploads, gated downloads,
-delete, and list — with no bucket credential in the client.
+The `storage` registry item wraps `@lunora/storage`, an R2 adapter with HMAC
+signed-URL helpers. It exposes Lunora functions for browser uploads, gated
+downloads, delete and list. The client never holds a bucket credential.
 
-A worker-signed URL points at **your Worker**, not at R2:
-`<base>/<key>?exp&method&bucket&sig`, where the base is the origin the request
-reached your Worker on (`ctx.origin`) unless `STORAGE_PUBLIC_BASE_URL` overrides
-it. The `/storage/*` route
-you add in step 4 is what verifies the signature and moves the bytes, for both
-the upload and the download. (The no-Worker-in-the-path variant is
-`@lunora/storage`'s S3 presigned URL, `getPresignedUrl` — it needs S3 credentials
-on the bucket and enforces none of your rules.)
+A worker-signed URL points at your Worker, not at R2. Its shape is
+`<base>/<key>?exp&method&bucket&sig`. The base is `ctx.origin` unless
+`STORAGE_PUBLIC_BASE_URL` overrides it. The `/storage/*` route from Step 3
+verifies the signature and moves the bytes, for both upload and download.
+`@lunora/storage`'s `getPresignedUrl` takes the Worker out of the path, but it
+needs S3 credentials and none of your rules apply to it.
 
-## When to Use
-
-- Uploading user files (avatars, attachments) into R2 under your own gate.
-- Serving private/gated downloads via short-lived signed URLs.
-- Listing or deleting a caller's stored objects.
-
-## When Not to Use
-
-- The project has no Lunora backend yet — use `lunora-quickstart` first.
-- Storage is already installed and you just want to upload — call
-  `client.action("storage/generateUploadUrl", …)` and `PUT` to the returned URL.
-
-## Workflow
-
-1. Add the `storage` item.
-2. Configure the `UPLOADS` R2 bucket binding and the signing secret.
-3. Regenerate types with `lunora codegen`.
-4. Add the `/storage/*` route to the Worker — it verifies signatures and serves
-   both the signed `PUT` and the signed `GET`.
-5. Upload/download from the client.
+If the project has no Lunora backend yet, start with `lunora-quickstart`.
 
 ## Step 1: Add the item
 
 ```bash
-lunora registry add storage
+lunora add storage                          # asks for the R2 bucket name
+lunora add storage --bucket my-app-uploads
+lunora registry add storage                 # low-level: writes bucket_name "replace-me-uploads"
 ```
 
-This:
+Then run `pnpm install` and `lunora codegen`. The item does the following:
 
-1. Adds `@lunora/storage` and `@lunora/server` to `package.json` (run
-   `pnpm install` afterwards).
-2. Adds an R2 bucket binding to `wrangler.jsonc` (`r2_buckets`, binding
-   **`UPLOADS`**, `bucket_name: "replace-me-uploads"` — rename it to a real
-   bucket). It **merges** into any existing `r2_buckets`.
-3. Scaffolds `STORAGE_SIGNING_SECRET` (a secret) and an empty, optional
-   `STORAGE_PUBLIC_BASE_URL` into `.dev.vars`.
-4. Copies `lunora/storage/index.ts` (the `generateUploadUrl` /
-   `getDownloadUrl` / `deleteObject` / `listObjects` functions) into your
-   project — it is **yours** to edit.
+1. Adds `@lunora/storage`, `@lunora/server`, `@lunora/errors` and `@lunora/ratelimit`.
+2. Merges an R2 binding named `UPLOADS` into `r2_buckets` in `wrangler.jsonc`.
+3. Writes `STORAGE_SIGNING_SECRET` (a secret) to `.dev.vars`, plus an empty, optional `STORAGE_PUBLIC_BASE_URL`.
+4. Copies `lunora/storage/index.ts` into the project. The project owns this file. Codegen exposes its functions as `api.storage.generateUploadUrl`, `getDownloadUrl` and `listObjects` (actions) and `deleteObject` (mutation). Every one requires a signed-in user, because `requireOwner` throws `UNAUTHORIZED` otherwise, so set up auth first (`lunora-setup-auth`). Each is rate-limited per user to 60 requests a minute through an in-memory, per-isolate limiter. For a durable limiter, run `lunora add ratelimit`.
 
-## Step 2: Configure the binding + secrets
+## Step 2: Configure the binding and secrets
 
-| Name                      | Where                                        | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `UPLOADS`                 | `wrangler.jsonc` → `r2_buckets[]`            | The R2 bucket binding. Point `bucket_name` at a real bucket.                                                                                                                                                                                                                                                                                                                                                                              |
-| `STORAGE_SIGNING_SECRET`  | secret (`.dev.vars` / `secret put`)          | HMAC secret for signed URLs. Min 32 chars, enforced — a shorter one throws on the first call. Never share across tenants.                                                                                                                                                                                                                                                                                                                 |
-| `STORAGE_PUBLIC_BASE_URL` | optional var (`.dev.vars` / Worker variable) | Leave it **empty** and URLs are signed against the origin the request reached your Worker on (`ctx.origin`), right in dev, previews and production alike. Set a **bare origin** only when another host (a CDN) serves `/storage/*`, or to sign where no request is behind the call: a query, a scheduled job, a workflow step have no `ctx.origin`, so signing there without it throws. A base carrying a path is rejected by the signer. |
+| Name                      | Where                           | Notes                                                                                                                                   |
+| ------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `UPLOADS`                 | `wrangler.jsonc` → `r2_buckets` | Set `bucket_name` to a real bucket: lowercase letters, digits and hyphens, 3–63 chars. Otherwise wrangler rejects it.                   |
+| `STORAGE_SIGNING_SECRET`  | secret                          | At least 32 chars; a shorter secret throws on the first call. Use `openssl rand -base64 32`, then `wrangler secret put` for production. |
+| `STORAGE_PUBLIC_BASE_URL` | optional var                    | See below.                                                                                                                              |
 
-A configured `STORAGE_PUBLIC_BASE_URL` must be `https://` anywhere but local dev. A signed URL
-_is_ a bearer credential and the object bytes stream through it, so a plaintext
-origin hands both to anyone on the path. Only `http://localhost` /
-`http://127.0.0.1` belong in `.dev.vars`.
+Leave `STORAGE_PUBLIC_BASE_URL` empty for most apps. URLs are then signed
+against `ctx.origin`, which is correct in dev, in previews and in production.
+Set it only in two cases:
 
-Generate a real signing secret with `openssl rand -base64 32` and write it with
-`wrangler secret put STORAGE_SIGNING_SECRET` for production.
+- Another host, such as a CDN, serves `/storage/*`.
+- You sign where no request is behind the call: a query, a scheduled job or a workflow step. None of these has a `ctx.origin`, so signing there throws.
 
-## Step 3: Regenerate types
+The value must be a bare origin. The key is verified from the whole URL
+pathname, so the signer rejects a base that includes a path. Outside local dev
+the value must use `https://`, because a signed URL is a bearer credential.
 
-```bash
-lunora codegen
-```
+## Step 3: Add the `/storage/*` route to the Worker
 
-The functions surface in the generated `api` as `api.storage.generateUploadUrl`,
-`api.storage.getDownloadUrl`, `api.storage.deleteObject`, and
-`api.storage.listObjects`.
+The app needs this route. Without it, every minted URL falls through to the
+Lunora catch-all and returns 404. The route is also the only place the signature
+is checked, so a route that skips `verifySignedUrl` lets anyone read any key.
 
-## Step 4: Add the `/storage/*` route to the Worker
+`@lunora/server`'s `serveStorageObject(ctx, key, request, authorize)` covers the
+download half. It handles `Range`/206, `ETag`, `nosniff` and the inline-safe
+`content-disposition` list. It verifies nothing on its own, so call
+`verifySignedUrl` inside its `authorize` gate. It also doesn't handle uploads.
+Use it from an `httpAction`, where `ctx.storage` is in scope, when you need
+`Range` seeking.
 
-**Required, not optional.** Without it a minted URL hits the Lunora catch-all and
-every upload and download 404s — and it is the only thing checking the signature,
-so skipping the check lets anyone read any key.
-
-`@lunora/server`'s `serveStorageObject(ctx, key, request, authorize)` handles
-the download half (`Range`/206, `ETag`, `nosniff`, and
-`content-disposition: attachment` for anything outside a small inline-safe set —
-raster images plus `audio/mpeg`, `audio/ogg`, `audio/wav`, `video/mp4`,
-`video/webm`, with `image/svg+xml` deliberately excluded). It verifies nothing on
-its own — its required `authorize` gate is where `verifySignedUrl` goes — and it
-does not handle the upload. Reach for it from an `httpAction`, where `ctx.storage`
-is in scope, whenever you want `Range` seeking or conditional requests.
-
-The route below is the standalone version — a plain worker `fetch` with only the
-R2 binding to hand, so it serves whole objects and skips `Range`/`ETag`. Both
-verbs, by hand:
+The standalone route below is a plain Worker `fetch` that only has the R2
+binding. It handles both verbs and serves whole objects:
 
 ```ts
 import { isSafeHeaderValue } from "@lunora/server";
@@ -240,79 +204,49 @@ export default {
 };
 ```
 
-**Why the CORS lines are there.** If `STORAGE_PUBLIC_BASE_URL` is not your app's
-own origin, the browser `PUT` below is preflighted (`PUT` is not a simple method,
-and `content-type: image/png` is not a safelisted value). Answering `OPTIONS` is
-only half of it: the browser also reads
-`access-control-allow-origin` off the **real** response, so the 204 and the
-download response carry `...cors` too — a route that answers only the preflight
-passes it and then fails the request it was preflighting.
+CORS: if `STORAGE_PUBLIC_BASE_URL` is a different origin from the app, the
+browser preflights the `PUT`. The browser then reads
+`access-control-allow-origin` from the real response as well, which is why the
+204 and the download response also spread `...cors`. Keep the base same-origin
+and `ALLOWED_ORIGINS` can stay empty.
 
-Keep `STORAGE_PUBLIC_BASE_URL` same-origin if you would rather not maintain an
-allowlist; then `ALLOWED_ORIGINS` can be empty and `cors` never adds a header
-beyond `vary: origin`.
+On a CDN or host-rewrite setup, pass `{ expectedHost }` to `verifySignedUrl`,
+set to the host of `STORAGE_PUBLIC_BASE_URL`, so the signature is checked
+against the host the URL was minted for.
 
-`verifySignedUrl` checks expiry, then the HMAC. On a host-rewrite / CDN topology
-pass `{ expectedHost }` (the `STORAGE_PUBLIC_BASE_URL` host) so the signature
-canonicalizes against the host it was minted for.
-
-## Step 5: Upload / download from the client
+## Step 4: Upload and download from the client
 
 ```ts
-// 1. ask the server for a signed PUT URL
-const { key, url } = await client.action("storage/generateUploadUrl", {
-    key: "avatar.png",
-    contentType: file.type,
-});
+import { api } from "../lunora/_generated/api"; // path relative to your client file
 
-// 2. upload it — the URL points at your Worker's `/storage/*` route, which
-//    verifies the signature and writes to R2. The content type is pinned into
-//    the signature (and carried on the URL as `&ct=`); that signed value is what
-//    gets stored, so the request's own `content-type` header is not read and
-//    cannot override it.
+// 1. Mint a signed PUT URL. contentType must be in ALLOWED_UPLOAD_CONTENT_TYPES
+//    in lunora/storage/index.ts. The type is pinned into the signature, and the
+//    route stores that pinned value, not the request header.
+const { key, url } = await client.action(api.storage.generateUploadUrl, { key: "avatar.png", contentType: file.type });
+
+// 2. Upload straight to the Worker's /storage/* route.
 await fetch(url, { method: "PUT", headers: { "content-type": file.type }, body: file });
 
-// 3. later, get a signed GET URL to display it
-const { url: downloadUrl } = await client.action("storage/getDownloadUrl", { key: "avatar.png" });
+// 3. Later, mint a signed GET URL to display it.
+const { url: downloadUrl } = await client.action(api.storage.getDownloadUrl, { key: "avatar.png" });
 ```
 
-Every key is scoped per-tenant with `scopeKey(requireOwner(ctx.auth.userId),
-key)` — `requireOwner` returns `storage/<userId>` — so a client-supplied key can
-never address another user's data, and the `storage/` prefix is what lands the
-minted URL on the `/storage/*` route. The functions return the **scoped** key
-(`storage/<userId>/avatar.png`) alongside the URL; persist that, and pass the
-bare key back in — the component re-scopes it.
+Every key is scoped as `storage/<userId>/<key>`, so a key from the client can't
+reach another user's data. The `storage/` prefix is also what routes the minted
+URL to `/storage/*`. The functions return the scoped key: persist it if you
+like, but always pass the bare key back in, because the function scopes it
+again. `listObjects` is an action, not a query, because R2 isn't reactive.
+Refetch it after an upload or a delete.
 
-## Common Pitfalls
+## Pitfalls
 
-1. **Skipping `verifySignedUrl` on the download route.** Without it, anyone can
-   read any key. Always verify before streaming.
-2. **Placeholder bucket name.** `lunora init` and `lunora add storage` prompt for
-   the bucket name (or take `--bucket <name>`), but the low-level
-   `lunora registry add storage` writes the placeholder
-   `bucket_name: "replace-me-uploads"` — rename it to a real R2 bucket. (R2 names
-   are lowercase alphanumeric + hyphens, 3–63 chars; wrangler rejects anything
-   else on `dev`/`deploy`.)
-3. **Short / shared signing secret.** ≥32 chars is enforced (the item throws on
-   the first call below it). Cross-_bucket_ replay is not a risk here — the
-   bucket name is part of the HMAC canonical and rides on the URL as `&bucket=`,
-   so a URL minted for one bucket never verifies against another under the same
-   secret. Cross-_tenant_ reuse is the real hazard: one secret shared between two
-   apps lets either mint URLs the other's route will honour, so keep a distinct
-   secret per deployment.
-4. **Base URL with a path.** `STORAGE_PUBLIC_BASE_URL` must be a bare origin. The
-   key is verified from the whole URL pathname, so a subpath base would make
-   every minted URL fail verification — `buildSignedUrl` rejects it up front.
-5. **Routing the body through a Lunora function.** Uploads and downloads go
-   through the thin `/storage/*` route, which streams to and from R2 — don't
-   read the file into a `query`/`mutation`/`action` argument or return value.
+- **Signing secret reuse.** Signed URLs carry the bucket name inside the HMAC, so they can't be replayed across buckets. They can be replayed across deployments: two apps that share a secret will each honor URLs the other minted. Give each deployment its own secret.
+- **File bodies through functions.** Bytes stream through the `/storage/*` route. Don't pass file contents as a `query`/`mutation`/`action` argument or return value.
+- **Content types.** Widen the upload list through `ALLOWED_UPLOAD_CONTENT_TYPES`. Leave out `text/html` and `image/svg+xml`, since an uploaded one served from your origin is stored XSS.
 
-## Checklist
+## Verify
 
-- [ ] `lunora registry add storage` run, `pnpm install` done.
-- [ ] `UPLOADS` bucket bound to a real bucket; `STORAGE_SIGNING_SECRET` (≥32
-      chars) set; `STORAGE_PUBLIC_BASE_URL` left empty unless another host
-      serves `/storage/*` or you sign URLs in a query or a scheduled job.
-- [ ] `lunora codegen` run so `api.storage.*` is generated.
-- [ ] `/storage/*` route added, verifying signed URLs on both `PUT` and `GET`.
-- [ ] Verified a client upload → signed download round-trip.
+1. Run `lunora dev`, sign in, and upload a file through `generateUploadUrl` and `PUT`. The PUT should return 204.
+2. Open the URL from `getDownloadUrl`. It should return the bytes with `cache-control: private, no-store`.
+3. Change one character of `sig` in that URL. The route should return 403.
+4. Before deploying, check that `bucket_name` is a real bucket and that `STORAGE_SIGNING_SECRET` was set with `wrangler secret put`.

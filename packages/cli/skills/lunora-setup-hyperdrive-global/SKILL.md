@@ -1,66 +1,54 @@
 ---
 name: lunora-setup-hyperdrive-global
-description: Use PlanetScale (Postgres/MySQL via Cloudflare Hyperdrive) as a first-class, REACTIVE `.global()` storage backend for a Lunora app — and migrate an existing D1 `.global()` dataset to it. Use for `@lunora/hyperdrive/global`, `.global({ backend: "hyperdrive" })`, `createHyperdriveGlobalCtxDb`, the app-builder `.hyperdriveGlobal()` declaration, the `HYPERDRIVE` binding pointing at PlanetScale, and `lunora migrate d1-to-hyperdrive`. NOT the same as `@lunora/hyperdrive` (which is an action-only, non-reactive `ctx.sql`).
+description: Stores a Lunora app's own `.global()` tables in Postgres or MySQL (PlanetScale, Neon, RDS, or any Hyperdrive-reachable database) through Cloudflare Hyperdrive instead of D1. Lunora owns the schema, and live queries stay fully reactive. Also migrates an existing D1 `.global()` dataset with `lunora migrate d1-to-hyperdrive`. Covers `.global({ backend: "hyperdrive" })`, `@lunora/hyperdrive/global` (`buildPgExec` / `buildMysqlExec`, `createHyperdriveGlobalCtxDb`), the app builder's `.hyperdriveGlobal({ engine, exec })`, and the `HYPERDRIVE` binding. Use when the user wants to "move global tables to PlanetScale/Postgres", "use Postgres instead of D1", or "migrate off D1", or edits `.global({ backend: "hyperdrive" })`. For querying an existing, externally owned database from an action (non-reactive `ctx.sql`), use `lunora-setup-hyperdrive` instead.
 ---
 
 # Lunora Setup: Hyperdrive Global Backend (Postgres/MySQL)
 
-Store Lunora `.global()` tables in a **Postgres or MySQL database reached
-through [Cloudflare Hyperdrive](https://developers.cloudflare.com/hyperdrive/)**
-— **PlanetScale**, Neon, RDS, or any Hyperdrive-reachable database — instead of
-D1, as a **drop-in, fully reactive** backend. (PlanetScale on Cloudflare is the
-headline use case; nothing here is PlanetScale-specific.)
+Store `.global()` (cross-tenant) tables in a Postgres or MySQL database reached
+through Cloudflare Hyperdrive instead of D1. PlanetScale on Cloudflare is the
+typical case, but nothing here is PlanetScale-specific.
 
-> **`@lunora/hyperdrive/global` vs. `@lunora/hyperdrive` (`ctx.sql`).** The
-> `ctx.sql` surface is an action-only, **non-reactive** escape hatch for
-> integrating a legacy database. `@lunora/hyperdrive/global` is different: Lunora
-> **owns** the schema (column-per-field, like D1) and routes every write through
-> its own store core, so live queries stay reactive — the writer is injected as
-> `globalDb` and the shard DO's broadcast hook re-runs subscriptions exactly as
-> with D1.
-
-## When to Use
-
-- You want `.global()` (cross-tenant) tables to live in PlanetScale rather than
-  D1 — e.g. for larger datasets, existing SQL tooling, or unified Cloudflare
-  billing.
-- You're migrating an existing D1 `.global()` dataset to PlanetScale.
+> **This is not `ctx.sql`.** `@lunora/hyperdrive`'s `ctx.sql`
+> (`lunora-setup-hyperdrive`) is an action-only, non-reactive client for a
+> database Lunora doesn't own. `.global({ backend: "hyperdrive" })` is the opposite:
+> Lunora owns the tables (one column per field, like D1), and every write goes
+> through Lunora's store core. Subscriptions re-run exactly as they do with D1.
+> The live-query guarantee covers only writes made through Lunora (`ctx.db`).
+> Rows written to the database directly are invisible to live queries.
 
 ## When Not to Use
 
-- You only need to read/write a **legacy** external DB from an action — use
-  `@lunora/hyperdrive` (`ctx.sql`) instead; it's lighter and action-scoped.
-- Your global data is small and D1 is fine — bare `.global()` (D1) needs no
-  extra binding or driver.
+- You only need to read or write a legacy database from an action: use
+  `lunora-setup-hyperdrive`.
+- Your global data is small and D1 is fine: bare `.global()` needs no extra
+  binding or driver.
 
 ## How it works
 
-PlanetScale reuses Lunora's dialect-parameterized store core (the same one D1
-uses): a `SqlDialect` (Postgres or MySQL) shapes the SQL, and a Hyperdrive-backed
-`SqlExec` runs it from inside the Durable Object that hosts the global writer.
-Values are stored SQLite-shaped (boolean → 1/0, JSON → text/json, bigint →
-decimal), so the value codec is shared with D1.
+The same dialect-parameterized store core that backs D1 runs here with a
+Postgres or MySQL `SqlDialect`. A Hyperdrive-backed `SqlExec` executes it from
+inside the Durable Object that hosts the global writer. Values are stored in the
+same shapes D1 uses (boolean → 1/0, JSON → text/json, bigint → decimal).
 
-## Step 1: Install the package + a driver
+## Step 1: Install
 
 ```bash
-pnpm add @lunora/hyperdrive/global
-# choose the driver matching your engine (optional peer deps — none is bundled):
-pnpm add postgres        # PlanetScale Postgres → fromPostgresJs
-# or
-pnpm add mysql2          # PlanetScale MySQL    → mysql2/promise
+pnpm add @lunora/hyperdrive @lunora/sql-store
+pnpm add postgres   # Postgres engine → buildPgExec(fromPostgresJs(...))
+# or: pnpm add mysql2  → buildMysqlExec(mysql2/promise pool), MySQL 8.0+
 ```
 
-## Step 2: Create the Hyperdrive binding pointing at PlanetScale
+`@lunora/hyperdrive/global` is a subpath export of `@lunora/hyperdrive`, not a
+separate package. Codegen requires `@lunora/sql-store` too, because the generated
+`_generated/app.ts` imports its `SqlExec` types. Install the driver that matches
+your engine. Drivers are optional peer dependencies.
 
-Create a PlanetScale database from the Cloudflare dashboard (unified billing),
-then a Hyperdrive config over its connection string:
+## Step 2: Create the Hyperdrive binding
 
 ```bash
 wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host/db" # gitleaks:allow -- placeholder
 ```
-
-Add the binding to `wrangler.jsonc` (use `localConnectionString` for `lunora dev`):
 
 ```jsonc
 {
@@ -70,15 +58,14 @@ Add the binding to `wrangler.jsonc` (use `localConnectionString` for `lunora dev
 }
 ```
 
-The binding is required, not optional: with no `hyperdrive` entry at all,
-`lunora dev` and `lunora deploy` both refuse to start. The NAME is yours — the
-validator only checks that some binding exists, because your `exec` selector is
-what picks it.
+A binding is required. Without any `hyperdrive` entry, config validation errors
+and `lunora dev` / `lunora deploy` won't start. You choose the name: the
+validator only checks that at least one binding exists, and your `exec` selector picks it.
 
-> **Read-your-writes:** point the Hyperdrive config at the **primary** (or pin
-> writes to it) so a write then immediate read isn't served by a stale replica.
+Point Hyperdrive at the primary (or pin writes to it) so you can read your own
+writes. A replica can serve a stale read right after a write.
 
-## Step 3: Mark tables `.global({ backend: "hyperdrive" })`
+## Step 3: Mark tables
 
 ```ts
 // lunora/schema.ts
@@ -89,88 +76,99 @@ export default defineSchema({
 });
 ```
 
-A bare `.global()` stays on D1. **One backend per app** — mixing D1- and
-PlanetScale-backed global tables in the same app isn't supported yet (codegen
-errors clearly).
+Bare `.global()` stays on D1. An app can use only one global backend: codegen fails
+if the schema mixes D1 and Hyperdrive global tables.
 
-## Step 4: Wire `.hyperdriveGlobal()` in the app composition
+## Step 4: Wire `.hyperdriveGlobal()`
 
-Codegen emits a `.hyperdriveGlobal()` builder method. Supply the engine and an `exec`
-built from the Hyperdrive binding (cache the driver on the DO instance; rebuild
-lazily after hibernation):
+Codegen emits a `.hyperdriveGlobal({ engine, exec, origin? })` builder method.
+`exec` builds a `SqlExec` from `env`:
 
 ```ts
-import { buildPgExec } from "@lunora/hyperdrive/global";
 import { fromPostgresJs } from "@lunora/hyperdrive";
+import { buildPgExec } from "@lunora/hyperdrive/global";
 import postgres from "postgres";
 
-export default defineApp<Env>()
+import { defineApp } from "../lunora/_generated/app.js";
+
+const app = defineApp<Env>()
     .shard((env) => env.SHARD)
     .hyperdriveGlobal({
         engine: "postgres",
         exec: (env) => buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))),
-    });
+    })
+    .build();
+
+export const ShardDO = app.ShardDO;
 ```
 
-For MySQL, create the pool with the **`FOUND_ROWS`** flag (the optimistic-concurrency
-guard needs matched-row counts, or idempotent writes raise spurious conflicts):
+For MySQL, create the pool with the `FOUND_ROWS` flag. The optimistic-concurrency
+guard needs matched-row counts. Without the flag, an idempotent write reports
+zero affected rows and raises a spurious conflict. `buildMysqlExec` throws at
+construction when the flag is missing. If it can't read the flag, it warns once instead.
 
 ```ts
 import { buildMysqlExec } from "@lunora/hyperdrive/global";
 import mysql from "mysql2/promise";
 
+// inside the builder chain:
 .hyperdriveGlobal({
     engine: "mysql",
     exec: (env) => buildMysqlExec(mysql.createPool({ uri: env.HYPERDRIVE.connectionString, flags: ["FOUND_ROWS"] })),
-});
+})
 ```
 
-## Step 5: Regenerate + run
+Outside the app builder, for example in tests or a custom host,
+`createHyperdriveGlobalCtxDb({ engine, exec, ... })` builds the same reactive writer
+directly.
+
+## Step 5: Regenerate and run
 
 ```bash
-lunora codegen   # wires config.hyperdriveGlobal and the .hyperdriveGlobal() method
+lunora codegen
 lunora dev
 ```
 
-Tables auto-provision on first use (the runtime runs the PlanetScale DDL through
-the dialect — no manual migration needed), and subscriptions are reactive.
+Tables provision automatically on first use, because the runtime runs the DDL
+through the dialect. You don't write or commit SQL migrations. `CREATE TABLE IF NOT EXISTS` never
+reshapes an existing table, though. When a column's validator starts accepting
+null, the store reports the `ALTER` statement to run. MySQL tables created before
+the `utf8mb4_0900_bin` column collation need a one-off
+`ALTER TABLE … CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`.
+See `lunora-migration-helper` for schema changes.
 
-## Migrating an existing D1 dataset → PlanetScale
+**Verify:** subscribe to a query over a hyperdrive-backed table, write through a
+mutation, and confirm that the subscription updates.
 
-Blue-green: deploy the new PlanetScale-backed worker alongside the old D1 one,
-then copy the `.global()` data:
+Postgres deployments can also serve `ctx.vectors` from pgvector instead of a Vectorize
+binding with `createPgVectorIndex` (from `@lunora/hyperdrive/global`). It supports
+equality-only metadata filters.
+
+## Migrating an existing D1 dataset
+
+The flow is blue-green: deploy the Hyperdrive-backed worker next to the D1 one,
+then copy the data:
 
 ```bash
 lunora migrate d1-to-hyperdrive \
-  --from-url https://old-d1.example.com   --from-token "$D1_ADMIN_TOKEN" \
-  --to-url   https://new-ps.example.com   --to-token   "$PS_ADMIN_TOKEN" \
-  --tables settings,orders                # omit to move every global table
-  # --out dump.ndjson                      # keep the intermediate dump to inspect
+  --from-url https://old-d1.example.com --from-token "$D1_ADMIN_TOKEN" \
+  --to-url   https://new-hd.example.com --to-token   "$HD_ADMIN_TOKEN" \
+  --tables settings,orders   # omit to move every global table; --out dump.ndjson keeps the dump
 ```
 
-It streams the source's global rows to NDJSON, imports them into the target
-(whose `.global({ backend: "hyperdrive" })` tables route the writes to
-PlanetScale), and verifies the row counts match. Rows whose `_id` already exists
-are reported as conflicts, not duplicated.
-
-> **Direct external writes** to PlanetScale (bypassing Lunora) are invisible to
-> live queries — same as D1. Let Lunora own the writes.
+The command exports the source's global rows to NDJSON, imports them into the
+target, and compares row counts. It refuses to run when the source and target
+resolve to the same URL, and non-localhost URLs must use https. Rows whose `_id`
+already exists in the target are reported as conflicts and not duplicated.
+A count mismatch is a warning: inspect it with `--out`, resolve it, and re-run.
+Tokens default to `--token` / `LUNORA_ADMIN_TOKEN`.
 
 ## Common Pitfalls
 
-1. **Mixing backends.** One global backend per app (codegen errors on a mix).
-2. **Missing driver.** `postgres`/`mysql2` are optional peer deps — install the
-   one matching your engine.
-3. **Stale-replica reads.** Point Hyperdrive at the primary for read-your-writes.
-4. **Expecting external writes to be reactive.** They aren't — route writes
-   through Lunora (`ctx.db`).
-
-## Checklist
-
-- [ ] `@lunora/hyperdrive/global` + the engine's driver installed.
-- [ ] Hyperdrive binding (`HYPERDRIVE`) created over the PlanetScale connection
-      string, with a `localConnectionString` for dev.
-- [ ] Target tables marked `.global({ backend: "hyperdrive" })` (one backend per app).
-- [ ] `.hyperdriveGlobal({ engine, exec })` wired in the app composition.
-- [ ] `lunora codegen` run; `lunora dev` serves the tables reactively.
-- [ ] (Migrating) `lunora migrate d1-to-hyperdrive` run; row counts verified.
+1. **Installing `@lunora/hyperdrive/global` as a package name.** It's a subpath.
+   Install `@lunora/hyperdrive` and `@lunora/sql-store`.
+2. **Mixing D1 and Hyperdrive global tables.** Codegen rejects this.
+3. **Missing `FOUND_ROWS` on MySQL.** It causes spurious OCC conflicts on idempotent writes.
+4. **Stale-replica reads.** Point Hyperdrive at the primary.
+5. **Writing to the database directly.** Live queries won't see those writes. Route writes
+   through `ctx.db`.
