@@ -84,6 +84,7 @@ studio.
 | `workflow_unused`              | info  | A declared workflow is never started: dead code (still billed), or external.                           |
 | `queue_without_dlq`            | warn  | A `defineQueue` with no `deadLetterQueue`: exhausted messages are dropped, not captured or replayable. |
 | `container_oversized_instance` | info  | A container on a large instance type: provisioned memory/disk billed while running.                    |
+| `topic_too_many_subscriptions` | info  | A topic with more than 10 subscriptions: each publish sends to every queue, six at a time.             |
 
 ## Runtime lints
 

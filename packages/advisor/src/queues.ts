@@ -37,6 +37,8 @@ export interface AdvisorQueue {
      * flagged for lacking its own DLQ.
      */
     name: string;
+    /** Set for a `defineSubscription(topic, …)` export: the `defineTopic` export it consumes. */
+    topic?: string;
     /** Push-consumer batch/retry tuning; the `deadLetterQueue`/`maxRetries` the queue lints read. */
     tuning: AdvisorQueueTuning;
 }

@@ -475,6 +475,66 @@ describe("lunora deploy", () => {
             });
         });
 
+        describe("artifacts namespace jurisdiction", () => {
+            /** `VALID_WRANGLER` binding one Artifacts namespace, over the fixture schema pinned to `eu`. */
+            const seedPinnedArtifacts = (): void => {
+                const wrangler = JSON.parse(VALID_WRANGLER) as Record<string, unknown>;
+                const schemaPath = join(workdir, "lunora", "schema.ts");
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({ ...wrangler, artifacts: [{ binding: "ARTIFACTS", namespace: "repos" }] }),
+                    "utf8",
+                );
+                writeFileSync(schemaPath, readFileSync(schemaPath, "utf8").replace(/\}\);\s*$/u, '}).jurisdiction("eu");\n'), "utf8");
+            };
+
+            afterEach(() => {
+                vi.unstubAllEnvs();
+                vi.unstubAllGlobals();
+            });
+
+            it("stops before wrangler when a bound namespace is outside the schema's jurisdiction", async () => {
+                expect.assertions(4);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+                // The class-budget lookup gets the same body, finds no count and stays silent.
+                vi.stubGlobal(
+                    "fetch",
+                    vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: { jurisdiction: "unrestricted", namespace: "repos" }, success: true })),
+                );
+
+                const { errors, logger } = silentLogger();
+                const recording = createRecordingSpawner();
+                const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toContain('Artifacts namespace "repos" (binding ARTIFACTS) is in the "unrestricted" jurisdiction');
+                // Pretty mode prints no returned error, so the refusal must reach the logger.
+                expect(errors.some((message) => message.includes('Artifacts namespace "repos" (binding ARTIFACTS)'))).toBe(true);
+                expect(recording.calls).toHaveLength(0);
+            });
+
+            it("warns and deploys when there is no API token to check with", async () => {
+                expect.assertions(3);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+
+                const { logger, warns } = silentLogger();
+                const recording = createRecordingSpawner();
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
+
+                expect(result.code).toBe(0);
+                expect(recording.calls).toHaveLength(1);
+                expect(warns.some((message) => message.includes('the jurisdiction of Artifacts namespace "repos" (binding ARTIFACTS) was not checked'))).toBe(
+                    true,
+                );
+            });
+        });
+
         it("runs codegen, validates wrangler, then spawns `pnpm exec wrangler deploy`", async () => {
             expect.assertions(5);
 
