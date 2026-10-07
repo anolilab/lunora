@@ -1,3 +1,9 @@
+## @lunora/config [1.0.0-alpha.321](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.320...@lunora/config@1.0.0-alpha.321) (2026-10-07)
+
+### Bug Fixes
+
+* **config:** index optional vector metadata columns by their inner kind ([#1034](https://github.com/anolilab/lunora/issues/1034)) ([4149265](https://github.com/anolilab/lunora/commit/41492657dbbcacb0dff004d95ca44e4b1d107836)), closes [#1033](https://github.com/anolilab/lunora/issues/1033)
+
 ## @lunora/config [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.319...@lunora/config@1.0.0-alpha.320) (2026-10-07)
 
 
