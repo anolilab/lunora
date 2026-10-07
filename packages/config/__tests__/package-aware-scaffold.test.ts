@@ -52,7 +52,7 @@ describe("secretsForPackages", () => {
     it("returns entries for multiple packages in the order supplied", () => {
         expect.assertions(2);
 
-        const entries = secretsForPackages(["@lunora/auth", "@lunora/payment"]);
+        const entries = secretsForPackages(["@lunora/auth", "@lunora/payment/stripe"]);
         const keys = entries.map((entry) => entry.key);
 
         // Auth entries come before payment entries.
@@ -175,7 +175,7 @@ describe("buildPackageSecretsBlock", () => {
     it("never emits a real secret value — secret-keyed entries have placeholder values", () => {
         expect.assertions(1);
 
-        const block = buildPackageSecretsBlock(["@lunora/auth", "@lunora/payment"], new Set());
+        const block = buildPackageSecretsBlock(["@lunora/auth", "@lunora/payment/stripe"], new Set());
         const values = secretEntryValues(block);
 
         expect(values.every((value) => isPlaceholderValue(value))).toBe(true);
@@ -257,11 +257,12 @@ describe("ensureDevVarsExample", () => {
     it("produces entries for multiple packages (auth + payment)", () => {
         expect.assertions(4);
 
-        const added = ensureDevVarsExample(dir, ["@lunora/auth", "@lunora/payment"]);
+        const added = ensureDevVarsExample(dir, ["@lunora/auth", "@lunora/payment", "@lunora/payment/creem"]);
 
         expect(added).toContain("AUTH_SECRET");
-        expect(added).toContain("STRIPE_SECRET_KEY");
-        expect(added).toContain("POLAR_ACCESS_TOKEN");
+        expect(added).toContain("CREEM_API_KEY");
+        // Only the imported adapter's secrets, not every provider's (#1022).
+        expect(added).not.toContain("STRIPE_SECRET_KEY");
 
         const content = readFileSync(join(dir, ".dev.vars.example"), "utf8");
 
@@ -281,7 +282,7 @@ describe("ensureDevVarsExample", () => {
     it("never writes a real secret value — secret-keyed entries have placeholder values", () => {
         expect.assertions(1);
 
-        ensureDevVarsExample(dir, ["@lunora/auth", "@lunora/payment", "@lunora/mail"]);
+        ensureDevVarsExample(dir, ["@lunora/auth", "@lunora/payment/stripe", "@lunora/mail"]);
 
         const content = readFileSync(join(dir, ".dev.vars.example"), "utf8");
         const values = secretEntryValues(content);

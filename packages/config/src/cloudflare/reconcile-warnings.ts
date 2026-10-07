@@ -223,7 +223,7 @@ const orphanedEntryWarnings = (inferred: InferredBindings, parsed: WranglerShape
 
 /**
  * Every `@lunora/payment` provider adapter and the `.dev.vars` secret pair that
- * configures it. Mirrors the `@lunora/payment` entry in
+ * configures it. Mirrors the `@lunora/payment/<adapter>` entries in
  * `package-secrets-registry.ts` and the adapters under
  * `packages/payment/src/providers/` — a provider is "configured" when **both**
  * of its keys carry a non-empty value.
