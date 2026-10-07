@@ -189,6 +189,24 @@ export const movePaymentTables = internalMutation({
 });
 ```
 
+### `@lunora/codegen`: `api.*` nests by folder
+
+A function file in a folder used to be one underscore-joined key:
+`lunora/billing/invoices.ts` was `api.billing_invoices.*`. The generated
+`api`, `internal` and `createCaller` types now nest by folder, so it is
+`api.billing.invoices.*`, the same shape as Convex. A trailing `index.ts` still
+collapses into its folder (`lunora/ratelimit/index.ts` stays `api.ratelimit.*`).
+
+Nothing changes at runtime: the dispatch key is still `billing_invoices:create`,
+so OpenAPI operation IDs, the wire protocol and the non-JS SDKs are unaffected.
+TypeScript flags every old reference after `lunora codegen`.
+
+**Migration:** replace each `api.<folder>_<file>.` / `internal.<folder>_<file>.`
+with `api.<folder>.<file>.` / `internal.<folder>.<file>.`. A file that exports a
+function named like a file in its sibling folder (`billing.ts` exporting
+`invoices` next to `billing/invoices.ts`) is now a codegen error, because both
+would be `api.billing.invoices`. Rename one of them.
+
 ## Recommended (non-breaking) follow-ups
 
 - **Enforce ephemeral WS admin tokens.** The worker can now reject the raw

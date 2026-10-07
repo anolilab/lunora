@@ -2,20 +2,18 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { CallEdgeIR } from "../ir";
-import sanitizeNamespace from "../paths";
 import { collectCallRows, collectNodeRows, functionReferenceSegments, RUN_METHODS } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 
 /**
  * A function reference as the `namespace:export` key the function registry uses.
- * The emitted api is flat (`api.billing_invoices.create`), and a nested chain
- * (`api.billing.invoices.create`) is folded the same way `sanitizeNamespace` folds
- * the file path, so both spellings land on the same key.
+ * The path is joined with `_` (`api.billing.invoices.create` →
+ * `billing_invoices:create`), as the `anyApi` proxy joins it at runtime.
  */
 const functionKeyOf = (node: TsNode | undefined): string | undefined => {
     const segments = functionReferenceSegments(node);
 
-    return segments === undefined ? undefined : `${sanitizeNamespace(segments.slice(0, -1).join("/"))}:${String(segments.at(-1))}`;
+    return segments === undefined ? undefined : `${segments.slice(0, -1).join("_")}:${String(segments.at(-1))}`;
 };
 
 /** `ctx.<surface>.<name>.<method>(…)` → `name`, when the receiver chain is exactly that shape. */

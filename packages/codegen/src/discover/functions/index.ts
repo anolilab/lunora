@@ -2,7 +2,7 @@ import type { CallExpression, Project, SourceFile } from "ts-morph";
 
 import declaredOutputWins from "../../declared-output";
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "../../ir";
-import sanitizeNamespace from "../../paths";
+import { namespaceSegments, sanitizeNamespace } from "../../paths";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
 import { exportNamesByLocalOf, isAddressableExportName } from "../attribution";
 import { collectErasures, reportErasures } from "../erased-returns";
@@ -188,6 +188,22 @@ const assertNoNamespaceCollision = (functions: ReadonlyArray<FunctionIR>): void 
         }
 
         namespaceOrigins.set(namespace, entry.filePath);
+    }
+
+    // `api.*` is nested by folder, so `lunora/billing.ts`'s export `invoices` and
+    // the file `lunora/billing/invoices.ts` would both be `api.billing.invoices`.
+    const folderPaths = new Set(functions.flatMap((entry) => namespaceSegments(entry.filePath).map((_, index, all) => all.slice(0, index + 1).join("."))));
+    const clash = functions.find((entry) => folderPaths.has([...namespaceSegments(entry.filePath), entry.exportName].join(".")));
+
+    if (clash !== undefined) {
+        const path = [...namespaceSegments(clash.filePath), clash.exportName].join(".");
+
+        throw Object.assign(
+            new Error(
+                `Namespace collision: the export "${clash.exportName}" of "${clash.filePath}" and a file under the folder of the same name both resolve to api.${path}. Rename the export or the folder.`,
+            ),
+            { code: "NAMESPACE_COLLISION", name: "LunoraError", paths: [clash.filePath], status: 500 },
+        );
     }
 };
 

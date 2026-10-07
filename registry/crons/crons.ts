@@ -14,8 +14,8 @@
  *
  * Every job points at an **internal** function (server-only — clients can't
  * call it) referenced statically via the generated `internal` proxy, e.g.
- * `internal.crons_jobs.run`. The reference MUST be a two-segment property
- * access (`internal.<file>.<fn>`) so codegen can resolve it to the
+ * `internal.crons.jobs.run`. The reference MUST be a static property
+ * access (`internal.<…path>.<fn>`) so codegen can resolve it to the
  * `namespace:fn` dispatch ref; a dynamic reference won't be discovered.
  *
  * Schedule helpers (all UTC):
@@ -38,6 +38,6 @@ const crons = cronJobs();
 // hour. Replace the function ref (and the schedule) with your own — e.g.
 //   crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, {});
 //   crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, { roomId: "lobby" });
-crons.interval("heartbeat", { hours: 1 }, internal.crons_jobs.run, {});
+crons.interval("heartbeat", { hours: 1 }, internal.crons.jobs.run, {});
 
 export default crons;

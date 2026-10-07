@@ -30,6 +30,18 @@ interface AgentIR {
 }
 ```
 
+### `ArchitectureManifest` (interface)
+
+```ts
+interface ArchitectureManifest {
+    edges: ArchitectureEdge[];
+    nodes: ArchitectureNode[];
+    modules: ArchitectureModule[];
+    unresolved: UnresolvedEdge[];
+    version: 1;
+}
+```
+
 ### `AuthApiCallIR` (interface)
 
 ```ts
@@ -103,6 +115,7 @@ interface CodegenResult {
     advisorContext?: LintContext;
     advisories: ReadonlyArray<Finding>;
     agents: ReadonlyArray<AgentIR>;
+    architecture?: ArchitectureManifest;
     containers: ReadonlyArray<ContainerIR>;
     cronTriggers: ReadonlyArray<string>;
     generated: {
@@ -1714,6 +1727,52 @@ interface AiToolSideEffectIR {
 }
 ```
 
+### `ArchitectureEdge` (interface)
+
+```ts
+interface ArchitectureEdge {
+    from: string;
+    kind: ArchitectureEdgeKind;
+    to: string;
+}
+```
+
+### `ArchitectureEdgeKind` (type)
+
+```ts
+type ArchitectureEdgeKind = "call" | "enqueue" | "invoke" | "publish" | "read" | "schedule" | "start" | "subscribe" | "trigger" | "write";
+```
+
+### `ArchitectureModule` (interface)
+
+```ts
+interface ArchitectureModule {
+    description?: string;
+    installed?: true;
+    ownsFolder?: false;
+    name: string;
+    tables: string[];
+}
+```
+
+### `ArchitectureNode` (interface)
+
+```ts
+interface ArchitectureNode {
+    detail?: string;
+    id: string;
+    kind: ArchitectureNodeKind;
+    name: string;
+    module?: string;
+}
+```
+
+### `ArchitectureNodeKind` (type)
+
+```ts
+type ArchitectureNodeKind = "cron" | "function" | "http" | "queue" | "service" | "table" | "topic" | "workflow";
+```
+
 ### `ArgumentDerivedFetchIR` (interface)
 
 ```ts
@@ -2856,6 +2915,17 @@ interface TtlIR {
 interface TtlSnapshot {
     after?: number;
     field: string;
+}
+```
+
+### `UnresolvedEdge` (interface)
+
+```ts
+interface UnresolvedEdge {
+    file: string;
+    kind: ArchitectureEdgeKind;
+    line: number;
+    reason: string;
 }
 ```
 

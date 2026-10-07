@@ -7,7 +7,6 @@ import { Node, SyntaxKind } from "ts-morph";
 import { CodegenDiagnosticError, diagnosticAt } from "../diagnostics";
 import type { AgentIR, CronJobIR, WorkflowIR } from "../ir";
 import { isCronSourceModule } from "../module-specifiers";
-import sanitizeNamespace from "../paths";
 import { listLunoraSourceFiles, propertyKeyName } from "./ast";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
@@ -172,23 +171,26 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
         );
     }
 
-    // `root.namespace.fn` → `${namespace}:${fn}`. The leading root
-    // (`internal`/`api`) is dropped; namespaces are sanitized exactly as
+    // `root.<…path>.fn` → `${path joined by _}:${fn}`. The leading root
+    // (`internal`/`api`) is dropped; the path is joined exactly as
     // `emitApi`/`emitServer`/the anyApi proxy do, so the ref matches dispatch.
-    const functionName = argument.getName();
-    const receiver = argument.getExpression();
+    const segments: string[] = [];
+    let current: Node = argument;
 
-    if (!Node.isPropertyAccessExpression(receiver)) {
-        throw diagnosticAt(argument, `Cron job "${jobName}" function reference must be of the form internal.file.fn (two property accesses).`, {
+    while (Node.isPropertyAccessExpression(current)) {
+        segments.unshift(current.getName());
+        current = current.getExpression();
+    }
+
+    if (segments.length < 2) {
+        throw diagnosticAt(argument, `Cron job "${jobName}" function reference must be of the form internal.file.fn (at least two property accesses).`, {
             code: "CRON_NON_STATIC_FN",
             name: "LunoraError",
             status: 500,
         });
     }
 
-    const namespace = receiver.getName();
-
-    return `${sanitizeNamespace(namespace)}:${functionName}`;
+    return `${segments.slice(0, -1).join("_")}:${String(segments.at(-1))}`;
 };
 
 /** Build a workflow target IR from a resolved {@link WorkflowIR}. */

@@ -31,7 +31,7 @@ when porting an existing Convex app.
 | Per-tenant data     | tables                   | `.shardBy("field")` tables in DOs         |
 | Schema file         | `convex/schema.ts`       | `lunora/schema.ts`                        |
 | Generated API       | `convex/_generated/api`  | `lunora/_generated/api`                   |
-| Nested function dir | `internal.a.b.fn`        | `internal.a_b.fn` (flattened, see below)  |
+| Nested function dir | `internal.a.b.fn`        | `internal.a.b.fn` (same shape)            |
 | Function dir        | `convex/*.ts`            | `lunora/*.ts`                             |
 | Codegen trigger     | `convex dev`             | `lunora codegen` (or the Vite plugin)     |
 | React hooks         | `convex/react`           | `@lunora/react`                           |
@@ -42,16 +42,6 @@ when porting an existing Convex app.
 | File storage        | `ctx.storage`            | `ctx.storage` (backed by R2)              |
 | Subscriptions       | WebSocket                | WebSocket (Durable Object hibernated)     |
 | Deploy              | `npx convex deploy`      | `lunora deploy` (wraps `wrangler deploy`) |
-
-<Callout type="warn">
-    **Nested function directories flatten into one underscore-joined key.** Convex namespaces the generated API by directory nesting
-    (`internal.agent.threads.listThreads`); Lunora joins the path (`internal.agent_threads.listThreads`), because the namespace is also the runtime dispatch key
-    and has to be a single JS identifier.
-
-    The failure mode is misleading, so it is worth knowing before you start: a missed lookup reads `Property 'agent' does not exist on type 'InternalApiTypes'`,
-    which looks like the function was never registered rather than registered under a different key. On one 92-table port this was 608 call sites.
-
-</Callout>
 
 ## Schema
 

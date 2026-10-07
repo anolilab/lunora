@@ -42,7 +42,7 @@ describe("discover/crons", () => {
             const crons = cronJobs();
             crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
             crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, { batch: 10 });
-            crons.cron("custom", "0 * * * *", internal.foo.bar, {});
+            crons.cron("custom", "0 * * * *", internal.reports.weekly.send, {});
             export default crons;
         `,
         );
@@ -52,7 +52,8 @@ describe("discover/crons", () => {
         // Sorted by name: "clear presence", "custom", "send digest".
         expect(result).toEqual([
             { args: {}, cron: "*/30 * * * *", functionPath: "presence:clear", name: "clear presence" },
-            { args: {}, cron: "0 * * * *", functionPath: "foo:bar", name: "custom" },
+            // A nested `api.*` path joins with `_`, matching the dispatch key.
+            { args: {}, cron: "0 * * * *", functionPath: "reports_weekly:send", name: "custom" },
             { args: { batch: 10 }, cron: "0 9 * * *", functionPath: "email:digest", name: "send digest" },
         ]);
     });

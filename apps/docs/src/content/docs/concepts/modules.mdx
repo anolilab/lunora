@@ -23,8 +23,8 @@ export default defineModule({
 ```
 
 Modules are metadata. They change no `api.*` path and nothing at runtime, and the
-whole app still deploys as one Worker. `lunora/billing/invoices.ts` stays
-`api.billing_invoices.*` either way. Codegen reads `description` and `tables`
+whole app still deploys as one Worker. `lunora/billing/invoices.ts` is
+`api.billing.invoices.*` whether or not `billing/` is a module. Codegen reads `description` and `tables`
 without running the file, so write them inline.
 
 Modules do not nest: a `module.ts` inside another module's folder is a codegen
@@ -156,7 +156,7 @@ available inside a mutation:
 
 ```ts
 // lunora/accounts/signup.ts — not the billing module
-await ctx.runMutation(internal.billing_invoices.open, { userId });
+await ctx.runMutation(internal.billing.invoices.open, { userId });
 ```
 
 `ctx.runMutation` composes the submutation in-process. It runs the handler

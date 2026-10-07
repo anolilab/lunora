@@ -687,6 +687,36 @@ describe("emitApi", () => {
         expect(rendered).not.toContain("    2fa: {");
     });
 
+    it("nests a folder's files under the folder's key, beside a same-named file's exports", () => {
+        expect.assertions(3);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "pay", filePath: "billing", kind: "mutation", returnType: "void" },
+            { args: {}, exportName: "create", filePath: "billing/invoices", kind: "mutation", returnType: "void" },
+            { args: {}, exportName: "list", filePath: "billing/invoices", kind: "query", returnType: "void" },
+        ];
+
+        expect(emitApi({ functions })).toContain(
+            [
+                "export interface ApiTypes {",
+                "    billing: {",
+                '        pay: FunctionReference<"mutation", {}, void>;',
+                "        invoices: {",
+                '            create: FunctionReference<"mutation", {}, void>;',
+                '            list: FunctionReference<"query", {}, void>;',
+                "        };",
+                "    };",
+                "}",
+            ].join("\n"),
+        );
+
+        const rendered = emitFunctions({ functions });
+
+        // The caller nests the same way; the dispatch key stays the `_`-joined namespace.
+        expect(rendered).toContain("        invoices: {\n            create: (args?: {}) => Promise<void>;");
+        expect(rendered).toContain('create: (args) => callRegistered(context, "billing_invoices:create", args),');
+    });
+
     it("emits a typed `httpStreams.*` reference block for `.stream()` routes", () => {
         expect.assertions(6);
 

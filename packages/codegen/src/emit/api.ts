@@ -4,7 +4,7 @@ import { agentComponent } from "@lunora/agent/component";
 import { LunoraError } from "@lunora/errors";
 
 import type { AgentIR, FunctionIR, HttpRouteIR, MutatorIR, ShapeIR, WorkflowIR } from "../ir";
-import sanitizeNamespace from "../paths";
+import { namespaceSegments, sanitizeNamespace } from "../paths";
 import { rebaseRelativeQualifiers, referencedDataModelImports, referenceReturnType, relocateBaseQualifiers } from "./qualifiers";
 import { assertIdentifier, baseSpecifiers, GENERATED_HEADER, pascalCase, renderArgsType, renderObjectKey, renderPropertyKey } from "./shared";
 
@@ -22,43 +22,89 @@ const groupByFileSorted = <T extends { filePath: string }>(entries: ReadonlyArra
     return [...namespaces.entries()].toSorted(([a], [b]) => a.localeCompare(b));
 };
 
+interface NamespaceNode<T> {
+    children: Map<string, NamespaceNode<T>>;
+    /** The functions of the file this node stands for, if one does. */
+    entries?: T[];
+}
+
 /**
- * Render the grouped-by-namespace body of an api interface for a subset of
- * functions. Returns `""` when the subset is empty so the caller can emit an
- * empty `{}` interface.
+ * Render functions grouped by file as nested `api.*` key paths:
+ * `lunora/billing/invoices.ts` → `billing: { invoices: { … } }`. A file and a
+ * folder of the same name share a node (`lunora/billing.ts` + `lunora/billing/`);
+ * discovery has already rejected an export that clashes with a folder's file.
+ *
+ * `renderLeaf` renders one member without indentation; `terminator` closes a
+ * nested block (`;` in an interface, `,` in an object literal).
  */
-const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
-    const renderNamespace = ([file, list]: [string, FunctionIR[]]): string => {
+const renderNamespaceTree = <T extends { exportName: string; filePath: string }>(
+    entries: ReadonlyArray<T>,
+    renderLeaf: (entry: T) => string,
+    renderKey: (key: string) => string,
+    terminator: string,
+): string => {
+    const root: NamespaceNode<T> = { children: new Map() };
+
+    for (const [file, list] of groupByFileSorted(entries)) {
+        let node = root;
+
+        for (const segment of namespaceSegments(file)) {
+            let child = node.children.get(segment);
+
+            if (child === undefined) {
+                child = { children: new Map() };
+                node.children.set(segment, child);
+            }
+
+            node = child;
+        }
+
+        node.entries = list;
+    }
+
+    const render = (node: NamespaceNode<T>, depth: number): string[] => {
+        const indent = "    ".repeat(depth);
+        const leaves = (node.entries ?? []).map((entry) => `${indent}${renderLeaf(entry)}`);
+        const nested = [...node.children.entries()]
+            .toSorted(([a], [b]) => a.localeCompare(b))
+            .map(([key, child]) => `${indent}${renderKey(key)}: {\n${render(child, depth + 1).join("\n")}\n${indent}}${terminator}`);
+
+        return [...leaves, ...nested];
+    };
+
+    return render(root, 1).join("\n");
+};
+
+/**
+ * Render the nested body of an api interface for a subset of functions.
+ * Returns `""` when the subset is empty so the caller can emit an empty `{}`
+ * interface.
+ */
+const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string =>
+    renderNamespaceTree(
         // Sorted by export name so a namespace that mixes discovered functions with
         // synthetic entries (agents, custom mutators — appended after the sorted
         // discovery output) still emits in a stable, alphabetical order.
-        const members = list
-            .toSorted((a, b) => a.exportName.localeCompare(b.exportName))
-            .map((definition) => {
-                // We emit `FunctionReference<Kind, ArgsObj, Return>` so the
-                // generated `api.*` references plug directly into
-                // `useQuery`/`useMutation` from `@lunora/react` (and
-                // `client.query` / `client.mutation` from `@lunora/client`).
-                // The phantom `Kind`/`Args`/`Return` parameters carry the
-                // info downstream hooks need to infer call signatures.
-                const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
-                const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
+        functions.toSorted((a, b) => a.exportName.localeCompare(b.exportName)),
+        (definition) => {
+            // We emit `FunctionReference<Kind, ArgsObj, Return>` so the
+            // generated `api.*` references plug directly into
+            // `useQuery`/`useMutation` from `@lunora/react` (and
+            // `client.query` / `client.mutation` from `@lunora/client`).
+            // The phantom `Kind`/`Args`/`Return` parameters carry the
+            // info downstream hooks need to infer call signatures.
+            const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
+            const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
-                return `        ${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
-            })
-            .join("\n");
-
+            return `${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
+        },
         // A namespace derived from a leading-digit filename (e.g. `2fa.ts`) is a
         // valid `__lunoraRef` string but not a bare TS key, so quote it when
         // needed — the string value (and thus the runtime dispatch key) is
         // unchanged.
-        return `    ${renderPropertyKey(sanitizeNamespace(file))}: {\n${members}\n    };`;
-    };
-
-    return groupByFileSorted(functions)
-        .map((entry) => renderNamespace(entry))
-        .join("\n");
-};
+        renderPropertyKey,
+        ";",
+    );
 
 /**
  * Render the scheduler-target reference block for `_generated/api.ts` (its
@@ -726,4 +772,4 @@ ${factories}
 `;
 };
 
-export { emitApi, emitCollections, emitSeed, groupByFileSorted, renderAgentFunctionRegistry, renderSandboxFunctionRegistry };
+export { emitApi, emitCollections, emitSeed, groupByFileSorted, renderAgentFunctionRegistry, renderNamespaceTree, renderSandboxFunctionRegistry };

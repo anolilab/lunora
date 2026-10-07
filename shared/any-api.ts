@@ -1,10 +1,17 @@
 /**
  * The opaque `api` / `internal` proxy codegen emits into `_generated/api.ts`.
  *
- * Reading `api.<namespace>.<fn>` yields `{ __lunoraRef: "namespace:fn" }` — the
- * reference every dispatch path (`ctx.run*`, the client, the scheduler) resolves
- * a function by. The runtime value carries no type information; the generated
- * declarations supply that.
+ * Reading `api.<…path>.<fn>` yields a reference whose `__lunoraRef` is
+ * `"<path joined by _>:<fn>"` — `api.billing.invoices.create` is
+ * `"billing_invoices:create"`, the dispatch key `lunora/billing/invoices.ts`
+ * registers under. That is the reference every dispatch path (`ctx.run*`, the
+ * client, the scheduler) resolves a function by. The runtime value carries no
+ * type information; the generated declarations supply that.
+ *
+ * Every node from depth two down is both a reference and a namespace, because a
+ * file (`lunora/billing.ts`) and a folder (`lunora/billing/`) can share a name.
+ * The reference is the node's own `__lunoraRef` property, so spreading or
+ * serialising a reference still yields `{ __lunoraRef }`.
  *
  * Lives here rather than in `@lunora/server` because the generated `api.ts` is
  * the file a SIBLING package imports (a web app, another Worker), and its only
@@ -14,46 +21,33 @@
  * Both `@lunora/server` and `@lunora/client` re-export it from here, so neither
  * package gains a dependency on the other and the public surface is unchanged.
  *
- * Both levels are memoised so repeated reads of the same reference are
+ * Every level is memoised so repeated reads of the same reference are
  * identity-stable — call sites compare and cache these.
  */
-const namespaceCache = new Map<PropertyKey, Record<string, unknown>>();
+const createNode = (segments: ReadonlyArray<string>): Record<string, unknown> => {
+    const target: Record<string, unknown> = segments.length < 2 ? {} : { __lunoraRef: `${segments.slice(0, -1).join("_")}:${String(segments.at(-1))}` };
+    const children = new Map<string, Record<string, unknown>>();
 
-const anyApi: Record<string, Record<string, unknown>> = new Proxy(
-    {},
-    {
-        get(_target, namespace: PropertyKey) {
-            const cached = namespaceCache.get(namespace);
-
-            if (cached) {
-                return cached;
+    return new Proxy(target, {
+        get(_target, property: string | symbol) {
+            // Symbols and the object's own/inherited members (`__lunoraRef`,
+            // `toString`, …) read through, so a reference still behaves as a plain object.
+            if (typeof property === "symbol" || property in target) {
+                return Reflect.get(target, property) as unknown;
             }
 
-            const referenceCache = new Map<PropertyKey, { __lunoraRef: string }>();
-            const namespaceProxy = new Proxy(
-                {},
-                {
-                    get(_inner, functionName: PropertyKey) {
-                        const cachedReference = referenceCache.get(functionName);
+            let child = children.get(property);
 
-                        if (cachedReference) {
-                            return cachedReference;
-                        }
+            if (child === undefined) {
+                child = createNode([...segments, property]);
+                children.set(property, child);
+            }
 
-                        const reference = { __lunoraRef: `${String(namespace)}:${String(functionName)}` };
-
-                        referenceCache.set(functionName, reference);
-
-                        return reference;
-                    },
-                },
-            );
-
-            namespaceCache.set(namespace, namespaceProxy);
-
-            return namespaceProxy;
+            return child;
         },
-    },
-) as Record<string, Record<string, unknown>>;
+    });
+};
+
+const anyApi = createNode([]) as Record<string, Record<string, unknown>>;
 
 export { anyApi };

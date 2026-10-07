@@ -28,7 +28,7 @@ import type {
     WorkflowIR,
 } from "./ir";
 import renderJsonData from "./json-data";
-import sanitizeNamespace from "./paths";
+import { namespaceSegments, sanitizeNamespace } from "./paths";
 
 /** The call-site evidence, shared with the advisor so each walk runs once per codegen. */
 interface CallSites {
@@ -208,7 +208,7 @@ const buildNodes = (input: ArchitectureInput): { nodes: Map<string, Architecture
 
     for (const definition of input.functions) {
         const key = siteKey(definition.filePath, definition.exportName);
-        const name = `${sanitizeNamespace(definition.filePath)}.${definition.exportName}`;
+        const name = [...namespaceSegments(definition.filePath), definition.exportName].join(".");
 
         add(withModule({ detail: definition.kind, id: `function:${key}`, kind: "function", name }, moduleOf(input.modules, definition.filePath)), key);
     }

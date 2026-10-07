@@ -47,11 +47,11 @@ export const feed = query({
 export const post = mutation({
     args: { text: v.string() },
     handler: async (ctx, args) => {
-        await ctx.runQuery(api.accounts_users.me, {});
-        await ctx.scheduler.runAfter(1000, internal.accounts_users.touch, {});
+        await ctx.runQuery(api.accounts.users.me, {});
+        await ctx.scheduler.runAfter(1000, internal.accounts.users.touch, {});
         await ctx.topics.posted.publish({ text: args.text });
         await ctx.queues.jobs.send({});
-        const target = api.accounts_users.me;
+        const target = api.accounts.users.me;
         await ctx.runQuery(target, {});
         return ctx.db.insert("messages", { channelId: "c", text: args.text });
     },
@@ -173,7 +173,7 @@ import { posted } from "../queues";
 
 export const welcome = defineSubscription(posted, { handler: async () => {} });
 export const audits = defineQueue({ handler: async (ctx) => {
-    await ctx.runMutation(internal.accounts_users.touch, {});
+    await ctx.runMutation(internal.accounts.users.touch, {});
 } });
 `,
         );
@@ -379,7 +379,7 @@ export default defineSchema({ invoices: defineTable({ amount: v.number() }) });
 
 export const onboard = async (ctx) => {
     await ctx.step.do("greet", () => undefined);
-    await ctx.runQuery(api.accounts_users.me, {});
+    await ctx.runQuery(api.accounts.users.me, {});
 };
 `,
         );
@@ -396,7 +396,7 @@ export const onboarding = defineWorkflow({ handler: onboard });
             `import { internal } from "../_generated/api";
 
 export async function processJob(message, ctx) {
-    await ctx.runMutation(internal.accounts_users.touch, {});
+    await ctx.runMutation(internal.accounts.users.touch, {});
 }
 `,
         );
@@ -428,7 +428,7 @@ export const jobs = defineQueue({ handler: processJob });
             `import { internal } from "../_generated/api";
 
 const run = async (message, ctx) => {
-    await ctx.runMutation(internal.accounts_users.touch, {});
+    await ctx.runMutation(internal.accounts.users.touch, {});
 };
 
 export { run as processJob };
