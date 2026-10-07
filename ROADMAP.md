@@ -53,10 +53,10 @@ deliberate, and mostly a set of go/no-go decisions:
       `svelte`, `astro`, `nuxt`, `auth`, `auth-ui`, `storage`, `scheduler`, `mail`,
       `notify`, `ratelimit`, `seed`, `db`, `sql-store`, `studio`, `advisor`, `mcp`,
       `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`,
-      `fingerprint`, `dispatch`, `payment`.
+      `fingerprint`, `dispatch`, `payment`, `x402`, `browser`.
     - **Experimental (excluded from the 1.0 promise, iterating on their own track):**
-      `agent`, `replica`, `x402`, `react-native`, `angular`, `ai`, `browser`,
-      `container`, `platform-celld`, `platform-node`, `rspack`.
+      `agent`, `replica`, `react-native`, `angular`, `ai`, `container`,
+      `platform-celld`, `platform-node`, `rspack`.
 - **Cut the beta channel.** Feature-freeze the Core + Stable-adapter tiers and
   promote `alpha → beta`; the experimental tier keeps iterating on `alpha`.
 - **Bake and dogfood.** Run a real application (the playground plus at least one
@@ -138,16 +138,16 @@ Where the tier stands today:
 | `agent`          | yes (183)                                          | no                                                                                  |
 | `ai`             | yes (63)                                           | no                                                                                  |
 | `angular`        | yes (80)                                           | n/a — runs in the browser                                                           |
-| `browser`        | yes (25)                                           | no                                                                                  |
 | `container`      | yes (0 — fully tracked)                            | partial — starting a container needs Docker, so lifecycle and `exec` are unverified |
 | `platform-celld` | yes (0)                                            | n/a — verified by the `test:celld` TCK                                              |
 | `platform-node`  | yes (0)                                            | n/a — a Node host                                                                   |
 | `react-native`   | yes (5)                                            | n/a — runs on device                                                                |
 | `replica`        | yes (69)                                           | no                                                                                  |
 | `rspack`         | yes (0)                                            | n/a — a bundler plugin                                                              |
-| `x402`           | yes (83)                                           | yes                                                                                 |
 
-`payment` graduated to Stable adapter (audit, workerd suite, no `@experimental` exports). No
+`payment`, `x402` and `browser` graduated to Stable adapter (audit, workerd suite, no
+`@experimental` exports). `browser`'s workerd suite fakes the Browser Run binding and stops at
+the DevTools upgrade, since no Chrome runs locally; what lies past it is listed in its docs. No
 Core or Stable-adapter export carries `@experimental`: `api:check` fails if one does. The
 per-package graduation order is in [`plans/463`](./plans/463-experimental-graduation.md).
 

@@ -174,6 +174,8 @@ const TIER_2 = [
     "dispatch",
     // Graduated from TIER_3 (plan 463): full audit, workerd suite, no `@experimental` exports.
     "payment",
+    "x402",
+    "browser",
 ];
 
 /**
@@ -216,7 +218,7 @@ const TIER_2 = [
  * `@lunora/react`, and a re-export is pinned by name + kind + source package
  * with its signature tracked in the owning snapshot.
  */
-const TIER_3 = ["agent", "ai", "angular", "browser", "container", "platform-celld", "platform-node", "react-native", "replica", "rspack", "x402"];
+const TIER_3 = ["agent", "ai", "angular", "container", "platform-celld", "platform-node", "react-native", "replica", "rspack"];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
