@@ -771,6 +771,8 @@ const checkArtifactsNamespaces = async (
         if (check.verdict === "unchecked") {
             logger.warn(line);
         } else if (check.verdict !== "ok") {
+            // Logged here like the migrate preflight: a pretty-mode run prints no returned error.
+            logger.error(line);
             failures.push(line);
         }
     }

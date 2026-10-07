@@ -495,7 +495,7 @@ describe("lunora deploy", () => {
             });
 
             it("stops before wrangler when a bound namespace is outside the schema's jurisdiction", async () => {
-                expect.assertions(3);
+                expect.assertions(4);
 
                 seedPinnedArtifacts();
                 vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
@@ -506,12 +506,14 @@ describe("lunora deploy", () => {
                     vi.fn<typeof globalThis.fetch>(async () => Response.json({ result: { jurisdiction: "unrestricted", namespace: "repos" }, success: true })),
                 );
 
-                const { logger } = silentLogger();
+                const { errors, logger } = silentLogger();
                 const recording = createRecordingSpawner();
                 const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
 
                 expect(result.code).toBe(EXIT_CODE.USAGE);
                 expect(result.error).toContain('Artifacts namespace "repos" (binding ARTIFACTS) is in the "unrestricted" jurisdiction');
+                // Pretty mode prints no returned error, so the refusal must reach the logger.
+                expect(errors.some((message) => message.includes('Artifacts namespace "repos" (binding ARTIFACTS)'))).toBe(true);
                 expect(recording.calls).toHaveLength(0);
             });
 
