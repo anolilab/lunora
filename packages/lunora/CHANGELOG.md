@@ -1,3 +1,14 @@
+## lunorash [1.0.0-alpha.363](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.362...lunorash@1.0.0-alpha.363) (2026-10-07)
+
+### Code Refactoring
+
+* **testing:** extract the engine seam (plan 453 phase 1) ([#1032](https://github.com/anolilab/lunora/issues/1032)) ([2a7082c](https://github.com/anolilab/lunora/commit/2a7082c02d57f82fe338b8c7f2aeca0622d298a8))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.361
+
 ## lunorash [1.0.0-alpha.362](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.361...lunorash@1.0.0-alpha.362) (2026-10-07)
 
 
