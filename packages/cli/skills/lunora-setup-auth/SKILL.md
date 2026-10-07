@@ -65,6 +65,10 @@ the call in the `lunora.config.ts` `app` hook. A hand-written entry
 ```ts
 // lunora.config.ts
 import type { AppBuilder, LunoraConfig } from "./lunora/_generated/app";
+// Move the object `buildAuth` passes to `createAuth` (minus `database`; the
+// builder supplies the D1 adapter) into an exported `authOptions(env)` in
+// lunora/auth/index.ts, and have `buildAuth` spread it too.
+import { authOptions } from "./lunora/auth/index.js";
 
 interface Env {
     BETTER_AUTH_SECRET: string;
@@ -77,33 +81,42 @@ export default {
     app: (app: AppBuilder<Env>): AppBuilder<Env> =>
         app.auth({
             d1: (env) => env.DB,
-            // Same options as buildAuth in lunora/auth/index.ts, minus `database`
-            // (the builder supplies the D1 adapter itself).
-            options: (env) => ({ baseURL: env.BETTER_AUTH_URL, emailAndPassword: { enabled: true }, secret: env.BETTER_AUTH_SECRET }),
+            options: (env) => authOptions(env),
         }),
 } satisfies LunoraConfig<Env>;
 ```
+
+Reuse the scaffold's options rather than retyping a subset: a hand-written
+`{ emailAndPassword: { enabled: true } }` drops `requireEmailVerification`,
+`sendResetPassword` and `sendVerificationEmail`, so users sign in unverified and
+no verification or reset mail goes out.
 
 `.auth()` appears on the builder only after codegen sees `@lunora/auth`
 installed, so run `lunora codegen` first.
 
 **Hand-rolled `createWorker` entry.** Call the scaffolded `mountAuth` first in
-`fetch`, then resolve the identity:
+`fetch`, then hand every other request to the Lunora worker, which resolves the
+identity:
 
 ```ts
+import type { AuthEnv } from "../../lunora/auth/index.js";
 import { getAuth, mountAuth } from "../../lunora/auth/index.js";
 
-// in fetch(request, env, ctx):
-const authResponse = await mountAuth(env, request);
-if (authResponse) return authResponse;
-
-createWorker({
-    resolveIdentity: async (req) => {
-        const session = await getAuth(env).api.getSession({ headers: req.headers });
+const worker = createWorker({
+    resolveIdentity: async (req, env) => {
+        const session = await getAuth(env as AuthEnv).api.getSession({ headers: req.headers });
         return session?.user ? { userId: session.user.id } : null;
     },
     // …
 });
+
+export default {
+    async fetch(request: Request, env: AuthEnv, ctx: ExecutionContext): Promise<Response> {
+        const authResponse = await mountAuth(env, request);
+        if (authResponse) return authResponse;
+        return worker.fetch(request, env, ctx); // RPC, WebSocket, everything else
+    },
+};
 ```
 
 ## Step 4: Providers and add-ons (optional)
@@ -163,9 +176,9 @@ import { createLunoraAuthClient } from "@lunora/auth/plugins/client";
 import { Authenticated, AuthLoading, Unauthenticated, useAuth } from "@lunora/react";
 import { createAuthClient } from "better-auth/react";
 
-export const authClient = createLunoraAuthClient(createAuthClient, { plugins: { twoFactor: true } });
+export const authClient = createLunoraAuthClient(createAuthClient);
 
-function Account() {
+function Account({ email, password }: { email: string; password: string }) {
     const { user } = useAuth(); // { setToken, status, token, user }
 
     return (
@@ -186,6 +199,11 @@ function Account() {
     );
 }
 ```
+
+A client plugin toggle such as `{ plugins: { twoFactor: true } }` only adds
+the client half. Register the matching server plugin (`twoFactor()` from
+`@lunora/auth/plugins`) in `buildAuth`'s `plugins` too, or its endpoints don't
+exist.
 
 `setToken` is only for bearer-token setups, such as React Native or a JWT from
 an external IdP.

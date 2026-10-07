@@ -15,23 +15,25 @@ table, or a new non-unique index. Those are additive and deploy as-is.
 
 Check the table's modifier in `lunora/schema.ts` first; the tools differ.
 
-| Table                                | Where rows live                      | Structural DDL                                                 | Data backfill                        |
-| ------------------------------------ | ------------------------------------ | -------------------------------------------------------------- | ------------------------------------ |
-| default (root) or `.shardBy(key)`    | SQLite in the root / per-key ShardDO | Applied by the runtime from the schema                         | `defineMigration` + `lunora migrate` |
-| `.global()`                          | D1 (`DB` binding)                    | Additive DDL auto-provisioned; destructive SQL applied by hand | `defineMigration` + `lunora migrate` |
-| `.global({ backend: "hyperdrive" })` | Postgres/MySQL via Hyperdrive        | Additive DDL auto-provisioned; no `migrate generate` support   | `defineMigration` + `lunora migrate` |
+| Table                                | Where rows live                      | Structural DDL                                                 | Data backfill                          |
+| ------------------------------------ | ------------------------------------ | -------------------------------------------------------------- | -------------------------------------- |
+| default (root) or `.shardBy(key)`    | SQLite in the root / per-key ShardDO | Applied by the runtime from the schema                         | `defineMigration` + `lunora migrate`   |
+| `.global()`                          | D1 (`DB` binding)                    | Additive DDL auto-provisioned; destructive SQL applied by hand | SQL `UPDATE` via `wrangler d1 execute` |
+| `.global({ backend: "hyperdrive" })` | Postgres/MySQL via Hyperdrive        | Additive DDL auto-provisioned; no `migrate generate` support   | SQL `UPDATE` against the database      |
 
 ## The pattern: widen, migrate, narrow
 
-The schema-drift gate blocks a breaking change unless a new migration on that
-table covers it, so stage every breaking change across deploys:
+The schema-drift gate blocks a breaking change; one that needs a backfill is
+let through once a new migration on that table covers it (the rest are listed
+below). Stage every such change across deploys:
 
 1. **Widen.** Make the schema accept both shapes: add the new field as
    `v.optional(...)`, keep the old one. Make reads handle both, and start
    writing the new shape on every insert/patch so rows created during the
    migration aren't missed. Deploy.
 2. **Migrate.** Backfill existing rows with a `defineMigration`, run it with
-   `lunora migrate up`, and confirm with `lunora migrate status`.
+   `lunora migrate up`, and confirm with `lunora migrate status`. On a
+   `.global()` table, backfill with SQL instead (see below).
 3. **Narrow.** Make the field required / drop the old one, remove the
    both-shapes code. Deploy.
 
@@ -175,6 +177,13 @@ The file is multi-statement, so it is not a `@lunora/d1` `Migration`. Commit
 Hyperdrive-backed tables are left out of `migrate generate` (it emits SQLite
 DDL). Write destructive DDL for them by hand against your database. See
 `lunora-setup-hyperdrive-global`.
+
+`defineMigration` does not reach `.global()` rows on either backend: it runs
+inside each shard's Durable Object against that shard's SQLite, never D1 or
+Hyperdrive. Backfill a global table with a SQL `UPDATE` (D1: `wrangler d1
+execute`; Hyperdrive: your Postgres/MySQL client). The drift gate still keys on
+a migration naming the table, so once the SQL backfill is done, deploy the
+narrowing change with `--allow-schema-drift` rather than a no-op migration.
 
 ### Moving a dataset from D1 to Hyperdrive
 

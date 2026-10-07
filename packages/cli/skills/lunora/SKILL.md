@@ -33,7 +33,8 @@ lunora verify    # wrangler config + codegen dry-run + tsc --noEmit; writes noth
 `server.ts`, `dataModel.ts`, `shard.ts`, `app.ts`, `openapi.ts`, …; it prints
 the exact list) and reports schema advisories and platform diagnostics. It does
 not run `tsc`, so use `lunora verify` as the check that the code you wrote is
-done. `lunora dev` re-runs codegen on save, and `lunora deploy` runs it too.
+done. Its `tsc --noEmit` step runs only when the project has a `tsconfig.json`
+(otherwise it warns and skips) and is turned off by `--no-typecheck`. `lunora dev` re-runs codegen on save, and `lunora deploy` runs it too.
 Scaffolded projects gitignore `lunora/_generated/`; never hand-edit it.
 
 ## Route to the right skill

@@ -18,7 +18,9 @@ edit:
 
 1. `lunora codegen` — regenerates `lunora/_generated/` and prints advisor
    findings (it does not run `tsc`).
-2. `lunora verify` — codegen dry-run plus `tsc --noEmit`, no files written.
+2. `lunora verify` — codegen dry-run plus `tsc --noEmit`, no files written. The
+   type-check needs a `tsconfig.json` (without one it warns and skips) and is
+   off under `--no-typecheck`.
 
 ## When to Use
 
@@ -131,8 +133,16 @@ export const send = mutation
     });
 
 export const notifySlack = action.input({ channelId: v.id("channels") }).action(async ({ ctx, args: { channelId } }) => {
+    // A public action is callable by anyone: gate it like a mutation (and check
+    // channel access too, if your app has per-channel membership).
+    if (!ctx.auth.userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
     const messages = await ctx.runQuery(api.messages.listByChannel, { channelId });
-    await fetch(String(ctx.env?.SLACK_WEBHOOK_URL), { method: "POST", body: JSON.stringify(messages) });
+    const response = await fetch(String(ctx.env?.SLACK_WEBHOOK_URL), { method: "POST", body: JSON.stringify(messages) });
+    if (!response.ok) {
+        throw new Error(`Slack webhook failed: ${String(response.status)}`); // fetch resolves on 4xx/5xx
+    }
 });
 ```
 
@@ -191,11 +201,12 @@ as-is; the client hook (`usePaginatedQuery`, see `lunora-realtime`) supplies it:
 
 ```ts
 // `v.any()` would type the arg `unknown`, which `.paginate()` rejects. The hook
-// also sends `endCursor`; an undeclared key is stripped, so declare it.
+// also sends `endCursor`; an undeclared key is stripped, so declare it. Bound
+// `numItems` too: it is caller input and sets the read limit.
 const cursor = v.optional(v.union(v.string(), v.null()));
 
 export const page = query
-    .input({ channelId: v.id("channels"), paginationOpts: v.object({ cursor, endCursor: cursor, numItems: v.number() }) })
+    .input({ channelId: v.id("channels"), paginationOpts: v.object({ cursor, endCursor: cursor, numItems: v.number().int().min(1).max(100) }) })
     .query(async ({ ctx, args: { channelId, paginationOpts } }) =>
         ctx.db
             .query("messages")
@@ -263,19 +274,20 @@ scans the `lunora/` source set and turns a capability on only when a file there
 imports its `@lunora/*` package or reads its `ctx.*` helper. Write the call
 first, then run `lunora codegen` to wire the binding and typed context:
 
-| `ctx.*`                                                                                   | Package                       |
-| ----------------------------------------------------------------------------------------- | ----------------------------- |
-| `ctx.scheduler` (mutations + actions; see `lunora-setup-scheduler`)                       | `@lunora/scheduler`           |
-| `ctx.storage` (R2; see `lunora-setup-storage`)                                            | `@lunora/storage`             |
-| `ctx.ai`                                                                                  | `@lunora/ai` (Workers AI)     |
-| `ctx.flags`                                                                               | `@lunora/flags` (OpenFeature) |
-| `ctx.queues.<name>`                                                                       | `@lunora/queue`               |
-| `ctx.topics.<name>` (pub/sub, see below)                                                  | `@lunora/queue`               |
-| `ctx.workflows` / `ctx.runStep`                                                           | `@lunora/workflow`            |
-| `ctx.containers`                                                                          | `@lunora/container`           |
-| `ctx.browser` (action-only)                                                               | `@lunora/browser`             |
-| `ctx.sql` (action-only)                                                                   | `@lunora/hyperdrive`          |
-| `ctx.kv` / `ctx.images` / `ctx.analytics` / `ctx.pipelines` / `ctx.vectors` / `ctx.r2sql` | `@lunora/bindings` subpaths   |
+| `ctx.*`                                                             | Package                       |
+| ------------------------------------------------------------------- | ----------------------------- |
+| `ctx.scheduler` (mutations + actions; see `lunora-setup-scheduler`) | `@lunora/scheduler`           |
+| `ctx.storage` (R2; see `lunora-setup-storage`)                      | `@lunora/storage`             |
+| `ctx.ai`                                                            | `@lunora/ai` (Workers AI)     |
+| `ctx.flags`                                                         | `@lunora/flags` (OpenFeature) |
+| `ctx.queues.<name>`                                                 | `@lunora/queue`               |
+| `ctx.topics.<name>` (pub/sub, see below)                            | `@lunora/queue`               |
+| `ctx.workflows` / `ctx.runStep`                                     | `@lunora/workflow`            |
+| `ctx.containers`                                                    | `@lunora/container`           |
+| `ctx.browser` (action-only)                                         | `@lunora/browser`             |
+| `ctx.sql` (action-only)                                             | `@lunora/hyperdrive`          |
+| `ctx.kv` / `ctx.images` / `ctx.analytics`                           | `@lunora/bindings` subpaths   |
+| `ctx.pipelines` / `ctx.vectors` / `ctx.r2sql`                       | `@lunora/bindings` subpaths   |
 
 One exception to the usage scan, and one extra requirement:
 
@@ -411,16 +423,25 @@ const encoder = new TextEncoder();
 const verifyStripe = async (secret: string, header: string | undefined, payload: string): Promise<boolean> => {
     const fields = header?.split(",").map((part) => part.split("=", 2)) ?? [];
     const t = fields.find(([k]) => k === "t")?.[1];
-    const v1 = fields.find(([k]) => k === "v1")?.[1];
+    // While a secret is being rolled Stripe sends one `v1` per secret; accept any.
+    const v1s = fields.filter(([k, value]) => k === "v1" && /^[\da-f]{64}$/.test(value ?? "")).map(([, value]) => value ?? "");
 
-    if (!t || !v1 || !/^[\da-f]{64}$/.test(v1) || Math.abs(Date.now() / 1000 - Number(t)) > 300) {
+    if (!t || v1s.length === 0 || Math.abs(Date.now() / 1000 - Number(t)) > 300) {
         return false; // missing, malformed, or outside the 5-minute replay window
     }
 
     const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
-    const signature = Uint8Array.from(v1.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
+    const signed = encoder.encode(`${t}.${payload}`);
 
-    return crypto.subtle.verify("HMAC", key, signature, encoder.encode(`${t}.${payload}`)); // constant-time
+    for (const v1 of v1s) {
+        const signature = Uint8Array.from(v1.match(/../g) ?? [], (byte) => Number.parseInt(byte, 16));
+
+        if (await crypto.subtle.verify("HMAC", key, signature, signed)) {
+            return true; // constant-time compare
+        }
+    }
+
+    return false;
 };
 
 // A plain Hono handler, not `httpAction`: the action ctx (`c.var.lunora`) has

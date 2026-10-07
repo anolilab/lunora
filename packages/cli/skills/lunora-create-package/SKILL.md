@@ -125,16 +125,18 @@ pnpm run api:update   # writes api-snapshots/search.api.md from the fresh build;
 ## Wiring a `ctx.*` capability into codegen
 
 Codegen decides which `ctx.*` fields exist by detecting usage, so a new
-binding-backed helper is a row in `CAPABILITIES`
-(`packages/codegen/src/capabilities.ts`): its package, `ctx` property, tier
+binding-backed helper is a literal row in `CAPABILITY_ROWS`
+(`packages/codegen/src/capabilities.ts`; `CAPABILITIES` is a read-only view of
+it): its package, `ctx` property, tier
 (`"every"` or `"action"`-only), ctx type fragment, ShardDO binding, and
 `defineApp` method. Rate the feature for every target in the
 `PlatformCapabilities` matrices in `@lunora/platform`
 (`packages/platform/src/capabilities/`) as `native`, `emulated` or
 `unsupported` in the same change. A feature a target leaves unrated is dropped
 from that target's generated surface with a diagnostic. Declaration-gated
-surfaces (flags, notify, containers, workflows, queues, agents) have their own
-emitters instead of a table row.
+surfaces (flags, notify, containers, workflows, queues, agents) also have their
+own emitters; some of them (flags, notify, containers, workflows) keep a row too,
+for usage probing, so a row and a dedicated emitter can coexist.
 
 Document in the README any `lunora/*.ts` declaration the user must add for
 codegen to emit the typed surface.

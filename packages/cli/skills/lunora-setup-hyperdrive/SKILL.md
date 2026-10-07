@@ -114,9 +114,15 @@ Pick one approach:
 `defineSchema` table through a mutation. That write is tracked:
 
 ```ts
+import { LunoraError } from "lunorash/server";
+
 import { internal } from "#lunora/_generated/internal.js";
 
 const [row] = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where id = $1", [id]);
+
+if (!row) {
+    throw new LunoraError("NOT_FOUND", `order ${id} not found`);
+}
 
 // Re-runs live queries over `orders`. ctx.run* takes a generated reference, not a "file:fn" string.
 await ctx.runMutation(internal.orders.upsert, { id: row.id, total: row.total });

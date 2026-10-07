@@ -38,16 +38,16 @@ call to them returns `FUNCTION_NOT_FOUND`.
 The copied file builds its mailer with `createMailerFromEnv`. That function
 picks the transport in this order:
 
-| Condition                                                                                   | Transport                                           |
-| ------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `LUNORA_MAIL_CAPTURE=1`, or every env-name var (`WORKER_ENV`, `NODE_ENV`, …) looks like dev | **Capture** into the Studio Mail tab                |
-| `SEND_EMAIL` binding present                                                                | Cloudflare Email Workers                            |
-| no binding, `RESEND_API_KEY` secret set                                                     | Resend                                              |
-| none of the above                                                                           | throws on send (production never captures silently) |
+| Condition                                             | Transport                                           |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| `LUNORA_MAIL_CAPTURE=1`, or a dev environment (below) | **Capture** into the Studio Mail tab                |
+| `SEND_EMAIL` binding present                          | Cloudflare Email Workers                            |
+| no binding, `RESEND_API_KEY` secret set               | Resend                                              |
+| none of the above                                     | throws on send (production never captures silently) |
 
 - **Cloudflare Email Workers.** The binding sends to a single recipient, and only to verified [Email Routing](https://developers.cloudflare.com/email-routing/) destinations. That fits app-to-operator mail. Verify the address and replace the placeholder.
 - **Resend.** Use this to send to arbitrary users. Run `wrangler secret put RESEND_API_KEY` and remove the `send_email` binding. While the binding exists it takes precedence over Resend.
-- **Capture.** `lunora dev` sets `WORKER_ENV=development`, so capture is on in dev. Capture writes to the root shard. If `SHARD` or `LUNORA_ADMIN_TOKEN` is missing, captured mail is discarded and a one-time warning is logged. To deliver for real from dev, set `LUNORA_MAIL_CAPTURE=0`.
+- **Capture.** Capture turns on when every env-name var (`WORKER_ENV`, `NODE_ENV`, …) looks like dev. `lunora dev` sets `WORKER_ENV=development`, so capture is on in dev. Capture writes to the root shard. If `SHARD` or `LUNORA_ADMIN_TOKEN` is missing, captured mail is discarded and a one-time warning is logged. To deliver for real from dev, set `LUNORA_MAIL_CAPTURE=0`.
 
 `MAIL_FROM` is required on every path. It accepts `Name <addr@host>` or a bare
 address.
@@ -71,6 +71,9 @@ export const inviteMember = mutation.input({ teamId: v.id("teams"), email: v.str
     });
 });
 ```
+
+Sending to an arbitrary `args.email` needs the Resend path in production: the
+`SEND_EMAIL` binding only reaches its verified destination.
 
 From an action, call `await ctx.runAction(internal.mail.sendEmail, { … })`.
 
@@ -99,10 +102,12 @@ For the auth flows, `lunora add auth-emails` adds ready-made templates.
 
 `queueEmail` requires a Cloudflare Queue producer binding passed as
 `createMailer({ queue })`, and the item doesn't add one. Without it, the call
-throws `` `queue` binding is required for mailer.queue() ``. A consumer drains
-the queue with `consumeQueuedSend(mailer, message.body)` and then calls
-`message.ack()` for each message. Queues deliver at least once, so a single
-throw would otherwise resend the whole batch. The full wiring is in the "Queueing"
+throws `` `queue` binding is required for mailer.queue() ``, except under
+capture, where it sends straight to the capture inbox so dev flows keep working.
+A consumer drains the queue with `consumeQueuedSend(mailer, message.body)` and
+then calls `message.ack()` for each message. Queues deliver at least once: with
+per-message acks a later throw retries only the unacknowledged messages, while
+without them a single throw resends the whole batch. The full wiring is in the "Queueing"
 section of the item README.
 
 ## Testing and inbound
@@ -112,5 +117,5 @@ section of the item README.
 
 ## Verify
 
-1. Run `lunora dev` and trigger a send. The message should appear in the Studio Mail tab.
+1. Run `lunora dev` and trigger a send. With `SHARD` and `LUNORA_ADMIN_TOKEN` set, the message should appear in the Studio Mail tab; if either is missing, capture discards it and logs a warning.
 2. Before deploying, run `lunora doctor`. It flags the placeholder destination. Confirm that `MAIL_FROM` is set, and that either the binding uses a verified destination or `RESEND_API_KEY` is set with the binding removed.

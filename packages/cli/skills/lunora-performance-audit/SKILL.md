@@ -129,9 +129,10 @@ not retry it; a mutation body runs at most once per call, and the caller
 decides what to do. On the client, check with `isConflictError(error)` from
 `@lunora/client` (also exported via `lunorash/client`).
 
-Not every 409 is contention: `ConflictError.kind` is `"occ"` for real write
-contention, and `"unique"`, `"restrict"` or `"trigger"` for constraint and guard
-failures. `insights` counts only `occ` as a write conflict, so fix a `unique`
+Not every 409 is contention. On the server, `ConflictError.kind` is `"occ"` for
+real write contention, and `"unique"`, `"restrict"` or `"trigger"` for
+constraint and guard failures. The client only sees `code: "CONFLICT"` (`kind`
+is not part of the error envelope), so it cannot tell them apart. `insights` counts only `occ` as a write conflict, so fix a `unique`
 409 in the data or the insert logic, not by sharding.
 
 Fixes, in order:
