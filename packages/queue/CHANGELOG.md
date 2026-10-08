@@ -1,3 +1,14 @@
+## @lunora/queue [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.96...@lunora/queue@1.0.0-alpha.97) (2026-10-08)
+
+### Bug Fixes
+
+* **queue:** route renamed queues, add maxConcurrency, type ctx.queues ([#1041](https://github.com/anolilab/lunora/issues/1041)) ([57c6a86](https://github.com/anolilab/lunora/commit/57c6a867ca68630d8662fe78196c4afa6cf35517))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.58
+
 ## @lunora/queue [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/queue@1.0.0-alpha.95...@lunora/queue@1.0.0-alpha.96) (2026-10-08)
 
 ### Bug Fixes

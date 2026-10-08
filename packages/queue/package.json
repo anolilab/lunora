@@ -1,6 +1,6 @@
 {
     "name": "@lunora/queue",
-    "version": "1.0.0-alpha.96",
+    "version": "1.0.0-alpha.97",
     "description": "Cloudflare Queues for Lunora: defineQueue producers + consumers, the ctx.queues surface, and the generated queue() worker handler",
     "keywords": [
         "background-jobs",
@@ -60,7 +60,7 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/platform": "1.0.0-alpha.57"
+        "@lunora/platform": "1.0.0-alpha.58"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
