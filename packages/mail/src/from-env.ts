@@ -34,7 +34,11 @@ const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as 
 
 /** Options for {@link createMailerFromEnv}. */
 interface FromEnvOptions {
-    /** RFC 822 send callback bound to the Worker's `send_email` binding (Cloudflare default transport). */
+    /**
+     * RFC 822 send callback bound to the Worker's `send_email` binding (Cloudflare
+     * default transport). Used only when `env.SEND_EMAIL` is set, so it can be
+     * passed unconditionally.
+     */
     cloudflareSend?: CloudflareSend;
 
     /**
@@ -172,9 +176,13 @@ const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD,
 /**
  * Build a {@link Mailer} from a Worker `env`. In a dev environment every send is
  * captured into the studio's Mail inbox; otherwise it delivers via the supplied
- * `cloudflareSend` (the `SEND_EMAIL` binding) or, failing that, `RESEND_API_KEY`.
- * Throws when neither a capture context nor a real transport is available, so a
- * misconfigured production deploy fails loudly instead of silently dropping mail.
+ * `cloudflareSend` (used only when the `SEND_EMAIL` binding is present) or,
+ * failing that, `RESEND_API_KEY`. With no real transport `send()` rejects, so a
+ * misconfigured production deploy fails loudly instead of silently dropping mail
+ * — while `queue()` still works for a producer-only worker.
+ *
+ * A queue consumer should build its mailer here too: `consumeQueuedSend` goes
+ * through `send()`, so in dev queued mail is captured at consume time.
  *
  * `MAIL_FROM` is required (the default sender).
  */
@@ -185,20 +193,15 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
         return createMailer({ from, queue: options.queue, transport: createCaptureTransport(createCaptureSink(env, options.rootShard, options.jurisdiction)) });
     }
 
-    if (options.cloudflareSend) {
-        return createMailer({ cloudflareSend: options.cloudflareSend, from, queue: options.queue });
-    }
+    // `cloudflareSend` wraps the `SEND_EMAIL` binding, so honour it only when that
+    // binding exists — otherwise a Resend-only deploy would throw inside it
+    // instead of falling back to `RESEND_API_KEY`.
+    const cloudflareSend = env["SEND_EMAIL"] === undefined ? undefined : options.cloudflareSend;
+    const apiKey = typeof env["RESEND_API_KEY"] === "string" && env["RESEND_API_KEY"] !== "" ? env["RESEND_API_KEY"] : undefined;
 
-    const apiKey = typeof env["RESEND_API_KEY"] === "string" ? env["RESEND_API_KEY"] : undefined;
-
-    if (apiKey !== undefined && apiKey !== "") {
-        return createMailer({ apiKey, from, queue: options.queue });
-    }
-
-    throw new LunoraError(
-        "INTERNAL",
-        "@lunora/mail: no transport configured — provide `cloudflareSend` (a SEND_EMAIL binding) or RESEND_API_KEY, or run in a dev environment to capture.",
-    );
+    // With neither, a producer-only mailer (it has a `queue`) is still built and
+    // only `send()` rejects; `createMailer` owns that rule.
+    return createMailer({ apiKey, cloudflareSend, from, queue: options.queue });
 };
 
 export { createCaptureSink, createMailerFromEnv, shouldCaptureMail };
