@@ -85,7 +85,7 @@ describe("createNodeQueueHost", () => {
             },
         ]);
 
-        await topics.signups!.publish({ userId: "u1" });
+        await topics.signups.publish({ userId: "u1" });
 
         await expect(host.poll()).resolves.toBe(2);
 
