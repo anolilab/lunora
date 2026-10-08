@@ -162,16 +162,16 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/cli": "1.0.0-alpha.364",
-        "@lunora/client": "1.0.0-alpha.190",
-        "@lunora/do": "1.0.0-alpha.200",
+        "@lunora/cli": "1.0.0-alpha.365",
+        "@lunora/client": "1.0.0-alpha.191",
+        "@lunora/do": "1.0.0-alpha.201",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/flags": "1.0.0-alpha.66",
-        "@lunora/observability": "1.0.0-alpha.127",
-        "@lunora/platform": "1.0.0-alpha.57",
-        "@lunora/ratelimit": "1.0.0-alpha.119",
-        "@lunora/runtime": "1.0.0-alpha.186",
-        "@lunora/server": "1.0.0-alpha.186",
+        "@lunora/observability": "1.0.0-alpha.128",
+        "@lunora/platform": "1.0.0-alpha.58",
+        "@lunora/ratelimit": "1.0.0-alpha.120",
+        "@lunora/runtime": "1.0.0-alpha.187",
+        "@lunora/server": "1.0.0-alpha.187",
         "@lunora/values": "1.0.0-alpha.61"
     },
     "devDependencies": {
