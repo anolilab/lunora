@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.125...@lunora/platform-node@1.0.0-alpha.126) (2026-10-08)
+
+### Bug Fixes
+
+* **queue:** route renamed queues, add maxConcurrency, type ctx.queues ([#1041](https://github.com/anolilab/lunora/issues/1041)) ([57c6a86](https://github.com/anolilab/lunora/commit/57c6a867ca68630d8662fe78196c4afa6cf35517))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.169
+* **@lunora/platform:** upgraded to 1.0.0-alpha.58
+* **@lunora/queue:** upgraded to 1.0.0-alpha.97
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.170
+* **@lunora/do:** upgraded to 1.0.0-alpha.201
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.79
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.187
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.119
+* **@lunora/storage:** upgraded to 1.0.0-alpha.122
+
 ## @lunora/platform-node [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.124...@lunora/platform-node@1.0.0-alpha.125) (2026-10-08)
 
 ### Bug Fixes
