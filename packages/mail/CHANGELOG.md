@@ -1,3 +1,14 @@
+## @lunora/mail [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.101...@lunora/mail@1.0.0-alpha.102) (2026-10-08)
+
+### Bug Fixes
+
+* **mail:** lazy renderer, queue without transport, README fix ([#1042](https://github.com/anolilab/lunora/issues/1042)) ([36f883d](https://github.com/anolilab/lunora/commit/36f883d798e22127bc30e48f4f673bc443b7917c))
+
+
+### Dependencies
+
+* **@visulima/email:** 3.0.26 → 3.0.28
+
 ## @lunora/mail [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.100...@lunora/mail@1.0.0-alpha.101) (2026-10-07)
 
 
