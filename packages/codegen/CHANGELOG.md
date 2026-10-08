@@ -1,3 +1,22 @@
+## @lunora/codegen [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.278...@lunora/codegen@1.0.0-alpha.279) (2026-10-08)
+
+### Bug Fixes
+
+* **queue:** route renamed queues, add maxConcurrency, type ctx.queues ([#1041](https://github.com/anolilab/lunora/issues/1041)) ([57c6a86](https://github.com/anolilab/lunora/commit/57c6a867ca68630d8662fe78196c4afa6cf35517))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.201
+* **@lunora/agent:** upgraded to 1.0.0-alpha.189
+* **@lunora/platform:** upgraded to 1.0.0-alpha.58
+* **@lunora/queue:** upgraded to 1.0.0-alpha.97
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.116
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.103
+* **@lunora/do:** upgraded to 1.0.0-alpha.201
+* **@lunora/server:** upgraded to 1.0.0-alpha.187
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.119
+
 ## @lunora/codegen [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.277...@lunora/codegen@1.0.0-alpha.278) (2026-10-08)
 
 ### Bug Fixes
