@@ -6,7 +6,7 @@ import { routingPushProvider } from "../src/providers";
 import { d1SubscriptionStore } from "../src/subscriptions/d1-store";
 import { memorySubscriptionStore } from "../src/subscriptions/memory-store";
 import { legacyWebPushId } from "../src/subscriptions/normalize";
-import type { NotifyDefinition, SubscriptionStore } from "../src/types";
+import type { NotifyDefinition, PushContent, SubscriptionStore } from "../src/types";
 import { fakeD1, FCM_DEAD_TOKEN_ERROR, mockChatProvider, mockEngine, mockFlakyPushProvider, mockPushProvider, mockThrowingPushProvider } from "./helpers";
 
 const baseDefinition = (store: SubscriptionStore, chat = false): NotifyDefinition => {
@@ -143,6 +143,17 @@ describe("ctx.push lifecycle", () => {
 
         await expect(push.send(stored.id, { body: "x", ttl: -1 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
         await expect(push.broadcast({ body: "x", ttl: 1.5 })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(sends).toHaveLength(0);
+    });
+
+    it("rejects an unknown urgency with BAD_REQUEST before sending", async () => {
+        expect.hasAssertions();
+
+        const { push, sends } = setup();
+        const stored = await push.register({ subscription: okSub });
+
+        await expect(push.send(stored.id, { body: "x", urgency: "asap" } as unknown as PushContent)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        await expect(push.broadcast({ body: "x", urgency: "asap" } as unknown as PushContent)).rejects.toMatchObject({ code: "BAD_REQUEST" });
         expect(sends).toHaveLength(0);
     });
 

@@ -664,7 +664,7 @@ catalogs:
     "@react-email/render": 2.1.0
     "postal-mime": 3.0.1
   notify:
-    "@visulima/notification": 1.1.22
+    "@visulima/notification": 1.2.0
   mcp:
     "@modelcontextprotocol/sdk": ^1.32.0
     # The SDK's eval-free JSON Schema provider (`sdk/validation/cfworker`) needs
@@ -1073,6 +1073,9 @@ minimumReleaseAgeExclude:
   - '@types/react@19.2.16'
   - '@visulima/email@1.0.0-alpha.41'
   - '@visulima/find-ai-runner@1.0.0-alpha.9'
+  # Per-message ttl/urgency (visulima/visulima#936), published 2026-10-08 —
+  # dead weight after 2026-10-09, drop it then.
+  - '@visulima/notification@1.2.0'
   # User-authorized one-off for the upstream storage fixes: storage 2.0.33 +
   # storage-client 1.0.8 (visulima/visulima#923, #925, on top of #899-#921).
   # Remove these entries once they are 24h old: storage 2026-10-06 22:16 UTC,

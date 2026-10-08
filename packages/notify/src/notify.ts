@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { Notification, Provider, Receipt } from "@visulima/notification";
 
 import type { ResolvedProviders } from "./providers";
-import { buildEngine, checkPushTtl } from "./providers";
+import { buildEngine, checkPushTtl, checkPushUrgency } from "./providers";
 import { memorySubscriptionStore } from "./subscriptions/memory-store";
 import { isGoneError, normalizeRegisterInput, targetOf } from "./subscriptions/normalize";
 import type {
@@ -461,6 +461,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
      */
     const broadcastPage = async (payload: PushContent, filter?: SubscriptionFilter): Promise<BroadcastPageResult> => {
         checkPushTtl(payload.ttl);
+        checkPushUrgency(payload.urgency);
 
         // A non-positive `limit` means "deliver to nobody" at this (audience-cap)
         // layer — NOT "no cap", which is the store layer's convention for the same
@@ -572,6 +573,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         },
         send: async (target: StoredSubscription | string, payload: PushContent): Promise<Receipt> => {
             checkPushTtl(payload.ttl);
+            checkPushUrgency(payload.urgency);
 
             const { error, receipt } = await deliver(await resolveSubscription(target), payload, true);
 

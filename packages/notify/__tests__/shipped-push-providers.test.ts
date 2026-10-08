@@ -205,16 +205,20 @@ describe("shipped push providers", () => {
             expect(requests[0]?.headers).toMatchObject({ TTL: "2419200", Urgency: "normal" });
         });
 
-        it.each([-1, 1.5, Number.NaN])("rejects a ttl of %s with BAD_REQUEST before sending", async (ttl) => {
+        it.each([-1, 1.5, Number.NaN])("rejects a ttl of %s before sending", async (ttl) => {
             expect.hasAssertions();
 
             const keys = await vapidKeys();
             const requests = stubFetch(() => true);
 
+            // Upstream validates `payload.ttl` itself since @visulima/notification
+            // 1.2.0 (the wrapper this suite used to drive through is gone), so the
+            // wording below is its own. The facade's BAD_REQUEST wording — which is
+            // what apps see via ctx.push.send/broadcast — is asserted in notify.test.ts.
             const message: PushContent & { to: string } = { body: "b", title: "t", to: subscription("good", keys.vapidPublicKey), ttl };
             const result = await engineFor(keys).sendToChannel("push", message);
 
-            expect(result).toMatchObject({ errorMessages: [expect.stringContaining("push ttl must be a non-negative integer")], successful: false });
+            expect(result).toMatchObject({ errorMessages: [expect.stringContaining("Invalid ttl: expected a non-negative integer")], successful: false });
             expect(requests).toHaveLength(0);
         });
     });
