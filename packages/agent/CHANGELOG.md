@@ -1,3 +1,20 @@
+## @lunora/agent [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.187...@lunora/agent@1.0.0-alpha.188) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.120
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/mail:** upgraded to 1.0.0-alpha.103
+* **@lunora/server:** upgraded to 1.0.0-alpha.186
+* **@lunora/values:** upgraded to 1.0.0-alpha.61
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.72
+* **@lunora/container:** upgraded to 1.0.0-alpha.71
+
 ## @lunora/agent [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.186...@lunora/agent@1.0.0-alpha.187) (2026-10-08)
 
 
