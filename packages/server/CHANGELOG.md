@@ -1,3 +1,23 @@
+## @lunora/server [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.185...@lunora/server@1.0.0-alpha.186) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+### Code Refactoring
+
+* **testing:** extract the engine seam (plan 453 phase 1) ([#1032](https://github.com/anolilab/lunora/issues/1032)) ([2a7082c](https://github.com/anolilab/lunora/commit/2a7082c02d57f82fe338b8c7f2aeca0622d298a8))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.115
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+* **@lunora/values:** upgraded to 1.0.0-alpha.61
+* **@lunora/observability:** upgraded to 1.0.0-alpha.127
+* **@lunora/storage:** upgraded to 1.0.0-alpha.121
+
 ## @lunora/server [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.184...@lunora/server@1.0.0-alpha.185) (2026-10-07)
 
 ### ⚠ BREAKING CHANGES
