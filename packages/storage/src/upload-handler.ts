@@ -27,6 +27,19 @@
  * stored file. So is any request carrying a method-override header, which
  * would change the method after that check. Downloads go through
  * `ctx.storage.download()` or a signed URL.
+ *
+ * ## Workers compatibility
+ *
+ * The `node:async_hooks` import below is static, so it is this whole module —
+ * not just the `AsyncLocalStorage` construction — that fails on a Worker which
+ * cannot resolve it: the graph never loads, before any export is reached. On
+ * Workers, a `compatibility_date` of `2026-08-04` or later enables
+ * `nodejs_compat` (and `nodejs_compat_v2`) by default; earlier dates need
+ * `nodejs_compat`, or `nodejs_als` alone — the narrower flag that turns on
+ * `AsyncLocalStorage` only — in `compatibility_flags`. Deferring the
+ * construction below to first use would not lift the requirement while the
+ * import stays static. Node.js provides the module natively, so no flag
+ * applies there.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 

@@ -170,6 +170,15 @@ HTTP route and drive it from the client with `useUpload`. The handler wraps
 `@visulima/storage`'s handlers, and the client hooks re-export
 `@visulima/storage-client`, so Lunora does not hand-roll the wire protocol.
 
+The subpath statically imports `node:async_hooks` for the grant scope, and the
+R2 providers it re-exports import `node:stream`, so the Worker needs Node.js
+compatibility for the module to load at all. A `compatibility_date` of
+`2026-08-04` or later has `nodejs_compat` on by default; earlier ones need
+`nodejs_compat` in `compatibility_flags` (`nodejs_als` alone covers
+`AsyncLocalStorage`, but not `node:stream`). Without it the import fails when
+the module loads — the subpath never reaches `createUploadHandler`, so making
+its `AsyncLocalStorage` lazy would not help.
+
 One handler speaks one protocol:
 
 - `"tus"` (the default): resumable. The client can pause, resume, and continue

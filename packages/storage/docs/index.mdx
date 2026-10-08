@@ -281,6 +281,16 @@ resumable upload handlers (TUS / chunked-REST / multipart) behind an app-supplie
 walks through mounting it as an HTTP action, checking upload ownership, the
 client side, and the request-size limits. This is the reference.
 
+The subpath statically imports `node:async_hooks` (the grant scope is an
+`AsyncLocalStorage`) and, through the R2 providers, `node:stream`, so it needs
+Workers Node.js compatibility to load at all: a `compatibility_date` of
+`2026-08-04` or later enables `nodejs_compat` by default, and earlier ones need
+`nodejs_compat` in `compatibility_flags` (`nodejs_als` alone covers the
+`AsyncLocalStorage` import, but not `node:stream`). Without it the import fails
+when the module loads, so the subpath fails before `createUploadHandler` or
+`createUploadContext` is called — making the `AsyncLocalStorage` lazy would not
+change that.
+
 `createUploadHandler(options)` returns `{ fetch(request), protocol }`. Mount
 `fetch` on the route your client uploads to; one handler speaks one protocol, so
 each protocol needs its own route.
