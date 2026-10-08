@@ -18,6 +18,20 @@
 /** A plain, JSON-serialisable Web Push subscription (the shape `ctx.push.register` accepts). */
 import { fromBase64Url } from "../../../shared/base64";
 
+/**
+ * How long {@link existingRegistration} waits for a REGISTERED service worker to
+ * become active before failing (ms). Boundless, `navigator.serviceWorker.ready`
+ * never rejects — a worker stuck in `installing` forever (failed install,
+ * hung update script) leaves callers hanging. After this bound, the caller
+ * fails instead. Generous: activation normally completes in well under a second
+ * after the script is fetched; the bound only trades a permanent hang for a
+ * bounded failure.
+ */
+const READY_WAIT_TIMEOUT_MS = 30_000;
+
+/** The error message {@link existingRegistration} rejects with when the bound elapses. */
+const NEVER_ACTIVE_MESSAGE = "@lunora/notify: the registered service worker never became active";
+
 interface SerializedPushSubscription {
     endpoint: string;
     expirationTime: number | null;
@@ -114,6 +128,13 @@ const isPushSupported = (): boolean =>
  * registered for this page. `navigator.serviceWorker.ready` is awaited only while
  * the registration has no active worker yet (Push needs one): it never settles
  * without a registration, so a caller would hang instead of failing.
+ *
+ * `ready` also never rejects (Service Workers spec) — a registration whose
+ * worker never becomes active (a failed install, a permanently stuck update)
+ * leaves it pending forever. The wait is therefore bounded:
+ * {@link subscribeToPush} rejects with `NEVER_ACTIVE_MESSAGE` and
+ * {@link unsubscribeFromPush} resolves `false` when a registered worker never
+ * activates, instead of either hanging.
  */
 const existingRegistration = async (): Promise<ServiceWorkerRegistration | undefined> => {
     const registration = await navigator.serviceWorker.getRegistration();
@@ -122,7 +143,23 @@ const existingRegistration = async (): Promise<ServiceWorkerRegistration | undef
         return registration;
     }
 
-    return navigator.serviceWorker.ready;
+    return await new Promise<ServiceWorkerRegistration>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(NEVER_ACTIVE_MESSAGE));
+        }, READY_WAIT_TIMEOUT_MS);
+
+        navigator.serviceWorker.ready
+            .then((readyRegistration) => {
+                clearTimeout(timer);
+                resolve(readyRegistration);
+                return readyRegistration;
+            })
+            .catch((error: unknown) => {
+                clearTimeout(timer);
+                reject(error instanceof Error ? error : new Error(String(error)));
+                return undefined;
+            });
+    });
 };
 
 /**
@@ -198,7 +235,21 @@ const unsubscribeFromPush = async (): Promise<boolean> => {
         return false;
     }
 
-    const registration = await existingRegistration();
+    let registration: ServiceWorkerRegistration | undefined;
+
+    try {
+        registration = await existingRegistration();
+    } catch (error) {
+        // The registered worker never became active within the bound — there is
+        // nothing to unsubscribe, so this resolves `false` rather than rejecting
+        // (the "no registration" path returns `false`; the timeout path should
+        // too). Any other error (a real API failure) still propagates.
+        if (error instanceof Error && error.message === NEVER_ACTIVE_MESSAGE) {
+            return false;
+        }
+
+        throw error;
+    }
 
     if (registration === undefined) {
         return false;
@@ -210,4 +261,4 @@ const unsubscribeFromPush = async (): Promise<boolean> => {
 };
 
 export type { SerializedPushSubscription, SubscribeToPushOptions, SubscribeToPushResult };
-export { isPushSupported, subscribeToPush, unsubscribeFromPush };
+export { isPushSupported, READY_WAIT_TIMEOUT_MS, subscribeToPush, unsubscribeFromPush };

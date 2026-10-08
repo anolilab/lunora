@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isPushSupported, subscribeToPush, unsubscribeFromPush } from "../src/web";
+import { isPushSupported, READY_WAIT_TIMEOUT_MS, subscribeToPush, unsubscribeFromPush } from "../src/web";
 
 /**
  * Encode bytes as base64url — the inverse of `web.ts`'s `urlBase64ToUint8Array`,
@@ -229,6 +229,56 @@ describe("subscribeToPush — existing registration", () => {
         activate();
 
         await expect(pending).resolves.toMatchObject({ subscription: { endpoint: "https://push.example/fresh" } });
+    });
+});
+
+describe("subscribeToPush / unsubscribeFromPush — registered worker never becomes active", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+    });
+
+    /**
+     * A page where a registration EXISTS but its worker is stuck installing
+     * forever: `navigator.serviceWorker.ready` never settles (it also never
+     * rejects, per the spec), so without a bound both callers would hang.
+     */
+    const installStalled = (): void => {
+        const registration = { active: null, pushManager: undefined };
+
+        vi.stubGlobal("navigator", {
+            serviceWorker: {
+                getRegistration: async () => registration,
+                ready: new Promise(() => {}),
+            },
+        });
+        vi.stubGlobal("PushManager", () => {});
+        vi.stubGlobal("Notification", { requestPermission: async () => "granted" });
+    };
+
+    it("subscribeToPush rejects after the bound instead of hanging", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+        installStalled();
+
+        const pending = subscribeToPush({ vapidPublicKey: VAPID_PUBLIC_KEY });
+
+        // Subscribe to the rejection BEFORE the timers advance, so the bound's
+        // rejection is observed rather than flagged as unhandled — same shape as
+        // the queue capture suite's abort test.
+        await Promise.all([expect(pending).rejects.toThrow(/never became active/u), vi.advanceTimersByTimeAsync(READY_WAIT_TIMEOUT_MS)]);
+    });
+
+    it("unsubscribeFromPush resolves false after the bound instead of hanging", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+        installStalled();
+
+        const pending = unsubscribeFromPush();
+
+        await Promise.all([expect(pending).resolves.toBe(false), vi.advanceTimersByTimeAsync(READY_WAIT_TIMEOUT_MS)]);
     });
 });
 
