@@ -1,3 +1,25 @@
+## @lunora/codegen [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.277...@lunora/codegen@1.0.0-alpha.278) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.200
+* **@lunora/agent:** upgraded to 1.0.0-alpha.188
+* **@lunora/container:** upgraded to 1.0.0-alpha.71
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/queue:** upgraded to 1.0.0-alpha.96
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.115
+* **@lunora/values:** upgraded to 1.0.0-alpha.61
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.72
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.102
+* **@lunora/do:** upgraded to 1.0.0-alpha.200
+* **@lunora/server:** upgraded to 1.0.0-alpha.186
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+
 ## @lunora/codegen [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.276...@lunora/codegen@1.0.0-alpha.277) (2026-10-08)
 
 
