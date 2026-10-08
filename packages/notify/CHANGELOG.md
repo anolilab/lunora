@@ -1,3 +1,15 @@
+## @lunora/notify [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.76...@lunora/notify@1.0.0-alpha.77) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@visulima/notification:** 1.1.22 → 1.2.0
+
 ## @lunora/notify [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.75...@lunora/notify@1.0.0-alpha.76) (2026-10-07)
 
 ### ⚠ BREAKING CHANGES
