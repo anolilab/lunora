@@ -472,6 +472,12 @@ const webPushId: (endpoint: string) => string;
 
 ## `@lunora/notify/web`
 
+### `READY_WAIT_TIMEOUT_MS` (const)
+
+```ts
+const READY_WAIT_TIMEOUT_MS = 3e4;
+```
+
 ### `SerializedPushSubscription` (interface)
 
 ```ts
