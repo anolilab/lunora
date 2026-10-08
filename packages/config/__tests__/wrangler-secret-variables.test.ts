@@ -178,4 +178,12 @@ describe("wranglerCodegenInputs — wranglerVariables", () => {
         expect.assertions(1);
         expect(wranglerCodegenInputs(root).wranglerVariables).toHaveLength(0);
     });
+
+    it("returns [] when vars is null instead of throwing", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "vars": null }`, "utf8");
+
+        expect(wranglerCodegenInputs(root).wranglerVariables).toStrictEqual([]);
+    });
 });

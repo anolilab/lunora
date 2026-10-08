@@ -16,7 +16,7 @@ import type { QueuesShape } from "./wrangler-shape";
 interface WranglerCodegenShape {
     env?: Record<string, { queues?: QueuesShape | null } | null> | null;
     queues?: QueuesShape | null;
-    vars?: Record<string, unknown>;
+    vars?: Record<string, unknown> | null;
 }
 
 interface WranglerCodegenInputs {
@@ -49,7 +49,7 @@ const wranglerCodegenInputs = (projectRoot: string): WranglerCodegenInputs => {
 
     return {
         wranglerQueueProducers: [...producersOf(parsed.queues), ...Object.entries(parsed.env ?? {}).flatMap(([env, block]) => producersOf(block?.queues, env))],
-        wranglerVariables: scanWranglerVariablesForSecrets(parsed.vars, relative(projectRoot, wranglerPath)),
+        wranglerVariables: scanWranglerVariablesForSecrets(isPlainObject(parsed.vars) ? parsed.vars : undefined, relative(projectRoot, wranglerPath)),
     };
 };
 
