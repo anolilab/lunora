@@ -1,3 +1,15 @@
+## @lunora/testing [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.243...@lunora/testing@1.0.0-alpha.244) (2026-10-08)
+
+### Code Refactoring
+
+* **testing:** extract the engine seam (plan 453 phase 1) ([#1032](https://github.com/anolilab/lunora/issues/1032)) ([2a7082c](https://github.com/anolilab/lunora/commit/2a7082c02d57f82fe338b8c7f2aeca0622d298a8))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.187
+* **@lunora/mail:** upgraded to 1.0.0-alpha.102
+
 ## @lunora/testing [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.242...@lunora/testing@1.0.0-alpha.243) (2026-10-07)
 
 
