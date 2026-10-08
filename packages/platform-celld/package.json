@@ -1,6 +1,6 @@
 {
     "name": "@lunora/platform-celld",
-    "version": "1.0.0-alpha.2",
+    "version": "1.0.0-alpha.3",
     "description": "celld implementation of the Lunora platform contracts: the Cloudflare host adapters recomposed for celld (self-hosted distributed Durable Objects) under an honest capability matrix",
     "keywords": [
         "celld",
@@ -57,20 +57,20 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/platform": "1.0.0-alpha.57",
-        "@lunora/platform-cloudflare": "1.0.0-alpha.78"
+        "@lunora/platform": "1.0.0-alpha.58",
+        "@lunora/platform-cloudflare": "1.0.0-alpha.79"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/agent": "1.0.0-alpha.188",
+        "@lunora/agent": "1.0.0-alpha.189",
         "@lunora/ai": "1.0.0-alpha.120",
-        "@lunora/bindings": "1.0.0-alpha.102",
+        "@lunora/bindings": "1.0.0-alpha.103",
         "@lunora/container": "1.0.0-alpha.71",
-        "@lunora/d1": "1.0.0-alpha.168",
-        "@lunora/queue": "1.0.0-alpha.96",
-        "@lunora/shard-engine": "1.0.0-alpha.118",
-        "@lunora/storage": "1.0.0-alpha.121",
+        "@lunora/d1": "1.0.0-alpha.169",
+        "@lunora/queue": "1.0.0-alpha.97",
+        "@lunora/shard-engine": "1.0.0-alpha.119",
+        "@lunora/storage": "1.0.0-alpha.122",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
