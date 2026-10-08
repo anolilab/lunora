@@ -1,3 +1,16 @@
+## @lunora/sql-store [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.168...@lunora/sql-store@1.0.0-alpha.169) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+* **@lunora/do:** upgraded to 1.0.0-alpha.200
+
 ## @lunora/sql-store [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.167...@lunora/sql-store@1.0.0-alpha.168) (2026-10-06)
 
 
