@@ -73,7 +73,7 @@ export const listItems = query({
 
         refreshCodegenProject(project, lunoraDirectory);
 
-        const before = runCodegen({ lint: false, project, projectRoot: workdir });
+        const before = runCodegen({ lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(before.generated.functions).toContain("title: string");
         expect(before.generated.functions).not.toContain("age: number");
@@ -89,14 +89,14 @@ export const listItems = query({
         );
         refreshCodegenProject(project, lunoraDirectory);
 
-        const after = runCodegen({ lint: false, project, projectRoot: workdir });
+        const after = runCodegen({ lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(after.generated.functions).toContain("age: number");
 
         // Control (plan §3.2): a freshly-constructed Project over the same
         // post-edit source must agree byte-for-byte with the refreshed, reused
         // one — `vite dev` and `lunora codegen` may never disagree.
-        const fresh = runCodegen({ lint: false, projectRoot: workdir });
+        const fresh = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(after.generated.functions).toBe(fresh.generated.functions);
     });

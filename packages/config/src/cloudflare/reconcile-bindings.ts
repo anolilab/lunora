@@ -323,7 +323,7 @@ const bindingNameOwner = (parsed: WranglerShape, name: string): string | undefin
         }
     }
 
-    if (parsed.queues?.producers?.some((entry) => entry.binding === name) === true) {
+    if (parsed.queues?.producers?.some((entry) => entry?.binding === name) === true) {
         return "queues.producers";
     }
 

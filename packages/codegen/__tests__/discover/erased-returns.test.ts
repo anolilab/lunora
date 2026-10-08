@@ -180,7 +180,7 @@ const runCodegenFor = (sources: Record<string, string>): ReturnType<typeof runCo
         writeFileSync(join(workdir, "lunora", name), text, "utf8");
     }
 
-    return runCodegen({ projectRoot: workdir });
+    return runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 };
 
 const advisoriesFor = (sources: Record<string, string>): ReturnType<typeof runCodegen>["advisories"] => runCodegenFor(sources).advisories;
@@ -483,7 +483,9 @@ describe("procedure_return_type_erased across inference passes", () => {
         try {
             writeFileSync(join(resolvingWorkdir, "lunora", "probe.ts"), VIA_GENERATED_CALLER, "utf8");
 
-            const findings = runCodegen({ projectRoot: resolvingWorkdir }).advisories.filter((finding) => finding.name === "procedure_return_type_erased");
+            const findings = runCodegen({ projectRoot: resolvingWorkdir, wranglerQueueProducers: [] }).advisories.filter(
+                (finding) => finding.name === "procedure_return_type_erased",
+            );
 
             expect(findings).toHaveLength(1);
             expect(findings[0]?.metadata).toMatchObject({ exportName: "wrap", rendered: "{ v: number; } | Tree" });
@@ -513,7 +515,9 @@ describe("procedure_return_type_erased across inference passes", () => {
             writeFileSync(join(staleWorkdir, "lunora", "probe.ts"), VIA_STALE_CALLER, "utf8");
             writeFileSync(join(staleWorkdir, "lunora", "_generated", "functions.ts"), staleCallerFunctions(), "utf8");
 
-            const findings = runCodegen({ projectRoot: staleWorkdir }).advisories.filter((finding) => finding.name === "procedure_return_type_erased");
+            const findings = runCodegen({ projectRoot: staleWorkdir, wranglerQueueProducers: [] }).advisories.filter(
+                (finding) => finding.name === "procedure_return_type_erased",
+            );
 
             expect(findings).toHaveLength(0);
         } finally {

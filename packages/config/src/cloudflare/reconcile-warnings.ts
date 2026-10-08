@@ -168,7 +168,7 @@ const orphanedQueueWarnings = (inferred: InferredBindings, parsed: WranglerShape
                   ];
         }),
         ...(parsed.queues?.producers ?? []).flatMap((producer) => {
-            const { binding } = producer;
+            const binding = producer?.binding;
 
             return binding === undefined || declaredBindings.has(binding)
                 ? []

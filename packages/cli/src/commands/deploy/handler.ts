@@ -20,6 +20,7 @@ import {
     reconcileWranglerCompatibilityDate,
     reconcileWranglerCrons,
     warnCloudflareCliConfigOnce,
+    wranglerCodegenInputs,
 } from "@lunora/config/cloudflare";
 import { Spinner } from "@visulima/spinner";
 
@@ -241,7 +242,7 @@ const runCodegenStep = async (
     }
 
     try {
-        const result = runCodegen({ apiSpec, projectRoot: cwd, target });
+        const result = runCodegen({ apiSpec, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
         codegenSpinner?.succeed("codegen complete");
 
         if (!codegenSpinner) {

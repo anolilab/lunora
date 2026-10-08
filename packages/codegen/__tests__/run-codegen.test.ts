@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { ModuleKind, ModuleResolutionKind, Project, ScriptTarget, ts } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { emitQueues, UMBRELLA_BASE_PACKAGES } from "../src/emit";
+import { emitQueues, queueAliasFindings, UMBRELLA_BASE_PACKAGES } from "../src/emit";
 import {
     createCodegenProject,
     emitApi,
@@ -131,7 +131,7 @@ describe("run-codegen", () => {
         it("emits dataModel.ts with per-table Doc interfaces", () => {
             expect.assertions(6);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.dataModel).toContain('TableName = "messages" | "users"');
             expect(result.generated.dataModel).toContain("export interface Doc_messages");
@@ -156,7 +156,7 @@ describe("run-codegen", () => {
             // A voice session object stores nothing (transcripts are shard rows, already
             // pinned), so a voice-only app passes and its voice namespaces are pinned
             // through the worker's jurisdiction.
-            const voiceOnly = runCodegen({ projectRoot: workdir }).generated.app;
+            const voiceOnly = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated.app;
 
             expect([voiceOnly.includes('jurisdiction: "eu"'), voiceOnly.includes("options.voiceAgents = {")]).toStrictEqual([true, true]);
 
@@ -168,17 +168,17 @@ describe("run-codegen", () => {
 
             // An app that already declared `.jurisdiction()` upgrades with no schema
             // change: this is the only thing that stops its users starting empty.
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/DO-backed auth[\s\S]*src\/index\.ts:2/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/DO-backed auth[\s\S]*src\/index\.ts:2/u);
 
             writeFileSync(join(workdir, "lunora", "schema.ts"), schemaSource(`.jurisdiction("eu", { pinAuth: true })`));
 
-            expect(runCodegen({ projectRoot: workdir }).generated.app).toContain('jurisdiction: "eu"');
+            expect(runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated.app).toContain('jurisdiction: "eu"');
         });
 
         it("narrows ctx.db.asId to a real TableName", () => {
             expect.assertions(5);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // The conditional `AsIdTable` is what makes a misspelled literal fail. An
             // intersection with a wide `(string, string) => string` overload would look
@@ -212,7 +212,7 @@ export default defineSchema({
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             // The add-on's table is real and queryable…
             expect(result.generated.dataModel).toContain('TableName = "nodes" | "ratelimit_buckets"');
@@ -245,7 +245,9 @@ export default defineSchema({
                 `,
             );
 
-            expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/both map to the http-stream namespace "feed_a"/u);
+            expect(() => runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(
+                /both map to the http-stream namespace "feed_a"/u,
+            );
         });
 
         it("rejects a workflow and an agent that share a deployed name (CODEGEN-01 cross-kind)", () => {
@@ -270,7 +272,7 @@ export default defineSchema({
             `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Duplicate deployed name "shared-name"/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/Duplicate deployed name "shared-name"/u);
         });
 
         it("rejects a defineShape that replicates a table a mask() chain masks a column on (plan 208, fail closed)", () => {
@@ -294,7 +296,9 @@ export default defineSchema({
             `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/replicates table "users", which masks column\(s\) "email"/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(
+                /replicates table "users", which masks column\(s\) "email"/u,
+            );
         });
 
         it("does not throw for a defineShape over a table no mask() chain touches", () => {
@@ -317,7 +321,7 @@ export default defineSchema({
             `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).not.toThrow();
         });
 
         it("rejects a defineShape whose table isn't a string literal when the project masks a column (fail closed on a non-literal shape table)", () => {
@@ -344,7 +348,7 @@ export default defineSchema({
             `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/allUsers" has a non-literal `table`/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/allUsers" has a non-literal `table`/u);
         });
 
         it("does not throw for a defineShape whose table isn't a string literal when the project masks no columns (no over-firing)", () => {
@@ -362,7 +366,7 @@ export default defineSchema({
             `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).not.toThrow();
         });
 
         it("rejects a shape when a mask() policies argument is a hoisted reference (fail closed on a non-literal mask policy)", () => {
@@ -390,7 +394,9 @@ export default defineSchema({
             `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/mask\(\.\.\.\)` policy whose argument isn't a plain object literal/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(
+                /mask\(\.\.\.\)` policy whose argument isn't a plain object literal/u,
+            );
         });
 
         it("rejects a shape when the mask() policy names its table with a quoted key", () => {
@@ -418,7 +424,9 @@ export default defineSchema({
             `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/replicates table "users", which masks column\(s\) "email"/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(
+                /replicates table "users", which masks column\(s\) "email"/u,
+            );
         });
 
         it("rejects a shape when a mask() policies object literal spreads a variable (fail closed on spread/computed mask keys, plan 257)", () => {
@@ -446,7 +454,7 @@ export default defineSchema({
             `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/isn't a plain object literal.*spread.*computed key/su);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/isn't a plain object literal.*spread.*computed key/su);
         });
 
         it("does not throw for a mask() policies object literal that spreads a variable when the project declares no shapes (scoping preserved)", () => {
@@ -465,7 +473,7 @@ export default defineSchema({
             `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).not.toThrow();
         });
 
         it("is silent and output-unchanged when LUNORA_CODEGEN_TIMING is unset", () => {
@@ -486,10 +494,10 @@ export default defineSchema({
 
             try {
                 delete process.env["LUNORA_CODEGEN_TIMING"];
-                withoutFlag = runCodegen({ projectRoot: workdir });
+                withoutFlag = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
                 process.env["LUNORA_CODEGEN_TIMING"] = "1";
-                withFlag = runCodegen({ projectRoot: workdir });
+                withFlag = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             } finally {
                 // eslint-disable-next-line no-console -- restore the original implementation.
                 console.error = originalError;
@@ -511,7 +519,7 @@ export default defineSchema({
         it("does not wire @lunora/ai for a project that doesn't use it", () => {
             expect.assertions(2);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).not.toContain("@lunora/ai");
             expect(result.generated.server).not.toContain("@lunora/ai");
@@ -521,7 +529,7 @@ export default defineSchema({
             expect.assertions(6);
 
             // No package.json (or one without `lunora`) → granular form, the default.
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.server).toContain('from "@lunora/server"');
             // The query-DSL bindings moved to server.ts so dataModel.ts stays free
@@ -541,7 +549,7 @@ export default defineSchema({
                 JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", lunorash: "*" }, name: "umbrella-app" }),
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // Base surface routed through the umbrella…
             expect(result.generated.server).toContain('from "lunorash/server"');
@@ -591,7 +599,7 @@ export const sendMessage = defineMutator({
 
                 writeShapes();
 
-                const result = runCodegen({ lint: false, projectRoot: workdir });
+                const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
                 // functions.ts gains the shape registry, keyed by export name.
                 expect(result.generated.functions).toContain("export const LUNORA_SHAPES");
@@ -635,7 +643,7 @@ export const listMessages = query
                     "utf8",
                 );
 
-                const result = runCodegen({ lint: false, projectRoot: workdir });
+                const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
                 /* eslint-disable no-secrets/no-secrets -- dense generated-code assertions, not credentials */
                 expect(result.generated.shard).toContain("assertShapesDeclareReadPolicies, beginDeferredDeletes, beginDeferredSchedules");
@@ -650,7 +658,7 @@ export const listMessages = query
 
                 writeMutators();
 
-                const result = runCodegen({ lint: false, projectRoot: workdir });
+                const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
                 // Mutators register into the function dispatch table (transaction-wrapped),
                 // keyed by their file-scoped path.
@@ -666,7 +674,7 @@ export const listMessages = query
 
                 writeMutators();
 
-                const result = runCodegen({ lint: false, projectRoot: workdir });
+                const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
                 // `defineMutator({ serverRef: api.mutators.sendMessage })` in the browser
                 // bundle now binds the dispatch path at compile time (and infers its args
@@ -688,7 +696,7 @@ export const listMessages = query
                     JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/db": "*" }, name: "db-app" }),
                 );
 
-                const result = runCodegen({ lint: false, projectRoot: workdir });
+                const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
                 expect(result.generated.collections).toContain('import { lunoraCollectionOptions } from "@lunora/db/collections"');
                 expect(result.generated.collections).toContain('import type { LunoraClient, SubscriptionError } from "@lunora/client"');
@@ -717,7 +725,7 @@ export const listMessages = query
                     JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/db": "*", lunorash: "*" }, name: "umbrella-db-app" }),
                 );
 
-                const result = runCodegen({ lint: false, projectRoot: workdir });
+                const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
                 // @lunora/client is in the umbrella base → remapped.
                 expect(result.generated.collections).toContain('import type { LunoraClient, SubscriptionError } from "lunorash/client"');
@@ -731,7 +739,7 @@ export const listMessages = query
 
                 writeShapes();
 
-                const result = runCodegen({ lint: false, projectRoot: workdir });
+                const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
                 expect(result.generated.collections).toBe("");
                 expect(existsSync(join(workdir, "lunora", "_generated", "collections.ts"))).toBe(false);
@@ -748,7 +756,7 @@ export const listMessages = query
                     join(workdir, "package.json"),
                     JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/db": "*" }, name: "db-app" }),
                 );
-                runCodegen({ lint: false, projectRoot: workdir });
+                runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
                 expect(existsSync(collectionsPath)).toBe(true);
 
@@ -757,7 +765,7 @@ export const listMessages = query
                 // (it imports @lunora/db, which the app no longer installs).
                 writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "db-app" }));
 
-                const result = runCodegen({ lint: false, projectRoot: workdir });
+                const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
                 expect(result.generated.collections).toBe("");
                 expect(existsSync(collectionsPath)).toBe(false);
@@ -766,7 +774,7 @@ export const listMessages = query
             it("leaves generated output byte-identical when neither shapes nor mutators are declared", () => {
                 expect.assertions(3);
 
-                const baseline = runCodegen({ lint: false, projectRoot: workdir }).generated;
+                const baseline = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
                 expect(baseline.collections).toBe("");
                 expect(baseline.functions).not.toContain("LUNORA_SHAPES");
@@ -792,7 +800,7 @@ export const identity = defineIdentity({
             it("leaves server.ts byte-identical when no defineIdentity is declared", () => {
                 expect.assertions(6);
 
-                const { server } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+                const { server } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
                 // No contract ⇒ none of the narrowing fragments are emitted, so the
                 // output is the untyped-identity baseline (the guardrail the item
@@ -812,7 +820,7 @@ export const identity = defineIdentity({
 
                 writeIdentity();
 
-                const { server } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+                const { server } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
                 // The claim type is recovered from the declaration itself (reused
                 // `InferIdentity` machinery, `typeof` the imported contract) — no
@@ -835,7 +843,7 @@ export const identity = defineIdentity({
             it("leaves app.ts free of identity wiring when no defineIdentity is declared", () => {
                 expect.assertions(2);
 
-                const { app } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+                const { app } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
                 // No contract ⇒ no import and no `options.identity` wiring, so the
                 // runtime trust boundary is a no-op. (An unrelated `identity:` may
@@ -850,7 +858,7 @@ export const identity = defineIdentity({
 
                 writeIdentity();
 
-                const { app } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+                const { app } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
                 // Imported as a VALUE (not `import type`) — the contract must exist
                 // at runtime for the worker's contract gate to run.
@@ -872,7 +880,7 @@ export const other = defineIdentity({ userId: v.string() });
                     "utf8",
                 );
 
-                expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/exactly one is allowed/u);
+                expect(() => runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/exactly one is allowed/u);
             });
         });
 
@@ -893,7 +901,7 @@ export const env = defineEnv({
             it("leaves server.ts + shard.ts byte-identical when no defineEnv is declared", () => {
                 expect.assertions(4);
 
-                const { server, shard } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+                const { server, shard } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
                 // No contract ⇒ none of the wiring fragments are emitted, so the
                 // output is the baseline (guards the golden-fixture invariant).
@@ -908,7 +916,7 @@ export const env = defineEnv({
 
                 writeEnv();
 
-                const { server } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+                const { server } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
                 // The validated shape is recovered from the declaration itself
                 // (`ReturnType` over the accessor's `typeof` — no parallel type
@@ -928,7 +936,7 @@ export const env = defineEnv({
 
                 writeEnv();
 
-                const { shard } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+                const { shard } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
                 // Imported as a VALUE namespace (the accessor must run at ctx-build time).
                 expect(shard).toContain('import * as lunoraEnvContract from "../env.js";');
@@ -944,7 +952,7 @@ export const env = defineEnv({
 
                 writeEnv("lunorash/server");
 
-                const { server, shard } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+                const { server, shard } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
                 // The contract module is always `../env.js` regardless of the umbrella —
                 // it is the user's own module, not a base-package specifier.
@@ -964,7 +972,7 @@ export const other = defineEnv({ HOST: v.string() });
                     "utf8",
                 );
 
-                expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/exactly one is allowed/u);
+                expect(() => runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/exactly one is allowed/u);
             });
         });
 
@@ -979,7 +987,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
                 "utf8",
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain('import { createAi } from "@lunora/ai"');
             expect(result.generated.shard).toContain("ctx.ai = ai;");
@@ -989,7 +997,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
         it("does not wire @lunora/payment for a project that doesn't use it", () => {
             expect.assertions(2);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).not.toContain("@lunora/payment");
             expect(result.generated.server).not.toContain("@lunora/payment");
@@ -1006,7 +1014,7 @@ export const mySubs = action({ args: { reference: v.string() }, handler: async (
                 "utf8",
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain('import { paymentsFromContext } from "@lunora/payment"');
             expect(result.generated.shard).toContain("get payments(): LunoraPayment {");
@@ -1025,7 +1033,7 @@ export const cached = query({ args: { key: v.string() }, handler: async (ctx, { 
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain('import { createKv } from "@lunora/bindings/kv"');
             expect(result.generated.shard).toContain("\n                kv,");
@@ -1045,7 +1053,7 @@ export const whoAmI = query({ args: {}, handler: async (ctx) => ({ email: ctx.ac
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain('import { accessFacade } from "@lunora/cloudflare-access/context"');
             expect(result.generated.shard).toContain("const access = accessFacade(identity, userId);");
@@ -1058,7 +1066,7 @@ export const whoAmI = query({ args: {}, handler: async (ctx) => ({ email: ctx.ac
         it("does not wire ctx.access for a project that doesn't read it", () => {
             expect.assertions(2);
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).not.toContain("@lunora/cloudflare-access");
             expect(result.generated.server).not.toContain("@lunora/cloudflare-access");
@@ -1067,7 +1075,7 @@ export const whoAmI = query({ args: {}, handler: async (ctx) => ({ email: ctx.ac
         it("does not wire @lunora/flags for a project without a lunora/flags.ts", () => {
             expect.assertions(2);
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).not.toContain("@lunora/flags");
             expect(result.generated.server).not.toContain("@lunora/flags");
@@ -1084,7 +1092,7 @@ export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) =
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain('import { createFlags } from "@lunora/flags"');
             expect(result.generated.shard).toContain('import flagsConfig from "../flags.js"');
@@ -1109,7 +1117,7 @@ export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) =
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             // Flags surface routed through the umbrella…
             expect(result.generated.shard).toContain('import { createFlags } from "lunorash/flags"');
@@ -1126,7 +1134,7 @@ export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) =
             // it to assert the default-closed path emits neither facade.
             rmSync(join(workdir, "lunora", "notify.ts"), { force: true });
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).not.toContain("@lunora/notify");
             expect(result.generated.shard).not.toContain("createNotify");
@@ -1146,7 +1154,7 @@ export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             // Runtime wiring (shard): the definition import + createNotify build + both ctx fields.
             expect(result.generated.shard).toContain('import { createNotify } from "@lunora/notify"');
@@ -1176,7 +1184,7 @@ export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain('import { createNotify } from "@lunora/notify"');
             expect(result.generated.server).toContain('import("@lunora/notify").LunoraNotify');
@@ -1195,7 +1203,7 @@ export const ext = action({ args: { id: v.string() }, handler: async (ctx, { id 
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain('import type { SqlClient } from "@lunora/hyperdrive";');
             // Attached only inside the `if (isAction)` block — never spliced into the shared ctx literal.
@@ -1218,7 +1226,7 @@ export const top = action({ args: { region: v.string() }, handler: async (ctx, {
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain('import { createR2Sql } from "@lunora/bindings/r2sql";');
             // Attached only inside the `if (isAction)` block — never spliced into the shared ctx literal.
@@ -1251,7 +1259,7 @@ export default crons;
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             // payments via ctx read; scheduler via a declared cron (no @lunora/scheduler ctx use needed);
             // storage via the fixture's `attachments.fileKey: v.storage()` column (no ctx.storage use needed).
@@ -1280,7 +1288,7 @@ export default crons;
                 "utf8",
             );
 
-            const withoutIndex = runCodegen({ lint: false, projectRoot: workdir });
+            const withoutIndex = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             // A bare `@lunora/bindings` dependency (installed for `ctx.kv` /
             // `ctx.images`) declares no index, so there is no registry to serve and
@@ -1302,7 +1310,7 @@ export default schema;
                 "utf8",
             );
 
-            const withIndex = runCodegen({ lint: false, projectRoot: workdir });
+            const withIndex = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(emittedJsonData(withIndex.generated.shard, "LUNORA_STUDIO_FEATURES")).toHaveProperty("vectors", true);
             expect(withIndex.generated.app).toContain("options.vectorIntrospector = createVectorAdminIntrospector({");
@@ -1337,7 +1345,7 @@ export default crons;
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             // Declared crons lead, in the order `emitWranglerCronTriggers` renders
             // them; entry-derived expressions append.
@@ -1362,7 +1370,7 @@ export default createWorker({ backupCron: process.env.NIGHTLY_CRON });
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             // Out of reach for any AST scan, which is why `package.json`'s
             // `lunora.crons` ownership record stays: `reconcileWranglerCrons` keeps
@@ -1384,7 +1392,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.cronTriggers).toStrictEqual(["0 4 * * *"]);
         });
@@ -1392,7 +1400,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("does not emit a seed client for a project that doesn't depend on @lunora/seed", () => {
             expect.assertions(1);
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.seed).toBe("");
         });
@@ -1410,7 +1418,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
                 "utf8",
             );
 
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.seed).toContain('import { createSeedClient as createSeedClientBase } from "@lunora/seed";');
             // The runtime schema is the default export of lunora/schema.ts (same import the ShardDO uses).
@@ -1426,7 +1434,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits api.ts with grouped queries/mutations", () => {
             expect.assertions(8);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.api).toContain("export interface ApiTypes");
             expect(result.generated.api).toContain("messages:");
@@ -1441,7 +1449,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("routes internal functions to `internal`/InternalApiTypes, keeping them off the public `api`", () => {
             expect.assertions(8);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // `purge` is an internalMutation — it must NOT appear in the public api.ts.
             const publicHalf = result.generated.api;
@@ -1465,7 +1473,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits per-table index and searchIndex name unions in dataModel.ts", () => {
             expect.assertions(8);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // Indexes: messages -> "by_channel", users -> "by_email".
             expect(result.generated.dataModel).toContain("export interface IndexNamesByTable");
@@ -1483,7 +1491,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits literal validators as TS literal types and record as Record<K, V>", () => {
             expect.assertions(6);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // dataModel.ts: literal -> "admin", record -> Record<string, string>.
             expect(result.generated.dataModel).toContain('role: "admin";');
@@ -1502,7 +1510,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits server.ts with project-typed query/mutation/action wrappers", () => {
             expect.assertions(15);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // The procedure builders come from `initLunora.dataModel<DataModel>().create()`
             // and are re-bound to the schema-typed contexts via the exported builder types.
@@ -1551,7 +1559,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("narrows ctx.storage to the declared bucket names", () => {
             expect.assertions(3);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // `StorageBucketName` is emitted (at minimum the default bucket) and
             // `ctx.storage` is narrowed to it on every context.
@@ -1577,7 +1585,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits a typed createCaller covering public and internal functions", () => {
             expect.assertions(7);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.functions).toContain("export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;");
             expect(result.generated.functions).toContain("export interface Caller {");
@@ -1598,7 +1606,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("routes a mutation or query reached through createCaller through the caller's run*", () => {
             expect.assertions(3);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // `createCaller(ctx).ns.someMutation()` used to invoke the handler
             // directly, so a mutation composed this way from an action or a stream
@@ -1622,7 +1630,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             // installing a SERVER package to compile a branded string and a few
             // interfaces. The query-DSL bindings that need it now live in
             // `server.ts`, which no consumer imports.
-            const { api, dataModel } = runCodegen({ projectRoot: workdir }).generated;
+            const { api, dataModel } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             // The property, stated directly: no imports at all.
             expect(dataModel).not.toContain("import ");
@@ -1636,7 +1644,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits per-table ctx.db facade types in dataModel.ts", () => {
             expect.assertions(9);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // Insert shapes — system fields optional, user fields carried through.
             expect(result.generated.dataModel).toContain("export interface Insert_messages");
@@ -1662,7 +1670,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits the ctx.orm namespace bound to the shipped facade generics", () => {
             expect.assertions(11);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // The read facade (with findFirstOrThrow) is bound from the shipped
             // module rather than emitted inline.
@@ -1690,7 +1698,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits functions.ts dispatch table keyed by `<namespace>:<fnName>`", () => {
             expect.assertions(6);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // The namespace must match the sanitized form `emitApi` uses so the
             // client-side `__lunoraRef` and the server-side dispatch key agree.
@@ -1705,7 +1713,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("writes all generated files into _generated/", () => {
             expect.assertions(9);
 
-            runCodegen({ projectRoot: workdir });
+            runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             const generatedDirectory = join(workdir, "lunora", "_generated");
 
@@ -1725,7 +1733,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits openapi.json covering httpRouter routes and RPC functions", () => {
             expect.assertions(9);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             const document = JSON.parse(result.generated.openApi) as Record<string, unknown>;
 
             const paths = document.paths as Record<string, Record<string, { operationId: string }>>;
@@ -1757,7 +1765,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it('defaults to apiSpec:"openapi" — writes openapi.{json,ts} only, not openrpc.*', () => {
             expect.assertions(4);
 
-            runCodegen({ projectRoot: workdir });
+            runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             const generatedDirectory = join(workdir, "lunora", "_generated");
 
@@ -1772,7 +1780,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it('apiSpec:"openrpc" writes openrpc.{json,ts} only, not openapi.*', () => {
             expect.assertions(5);
 
-            const result = runCodegen({ apiSpec: "openrpc", projectRoot: workdir });
+            const result = runCodegen({ apiSpec: "openrpc", projectRoot: workdir, wranglerQueueProducers: [] });
 
             const generatedDirectory = join(workdir, "lunora", "_generated");
 
@@ -1789,7 +1797,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it('apiSpec:"both" writes both openapi.{json,ts} and openrpc.{json,ts}', () => {
             expect.assertions(4);
 
-            runCodegen({ apiSpec: "both", projectRoot: workdir });
+            runCodegen({ apiSpec: "both", projectRoot: workdir, wranglerQueueProducers: [] });
 
             const generatedDirectory = join(workdir, "lunora", "_generated");
 
@@ -1802,7 +1810,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it('apiSpec:"none" writes neither spec file (json or ts)', () => {
             expect.assertions(4);
 
-            runCodegen({ apiSpec: "none", projectRoot: workdir });
+            runCodegen({ apiSpec: "none", projectRoot: workdir, wranglerQueueProducers: [] });
 
             const generatedDirectory = join(workdir, "lunora", "_generated");
 
@@ -1818,14 +1826,14 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             const generatedDirectory = join(workdir, "lunora", "_generated");
 
             // First run writes the default openapi.* artifacts…
-            runCodegen({ projectRoot: workdir });
+            runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "openapi.ts"))).toBe(true);
 
             // …switching to openrpc must delete the stale openapi.* files rather
             // than leave a portable artifact documenting the old API forever.
-            runCodegen({ apiSpec: "openrpc", projectRoot: workdir });
+            runCodegen({ apiSpec: "openrpc", projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(false);
             expect(existsSync(join(generatedDirectory, "openapi.ts"))).toBe(false);
@@ -1834,7 +1842,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits openrpc.json modelling RPC functions as methods, excluding internal/stream", () => {
             expect.assertions(5);
 
-            const result = runCodegen({ apiSpec: "openrpc", projectRoot: workdir });
+            const result = runCodegen({ apiSpec: "openrpc", projectRoot: workdir, wranglerQueueProducers: [] });
             const document = JSON.parse(result.generated.openRpc) as { methods: { name: string; params: { name: string }[] }[]; openrpc: string };
 
             const names = document.methods.map((method) => method.name);
@@ -1856,7 +1864,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
                 "utf8",
             );
 
-            const result = runCodegen({ apiSpec: "both", projectRoot: workdir });
+            const result = runCodegen({ apiSpec: "both", projectRoot: workdir, wranglerQueueProducers: [] });
             const openApiDoc = JSON.parse(result.generated.openApi) as { info: { version: string } };
             const openRpcDoc = JSON.parse(result.generated.openRpc) as { info: { version: string } };
 
@@ -1868,7 +1876,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             expect.assertions(2);
 
             // workdir has no package.json by default (fixture copies lunora/ only).
-            const result = runCodegen({ apiSpec: "both", projectRoot: workdir });
+            const result = runCodegen({ apiSpec: "both", projectRoot: workdir, wranglerQueueProducers: [] });
             const openApiDoc = JSON.parse(result.generated.openApi) as { info: { version: string } };
             const openRpcDoc = JSON.parse(result.generated.openRpc) as { info: { version: string } };
 
@@ -1879,7 +1887,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits drizzle.global.ts containing only `.global()` tables", () => {
             expect.assertions(3);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // `users` is .global() — must appear here.
             expect(result.generated.drizzleGlobal).toContain('export const users = sqliteTable("users"');
@@ -1892,7 +1900,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits drizzle column mappings for optional/array/bigint/bytes", () => {
             expect.assertions(8);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // `attachments` table covers the long-tail validator → drizzle column mappings.
             expect(result.generated.drizzleGlobal).toContain('export const attachments = sqliteTable("attachments"');
@@ -1921,7 +1929,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
         it("emits drizzle.shard.ts containing shardBy/root tables", () => {
             expect.assertions(5);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.drizzleShard).toContain('export const messages = sqliteTable("messages"');
             expect(result.generated.drizzleShard).toContain('index("by_channel").on(t.channelId)');
@@ -1960,7 +1968,7 @@ export const schema = defineSchema({
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.drizzleShard).toContain('mcpServers: text("mcpServers")');
             expect(result.generated.drizzleShard).not.toContain('text("mcpServers", { mode: "json" })');
@@ -2001,7 +2009,7 @@ export const schema = defineSchema({
 `,
             );
 
-            const { dataModel, drizzleShard } = runCodegen({ projectRoot: workdir }).generated;
+            const { dataModel, drizzleShard } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             for (const rendered of [dataModel, drizzleShard]) {
                 expect(rendered).toContain('import("../lib/schemas.js").McpServer');
@@ -2016,7 +2024,7 @@ export const schema = defineSchema({
             // snapshot stays decoupled from advisor behaviour (a lint change
             // would otherwise churn the fixture). The advisory data path is
             // covered separately below.
-            const result = runCodegen({ lint: false, projectRoot: workdir });
+            const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             const expectedApp = readFileSync(join(expectedDirectory, "app.ts"), "utf8");
             const expectedApi = readFileSync(join(expectedDirectory, "api.ts"), "utf8");
@@ -2050,7 +2058,7 @@ export const schema = defineSchema({
         it("emits shard.ts with a createShardDO factory wired to generated modules", () => {
             expect.assertions(8);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.shard).toContain("export const createShardDO");
             expect(result.generated.shard).toContain('import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js"');
@@ -2068,7 +2076,7 @@ export const schema = defineSchema({
         it("emits app.ts with a feature-gated defineApp builder", () => {
             expect.assertions(9);
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // Always present: the builder, the entry factory, and the always-on methods.
             expect(result.generated.app).toContain("class AppBuilder");
@@ -2104,7 +2112,7 @@ export const cached = query.input({ key: v.string() }).query(async ({ args, ctx 
                 "utf8",
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // The method, the config-type alias, and the pass-through state are all emitted…
             // eslint-disable-next-line no-secrets/no-secrets -- an emitted type signature, not a credential
@@ -2130,7 +2138,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
                 "utf8",
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // The fluent builder method + its config-type pass-through are emitted…
             // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated builder-method signature, not a credential
@@ -2150,7 +2158,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
                 "utf8",
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.app).toContain("public auth(");
             expect(result.generated.app).toContain(
@@ -2172,7 +2180,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
                 "utf8",
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             const app = result.generated.app ?? "";
 
             // `namespace` selects the DO mode — the tables live in the object because
@@ -2203,7 +2211,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
             expect.assertions(7);
 
             // No framework adapter → standalone only.
-            const standalone = runCodegen({ projectRoot: workdir });
+            const standalone = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(standalone.generated.app).not.toContain("buildFrameworkWorker");
             expect(standalone.generated.app).not.toContain("withFrameworkWorker");
@@ -2215,7 +2223,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
                 "utf8",
             );
 
-            const framework = runCodegen({ projectRoot: workdir });
+            const framework = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(framework.generated.app).toContain("public buildFrameworkWorker(host: FrameworkHostHandler): ComposedApp");
             expect(framework.generated.app).toContain("withFrameworkWorker");
@@ -2230,12 +2238,14 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
                 "utf8",
             );
 
-            expect(runCodegen({ projectRoot: workdir }).generated.app).not.toContain("buildFrameworkWorker");
+            expect(runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated.app).not.toContain("buildFrameworkWorker");
 
             mkdirSync(join(workdir, "src"), { recursive: true });
             writeFileSync(join(workdir, "src", "worker.ts"), "export {};\n", "utf8");
 
-            expect(runCodegen({ projectRoot: workdir }).generated.app).toContain("public buildFrameworkWorker(host: FrameworkHostHandler): ComposedApp");
+            expect(runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated.app).toContain(
+                "public buildFrameworkWorker(host: FrameworkHostHandler): ComposedApp",
+            );
         });
 
         it("collects onConnect/onDisconnect exports into the LUNORA_LIFECYCLE_HOOKS manifest and wires the shard override", () => {
@@ -2250,7 +2260,7 @@ export const onLeave = onDisconnect(async (ctx, event) => { void ctx; void event
                 "utf8",
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // The hooks land in the dispatchable function table by their path…
             expect(result.generated.functions).toContain('"hooks:onJoin":');
@@ -2277,7 +2287,7 @@ export const authorize = onWhisper(async (ctx, event) => { void ctx; return even
                 "utf8",
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.functions).toContain('"whisper:authorize":');
             expect(result.generated.functions).toContain('whisper: ["whisper:authorize"]');
@@ -2319,7 +2329,7 @@ export default schema;
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // #2: without the annotation TypeScript cannot infer through the cycle
             // (TS7022 on the binding, TS7024 on the callback) under noImplicitAny.
@@ -2355,7 +2365,7 @@ export default schema;
 `,
             );
 
-            const { generated } = runCodegen({ projectRoot: workdir });
+            const { generated } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(generated.dataModel.match(/ {4}note: string \| null;/gu)).toHaveLength(2);
             expect(generated.dataModel.match(/ {4}tags\?: Array<string> \| null;/gu)).toHaveLength(2);
@@ -2403,7 +2413,7 @@ export const others = query.input({ id: v.string() }).query(async ({ ctx, args }
 `,
             );
 
-            const findings = runCodegen({ projectRoot: workdir }).advisories.filter((a) => a.name === "filter_on_primary_key");
+            const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter((a) => a.name === "filter_on_primary_key");
 
             expect(findings).toHaveLength(1);
             expect(findings[0]?.detail).toContain("reads:");
@@ -2429,7 +2439,7 @@ export const inline = query.input({}).output(v.object({ title: v.string() })).qu
 `,
             );
 
-            const { api } = runCodegen({ projectRoot: workdir }).generated;
+            const { api } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             // Both render through validatorToType (no trailing `;` — that would be
             // TS's own type renderer, i.e. the handler-inference fallback).
@@ -2454,7 +2464,7 @@ export const opaque = query.input({}).output(opaqueOut).query(async () => ({ tit
 `,
             );
 
-            const { api } = runCodegen({ projectRoot: workdir }).generated;
+            const { api } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             // Asserted on the observable outcome — the handler's `{ title: "x" }`
             // survives — rather than on which renderer produced it. (The two
@@ -2481,7 +2491,7 @@ export const one = query.input({}).output(badOut).query(async () => ({ title: "x
 
             writeFileSync(join(workdir, "lunora", "typo.ts"), hoisted);
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Unsupported validator kind: strng/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/Unsupported validator kind: strng/u);
 
             writeFileSync(
                 join(workdir, "lunora", "typo.ts"),
@@ -2491,7 +2501,7 @@ export const one = query.input({}).output(v.object({ title: v.strng() })).query(
 `,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/Unsupported validator kind: strng/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/Unsupported validator kind: strng/u);
         });
 
         it("renders a recovered v.from() type into the emitted api, end to end", () => {
@@ -2518,7 +2528,7 @@ export const byEmail = query.input({ email: v.from(emailSchema) }).query(async (
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.api).toContain('byEmail: FunctionReference<"query", { email: string }');
             expect(result.generated.api).not.toContain("{ email: unknown }");
@@ -2559,7 +2569,7 @@ export const run = query.input({ tool: v.from(toolSchema) }).query(async () => 1
 `,
             );
 
-            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+            const { api, functions } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             // `_generated/` sits one level under `lunora/`, so the qualifier must
             // climb out of it before naming the user's module.
@@ -2600,7 +2610,7 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
 `,
             );
 
-            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+            const { api, functions } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             for (const rendered of [api, functions]) {
                 // Qualified and rebased one level out of `_generated/`, so it
@@ -2633,7 +2643,7 @@ export const get = query.input({}).query(async (): Promise<UIMessage> => ({ text
 `,
             );
 
-            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+            const { api, functions } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             for (const rendered of [api, functions]) {
                 expect(rendered).toContain('import("../agent/client/index.js").UIMessage');
@@ -2690,7 +2700,7 @@ export const manifest = query.input({}).query(async (): Promise<Manifest> => ({ 
 `,
             );
 
-            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+            const { api, functions } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             expect(api).toContain('import("../here/index/index.js").Nested');
             expect(api).toContain('import("../at/index.js").Named');
@@ -2733,7 +2743,7 @@ export const stamp = query.input({}).query(async (): Promise<Stamp> => ({ at: 1 
 `,
             );
 
-            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+            const { api, functions } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             for (const rendered of [api, functions]) {
                 expect(rendered).toContain('import("../lib/shapes.js").Badge');
@@ -2778,7 +2788,7 @@ export const get = query.input({}).query(async (): Promise<Envelope> => null as 
 `,
             );
 
-            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+            const { api, functions } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             expect(api).toContain('get: FunctionReference<"query", {}, unknown>');
             expect(functions).toContain("Promise<unknown>");
@@ -2817,7 +2827,7 @@ export const get = query.input({}).query(async (): Promise<Badge> => ({ label: "
 `,
             );
 
-            const { api, functions } = runCodegen({ projectRoot: workdir }).generated;
+            const { api, functions } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             for (const rendered of [api, functions]) {
                 expect(rendered).not.toContain('import("~/aliased")');
@@ -2848,7 +2858,7 @@ export const raw = internalQuery
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             // Both arms of the declared union survive to the caller.
             expect(result.generated.internal).toContain("hasAccess: true");
@@ -2882,7 +2892,7 @@ export const tick = query
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.functions).toContain("tick: (args: { id: string }) => Promise<AsyncIterable<{ n: number; }>>;");
             expect(result.generated.api).toContain("{ n: number; }");
@@ -2908,7 +2918,7 @@ export const page = internalQuery
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.functions).toContain("page: (args: { limit: number }) => Promise<{ cursor?: string; id: string }>;");
             // The declared `v.string()` stays opaque — it is not re-branded as an
@@ -2935,7 +2945,7 @@ export default executeTrigger;
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.internal).toContain("execute: {");
             expect(result.generated.internal).toContain('default: FunctionReference<"action"');
@@ -2962,7 +2972,7 @@ export const getUserSettings = makeGetter();
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             const finding = result.advisories.find((entry) => entry.name === "procedure_not_registered");
 
             expect(finding).toBeDefined();
@@ -2987,7 +2997,7 @@ export const getUserSettings = makeGetter();
 export const probeListed = query.input({}).query(async () => "x");
 `,
             );
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             const finding = result.advisories.find((entry) => entry.name === "procedure_type_check_unavailable");
 
             expect(finding?.detail).toContain("Type resolution for `lunora/` is unavailable");
@@ -3011,7 +3021,7 @@ export const probeListed = query.input({}).query(async () => "x");
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.advisories.map((entry) => entry.name)).toContain("procedure_type_check_unavailable");
             expect(result.generated.shard).not.toContain("procedure_type_check_unavailable");
@@ -3033,7 +3043,7 @@ export { listSettings as listUserSettings };
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.api).toContain("listUserSettings: FunctionReference<");
             expect(result.generated.api).not.toContain("listSettings:");
@@ -3057,7 +3067,7 @@ export { createPost as makePost };
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(result.generated.functions).toMatch(/"mutators:makePost": lunora_mutators_\d+\.makePost as unknown as RegisteredLunoraFunction/u);
             expect(result.generated.functions).not.toContain(".createPost");
@@ -3082,7 +3092,7 @@ export { createPost as makePost };
                 `import { mutation, v } from "@lunora/server";\n\nconst removeIt = ${body};\n\nexport { removeIt as deletePost };\n`,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             const namesFor = (file: string): string[] =>
                 result.advisories
                     // The project-wide type-check notice names one witness procedure, not a finding about it.
@@ -3105,7 +3115,7 @@ export { createPost as makePost };
                 `import { query } from "@lunora/server";\n\nconst listSettings = query.input({}).query(async () => "x");\n\nexport { listSettings as "list-settings" };\n`,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             const syntaxErrors = (text: string): number => {
                 const file = ts.createSourceFile("probe.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
@@ -3127,7 +3137,9 @@ export { createPost as makePost };
                 `import { probeQuery } from "./builders.js";\n\nconst listSettings = probeQuery.input({}).query(async () => "x");\n\nexport { listSettings as "list-settings" };\n`,
             );
 
-            const finding = runCodegen({ projectRoot: workdir }).advisories.find((entry) => entry.name === "procedure_not_registered");
+            const finding = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.find(
+                (entry) => entry.name === "procedure_not_registered",
+            );
 
             expect(finding?.detail).toContain("`list-settings`");
             expect(finding?.detail).toContain("string name that is not an identifier");
@@ -3150,7 +3162,7 @@ export { listSettings as listUserSettings };
 `,
             );
 
-            const result = runCodegen({ projectRoot: workdir });
+            const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             const finding = result.advisories.find((entry) => entry.name === "procedure_not_registered");
 
             expect(finding?.detail).toContain("`listUserSettings`");
@@ -3184,7 +3196,7 @@ export default schema;
             let thrown: unknown;
 
             try {
-                runCodegen({ projectRoot: workdir });
+                runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             } catch (error: unknown) {
                 thrown = error;
             }
@@ -3210,7 +3222,7 @@ export default schema;
                  export default defineSchema({ posts: defineTable({ author: v.string() }).index("by-author", ["author"]) });`,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).not.toThrow();
 
             const drizzle = readFileSync(join(workdir, "lunora", "_generated", "drizzle.shard.ts"), "utf8");
 
@@ -3232,7 +3244,7 @@ export default schema;
                  export default defineSchema({ posts: defineTable({ author: v.string() }).index("__proto__", ["author"]) });`,
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).not.toThrow();
 
             const drizzle = readFileSync(join(workdir, "lunora", "_generated", "drizzle.shard.ts"), "utf8");
 
@@ -3264,7 +3276,7 @@ export default schema;
             let thrown: unknown;
 
             try {
-                runCodegen({ projectRoot: workdir });
+                runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             } catch (error: unknown) {
                 thrown = error;
             }
@@ -3293,7 +3305,7 @@ export default schema;
             let thrown: unknown;
 
             try {
-                runCodegen({ projectRoot: workdir });
+                runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             } catch (error: unknown) {
                 thrown = error;
             }
@@ -3315,7 +3327,7 @@ export default schema;
                 JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*", "@lunora/server": "*" }, name: "app", version: "0.0.0" }),
             );
 
-            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).not.toThrow();
         });
 
         it("skips the required-package gate when no manifest can be read", () => {
@@ -3325,7 +3337,7 @@ export default schema;
             // manifest is "cannot tell", not "declares nothing" — otherwise every
             // manifest-less project (fixtures, embedded schemas, direct runCodegen
             // callers) would be told every add-on is missing.
-            expect(() => runCodegen({ projectRoot: workdir })).not.toThrow();
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).not.toThrow();
         });
 
         it("writes nothing when discovery fails, instead of emitting an empty api", () => {
@@ -3355,13 +3367,13 @@ export default crons;
 
             writeFileSync(join(workdir, "lunora", "crons.ts"), badCron);
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/interval\.hours is capped at 23/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/interval\.hours is capped at 23/u);
             expect(existsSync(join(outputDirectory, "api.ts"))).toBe(false);
 
             // Warm: a previous good run's output must survive the failure intact,
             // so the build breaks at the cron rather than at 600 call sites.
             rmSync(join(workdir, "lunora", "crons.ts"));
-            runCodegen({ projectRoot: workdir });
+            runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
             const goodApi = readFileSync(join(outputDirectory, "internal.ts"), "utf8");
 
@@ -3369,7 +3381,7 @@ export default crons;
 
             writeFileSync(join(workdir, "lunora", "crons.ts"), badCron);
 
-            expect(() => runCodegen({ projectRoot: workdir })).toThrow(/interval\.hours is capped at 23/u);
+            expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/interval\.hours is capped at 23/u);
             // Deliberately re-read rather than trusting the throw: the failure mode
             // being guarded is a write that happened anyway.
             expect(readFileSync(join(outputDirectory, "internal.ts"), "utf8")).toBe(goodApi);
@@ -3381,7 +3393,7 @@ export default crons;
             const empty = mkdtempSync(join(tmpdir(), "lunora-empty-"));
 
             try {
-                expect(() => runCodegen({ projectRoot: empty })).toThrow(SCHEMA_NOT_FOUND_RE);
+                expect(() => runCodegen({ projectRoot: empty, wranglerQueueProducers: [] })).toThrow(SCHEMA_NOT_FOUND_RE);
             } finally {
                 rmSync(empty, { force: true, recursive: true });
             }
@@ -3394,7 +3406,7 @@ export default crons;
         it("produces output identical to a fresh Project when the shared Project is reused unchanged", () => {
             expect.assertions(7);
 
-            const reference = runCodegen({ lint: false, projectRoot: workdir });
+            const reference = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             // A second run over the same files through one shared, refreshed Project
             // must emit byte-identical content — reuse must never drift from the
@@ -3403,7 +3415,7 @@ export default crons;
 
             refreshCodegenProject(project, lunoraDirectory());
 
-            const reused = runCodegen({ lint: false, project, projectRoot: workdir });
+            const reused = runCodegen({ lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(reused.generated.api).toBe(reference.generated.api);
             expect(reused.generated.server).toBe(reference.generated.server);
@@ -3416,7 +3428,7 @@ export default crons;
             // disk change) stays stable too.
             refreshCodegenProject(project, lunoraDirectory());
 
-            const reusedAgain = runCodegen({ lint: false, project, projectRoot: workdir });
+            const reusedAgain = runCodegen({ lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(reusedAgain.generated.functions).toBe(reference.generated.functions);
         });
@@ -3428,7 +3440,7 @@ export default crons;
 
             refreshCodegenProject(project, lunoraDirectory());
 
-            const before = runCodegen({ lint: false, project, projectRoot: workdir });
+            const before = runCodegen({ lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(before.generated.api).toContain("send:");
             expect(before.generated.api).not.toContain("publish:");
@@ -3441,7 +3453,7 @@ export default crons;
             writeFileSync(messagesPath, edited, "utf8");
             refreshCodegenProject(project, lunoraDirectory());
 
-            const after = runCodegen({ lint: false, project, projectRoot: workdir });
+            const after = runCodegen({ lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(after.generated.api).toContain("publish:");
             expect(after.generated.api).not.toContain("send:");
@@ -3454,7 +3466,7 @@ export default crons;
 
             refreshCodegenProject(project, lunoraDirectory());
 
-            const before = runCodegen({ lint: false, project, projectRoot: workdir });
+            const before = runCodegen({ lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(before.generated.api).toContain("messages:");
             expect(before.generated.functions).not.toContain("notifications:ping");
@@ -3471,7 +3483,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             rmSync(join(lunoraDirectory(), "messages.ts"), { force: true });
             refreshCodegenProject(project, lunoraDirectory());
 
-            const after = runCodegen({ lint: false, project, projectRoot: workdir });
+            const after = runCodegen({ lint: false, project, projectRoot: workdir, wranglerQueueProducers: [] });
 
             // The new function is discovered…
             expect(after.generated.functions).toContain('"notifications:ping"');
@@ -4940,6 +4952,51 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(registry).not.toContain("QUEUE_PULLED");
         });
 
+        it("routes a per-environment queue name to the queue whose producer binding it shares", () => {
+            expect.assertions(3);
+
+            const registry = emitQueues(
+                [
+                    { bindingName: "QUEUE_JOBS", exportName: "jobs", filePath: "queues", mode: "push", name: "jobs", tuning: {} },
+                    { bindingName: "QUEUE_MAIL", exportName: "mail", filePath: "queues", mode: "push", name: "mail", tuning: {} },
+                ],
+                [
+                    { binding: "QUEUE_JOBS", queue: "jobs" },
+                    { binding: "QUEUE_JOBS", queue: "jobs-preview" },
+                    // A rename onto another declared queue's name never shadows it.
+                    { binding: "QUEUE_JOBS", queue: "mail" },
+                    { binding: "QUEUE_OTHER", queue: "other-preview" },
+                ],
+            );
+
+            expect(registry).toContain('    "jobs-preview": { binding: "QUEUE_JOBS", definition: jobs, exportName: "jobs" },');
+            expect(registry).toContain('    "mail": { binding: "QUEUE_MAIL", definition: mail, exportName: "mail" },');
+            expect(registry).not.toContain("other-preview");
+        });
+
+        it("reports an alias onto a declared name and one alias claimed for two queues, keeping the first route", () => {
+            expect.assertions(3);
+
+            const queues = [
+                { bindingName: "QUEUE_JOBS", exportName: "jobs", filePath: "queues", mode: "push", name: "jobs", tuning: {} },
+                { bindingName: "QUEUE_MAIL", exportName: "mail", filePath: "queues", mode: "push", name: "mail", tuning: {} },
+            ] as const;
+            const producers = [
+                { binding: "QUEUE_JOBS", env: "preview", queue: "mail" },
+                { binding: "QUEUE_JOBS", env: "staging", queue: "shared" },
+                { binding: "QUEUE_MAIL", env: "preview", queue: "shared" },
+                // The same queue under the same alias in a second scope is not a conflict.
+                { binding: "QUEUE_JOBS", env: "qa", queue: "shared" },
+            ];
+
+            expect(queueAliasFindings(queues, producers).map((finding) => finding.detail)).toStrictEqual([
+                'env.preview maps `QUEUE_JOBS` to "mail", the declared name of queue `mail` — batches for "mail" go to `mail`, never `jobs`.',
+                '"shared" is aliased to `jobs` by env.staging and to `mail` by env.preview — batches for it go to `jobs`.',
+            ]);
+            expect(queueAliasFindings(queues, producers).every((finding) => finding.name === "queue_alias_conflict" && finding.level === "WARN")).toBe(true);
+            expect(emitQueues(queues, producers)).toContain('    "shared": { binding: "QUEUE_JOBS", definition: jobs, exportName: "jobs" },');
+        });
+
         it("emits the queues studio metadata constant + override when queues are declared, and omits both otherwise", () => {
             expect.assertions(5);
 
@@ -5292,7 +5349,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("auto-registers the internal sandbox:invoke dispatcher when a sandbox tool is imported", () => {
             expect.assertions(3);
 
-            const { functions } = runCodegen({ lint: false, projectRoot: sandboxWorkdir }).generated;
+            const { functions } = runCodegen({ lint: false, projectRoot: sandboxWorkdir, wranglerQueueProducers: [] }).generated;
 
             expect(functions).toContain('import { sandboxComponent } from "@lunora/agent/component";');
             expect(functions).toContain("const lunoraSandbox = sandboxComponent();");
@@ -5302,7 +5359,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("wires ctx.browser onto the ActionCtx because browserTool drives the headless browser", () => {
             expect.assertions(1);
 
-            const { server } = runCodegen({ lint: false, projectRoot: sandboxWorkdir }).generated;
+            const { server } = runCodegen({ lint: false, projectRoot: sandboxWorkdir, wranglerQueueProducers: [] }).generated;
 
             expect(ctxInterface(server, "ActionCtx")).toContain("browser");
         });
@@ -5311,7 +5368,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect.assertions(1);
 
             // The `simple` fixture imports no sandbox tool — its output must stay clean.
-            const { functions } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+            const { functions } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
             expect(functions).not.toContain("sandbox:invoke");
         });

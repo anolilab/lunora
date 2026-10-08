@@ -797,6 +797,7 @@ export interface QueueIR {
         deadLetterQueue?: string;
         maxBatchSize?: number;
         maxBatchTimeout?: number;
+        maxConcurrency?: number;
         maxRetries?: number;
         retryDelay?: number;
     };
@@ -2292,6 +2293,21 @@ export interface WranglerVariableIR {
     kind: string;
     /** Redacted preview of the value (first few chars + length) for the finding detail — never the full secret. */
     preview: string;
+}
+
+/**
+ * One `queues.producers[]` entry of `wrangler.jsonc`, from the top level or an
+ * `env.<name>` block — how codegen learns a queue's per-environment name. Produced
+ * by `@lunora/config` (which reads `wrangler.jsonc`); codegen only matches it to a
+ * declared queue by `binding`.
+ */
+export interface WranglerQueueProducerIR {
+    /** The `Queue` producer binding, e.g. `QUEUE_JOBS`. */
+    binding: string;
+    /** The `env.<name>` block the entry sits in; absent for the top level. */
+    env?: string;
+    /** The queue name that binding sends to in that scope, e.g. `jobs-preview`. */
+    queue: string;
 }
 
 export interface ProjectIR {

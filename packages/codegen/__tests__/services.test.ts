@@ -61,7 +61,7 @@ describe("services", () => {
     it("emits nothing service-related when no service is declared", () => {
         expect.assertions(2);
 
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(generated("server.ts")).not.toContain("LunoraServices");
         expect(generated("shard.ts")).not.toContain("LUNORA_SERVICES");
@@ -71,7 +71,7 @@ describe("services", () => {
         expect.assertions(6);
 
         writeServices();
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         const server = generated("server.ts");
         const shard = generated("shard.ts");
@@ -106,7 +106,7 @@ export class Gateway {
 }
 `,
         );
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         const entry = generated("services/llmGateway/src/index.d.ts");
 
@@ -117,7 +117,7 @@ export class Gateway {
 
         // The snapshot goes once the service is no longer RPC.
         write("lunora.config.ts", `export default { services: { parser: { dir: "./services/parser" } } };\n`);
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(() => generated("services/llmGateway/src/index.d.ts")).toThrow(/ENOENT/u);
         expect(() => generated("services")).toThrow(/ENOENT/u);
@@ -131,7 +131,7 @@ export class Gateway {
         write("services/llm-gateway/wrangler.jsonc", `{ "name": "neore-llm-gateway", "main": "src/index.js" }\n`);
         write("services/llm-gateway/src/index.js", `export class Gateway {}\n`);
 
-        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/service "llmGateway": TypeScript emitted no declaration/u);
+        expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/service "llmGateway": TypeScript emitted no declaration/u);
     });
 
     it("binds a named entrypoint declared rpc: false as a fetcher, without importing the service's sources", () => {
@@ -139,7 +139,7 @@ export class Gateway {
 
         writeServices();
         write("lunora.config.ts", `export default { services: { llmGateway: { dir: "./services/llm-gateway", entrypoint: "InternalApi", rpc: false } } };\n`);
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         const server = generated("server.ts");
         const [service] = resolveServiceBindings(workdir);
@@ -189,7 +189,7 @@ export const parse = action({
 });
 `,
         );
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         const { edges, nodes } = JSON.parse(generated("architecture.json")) as ArchitectureManifest;
 
@@ -205,7 +205,7 @@ export const parse = action({
         writeServices();
         write("lunora.config.ts", `export default { target: "node", services: { parser: { dir: "./services/parser" } } };\n`);
 
-        const result = runCodegen({ projectRoot: workdir });
+        const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(generated("server.ts")).not.toContain("LunoraServices");
         expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toContain("platform_unsupported_feature");
@@ -220,7 +220,7 @@ export const parse = action({
             `{ "name": "neore-llm-gateway", "main": "src/index.mts", "routes": ["llm.example.com/*"], "env": { "staging": { "name": "gw-staging", "routes": [], "workers_dev": true } } }\n`,
         );
         write("services/llm-gateway/src/index.mts", `export class Gateway {\n    complete(prompt: string): string {\n        return prompt;\n    }\n}\n`);
-        runCodegen({ projectRoot: workdir });
+        runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(generated("server.ts")).toContain(`from "./services/llmGateway/src/index.mjs";`);
         expect(generated("shard.ts")).toContain(`{ binding: "SERVICE_LLM_GATEWAY", name: "llmGateway", rpc: true }`);
@@ -245,7 +245,7 @@ export const parse = action({
         writeServices();
         write("lunora.config.ts", `const shared = {};\nexport default ${config};\n`);
 
-        expect(() => runCodegen({ projectRoot: workdir })).toThrow(message);
+        expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(message);
     });
 
     it("rejects a service whose wrangler config names no Worker", () => {
@@ -254,6 +254,6 @@ export const parse = action({
         writeServices();
         write("services/parser/wrangler.jsonc", `{ "main": "src/index.ts" }\n`);
 
-        expect(() => runCodegen({ projectRoot: workdir })).toThrow(/declares no Worker "name"/u);
+        expect(() => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/declares no Worker "name"/u);
     });
 });

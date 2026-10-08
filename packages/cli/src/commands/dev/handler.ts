@@ -25,7 +25,7 @@ import {
     secretSourcesFromBindings,
     updateDevServerState,
 } from "@lunora/config";
-import { resolveRemoteEnabled } from "@lunora/config/cloudflare";
+import { resolveRemoteEnabled, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
@@ -370,7 +370,7 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
     }
 
     try {
-        runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: "lunora", projectRoot: cwd, target });
+        runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: "lunora", projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
     } catch (error: unknown) {
         logger.warn(`codegen (pre-sidecar) failed: ${error instanceof Error ? error.message : String(error)} — the framework dev server will retry`);
     }

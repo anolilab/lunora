@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
+import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
@@ -233,7 +234,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
             return { code: EXIT_CODE.USAGE, error: message, errors: [message], warnings: [], wranglerPath: undefined };
         }
 
-        const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd, target: resolvedTarget.target });
+        const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd, target: resolvedTarget.target, ...wranglerCodegenInputs(cwd) });
 
         // The target is resolved and validated immediately above precisely so
         // the surface is gated against it — reporting everything else this run

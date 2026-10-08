@@ -120,6 +120,7 @@ export type {
     ValidatorIR,
     VectorIndexIR,
     WorkflowIR,
+    WranglerQueueProducerIR,
     WranglerVariableIR,
 } from "./ir";
 export type { OpenApiEmitInput } from "./openapi";

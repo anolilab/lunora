@@ -98,7 +98,7 @@ const unboundPublisher = (unbound: ReadonlyArray<string>): TopicPublisher => {
  * specs. A topic with no subscriptions publishes to nobody; a topic with an
  * unbound subscription rejects every publish (see {@link unboundPublisher}).
  */
-const createTopicContext = (env: Record<string, unknown>, specs: ReadonlyArray<TopicBindingSpec>): Topics => {
+const createTopicContext = <Name extends string>(env: Record<string, unknown>, specs: ReadonlyArray<TopicBindingSpec<Name>>): Topics<Name> => {
     const publishers: Record<string, TopicPublisher> = {};
 
     for (const spec of specs) {
@@ -118,7 +118,7 @@ const createTopicContext = (env: Record<string, unknown>, specs: ReadonlyArray<T
         publishers[spec.exportName] = unbound.length > 0 ? unboundPublisher(unbound) : publisherFor(bound);
     }
 
-    return namedLookup(publishers, "topic", (reject) => {
+    return namedLookup<Name, TopicPublisher>(publishers, "topic", (reject) => {
         return { publish: reject, publishBatch: reject };
     });
 };

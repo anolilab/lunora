@@ -29,6 +29,7 @@ import { dirname, join } from "node:path";
 
 import type { CodegenOptions } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
+import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { renderCodegenFailure } from "./codegen-error";
 import type { Logger } from "./logger";
@@ -82,7 +83,7 @@ const runOnce = (options: Pick<CodegenWatcherOptions, "apiSpec" | "logger" | "pr
     const { apiSpec, logger, projectRoot, target } = options;
 
     try {
-        const result = runCodegen({ apiSpec, lunoraDirectory, projectRoot, target });
+        const result = runCodegen({ apiSpec, lunoraDirectory, projectRoot, target, ...wranglerCodegenInputs(projectRoot) });
 
         logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
 

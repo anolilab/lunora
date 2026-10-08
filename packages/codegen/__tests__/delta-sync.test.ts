@@ -70,7 +70,7 @@ describe("delta-sync fixture", () => {
     // empty so the golden stays decoupled from advisor behaviour.
     beforeAll(() => {
         workdir = makeFixtureWorkdir(fixtureRoot);
-        generated = runCodegen({ lint: false, projectRoot: workdir }).generated;
+        generated = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
     }, 300_000);
 
     afterAll(() => {

@@ -49,7 +49,7 @@ describe("sdk-surface fixture", () => {
 
     beforeAll(() => {
         workdir = makeFixtureWorkdir(fixtureRoot);
-        openRpc = runCodegen({ lint: false, projectRoot: workdir }).generated.openRpc;
+        openRpc = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated.openRpc;
     }, 300_000);
 
     afterAll(() => {

@@ -1,6 +1,7 @@
+import type { Finding } from "@lunora/advisor";
 import type { QueuesResult, WorkflowsResult } from "@lunora/shard-engine";
 
-import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
+import type { AgentIR, ContainerIR, JurisdictionIR, QueueIR, ServiceBindingIR, TopicIR, WorkflowIR, WranglerQueueProducerIR } from "../ir";
 import { subscriptionsOf } from "../ir";
 import renderJsonData from "../json-data";
 import { renderThrowingStub } from "./shard-bindings";
@@ -272,15 +273,96 @@ import { ${imports} } from "../agents.js";
 ${classes}`;
 };
 
+/** Where a `queues.producers[]` entry sits, for a message: `env.preview` or the top level. */
+const producerScope = (producer: WranglerQueueProducerIR): string => (producer.env === undefined ? "the top level" : `env.${producer.env}`);
+
+/**
+ * Map every wrangler queue name a batch can arrive under to the push queue that
+ * handles it: each push queue's declared name, plus every name a producer maps
+ * that queue's binding to (`jobs-preview` for `jobs`), so a per-environment
+ * rename still routes.
+ *
+ * Unlike `reconcileEnvQueues`, which matches within one `env.<name>` block, this
+ * merges every scope into the one registry the worker ships, so a name can be
+ * claimed twice. Declared names always win, then the first producer. Each name
+ * that loses that way is reported in `conflicts`: an alias equal to another
+ * queue's declared name, or one name aliased to two different queues.
+ */
+const resolveQueueRoutes = (
+    queues: ReadonlyArray<QueueIR>,
+    producers: ReadonlyArray<WranglerQueueProducerIR>,
+): { conflicts: string[]; routes: Map<string, QueueIR> } => {
+    const pushQueues = queues.filter((queue) => queue.mode === "push");
+    const byBinding = new Map(pushQueues.map((queue) => [queue.bindingName, queue]));
+    const declared = new Map(queues.map((queue) => [queue.name, queue]));
+    const routes = new Map(pushQueues.map((queue) => [queue.name, queue]));
+    const claimedBy = new Map<string, WranglerQueueProducerIR>();
+    const conflicts: string[] = [];
+
+    for (const producer of producers) {
+        const queue = byBinding.get(producer.binding);
+
+        if (queue === undefined || producer.queue === queue.name) {
+            continue;
+        }
+
+        const owner = declared.get(producer.queue);
+
+        if (owner !== undefined) {
+            conflicts.push(
+                `${producerScope(producer)} maps \`${producer.binding}\` to "${producer.queue}", the declared name of queue \`${owner.exportName}\` — batches for "${producer.queue}" go to \`${owner.exportName}\`, never \`${queue.exportName}\`.`,
+            );
+            continue;
+        }
+
+        const claimed = routes.get(producer.queue);
+
+        if (claimed === undefined) {
+            routes.set(producer.queue, queue);
+            claimedBy.set(producer.queue, producer);
+        } else if (claimed !== queue) {
+            const first = claimedBy.get(producer.queue);
+
+            conflicts.push(
+                `"${producer.queue}" is aliased to \`${claimed.exportName}\` by ${first === undefined ? "an earlier producer" : producerScope(first)} and to \`${queue.exportName}\` by ${producerScope(producer)} — batches for it go to \`${claimed.exportName}\`.`,
+            );
+        }
+    }
+
+    return { conflicts, routes };
+};
+
+/**
+ * Codegen findings for the queue names {@link resolveQueueRoutes} could not route
+ * as wrangler.jsonc asks: one warning per conflicting producer.
+ */
+const queueAliasFindings = (queues: ReadonlyArray<QueueIR>, producers: ReadonlyArray<WranglerQueueProducerIR>): Finding[] =>
+    resolveQueueRoutes(queues, producers).conflicts.map((detail) => {
+        return {
+            cacheKey: `queue_alias_conflict:${detail}`,
+            categories: ["SCHEMA"],
+            description:
+                "Codegen routes a delivered batch by its queue name. A wrangler.jsonc producer that maps a queue's binding to another name adds that name as a route, so it must not be another queue's declared name or an alias another scope gives a different queue.",
+            detail,
+            facing: "INTERNAL",
+            level: "WARN",
+            metadata: {},
+            name: "queue_alias_conflict",
+            remediation: "Give each queue a distinct name in every `env.<name>` block of wrangler.jsonc, then rerun codegen.",
+            title: "Queue name routes to a different handler than wrangler.jsonc implies",
+        };
+    });
+
 /**
  * Emit `_generated/queues.ts` — the push-consumer registry the worker `queue()`
- * handler dispatches through. Maps each push queue's stable wrangler name (which
- * `batch.queue` carries) to its `defineQueue` definition + export name. Pull
- * queues are consumed by an external worker, so they carry no handler and are
- * omitted here. Returns "" (and the file is not written) when no push queues are
- * declared — a pull-only or queue-free app keeps a clean `_generated/`.
+ * handler dispatches through. Maps each wrangler queue name a batch can arrive
+ * under (`batch.queue`, see {@link resolveQueueRoutes}) to its `defineQueue`
+ * definition + export name. Pull queues are consumed by an external worker, so
+ * they carry no handler and are omitted here. Returns "" (and the file is not
+ * written) when no push queues are declared — a pull-only or queue-free app
+ * keeps a clean `_generated/`.
  */
-const emitQueues = (queues: ReadonlyArray<QueueIR>): string => {
+const emitQueues = (queues: ReadonlyArray<QueueIR>, producers: ReadonlyArray<WranglerQueueProducerIR> = []): string => {
     const pushQueues = queues.filter((queue) => queue.mode === "push");
 
     if (pushQueues.length === 0) {
@@ -295,10 +377,12 @@ const emitQueues = (queues: ReadonlyArray<QueueIR>): string => {
     const imports = [...Map.groupBy(pushQueues, (queue) => queue.filePath)]
         .map(([filePath, declared]) => `import { ${declared.map((queue) => queue.exportName).join(", ")} } from "../${filePath}.js";`)
         .join("\n");
-    const entries = pushQueues
+    const { routes } = resolveQueueRoutes(queues, producers);
+
+    const entries = [...routes]
         .map(
-            (queue) =>
-                `    ${JSON.stringify(queue.name)}: { binding: ${JSON.stringify(queue.bindingName)}, definition: ${queue.exportName}, exportName: ${JSON.stringify(queue.exportName)} },`,
+            ([name, queue]) =>
+                `    ${JSON.stringify(name)}: { binding: ${JSON.stringify(queue.bindingName)}, definition: ${queue.exportName}, exportName: ${JSON.stringify(queue.exportName)} },`,
         )
         .join("\n");
 
@@ -312,7 +396,7 @@ import type { QueueRegistry } from "@lunora/queue";
 
 ${imports}
 
-/** Stable wrangler queue name → { binding, definition, exportName } for batch routing. */
+/** Wrangler queue name (declared, or a per-environment rename) → { binding, definition, exportName } for batch routing. */
 export const LUNORA_QUEUE_REGISTRY: QueueRegistry = {
 ${entries}
 };
@@ -717,4 +801,5 @@ export {
     emitWorkflowFragments,
     emitWorkflows,
     emitWorkflowsMetadataFragments,
+    queueAliasFindings,
 };

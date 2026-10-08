@@ -27,17 +27,17 @@ export interface QueueProducer<Body = unknown> {
 
 /**
  * `ctx.queues` — the map of declared queue export names → typed producers.
- * Codegen narrows this to the exact export names; the package keeps it open so
- * `createQueues` stays schema-agnostic.
+ * Keyed by the exact export names `createQueueContext` / `createQueues` are
+ * handed, so `queues.jobs` is a `QueueProducer` rather than `QueueProducer |
+ * undefined` under `noUncheckedIndexedAccess`. `Name` defaults to `string`
+ * (an open map) for schema-agnostic callers.
  */
-export interface Queues {
-    [exportName: string]: QueueProducer;
-}
+export type Queues<Name extends string = string> = Readonly<Record<Name, QueueProducer>>;
 
 /** Options the package-level `createQueues` factory takes. */
-export interface LunoraQueuesOptions {
+export interface LunoraQueuesOptions<Name extends string = string> {
     /** Map of `lunora/queues.ts` export name → Cloudflare `Queue` producer binding. */
-    bindings: Record<string, QueueBindingLike>;
+    bindings: Record<Name, QueueBindingLike>;
 }
 
 // ─── Consumer side (the `defineQueue` handler) ──────────────────────────────
@@ -105,6 +105,8 @@ export interface QueueConsumerTuning {
     maxBatchSize?: number;
     /** Max seconds to wait before delivering a partial batch (0–60, default 5). */
     maxBatchTimeout?: number;
+    /** Max concurrent consumer invocations (1–250). Unset lets Cloudflare autoscale. Not emulated by Miniflare in dev. */
+    maxConcurrency?: number;
     /** Retries **after** the initial delivery, before a message is dropped / dead-lettered. Default 3, so up to 4 deliveries in total. */
     maxRetries?: number;
     /** Delay in seconds before a failed batch is retried. */
@@ -156,10 +158,8 @@ export interface TopicPublisher<Payload = unknown> {
     publishBatch: (messages: Iterable<MessageSendRequestLike<Payload>>, options?: QueueSendBatchOptions) => Promise<void>;
 }
 
-/** `ctx.topics` — declared topic export names → typed publishers. Codegen narrows it to the exact names. */
-export interface Topics {
-    [exportName: string]: TopicPublisher;
-}
+/** `ctx.topics` — declared topic export names → typed publishers, keyed like {@link Queues}. */
+export type Topics<Name extends string = string> = Readonly<Record<Name, TopicPublisher>>;
 
 /** The branded result of `defineTopic`, discovered by codegen. Carries no deploy config of its own. */
 export interface TopicDefinition<Payload = unknown> {
@@ -197,19 +197,19 @@ export interface SubscriptionDefinition<Payload = unknown> extends QueueDefiniti
 }
 
 /** Wiring info for one declared topic, emitted by codegen into the generated shard. */
-export interface TopicBindingSpec {
+export interface TopicBindingSpec<Name extends string = string> {
     /** The `lunora/queues.ts` topic export name, e.g. `signups`. */
-    exportName: string;
+    exportName: Name;
     /** One entry per subscription: its export name and its `Queue` producer binding. */
     subscriptions: ReadonlyArray<{ binding: string; exportName: string }>;
 }
 
 /** Wiring info for one declared queue, emitted by codegen into the generated shard/handler. */
-export interface QueueBindingSpec {
+export interface QueueBindingSpec<Name extends string = string> {
     /** The Cloudflare `Queue` producer binding name, e.g. `QUEUE_EMAIL`. */
     binding: string;
     /** The `lunora/queues.ts` export name, e.g. `emailQueue`. */
-    exportName: string;
+    exportName: Name;
     /** The stable wrangler queue name, e.g. `email-queue`. */
     name: string;
 }

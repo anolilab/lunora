@@ -53,7 +53,7 @@ const primedWorkdir = (): string => {
         cpSync(join(fixtureRoot, "lunora"), join(created, "lunora"), { recursive: true });
         // Prime the on-disk output so the bench exercises the `writeIfChanged`
         // no-op path rather than a first write.
-        runCodegen({ projectRoot: created });
+        runCodegen({ projectRoot: created, wranglerQueueProducers: [] });
 
         return created;
     })();
@@ -79,7 +79,7 @@ describe("runCodegen end-to-end (simple fixture)", () => {
             cpSync(join(fixtureRoot, "lunora"), join(coldWorkdir, "lunora"), { recursive: true });
 
             try {
-                runCodegen({ projectRoot: coldWorkdir });
+                runCodegen({ projectRoot: coldWorkdir, wranglerQueueProducers: [] });
             } finally {
                 rmSync(coldWorkdir, { force: true, recursive: true });
             }
@@ -90,7 +90,7 @@ describe("runCodegen end-to-end (simple fixture)", () => {
     bench(
         "warm run — same workdir, only emit phase changes",
         () => {
-            runCodegen({ projectRoot: primedWorkdir() });
+            runCodegen({ projectRoot: primedWorkdir(), wranglerQueueProducers: [] });
         },
         { iterations: 20 },
     );

@@ -135,7 +135,7 @@ describe("runCodegen lint integration", () => {
     it("returns advisories in the result (codegen does not print them)", () => {
         expect.assertions(2);
 
-        const names = runCodegen({ projectRoot: workdir }).advisories.map((advisory) => advisory.name);
+        const names = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.map((advisory) => advisory.name);
 
         // The FK lint fires on the schema; the write feeder also flags `posts`
         // (no `ctx.db.insert("posts", …)` in the fixture functions).
@@ -146,13 +146,15 @@ describe("runCodegen lint integration", () => {
     it("respects `lint: false` — no findings", () => {
         expect.assertions(1);
 
-        expect(runCodegen({ lint: false, projectRoot: workdir }).advisories).toHaveLength(0);
+        expect(runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).advisories).toHaveLength(0);
     });
 
     it("still computes advisories on a dry run", () => {
         expect.assertions(1);
 
-        expect(runCodegen({ dryRun: true, projectRoot: workdir }).advisories.map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
+        expect(runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories.map((advisory) => advisory.name)).toContain(
+            "unindexed_foreign_key",
+        );
     });
 
     it("flags a filter-without-index read discovered in a function body", () => {
@@ -165,7 +167,7 @@ describe("runCodegen lint integration", () => {
             "utf8",
         );
 
-        const names = runCodegen({ projectRoot: workdir }).advisories.map((advisory) => advisory.name);
+        const names = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.map((advisory) => advisory.name);
 
         expect(names).toContain("filter_without_index");
         expect(names).toContain("unindexed_foreign_key");
@@ -174,7 +176,7 @@ describe("runCodegen lint integration", () => {
     it("emits the advisories into the generated shard for the getAdvisories RPC", () => {
         expect.assertions(3);
 
-        const { shard } = runCodegen({ projectRoot: workdir }).generated;
+        const { shard } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
         // The generated subclass overrides `advisories()` with the baked list,
         // so the DO's `getAdvisories` admin RPC can serve them to the studio.
@@ -186,7 +188,9 @@ describe("runCodegen lint integration", () => {
     it("emits an empty advisory list under `lint: false`", () => {
         expect.assertions(1);
 
-        expect(emittedJsonData(runCodegen({ lint: false, projectRoot: workdir }).generated.shard, "LUNORA_ADVISORIES")).toStrictEqual([]);
+        expect(
+            emittedJsonData(runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated.shard, "LUNORA_ADVISORIES"),
+        ).toStrictEqual([]);
     });
 
     it("flags replication shapes targeting an unknown table and a `.global()` table (full discover → lint path)", () => {
@@ -213,7 +217,7 @@ export const ghost = defineShape({ table: "mesages", where: () => ({}) });
             "utf8",
         );
 
-        const findings = runCodegen({ projectRoot: workdir }).advisories;
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
         const byName = (name: string) => findings.filter((finding) => finding.name === name);
 
         expect(byName("shape_targets_global_table")).toHaveLength(1);
@@ -264,11 +268,11 @@ export const schema = defineSchema({
 
             seedAllLevels();
 
-            const unfiltered = runCodegen({ dryRun: true, projectRoot: workdir }).advisories;
+            const unfiltered = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
 
             writeFileSync(join(workdir, "lunora.config.ts"), `export default { advisor: { minSeverity: "warn" } };\n`, "utf8");
 
-            const { advisories, generated } = runCodegen({ projectRoot: workdir });
+            const { advisories, generated } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
             const emitted = emittedJsonData(generated.shard, "LUNORA_ADVISORIES") as { level: string; name: string }[];
 
             expect(levels(unfiltered)["INFO"]).toBeGreaterThan(0);
@@ -283,7 +287,7 @@ export const schema = defineSchema({
 
             seedAllLevels(`const advisor = { minSeverity: "error" } as const;\nexport default { advisor };\n`);
 
-            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir });
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
 
             expect(Object.keys(levels(advisories))).toStrictEqual(["ERROR"]);
             expect(errorAdvisoryNames(advisories)).toContain("shape_unknown_table");
@@ -306,11 +310,11 @@ export const schema = defineSchema({
 
             seedAllLevels();
 
-            const unfiltered = runCodegen({ dryRun: true, projectRoot: workdir }).advisories;
+            const unfiltered = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
 
             writeFileSync(join(workdir, "lunora.config.ts"), config, "utf8");
 
-            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir });
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
             const invalid = advisories.filter((advisory) => advisory.name === "advisor_min_severity_invalid");
 
             expect(advisories).toHaveLength(unfiltered.length + 1);
@@ -333,7 +337,11 @@ export const careful = action({ args: {}, handler: async (ctx) => { try { await 
             "utf8",
         );
 
-        const names = new Set(runCodegen({ projectRoot: workdir }).advisories.map((advisory) => `${advisory.name}:${String(advisory.metadata.exportName)}`));
+        const names = new Set(
+            runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.map(
+                (advisory) => `${advisory.name}:${String(advisory.metadata.exportName)}`,
+            ),
+        );
 
         expect(names).toContain("error_without_catalog:quiet");
         expect(names).toContain("procedure_without_structured_event:quiet");
@@ -354,7 +362,7 @@ export const careful = action({ args: {}, handler: async (ctx) => { try { await 
             "utf8",
         );
 
-        const rows = runCodegen({ dryRun: true, projectRoot: workdir }).advisorContext?.procedureProtections ?? [];
+        const rows = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisorContext?.procedureProtections ?? [];
 
         // A false positive here silences the procedure in compareToBaseline forever.
         expect(rows.find((row) => row.exportName === "handler")?.exempt).toBe(false);
@@ -373,7 +381,7 @@ export const current = mutation({ args: {}, handler: async (ctx) => { throw new 
             "utf8",
         );
 
-        const context = runCodegen({ dryRun: true, projectRoot: workdir }).advisorContext;
+        const context = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisorContext;
         const rows = context?.procedureProtections ?? [];
         const exempted = rows.find((row) => row.exportName === "legacy");
 
@@ -396,7 +404,7 @@ export const schema = defineSchema({
             "utf8",
         );
 
-        const findings = runCodegen({ projectRoot: workdir }).advisories;
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
         const finding = findings.find((advisory) => advisory.name === "public_table_rls_optout_confusion");
 
         expect(finding).toBeDefined();
@@ -415,7 +423,7 @@ export const app = defineApp().extend(() => ({ allowUnauthenticatedShardAccess: 
             "utf8",
         );
 
-        const findings = runCodegen({ projectRoot: workdir }).advisories;
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
         const finding = findings.find((advisory) => advisory.name === "allow_unauthenticated_shard_access_enabled");
 
         expect(finding).toBeDefined();

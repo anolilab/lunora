@@ -93,7 +93,7 @@ const BASELINE_PATH = join(HERE, "plan-131-baseline.demo.json");
 const main = (): void => {
     console.log("=== Plan 131 baseline/suppression PoC: queue_without_dlq on apps/playground ===\n");
 
-    const result = runCodegen({ projectRoot: PROJECT_ROOT });
+    const result = runCodegen({ projectRoot: PROJECT_ROOT, wranglerQueueProducers: [] });
     const baseline: Baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Baseline;
 
     console.log(`Without baseline: ${result.advisories.length.toString()} advisories:`);

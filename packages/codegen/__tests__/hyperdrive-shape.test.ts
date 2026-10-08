@@ -46,7 +46,7 @@ describe("hyperdrive-shape fixture", () => {
     // `lint: false` matches `capture-expected.ts`.
     beforeAll(() => {
         workdir = makeFixtureWorkdir(fixtureRoot);
-        generated = runCodegen({ lint: false, projectRoot: workdir }).generated;
+        generated = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated;
     }, 300_000);
 
     afterAll(() => {

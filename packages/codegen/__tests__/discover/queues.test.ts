@@ -63,6 +63,35 @@ describe("discover/queues", () => {
         expect(discoverQueues(newProject(), workdir)[0]?.name).toBe("outbound");
     });
 
+    it("reads maxConcurrency with the other numeric tuning options", () => {
+        expect.assertions(1);
+
+        writeQueues(`
+            import { defineQueue } from "@lunora/queue";
+
+            export const jobs = defineQueue({ maxBatchSize: 20, maxConcurrency: 4, handler: async () => {} });
+        `);
+
+        expect(discoverQueues(newProject(), workdir)[0]?.tuning).toStrictEqual({ maxBatchSize: 20, maxConcurrency: 4 });
+    });
+
+    it.each([
+        ["maxConcurrency: 0", "`maxConcurrency` must be an integer from 1 to 250 (got 0)"],
+        ["maxConcurrency: 251", "`maxConcurrency` must be an integer from 1 to 250 (got 251)"],
+        ["maxBatchSize: 2.5", "`maxBatchSize` must be an integer from 1 to 100 (got 2.5)"],
+        ["maxBatchTimeout: 61", "`maxBatchTimeout` must be a number from 0 to 60 (got 61)"],
+    ])("rejects an out-of-range tuning value (%s)", (property, message) => {
+        expect.assertions(1);
+
+        writeQueues(`
+            import { defineQueue } from "@lunora/queue";
+
+            export const jobs = defineQueue({ ${property}, handler: async () => {} });
+        `);
+
+        expect(() => discoverQueues(newProject(), workdir)).toThrow(message);
+    });
+
     it("rejects an empty static name, mirroring the runtime defineQueue guard", () => {
         expect.assertions(1);
 

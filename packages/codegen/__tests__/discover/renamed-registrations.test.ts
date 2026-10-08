@@ -299,7 +299,7 @@ describe("emitted output for registrations exported as `default` or a reserved w
                 writeFileSync(join(lunora, file), `${importLine}\nconst zeta = ${call};\n${exportStatement}\n`);
             }
 
-            const { generated } = runCodegen({ lint: false, projectRoot: workdir });
+            const { generated } = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
             const modules = Object.entries(generated).filter(
                 (entry): entry is [string, string] => typeof entry[1] === "string" && !entry[0].endsWith("Json") && !entry[0].startsWith("open"),

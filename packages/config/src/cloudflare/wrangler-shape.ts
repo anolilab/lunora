@@ -47,15 +47,17 @@ interface QueueConsumerEntry {
     dead_letter_queue?: string;
     max_batch_size?: number;
     max_batch_timeout?: number;
+    max_concurrency?: number;
     max_retries?: number;
     queue?: string;
     retry_delay?: number;
     type?: string;
 }
 
+/** A hand-edited JSONC array may hold a `null` (a trailing comma parses to one). */
 interface QueuesShape {
     consumers?: ReadonlyArray<QueueConsumerEntry>;
-    producers?: ReadonlyArray<QueueProducerEntry>;
+    producers?: ReadonlyArray<QueueProducerEntry | null>;
 }
 
 /** A wrangler `exports.<Class>` entry — only `type: "workflow"` ones are Lunora's to write. */
