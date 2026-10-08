@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "@lunora/advisor";
-import type { Expression, Identifier, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { Expression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { defaultExportExpression, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
@@ -256,6 +256,42 @@ const notifyConfigExpression = (source: SourceFile, visiting: Set<string> = new 
 };
 
 /**
+ * The object-literal config a `defineNotify(...)` argument refers to: the
+ * argument itself, or the literal initializer of the variable/import it names
+ * (`const config = { webPush: ... }; defineNotify(config)`, including a config
+ * imported from a sibling lunora file). Mirrors `resolveStringConst` in
+ * `inserts.ts` — follows the symbol's (aliased) declaration to an object-literal
+ * initializer. Returns `undefined` when the argument is a call result, an
+ * unreadable property access, or otherwise not a statically-readable literal;
+ * the caller's spread rejection and both-channels fallback then apply, because
+ * such a config may still wire a channel.
+ */
+const configLiteralOf = (argument: TsNode): ObjectLiteralExpression | undefined => {
+    if (Node.isObjectLiteralExpression(argument)) {
+        return argument;
+    }
+
+    if (!Node.isIdentifier(argument)) {
+        return undefined;
+    }
+
+    const symbol = argument.getSymbol();
+    const declarations = symbol?.getAliasedSymbol()?.getDeclarations() ?? symbol?.getDeclarations() ?? [];
+
+    for (const declaration of declarations) {
+        if (Node.isVariableDeclaration(declaration)) {
+            const initializer = declaration.getInitializer();
+
+            if (initializer && Node.isObjectLiteralExpression(initializer)) {
+                return initializer;
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/**
  * Read which push channels the project's `lunora/notify.ts` default export
  * (`defineNotify({...})`) wires, or `undefined` when the file is absent (the app
  * declares no notify config). The read is metadata-only (like `discoverFlags`):
@@ -263,11 +299,13 @@ const notifyConfigExpression = (source: SourceFile, visiting: Set<string> = new 
  * The argument is read as the complete config only when the callee resolves to
  * `defineNotify` itself (`isDefineNotify`) — a wrapper factory could add a
  * channel before returning a valid definition, so its literal argument is not
- * trustworthy. A same-file `const` alias and a cross-file default re-export of a
- * literal `defineNotify(...)` call are followed and read the same way; anything
- * else — no `defineNotify(...)` default export, a non-`defineNotify` callee, a
- * non-literal argument, or a spread — reports BOTH channels, so their secrets
- * are scaffolded and preflighted rather than silently dropped. `@lunora/config`
+ * trustworthy. A same-file `const` alias, a cross-file default re-export, and a
+ * variable or imported config that resolves to an object literal
+ * (`configLiteralOf`) are followed and read the same way; anything unreadable —
+ * no `defineNotify(...)` default export, a non-`defineNotify` callee, a
+ * computed/non-literal config, or a spread — reports BOTH channels, so their
+ * secrets are scaffolded and preflighted rather than silently dropped (a
+ * wrapper factory may add a channel its argument doesn't show). `@lunora/config`
  * reads this alone to scaffold only the configured channels' secrets.
  */
 const discoverNotifyChannels = (project: Project, lunoraDirectory: string): NotifyChannels | undefined => {
@@ -286,12 +324,13 @@ const discoverNotifyChannels = (project: Project, lunoraDirectory: string): Noti
 
     const callee = exported.getExpression();
     const argument = Node.isIdentifier(callee) && isDefineNotify(callee) ? exported.getArguments()[0] : undefined;
+    const config = argument === undefined ? undefined : configLiteralOf(argument);
 
-    if (!argument || !Node.isObjectLiteralExpression(argument) || argument.getProperties().some((property) => Node.isSpreadAssignment(property))) {
+    if (!config || config.getProperties().some((property) => Node.isSpreadAssignment(property))) {
         return { hasFcm: true, hasWebPush: true };
     }
 
-    return { hasFcm: findObjectProperty(argument, "fcm") !== undefined, hasWebPush: findObjectProperty(argument, "webPush") !== undefined };
+    return { hasFcm: findObjectProperty(config, "fcm") !== undefined, hasWebPush: findObjectProperty(config, "webPush") !== undefined };
 };
 
 /**

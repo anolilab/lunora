@@ -1349,6 +1349,24 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
         expect(packages).not.toContain("@lunora/notify");
     });
 
+    it("scaffolds only the webPush secrets when defineNotify gets a readable variable config (webPush-only, #1039)", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/notify.ts",
+            `import { defineNotify, webPushFromEnv } from "@lunora/notify";\nconst config = { webPush: webPushFromEnv };\nexport default defineNotify(config);`,
+        );
+
+        const packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: root }));
+
+        // The variable config is readable as an object literal, so a webPush-only
+        // app still does not get FCM secrets scaffolded.
+        expect(packages).toContain("@lunora/notify:webPush");
+        expect(packages).not.toContain("@lunora/notify:fcm");
+    });
+
     it("reports both notify channels when defineNotify's config is not a plain object literal", async () => {
         expect.assertions(1);
 

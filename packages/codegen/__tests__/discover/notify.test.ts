@@ -172,9 +172,10 @@ export default defineNotify({});
 
     it.each([
         [
-            "a variable argument",
+            "a computed variable argument",
             `import { defineNotify } from "@lunora/notify";
-const config = { fcm: () => undefined };
+import { buildNotifyConfig } from "./notify-config";
+const config = buildNotifyConfig();
 export default defineNotify(config);
 `,
         ],
@@ -235,6 +236,37 @@ export default defineNotify({ webPush: () => undefined });
             join(workdir, "lunora", "notify.ts"),
             `import definition from "./notify-definition";
 export default definition;
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+    });
+
+    it("reads a same-file variable config argument of defineNotify (webPush-only does not scaffold fcm)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+const config = { webPush: () => undefined };
+export default defineNotify(config);
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+    });
+
+    it("reads an imported variable config argument of defineNotify from a sibling file (webPush-only does not scaffold fcm)", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify-config.ts"), `export const config = { webPush: () => undefined };\n`, "utf8");
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+import { config } from "./notify-config";
+export default defineNotify(config);
 `,
             "utf8",
         );
