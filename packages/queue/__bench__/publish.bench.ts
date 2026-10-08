@@ -24,10 +24,6 @@ const topicWith = (count: number) => {
 
     const { signups } = createTopicContext(env, [{ exportName: "signups", subscriptions }]);
 
-    if (signups === undefined) {
-        throw new Error("createTopicContext returned no `signups` publisher");
-    }
-
     return signups;
 };
 
