@@ -1,3 +1,20 @@
+## @lunora/hyperdrive [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.164...@lunora/hyperdrive@1.0.0-alpha.165) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+### Documentation
+
+* **cli:** refresh agent skills and compile-check their examples ([#1035](https://github.com/anolilab/lunora/issues/1035)) ([ad2d4c8](https://github.com/anolilab/lunora/commit/ad2d4c8052509ef45f3cdb78eddf40523333e5c7))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.169
+
 ## @lunora/hyperdrive [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.163...@lunora/hyperdrive@1.0.0-alpha.164) (2026-10-06)
 
 
