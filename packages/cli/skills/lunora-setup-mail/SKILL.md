@@ -101,11 +101,13 @@ For the auth flows, `lunora add auth-emails` adds ready-made templates.
 ### Queueing (optional)
 
 `queueEmail` requires a Cloudflare Queue producer binding passed as
-`createMailer({ queue })`, and the item doesn't add one. Without it, the call
+`createMailerFromEnv(env, { queue })` in `mailer()`, and the item doesn't add one. Without it, the call
 throws `` `queue` binding is required for mailer.queue() ``, except under
 capture, where it sends straight to the capture inbox so dev flows keep working.
-A consumer drains the queue with `consumeQueuedSend(mailer, message.body)` and
-then calls `message.ack()` for each message. Queues deliver at least once: with
+A consumer builds its mailer with `createMailerFromEnv` too, drains the queue
+with `consumeQueuedSend(mailer, message.body)` and then calls `message.ack()`
+for each message. With a queue bound in dev, the message still goes through the
+queue and the consumer's mailer captures it into the inbox. Queues deliver at least once: with
 per-message acks a later throw retries only the unacknowledged messages, while
 without them a single throw resends the whole batch. The full wiring is in the "Queueing"
 section of the item README.

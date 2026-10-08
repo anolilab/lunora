@@ -15,7 +15,8 @@ Cloudflare Queue.
 
 `createMailer` needs `from` plus exactly one transport: `cloudflareSend` (the
 Cloudflare default), `apiKey` (Resend), or an explicit `transport`. Passing none
-throws.
+throws, unless you pass a `queue`: that builds a producer-only mailer whose
+`queue()` works and whose `send()` rejects.
 
 ```ts
 import { createMailer } from "@lunora/mail";
@@ -28,8 +29,8 @@ export const mailer = createMailer({
 
 Inside a Worker, prefer `createMailerFromEnv(env)`: it reads `MAIL_FROM`,
 captures every send into the studio's Mail inbox in a dev environment, and
-otherwise delivers via a `SEND_EMAIL` binding (pass `cloudflareSend`) or
-`RESEND_API_KEY`.
+otherwise delivers via a `SEND_EMAIL` binding (pass `cloudflareSend`; it is
+used only when `env.SEND_EMAIL` is set) or `RESEND_API_KEY`.
 
 ```ts
 import { createMailerFromEnv } from "@lunora/mail";
@@ -105,14 +106,16 @@ A consumer Worker re-hydrates the payload and sends it with
 calls `mailer.send(...)` for you and returns `{ id }`. Call `message.ack()` after
 each successful send: Cloudflare Queues are at-least-once, so without a per-message
 ack a single throw retries the WHOLE batch — resending every already-delivered
-email in it, not just the one that failed:
+email in it, not just the one that failed. Build the consumer's mailer with
+`createMailerFromEnv` so that in dev the queued message is captured into the
+studio inbox at consume time instead of delivered:
 
 ```ts
-import { consumeQueuedSend, createMailer } from "@lunora/mail";
+import { consumeQueuedSend, createMailerFromEnv } from "@lunora/mail";
 
 export default {
     queue: async (batch, env) => {
-        const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "Acme <noreply@acme.test>" });
+        const mailer = createMailerFromEnv(env);
 
         for (const message of batch.messages) {
             const { idempotencyKey } = message.body;
@@ -276,7 +279,7 @@ rules; that lifecycle stays in Cloudflare.
 
 | Export                                | Purpose                                                                                                                                                                                                             |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createMailer(options)`               | Build a `Mailer`. Needs `from` plus one of `cloudflareSend` / `apiKey` / `transport`                                                                                                                                |
+| `createMailer(options)`               | Build a `Mailer`. Needs `from` plus one of `cloudflareSend` / `apiKey` / `transport` (or only a `queue`, for a producer-only mailer)                                                                                |
 | `createMailerFromEnv(env, options?)`  | Build a `Mailer` from a Worker `env`: captures in dev, else delivers via Cloudflare/Resend                                                                                                                          |
 | `createCloudflareTransport(options)`  | Cloudflare Email Workers transport (single-recipient; rejects `cc`/`bcc`)                                                                                                                                           |
 | `createResendTransport(apiKey, from)` | Resend transport                                                                                                                                                                                                    |
