@@ -1,3 +1,17 @@
+## @lunora/client [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.189...@lunora/client@1.0.0-alpha.190) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/do:** upgraded to 1.0.0-alpha.200
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.186
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+
 ## @lunora/client [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.188...@lunora/client@1.0.0-alpha.189) (2026-10-07)
 
 ### ⚠ BREAKING CHANGES
