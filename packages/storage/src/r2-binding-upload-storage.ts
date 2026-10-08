@@ -60,8 +60,19 @@ import type { UploadStorage } from "./upload-handler";
 /** What `get()` answers; `@visulima/storage` does not export the type by name. */
 type FileReturn = Awaited<ReturnType<AbstractBaseStorage["get"]>>;
 
-/** Options for {@link createR2BindingUploadStorage}. */
-interface R2BindingUploadStorageOptions extends Omit<BaseStorageOptions, "metaStorage"> {
+/**
+ * `T` without its index signatures. `BaseStorageOptions` has a
+ * `[key: string]: unknown` one, and `Omit` over it maps over `string`, which
+ * erases every declared option (each would be `unknown`).
+ */
+type DeclaredKeys<T> = { [K in keyof T as string extends K ? never : number extends K ? never : K]: T[K] };
+
+/**
+ * Options for {@link createR2BindingUploadStorage}. A type alias, not an
+ * interface: an interface gets no implicit index signature, so it would not
+ * pass to `AbstractBaseStorage`'s constructor.
+ */
+type R2BindingUploadStorageOptions = Omit<DeclaredKeys<BaseStorageOptions>, "metaStorage"> & {
     /**
      * Key prefix the upload state objects and buffered segments are stored
      * under, in the same bucket. Default `"_lunora/uploads/"`. No uploaded
@@ -74,7 +85,7 @@ interface R2BindingUploadStorageOptions extends Omit<BaseStorageOptions, "metaSt
      * any upload you expect to take.
      */
     statePrefix?: string;
-}
+};
 
 const DEFAULT_STATE_PREFIX = "_lunora/uploads/";
 

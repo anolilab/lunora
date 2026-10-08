@@ -11,10 +11,10 @@ import {
     generateSecretValue,
     inferLunoraBindings,
     isMintableSecretKey,
-    packageNamesFromBindings,
     parseDevVariableEntries,
     requiredSecrets,
     resolveSchemaDirectory,
+    secretSourcesFromBindings,
     upsertDevVariableLine,
     writeDevVariablesFileAtomically,
 } from "@lunora/config";
@@ -78,7 +78,7 @@ const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
     let packages: ReadonlyArray<string> = [];
 
     try {
-        packages = packageNamesFromBindings(await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) }));
+        packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) }));
     } catch {
         // Scan failure → fall back to the core secrets + whatever is declared locally.
     }

@@ -1,3 +1,9 @@
+## @lunora/errors [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.51...@lunora/errors@1.0.0-alpha.52) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
 ## @lunora/errors [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/errors@1.0.0-alpha.50...@lunora/errors@1.0.0-alpha.51) (2026-10-07)
 
 ### ⚠ BREAKING CHANGES

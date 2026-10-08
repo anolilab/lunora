@@ -32,6 +32,8 @@ const inferred = (services: ServiceBindingIR[] | undefined): InferredBindings =>
         usesKv: false,
         usesMail: false,
         usesNotify: false,
+        usesNotifyFcm: false,
+        usesNotifyWebPush: false,
         usesPaymentAutumn: false,
         usesPaymentCreem: false,
         usesPaymentDodopayments: false,

@@ -105,24 +105,24 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
     }
     ```
 
-2. Give the copied `mailer()` a queue binding. `createMailerFromEnv` takes no `queue`, so swap it for `createMailer` in `lunora/mail/index.ts`:
+2. Pass the queue binding to `createMailerFromEnv` in the copied `mailer()` (`lunora/mail/index.ts`):
 
     ```ts
-    import { createMailer } from "@lunora/mail";
+    import type { QueueLike } from "@lunora/mail";
 
-    const mailer = (): Mailer => createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM as string, queue: env.MAIL_QUEUE as QueueLike });
+    const mailer = (): Mailer => createMailerFromEnv(env, { cloudflareSend, queue: env["MAIL_QUEUE"] as QueueLike });
     ```
 
-    That trades away the dev capture-into-the-studio-inbox behaviour `createMailerFromEnv` gives you, so keep the env-based mailer for dev and only build the queue-bound one where you call `queueEmail`.
+    A producer-only Worker (it enqueues, the consumer delivers) needs no delivery transport: `queue()` works without one, and only `send()` throws `no transport configured`.
 
-3. In your Worker's `queue()` handler, drain the batch with `consumeQueuedSend` from `@lunora/mail`:
+3. In your Worker's `queue()` handler, build the mailer with `createMailerFromEnv` as well and drain the batch with `consumeQueuedSend` from `@lunora/mail`:
 
     ```ts
-    import { consumeQueuedSend, createMailer } from "@lunora/mail";
+    import { consumeQueuedSend, createMailerFromEnv } from "@lunora/mail";
 
     export default {
         queue: async (batch, env) => {
-            const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: env.MAIL_FROM });
+            const mailer = createMailerFromEnv(env, { cloudflareSend });
 
             for (const message of batch.messages) {
                 await consumeQueuedSend(mailer, message.body);
@@ -133,6 +133,8 @@ await createMailer({ apiKey: env.RESEND_API_KEY as string, from: env.MAIL_FROM a
         },
     };
     ```
+
+    Dev capture keeps working: in `lunora dev` the message still goes through the queue, and the consumer's mailer captures it into the studio Mail inbox instead of delivering it (`consumeQueuedSend` sends through the mailer, and `createMailerFromEnv` picks capture in dev).
 
 The registry item doesn't add the Queue binding for you — a queue is an opt-in piece of infrastructure with a name you choose, so it's documented here rather than guessed into your `wrangler.jsonc`.
 

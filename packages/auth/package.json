@@ -126,7 +126,7 @@
         "@better-auth/oauth-provider": "catalog:auth",
         "@better-auth/passkey": "catalog:auth",
         "@better-auth/scim": "catalog:auth",
-        "@lunora/errors": "1.0.0-alpha.50",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/values": "1.0.0-alpha.60",
         "@visulima/disposable-email-domains": "catalog:email",
         "@visulima/email-verifier": "catalog:email",

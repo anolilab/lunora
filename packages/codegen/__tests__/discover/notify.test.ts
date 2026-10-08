@@ -169,4 +169,168 @@ export default defineNotify({});
 
         expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: false, usesPush: true });
     });
+
+    it.each([
+        [
+            "a computed variable argument",
+            `import { defineNotify } from "@lunora/notify";
+import { buildNotifyConfig } from "./notify-config";
+const config = buildNotifyConfig();
+export default defineNotify(config);
+`,
+        ],
+        [
+            "a spread",
+            `import { defineNotify } from "@lunora/notify";
+import { base } from "./notify-base";
+export default defineNotify({ ...base, webPush: () => undefined });
+`,
+        ],
+        [
+            "a re-exported definition",
+            `import definition from "./notify-definition";
+export default definition;
+`,
+        ],
+        [
+            "a wrapper factory around defineNotify",
+            `import { defineNotify } from "@lunora/notify";
+const withDefaults = (config: { webPush: () => void }) => defineNotify({ ...config, fcm: () => undefined });
+export default withDefaults({ webPush: () => undefined });
+`,
+        ],
+        [
+            "a same-file variable config mutated via Object.assign",
+            `import { defineNotify } from "@lunora/notify";
+const config = { webPush: () => undefined };
+Object.assign(config, { fcm: () => undefined });
+export default defineNotify(config);
+`,
+        ],
+        [
+            "a same-file variable config with a property write",
+            `import { defineNotify } from "@lunora/notify";
+const config = { webPush: () => undefined };
+config.fcm = () => undefined;
+export default defineNotify(config);
+`,
+        ],
+        [
+            "a reassignable (let) variable config",
+            `import { defineNotify } from "@lunora/notify";
+let config = { webPush: () => undefined };
+export default defineNotify(config);
+`,
+        ],
+    ])("reports both channels when they can't be read statically (%s)", (_label, source) => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), source, "utf8");
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+    });
+
+    it("follows a same-file const alias of a direct defineNotify call (webPush-only does not scaffold fcm)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+const definition = defineNotify({ webPush: () => undefined });
+export default definition;
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+    });
+
+    it("follows a cross-file default re-export of a direct defineNotify call (webPush-only does not scaffold fcm)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify-definition.ts"),
+            `import { defineNotify } from "@lunora/notify";
+export default defineNotify({ webPush: () => undefined });
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import definition from "./notify-definition";
+export default definition;
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+    });
+
+    it("reads a same-file variable config argument of defineNotify (webPush-only does not scaffold fcm)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+const config = { webPush: () => undefined };
+export default defineNotify(config);
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+    });
+
+    it("reads an imported variable config argument of defineNotify from a sibling file (webPush-only does not scaffold fcm)", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify-config.ts"), `export const config = { webPush: () => undefined };\n`, "utf8");
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+import { config } from "./notify-config";
+export default defineNotify(config);
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+    });
+
+    it("reports both channels when an imported config is mutated in the using file", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify-config.ts"), `export const config = { webPush: () => undefined };\n`, "utf8");
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+import { config } from "./notify-config";
+Object.assign(config, { fcm: () => undefined });
+export default defineNotify(config);
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+    });
+
+    it("reports both channels when an imported config is mutated in its declaring file", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify-config.ts"),
+            `export const config = { webPush: () => undefined };\nObject.assign(config, { fcm: () => undefined });\n`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+import { config } from "./notify-config";
+export default defineNotify(config);
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+    });
 });

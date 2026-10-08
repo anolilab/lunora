@@ -22,7 +22,7 @@ export default defineNotify({
 });
 ```
 
-`.dev.vars` (scaffolded by `lunora dev` from `@lunora/config`'s package-secrets registry):
+`.dev.vars` (scaffolded by `lunora dev` from `@lunora/config`'s package-secrets registry — only for the channels `defineNotify` configures):
 
 ```
 VAPID_PUBLIC_KEY=<your-vapid-public-key>
@@ -42,6 +42,10 @@ import { subscribeToPush } from "@lunora/notify/web";
 const { replacedEndpoint, subscription } = await subscribeToPush({ serviceWorkerUrl: "/sw.js", vapidPublicKey });
 await client.mutation("registerDevice", { replacedEndpoint, subscription });
 ```
+
+Without `serviceWorkerUrl`, `subscribeToPush` uses the page's existing
+registration: await your own `navigator.serviceWorker.register()` first, or the
+call rejects with "no service worker is registered" instead of waiting for it.
 
 `replacedEndpoint` is set only after a **VAPID key rotation**: the stale browser
 subscription is dropped and a new one minted, and the new one has a new endpoint
@@ -126,6 +130,12 @@ export const announce = action.input({ title: v.string(), body: v.string() }).ac
 
 ```ts
 await ctx.push.send(subscriptionId, { title: "Hi", body: "…" });
+```
+
+`send` and `broadcast` take per-message Web Push delivery hints, overriding the channel's `urgency` / `ttl` (FCM targets ignore both):
+
+```ts
+await ctx.push.broadcast({ title: "Approval needed", body: "…", urgency: "high", ttl: 3600 }, { userId });
 ```
 
 Multi-channel through `ctx.notify.send`:

@@ -1,3 +1,21 @@
+## @lunora/cli [1.0.0-alpha.363](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.362...@lunora/cli@1.0.0-alpha.363) (2026-10-08)
+
+### Bug Fixes
+
+* **mail:** lazy renderer, queue without transport, README fix ([#1042](https://github.com/anolilab/lunora/issues/1042)) ([36f883d](https://github.com/anolilab/lunora/commit/36f883d798e22127bc30e48f4f673bc443b7917c))
+
+### Documentation
+
+* **cli:** refresh agent skills and compile-check their examples ([#1035](https://github.com/anolilab/lunora/issues/1035)) ([ad2d4c8](https://github.com/anolilab/lunora/commit/ad2d4c8052509ef45f3cdb78eddf40523333e5c7))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.277
+* **@lunora/config:** upgraded to 1.0.0-alpha.322
+* **@lunora/seed:** upgraded to 1.0.0-alpha.201
+* **@lunora/testing:** upgraded to 1.0.0-alpha.244
+
 ## @lunora/cli [1.0.0-alpha.362](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.361...@lunora/cli@1.0.0-alpha.362) (2026-10-07)
 
 

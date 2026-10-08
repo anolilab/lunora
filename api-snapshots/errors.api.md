@@ -915,6 +915,7 @@ interface ErrorLocation {
 
 ```ts
 class LunoraError extends Error {
+    static override [Symbol.hasInstance](value: unknown): boolean;
     readonly type = "VisulimaError";
     readonly hint: ErrorHint | undefined;
     readonly title: string | undefined;

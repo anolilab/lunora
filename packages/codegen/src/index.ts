@@ -45,7 +45,8 @@ export { default as discoverMaskProcedures } from "./discover/mask-procedures";
 export { default as discoverMigrations } from "./discover/migrations";
 export { discoverMutators, MUTATORS_FILENAME } from "./discover/mutators";
 export { default as discoverNondeterministicCalls } from "./discover/nondeterministic-calls";
-export { discoverNotifyCalls, discoverNotifyConfig, NOTIFY_FILENAME } from "./discover/notify";
+export type { NotifyChannels } from "./discover/notify";
+export { discoverNotifyCalls, discoverNotifyChannels, discoverNotifyConfig, NOTIFY_FILENAME } from "./discover/notify";
 // Exported so the CLI's scaffolds pick the same import form codegen emits —
 // `lunorash/server` for an umbrella project, `@lunora/server` otherwise.
 // Returns `undefined` (not an empty set) for an absent/unparseable manifest, so
