@@ -205,4 +205,40 @@ export default withDefaults({ webPush: () => undefined });
 
         expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
     });
+
+    it("follows a same-file const alias of a direct defineNotify call (webPush-only does not scaffold fcm)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+const definition = defineNotify({ webPush: () => undefined });
+export default definition;
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+    });
+
+    it("follows a cross-file default re-export of a direct defineNotify call (webPush-only does not scaffold fcm)", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify-definition.ts"),
+            `import { defineNotify } from "@lunora/notify";
+export default defineNotify({ webPush: () => undefined });
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import definition from "./notify-definition";
+export default definition;
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+    });
 });

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "@lunora/advisor";
-import type { Identifier, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { Expression, Identifier, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { defaultExportExpression, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
@@ -208,6 +208,54 @@ const isDefineNotify = (identifier: Identifier): boolean => {
 };
 
 /**
+ * The default-export expression of the notify config, following a re-export
+ * chain to the file that actually declares it. `defaultExportExpression` already
+ * resolves a same-file `const` alias; this additionally resolves an identifier
+ * that re-exports the default of a sibling lunora file
+ * (`import definition from "./notify-definition"; export default definition;`)
+ * by following its aliased symbol to that file's `ExportAssignment`. Returns
+ * `undefined` for a re-export cycle so the caller's conservative fallback
+ * applies.
+ */
+const notifyConfigExpression = (source: SourceFile, visiting: Set<string> = new Set()): Expression | undefined => {
+    const exported = defaultExportExpression(source);
+
+    if (!exported) {
+        return undefined;
+    }
+
+    if (!Node.isIdentifier(exported)) {
+        return exported;
+    }
+
+    const symbol = exported.getSymbol();
+
+    if (!symbol?.isAlias()) {
+        return exported;
+    }
+
+    const aliased = symbol.getAliasedSymbol();
+
+    if (!aliased) {
+        return exported;
+    }
+
+    const assignment = aliased.getDeclarations().find((declaration) => Node.isExportAssignment(declaration));
+
+    if (!assignment) {
+        return exported;
+    }
+
+    const target = assignment.getSourceFile();
+
+    if (visiting.has(target.getFilePath())) {
+        return undefined;
+    }
+
+    return notifyConfigExpression(target, visiting.add(target.getFilePath()));
+};
+
+/**
  * Read which push channels the project's `lunora/notify.ts` default export
  * (`defineNotify({...})`) wires, or `undefined` when the file is absent (the app
  * declares no notify config). The read is metadata-only (like `discoverFlags`):
@@ -215,11 +263,12 @@ const isDefineNotify = (identifier: Identifier): boolean => {
  * The argument is read as the complete config only when the callee resolves to
  * `defineNotify` itself (`isDefineNotify`) — a wrapper factory could add a
  * channel before returning a valid definition, so its literal argument is not
- * trustworthy. When the channels can't be read statically — no `defineNotify(...)`
- * default export, a non-`defineNotify` callee, a non-literal argument, or a
- * spread — BOTH channels are reported, so their secrets are scaffolded and
- * preflighted rather than silently dropped. `@lunora/config` reads this alone to
- * scaffold only the configured channels' secrets.
+ * trustworthy. A same-file `const` alias and a cross-file default re-export of a
+ * literal `defineNotify(...)` call are followed and read the same way; anything
+ * else — no `defineNotify(...)` default export, a non-`defineNotify` callee, a
+ * non-literal argument, or a spread — reports BOTH channels, so their secrets
+ * are scaffolded and preflighted rather than silently dropped. `@lunora/config`
+ * reads this alone to scaffold only the configured channels' secrets.
  */
 const discoverNotifyChannels = (project: Project, lunoraDirectory: string): NotifyChannels | undefined => {
     const notifyPath = join(lunoraDirectory, NOTIFY_FILENAME);
@@ -229,7 +278,7 @@ const discoverNotifyChannels = (project: Project, lunoraDirectory: string): Noti
     }
 
     const source = project.getSourceFile(notifyPath) ?? project.addSourceFileAtPath(notifyPath);
-    const exported = defaultExportExpression(source);
+    const exported = notifyConfigExpression(source);
 
     if (!exported || !Node.isCallExpression(exported)) {
         return { hasFcm: true, hasWebPush: true };
