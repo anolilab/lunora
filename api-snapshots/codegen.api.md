@@ -570,6 +570,15 @@ interface MutatorIR {
 const NOTIFY_FILENAME = "notify.ts";
 ```
 
+### `NotifyChannels` (interface)
+
+```ts
+interface NotifyChannels {
+    hasFcm: boolean;
+    hasWebPush: boolean;
+}
+```
+
 ### `OPENRPC_VERSION` (const)
 
 ```ts
@@ -1277,6 +1286,12 @@ const discoverNondeterministicCalls: (project: Project, lunoraDirectory: string)
 
 ```ts
 const discoverNotifyCalls: (project: Project, lunoraDirectory: string) => AdvisorNotifyCall[];
+```
+
+### `discoverNotifyChannels` (const)
+
+```ts
+const discoverNotifyChannels: (project: Project, lunoraDirectory: string) => NotifyChannels | undefined;
 ```
 
 ### `discoverNotifyConfig` (const)

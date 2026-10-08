@@ -1,16 +1,23 @@
 /**
- * Per-package secret-requirements registry for `.dev.vars` scaffolding.
+ * Secret-requirements registry for `.dev.vars` scaffolding, keyed by SECRET SOURCE.
  *
- * Each entry maps a `@lunora/*` package name → the secrets it requires at
- * runtime, expressed as `{ key, description, docsUrl }` records. The scaffolder
- * in {@link ./scaffold-dev-variables} reads this registry to emit package-aware
- * `.dev.vars.example` entries (placeholders + inline doc-pointer comments).
+ * Each entry maps a secret source → the secrets it requires at runtime,
+ * expressed as `{ key, description, docsUrl }` records. A source is usually a
+ * `@lunora/*` import specifier — a package name (`@lunora/mail`) or, when the
+ * subpath decides which secrets apply, a subpath (`@lunora/payment/stripe`). A
+ * secret need that no import can tell apart is keyed `<package>:<detail>`
+ * (`@lunora/notify:webPush`, the channel `defineNotify` configures); `:` keeps
+ * it from reading as an import specifier or a Node `#imports` alias.
+ * `secretSourcesFromBindings` (in `infer-bindings.ts`) reports the sources a
+ * project uses, and the scaffolder in {@link ./scaffold-dev-variables} reads this
+ * registry to emit the matching `.dev.vars.example` entries (placeholders +
+ * inline doc-pointer comments).
  *
  * ## Adding a new add-on
  *
  * When a new `@lunora/*` package requires runtime secrets, add one entry to
- * {@link PACKAGE_SECRETS_REGISTRY} keyed by its exact npm package name. Each
- * `SecretEntry` in the array needs:
+ * {@link PACKAGE_SECRETS_REGISTRY} keyed by the source that reports it (see
+ * above). Each `SecretEntry` in the array needs:
  *
  * - `key`         — the env-var name the package reads from `env` (e.g. `RESEND_API_KEY`).
  * - `description` — one line describing the secret and how to obtain it.
@@ -140,7 +147,25 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-resend-api-key>",
         },
     ],
-    "@lunora/notify": [
+    // `@lunora/notify` itself needs no secret: each push channel's are keyed by the
+    // channel `defineNotify` configures, so a webPush-only app is not told to set
+    // FCM_* (#1039) — the same reason the payment adapters are keyed by subpath.
+    "@lunora/notify:fcm": [
+        {
+            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_PROJECT_ID",
+            placeholderValue: "<your-firebase-project-id>",
+        },
+        {
+            description:
+                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_ACCESS_TOKEN",
+            placeholderValue: "<your-fcm-access-token>",
+        },
+    ],
+    "@lunora/notify:webPush": [
         {
             description:
                 "Public VAPID key (base64url) for Web Push. Generate a keypair once with: npx web-push generate-vapid-keys — the public key is also shipped to the browser to subscribe.",
@@ -159,19 +184,6 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             docsUrl: "https://lunora.sh/docs/packages/notify#web-push",
             key: "VAPID_SUBJECT",
             placeholderValue: "mailto:you@example.com",
-        },
-        {
-            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
-            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_PROJECT_ID",
-            placeholderValue: "<your-firebase-project-id>",
-        },
-        {
-            description:
-                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
-            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_ACCESS_TOKEN",
-            placeholderValue: "<your-fcm-access-token>",
         },
     ],
     // `@lunora/payment` itself needs no secret: each provider's pair is keyed by

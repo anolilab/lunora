@@ -19,10 +19,10 @@ import {
     fillDevSecrets,
     inferLunoraBindings,
     isInteractive,
-    packageNamesFromBindings,
     readLiveDevServerState,
     readProjectRemotePreference,
     resolveSchemaDirectory,
+    secretSourcesFromBindings,
     updateDevServerState,
 } from "@lunora/config";
 import { resolveRemoteEnabled } from "@lunora/config/cloudflare";
@@ -122,11 +122,14 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
     // are not already listed there. Best-effort: a scan failure is non-fatal.
     try {
         const bindings = await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
-        const packageNames = packageNamesFromBindings(bindings);
-        const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, packageNames);
+        const sources = secretSourcesFromBindings(bindings);
+        const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, sources);
 
         if (addedKeys.length > 0) {
-            options.logger.info(`Updated .dev.vars.example with secrets for: ${packageNames.join(", ")} (${addedKeys.join(", ")})`);
+            // `@lunora/notify:webPush` → `@lunora/notify (webPush)`.
+            const readable = sources.map((source) => (source.includes(":") ? `${source.replace(":", " (")})` : source));
+
+            options.logger.info(`Updated .dev.vars.example with secrets for: ${readable.join(", ")} (${addedKeys.join(", ")})`);
         }
     } catch {
         // Non-fatal — scanning may fail in unusual project layouts.

@@ -63,7 +63,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.51",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/platform": "1.0.0-alpha.57",
         "drizzle-orm": "catalog:drizzle"
     },

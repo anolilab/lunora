@@ -26,8 +26,10 @@ import type { CapabilityKey, ServiceBindingIR, SourceCapabilitySignals } from "@
 import {
     capabilitiesUsedBy,
     CAPABILITY_PROBES,
+    discoverNotifyChannels,
     foldCapabilitySignals,
     mayReadCapabilityContext,
+    NOTIFY_FILENAME,
     readServiceBindings,
     sourceCapabilitySignals,
 } from "@lunora/codegen";
@@ -41,8 +43,10 @@ import artifactsBindingHint from "./artifacts-hint";
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import { escapeRegExp } from "./dev-variables-format";
+import { discoverIr } from "./discover-info";
 import { discoverFlagsInfo } from "./flags-info";
 import isWithinDirectory from "./is-within-directory";
+import { PACKAGE_SECRETS_REGISTRY } from "./package-secrets-registry";
 import join from "./path";
 import type { QueueIR } from "./queue-info";
 import { discoverQueueInfo } from "./queue-info";
@@ -90,7 +94,7 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
  * reads ({@link sourceCapabilitySignals}) and asks codegen's one matcher
  * ({@link capabilitiesUsedBy}), so a handler that makes codegen wire `ctx.kv`
  * always makes config add or hint the KV binding too. The package
- * {@link packageNamesFromBindings} reports, and the wording of each hint, are read
+ * {@link secretSourcesFromBindings} reports, and the wording of each hint, are read
  * off the row's probe ({@link CAPABILITY_PROBES}).
  */
 const CODEGEN_CAPABILITIES = [
@@ -104,9 +108,8 @@ const CODEGEN_CAPABILITIES = [
     "images",
     "kv",
     "mail",
-    // No Cloudflare binding of its own — like `@lunora/mail`, this exists so the
-    // package's declared secrets (the VAPID trio + the two FCM keys) reach
-    // `.dev.vars.example` and the missing-secret pre-flight.
+    // No Cloudflare binding and no secrets of its own: each push channel's secrets
+    // are keyed by the channel `lunora/notify.ts` configures — see NOTIFY_CHANNEL_SECRETS.
     "notify",
     "payments",
     "pipelines",
@@ -156,7 +159,7 @@ type CapabilityFlag = (typeof CONFIG_ONLY_SOURCES)[number][0] | `uses${Capitaliz
 
 /**
  * Every flag → the package it reports, sorted by flag so
- * {@link packageNamesFromBindings} lists packages in a stable order.
+ * {@link secretSourcesFromBindings} lists sources in a stable order.
  *
  * Every row counts a dynamic `import("…")` of its package as well as a static
  * one — deliberately, for all of them: a lazily loaded package needs its binding
@@ -168,6 +171,17 @@ const FLAG_PACKAGES: ReadonlyArray<readonly [CapabilityFlag, string]> = [
     ...CODEGEN_CAPABILITIES.map((key) => [flagOf(key), CAPABILITY_PROBES[key].moduleSpecifier] as const),
     ...CONFIG_ONLY_SOURCES,
 ].toSorted(([left], [right]) => left.localeCompare(right));
+
+/**
+ * The `@lunora/notify` push channels → the secrets-registry key their secrets are
+ * listed under. Like a payment adapter's subpath (#1022), the channel — not the
+ * package — says which secrets an app needs, so a `webPush`-only app is not told
+ * to set `FCM_*`. Read from `defineNotify({...})` in `lunora/notify.ts`.
+ */
+const NOTIFY_CHANNEL_SECRETS = [
+    ["usesNotifyFcm", "@lunora/notify:fcm"],
+    ["usesNotifyWebPush", "@lunora/notify:webPush"],
+] as const;
 
 /** The packages whose sandbox tools (`browserTool`, `jsCodeTool`) provision `BROWSER` / `LOADER` when imported under `lunora/`. */
 const SANDBOX_PACKAGES = ["@lunora/agent", "@lunora/agent/sandbox"] as const;
@@ -307,8 +321,12 @@ interface InferredBindings {
     usesKv: boolean;
     /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). No `ctx.mail` helper exists, so only the import counts. */
     usesMail: boolean;
-    /** `@lunora/notify` is imported or `ctx.notify` read (Web Push needs VAPID/FCM secrets in `.dev.vars`; no binding). */
+    /** `@lunora/notify` is imported or `ctx.notify` read (no binding; channel secrets ride `usesNotifyFcm` / `usesNotifyWebPush`). */
     usesNotify: boolean;
+    /** `lunora/notify.ts` configures the `fcm` channel → the `FCM_*` secrets in `.dev.vars`. */
+    usesNotifyFcm: boolean;
+    /** `lunora/notify.ts` configures the `webPush` channel → the `VAPID_*` secrets in `.dev.vars`. */
+    usesNotifyWebPush: boolean;
     /** `@lunora/payment/autumn` is imported → the Autumn secrets in `.dev.vars` (no binding). */
     usesPaymentAutumn: boolean;
     /** `@lunora/payment/creem` is imported → the Creem secrets in `.dev.vars` (no binding). */
@@ -652,6 +670,10 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     // Only a Flagship binding-mode provider implies a wrangler `flagship` binding
     // (its `app_id` is un-mintable → reconciled as a hint, never auto-written).
     const { flags } = discoverFlagsInfo(options.projectRoot, schemaDirectory);
+    const notifyIr = discoverIr(options.projectRoot, schemaDirectory, NOTIFY_FILENAME, discoverNotifyChannels);
+    // An unreadable `lunora/notify.ts` still declares notify: report both channels so
+    // their secrets are scaffolded and preflighted rather than silently dropped.
+    const notifyChannels = notifyIr.error === undefined ? notifyIr.value : { hasFcm: true, hasWebPush: true };
     const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
     const signals = describeSignals(durableObjects, schema, capabilities, containers, workflows, agents);
@@ -699,20 +721,26 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         services,
         signals,
         usesFlags: flags !== undefined,
+        usesNotifyFcm: notifyChannels?.hasFcm ?? false,
+        usesNotifyWebPush: notifyChannels?.hasWebPush ?? false,
         workflows,
     };
 };
 
 /**
- * Derive the list of `@lunora/*` package names that are actively used by a
- * project, based on its already-resolved {@link InferredBindings}.
+ * The secret sources a project uses — the {@link PACKAGE_SECRETS_REGISTRY} keys
+ * whose secrets it needs, derived from its already-resolved {@link InferredBindings}.
  *
- * This is the canonical bridge between binding inference and the package-aware
+ * This is the canonical bridge between binding inference and the
  * `.dev.vars.example` scaffolding in `scaffold-dev-variables.ts`. The result is
- * a stable, predictable slice of {@link FLAG_PACKAGES}' packages, filtered to
- * the flags that are `true` in `bindings` — in flag-name order.
+ * {@link FLAG_PACKAGES}' sources whose flag is `true` in `bindings` — in
+ * flag-name order — followed by the configured `@lunora/notify` channels
+ * ({@link NOTIFY_CHANNEL_SECRETS}), keeping only sources that carry secrets.
  */
-const packageNamesFromBindings = (bindings: InferredBindings): string[] => FLAG_PACKAGES.filter(([flag]) => bindings[flag]).map(([, source]) => source);
+const secretSourcesFromBindings = (bindings: InferredBindings): string[] =>
+    [...FLAG_PACKAGES, ...NOTIFY_CHANNEL_SECRETS]
+        .filter(([flag, source]) => bindings[flag] && PACKAGE_SECRETS_REGISTRY[source] !== undefined)
+        .map(([, source]) => source);
 
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
-export { inferLunoraBindings, packageNamesFromBindings };
+export { inferLunoraBindings, secretSourcesFromBindings };

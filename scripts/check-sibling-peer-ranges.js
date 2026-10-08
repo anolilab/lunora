@@ -49,6 +49,11 @@
  * that is not `workspace:` or `catalog:` fails — on the shape, not on current
  * drift. (`workspace:*` peers pass the exact-pin peer check above.)
  *
+ * The same report covers sibling `>=<floor>` RANGES (used for `@lunora/errors`
+ * so every sibling dedupes onto one `LunoraError` class). "satisfy" never raises
+ * a floor the new version still satisfies, so a floor below the dependency's
+ * current version is reported for a maintainer to raise by hand.
+ *
  * Run on every `pnpm install` via the root `postinstall` script.
  */
 
@@ -56,12 +61,17 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import semver from "semver";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, "..");
 const packagesDir = join(rootDir, "packages");
 
 /** Matches an exact, range-free semver literal (`1.0.0`, `1.0.0-alpha.24`). */
 const EXACT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** Captures the floor of a `>=<floor> …` range (`>=1.0.0-alpha.51 <2.0.0-0`). */
+const RANGE_FLOOR_RE = /^>=\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/;
 
 const isSibling = (name) => name === "lunorash" || name.startsWith("@lunora/");
 
@@ -140,8 +150,9 @@ for (const { dir, manifest } of manifests) {
         }
 
         const current = versions[name];
+        const floor = EXACT_VERSION_RE.test(specifier) ? specifier : RANGE_FLOOR_RE.exec(specifier)?.[1];
 
-        if (!current || specifier === current) {
+        if (!current || !floor || !semver.lt(floor, current)) {
             continue;
         }
 
@@ -152,7 +163,9 @@ for (const { dir, manifest } of manifests) {
 }
 
 if (dependencyWarnings > 0) {
-    console.warn(`⚠️  ${dependencyWarnings} sibling dependency pin(s) are behind the current published version (report-only, does not fail install).`);
+    console.warn(
+        `⚠️  ${dependencyWarnings} sibling dependency pin(s)/range floor(s) are behind the current published version (report-only, does not fail install).`,
+    );
 }
 
 // The range fix only holds while multi-semantic-release runs with

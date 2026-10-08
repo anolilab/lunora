@@ -44,7 +44,7 @@ export default defineNotify({
 ## VAPID / FCM config via `.dev.vars`
 
 `lunora dev` scaffolds these keys into `.dev.vars` from `@lunora/config`'s
-package-secrets registry. Generate a VAPID keypair once with
+package-secrets registry — only for the channels `defineNotify` configures. Generate a VAPID keypair once with
 `npx web-push generate-vapid-keys`:
 
 ```

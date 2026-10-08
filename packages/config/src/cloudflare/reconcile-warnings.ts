@@ -9,7 +9,7 @@ import { join } from "node:path";
 import artifactsBindingHint from "../artifacts-hint";
 import { DEV_VARS_FILE, parseDevVariableEntries } from "../dev-variables-format";
 import type { InferredBindings } from "../infer-bindings";
-import { packageNamesFromBindings } from "../infer-bindings";
+import { secretSourcesFromBindings } from "../infer-bindings";
 import { requiredSecrets } from "../scaffold-dev-variables";
 import type { ExportGap } from "./reconcile-bindings";
 import type { WranglerShape } from "./wrangler-shape";
@@ -274,7 +274,7 @@ const missingRequiredSecretWarnings = (inferred: InferredBindings, parsed?: Wran
     }
 
     const declared = new Set<unknown>(required);
-    const missing = requiredSecrets(packageNamesFromBindings(inferred))
+    const missing = requiredSecrets(secretSourcesFromBindings(inferred))
         .map((entry) => entry.key)
         .filter((key) => !declared.has(key));
 

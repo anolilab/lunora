@@ -499,6 +499,34 @@ const attemptGroup = async (channel: Provider<unknown, PushPayload>, group: Push
     }
 };
 
+const URGENCIES: ReadonlySet<unknown> = new Set<WebPushConfig["urgency"]>(["high", "low", "normal", "very-low"]);
+
+const isUrgency = (value: unknown): value is WebPushConfig["urgency"] => URGENCIES.has(value);
+
+/** A message's own push `ttl`, rejected with `BAD_REQUEST` unless it is a non-negative integer (seconds). */
+const checkPushTtl = (ttl: unknown): number | undefined => {
+    if (ttl !== undefined && (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < 0)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/notify: push ttl must be a non-negative integer number of seconds, got ${typeof ttl === "number" ? String(ttl) : typeof ttl}`,
+        );
+    }
+
+    return ttl;
+};
+
+/**
+ * A message's own push `urgency`, rejected with `BAD_REQUEST` unless it is one
+ * of RFC 8030's four values. Checked beside {@link checkPushTtl} at the
+ * facade's entry points: `@visulima/notification` ≥ 1.2.0 honours a payload's
+ * `urgency` but does not validate it.
+ */
+const checkPushUrgency = (urgency: unknown): void => {
+    if (urgency !== undefined && !isUrgency(urgency)) {
+        throw new LunoraError("BAD_REQUEST", `@lunora/notify: push urgency must be "very-low", "low", "normal" or "high", got ${JSON.stringify(urgency)}`);
+    }
+};
+
 /** Options for {@link routingPushProvider}. */
 export interface RoutingPushOptions {
     /**
@@ -764,3 +792,5 @@ export const buildEngine = (resolved: ResolvedProviders): Notification => {
 
     return attachResilience(createNotification(providers));
 };
+
+export { checkPushTtl, checkPushUrgency };

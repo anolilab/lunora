@@ -61,7 +61,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.50",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/observability": "1.0.0-alpha.126",
         "@lunora/platform": "1.0.0-alpha.57",
         "@lunora/platform-cloudflare": "1.0.0-alpha.76",
