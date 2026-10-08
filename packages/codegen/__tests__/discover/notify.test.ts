@@ -191,6 +191,13 @@ export default defineNotify({ ...base, webPush: () => undefined });
 export default definition;
 `,
         ],
+        [
+            "a wrapper factory around defineNotify",
+            `import { defineNotify } from "@lunora/notify";
+const withDefaults = (config: { webPush: () => void }) => defineNotify({ ...config, fcm: () => undefined });
+export default withDefaults({ webPush: () => undefined });
+`,
+        ],
     ])("reports both channels when they can't be read statically (%s)", (_label, source) => {
         expect.assertions(1);
 

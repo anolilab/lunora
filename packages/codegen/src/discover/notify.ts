@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "@lunora/advisor";
-import type { Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { Identifier, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { defaultExportExpression, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
@@ -170,14 +170,56 @@ interface NotifyChannels {
 }
 
 /**
+ * The specifier that exports the `defineNotify` config factory: the granular
+ * `@lunora/notify` package. Unlike `ctx.flags`, the umbrella never re-exports
+ * notify's surface (`shard-bindings.ts`), so there is no umbrella variant to
+ * accept.
+ */
+const DEFINE_NOTIFY_MODULES = new Set(["@lunora/notify"]);
+
+/**
+ * Decide whether a callee identifier refers to `defineNotify` from one of
+ * {@link DEFINE_NOTIFY_MODULES}. Mirrors `isFlagshipProvider` (`flags.ts`):
+ * trust the import declaration when the symbol resolves, and a bare same-named
+ * identifier when the ts-morph project can't always resolve the workspace
+ * package. Anything else — a local wrapper factory around `defineNotify` — is
+ * NOT `defineNotify`: its argument must not be read as the complete config.
+ */
+const isDefineNotify = (identifier: Identifier): boolean => {
+    const symbol = identifier.getSymbol();
+
+    if (!symbol) {
+        return identifier.getText() === "defineNotify";
+    }
+
+    for (const declaration of symbol.getDeclarations()) {
+        if (!Node.isImportSpecifier(declaration)) {
+            continue;
+        }
+
+        if (!DEFINE_NOTIFY_MODULES.has(declaration.getImportDeclaration().getModuleSpecifierValue())) {
+            return false;
+        }
+
+        return declaration.getNameNode().getText() === "defineNotify";
+    }
+
+    return false;
+};
+
+/**
  * Read which push channels the project's `lunora/notify.ts` default export
  * (`defineNotify({...})`) wires, or `undefined` when the file is absent (the app
  * declares no notify config). The read is metadata-only (like `discoverFlags`):
  * a `webPush`/`fcm` property's mere presence counts as the channel being wired.
- * When the channels can't be read statically — no `defineNotify(...)` default
- * export, a non-literal argument, or a spread — BOTH channels are reported, so
- * their secrets are scaffolded and preflighted rather than silently dropped.
- * `@lunora/config` reads this alone to scaffold only the configured channels' secrets.
+ * The argument is read as the complete config only when the callee resolves to
+ * `defineNotify` itself (`isDefineNotify`) — a wrapper factory could add a
+ * channel before returning a valid definition, so its literal argument is not
+ * trustworthy. When the channels can't be read statically — no `defineNotify(...)`
+ * default export, a non-`defineNotify` callee, a non-literal argument, or a
+ * spread — BOTH channels are reported, so their secrets are scaffolded and
+ * preflighted rather than silently dropped. `@lunora/config` reads this alone to
+ * scaffold only the configured channels' secrets.
  */
 const discoverNotifyChannels = (project: Project, lunoraDirectory: string): NotifyChannels | undefined => {
     const notifyPath = join(lunoraDirectory, NOTIFY_FILENAME);
@@ -189,7 +231,12 @@ const discoverNotifyChannels = (project: Project, lunoraDirectory: string): Noti
     const source = project.getSourceFile(notifyPath) ?? project.addSourceFileAtPath(notifyPath);
     const exported = defaultExportExpression(source);
 
-    const argument = exported && Node.isCallExpression(exported) ? exported.getArguments()[0] : undefined;
+    if (!exported || !Node.isCallExpression(exported)) {
+        return { hasFcm: true, hasWebPush: true };
+    }
+
+    const callee = exported.getExpression();
+    const argument = Node.isIdentifier(callee) && isDefineNotify(callee) ? exported.getArguments()[0] : undefined;
 
     if (!argument || !Node.isObjectLiteralExpression(argument) || argument.getProperties().some((property) => Node.isSpreadAssignment(property))) {
         return { hasFcm: true, hasWebPush: true };
