@@ -1,3 +1,19 @@
+## @lunora/runtime [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.185...@lunora/runtime@1.0.0-alpha.186) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.102
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/observability:** upgraded to 1.0.0-alpha.127
+* **@lunora/do:** upgraded to 1.0.0-alpha.200
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.72
+
 ## @lunora/runtime [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.184...@lunora/runtime@1.0.0-alpha.185) (2026-10-07)
 
 ### ⚠ BREAKING CHANGES
