@@ -199,6 +199,29 @@ const withDefaults = (config: { webPush: () => void }) => defineNotify({ ...conf
 export default withDefaults({ webPush: () => undefined });
 `,
         ],
+        [
+            "a same-file variable config mutated via Object.assign",
+            `import { defineNotify } from "@lunora/notify";
+const config = { webPush: () => undefined };
+Object.assign(config, { fcm: () => undefined });
+export default defineNotify(config);
+`,
+        ],
+        [
+            "a same-file variable config with a property write",
+            `import { defineNotify } from "@lunora/notify";
+const config = { webPush: () => undefined };
+config.fcm = () => undefined;
+export default defineNotify(config);
+`,
+        ],
+        [
+            "a reassignable (let) variable config",
+            `import { defineNotify } from "@lunora/notify";
+let config = { webPush: () => undefined };
+export default defineNotify(config);
+`,
+        ],
     ])("reports both channels when they can't be read statically (%s)", (_label, source) => {
         expect.assertions(1);
 
@@ -272,5 +295,42 @@ export default defineNotify(config);
         );
 
         expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+    });
+
+    it("reports both channels when an imported config is mutated in the using file", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify-config.ts"), `export const config = { webPush: () => undefined };\n`, "utf8");
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+import { config } from "./notify-config";
+Object.assign(config, { fcm: () => undefined });
+export default defineNotify(config);
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+    });
+
+    it("reports both channels when an imported config is mutated in its declaring file", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify-config.ts"),
+            `export const config = { webPush: () => undefined };\nObject.assign(config, { fcm: () => undefined });\n`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+import { config } from "./notify-config";
+export default defineNotify(config);
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
     });
 });

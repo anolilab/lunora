@@ -2,8 +2,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "@lunora/advisor";
-import type { Expression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Expression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { defaultExportExpression, findObjectProperty, handlerOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
@@ -255,6 +255,103 @@ const notifyConfigExpression = (source: SourceFile, visiting: Set<string> = new 
     return notifyConfigExpression(target, visiting.add(target.getFilePath()));
 };
 
+/** Assignment operators that write through a property/element of the binding. */
+const WRITE_OPERATORS = new Set(["%=", "&&=", "&=", "**=", "+=", "-=", "/=", "<<=", "=", ">>=", ">>>=", "??=", "^=", "|=", "||="]);
+
+/** The node that declares the binding an identifier refers to, following import aliases. */
+const bindingDeclarationOf = (identifier: Identifier): TsNode | undefined => {
+    const symbol = identifier.getSymbol();
+
+    return symbol?.getAliasedSymbol()?.getDeclarations()[0] ?? symbol?.getDeclarations()[0];
+};
+
+/** The identifier a write operand mutates through, unwrapping `config.fcm`/`config["fcm"]` to `config`. */
+const mutatedIdentifierOf = (node: TsNode): Identifier | undefined => {
+    if (Node.isIdentifier(node)) {
+        return node;
+    }
+
+    if (Node.isPropertyAccessExpression(node) || Node.isElementAccessExpression(node)) {
+        return mutatedIdentifierOf(node.getExpression());
+    }
+
+    return undefined;
+};
+
+/** True when `operand` is a write through the binding `declaration` (its root identifier resolves to it). */
+const writesThrough = (operand: TsNode, declaration: TsNode): boolean => {
+    const target = mutatedIdentifierOf(operand);
+
+    return target !== undefined && bindingDeclarationOf(target) === declaration;
+};
+
+/** True when `call` is an `Object.assign`-family (`Object.defineProperty(s)`/`Reflect.set`) mutation of `declaration`. */
+const assignCallMutates = (call: CallExpression, declaration: TsNode): boolean => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee)) {
+        return false;
+    }
+
+    const name = callee.getName();
+    const object = callee.getExpression();
+    const objectName = Node.isIdentifier(object) ? object.getText() : "";
+    const mutates =
+        ((name === "assign" || name === "defineProperty" || name === "defineProperties") && objectName === "Object") ||
+        (name === "set" && objectName === "Reflect");
+
+    if (!mutates) {
+        return false;
+    }
+
+    const target = call.getArguments()[0];
+
+    return target !== undefined && Node.isIdentifier(target) && bindingDeclarationOf(target) === declaration;
+};
+
+/** True when `node` writes through the binding `declaration` (assignment, delete, update, or Object.assign-family call). */
+const mutatedBy = (node: TsNode, declaration: TsNode): boolean => {
+    if (Node.isBinaryExpression(node)) {
+        return WRITE_OPERATORS.has(node.getOperatorToken().getText()) && writesThrough(node.getLeft(), declaration);
+    }
+
+    if (Node.isDeleteExpression(node)) {
+        return writesThrough(node.getExpression(), declaration);
+    }
+
+    if (Node.isPrefixUnaryExpression(node) || Node.isPostfixUnaryExpression(node)) {
+        const operator = node.getOperatorToken();
+
+        return (operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken) && writesThrough(node.getOperand(), declaration);
+    }
+
+    if (Node.isCallExpression(node)) {
+        return assignCallMutates(node, declaration);
+    }
+
+    return false;
+};
+
+/**
+ * True when the binding `identifier` refers to is written to anywhere in `files`
+ * (`Object.assign`/`Object.defineProperty`/`Object.defineProperties`/`Reflect.set`
+ * with the binding as target, a property/element assignment, `delete`, or
+ * `++`/`--`). `const config = { webPush }; Object.assign(config, { fcm })` —
+ * or `config.fcm = ...` — mutates the object without changing its initializer,
+ * so the initializer is not the configuration `defineNotify(config)` receives.
+ * The scan is bounded to the declaring and using files; mutation through an
+ * opaque helper call is not statically trackable and stays a documented gap.
+ */
+const bindingIsMutated = (identifier: Identifier, files: SourceFile[]): boolean => {
+    const declaration = bindingDeclarationOf(identifier);
+
+    if (declaration === undefined) {
+        return true;
+    }
+
+    return files.some((file) => file.getDescendants().some((descendant) => mutatedBy(descendant, declaration)));
+};
+
 /**
  * The object-literal config a `defineNotify(...)` argument refers to: the
  * argument itself, or the literal initializer of the variable/import it names
@@ -264,7 +361,11 @@ const notifyConfigExpression = (source: SourceFile, visiting: Set<string> = new 
  * initializer. Returns `undefined` when the argument is a call result, an
  * unreadable property access, or otherwise not a statically-readable literal;
  * the caller's spread rejection and both-channels fallback then apply, because
- * such a config may still wire a channel.
+ * such a config may still wire a channel. A variable/import initializer is only
+ * trusted when it is established as fixed — a `const` binding that is never
+ * written to in its declaring file or the calling file — because
+ * `Object.assign(config, { fcm })` or `config.fcm = ...` before the call makes
+ * the initializer no longer the configuration `defineNotify` receives.
  */
 const configLiteralOf = (argument: TsNode): ObjectLiteralExpression | undefined => {
     if (Node.isObjectLiteralExpression(argument)) {
@@ -279,13 +380,31 @@ const configLiteralOf = (argument: TsNode): ObjectLiteralExpression | undefined 
     const declarations = symbol?.getAliasedSymbol()?.getDeclarations() ?? symbol?.getDeclarations() ?? [];
 
     for (const declaration of declarations) {
-        if (Node.isVariableDeclaration(declaration)) {
-            const initializer = declaration.getInitializer();
-
-            if (initializer && Node.isObjectLiteralExpression(initializer)) {
-                return initializer;
-            }
+        if (!Node.isVariableDeclaration(declaration)) {
+            continue;
         }
+
+        const initializer = declaration.getInitializer();
+
+        if (!initializer || !Node.isObjectLiteralExpression(initializer)) {
+            continue;
+        }
+
+        const declarationList = declaration.getParent();
+
+        if (!Node.isVariableDeclarationList(declarationList) || declarationList.getDeclarationKind() !== VariableDeclarationKind.Const) {
+            continue;
+        }
+
+        const files = [declaration.getSourceFile(), argument.getSourceFile()].filter(
+            (file, index, all) => all.findIndex((other) => other.getFilePath() === file.getFilePath()) === index,
+        );
+
+        if (bindingIsMutated(argument, files)) {
+            continue;
+        }
+
+        return initializer;
     }
 
     return undefined;
