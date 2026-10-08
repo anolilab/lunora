@@ -1,3 +1,16 @@
+## @lunora/workflow [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.71...@lunora/workflow@1.0.0-alpha.72) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/values:** upgraded to 1.0.0-alpha.61
+* **@lunora/server:** upgraded to 1.0.0-alpha.186
+
 ## @lunora/workflow [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.70...@lunora/workflow@1.0.0-alpha.71) (2026-10-03)
 
 
