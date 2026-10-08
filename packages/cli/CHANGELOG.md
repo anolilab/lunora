@@ -1,3 +1,24 @@
+## @lunora/cli [1.0.0-alpha.364](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.363...@lunora/cli@1.0.0-alpha.364) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.200
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.102
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.278
+* **@lunora/config:** upgraded to 1.0.0-alpha.323
+* **@lunora/container:** upgraded to 1.0.0-alpha.71
+* **@lunora/d1:** upgraded to 1.0.0-alpha.168
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.224
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.186
+* **@lunora/seed:** upgraded to 1.0.0-alpha.202
+* **@lunora/testing:** upgraded to 1.0.0-alpha.245
+
 ## @lunora/cli [1.0.0-alpha.363](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.362...@lunora/cli@1.0.0-alpha.363) (2026-10-08)
 
 ### Bug Fixes
