@@ -1,3 +1,14 @@
+## @lunora/mail [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.102...@lunora/mail@1.0.0-alpha.103) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+
 ## @lunora/mail [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.101...@lunora/mail@1.0.0-alpha.102) (2026-10-08)
 
 ### Bug Fixes
