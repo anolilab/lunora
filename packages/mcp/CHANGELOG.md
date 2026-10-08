@@ -1,3 +1,18 @@
+## @lunora/mcp [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.223...@lunora/mcp@1.0.0-alpha.224) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.190
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+* **@lunora/auth:** upgraded to 1.0.0-alpha.199
+* **@lunora/x402:** upgraded to 1.0.0-alpha.85
+
 ## @lunora/mcp [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.222...@lunora/mcp@1.0.0-alpha.223) (2026-10-07)
 
 
