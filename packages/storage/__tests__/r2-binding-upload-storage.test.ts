@@ -2,12 +2,13 @@
  * The binding-backed upload provider, driven through `createUploadHandler` over
  * an in-memory R2 binding (see `fake-r2-upload-bucket.ts`).
  */
+import type { File as UploadFile } from "@visulima/storage";
 import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visulima/storage-client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import type { R2UploadBucket } from "../src/r2-binding-upload-storage";
+import type { R2BindingUploadStorageOptions, R2UploadBucket } from "../src/r2-binding-upload-storage";
 import { createR2BindingUploadStorage, R2_PART_SIZE } from "../src/r2-binding-upload-storage";
-import { createUploadHandler } from "../src/upload-handler";
+import { createUploadContext, createUploadHandler } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
 import { createFakeR2UploadBucket } from "./fake-r2-upload-bucket";
 import type { TusDriver } from "./tus-driver";
@@ -94,6 +95,46 @@ describe(createR2BindingUploadStorage, () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.useRealTimers();
+    });
+
+    it("types its options: the declared ones keep their types, unknown ones are refused (#1040)", () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+
+        // @ts-expect-error -- `allowMIME` is a string[]
+        createR2BindingUploadStorage(bucket, { allowMIME: 123 });
+        // @ts-expect-error -- `filename` is a function
+        createR2BindingUploadStorage(bucket, { filename: 42 });
+        // @ts-expect-error -- not an option of this provider
+        createR2BindingUploadStorage(bucket, { notAnOption: true });
+
+        expectTypeOf<R2BindingUploadStorageOptions["filename"]>().toEqualTypeOf<((file: UploadFile) => string) | undefined>();
+        expectTypeOf<NonNullable<R2BindingUploadStorageOptions["onCreate"]>>().parameter(0).toEqualTypeOf<UploadFile>();
+        expectTypeOf<R2BindingUploadStorageOptions>().not.toHaveProperty("metaStorage");
+
+        expect(createR2BindingUploadStorage(bucket, { allowMIME: ["image/*"], filename: (file) => `uploads/${file.id}` })).toBeDefined();
+    });
+
+    it("stores each caller's upload under the key `filename` builds from the grant's context (#1040)", async () => {
+        expect.hasAssertions();
+
+        const bucket = createFakeR2UploadBucket();
+        const caller = createUploadContext<{ userId: string }>();
+        const handler = createUploadHandler({
+            authorize: ({ request }) => caller.grant({ userId: request.headers.get("x-user") ?? "" }),
+            storage: createR2BindingUploadStorage(bucket, {
+                filename: (file) => `uploads/${caller.get().userId}/${file.id}`,
+            }),
+        });
+        const response = await handler.fetch(
+            new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "5", "x-user": "alice" }, method: "POST" }),
+        );
+        const id = (response.headers.get("location") ?? "").split("/").pop() ?? "";
+        const patched = await tusDriver(handler).patch(`${ENDPOINT}/${id}`, 0, pattern(5));
+
+        expect(patched.status).toBe(204);
+        expect(bucket.objects.has(`uploads/alice/${id}`)).toBe(true);
     });
 
     it("uploads in odd-sized chunks under 5 MiB, coalescing them into equal 5 MiB parts and a short last part", async () => {

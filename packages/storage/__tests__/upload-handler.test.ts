@@ -12,8 +12,8 @@ import { MemoryStorage } from "@visulima/storage/provider/memory";
 import { createChunkedRestAdapter, createTusAdapter, UploadControl } from "@visulima/storage-client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
-import { createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
+import type { UploadAuthorizeResult, UploadAuthzContext, UploadHandler, UploadSizeContext } from "../src/upload-handler";
+import { createUploadContext, createUploadHandler, DEFAULT_MAX_UPLOAD_BYTES } from "../src/upload-handler";
 import { chunkedRest, routedFetch, uploadId } from "./chunked-rest-driver";
 import { TUS_ENDPOINT, tusDriver } from "./tus-driver";
 
@@ -449,7 +449,7 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
     });
 
     describe("rLS enforcement (not admin-gated)", () => {
-        const authzHandler = (authorize: (context: UploadAuthzContext) => boolean | Promise<boolean>) =>
+        const authzHandler = (authorize: (context: UploadAuthzContext) => UploadAuthorizeResult | Promise<UploadAuthorizeResult>) =>
             createUploadHandler({ authorize, storage: new MemoryStorage({ path: "/upload" }) });
 
         it("rejects a non-admin caller without permission (403, no admin token)", async () => {
@@ -516,6 +516,127 @@ describe("createUploadHandler (RLS-gated, non-admin)", () => {
             const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
 
             expect(response.status).toBe(403);
+        });
+
+        it.each([
+            ["a hand-built `{ context }`", { context: { userId: "alice" } }],
+            ["`{ valid: false, context }`", { context: { userId: "alice" }, valid: false }],
+            ["an inherited `context`", Object.create({ context: { userId: "alice" } }) as object],
+        ])("denies %s: only createUploadContext issues a grant (403)", async (_label, verdict) => {
+            expect.hasAssertions();
+
+            const gated = authzHandler(() => verdict as unknown as boolean);
+
+            const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(response.status).toBe(403);
+        });
+
+        it("answers a Response the gate returns as it is, so it can rate-limit (429 + Retry-After)", async () => {
+            expect.hasAssertions();
+
+            const gated = authzHandler(() => new Response(null, { headers: { "Retry-After": "30" }, status: 429 }));
+
+            const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(response.status).toBe(429);
+            expect(response.headers.get("Retry-After")).toBe("30");
+            expect(response.headers.get("Tus-Resumable")).toBe("1.0.0");
+        });
+
+        it("adds Tus-Resumable to a gate Response whose headers are immutable", async () => {
+            expect.hasAssertions();
+
+            const gated = authzHandler(() => Response.redirect("https://example.com/login", 302));
+
+            const response = await gated.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" }));
+
+            expect(response.status).toBe(302);
+            expect(response.headers.get("location")).toBe("https://example.com/login");
+            expect(response.headers.get("Tus-Resumable")).toBe("1.0.0");
+        });
+
+        it("hands a grant's context to the storage callbacks and maxFileSizeFor, per request (#1040)", async () => {
+            expect.hasAssertions();
+
+            const caller = createUploadContext<string>();
+            const seen: [callback: string, context: string | undefined][] = [];
+            const storage = new MemoryStorage({
+                filename: (file) => {
+                    seen.push(["filename", caller.get()]);
+
+                    return file.id;
+                },
+                onCreate: () => {
+                    seen.push(["onCreate", caller.get()]);
+                },
+                path: "/upload",
+            });
+            const route = createUploadHandler({
+                authorize: ({ request }) => caller.grant(request.headers.get("x-user") ?? ""),
+                maxFileSizeFor: ({ granted }) => {
+                    seen.push(["maxFileSizeFor", granted]);
+
+                    return undefined;
+                },
+                storage,
+            });
+            const create = async (user: string) =>
+                route.fetch(new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10", "x-user": user }, method: "POST" }));
+
+            const [first, second] = await Promise.all([create("alice"), create("bob")]);
+
+            expect([first.status, second.status]).toStrictEqual([201, 201]);
+            expect(seen).toHaveLength(6);
+            expect(seen).toStrictEqual(
+                expect.arrayContaining([
+                    ["filename", "alice"],
+                    ["filename", "bob"],
+                    ["maxFileSizeFor", "alice"],
+                    ["maxFileSizeFor", "bob"],
+                    ["onCreate", "alice"],
+                    ["onCreate", "bob"],
+                ]),
+            );
+            // Outside a request there is no grant to read.
+            expect(() => caller.get()).toThrow(/no upload grant/u);
+        });
+
+        it("has no context when the gate answers `true`, or a grant from another UploadContext", async () => {
+            expect.hasAssertions();
+
+            const caller = createUploadContext<string>();
+            const other = createUploadContext<string>();
+            const read: unknown[] = [];
+            const route = (verdict: () => UploadAuthorizeResult<string>) =>
+                createUploadHandler({
+                    authorize: verdict,
+                    maxFileSizeFor: ({ granted }) => {
+                        read.push(granted);
+
+                        return undefined;
+                    },
+                    storage: new MemoryStorage({
+                        filename: (file) => {
+                            try {
+                                read.push(caller.get());
+                            } catch (error) {
+                                read.push(error instanceof Error ? error.message : error);
+                            }
+
+                            return file.id;
+                        },
+                        path: "/upload",
+                    }),
+                });
+            const post = () => new Request(ENDPOINT, { headers: { "Tus-Resumable": "1.0.0", "Upload-Length": "10" }, method: "POST" });
+
+            const plain = await route(() => true).fetch(post());
+            const foreign = await route(() => other.grant("mallory")).fetch(post());
+
+            expect([plain.status, foreign.status]).toStrictEqual([201, 201]);
+            // `maxFileSizeFor` sees nothing for `true` and the other context's value for its grant; `caller.get()` throws for both.
+            expect(read).toStrictEqual([undefined, expect.stringMatching(/no upload grant/u), "mallory", expect.stringMatching(/no upload grant/u)]);
         });
 
         it("surfaces the denial to the client adapter as a failed upload (403)", async () => {

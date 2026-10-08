@@ -237,10 +237,10 @@ const verifySignedUrl: (input: string | URL, secret: string, options?: {
 ### `CreateUploadHandlerOptions` (interface)
 
 ```ts
-interface CreateUploadHandlerOptions {
-    authorize?: (context: UploadAuthzContext) => boolean | Promise<boolean>;
+interface CreateUploadHandlerOptions<Context = unknown> {
+    authorize?: (context: UploadAuthzContext) => UploadAuthorizeResult<Context> | Promise<UploadAuthorizeResult<Context>>;
     maxFileSize?: number;
-    maxFileSizeFor?: (context: UploadSizeContext) => number | undefined | Promise<number | undefined>;
+    maxFileSizeFor?: (context: UploadSizeContext<Context>) => number | undefined | Promise<number | undefined>;
     protocol?: UploadProtocol;
     public?: boolean;
     silent?: boolean;
@@ -254,12 +254,12 @@ interface CreateUploadHandlerOptions {
 const DEFAULT_MAX_UPLOAD_BYTES: number;
 ```
 
-### `R2BindingUploadStorageOptions` (interface)
+### `R2BindingUploadStorageOptions` (type)
 
 ```ts
-interface R2BindingUploadStorageOptions extends Omit<BaseStorageOptions, "metaStorage"> {
+type R2BindingUploadStorageOptions = Omit<DeclaredKeys<BaseStorageOptions>, "metaStorage"> & {
     statePrefix?: string;
-}
+};
 ```
 
 ### `R2UploadBucket` (type)
@@ -287,6 +287,12 @@ interface R2UploadStorageOptions {
 const R2_PART_SIZE: number;
 ```
 
+### `UploadAuthorizeResult` (type)
+
+```ts
+type UploadAuthorizeResult<Context = unknown> = boolean | Response | UploadGrant<Context>;
+```
+
 ### `UploadAuthzContext` (interface)
 
 ```ts
@@ -295,6 +301,23 @@ interface UploadAuthzContext {
     protocol: UploadProtocol;
     request: Request;
     url: URL;
+}
+```
+
+### `UploadContext` (interface)
+
+```ts
+interface UploadContext<Context> {
+    get: () => Context;
+    grant: (context: Context) => UploadGrant<Context>;
+}
+```
+
+### `UploadGrant` (interface)
+
+```ts
+interface UploadGrant<Context = unknown> {
+    readonly [GRANTED]: Context;
 }
 ```
 
@@ -316,9 +339,10 @@ type UploadProtocol = "chunked-rest" | "multipart" | "tus";
 ### `UploadSizeContext` (interface)
 
 ```ts
-interface UploadSizeContext extends UploadAuthzContext {
+interface UploadSizeContext<Context = unknown> extends UploadAuthzContext {
     contentType: string;
     declaredSize: number | undefined;
+    granted: Context | undefined;
     metadata: Record<string, string>;
 }
 ```
@@ -343,10 +367,16 @@ const createR2UploadStorage: (options: R2UploadStorageOptions & {
 }) => AwsLightStorage;
 ```
 
+### `createUploadContext` (const)
+
+```ts
+const createUploadContext: <Context>() => UploadContext<Context>;
+```
+
 ### `createUploadHandler` (const)
 
 ```ts
-const createUploadHandler: (options: CreateUploadHandlerOptions) => UploadHandler;
+const createUploadHandler: <Context = unknown>(options: CreateUploadHandlerOptions<Context>) => UploadHandler;
 ```
 
 ## Referenced internal declarations
@@ -354,6 +384,14 @@ const createUploadHandler: (options: CreateUploadHandlerOptions) => UploadHandle
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `DeclaredKeys` (type)
+
+```ts
+type DeclaredKeys<T> = {
+    [K in keyof T as string extends K ? never : number extends K ? never : K]: T[K];
+};
+```
 
 ### `UploadHandlerOptions` (type)
 

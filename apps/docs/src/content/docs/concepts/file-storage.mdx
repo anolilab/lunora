@@ -170,6 +170,15 @@ HTTP route and drive it from the client with `useUpload`. The handler wraps
 `@visulima/storage`'s handlers, and the client hooks re-export
 `@visulima/storage-client`, so Lunora does not hand-roll the wire protocol.
 
+The subpath statically imports `node:async_hooks` for the grant scope, and the
+R2 providers it re-exports import `node:stream`, so the Worker needs Node.js
+compatibility for the module to load at all. A `compatibility_date` of
+`2026-08-04` or later has `nodejs_compat` on by default; earlier ones need
+`nodejs_compat` in `compatibility_flags` (`nodejs_als` alone covers
+`AsyncLocalStorage`, but not `node:stream`). Without it the import fails when
+the module loads — the subpath never reaches `createUploadHandler`, so making
+its `AsyncLocalStorage` lazy would not help.
+
 One handler speaks one protocol:
 
 - `"tus"` (the default): resumable. The client can pause, resume, and continue
@@ -183,7 +192,10 @@ One handler speaks one protocol:
 `authorize` is the gate. It runs on every request of an upload: `POST` creates
 it, `PATCH` sends a chunk, `HEAD` asks where to resume, and on TUS `DELETE`
 cancels one in progress. It allows the request only when it returns exactly
-`true`; anything else, or a throw, answers `403`. On TUS and chunked REST a
+`true` or a grant from `createUploadContext` (below); anything else, or a throw,
+answers `403`. Return a `Response` to refuse with it instead, say a `429` with
+`Retry-After` for a caller over its rate limit: it is passed through as it is,
+plus `Tus-Resumable` on a TUS route. On TUS and chunked REST a
 request that declares a size over `maxFileSize` is answered `413` before the gate
 runs. The route is write-only: `GET`, and any other method the protocol does not
 upload with, answers `405` before the gate runs, so the upload route never serves
@@ -261,9 +273,27 @@ object per upload under `_lunora/uploads/`, written with conditional puts, so a
 chunk can land on any isolate and two requests for the same upload cannot both
 write it (the second gets a `409`, and the client re-reads its offset and
 continues). Building the handler per request is therefore fine, and it is what
-lets the gate see this request's `ctx.auth`. The provider names the object from
-the upload id alone, so it cannot put each user's uploads under their own key
-prefix. Ownership lives in your table instead.
+lets the gate see this request's `ctx.auth`. The provider stays one module-level
+instance: to put each user's uploads under their own key prefix, create an
+upload context, have the gate answer `caller.grant({ userId })` instead of
+`true`, and read it back in the provider's `filename` with `caller.get()`:
+
+```ts
+import { createR2BindingUploadStorage, createUploadContext } from "@lunora/storage/upload";
+
+const caller = createUploadContext<{ userId: string }>();
+
+const storage = createR2BindingUploadStorage(env.UPLOADS, {
+    filename: (file) => `uploads/${caller.get().userId}/${file.id}`,
+});
+```
+
+`caller.get()` throws when the request was not admitted with one of its grants.
+`maxFileSizeFor` gets the granted value as `granted`.
+
+The key prefix does not replace the ownership check: the gate still has to
+confirm, on every request after the create, that the upload belongs to the
+caller.
 
 The state objects stay after an upload finishes (so `HEAD` still reports it
 complete), and so do those of uploads that were abandoned. Add an R2 object
