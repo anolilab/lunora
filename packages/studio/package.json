@@ -1,6 +1,6 @@
 {
     "name": "@lunora/studio",
-    "version": "1.0.0-alpha.275",
+    "version": "1.0.0-alpha.276",
     "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
     "keywords": [
         "admin-ui",
@@ -98,7 +98,7 @@
     "devDependencies": {
         "@babel/core": "catalog:build",
         "@babel/preset-react": "catalog:build",
-        "@lunora/mail": "1.0.0-alpha.101",
+        "@lunora/mail": "1.0.0-alpha.102",
         "@lunora/notify": "1.0.0-alpha.76",
         "@lunora/platform": "1.0.0-alpha.57",
         "@lunora/runtime": "1.0.0-alpha.185",

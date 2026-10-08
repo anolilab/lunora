@@ -660,7 +660,7 @@ catalogs:
     react-native: 0.86.3
     react-native-safe-area-context: ~5.10.1
   mail:
-    "@visulima/email": 3.0.26
+    "@visulima/email": 3.0.28
     "@react-email/render": 2.1.0
     "postal-mime": 3.0.1
   notify:
@@ -1071,7 +1071,9 @@ minimumReleaseAgeExclude:
   - '@tanstack/react-virtual@3.14.2'
   - '@tanstack/virtual-core@3.17.0'
   - '@types/react@19.2.16'
-  - '@visulima/email@1.0.0-alpha.41'
+  # Message-ID fix (visulima/visulima#935), published 2026-10-08 — dead weight
+  # after 2026-10-09, drop it then.
+  - '@visulima/email@3.0.28'
   - '@visulima/find-ai-runner@1.0.0-alpha.9'
   # Per-message ttl/urgency (visulima/visulima#936), published 2026-10-08 —
   # dead weight after 2026-10-09, drop it then.

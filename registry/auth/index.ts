@@ -111,20 +111,14 @@ const sendAuthEmail = async (env: AuthEnv, message: { html?: string; subject: st
 
     const cloudflareSend = async (from: string, to: string, raw: string): Promise<void> => {
         const { EmailMessage } = await import("cloudflare:email");
-        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> } | undefined;
-
-        if (binding === undefined) {
-            throw new Error("auth: no SEND_EMAIL binding to deliver mail — run `lunora add email` or set RESEND_API_KEY.");
-        }
+        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> };
 
         await binding.send(new EmailMessage(from, to, raw));
     };
 
-    // Only hand over `cloudflareSend` when the binding exists: `createMailerFromEnv`
-    // prefers it over `RESEND_API_KEY` whenever it is supplied, so passing it
-    // unconditionally would make a Resend-only deployment (no `SEND_EMAIL`
-    // binding) throw inside `cloudflareSend` instead of falling back to Resend.
-    await createMailerFromEnv(fullEnv, fullEnv["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }).send(message);
+    // `createMailerFromEnv` uses `cloudflareSend` only when `SEND_EMAIL` is bound,
+    // falling back to `RESEND_API_KEY` otherwise.
+    await createMailerFromEnv(fullEnv, { cloudflareSend }).send(message);
 };
 
 /**

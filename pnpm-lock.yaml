@@ -439,8 +439,8 @@ catalogs:
       specifier: 2.1.0
       version: 2.1.0
     '@visulima/email':
-      specifier: 3.0.26
-      version: 3.0.26
+      specifier: 3.0.28
+      version: 3.0.28
     postal-mime:
       specifier: 3.0.1
       version: 3.0.1
@@ -3743,7 +3743,7 @@ importers:
         version: 2.1.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@visulima/email':
         specifier: catalog:mail
-        version: 3.0.26(@opentelemetry/api@1.9.1)(@react-email/render@2.1.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@types/node@26.6.4)(asn1js@3.0.10)(dayjs@1.11.21)(fast-xml-parser@5.10.1)(handlebars@4.7.9)(luxon@3.7.2)(moment@2.31.0)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.8)(better-sqlite3@13.0.3)(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.24.5(@types/node@26.6.4)))(ioredis@5.11.1(supports-color@10.2.2)))
+        version: 3.0.28(@opentelemetry/api@1.9.1)(@react-email/render@2.1.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@types/node@26.6.4)(asn1js@3.0.10)(dayjs@1.11.21)(fast-xml-parser@5.10.1)(handlebars@4.7.9)(luxon@3.7.2)(moment@2.31.0)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.8)(better-sqlite3@13.0.3)(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.24.5(@types/node@26.6.4)))(ioredis@5.11.1(supports-color@10.2.2)))
       postal-mime:
         specifier: catalog:mail
         version: 3.0.1
@@ -13861,6 +13861,51 @@ packages:
 
   '@visulima/email@3.0.26':
     resolution: {integrity: sha512-DuOU+9lcpFqhMVlp6l7M7NWCyWgGue3kjTh4N0952sjIok4udBrUj5LUiRwE8CF+rgIXMeRCuepFBd1vhUiZ/Q==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+    peerDependencies:
+      '@opentelemetry/api': ^1.0.0 || ^2.0.0
+      '@react-email/render': ^2.1.0
+      '@vue-email/render': 0.0.9
+      asn1js: '>=3.0.10'
+      fast-xml-parser: ^5.7.0
+      handlebars: '>=4.7.9'
+      jsx-email: ^2.0.0
+      juice: ^11.0.0 || ^12.0.0
+      liquidjs: ^10.0.0
+      mjml: '>=5.4.0'
+      nodemailer: '>=7'
+      pkijs: '>=3.4.0'
+      unstorage: ^1.13.0
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
+      '@react-email/render':
+        optional: true
+      '@vue-email/render':
+        optional: true
+      asn1js:
+        optional: true
+      fast-xml-parser:
+        optional: true
+      handlebars:
+        optional: true
+      jsx-email:
+        optional: true
+      juice:
+        optional: true
+      liquidjs:
+        optional: true
+      mjml:
+        optional: true
+      nodemailer:
+        optional: true
+      pkijs:
+        optional: true
+      unstorage:
+        optional: true
+
+  '@visulima/email@3.0.28':
+    resolution: {integrity: sha512-pGKLSdb9xQ9clJZc/xbsZdNVsVdXbFFutnq2nAeVQi1vGK6zeuctzSceGlXB4e/+QzIFBlR14OZqAeEDVNlClQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@opentelemetry/api': ^1.0.0 || ^2.0.0
@@ -35148,6 +35193,31 @@ snapshots:
       html-to-text: 10.0.0
       ical-generator: 11.1.0(@types/node@26.6.4)(dayjs@1.11.21)(luxon@3.7.2)(moment@2.31.0)
       lru-cache: 11.5.2
+      mime: 4.1.0
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+      '@react-email/render': 2.1.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      asn1js: 3.0.10
+      fast-xml-parser: 5.10.1
+      handlebars: 4.7.9
+      unstorage: 1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.8)(better-sqlite3@13.0.3)(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.24.5(@types/node@26.6.4)))(ioredis@5.11.1(supports-color@10.2.2))
+    transitivePeerDependencies:
+      - '@touch4it/ical-timezones'
+      - '@types/luxon'
+      - '@types/mocha'
+      - '@types/node'
+      - dayjs
+      - luxon
+      - moment
+      - moment-timezone
+      - rrule
+    optional: true
+
+  '@visulima/email@3.0.28(@opentelemetry/api@1.9.1)(@react-email/render@2.1.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@types/node@26.6.4)(asn1js@3.0.10)(dayjs@1.11.21)(fast-xml-parser@5.10.1)(handlebars@4.7.9)(luxon@3.7.2)(moment@2.31.0)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.8)(better-sqlite3@13.0.3)(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.24.5(@types/node@26.6.4)))(ioredis@5.11.1(supports-color@10.2.2)))':
+    dependencies:
+      html-to-text: 10.0.0
+      ical-generator: 11.1.0(@types/node@26.6.4)(dayjs@1.11.21)(luxon@3.7.2)(moment@2.31.0)
+      lru-cache: 11.5.3
       mime: 4.1.0
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
