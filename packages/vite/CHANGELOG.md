@@ -1,3 +1,17 @@
+## @lunora/vite [1.0.0-alpha.321](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.320...@lunora/vite@1.0.0-alpha.321) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.278
+* **@lunora/config:** upgraded to 1.0.0-alpha.323
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/studio:** upgraded to 1.0.0-alpha.277
+
 ## @lunora/vite [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.319...@lunora/vite@1.0.0-alpha.320) (2026-10-08)
 
 
