@@ -1,3 +1,22 @@
+## @lunora/testing [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.244...@lunora/testing@1.0.0-alpha.245) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/agent:** upgraded to 1.0.0-alpha.188
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.102
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/mail:** upgraded to 1.0.0-alpha.103
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.115
+* **@lunora/server:** upgraded to 1.0.0-alpha.186
+* **@lunora/observability:** upgraded to 1.0.0-alpha.127
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.119
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+
 ## @lunora/testing [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.243...@lunora/testing@1.0.0-alpha.244) (2026-10-08)
 
 ### Code Refactoring

@@ -1,3 +1,16 @@
+## @lunora/react [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.202...@lunora/react@1.0.0-alpha.203) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.190
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.119
+
 ## @lunora/react [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.201...@lunora/react@1.0.0-alpha.202) (2026-10-07)
 
 

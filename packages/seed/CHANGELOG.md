@@ -1,3 +1,17 @@
+## @lunora/seed [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.201...@lunora/seed@1.0.0-alpha.202) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/server:** upgraded to 1.0.0-alpha.186
+* **@lunora/testing:** upgraded to 1.0.0-alpha.245
+* **@lunora/values:** upgraded to 1.0.0-alpha.61
+
 ## @lunora/seed [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.200...@lunora/seed@1.0.0-alpha.201) (2026-10-08)
 
 

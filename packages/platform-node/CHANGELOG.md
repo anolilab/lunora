@@ -1,3 +1,23 @@
+## @lunora/platform-node [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.124...@lunora/platform-node@1.0.0-alpha.125) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.168
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/queue:** upgraded to 1.0.0-alpha.96
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.169
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.72
+* **@lunora/do:** upgraded to 1.0.0-alpha.200
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.78
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.186
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+* **@lunora/storage:** upgraded to 1.0.0-alpha.121
+
 ## @lunora/platform-node [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.123...@lunora/platform-node@1.0.0-alpha.124) (2026-10-07)
 
 
