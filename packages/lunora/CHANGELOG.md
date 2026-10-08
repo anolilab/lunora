@@ -1,3 +1,23 @@
+## lunorash [1.0.0-alpha.366](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.365...lunorash@1.0.0-alpha.366) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.364
+* **@lunora/client:** upgraded to 1.0.0-alpha.190
+* **@lunora/do:** upgraded to 1.0.0-alpha.200
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/flags:** upgraded to 1.0.0-alpha.66
+* **@lunora/observability:** upgraded to 1.0.0-alpha.127
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.119
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.186
+* **@lunora/server:** upgraded to 1.0.0-alpha.186
+* **@lunora/values:** upgraded to 1.0.0-alpha.61
+
 ## lunorash [1.0.0-alpha.365](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.364...lunorash@1.0.0-alpha.365) (2026-10-08)
 
 
