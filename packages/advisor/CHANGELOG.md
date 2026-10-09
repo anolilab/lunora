@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.203...@lunora/advisor@1.0.0-alpha.204) (2026-10-09)
+
+### Features
+
+* **server,codegen:** platformAdmin admin marker and defineIdentityGuard declared guards ([#1085](https://github.com/anolilab/lunora/issues/1085)) ([b37d345](https://github.com/anolilab/lunora/commit/b37d3454e504d707e503c23b5f2af22ee5e3315c))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.188
+
 ## @lunora/advisor [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.202...@lunora/advisor@1.0.0-alpha.203) (2026-10-09)
 
 ### Bug Fixes
