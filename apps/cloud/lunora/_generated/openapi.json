@@ -2951,7 +2951,15 @@
                         "items": {},
                         "type": "array"
                       },
+                      "allowDeleteClasses": {
+                        "items": {},
+                        "type": "array"
+                      },
                       "deployKey": {},
+                      "durableObjectClasses": {
+                        "items": {},
+                        "type": "array"
+                      },
                       "kind": {
                         "anyOf": [
                           {
@@ -2977,6 +2985,10 @@
                         "description": "Id<\"projects\">",
                         "type": "string",
                         "x-lunora-table": "projects"
+                      },
+                      "runtime": {
+                        "const": "worker",
+                        "type": "string"
                       },
                       "runtimeVersion": {},
                       "scriptName": {}
@@ -6354,6 +6366,18 @@
                         "type": "string",
                         "x-lunora-table": "organizations"
                       },
+                      "runtime": {
+                        "anyOf": [
+                          {
+                            "const": "lunora",
+                            "type": "string"
+                          },
+                          {
+                            "const": "worker",
+                            "type": "string"
+                          }
+                        ]
+                      },
                       "slug": {}
                     },
                     "required": [
@@ -6803,6 +6827,18 @@
                         "x-lunora-table": "organizations"
                       },
                       "rootDirectory": {},
+                      "runtime": {
+                        "anyOf": [
+                          {
+                            "const": "lunora",
+                            "type": "string"
+                          },
+                          {
+                            "const": "worker",
+                            "type": "string"
+                          }
+                        ]
+                      },
                       "watchPaths": {
                         "items": {},
                         "type": "array"

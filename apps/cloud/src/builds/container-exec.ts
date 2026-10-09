@@ -10,7 +10,7 @@
 import { LunoraError } from "@lunora/server";
 
 import readNdjson from "../lib/read-ndjson";
-import type { BuildAdvisory, BuildExecution } from "./runner";
+import type { BuildAdvisory, BuildExecution, BuildPlace } from "./runner";
 import { MAX_BUILD_ADVISORIES } from "./runner";
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -166,14 +166,18 @@ const consumeBuildLine = async (
 export const executeInContainer = async (
     handle: { fetch: (path: string, init?: RequestInit) => Promise<Response> },
     source: ArrayBuffer,
-    rootDirectory: string | undefined,
+    place: BuildPlace | undefined,
     onLine: (line: string) => Promise<void>,
     onAdvisory: (advisory: BuildAdvisory) => Promise<void> = async () => {},
 ): Promise<BuildExecution> => {
-    // A query parameter rather than a header: a directory name is not
+    // Query parameters rather than headers: a directory name is not
     // guaranteed to be header-safe ASCII, and URLSearchParams encodes anything.
-    // The build box re-validates it; nothing here is trusted over there.
-    const path = rootDirectory ? `/__lunora/build?${new URLSearchParams({ rootDirectory }).toString()}` : "/__lunora/build";
+    // The build box re-validates both; nothing here is trusted over there.
+    const query = new URLSearchParams({
+        ...(place?.rootDirectory ? { rootDirectory: place.rootDirectory } : {}),
+        ...(place?.runtime === undefined ? {} : { runtime: place.runtime }),
+    }).toString();
+    const path = query === "" ? "/__lunora/build" : `/__lunora/build?${query}`;
     const response = await handle.fetch(path, { body: source, method: "POST" });
 
     if (!response.ok || response.body === null) {

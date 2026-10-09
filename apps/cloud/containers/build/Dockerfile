@@ -33,9 +33,15 @@ RUN corepack enable
 # the catalog-pinned release's own prebuilt `acorn.mjs` (zero dependencies,
 # MIT, licence beside it) and copied like the rest: no registry access at image
 # build, and the bytes are pinned by `__tests__/build-scan-vendor.test.ts`.
+# `vendor/release-manifest.mjs` is the Cloudflare Worker runtime's config →
+# release translation, bundled from `@lunora/config` / `@lunora/cli` source by
+# `scripts/vendor-release-manifest.ts` (third-party licences beside it) and
+# held to that source by `__tests__/build-box-worker-vendor.test.ts`.
+# `shim-runtime.mjs` is never run here: the server reads its text at start-up
+# and bundles it into each plain Worker (see `worker.mjs`).
 WORKDIR /srv
-COPY server.mjs workspace.mjs release.mjs scan.mjs ./
-COPY vendor/acorn.mjs vendor/acorn.LICENSE ./vendor/
+COPY server.mjs workspace.mjs release.mjs scan.mjs worker.mjs shim-runtime.mjs ./
+COPY vendor/acorn.mjs vendor/acorn.LICENSE vendor/release-manifest.mjs vendor/release-manifest.LICENSES ./vendor/
 
 # Builds land under here, one directory per build, owned by the unprivileged
 # user. Created in the image so the server never has to mkdir as root.

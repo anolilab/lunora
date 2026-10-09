@@ -1403,6 +1403,9 @@ importers:
       babel-plugin-react-compiler:
         specifier: catalog:build
         version: 1.0.0
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.2
       jsonc-parser:
         specifier: catalog:vite
         version: 3.3.1

@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import { activeOperation, tenantBackupKey } from "../src/backup/tenant-policy";
+import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
 import { internalMutation, query, v } from "./_generated/server.js";
@@ -53,6 +54,8 @@ interface DeploymentRow {
     createdAt: number;
     kind: string;
     resourceRef?: string;
+    /** `.global()` rows answer SQL NULL for an unset column; absent is a Lunora app. */
+    runtime?: "worker" | null;
     scriptName: string;
     status: string;
     target?: string;
@@ -125,6 +128,11 @@ const productionTarget = async (context: QueryContext, projectId: Id<"projects">
 
     if (!live?.alias || !live.url || !hasToken) {
         throw new LunoraError("NOT_FOUND", "this project has no live production deployment to back up or restore");
+    }
+
+    // A backup is the admin export a Lunora app serves; a plain Worker's data is its own.
+    if (live.runtime === "worker") {
+        throw new LunoraError("CONFLICT", PLAIN_WORKER_NO_ADMIN);
     }
 
     return {
