@@ -258,6 +258,73 @@ the edge. In `delete-hostnames` mode the domain also reads "blocked:
 suspended". Lift the suspension and, within the hour, the domain serves again
 (in `delete-hostnames` mode, with a fresh certificate).
 
+## 6c. Emergency stop (halt and resume)
+
+A suspension blocks new requests but does not stop code already running in a
+tenant. A Durable Object alarm that re-arms itself keeps billing. A halt
+converges the tenant onto a stub that keeps all data, parks alarms an hour at a
+time and runs none of the tenant's code (README § Emergency stop). Nothing to
+set up: the every-minute halt sweep runs wherever `RELEASES` is bound. Without
+it, nothing halts, because a stub is generated from the stored manifests.
+
+**Halt an organization (support).** For a runaway tenant, an abuse case, or a
+customer asking for it:
+
+```bash
+curl -X POST "https://$CONTROL_PLANE/v1/halts" \
+  -H "authorization: Bearer $LUNORA_ADMIN_TOKEN" -H "content-type: application/json" \
+  -d '{"organizationId":"<org id>","action":"halt"}'
+```
+
+The answer names the aliases asked to halt and those it cannot reach (box
+projects; stop those on the machine). Each alias converges within a minute or
+two. The org's Usage tab shows each one's state, and the audit log records
+`halt.requested`, then `halt.halted` per alias. A support halt is manual. Only
+`"action":"resume"` (support) or an owner's or admin's **Resume all projects**
+lifts it, never a suspension change.
+
+**Resume.** The same call with `"action":"resume"`. It is refused while a
+`spend-cap` or `overage` suspension still halts the org with
+`haltOnSuspension` on, because the sweep would halt it again on the next tick.
+Lift the suspension first, or have the owner turn the setting off. Each alias
+converges back onto its live release (`halt.resumed` in the audit log), with
+crons, queue consumers and secrets as on a deploy. Durable Object alarms that
+were parked run the tenant's code again within the hour.
+
+**Failures.** A converge that fails keeps its row and its error (`lastError`,
+shown on the card as "Retrying: …"). It is retried with backoff (1, 2, 4, …
+minutes, at most an hour). It is logged as `[halt]` in Workers Logs every time,
+and audit-logged (`halt.halt_failed` / `halt.resume_failed`) and alerted over
+the org's `deploy` rules once per run of failures. A failure never touches the
+suspension. Causes, by message:
+
+- `release … may be on the Worker but is no longer retained`: a release newer
+  than the live one started converging (its health check failed and its revert
+  failed, or it is stuck mid-flight), and its stored manifest is gone. Without it
+  the classes the stub must keep are unknown, so nothing converges. Find the
+  release (`deployments` rows of the alias newer than the live one, with
+  `provisioningAt` set). If it never reached the Worker, mark it `destroyed`,
+  and the next tick stubs from the live release.
+- `the stub does not keep the Worker's classes` / `binding … is … in one release
+and … in another`: two releases that may be on the Worker disagree about a
+  class, and no stub can keep both. Do not force it. Decide with the customer
+  which release is on the Worker, then mark the other `destroyed`.
+- `resuming onto the live release would delete the data of …`: a newer release
+  on the Worker binds a class the live one does not. The alias stays halted.
+  Resume by making that newer release live (its row `live`, the old one
+  `superseded`), then ask for the resume again.
+- `the job carries no token` or a Cloudflare 401/403 on `cloudflare-workers`:
+  the customer's connected token is revoked or lacks Workers Scripts: Edit. It
+  retries until they reconnect the account.
+- A provision-box 409 (`SERVICE_UNAVAILABLE`): another job for the alias was
+  running. It retries on its own.
+
+**Check:** halt a test org with one `cloudflare-wfp` project that has a Durable
+Object with a pending alarm. Within two minutes `https://<alias>.<app domain>/`
+answers `503 {"error":"project halted: support"}`, and its object's alarm is an
+hour out. Deploy to it: refused with "project halted — resume it first". Resume.
+The app serves again, and its data is intact.
+
 ## 7. `hostd` release signing key
 
 Exact steps in [`../hostd/README.md`](../hostd/README.md) § Releases & signing:
