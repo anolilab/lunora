@@ -9,6 +9,16 @@ export default defineConfig({
     // affected and `vis affected build` died with `spawn E2BIG`. This also
     // fixes local `vis affected`, which merge-bases against the same default.
     defaultBase: "alpha",
+    // Paths outside every project root that change nothing any project builds or
+    // tests. Without this, each of them marks EVERY project affected (above), so a
+    // PR that only updates an API snapshot ran the whole suite: anolilab/lunora#1051
+    // went from 29 affected projects to all 78 because of `api-snapshots/`.
+    // Matched only against files no project owns, so a pattern can never hide a
+    // change inside a package. `api-snapshots/` has its own `api:check` job; `*.md`
+    // is root-level only (`*` doesn't cross `/`). Never list `shared/`,
+    // `protocol/`, `registry/`, `tools/` or `.vis/`: their changes do affect
+    // projects.
+    affectedIgnore: ["api-snapshots/**", "marketing/**", "plans/**", "*.md"],
     namedInputs: {
         default: ["sharedGlobals", "{projectRoot}/**/*", "!{projectRoot}/**/*.md"],
         production: ["default", "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)"],
@@ -22,31 +32,23 @@ export default defineConfig({
             "!{workspaceRoot}/**/*.stories.@(js|jsx|ts|tsx|mdx)",
         ],
         // Do NOT add `shared/`, `protocol/`, `registry/`, `tools/` or `.vis/` here.
-        // They look like the gap they are not: none of them sits in a project root,
-        // `default` never matches them, and `.github/file-filters.yml` goes to some
-        // length to keep `shared/**` and `protocol/**` in the `packages` filter — so
-        // the obvious reading is that the filter starts the job and `vis affected`
-        // then selects nothing.
+        // None of them sits in a project root, so `default` never matches them, and
+        // they don't need to: a changed path outside every project root already
+        // marks EVERY project affected (measured: one committed one-line edit to any
+        // of them, `--no-uncommitted` as in CI, selects all projects). That is the
+        // right answer for them: `shared/` is inlined into package dists, and the
+        // others feed codegen, registry items or the toolchain. Listing them here
+        // would only widen `sharedGlobals`, whose job is to be the narrow set that
+        // invalidates the world. For unowned paths that should select NOTHING, use
+        // `affectedIgnore` above instead.
         //
-        // It does not. A CHANGED PATH OUTSIDE EVERY PROJECT ROOT MARKS EVERY PROJECT
-        // AFFECTED. Measured on this tree, one committed one-line edit each, against
-        // `origin/alpha` with `--no-uncommitted` (the mode CI runs in): shared/,
-        // protocol/, registry/, tools/, .vis/ — 75 of 75 projects affected, for
-        // `test`, `lint:eslint` and `lint:types` alike. So do the controls: a
-        // top-level README, `plans/`, `marketing/` — 75 as well; one package source
-        // file — 73, the graph narrowing as intended.
-        //
-        // Listing them here would therefore change nothing except to widen
-        // `sharedGlobals`, whose whole job is to be the narrow set that invalidates
-        // the world.
-        //
-        // The one case that DOES select nothing is a tracked but UNCOMMITTED edit to
-        // such a path: `--uncommitted` (on locally, off in CI) drops non-project
-        // paths deliberately, so an untracked scratch file cannot invalidate all 75.
-        // `pnpm run test:affected` over a dirty `shared/` therefore prints "No files
-        // changed. Nothing to run." and exits 0 — a local-only artefact of that
-        // guard, not a hole in CI, which diffs committed refs. Commit first, or pass
-        // `--base origin/alpha`, before concluding a gate is missing.
+        // The one case that selects nothing without it is a tracked but UNCOMMITTED
+        // edit to such a path: `--uncommitted` (on locally, off in CI) drops
+        // non-project paths deliberately, so an untracked scratch file cannot
+        // invalidate everything. `pnpm run test:affected` over a dirty `shared/`
+        // therefore prints "No files changed. Nothing to run." and exits 0, a
+        // local-only artefact, not a hole in CI, which diffs committed refs. Commit
+        // first, or pass `--base origin/alpha`, before concluding a gate is missing.
         sharedGlobals: ["{workspaceRoot}/.nvmrc", "{workspaceRoot}/package.json", "{workspaceRoot}/tsconfig.json", "{workspaceRoot}/tsconfig.base.json"],
     },
     tasks: {
