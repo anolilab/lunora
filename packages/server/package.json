@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "1.0.0-alpha.187",
+    "version": "1.0.0-alpha.188",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
@@ -98,7 +98,7 @@
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/observability": "1.0.0-alpha.128",
         "@lunora/search-core": "workspace:*",
-        "@lunora/storage": "1.0.0-alpha.122",
+        "@lunora/storage": "1.0.0-alpha.124",
         "@opentelemetry/api": "catalog:otel",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
