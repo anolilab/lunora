@@ -358,7 +358,7 @@ catalogs:
     "@commitlint/cli": ^21.2.3
     "@commitlint/config-conventional": ^21.2.3
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 4.1.19
+    "@visulima/vis": 4.2.0
     "@visulima/tabular": 4.1.0
     "@visulima/error": 6.1.0
   test:
@@ -1078,21 +1078,26 @@ minimumReleaseAgeExclude:
   # Per-message ttl/urgency (visulima/visulima#936), published 2026-10-08 —
   # dead weight after 2026-10-09, drop it then.
   - '@visulima/notification@1.2.0'
-  # User-authorized one-off for the upstream storage fixes: storage 2.0.33 +
-  # storage-client 1.0.8 (visulima/visulima#923, #925, on top of #899-#921).
-  # Remove these entries once they are 24h old: storage 2026-10-06 22:16 UTC,
-  # storage-client 2026-10-06 16:57 UTC.
-  - '@visulima/storage@2.0.33'
-  - '@visulima/storage-client@1.0.8'
-  - '@visulima/vis@1.0.0-alpha.43 || 4.0.2'
-  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.43 || 4.0.2'
-  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.43 || 4.0.2'
-  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.43 || 4.0.2'
-  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.43 || 4.0.2'
-  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.43 || 4.0.2'
-  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.43 || 4.0.2'
-  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.43 || 4.0.2'
-  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.43 || 4.0.2'
+  # vis 4.2.0 (affectedIgnore, visulima/visulima#937) + its task-runner 1.1.0, published
+  # 2026-10-09 ~11:00 UTC. Remove the vis + task-runner entries after 2026-10-10 11:00 UTC.
+  - '@visulima/task-runner@1.1.0'
+  - '@visulima/task-runner-binding-darwin-arm64@1.1.0'
+  - '@visulima/task-runner-binding-darwin-x64@1.1.0'
+  - '@visulima/task-runner-binding-linux-arm64-gnu@1.1.0'
+  - '@visulima/task-runner-binding-linux-arm64-musl@1.1.0'
+  - '@visulima/task-runner-binding-linux-x64-gnu@1.1.0'
+  - '@visulima/task-runner-binding-linux-x64-musl@1.1.0'
+  - '@visulima/task-runner-binding-win32-arm64-msvc@1.1.0'
+  - '@visulima/task-runner-binding-win32-x64-msvc@1.1.0'
+  - '@visulima/vis@4.2.0'
+  - '@visulima/vis-binding-darwin-arm64@4.2.0'
+  - '@visulima/vis-binding-darwin-x64@4.2.0'
+  - '@visulima/vis-binding-linux-arm64-gnu@4.2.0'
+  - '@visulima/vis-binding-linux-arm64-musl@4.2.0'
+  - '@visulima/vis-binding-linux-x64-gnu@4.2.0'
+  - '@visulima/vis-binding-linux-x64-musl@4.2.0'
+  - '@visulima/vis-binding-win32-arm64-msvc@4.2.0'
+  - '@visulima/vis-binding-win32-x64-msvc@4.2.0'
   - 'astro@6.4.6'
   - 'brace-expansion@1.1.17 || 1.1.18 || 2.1.3 || 2.1.4 || 5.0.8 || 5.0.9'
   - 'deslop-js@0.0.21'
