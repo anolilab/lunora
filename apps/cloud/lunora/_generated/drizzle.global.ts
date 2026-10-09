@@ -532,7 +532,7 @@ export const alertRules = sqliteTable("alertRules", {
     mode: text("mode", { mode: "json" }).$type<"threshold" | "deviation">(),
     name: text("name").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly">().notNull(),
     threshold: real("threshold").notNull(),
     updatedAt: real("updatedAt").notNull(),
     windowMinutes: real("windowMinutes"),
@@ -568,7 +568,7 @@ export const alerts = sqliteTable("alerts", {
     ruleId: text("ruleId").references((): AnySQLiteColumn => alertRules._id).notNull(),
     status: text("status", { mode: "json" }).$type<"firing" | "delivered" | "failed">().notNull(),
     subject: text("subject").notNull(),
-    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly">().notNull(),
+    target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly">().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_status: index("by_status").on(t.status),
@@ -586,7 +586,7 @@ export const anomalyBaselines = sqliteTable("anomalyBaselines", {
     mean: real("mean").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     samples: real("samples").notNull(),
-    signal: text("signal", { mode: "json" }).$type<"requests" | "errors">().notNull(),
+    signal: text("signal", { mode: "json" }).$type<"requests" | "errors" | "storage">().notNull(),
     updatedAt: real("updatedAt").notNull(),
     variance: real("variance").notNull(),
 }, (t) => ({
@@ -625,7 +625,7 @@ export const anomalySilences = sqliteTable("anomalySilences", {
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     reason: text("reason").notNull(),
     startsAt: real("startsAt").notNull(),
-    target: text("target", { mode: "json" }).$type<"usage_anomaly" | "error_anomaly">().notNull(),
+    target: text("target", { mode: "json" }).$type<"usage_anomaly" | "error_anomaly" | "storage_anomaly">().notNull(),
 }, (t) => ({
     by_org: index("by_org").on(t.organizationId),
 }));
@@ -708,6 +708,18 @@ export const usageCheckpoints = sqliteTable("usageCheckpoints", {
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_target_scope: uniqueIndex("by_target_scope").on(t.target, t.scopeKey),
+}));
+
+export const usageSourceStatus = sqliteTable("usageSourceStatus", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    scopeKey: text("scopeKey").notNull(),
+    target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">().notNull(),
+    unattributedQuantity: real("unattributedQuantity"),
+    unavailableReason: text("unavailableReason"),
+    updatedAt: real("updatedAt").notNull(),
+}, (t) => ({
+    by_source: uniqueIndex("by_source").on(t.target, t.scopeKey),
 }));
 
 export const customers = sqliteTable("customers", {

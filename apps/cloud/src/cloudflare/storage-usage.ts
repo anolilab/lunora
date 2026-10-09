@@ -1,0 +1,509 @@
+/* eslint-disable no-secrets/no-secrets -- GraphQL dataset, field and operation names read as entropy; none is a credential */
+
+/**
+ * Storage row counts read back from a Cloudflare account: D1 and Durable
+ * Object rows read and written, per tenant. These are the two meters a Durable
+ * Object alarm stuck in a loop runs up without serving a single request, so
+ * request counts alone never see that runaway.
+ *
+ * Both readers work against any account. They read the platform's own cell
+ * account for `cloudflare-wfp`, and a connected customer account for
+ * `cloudflare-workers`. Both read Cloudflare's hourly-bucketed GraphQL datasets,
+ * so the rollback calls them with closed, hour-aligned windows only.
+ *
+ * - **D1.** The dataset is `d1AnalyticsAdaptiveGroups`. Its filter (`databaseId`,
+ *   `datetimeHour_geq`, `datetimeHour_leq`), its sum fields and the
+ *   `datetimeHour` dimension are the ones wrangler's own `d1 info` query uses.
+ *   `databaseId` is not proven to be a dimension, so each database is queried
+ *   by filter instead. The databases are batched into one request with GraphQL
+ *   field aliases. A database is attributed by its name: tenant resources are
+ *   named `{alias}--{binding}` (`tenantResourceName`), and
+ *   `aliasOfResourceName` reverses that.
+ * - **Durable Objects.** No field name of the Durable Objects datasets is
+ *   verified anywhere in this repository. So the dataset is discovered by
+ *   introspection ({@link probeDurableObjectsDataset}) rather than hard-coded.
+ *   The probe takes `rowsRead` / `rowsWritten` only where the schema has them,
+ *   and attributes by `scriptName`, or by `namespaceId` resolved through the
+ *   namespace list. When the schema offers no such dataset, the reader throws
+ *   `UsageUnavailableError` with the reason, and the sweep shows it. It never
+ *   reports zero instead.
+ */
+import type { PeriodUsage } from "../billing/spend";
+import { UsageUnavailableError } from "../metering/unavailable";
+import { aliasOfResourceName } from "../provision-contract";
+import type { UsageWindow } from "../targets/driver";
+import type { CloudflareAccountAccess } from "./fetch";
+import { cloudflareFetch, CloudflareTokenError } from "./fetch";
+import { cloudflareGraphql, CloudflareGraphqlQueryError, graphqlTime } from "./graphql";
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/** The row limit every grouped query asks for. A result this long may be truncated, so it is refused. */
+export const STORAGE_QUERY_LIMIT = 10_000;
+
+/** Databases per GraphQL request. */
+export const D1_QUERY_BATCH = 25;
+
+/** Pages any one listing reads at most, so a broken `total_pages` cannot loop forever. */
+const MAX_LIST_PAGES = 100;
+
+/** A positive, finite count; anything else is nothing. */
+const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
+
+/** Add `usage` into `into` under `key`. */
+const addUsage = (into: Map<string, PeriodUsage>, key: string, usage: PeriodUsage): void => {
+    const total = into.get(key) ?? {};
+
+    for (const [meter, quantity] of Object.entries(usage) as [keyof PeriodUsage, number][]) {
+        if (quantity > 0) {
+            total[meter] = (total[meter] ?? 0) + quantity;
+        }
+    }
+
+    into.set(key, total);
+};
+
+/** Every item of a page-numbered v4 listing. */
+const listAll = async <T>(access: CloudflareAccountAccess, path: string): Promise<T[]> => {
+    const call = cloudflareFetch(access);
+    const items: T[] = [];
+
+    for (let page = 1; page <= MAX_LIST_PAGES; page += 1) {
+        // eslint-disable-next-line no-await-in-loop -- page-numbered listing is sequential by construction
+        const answer = await call<T[]>(`${path}${path.includes("?") ? "&" : "?"}page=${String(page)}&per_page=100`);
+        const result = answer?.result ?? [];
+
+        items.push(...result);
+
+        if (result.length === 0 || page >= (answer?.totalPages ?? 1)) {
+            break;
+        }
+    }
+
+    return items;
+};
+
+/** A D1 database as the listing reports it. */
+export interface D1DatabaseRef {
+    name: string;
+    uuid: string;
+}
+
+/** Every D1 database in the account (`GET /accounts/{id}/d1/database`, D1 Read). */
+export const listD1Databases = async (access: CloudflareAccountAccess): Promise<D1DatabaseRef[]> => {
+    const rows = await listAll<{ name?: unknown; uuid?: unknown }>(access, `/accounts/${access.accountId}/d1/database`);
+
+    return rows.flatMap((row) => (typeof row.name === "string" && typeof row.uuid === "string" ? [{ name: row.name, uuid: row.uuid }] : []));
+};
+
+interface D1Group {
+    dimensions?: { datetimeHour?: string };
+    sum?: { rowsRead?: number; rowsWritten?: number };
+}
+
+/** The hour filter of a closed `[since, until)` window: `datetimeHour_leq` is inclusive, so it names the last hour. */
+const hourFilter = (window: UsageWindow, geq: string, leq: string): string =>
+    `${geq}: ${JSON.stringify(graphqlTime(window.sinceMs))}, ${leq}: ${JSON.stringify(graphqlTime(window.untilMs - HOUR_MS))}`;
+
+/** One batch of databases, as a query with one aliased field per database. */
+const d1BatchQuery = (batch: ReadonlyArray<D1DatabaseRef>, window: UsageWindow): string => {
+    const fields = batch.map(
+        (database, index) =>
+            `d${String(index)}: d1AnalyticsAdaptiveGroups(limit: ${String(STORAGE_QUERY_LIMIT)}, filter: { databaseId: ${JSON.stringify(database.uuid)}, ${hourFilter(window, "datetimeHour_geq", "datetimeHour_leq")} }) { sum { rowsRead rowsWritten } dimensions { datetimeHour } }`,
+    );
+
+    return `query LunoraD1Rows($accountTag: string!) { viewer { accounts(filter: { accountTag: $accountTag }) { ${fields.join(" ")} } } }`;
+};
+
+/**
+ * D1 rows read and written per tenant alias in a closed, hour-aligned window
+ * (`[sinceMs, untilMs)`). Databases whose name no tenant produced (the
+ * platform's own) are not read.
+ * @throws {CloudflareTokenError} when the token lacks D1 Read or Account Analytics Read.
+ */
+export const readD1UsageByAlias = async (access: CloudflareAccountAccess, window: UsageWindow): Promise<Map<string, PeriodUsage>> => {
+    const databases = await listD1Databases(access);
+    const tenants = databases.flatMap((database) => {
+        const alias = aliasOfResourceName(database.name);
+
+        return alias === undefined ? [] : [{ ...database, alias }];
+    });
+    const byAlias = new Map<string, PeriodUsage>();
+
+    for (let start = 0; start < tenants.length; start += D1_QUERY_BATCH) {
+        const batch = tenants.slice(start, start + D1_QUERY_BATCH);
+        // eslint-disable-next-line no-await-in-loop -- one request per batch, sequential to stay polite to the API
+        const data = await cloudflareGraphql<{ viewer?: { accounts?: Record<string, D1Group[] | undefined>[] } }>(access, d1BatchQuery(batch, window), {
+            accountTag: access.accountId,
+        });
+        const account = data.viewer?.accounts?.[0] ?? {};
+
+        for (const [index, database] of batch.entries()) {
+            const groups = account[`d${String(index)}`] ?? [];
+
+            if (groups.length >= STORAGE_QUERY_LIMIT) {
+                throw new Error(`D1 analytics for ${database.name} hit the ${String(STORAGE_QUERY_LIMIT)}-row limit; refusing a truncated count`);
+            }
+
+            addUsage(byAlias, database.alias, {
+                d1RowsRead: groups.reduce((sum, group) => sum + count(group.sum?.rowsRead), 0),
+                d1RowsWritten: groups.reduce((sum, group) => sum + count(group.sum?.rowsWritten), 0),
+            });
+        }
+    }
+
+    return byAlias;
+};
+
+/** A Durable Object namespace as the listing reports it. */
+export interface DurableObjectNamespaceRef {
+    /** The dispatch namespace of a Workers-for-Platforms user script's namespace. */
+    dispatchNamespace?: string;
+    id: string;
+    script?: string;
+}
+
+/** Every Durable Object namespace in the account (`GET /accounts/{id}/workers/durable_objects/namespaces`, Workers Scripts Read). */
+export const listDurableObjectNamespaces = async (access: CloudflareAccountAccess): Promise<DurableObjectNamespaceRef[]> => {
+    const rows = await listAll<{ dispatch_namespace?: unknown; id?: unknown; script?: unknown }>(
+        access,
+        `/accounts/${access.accountId}/workers/durable_objects/namespaces`,
+    );
+
+    return rows.flatMap((row) =>
+        typeof row.id === "string"
+            ? [
+                  {
+                      id: row.id,
+                      ...(typeof row.script === "string" ? { script: row.script } : {}),
+                      ...(typeof row.dispatch_namespace === "string" ? { dispatchNamespace: row.dispatch_namespace } : {}),
+                  },
+              ]
+            : [],
+    );
+};
+
+/** A Durable Objects dataset the probe found that can be metered, and how to query it. */
+export interface DurableObjectsDataset {
+    /** The dimension rows are attributed by. */
+    by: "namespaceId" | "scriptName";
+    /** The dataset's field on the account type, e.g. `durableObjectsPeriodicGroups`. */
+    field: string;
+    /** The time filter: `hour` filters `datetimeHour_geq/_leq`, `instant` filters `datetime_geq/_leq`. */
+    filter: "hour" | "instant";
+    /** The sum fields the dataset has, of `rowsRead` and `rowsWritten`. */
+    sums: ("rowsRead" | "rowsWritten")[];
+}
+
+interface TypeRef {
+    kind?: string;
+    name?: null | string;
+    ofType?: null | TypeRef;
+}
+
+interface IntrospectedField {
+    args?: { name: string; type: TypeRef }[];
+    name: string;
+    type: TypeRef;
+}
+
+const TYPE_REF = "kind name ofType { kind name ofType { kind name ofType { kind name } } }";
+
+/** The named type under any `NON_NULL` / `LIST` wrappers. */
+const namedType = (ref: TypeRef | null | undefined): string | undefined => {
+    for (let current = ref; current; current = current.ofType) {
+        if (typeof current.name === "string" && current.name !== "") {
+            return current.name;
+        }
+    }
+
+    return undefined;
+};
+
+/** What a GraphQL type name may be. */
+const TYPE_NAME = /^\w+$/u;
+
+/** A type name as a GraphQL string argument; names come from the schema, but are checked before they are put in a query. */
+const typeName = (name: string): string => {
+    if (!TYPE_NAME.test(name)) {
+        throw new Error(`unexpected GraphQL type name ${JSON.stringify(name.slice(0, 64))}`);
+    }
+
+    return JSON.stringify(name);
+};
+
+/** The datasets the probe tries first, in this order. Any other `durableObjects*` field follows, alphabetically. */
+const PREFERRED_DATASETS = ["durableObjectsPeriodicGroups", "durableObjectsInvocationsAdaptiveGroups"];
+
+/** Fields of the given types, read in one aliased introspection request. */
+const typeFields = async (access: CloudflareAccountAccess, names: ReadonlyArray<string>, selection: string): Promise<Record<string, unknown>> => {
+    if (names.length === 0) {
+        return {};
+    }
+
+    const fields = names.map((name, index) => `t${String(index)}: __type(name: ${typeName(name)}) { ${selection} }`);
+
+    return cloudflareGraphql<Record<string, unknown>>(access, `query LunoraIntrospect { ${fields.join(" ")} }`);
+};
+
+/** The schema discovery's outcome, kept for the isolate: the dataset, or why there is none. */
+let probed: DurableObjectsDataset | UsageUnavailableError | undefined;
+
+/** Forget the probe's outcome — for tests, which each describe their own schema. */
+export const resetDurableObjectsProbe = (): void => {
+    probed = undefined;
+};
+
+/** Walk the schema to the account type: `Query.viewer` → `.accounts` → its element type. */
+const accountTypeName = async (access: CloudflareAccountAccess): Promise<string> => {
+    const { __schema: schema } = await cloudflareGraphql<{ __schema?: { queryType?: { fields?: IntrospectedField[] } } }>(
+        access,
+        `query LunoraIntrospect { __schema { queryType { fields { name type { ${TYPE_REF} } } } } }`,
+    );
+    const viewer = namedType(schema?.queryType?.fields?.find((field) => field.name === "viewer")?.type);
+
+    if (viewer === undefined) {
+        throw new UsageUnavailableError("the GraphQL schema has no `viewer` field");
+    }
+
+    const { t0: viewerFields } = (await typeFields(access, [viewer], `fields { name type { ${TYPE_REF} } }`)) as {
+        t0?: { fields?: IntrospectedField[] } | null;
+    };
+    const account = namedType(viewerFields?.fields?.find((field) => field.name === "accounts")?.type);
+
+    if (account === undefined) {
+        throw new UsageUnavailableError("the GraphQL schema's `viewer` has no `accounts` field");
+    }
+
+    return account;
+};
+
+/** Pick the dataset to meter from what the schema describes, or say why none fits. */
+const chooseDataset = async (access: CloudflareAccountAccess, candidates: ReadonlyArray<IntrospectedField>): Promise<DurableObjectsDataset> => {
+    const groups = candidates.map((field) => {
+        return { field: field.name, filter: namedType(field.args?.find((argument) => argument.name === "filter")?.type), group: namedType(field.type) };
+    });
+    const groupTypes = await typeFields(
+        access,
+        groups.map(({ group }) => group ?? "Unknown"),
+        `fields { name type { ${TYPE_REF} } }`,
+    );
+    const shapes = groups.map(({ field, filter }, index) => {
+        const fields = (groupTypes[`t${String(index)}`] as { fields?: IntrospectedField[] } | null)?.fields ?? [];
+
+        return {
+            dimensions: namedType(fields.find((candidate) => candidate.name === "dimensions")?.type),
+            field,
+            filter,
+            sum: namedType(fields.find((candidate) => candidate.name === "sum")?.type),
+        };
+    });
+    // One request for every sum, dimensions and filter type, in that order per dataset.
+    const names = shapes.flatMap((shape) => [shape.sum ?? "Unknown", shape.dimensions ?? "Unknown", shape.filter ?? "Unknown"]);
+    const described = await typeFields(access, names, "fields { name } inputFields { name }");
+    const fieldNames = (index: number): Set<string> => {
+        const type = described[`t${String(index)}`] as { fields?: { name: string }[] | null; inputFields?: { name: string }[] | null } | null;
+
+        return new Set([...(type?.fields ?? []), ...(type?.inputFields ?? [])].map((field) => field.name));
+    };
+    const seen: string[] = [];
+
+    for (const [index, shape] of shapes.entries()) {
+        const sums = fieldNames(index * 3);
+        const dimensions = fieldNames(index * 3 + 1);
+        const filters = fieldNames(index * 3 + 2);
+        const rowSums = (["rowsRead", "rowsWritten"] as const).filter((name) => sums.has(name));
+        let filter: DurableObjectsDataset["filter"] | undefined;
+
+        if (filters.has("datetimeHour_geq") && filters.has("datetimeHour_leq")) {
+            filter = "hour";
+        } else if (filters.has("datetime_geq") && filters.has("datetime_leq")) {
+            filter = "instant";
+        }
+
+        let by: DurableObjectsDataset["by"] | undefined;
+
+        if (dimensions.has("scriptName")) {
+            by = "scriptName";
+        } else if (dimensions.has("namespaceId")) {
+            by = "namespaceId";
+        }
+
+        if (rowSums.length > 0 && filter !== undefined && by !== undefined) {
+            return { by, field: shape.field, filter, sums: rowSums };
+        }
+
+        seen.push(`${shape.field} (sum: ${[...sums].join(", ") || "none"}; dimensions: ${[...dimensions].join(", ") || "none"})`);
+    }
+
+    throw new UsageUnavailableError(
+        `no Durable Objects dataset reports rowsRead/rowsWritten with a scriptName or namespaceId dimension and an hour filter; seen: ${seen.join("; ") || "none"}`.slice(
+            0,
+            500,
+        ),
+    );
+};
+
+/**
+ * Find the Durable Objects dataset that reports rows read and written, by
+ * GraphQL introspection, and remember the answer for the isolate.
+ *
+ * Storage units (`storageReadUnits`, `storageWriteUnits`) are deliberately not
+ * taken as rows. They are 4 KB units of the key-value backend, priced
+ * differently. Billing them as `doRowsRead` / `doRowsWritten` would misstate the
+ * bill, so a dataset that only has those is reported as unavailable, with the
+ * fields it does have.
+ *
+ * Only what the schema says is remembered: a dataset, or a definitive "none".
+ * A refused token or a failed request is not cached. Otherwise a fixed token
+ * would stay "unavailable" for as long as the isolate lives.
+ * @throws {UsageUnavailableError} when the schema offers no dataset to meter.
+ * @throws {CloudflareTokenError} when the token is refused.
+ */
+export const probeDurableObjectsDataset = async (access: CloudflareAccountAccess): Promise<DurableObjectsDataset> => {
+    if (probed instanceof UsageUnavailableError) {
+        throw probed;
+    }
+
+    if (probed !== undefined) {
+        return probed;
+    }
+
+    try {
+        const account = await accountTypeName(access);
+        const { t0: accountType } = (await typeFields(access, [account], `fields { name type { ${TYPE_REF} } args { name type { ${TYPE_REF} } } }`)) as {
+            t0?: { fields?: IntrospectedField[] } | null;
+        };
+        const candidates = (accountType?.fields ?? [])
+            .filter((field) => field.name.startsWith("durableObjects"))
+            .toSorted((a, b) => {
+                const rank = (name: string): number => {
+                    const index = PREFERRED_DATASETS.indexOf(name);
+
+                    return index === -1 ? PREFERRED_DATASETS.length : index;
+                };
+
+                return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
+            });
+
+        if (candidates.length === 0) {
+            throw new UsageUnavailableError(`the GraphQL account type ${account} has no durableObjects* dataset`);
+        }
+
+        probed = await chooseDataset(access, candidates);
+
+        return probed;
+    } catch (error) {
+        if (error instanceof UsageUnavailableError) {
+            probed = error;
+        }
+
+        throw error;
+    }
+};
+
+interface DurableObjectsGroup {
+    dimensions?: { namespaceId?: string; scriptName?: string };
+    sum?: { rowsRead?: number; rowsWritten?: number };
+}
+
+/**
+ * The script a namespace-id row belongs to: the namespace list's `script`, or
+ * `namespace:{id}` when the list cannot resolve it, so its volume shows up as
+ * unattributed. `undefined` (skipped) for a namespace the list puts in another
+ * dispatch namespace than `dispatchNamespace` — another environment's, in the
+ * same account, which this cell does not meter.
+ */
+const scriptOfNamespace = (
+    id: string | undefined,
+    ofNamespace: ReadonlyMap<string, DurableObjectNamespaceRef>,
+    dispatchNamespace: string | undefined,
+): string | undefined => {
+    if (id === undefined) {
+        return undefined;
+    }
+
+    const namespace = ofNamespace.get(id);
+
+    if (dispatchNamespace !== undefined && namespace?.dispatchNamespace !== undefined && namespace.dispatchNamespace !== dispatchNamespace) {
+        return undefined;
+    }
+
+    return namespace?.script ?? `namespace:${id}`;
+};
+
+/**
+ * Durable Object rows read and written per Worker script in a closed,
+ * hour-aligned window (`[sinceMs, untilMs)`), through the dataset the probe
+ * found. Rows are attributed by script name, or by namespace id resolved
+ * through the namespace list.
+ *
+ * - `dispatchNamespace` (`cloudflare-wfp`) drops the namespaces the list says
+ *   belong to ANOTHER dispatch namespace, such as another environment's in the
+ *   same account. Nothing else is dropped here: a row of the platform's own
+ *   scripts matches no deployment, so the rollback counts it as unattributed,
+ *   which keeps a misattribution visible rather than silent.
+ * - A namespace the list cannot resolve is keyed `namespace:{id}`. No tenant
+ *   has that name, so the rollback counts its volume as unattributed and the
+ *   sweep reports it, instead of dropping it silently.
+ * @throws {UsageUnavailableError} when no dataset can be metered.
+ * @throws {CloudflareTokenError} when the token lacks Account Analytics Read.
+ */
+export const readDurableObjectUsageByScript = async (
+    access: CloudflareAccountAccess,
+    window: UsageWindow,
+    options: { dispatchNamespace?: string } = {},
+): Promise<Map<string, PeriodUsage>> => {
+    const dataset = await probeDurableObjectsDataset(access);
+    const filter =
+        dataset.filter === "hour"
+            ? hourFilter(window, "datetimeHour_geq", "datetimeHour_leq")
+            : `datetime_geq: ${JSON.stringify(graphqlTime(window.sinceMs))}, datetime_leq: ${JSON.stringify(graphqlTime(window.untilMs - 1000))}`;
+    const data = await cloudflareGraphql<{ viewer?: { accounts?: { rows?: DurableObjectsGroup[] }[] } }>(
+        access,
+        `query LunoraDurableObjectRows($accountTag: string!) { viewer { accounts(filter: { accountTag: $accountTag }) { rows: ${dataset.field}(limit: ${String(STORAGE_QUERY_LIMIT)}, filter: { ${filter} }) { sum { ${dataset.sums.join(" ")} } dimensions { ${dataset.by} } } } } }`,
+        { accountTag: access.accountId },
+    );
+    const groups = data.viewer?.accounts?.[0]?.rows ?? [];
+
+    if (groups.length >= STORAGE_QUERY_LIMIT) {
+        throw new Error(`Durable Objects analytics hit the ${String(STORAGE_QUERY_LIMIT)}-row limit; refusing a truncated count`);
+    }
+
+    const namespaces = dataset.by === "namespaceId" ? await listDurableObjectNamespaces(access) : [];
+    const ofNamespace = new Map(namespaces.map((namespace) => [namespace.id, namespace]));
+    const byScript = new Map<string, PeriodUsage>();
+
+    for (const group of groups) {
+        const script =
+            dataset.by === "scriptName"
+                ? group.dimensions?.scriptName
+                : scriptOfNamespace(group.dimensions?.namespaceId, ofNamespace, options.dispatchNamespace);
+
+        if (script !== undefined && script !== "") {
+            addUsage(byScript, script, { doRowsRead: count(group.sum?.rowsRead), doRowsWritten: count(group.sum?.rowsWritten) });
+        }
+    }
+
+    return byScript;
+};
+
+/**
+ * Run one read of a usage source, reporting a refused token, or a query
+ * Cloudflare rejects, as the source being unavailable. Neither changes by
+ * retrying — a token does not gain a permission, a dataset does not gain a
+ * field — so the sweep shows it (`UsageUnavailableError`) instead of logging a
+ * failure every hour. Every other error passes through and is retried. The
+ * checkpoint holds either way, so nothing is lost while it is shown.
+ */
+export const unavailableOnRefusal = async <T>(read: () => Promise<T>): Promise<T> => {
+    try {
+        return await read();
+    } catch (error) {
+        if (error instanceof CloudflareTokenError || error instanceof CloudflareGraphqlQueryError) {
+            throw new UsageUnavailableError(error.message);
+        }
+
+        throw error;
+    }
+};

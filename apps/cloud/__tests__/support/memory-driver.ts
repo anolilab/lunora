@@ -49,20 +49,26 @@ export const createMemoryTarget = (): MemoryTarget => {
         id: "cloudflare-wfp",
         reach: (tenant) => tenantSender(tenant),
         usage: {
-            read: async (scope, sinceMs) => {
-                const totals = new Map<string, number>();
-
-                for (const record of served) {
-                    if (record.scope === scope && record.atMs > sinceMs) {
-                        totals.set(record.resourceRef, (totals.get(record.resourceRef) ?? 0) + record.requests);
-                    }
-                }
-
-                return [...totals].map(([resourceRef, requests]): UsageRow => {
-                    return { requests, resourceRef };
-                });
-            },
             scopes: async () => [...MEMORY_SCOPES],
+            sources: {
+                requests: {
+                    cadence: "continuous",
+                    // `(sinceMs, untilMs]`, as every continuous source answers.
+                    read: async (scope, { sinceMs, untilMs }) => {
+                        const totals = new Map<string, number>();
+
+                        for (const record of served) {
+                            if (record.scope === scope && record.atMs > sinceMs && record.atMs <= untilMs) {
+                                totals.set(record.resourceRef, (totals.get(record.resourceRef) ?? 0) + record.requests);
+                            }
+                        }
+
+                        return [...totals].map(([resourceRef, requests]): UsageRow => {
+                            return { meters: { requests }, resourceRef };
+                        });
+                    },
+                },
+            },
         },
     };
 

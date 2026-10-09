@@ -432,6 +432,7 @@ class AppBuilder<Env extends object> {
             ["overageDebits", { mode: { kind: "global" } }],
             ["platformUsage", { mode: { kind: "global" } }],
             ["usageCheckpoints", { mode: { kind: "global" } }],
+            ["usageSourceStatus", { mode: { kind: "global" } }],
             ["customers", { mode: { kind: "global" } }],
             ["events", { mode: { kind: "global" } }],
             ["paymentSessions", { mode: { kind: "global" } }],

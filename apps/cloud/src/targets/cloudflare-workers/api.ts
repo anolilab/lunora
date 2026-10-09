@@ -15,7 +15,8 @@
 
 import { fetchBillableUsage } from "../../cloudflare/billable-usage";
 import type { CloudflareAccountAccess } from "../../cloudflare/fetch";
-import { CLOUDFLARE_API_ROOT, cloudflareFetch, CloudflareTokenError } from "../../cloudflare/fetch";
+import { cloudflareFetch, CloudflareTokenError } from "../../cloudflare/fetch";
+import { cloudflareGraphql, graphqlTime } from "../../cloudflare/graphql";
 import type { CloudflarePermission } from "../../provision-contract";
 import { CLOUDFLARE_TOKEN_PERMISSIONS } from "../../provision-contract";
 
@@ -110,25 +111,19 @@ export interface ScriptRequests {
     scriptName: string;
 }
 
-interface GraphqlResponse {
-    data?: {
-        viewer?: {
-            accounts?: { workersInvocationsAdaptive?: { dimensions?: { scriptName?: string }; sum?: { requests?: number } }[] }[];
-        };
-    } | null;
-    errors?: { message?: string }[] | null;
+interface InvocationsData {
+    viewer?: {
+        accounts?: { workersInvocationsAdaptive?: { dimensions?: { scriptName?: string }; sum?: { requests?: number } }[] }[];
+    };
 }
-
-/** How the GraphQL API words a token that lacks the permission for a query. */
-const AUTHORIZATION_ERROR = /\bauthoriz|permission|not allowed/iu;
 
 /** Row cap of one readback: one row per script, so this is the number of Workers an account may run before a window under-counts. */
 const MAX_SCRIPTS = 10_000;
 
-const REQUESTS_QUERY = `query LunoraWorkerRequests($accountTag: string!, $since: Time!) {
+const REQUESTS_QUERY = `query LunoraWorkerRequests($accountTag: string!, $since: Time!, $until: Time!) {
   viewer {
     accounts(filter: { accountTag: $accountTag }) {
-      workersInvocationsAdaptive(limit: ${String(MAX_SCRIPTS)}, filter: { datetime_gt: $since }) {
+      workersInvocationsAdaptive(limit: ${String(MAX_SCRIPTS)}, filter: { datetime_gt: $since, datetime_leq: $until }) {
         sum { requests }
         dimensions { scriptName }
       }
@@ -137,41 +132,23 @@ const REQUESTS_QUERY = `query LunoraWorkerRequests($accountTag: string!, $since:
 }`;
 
 /**
- * Requests per Worker script in the account with an invocation time strictly
- * after `sinceMs` — the GraphQL Analytics API's `workersInvocationsAdaptive`
+ * Requests per Worker script in the account with an invocation time in
+ * `(sinceMs, untilMs]` — the GraphQL Analytics API's `workersInvocationsAdaptive`
  * dataset (Account Analytics Read), summed per `scriptName`. Its `sum` fields
  * are already corrected for Cloudflare's adaptive sampling, so the total is an
- * estimate only where Cloudflare's own dashboard is one.
+ * estimate only where Cloudflare's own dashboard is one. `untilMs` defaults to
+ * now.
  * @throws {CloudflareTokenError} when the token lacks Account Analytics Read.
  */
-export const readScriptRequests = async (access: CloudflareAccountAccess, sinceMs: number): Promise<ScriptRequests[]> => {
-    const response = await (access.fetch ?? globalThis.fetch)(`${CLOUDFLARE_API_ROOT}/graphql`, {
-        body: JSON.stringify({ query: REQUESTS_QUERY, variables: { accountTag: access.accountId, since: new Date(sinceMs).toISOString() } }),
-        headers: { authorization: `Bearer ${access.apiToken}`, "content-type": "application/json" },
-        method: "POST",
+export const readScriptRequests = async (access: CloudflareAccountAccess, sinceMs: number, untilMs = Date.now()): Promise<ScriptRequests[]> => {
+    const data = await cloudflareGraphql<InvocationsData>(access, REQUESTS_QUERY, {
+        accountTag: access.accountId,
+        since: graphqlTime(sinceMs),
+        until: graphqlTime(untilMs),
     });
-    const body = (await response.json().catch(() => null)) as GraphqlResponse | null;
-
-    if (response.status === 401 || response.status === 403) {
-        throw new CloudflareTokenError("Cloudflare refused the token for the GraphQL Analytics API");
-    }
-
-    const errors = (body?.errors ?? []).map((error) => error.message ?? "").filter((message) => message !== "");
-
-    if (!response.ok || errors.length > 0 || !body?.data) {
-        const reason = errors.length > 0 ? errors.join("; ").slice(0, 300) : `HTTP ${String(response.status)}`;
-
-        // GraphQL answers a missing permission as a 200 with an authorization error.
-        if (AUTHORIZATION_ERROR.test(reason)) {
-            throw new CloudflareTokenError(`Cloudflare refused the token for the GraphQL Analytics API: ${reason}`);
-        }
-
-        throw new Error(`Cloudflare GraphQL Analytics API failed: ${reason}`);
-    }
-
     const totals = new Map<string, number>();
 
-    for (const account of body.data.viewer?.accounts ?? []) {
+    for (const account of data.viewer?.accounts ?? []) {
         for (const row of account.workersInvocationsAdaptive ?? []) {
             const scriptName = row.dimensions?.scriptName;
             const requests = row.sum?.requests ?? 0;

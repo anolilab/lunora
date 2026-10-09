@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createRule, createSilence } from "../lunora/alerts";
 import type { ControlPlaneDatabase } from "../src/store";
 import type { AnomalyBaseline } from "../src/telemetry/anomaly";
-import { advanceBaseline, ANOMALY_BUCKET_MS, anomalyScore, isSilenced, MIN_ANOMALY_SAMPLES, scoreBucket } from "../src/telemetry/anomaly";
+import { advanceBaseline, ANOMALY_BUCKET_MS, anomalyScore, isSilenced, MIN_ANOMALY_SAMPLES, MIN_ANOMALY_VOLUME, scoreBucket } from "../src/telemetry/anomaly";
 import { runAnomalySweep } from "../src/telemetry/anomaly-sweep";
 import fakeControlPlaneDb from "./_helpers/fake-control-plane-db";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -30,6 +30,8 @@ describe(anomalyScore, () => {
         // 10 → 900 requests is a 90x jump, and still below the 1000/hour floor.
         expect(anomalyScore("requests", { mean: 10, samples: 100, variance: 1 }, 900)).toBe(0);
         expect(anomalyScore("errors", { mean: 1, samples: 100, variance: 0 }, 24)).toBe(0);
+        // Under a cent of storage rows an hour, before and after.
+        expect(anomalyScore("storage", { mean: 1e7, samples: 100, variance: 0 }, MIN_ANOMALY_VOLUME.storage - 1)).toBe(0);
     });
 
     it("floors sigma at the Poisson spread, so a flat history does not turn noise into a page", () => {
@@ -99,9 +101,12 @@ const baselineRow = {
     ...warm,
 };
 
+/** The scored hour's month — the ledger period its rows carry. */
+const JUNE = Date.UTC(2026, 5, 1);
+
 /** One ledger row of `quantity` requests, created inside the scored hour unless told otherwise. */
-const usage = (organizationId: string, quantity: number, createdAt = BUCKET_START + 60_000) => {
-    return { createdAt, kind: "requests", organizationId, quantity };
+const usage = (organizationId: string, quantity: number, createdAt = BUCKET_START + 60_000, kind = "requests", periodStart = JUNE) => {
+    return { createdAt, kind, organizationId, periodStart, quantity };
 };
 
 describe(runAnomalySweep, () => {
@@ -147,7 +152,7 @@ describe(runAnomalySweep, () => {
         expect(findMany).toHaveBeenCalledWith(
             "platformUsage",
             expect.objectContaining({
-                where: { createdAt: { gte: BUCKET_START, lt: BUCKET_START + ANOMALY_BUCKET_MS }, kind: "requests", organizationId: "org1" },
+                where: { createdAt: { gte: BUCKET_START, lt: BUCKET_START + ANOMALY_BUCKET_MS }, kind: "requests", organizationId: "org1", periodStart: JUNE },
             }),
         );
     });
@@ -224,6 +229,89 @@ describe(runAnomalySweep, () => {
 
         expect(result.scored).toBe(0);
         expect(patch).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The readback bills a window to the month it happened in, so the first run
+     * of a month writes rows of the month before — and compaction can then fold
+     * the whole closed month onto one of them. Scored by `createdAt` alone, that
+     * survivor reads as a month of traffic in one hour.
+     */
+    it("never counts a closed month's row created in the scored hour, such as a compaction survivor", async () => {
+        const july = Date.UTC(2026, 6, 1);
+        const now = Date.UTC(2026, 6, 1, 2, 30);
+        const bucket = Date.UTC(2026, 6, 1, 1);
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [],
+                alertRules: [usageRule],
+                anomalyBaselines: [{ ...baselineRow, lastBucketStart: bucket - ANOMALY_BUCKET_MS }],
+                anomalySilences: [],
+                // June's whole month, folded onto a row the July 1 01:05 readback created.
+                platformUsage: [usage("org1", 60_000_000, bucket + 5 * 60_000, "requests", JUNE), usage("org1", 2000, bucket + 6 * 60_000, "requests", july)],
+            },
+            { patch },
+        );
+
+        const result = await runAnomalySweep(database, { now });
+
+        expect(result.deliveries).toStrictEqual([]);
+        expect(patch).toHaveBeenCalledWith("base_req", expect.objectContaining({ lastBucketStart: bucket, lastValue: 2000 }), "anomalyBaselines");
+    });
+
+    it("fires a storage anomaly when a Durable Object runs away on rows without any requests", async () => {
+        const storageRule = { ...usageRule, _id: "rule_storage", name: "Storage runaway", target: "storage_anomaly" };
+        // A warmed baseline of about 4 cents of storage rows an hour, priced in nano-cents.
+        const storageBaseline = {
+            ...baselineRow,
+            _id: "base_storage",
+            mean: 4e9,
+            signal: "storage",
+            variance: 5e8 * 5e8,
+        };
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [],
+                alertRules: [storageRule],
+                anomalyBaselines: [storageBaseline],
+                anomalySilences: [],
+                // An alarm loop: a billion rows read and two million written in the hour, no requests at all.
+                platformUsage: [
+                    usage("org1", 1_000_000_000, BUCKET_START + 60_000, "doRowsRead"),
+                    usage("org1", 2_000_000, BUCKET_START + 60_000, "doRowsWritten"),
+                    usage("org1", 5000, BUCKET_START + 60_000, "d1RowsWritten"),
+                ],
+            },
+            { insert },
+        );
+
+        const result = await runAnomalySweep(database, { now: NOW });
+        // 1e9 × 100 + 2e6 × 100_000 + 5000 × 100_000 nano-cents.
+        const value = 1e9 * 100 + 2e6 * 100_000 + 5000 * 100_000;
+
+        expect(result.transitions).toStrictEqual([
+            {
+                action: "fire",
+                organizationId: "org1",
+                reading: { mean: 4e9, score: (value - 4e9) / 5e8, value },
+                ruleId: "rule_storage",
+                target: "storage_anomaly",
+            },
+        ]);
+        expect(result.deliveries[0]?.subject).toContain("storage row cost anomaly");
+        expect(result.deliveries[0]?.body).toContain("$3.0050");
+        expect(insert).toHaveBeenCalledWith("alerts", expect.objectContaining({ ruleId: "rule_storage", target: "storage_anomaly" }));
+    });
+
+    it("scores a write runaway against a read-heavy normal, priced, and a read wobble as noise", () => {
+        // Normal: ten million rows read an hour (one cent). Runaway: the same reads plus a million writes, priced at 100,000 nano-cents each.
+        const baseline: AnomalyBaseline = { mean: 1e9, samples: MIN_ANOMALY_SAMPLES + 10, variance: 1e8 * 1e8 };
+
+        expect(anomalyScore("storage", baseline, 1e9 + 1e6 * 100_000)).toBeGreaterThan(50);
+        // A one-percent wobble in reads is noise.
+        expect(Math.abs(anomalyScore("storage", baseline, 1.01e9))).toBeLessThan(1);
     });
 
     it("starts a baseline for a new rule without firing on it", async () => {

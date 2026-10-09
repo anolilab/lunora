@@ -2,11 +2,12 @@
  * The hourly anomaly sweep (plan 365 W4): measure each organization's last
  * completed hour, score it against that organization's rolling baseline
  * (`./anomaly`), persist the advanced baseline, and fire/clear its
- * `usage_anomaly` / `error_anomaly` rules over the shared `alertRuleState` latch.
+ * `usage_anomaly` / `error_anomaly` / `storage_anomaly` rules over the shared
+ * `alertRuleState` latch.
  *
  * Only organizations with an enabled anomaly rule are measured, so the work and
- * the `anomalyBaselines` rows (two per organization at most) are bounded by the
- * rules people actually wrote. A baseline starts when the first rule does and
+ * the `anomalyBaselines` rows (one per signal, three per organization at most)
+ * are bounded by the rules people actually wrote. A baseline starts when the first rule does and
  * scores after {@link MIN_ANOMALY_SAMPLES} hours.
  *
  * Where the two signals come from — both stores every target writes to, so the
@@ -16,20 +17,34 @@
  *   bucket. The `cloudflare-wfp` and `cloudflare-workers` readbacks write them
  *   hourly; a `celld-vps` box writes them from its usage reports. Display-only
  *   (`billable: false`) rows count: an anomaly is about traffic, not the invoice.
+ * - `storage` — the ledger rows of D1 and Durable Object row operations
+ *   (`STORAGE_METERS`) created in the bucket, priced at the rate card in
+ *   nano-cents. The
+ *   `cloudflare-wfp` and `cloudflare-workers` readbacks write them hourly, an
+ *   hour or two behind (they read only closed hours of Cloudflare's datasets).
+ *   Display-only rows count here too.
  * - `errors` — error-level `observations` (OTLP spans) started in the bucket, so
  *   only tenants that ship telemetry have an error signal.
+ *
+ * The two ledger signals count only rows of the bucket's own month
+ * (`periodStart`). The readback bills a window to the month it happened in, so
+ * the first run of a month writes rows of the month before, and compaction can
+ * then fold that whole closed month onto one of them. Counting it would score
+ * a month of usage as one hour.
  *
  * Idempotent per bucket: a baseline row remembers the bucket it last folded in, so
  * a re-run of the same hour re-uses the stored reading (letting a crash between
  * the baseline write and the rule writes finish its rules) and never folds the
  * hour in twice.
  */
+import type { UsageMeter } from "../billing/spend";
+import { RATE_CARD } from "../billing/spend";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { AlertChannel, AlertDelivery, AnomalyTarget } from "./alerts";
 import { ANOMALY_TARGETS } from "./alerts";
 import type { AnomalyBaseline, AnomalyReading, AnomalyRule, AnomalySignal, AnomalySilence, AnomalyTransition } from "./anomaly";
-import { ANOMALY_BUCKET_MS, ANOMALY_SIGNAL, fireAnomalyRules, isSilenced, MIN_ANOMALY_SAMPLES, scoreBucket } from "./anomaly";
+import { ANOMALY_BUCKET_MS, ANOMALY_SIGNAL, fireAnomalyRules, isSilenced, MIN_ANOMALY_SAMPLES, scoreBucket, STORAGE_METERS } from "./anomaly";
 
 /** An `alertRules` row as this sweep reads it. */
 interface AlertRuleRow {
@@ -82,13 +97,24 @@ const periodStartOf = (at: number): number => {
     return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
 };
 
-/** The org's `requests` events recorded in `[start, end)`. */
-const measureRequests = async (database: ControlPlaneDatabase, organizationId: string, start: number, end: number): Promise<number> => {
+/** The org's `kind` ledger rows recorded in `[start, end)` for the bucket's own month, summed. */
+const measureLedger = async (database: ControlPlaneDatabase, organizationId: string, kind: UsageMeter, start: number, end: number): Promise<number> => {
     const rows = await drainTable<{ quantity: number }>(database, "platformUsage", {
-        where: { createdAt: { gte: start, lt: end }, kind: "requests", organizationId },
+        where: { createdAt: { gte: start, lt: end }, kind, organizationId, periodStart: periodStartOf(start) },
     });
 
     return rows.reduce((sum, row) => sum + (Number.isFinite(row.quantity) && row.quantity > 0 ? row.quantity : 0), 0);
+};
+
+/** The org's `requests` events recorded in `[start, end)`. */
+const measureRequests = async (database: ControlPlaneDatabase, organizationId: string, start: number, end: number): Promise<number> =>
+    measureLedger(database, organizationId, "requests", start, end);
+
+/** The org's storage row operations recorded in `[start, end)`, priced in nano-cents. */
+const measureStorage = async (database: ControlPlaneDatabase, organizationId: string, start: number, end: number): Promise<number> => {
+    const quantities = await Promise.all(STORAGE_METERS.map(async (meter) => measureLedger(database, organizationId, meter, start, end)));
+
+    return STORAGE_METERS.reduce((sum, meter, index) => sum + (quantities[index] ?? 0) * RATE_CARD[meter].nanoCentsPerUnit, 0);
 };
 
 /** The org's error spans started in `[start, end)`, capped at {@link ERROR_SCAN_CAP}. */
@@ -101,7 +127,10 @@ const measureErrors = async (database: ControlPlaneDatabase, organizationId: str
     return page.length;
 };
 
-const MEASURE: Record<AnomalySignal, typeof measureRequests> = { errors: measureErrors, requests: measureRequests };
+const MEASURE: Record<AnomalySignal, typeof measureRequests> = { errors: measureErrors, requests: measureRequests, storage: measureStorage };
+
+/** The signals measured from the `platformUsage` ledger, which compaction rewrites once a month closes. */
+const LEDGER_SIGNALS: ReadonlySet<AnomalySignal> = new Set<AnomalySignal>(["requests", "storage"]);
 
 /** Map a rule row onto the firing loop's shape. */
 const toAnomalyRule = (row: AlertRuleRow): AnomalyRule => {
@@ -146,7 +175,7 @@ const readSignal = async (
     // The ledger compacts a closed period by folding its rows onto a survivor; a
     // survivor created in the period's last hour would carry the whole month into
     // this bucket. That hour is skipped once a month rather than risk scoring it.
-    if (signal === "requests" && periodStartOf(start) !== periodStartOf(now)) {
+    if (LEDGER_SIGNALS.has(signal) && periodStartOf(start) !== periodStartOf(now)) {
         return { fresh: false };
     }
 

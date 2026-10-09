@@ -45,10 +45,11 @@ export type EventAlertTarget = "deploy" | "spend";
  * Anomaly targets (plan 365 D5) — threshold a derived **anomaly score**, not a raw
  * metric. The score is an online z-score of one hourly signal against the org's
  * own rolling baseline (`src/telemetry/anomaly.ts`): `usage_anomaly` scores
- * requests, `error_anomaly` scores error spans. `threshold` is read in standard
+ * requests, `error_anomaly` scores error spans, `storage_anomaly` scores the
+ * hour's D1 and Durable Object row cost. `threshold` is read in standard
  * deviations: `gt 4` is "four sigma above normal", `lt -4` "traffic fell away".
  */
-export type AnomalyTarget = "error_anomaly" | "usage_anomaly";
+export type AnomalyTarget = "error_anomaly" | "storage_anomaly" | "usage_anomaly";
 
 /** What a rule watches — a count-crossing counter, a metric window, an anomaly score, or a one-off event. */
 export type AlertTarget = AnomalyTarget | CountTarget | EventAlertTarget | MetricTarget;
@@ -69,7 +70,7 @@ export const METRIC_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["e
 export const EVENT_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["deploy", "spend"]);
 
 /** Anomaly targets threshold the hourly score the anomaly sweep derives, never a raw window. */
-export const ANOMALY_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["error_anomaly", "usage_anomaly"]);
+export const ANOMALY_TARGETS: ReadonlySet<AlertTarget> = new Set<AlertTarget>(["error_anomaly", "storage_anomaly", "usage_anomaly"]);
 
 /** A rule target's family — the four shapes a rule's condition can take. */
 export type AlertFamily = "anomaly" | "count" | "event" | "metric";

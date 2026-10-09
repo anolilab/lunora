@@ -307,7 +307,7 @@ interface AnomalySilenceRow {
     endsAt: number;
     reason: string;
     startsAt: number;
-    target: "error_anomaly" | "usage_anomaly";
+    target: "error_anomaly" | "storage_anomaly" | "usage_anomaly";
 }
 
 /** An org's silences that have not ended yet, soonest-ending first (any member). */
@@ -420,7 +420,7 @@ interface AnomalyBaselineView {
     lastScore: number;
     lastValue: number;
     samples: number;
-    signal: "errors" | "requests";
+    signal: "errors" | "requests" | "storage";
     /** `true` until the baseline has the day of history it needs to score. */
     warmingUp: boolean;
 }

@@ -45,6 +45,7 @@ const TARGET_LABELS: Record<RuleTarget, string> = {
     latency_p95: "Latency p95 (ms)",
     llm_cost: "LLM cost budget",
     spend: "Spend warning / cap (org thresholds)",
+    storage_anomaly: "Storage anomaly (σ)",
     uptime: "Uptime failures",
     usage_anomaly: "Usage anomaly (σ)",
 };
@@ -369,7 +370,15 @@ type AnomalyBaseline = ReturnOf<typeof api.alerts.anomalyBaselines>[number];
 type AnomalySilence = ReturnOf<typeof api.alerts.silences>[number];
 
 /** Which anomaly target scores each signal, for the baseline rows. */
-const SIGNAL_LABEL: Record<AnomalyBaseline["signal"], string> = { errors: "Error spans / hour", requests: "Requests / hour" };
+const SIGNAL_LABEL: Record<AnomalyBaseline["signal"], string> = {
+    errors: "Error spans / hour",
+    requests: "Requests / hour",
+    storage: "D1 + Durable Object row cost / hour",
+};
+
+/** A baseline value in its signal's unit: a count, or (`storage`, nano-cents) dollars. */
+const baselineValue = (signal: AnomalyBaseline["signal"], value: number): string =>
+    signal === "storage" ? `$${(value / 100_000_000_000).toFixed(4)}` : Math.round(value).toLocaleString();
 
 /** A baseline's state in one line: still warming up, or the last hour's score against what was normal. */
 const baselineSummary = (row: AnomalyBaseline): string => {
@@ -379,7 +388,7 @@ const baselineSummary = (row: AnomalyBaseline): string => {
 
     const sign = row.lastScore >= 0 ? "+" : "";
 
-    return `${sign}${row.lastScore.toFixed(1)}σ · ${Math.round(row.lastValue).toLocaleString()} vs ${Math.round(row.lastMean).toLocaleString()}`;
+    return `${sign}${row.lastScore.toFixed(1)}σ · ${baselineValue(row.signal, row.lastValue)} vs ${baselineValue(row.signal, row.lastMean)}`;
 };
 
 /**
@@ -415,7 +424,7 @@ const AnomalyCard = ({
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
                 <AsyncList
-                    empty="No baseline yet — add a usage or error anomaly rule and the next hourly sweep starts one."
+                    empty="No baseline yet — add a usage, error or storage anomaly rule and the next hourly sweep starts one."
                     render={(rows) => (
                         <RowList>
                             {rows.map((row) => (
@@ -488,6 +497,7 @@ const AnomalyCard = ({
                                 <SelectGroup>
                                     <SelectItem value="usage_anomaly">{TARGET_LABELS.usage_anomaly}</SelectItem>
                                     <SelectItem value="error_anomaly">{TARGET_LABELS.error_anomaly}</SelectItem>
+                                    <SelectItem value="storage_anomaly">{TARGET_LABELS.storage_anomaly}</SelectItem>
                                 </SelectGroup>
                             </SelectContent>
                         </Select>

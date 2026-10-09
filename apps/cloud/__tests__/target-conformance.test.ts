@@ -72,11 +72,11 @@ describeUsageReadbackConformance("cloudflare-wfp", () => {
     const { usage } = createCloudflareWfpFleet({
         cell: "default",
         usage: {
-            readRequestUsage: (sinceMs) => {
-                // `timestamp > since`, summed per script — the SQL `createHttpAnalyticsReader` runs.
+            readRequestUsage: (sinceMs, untilMs) => {
+                // `timestamp > since AND timestamp <= until`, summed per script — the SQL `createHttpAnalyticsReader` runs.
                 const totals = new Map<string, number>();
 
-                for (const point of dataPoints.filter((candidate) => candidate.atMs > sinceMs)) {
+                for (const point of dataPoints.filter((candidate) => candidate.atMs > sinceMs && candidate.atMs <= untilMs)) {
                     totals.set(point.scriptName, (totals.get(point.scriptName) ?? 0) + point.requests);
                 }
 
@@ -155,11 +155,13 @@ describeUsageReadbackConformance("cloudflare-workers", () => {
         read: createCloudflareWorkersFleet({
             accounts: () => Promise.resolve(Object.keys(accounts)),
             credentials: (id) => Promise.resolve({ accountId: accounts[id] ?? "", apiToken: `token-${id}` }),
-            // `datetime_gt: since`, summed per script — the query `readScriptRequests` sends.
-            read: (access, sinceMs) => {
+            // `datetime_gt: since, datetime_leq: until`, summed per script — the query `readScriptRequests` sends.
+            read: (access, sinceMs, untilMs) => {
                 const totals = new Map<string, number>();
 
-                for (const row of invocations.filter((candidate) => candidate.accountId === access.accountId && candidate.atMs > sinceMs)) {
+                for (const row of invocations.filter(
+                    (candidate) => candidate.accountId === access.accountId && candidate.atMs > sinceMs && candidate.atMs <= untilMs,
+                )) {
                     totals.set(row.scriptName, (totals.get(row.scriptName) ?? 0) + row.requests);
                 }
 

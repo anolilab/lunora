@@ -127,20 +127,21 @@ describe(createHttpAnalyticsReader, () => {
             .mockResolvedValue(Response.json({ data: [{ requests: "42", scriptName: "acme-app" }], rows: 1 }, { status: 200 }));
         const reader = createHttpAnalyticsReader({ accountId: "acc", apiToken: "tok", dataset: "usage", fetch: fetchMock });
 
-        await expect(reader.readRequestUsage(0)).resolves.toStrictEqual([{ requests: 42, scriptName: "acme-app" }]);
+        await expect(reader.readRequestUsage(0, 1000)).resolves.toStrictEqual([{ requests: 42, scriptName: "acme-app" }]);
     });
 
     /**
      * The request shape: the Analytics SQL endpoint, the platform account as the
      * request-level scope (so the statement carries no tenancy predicate), the AE
-     * dataset as its `events.analyticsEngine` table, and the window bound as a
-     * parameter rather than spliced into the text.
+     * dataset as its `events.analyticsEngine` table, and the window's two bounds
+     * as parameters rather than spliced into the text. The upper bound is what
+     * lets the rollback split a window at a month boundary.
      */
     it("posts a parameterised statement scoped to the platform account", async () => {
         const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ data: [], rows: 0 }, { status: 200 }));
         const reader = createHttpAnalyticsReader({ accountId: "acc", apiToken: "tok", dataset: "lunora_tenant_usage", fetch: fetchMock });
 
-        await reader.readRequestUsage(1_700_000_000_000);
+        await reader.readRequestUsage(1_700_000_000_000, 1_700_003_600_000);
 
         const [url, init] = fetchMock.mock.calls[0] ?? [];
         const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { params: unknown; query: string; scope: unknown };
@@ -148,9 +149,9 @@ describe(createHttpAnalyticsReader, () => {
         expect(url).toBe("https://api.cloudflare.com/client/v4/analytics/sql");
         expect(new Headers(init?.headers).get("authorization")).toBe("Bearer tok");
         expect(body.scope).toStrictEqual({ accountTag: "acc" });
-        expect(body.params).toStrictEqual({ since: "2023-11-14T22:13:20Z" });
+        expect(body.params).toStrictEqual({ since: "2023-11-14T22:13:20Z", until: "2023-11-14T23:13:20Z" });
         expect(body.query).toBe(
-            'SELECT index1 AS scriptName, COUNT(*) AS requests FROM events.analyticsEngine."lunora_tenant_usage" WHERE timestamp > $since GROUP BY scriptName',
+            'SELECT index1 AS scriptName, COUNT(*) AS requests FROM events.analyticsEngine."lunora_tenant_usage" WHERE timestamp > $since AND timestamp <= $until GROUP BY scriptName',
         );
     });
 
@@ -166,7 +167,7 @@ describe(createHttpAnalyticsReader, () => {
         const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ data: [], rows: 0 }, { status: 200 }));
         const reader = createHttpAnalyticsReader({ accountId: "acc", apiToken: "tok", dataset: "usage", fetch: fetchMock });
 
-        await reader.readRequestUsage(1_700_000_000_000);
+        await reader.readRequestUsage(1_700_000_000_000, 1_700_003_600_000);
 
         const body = (fetchMock.mock.calls[0]?.[1] as undefined | { body?: string })?.body ?? "";
 
@@ -183,6 +184,6 @@ describe(createHttpAnalyticsReader, () => {
             fetch: async () => new Response("nope", { status: 500 }),
         });
 
-        await expect(reader.readRequestUsage(0)).rejects.toThrow(AnalyticsSqlQueryError);
+        await expect(reader.readRequestUsage(0, 1000)).rejects.toThrow(AnalyticsSqlQueryError);
     });
 });
