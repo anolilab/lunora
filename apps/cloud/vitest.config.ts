@@ -64,7 +64,12 @@ export default defineConfig({
                   {
                       extends: true,
                       plugins: [cloudflareTest({ main: "__tests__/workerd/test-worker.ts", wrangler: { configPath: "./__tests__/workerd/wrangler.jsonc" } })],
-                      test: { include: ["__tests__/workerd/**/*.workerd.test.ts"], name: "workerd" },
+                      test: {
+                          // Writes the emergency stop's generated stub module the test worker hosts.
+                          globalSetup: ["__tests__/workerd/generate-halt-stub.ts"],
+                          include: ["__tests__/workerd/**/*.workerd.test.ts"],
+                          name: "workerd",
+                      },
                   },
               ]
             : [nodeProject],

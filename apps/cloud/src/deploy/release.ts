@@ -192,6 +192,18 @@ const durableObjectClasses = (manifest: DeployManifest): Set<string> =>
     new Set(manifest.bindings.flatMap((requirement) => (requirement.type === "durable_object" && requirement.className ? [requirement.className] : [])));
 
 /**
+ * The Durable Object classes `previous` binds that `next` does not — the ones a
+ * converge from `previous` onto `next` deletes the data of, on a target that
+ * drops unbound classes (`TARGETS[target].dropsUnboundClasses`). The guard of
+ * both a rollback ({@link reprovision}) and an emergency stop's stub (`./halt-stub.ts`).
+ */
+export const droppedDurableObjectClasses = (previous: DeployManifest, next: DeployManifest): string[] => {
+    const kept = durableObjectClasses(next);
+
+    return [...durableObjectClasses(previous)].filter((className) => !kept.has(className));
+};
+
+/**
  * Put a stored release back on the project's stable Worker, with its spec
  * resolved by {@link resolveReleaseSpec}. The admin token is the target
  * deployment's own, so its row's sealed token keeps working with the studio proxy.
@@ -239,8 +251,7 @@ export const reprovision = async (
             : null;
 
     if (live) {
-        const kept = durableObjectClasses(release.manifest);
-        const dropped = [...durableObjectClasses(live.manifest)].filter((className) => !kept.has(className));
+        const dropped = droppedDurableObjectClasses(live.manifest, release.manifest);
 
         if (dropped.length > 0) {
             throw new LunoraError(

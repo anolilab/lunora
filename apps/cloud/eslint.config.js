@@ -22,6 +22,9 @@ export default createConfig(
             // fail on the missing module; that makes ignoring it here the only way
             // to keep it out of the lint surface. Matches apps/docs.
             "**/routeTree.gen.ts",
+            // The emergency stop's stub, written by the workerd project's global
+            // setup (`__tests__/workerd/generate-halt-stub.ts`) — generated output.
+            "__tests__/workerd/halt-stub.generated.js",
             // Vendored shadcn / Base UI primitives — copied verbatim from
             // packages/studio (or written to match them) so `shadcn add`/diff stays
             // clean. Not hand-authored source, so the strict import/sort/style rules

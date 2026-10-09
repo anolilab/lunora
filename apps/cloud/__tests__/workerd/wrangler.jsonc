@@ -8,9 +8,17 @@
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
-        "bindings": [{ "class_name": "BoxSessionDO", "name": "BOX_SESSION" }],
+        "bindings": [
+            { "class_name": "BoxSessionDO", "name": "BOX_SESSION" },
+            // The emergency stop's generated stub classes (halt-stub-fixture.ts): one per storage backend.
+            { "class_name": "ParkedSqlite", "name": "PARKED_SQLITE" },
+            { "class_name": "ParkedKv", "name": "PARKED_KV" },
+        ],
     },
-    "migrations": [{ "new_sqlite_classes": ["BoxSessionDO"], "tag": "v1" }],
+    "migrations": [
+        { "new_sqlite_classes": ["BoxSessionDO"], "tag": "v1" },
+        { "new_classes": ["ParkedKv"], "new_sqlite_classes": ["ParkedSqlite"], "tag": "v2" },
+    ],
     "d1_databases": [{ "binding": "DB", "database_id": "box-session-test", "database_name": "box-session-test" }],
     // A throwaway master key: the session mints and seals the organization's ingest key under it.
     "vars": {
