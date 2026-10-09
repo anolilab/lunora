@@ -1,3 +1,19 @@
+## @lunora/platform-node [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.126...@lunora/platform-node@1.0.0-alpha.127) (2026-10-09)
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** createBatch takes the object form and reports per-instance errors (#1087)
+
+### Bug Fixes
+
+* **workflow:** createBatch takes the object form and reports per-instance errors ([#1087](https://github.com/anolilab/lunora/issues/1087)) ([295acc3](https://github.com/anolilab/lunora/commit/295acc39bceeb2f9506a85643002d367f2814064))
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.73
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.188
+
 ## @lunora/platform-node [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.125...@lunora/platform-node@1.0.0-alpha.126) (2026-10-08)
 
 ### Bug Fixes

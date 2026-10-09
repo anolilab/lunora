@@ -317,9 +317,114 @@ export const schema = defineSchema({
             const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
             const invalid = advisories.filter((advisory) => advisory.name === "advisor_min_severity_invalid");
 
-            expect(advisories).toHaveLength(unfiltered.length + 1);
+            // A spread also makes `accept` unreadable, which reports its own warning; only the floor's is asserted here.
+            expect(advisories.filter((advisory) => advisory.name !== "advisor_accept_invalid")).toHaveLength(unfiltered.length + 1);
             expect(invalid).toHaveLength(1);
             expect(invalid[0]?.detail).toContain(detail);
+        });
+
+        // `advisor.accept` demotes a reviewed ERROR to INFO, matched exactly by rule, file and export.
+        it("demotes the one ERROR an accept entry names to INFO, with its reason, and lets the gate pass", () => {
+            expect.assertions(4);
+
+            seedAllLevels();
+
+            const before = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+            const accepted = advisories.find((advisory) => advisory.name === "shape_unknown_table");
+
+            expect(levels(advisories)["ERROR"] ?? 0).toBe((levels(before)["ERROR"] ?? 0) - 1);
+            expect(accepted?.level).toBe("INFO");
+            expect(accepted?.detail).toContain("Accepted: reviewed fixture.");
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
+        });
+
+        it("warns about an accept entry that matches no ERROR and leaves every ERROR in place", () => {
+            expect.assertions(3);
+
+            seedAllLevels();
+
+            const before = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            // The right rule and file, but the wrong export: the ghost shape is still an ERROR.
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "nobody", reason: "wrong export" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(levels(advisories)["ERROR"]).toBe(levels(before)["ERROR"]);
+            expect(errorAdvisoryNames(advisories)).toContain("shape_unknown_table");
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(1);
+        });
+
+        it.each([
+            ["an empty reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "" }`],
+            ["a computed reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: ["x"].join("") }`],
+            ["an unknown key", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "x", note: "y" }`],
+            ["a spread entry", `{ ...base }`],
+        ])("ignores the whole list for %s and keeps every ERROR", (_label, entry) => {
+            expect.assertions(3);
+
+            seedAllLevels();
+
+            const before = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `const base = {};\nexport default { advisor: { accept: [${entry}] } };\n`, "utf8");
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(levels(advisories)["ERROR"]).toBe(levels(before)["ERROR"]);
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_invalid")).toHaveLength(1);
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
+        });
+
+        // A floor of "error" must not hide what the accept list did: the demoted finding and the stale warning both stay.
+        it('keeps an accepted finding and a stale-accept warning when minSeverity is "error"', () => {
+            expect.assertions(3);
+
+            seedAllLevels();
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { minSeverity: "error", accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }, { rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "nobody", reason: "stale" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(advisories.find((advisory) => advisory.name === "shape_unknown_table")?.level).toBe("INFO");
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(1);
+            expect(levels(advisories)["ERROR"] ?? 0).toBe(0);
+        });
+
+        // An unreadable minSeverity disables only the floor; a valid accept list still demotes its ERROR.
+        it("still applies a valid accept list when minSeverity is not a literal", () => {
+            expect.assertions(2);
+
+            seedAllLevels();
+
+            const before = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `const level = ["warn"][0];\nexport default { advisor: { minSeverity: level, accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(levels(advisories)["ERROR"] ?? 0).toBe((levels(before)["ERROR"] ?? 0) - 1);
+            expect(advisories.map((advisory) => advisory.name)).toContain("advisor_min_severity_invalid");
         });
     });
 

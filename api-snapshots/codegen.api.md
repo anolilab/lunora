@@ -664,6 +664,8 @@ interface PlatformDiagnostic {
 ```ts
 interface ProjectConfigLiterals {
     advisor?: {
+        accept?: AcceptedFinding[];
+        acceptUnreadable?: true;
         minSeverity?: string;
         unreadable?: boolean;
     };
@@ -1731,6 +1733,17 @@ const validatorIrToJsonSchema: (validator: ValidatorIR) => JsonSchema;
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `AcceptedFinding` (interface)
+
+```ts
+interface AcceptedFinding {
+    exportName: string;
+    file: string;
+    reason: string;
+    rule: string;
+}
+```
 
 ### `AdminRouteIR` (interface)
 

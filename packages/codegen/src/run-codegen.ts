@@ -12,7 +12,7 @@ import type { ArchitectureManifest } from "../../../shared/architecture-manifest
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { serializeSchemaSnapshot } from "../../../shared/schema-snapshot";
 import { toAdvisorContext } from "./advisor";
-import { applyAdvisorFloor } from "./advisor-floor";
+import { applyAdvisorPolicy } from "./advisor-floor";
 import type { CallSites } from "./architecture";
 import { buildArchitecture, emitArchitectureModule } from "./architecture";
 import assertNoNamespaceCollisions from "./assert-namespace-collisions";
@@ -876,7 +876,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const advisories =
         advisorContext === undefined
             ? []
-            : applyAdvisorFloor(options.projectRoot, [
+            : applyAdvisorPolicy(options.projectRoot, [
                   ...runAdvisor(advisorContext, { source: "static" }),
                   ...discoverUnregisteredProcedures(project, lunoraDirectory, {
                       // Workflows, queues, agents and containers record no file in

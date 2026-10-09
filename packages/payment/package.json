@@ -1,6 +1,6 @@
 {
     "name": "@lunora/payment",
-    "version": "1.0.0-alpha.191",
+    "version": "1.0.0-alpha.192",
     "description": "Provider-agnostic payments for Lunora: Stripe-first adapter, webhook sync, and subscription/payment state machine",
     "keywords": [
         "billing",
@@ -86,7 +86,7 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/server": "1.0.0-alpha.188",
+        "@lunora/server": "1.0.0-alpha.189",
         "@lunora/values": "1.0.0-alpha.61",
         "dinero.js": "catalog:payment"
     },
