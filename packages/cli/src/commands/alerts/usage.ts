@@ -17,8 +17,10 @@ type MetricUnit = "count" | "microseconds" | "unknown";
 
 /** The calendar month the usage covers. */
 interface UsagePeriod {
-    /** `YYYY-MM-DD`, the last day of the month. */
+    /** `YYYY-MM-DD`, the last day of the month (for display). */
     endDate: string;
+    /** `YYYY-MM-DD`, the first day of the next month — the exclusive upper bound every filter uses. */
+    nextStartDate: string;
     /** `YYYY-MM-DD`, the first day of the month. */
     startDate: string;
 }
@@ -37,12 +39,13 @@ interface MetricDefinition {
 /* eslint-disable no-secrets/no-secrets -- GraphQL Analytics dataset and field names, not credentials */
 
 /**
- * The datasets queried, and the provenance of each field: `workersInvocationsAdaptive.sum.requests`
- * and `datetime_geq/_leq` — Cloudflare's "Querying Workers metrics" tutorial;
+ * The datasets queried, and the provenance of each name: `workersInvocationsAdaptive.sum.requests`
+ * and `datetime_geq` — Cloudflare's "Querying Workers metrics" tutorial;
  * `durableObjectsInvocationsAdaptiveGroups.sum.requests` — the Durable Objects GraphQL page;
- * `d1AnalyticsAdaptiveGroups.sum.rowsRead/rowsWritten` and `datetimeHour_geq/_leq` — the query
- * wrangler itself sends. The rest (`cpuTimeUs`, `activeTime`, `rowsRead`/`rowsWritten` on the
- * periodic dataset, and `date_geq/_leq`) are unpublished, which is why introspection gates them.
+ * `d1AnalyticsAdaptiveGroups.sum.rowsRead/rowsWritten` and `datetimeHour_geq` — the query wrangler
+ * itself sends. Unpublished: the fields `cpuTimeUs`, `activeTime` and the periodic dataset's
+ * `rowsRead`/`rowsWritten` (introspection gates them), and the `date_geq` filter and the exclusive
+ * `_lt` upper bounds (not introspected — a rejected filter makes that metric unavailable).
  */
 const WORKERS_DATASET = "workersInvocationsAdaptive";
 const DO_INVOCATIONS_DATASET = "durableObjectsInvocationsAdaptiveGroups";
@@ -121,22 +124,29 @@ const pad = (value: number): string => String(value).padStart(2, "0");
 const previousMonth = (now: Date): UsagePeriod => {
     const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
     const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
     const day = (date: Date): string => `${String(date.getUTCFullYear())}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
 
-    return { endDate: day(end), startDate: day(start) };
+    return { endDate: day(end), nextStartDate: day(next), startDate: day(start) };
 };
 
-/** The dataset filter for `period`, as a GraphQL input-object literal. */
+/**
+ * The dataset filter for `period`, as a GraphQL input-object literal: from the
+ * month's first instant, up to but excluding the next month's first.
+ */
 const filterLiteral = (style: FilterStyle, period: UsagePeriod): string => {
+    const from = JSON.stringify(`${period.startDate}T00:00:00Z`);
+    const until = JSON.stringify(`${period.nextStartDate}T00:00:00Z`);
+
     switch (style) {
         case "date": {
-            return `{ date_geq: ${JSON.stringify(period.startDate)}, date_leq: ${JSON.stringify(period.endDate)} }`;
+            return `{ date_geq: ${JSON.stringify(period.startDate)}, date_lt: ${JSON.stringify(period.nextStartDate)} }`;
         }
         case "datetime": {
-            return `{ datetime_geq: ${JSON.stringify(`${period.startDate}T00:00:00Z`)}, datetime_leq: ${JSON.stringify(`${period.endDate}T23:59:59Z`)} }`;
+            return `{ datetime_geq: ${from}, datetime_lt: ${until} }`;
         }
         default: {
-            return `{ AND: [{ datetimeHour_geq: ${JSON.stringify(`${period.startDate}T00:00:00Z`)}, datetimeHour_leq: ${JSON.stringify(`${period.endDate}T23:00:00Z`)} }] }`;
+            return `{ AND: [{ datetimeHour_geq: ${from}, datetimeHour_lt: ${until} }] }`;
         }
     }
 };

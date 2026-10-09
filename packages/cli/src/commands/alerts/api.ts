@@ -3,9 +3,10 @@
  * (Notifications) and the GraphQL Analytics API. One module so the timeout,
  * the injectable `fetch` and the error classification are decided once.
  *
- * Errors are classified by HTTP status only — Cloudflare's numeric error codes
- * for these endpoints are not documented, so the messages it sends are passed
- * through verbatim rather than interpreted.
+ * Errors are classified by HTTP status — Cloudflare's numeric error codes for
+ * these endpoints are not documented, so the messages it sends are passed
+ * through verbatim. The one exception is the malformed-token code observed
+ * live (see `MALFORMED_TOKEN_CODE`).
  */
 import { cloudflareRestRequest } from "../../../../../shared/cloudflare-rest";
 import { EXIT_CODE } from "../../util/exit-code";
@@ -18,7 +19,8 @@ const GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql";
 /** The token permission each API needs, named as the dashboard's token editor names it. */
 const PERMISSION = {
     analytics: "Account Analytics Read",
-    notifications: "Notifications Write",
+    notificationsRead: "Notifications Read",
+    notificationsWrite: "Notifications Write",
 } as const;
 
 type Permission = (typeof PERMISSION)[keyof typeof PERMISSION];
@@ -164,12 +166,40 @@ interface CloudflareClient {
     graphql: (what: string, query: string, variables?: Record<string, unknown>) => Promise<GraphqlOutcome>;
     /** One Notifications REST call; resolves to the envelope's `result`. */
     notifications: (what: string, method: "DELETE" | "GET" | "POST" | "PUT", path: string, body?: unknown) => Promise<unknown>;
+    /** Every page of a paginated Notifications list (`page`/`result_info.total_pages`), up to `maxPages`. */
+    notificationsList: (what: string, path: string, maxPages?: number) => Promise<unknown[]>;
 }
+
+/** How many pages a list may take before it stops — the history is advice, not an export. */
+const DEFAULT_MAX_PAGES = 10;
 
 const createCloudflareClient = (options: CloudflareClientOptions): CloudflareClient => {
     const { accountId, token } = options;
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+
+    /** One REST call, resolving to the whole v4 envelope. A read failure names Notifications Read, a write Notifications Write. */
+    const rest = async (what: string, method: "DELETE" | "GET" | "POST" | "PUT", path: string, body?: unknown): Promise<Record<string, unknown>> => {
+        let outcome: Awaited<ReturnType<typeof cloudflareRestRequest>>;
+
+        try {
+            outcome = await cloudflareRestRequest({
+                accountId,
+                apiToken: token,
+                fetch: fetchImpl,
+                init: { method, signal: AbortSignal.timeout(timeoutMs), ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
+                path,
+            });
+        } catch (error) {
+            throw transportFailure(what, error);
+        }
+
+        if (!outcome.ok) {
+            throw failure(what, outcome.status, outcome.text, method === "GET" ? PERMISSION.notificationsRead : PERMISSION.notificationsWrite);
+        }
+
+        return outcome.body;
+    };
 
     return {
         accountId,
@@ -202,25 +232,21 @@ const createCloudflareClient = (options: CloudflareClientOptions): CloudflareCli
             }
         },
         notifications: async (what, method, path, body) => {
-            let outcome: Awaited<ReturnType<typeof cloudflareRestRequest>>;
+            const envelope = await rest(what, method, path, body);
 
-            try {
-                outcome = await cloudflareRestRequest({
-                    accountId,
-                    apiToken: token,
-                    fetch: fetchImpl,
-                    init: { method, signal: AbortSignal.timeout(timeoutMs), ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
-                    path,
-                });
-            } catch (error) {
-                throw transportFailure(what, error);
-            }
+            return envelope["result"];
+        },
+        notificationsList: async (what, path, maxPages = DEFAULT_MAX_PAGES) => {
+            const page = async (number: number): Promise<unknown[]> => {
+                const envelope = await rest(what, "GET", `${path}${path.includes("?") ? "&" : "?"}page=${String(number)}`);
+                const items = Array.isArray(envelope["result"]) ? (envelope["result"] as unknown[]) : [];
+                const info = envelope["result_info"] as { total_pages?: unknown } | undefined;
+                const more = typeof info?.total_pages === "number" && number < info.total_pages && number < maxPages;
 
-            if (!outcome.ok) {
-                throw failure(what, outcome.status, outcome.text, PERMISSION.notifications);
-            }
+                return more ? [...items, ...(await page(number + 1))] : items;
+            };
 
-            return outcome.body["result"];
+            return page(1);
         },
     };
 };

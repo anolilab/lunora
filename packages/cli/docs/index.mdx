@@ -786,31 +786,46 @@ lunora alerts test                                     # what Cloudflare has del
 
 It calls the Cloudflare API with `CLOUDFLARE_API_TOKEN` (a `wrangler login`
 session is not reused) on the account from `CLOUDFLARE_ACCOUNT_ID` or
-wrangler's `account_id`. The token needs **Notifications Write** for the alerts
-and **Account Analytics Read** for the usage history; a refusal names the
-missing one.
+wrangler's `account_id`. The token needs **Notifications Write** for `setup`
+(**Notifications Read** is enough for `status` and `test`) and **Account
+Analytics Read** for the usage history; a refusal names the missing one.
 
 | Subcommand | What it does                                                                                                                                                                  |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status`   | Default. Last calendar month's usage for Workers requests and CPU, Durable Objects requests, duration and rows, and D1 rows, and the usage alerts already on the account.     |
-| `setup`    | One Usage Based Billing notification per product at `--multiplier` (default 3) × last month, rounded up, never below the Workers Paid included allowance. Asks first.         |
+| `status`   | Default. Last calendar month's usage for Workers requests and CPU, Durable Objects requests, duration and rows, and D1 rows, and which enabled usage alert covers each.       |
+| `setup`    | A Usage Based Billing notification for Workers requests and Durable Objects requests at `--multiplier` (default 3) × last month, never below the included allowance.          |
 | `test`     | Each webhook destination's last delivery and failure, and the notifications Cloudflare sent for these policies. It sends nothing: Cloudflare's API has no test-send endpoint. |
 
 `setup` options: `--email <address>` and `--webhook <destination-id>` (each
-repeatable, at least one required), `--multiplier <n>`, `--dry-run`, and
-`--yes` (required when stdin is not a TTY). Its policies are named
-`Lunora usage: …`; a re-run updates them in place instead of adding
-duplicates, and leaves alone a product an alert you made yourself already
-covers.
+repeatable, at least one required), `--multiplier <n>`,
+`--threshold <metric>=<n>` (repeatable), `--allow-floor`,
+`--replace-recipients`, `--dry-run`, and `--yes` (required when stdin is not a
+TTY or with `--format json`).
 
-- **Product identifiers are discovered, never assumed.** Cloudflare does not
-  publish the `product` values a usage notification accepts, so `setup` reads
-  them from the account (the alert type's filter options, and existing usage
-  alerts). When it finds none, it creates nothing and prints the dashboard
-  path instead.
-- **Usage fields are introspected.** A metric whose field the analytics schema
-  does not expose is shown as unavailable rather than queried on a guess, and
-  gets the floor as its threshold.
+- **Product identifiers.** The `product` values come from the account when it
+  offers them, and otherwise from the list Cloudflare documents in its
+  [Terraform provider (v4.52.0)](https://github.com/cloudflare/terraform-provider-cloudflare/blob/v4.52.0/docs/resources/notification_policy.md):
+  `worker_requests` and seven Durable Objects products. There is **no usage
+  alert for D1 or for Workers CPU time**; for those the budget alert is the
+  only guard.
+- **Only request alerts are automatic.** Durable Objects duration and storage
+  reads/writes are metered in units that cannot be matched to an analytics
+  reading, so `setup` skips them unless you set a limit with
+  `--threshold do-duration=<n>` (metrics: `workers-requests`, `do-requests`,
+  `do-duration`, `do-rows-read`, `do-rows-written`).
+- **Unreadable usage is not zero.** When last month's usage cannot be read,
+  `setup` writes no alert for that metric and exits `1`, rather than setting
+  one at the floor that an already-busy account would trip every month. Pass
+  `--threshold`, or `--allow-floor` to accept the floor anyway.
+- **Re-runs are safe.** Its policies are named `Lunora usage: <metric>` and
+  found by that name, so a re-run updates them in place. An update adds the new
+  recipients to the existing ones (`--replace-recipients` replaces them; the
+  plan and the prompt list what is added or removed). An enabled alert of your
+  own on the same product is left alone; a disabled one does not count.
+- **Limits are read back.** Cloudflare does not document the unit of a usage
+  alert's limit. After writing, `setup` reads each policy back and shows the
+  limit Cloudflare stored, and it warns when your own alert's limit differs
+  from its plan by 100× or more.
 - **Budget alerts cannot be created or checked.** The account-wide USD budget
   alert has no API; every subcommand prints where to make it: Manage Account >
   Billing > Billable Usage > Create budget alert.

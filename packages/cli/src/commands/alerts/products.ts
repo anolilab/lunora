@@ -1,24 +1,35 @@
 /**
- * Which `product` values a Usage Based Billing notification (`billing_usage_alert`)
- * accepts on this account, discovered — never assumed.
+ * Which `product` a Usage Based Billing notification (`billing_usage_alert`)
+ * takes for each metric.
  *
- * Cloudflare does not publish the product identifiers. Two sources are read:
- * the `filter_options` that `GET /alerting/v3/available_alerts` returns for the
- * alert type (typed only as `unknown[]` in Cloudflare's own SDK, so it is walked
- * defensively), and the `filters.product` of policies already on the account
- * (for instance ones made in the dashboard). A product is then tied to a metric
- * only when its identifier or label names that metric unambiguously.
+ * The identifiers are documented: Cloudflare's Terraform provider (v4.52.0,
+ * `docs/resources/notification_policy.md`) lists eight, and none of them is for
+ * D1 or for Workers CPU time — so those two have no usage alert at all, and the
+ * account-wide budget alert is their only guard. The account is still read
+ * first: the `filter_options` that `GET /alerting/v3/available_alerts` returns
+ * for the alert type (PascalCase in Cloudflare's OpenAPI example —
+ * `{ Key, AvailableValues: [{ ID, Description }] }` — so keys are matched
+ * case-insensitively), and the `filters.product` of policies already on the
+ * account. A value the account offers wins over the documented list.
+ * @see https://github.com/cloudflare/terraform-provider-cloudflare/blob/v4.52.0/docs/resources/notification_policy.md
  */
 import type { MetricId } from "./usage";
 
 const BILLING_ALERT_TYPE = "billing_usage_alert";
 
+/** The documented `product` value per metric. Absent: Cloudflare offers no usage alert for it. */
+const DOCUMENTED_PRODUCTS: Partial<Record<MetricId, string>> = {
+    "do-duration": "worker_durable_objects_duration",
+    "do-requests": "worker_durable_objects_requests",
+    "do-rows-read": "worker_durable_objects_storage_reads",
+    "do-rows-written": "worker_durable_objects_storage_writes",
+    "workers-requests": "worker_requests",
+};
+
 interface ProductOption {
     id: string;
     label?: string;
-    source: "available-alerts" | "existing-policy";
-    /** The unit the option states for its limit, when it states one. */
-    unit?: string;
+    source: "available-alerts" | "documented" | "existing-policy";
 }
 
 interface ProductDiscovery {
@@ -36,9 +47,17 @@ const MAX_DEPTH = 6;
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
     typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 
-const firstString = (record: Record<string, unknown>, keys: ReadonlyArray<string>): string | undefined => {
-    for (const key of keys) {
-        const value = record[key];
+/** `record[name]`, matching the key case-insensitively (`Key`, `key`, `KEY`). */
+const field = (record: Record<string, unknown>, name: string): unknown => {
+    const wanted = name.toLowerCase();
+    const key = Object.keys(record).find((candidate) => candidate.toLowerCase() === wanted);
+
+    return key === undefined ? undefined : record[key];
+};
+
+const firstString = (record: Record<string, unknown>, names: ReadonlyArray<string>): string | undefined => {
+    for (const name of names) {
+        const value = field(record, name);
 
         if (typeof value === "string" && value.length > 0) {
             return value;
@@ -55,31 +74,30 @@ const productFromEntry = (entry: unknown): ProductOption | undefined => {
     }
 
     const record = asRecord(entry);
-    const id = record === undefined ? undefined : firstString(record, ["value", "id", "key", "name"]);
+    const id = record === undefined ? undefined : firstString(record, ["id", "value", "key", "name"]);
 
     if (record === undefined || id === undefined) {
         return undefined;
     }
 
-    const label = firstString(record, ["label", "display_name", "displayName", "description", "name"]);
-    const unit = firstString(record, ["unit", "units", "limit_unit"]);
+    const label = firstString(record, ["description", "label", "display_name", "displayName", "name"]);
 
-    return { id, source: "available-alerts", ...(label === undefined || label === id ? {} : { label }), ...(unit === undefined ? {} : { unit }) };
+    return { id, source: "available-alerts", ...(label === undefined || label === id ? {} : { label }) };
 };
 
-const VALUE_LIST_KEYS = ["values", "options", "available_values", "enum", "choices"] as const;
+const VALUE_LIST_KEYS = ["AvailableValues", "available_values", "values", "options", "enum", "choices"] as const;
 
 const toOptions = (list: ReadonlyArray<unknown>): ProductOption[] =>
     list.map((entry) => productFromEntry(entry)).filter((option): option is ProductOption => option !== undefined);
 
-/** The value lists of a `{ key: "product", values: [...] }`-shaped record (and its spellings), else nothing. */
+/** The value lists of a `{ Key: "product", AvailableValues: [...] }`-shaped record (any key case), else nothing. */
 const listedProducts = (record: Record<string, unknown>): ProductOption[] => {
     if (firstString(record, ["key", "name", "filter", "id"]) !== "product") {
         return [];
     }
 
     return VALUE_LIST_KEYS.flatMap((key) => {
-        const list = record[key];
+        const list = field(record, key);
 
         return Array.isArray(list) ? toOptions(list) : [];
     });
@@ -109,7 +127,7 @@ const collectProducts = (node: unknown, depth: number, out: ProductOption[]): vo
 
     for (const [key, value] of Object.entries(record)) {
         // `{ product: [...] }`
-        if (key === "product" && Array.isArray(value)) {
+        if (key.toLowerCase() === "product" && Array.isArray(value)) {
             out.push(...toOptions(value));
         } else if (typeof value === "object" && value !== null) {
             collectProducts(value, depth + 1, out);
@@ -127,7 +145,7 @@ const findBillingAlertType = (availableAlerts: unknown): Record<string, unknown>
 
     for (const items of Object.values(categories)) {
         if (Array.isArray(items)) {
-            const match = items.map((item) => asRecord(item)).find((item) => item?.["type"] === BILLING_ALERT_TYPE);
+            const match = items.map((item) => asRecord(item)).find((item) => item !== undefined && field(item, "type") === BILLING_ALERT_TYPE);
 
             if (match !== undefined) {
                 return match;
@@ -147,10 +165,7 @@ const productsFromPolicies = (policies: ReadonlyArray<{ alert_type?: string; fil
             return { id, source: "existing-policy" as const };
         });
 
-/**
- * Combine both sources, keeping the richer `available_alerts` entry when the
- * same id shows up in both.
- */
+/** Combine both account sources, keeping the richer `available_alerts` entry when an id shows up in both. */
 const discoverProducts = (
     availableAlerts: unknown,
     availableAlertsRead: boolean,
@@ -160,7 +175,7 @@ const discoverProducts = (
     const fromOptions: ProductOption[] = [];
 
     if (alertType !== undefined) {
-        collectProducts(alertType["filter_options"], 0, fromOptions);
+        collectProducts(field(alertType, "filter_options"), 0, fromOptions);
     }
 
     const byId = new Map<string, ProductOption>();
@@ -184,14 +199,15 @@ const wordsOf = (option: ProductOption): string[] =>
         .filter((word) => word.length > 0);
 
 /**
- * What a product's id or label must say to stand for each metric: a word
- * starting with one of the alternatives in every `all` group, and no word
- * starting with anything in `none`.
+ * What an undocumented product's id or label must say to stand for each metric:
+ * a word starting with one of the alternatives in every `all` group, and no
+ * word starting with anything in `none`. Only consulted for ids the account
+ * offers that are not on the documented list.
  */
 const MATCHERS: Record<MetricId, { all: ReadonlyArray<ReadonlyArray<string>>; none?: ReadonlyArray<string> }> = {
     "d1-rows-read": { all: [["d1"], ["read"]] },
     "d1-rows-written": { all: [["d1"], ["writ"]] },
-    "do-duration": { all: [["durable"], ["duration", "gb"]] },
+    "do-duration": { all: [["durable"], ["duration"]] },
     "do-requests": { all: [["durable"], ["request"]] },
     "do-rows-read": { all: [["durable"], ["read"]], none: ["request"] },
     "do-rows-written": { all: [["durable"], ["writ"]] },
@@ -207,18 +223,34 @@ const namesMetric = (metric: MetricId, option: ProductOption): boolean => {
     return all.every((group) => group.some((prefix) => has(prefix))) && !none.some((prefix) => has(prefix));
 };
 
-type ProductMatch = { product: ProductOption; status: "matched" } | { candidates: string[]; status: "ambiguous" } | { status: "none" };
+type ProductMatch = { candidates: string[]; status: "ambiguous" } | { product: ProductOption; status: "matched" } | { status: "no-product" };
 
-/** The one discovered product that names `metric`, if exactly one does. */
+/**
+ * The product for `metric`: the documented id when the account offers it, else
+ * the one offered id that names the metric, else the documented id itself.
+ * `no-product` means Cloudflare has no usage alert for the metric.
+ */
 const matchProduct = (metric: MetricId, products: ReadonlyArray<ProductOption>): ProductMatch => {
-    const matches = products.filter((product) => namesMetric(metric, product));
+    const documented = DOCUMENTED_PRODUCTS[metric];
+    const offered = documented === undefined ? undefined : products.find((product) => product.id === documented);
+
+    if (offered !== undefined) {
+        return { product: offered, status: "matched" };
+    }
+
+    const documentedIds = new Set(Object.values(DOCUMENTED_PRODUCTS));
+    const matches = products.filter((product) => !documentedIds.has(product.id) && namesMetric(metric, product));
 
     if (matches.length === 1 && matches[0] !== undefined) {
         return { product: matches[0], status: "matched" };
     }
 
-    return matches.length === 0 ? { status: "none" } : { candidates: matches.map((product) => product.id), status: "ambiguous" };
+    if (matches.length > 1) {
+        return { candidates: matches.map((product) => product.id), status: "ambiguous" };
+    }
+
+    return documented === undefined ? { status: "no-product" } : { product: { id: documented, source: "documented" }, status: "matched" };
 };
 
 export type { ProductDiscovery, ProductMatch, ProductOption };
-export { BILLING_ALERT_TYPE, discoverProducts, matchProduct };
+export { BILLING_ALERT_TYPE, discoverProducts, DOCUMENTED_PRODUCTS, matchProduct };
