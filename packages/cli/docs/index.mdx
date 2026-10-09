@@ -765,10 +765,12 @@ is recorded in the shard's audit trail. Treat the admin bearer accordingly.
 
 Tools that only apply to an app deployed to your own Cloudflare account. Lunora
 also deploys to Node and celld hosts, where they have no meaning: on such a
-project every tool refuses and names the host in use. The host comes from
-`--target`, then `target` in `lunora.config.*`, then Cloudflare. `lunora
-cloudflare` on its own lists the tools; `lunora cloudflare --help` shows every
-tool's arguments and options.
+project every tool refuses and names the host in use (or the `--target` flag
+that chose it). The host comes from `--target`, then `target` in
+`lunora.config.*`, then Cloudflare. `lunora cloudflare` on its own lists the
+tools; `lunora cloudflare --help` shows every tool's arguments and options.
+`lunora cloudflare ai` and `lunora cloudflare ai gateway` are accepted for
+`ai-gateway`.
 
 These commands used to be top-level (`lunora containers`, `lunora deployments`,
 `lunora ai gateway`). The old names now exit `2` and print the new command to

@@ -1,8 +1,8 @@
 /**
  * `lunora cloudflare` handler — dispatches on the first positional to a
  * Cloudflare-only tool, after checking that the project deploys to Cloudflare.
- * `alert` is accepted for `alerts`, the way `lunora add` accepts friendly
- * synonyms for its items.
+ * `alert` is accepted for `alerts` and `ai` (or `ai gateway`) for
+ * `ai-gateway`, the way `lunora add` accepts friendly synonyms for its items.
  */
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -18,10 +18,28 @@ import { isDeploymentsSubcommand, runDeploymentsCommand } from "./deployments/ha
 import type { CloudflareOptions, CloudflareToolName } from "./index";
 import { CLOUDFLARE_TOOLS } from "./index";
 
-/** Accepted spellings of a tool that are not its name. */
-const TOOL_SYNONYMS: Readonly<Record<string, CloudflareToolName>> = { alert: "alerts" };
+/**
+ * Accepted spellings of a tool that are not its name. `absorbs` is a following
+ * positional the spelling carries along — `ai gateway`, the old top-level form
+ * of `ai-gateway`.
+ */
+const TOOL_SYNONYMS: Readonly<Record<string, { absorbs?: string; tool: CloudflareToolName }>> = {
+    ai: { absorbs: "gateway", tool: "ai-gateway" },
+    alert: { tool: "alerts" },
+};
 
-const toolNamed = (name: string): CloudflareToolName | undefined => TOOL_SYNONYMS[name] ?? CLOUDFLARE_TOOLS.find((tool) => tool.name === name)?.name;
+/** The tool `given` names, and the positionals left for it once a synonym has absorbed its word. */
+const toolNamed = (given: string, rest: string[]): { rest: string[]; tool: CloudflareToolName } | undefined => {
+    const synonym = TOOL_SYNONYMS[given];
+
+    if (synonym !== undefined) {
+        return { rest: synonym.absorbs !== undefined && rest[0] === synonym.absorbs ? rest.slice(1) : rest, tool: synonym.tool };
+    }
+
+    const tool = CLOUDFLARE_TOOLS.find((entry) => entry.name === given)?.name;
+
+    return tool === undefined ? undefined : { rest, tool };
+};
 
 /** How the refusal names each non-Cloudflare host. */
 const TARGET_NAMES: Readonly<Record<string, string>> = { celld: "celld", node: "Node" };
@@ -57,7 +75,8 @@ const printTools = (logger: Logger): CommandResult<never> => {
  * Why `lunora cloudflare <tool>` must not run here, or `undefined` when the
  * project deploys to Cloudflare. The target resolves the canonical way —
  * `--target`, then `lunora.config.*`, then `"cloudflare"` — so this agrees with
- * what `lunora deploy` would ship to.
+ * what `lunora deploy` would ship to. The refusal names where the target came
+ * from: a `--target` flag is not something "the project" says.
  */
 const offCloudflare = (cwd: string, tool: string, explicit: string | undefined): string | undefined => {
     const { error, target } = resolveTargetOrError(cwd, explicit);
@@ -70,7 +89,9 @@ const offCloudflare = (cwd: string, tool: string, explicit: string | undefined):
         return undefined;
     }
 
-    return `this project deploys to ${TARGET_NAMES[target] ?? `"${target}"`} — \`lunora cloudflare ${tool}\` only applies to Cloudflare.`;
+    const source = explicit === undefined ? `this project deploys to ${TARGET_NAMES[target] ?? `"${target}"`}` : `\`--target ${target}\``;
+
+    return `${source} — \`lunora cloudflare ${tool}\` only applies to Cloudflare.`;
 };
 
 /** What a tool runner receives: the arguments after the tool name, plus the handler context. */
@@ -163,21 +184,22 @@ const execute: CommandHandler<CloudflareOptions> = defineHandler<CloudflareOptio
         return printTools(logger);
     }
 
-    const tool = toolNamed(given);
+    const named = toolNamed(given, rest);
 
-    if (tool === undefined) {
+    if (named === undefined) {
         return refuse(logger, EXIT_CODE.USAGE, `cloudflare: unknown tool "${given}" — expected ${CLOUDFLARE_TOOLS.map((entry) => entry.name).join(" | ")}`);
     }
 
     // Before anything a tool does — a spawn, an API call, a file write — so a
     // celld or Node project never reaches Cloudflare through this group.
+    const { tool } = named;
     const refusal = offCloudflare(cwd, tool, options.target);
 
     if (refusal !== undefined) {
         return refuse(logger, EXIT_CODE.USAGE, refusal);
     }
 
-    return RUNNERS[tool]({ cwd, format, logger, options, rest });
+    return RUNNERS[tool]({ cwd, format, logger, options, rest: named.rest });
 });
 
 export { execute };

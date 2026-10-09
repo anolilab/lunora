@@ -141,6 +141,27 @@ describe("lunora cloudflare", () => {
             expect(spawned).toHaveLength(0);
         });
 
+        it.each([[["cloudflare", "ai", "--dry-run"]], [["cloudflare", "ai", "gateway", "--dry-run"]]])(
+            "accepts `ai` and `ai gateway` for ai-gateway: %j",
+            async (argv) => {
+                expect.assertions(2);
+
+                const { code, output } = await cli(argv);
+
+                expect(code).toBe(0);
+                expect(output).toContain('would create or reuse AI Gateway "demo-app"');
+            },
+        );
+
+        it("still refuses a stray positional after `ai gateway`", async () => {
+            expect.assertions(2);
+
+            const { code, output } = await cli(["cloudflare", "ai", "gateway", "extra"]);
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(output).toContain('cloudflare ai-gateway: takes no arguments, got "extra"');
+        });
+
         it("runs ai-gateway with its flags", async () => {
             expect.assertions(3);
 
@@ -179,11 +200,13 @@ describe("lunora cloudflare", () => {
         );
 
         it("refuses on --target alone, and --target cloudflare overrides lunora.config", async () => {
-            expect.assertions(4);
+            expect.assertions(5);
 
             const flagged = await cli(["cloudflare", "containers", "list", "--target", "celld"]);
 
             expect(flagged.code).toBe(EXIT_CODE.USAGE);
+            // The flag said celld, not the project — the refusal names the flag.
+            expect(flagged.output).toContain("`--target celld` — `lunora cloudflare containers` only applies to Cloudflare.");
             expect(spawned).toHaveLength(0);
 
             setTarget("celld");
