@@ -176,4 +176,27 @@ describe("classifyProcedureCall", () => {
 
         expect(classified?.receiver?.getText()).toBe("query.use(rls(p))");
     });
+
+    it("marks a chain that carries a platformAdmin step as admin-only", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `export const setCredits = mutation.use(platformAdmin(() => true)).mutation(async () => null);`,
+                `import { mutation, platformAdmin } from "@lunora/server";`,
+            ),
+        ).toStrictEqual({ adminOnly: true, kind: "mutation", receiver: expect.anything(), visibility: "public" });
+    });
+
+    it("does not mark admin-only from a variable named adminMutation without the platformAdmin step", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `export const list = adminMutation.mutation(async () => null);`,
+                `import { mutation } from "@lunora/server";
+const adminMutation = mutation;`,
+            ),
+        ).not.toHaveProperty("adminOnly");
+    });
 });

@@ -498,6 +498,7 @@ interface AdvisorNotifyConfig {
 
 ```ts
 interface AdvisorOwnerFieldWrite {
+    adminOnly?: true;
     field: string;
     file: string;
     guarded?: true;

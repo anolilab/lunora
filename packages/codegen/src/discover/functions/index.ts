@@ -13,6 +13,8 @@ import { argsFromCall, exposeFromBuilderChain } from "./internal/expose";
 import { exportCallsOfDeclaration, resolveExpressionToCall } from "./internal/resolve-call";
 
 interface DiscoveredFunction {
+    /** Set when the builder chain carries `.use(platformAdmin(...))` — see `classifyProcedureCall`. */
+    adminOnly?: true;
     args: Record<string, ValidatorIR>;
     /** Set when the builder chain includes `.expose({ rest: true })` (plan 167). */
     expose?: { cache?: ExposeCacheIR; rest?: boolean };
@@ -55,6 +57,7 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
         return {
             args: argsFromBuilderChain(receiver),
             ...(expose ? { expose } : {}),
+            ...(classified.adminOnly ? { adminOnly: true as const } : {}),
             kind: classified.kind,
             ...(output.value ? { output: output.value } : {}),
             returnType: returnType.value,
@@ -93,6 +96,7 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
         returnType: discovered.returnType,
         ...(discovered.output ? { output: discovered.output } : {}),
         visibility: discovered.visibility,
+        ...(discovered.adminOnly ? { adminOnly: true as const } : {}),
         ...(discovered.expose ? { expose: discovered.expose } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),
     };

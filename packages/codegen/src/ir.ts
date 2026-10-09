@@ -330,6 +330,12 @@ export interface ExposeCacheIR {
 }
 
 export interface FunctionIR {
+    /**
+     * Set when the chain carries `.use(platformAdmin(...))`: only a platform admin
+     * can reach the procedure, so its writes are trusted to name any account.
+     */
+    adminOnly?: true;
+
     args: Record<string, ValidatorIR>;
 
     exportName: string;
@@ -347,6 +353,7 @@ export interface FunctionIR {
      * computed value is simply absent (the spec under-documents rather than lies).
      */
     expose?: { cache?: ExposeCacheIR; rest?: boolean };
+
     /** Path relative to `<projectRoot>/lunora/` without extension, e.g. "messages". */
     filePath: string;
 
@@ -1632,8 +1639,14 @@ export interface UnrestrictedWhereBranchIR {
 }
 
 export interface OwnerFieldWriteIR {
+    /**
+     * Every procedure that reaches the write carries `.use(platformAdmin(...))`
+     * (see {@link FunctionIR.adminOnly}): the caller is a platform admin by design.
+     */
+    adminOnly?: true;
     /** The identity column being written from `args` (e.g. `userId`). */
     field: string;
+
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
 

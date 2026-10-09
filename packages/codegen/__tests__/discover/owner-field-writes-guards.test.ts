@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createOwnerFieldFixture, rowAt } from "./owner-field-writes-fixture";
 
+/** A guard declared the way the repo declares one: `defineIdentityGuard` from `@lunora/server`. */
+const DECLARED_GUARD = `import { defineIdentityGuard } from "@lunora/server";
+export const assertOwnOrganizationId = defineIdentityGuard((user: unknown, organizationId: unknown): void => undefined);`;
+
 /**
  * A plain public mutation (no `defineMutator`) whose body is `body`, writing an
  * owner column on line 2 (the first body line is line 2 of the file).
@@ -29,7 +33,20 @@ describe("owner-field writes: guards and admin builders", () => {
         expect(rowAt(found, 3)).toMatchObject({ field: "organizationId", guarded: true });
     });
 
-    it("marks a write guarded by an assert helper given the argument and the identity", () => {
+    it("marks a write guarded by a declared identity guard given the argument and the identity", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `${handler(`  assertOwnOrganizationId(ctx.user, args.organizationId);
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`)}
+${DECLARED_GUARD}`,
+        );
+
+        expect(rowAt(found, 3)).toMatchObject({ guarded: true });
+    });
+
+    // A function that merely has an `assert` name proves nothing: only a declared guard counts.
+    it("does not mark a write guarded by an undeclared assert-named helper", () => {
         expect.assertions(1);
 
         const found = discover(
@@ -37,7 +54,7 @@ describe("owner-field writes: guards and admin builders", () => {
   await ctx.db.insert("prompts", { organizationId: args.organizationId });`),
         );
 
-        expect(rowAt(found, 3)).toMatchObject({ guarded: true });
+        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
     });
 
     it("does not mark a write whose guard runs after it", () => {
@@ -156,5 +173,30 @@ describe("owner-field writes: guards and admin builders", () => {
         );
 
         expect(rowAt(found, 3)).not.toHaveProperty("guarded");
+    });
+
+    it("stamps adminOnly on a write reached only through a platform-admin procedure", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `export const createPost = adminMutation.mutation(async ({ args, ctx }) => {
+  await ctx.db.insert("posts", { userId: args.userId });
+});`,
+            "mutators.ts",
+            undefined,
+            [{ args: {}, exportName: "createPost", filePath: "mutators", kind: "mutation", returnType: "unknown", visibility: "public", adminOnly: true }],
+        );
+
+        expect(rowAt(found, 2)).toMatchObject({ field: "userId", adminOnly: true });
+    });
+
+    it("does not stamp adminOnly on a write reached through an ordinary procedure", () => {
+        expect.assertions(1);
+
+        const found = discover(handler(`  await ctx.db.insert("posts", { userId: args.userId });`), "mutators.ts", undefined, [
+            { args: {}, exportName: "createPost", filePath: "mutators", kind: "mutation", returnType: "unknown", visibility: "public" },
+        ]);
+
+        expect(rowAt(found, 2)).not.toHaveProperty("adminOnly");
     });
 });

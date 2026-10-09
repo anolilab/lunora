@@ -469,8 +469,8 @@ catalogs:
     "@visulima/cerebro": 3.1.2
     "@visulima/colorize": 2.1.1
     "@visulima/find-ai-runner": 1.0.2
-    "@visulima/fs": 6.0.28
-    "@visulima/package": 5.0.41
+    "@visulima/fs": 6.0.29
+    "@visulima/package": 5.0.42
     "@visulima/pail": 5.0.0
     "@visulima/path": 4.0.0
     "@visulima/spinner": 1.0.1
@@ -479,8 +479,8 @@ catalogs:
     # the widget set moved to `@visulima/tui-kit` at flat subpaths — the CLI's
     # prompts import CommandPalette/ConfirmInput/SelectInput/Spinner/TextInput from
     # there now. tui-kit peers `@visulima/tui` EXACTLY, so bump the two together.
-    "@visulima/tui": 4.0.28
-    "@visulima/tui-kit": 1.0.31
+    "@visulima/tui": 4.0.29
+    "@visulima/tui-kit": 1.0.32
     giget: 3.3.1
     magic-string: ^1.4.2
     react-reconciler: ^0.33.0
@@ -678,8 +678,8 @@ catalogs:
   # adapters (React/Vue/Solid/Svelte) with progress, pause/resume and per-part
   # retry. Both follow the repo's exact-pinned `@visulima/*` convention.
   storage:
-    "@visulima/storage": 2.0.33
-    "@visulima/storage-client": 1.0.8
+    "@visulima/storage": 2.0.37
+    "@visulima/storage-client": 1.0.9
     # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional
     # peer pulled in by the `aws-light` provider that backs `createR2UploadStorage`.
     aws4fetch: 1.0.20
@@ -935,9 +935,9 @@ catalogs:
   redact:
     "@visulima/redact": 5.0.0
   email:
-    "@visulima/disposable-email-domains": 1.1.14
+    "@visulima/disposable-email-domains": 1.1.19
     "@visulima/free-email-domains": 1.0.1
-    "@visulima/email-verifier": 1.0.30
+    "@visulima/email-verifier": 1.0.36
 
 # multi-semantic-release rewrites every intra-repo dependency from `workspace:*`
 # to the exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and
@@ -1071,13 +1071,19 @@ minimumReleaseAgeExclude:
   - '@tanstack/react-virtual@3.14.2'
   - '@tanstack/virtual-core@3.17.0'
   - '@types/react@19.2.16'
+  # Published 2026-10-09 04:54 UTC, inside the 24h window; drop after 2026-10-10.
+  - '@visulima/disposable-email-domains@1.1.19'
   # Message-ID fix (visulima/visulima#935), published 2026-10-08 — dead weight
   # after 2026-10-09, drop it then.
   - '@visulima/email@3.0.28'
+  # Published 2026-10-09 05:01 UTC, inside the 24h window; drop after 2026-10-10.
+  - '@visulima/email-verifier@1.0.36'
   - '@visulima/find-ai-runner@1.0.0-alpha.9'
   # Per-message ttl/urgency (visulima/visulima#936), published 2026-10-08 —
   # dead weight after 2026-10-09, drop it then.
   - '@visulima/notification@1.2.0'
+  # Published 2026-10-09 15:44 UTC, inside the 24h window; drop after 2026-10-10.
+  - '@visulima/storage@2.0.37'
   # vis 4.2.0 (affectedIgnore, visulima/visulima#937) + its task-runner 1.1.0, published
   # 2026-10-09 ~11:00 UTC. Remove the vis + task-runner entries after 2026-10-10 11:00 UTC.
   - '@visulima/task-runner@1.1.0'

@@ -2,7 +2,7 @@ import type { CallExpression, Identifier, PropertyAccessExpression } from "ts-mo
 import { Node } from "ts-morph";
 
 import { unwrapExpression } from "../ast";
-import { walkBuilderChain } from "../builder-chain";
+import { chainUsesWrappedCall, walkBuilderChain } from "../builder-chain";
 import { resolveCalleeKind } from "../callee";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
@@ -108,8 +108,22 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
     return INTERNAL_FACTORIES[rootName] ? "internal" : undefined;
 };
 
+/**
+ * The `adminOnly` flag for a builder chain, or nothing. The marker is the
+ * `platformAdmin` import from `@lunora/server` used as a `.use(...)` step, matched
+ * by its import origin and not by the name of the variable that holds the chain.
+ */
+const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> =>
+    chainUsesWrappedCall(receiver, "use", "platformAdmin") ? { adminOnly: true } : {};
+
 /** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
 interface ProcedureClassification {
+    /**
+     * `true` when the builder chain carries `.use(platformAdmin(...))`: only a
+     * platform admin can reach the procedure. Absent otherwise.
+     */
+    adminOnly?: true;
+
     /** Registration kind: `query` | `mutation` | `action` | `stream`. */
     kind: string;
 
@@ -173,7 +187,7 @@ const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureCla
         // security classification, so the stricter of the two wins.
         const internal = candidates.some((node) => node.getType().getProperty("__lunoraVisibility"));
 
-        return { kind: method, receiver, visibility: internal ? "internal" : "public" };
+        return { kind: method, receiver, visibility: internal ? "internal" : "public", ...adminMarkerOf(receiver) };
     }
 
     // Robust fallback: walk the builder chain (`.input()`/`.use()`/`.output()`)
@@ -184,7 +198,7 @@ const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureCla
     const rootKind = resolveBuilderRootKind(receiver);
 
     if (rootKind) {
-        return { kind: method, receiver, visibility: rootKind };
+        return { kind: method, receiver, visibility: rootKind, ...adminMarkerOf(receiver) };
     }
 
     return undefined;

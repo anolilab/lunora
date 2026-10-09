@@ -561,6 +561,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `PlatformAdminCheck` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `Plugin` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1245,6 +1249,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `defineIdentityGuard` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineListArgs` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1390,6 +1398,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `onWhisper` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `platformAdmin` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5539,6 +5551,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `PlatformAdminCheck` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `Plugin` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6223,6 +6239,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `defineIdentityGuard` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineListArgs` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6368,6 +6388,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `onWhisper` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `platformAdmin` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
