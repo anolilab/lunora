@@ -48,6 +48,7 @@ import { createJiti } from "jiti";
 import type { ObjectLiteralElementLike, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment, SourceFile } from "ts-morph";
 import { Node as TsNode, Project } from "ts-morph";
 
+import type { AcceptedFinding } from "./advisor-accept";
 import { propertyKeyName } from "./discover/property-name";
 import { findProjectConfigFile } from "./project-config-path";
 
@@ -64,7 +65,7 @@ interface ProjectConfigLiterals {
      * kept apart from the top-level `unreadable`, which means "the target may
      * be wrong".
      */
-    advisor?: { minSeverity?: string; unreadable?: boolean };
+    advisor?: { accept?: AcceptedFinding[]; acceptUnreadable?: true; minSeverity?: string; unreadable?: boolean };
 
     /**
      * `codegen.exclude`: extra globs (relative to `lunora/`) the source walk
@@ -285,19 +286,91 @@ const readPlainMember = (declared: TsNode | undefined, sourceFile: SourceFile, k
     return literal === undefined ? { unreadable: true } : { literal };
 };
 
+const ACCEPT_KEYS = ["exportName", "file", "reason", "rule"] as const;
+
 /**
- * `advisor.minSeverity` from the `advisor` object literal, or `unreadable` when
- * it is not a string literal the parser can see — a wrong floor hides findings.
+ * One `advisor.accept` entry as four non-empty string literals, or `undefined`
+ * for anything else — an extra key, a computed value, a blank reason. A typo in
+ * a key would otherwise match nothing and fail silently, so only the four are read.
+ */
+const readAcceptedEntry = (entry: TsNode): AcceptedFinding | undefined => {
+    const value = unwrapLiteral(entry);
+
+    if (value === undefined || !TsNode.isObjectLiteralExpression(value)) {
+        return undefined;
+    }
+
+    const fields: Partial<Record<(typeof ACCEPT_KEYS)[number], string>> = {};
+
+    for (const property of value.getProperties()) {
+        if (!TsNode.isPropertyAssignment(property) || TsNode.isComputedPropertyName(property.getNameNode())) {
+            return undefined;
+        }
+
+        const key = propertyKeyName(property);
+        const initializer = unwrapLiteral(property.getInitializer());
+
+        if (!(ACCEPT_KEYS as ReadonlyArray<string>).includes(key) || initializer === undefined) {
+            return undefined;
+        }
+
+        if (!TsNode.isStringLiteral(initializer) && !TsNode.isNoSubstitutionTemplateLiteral(initializer)) {
+            return undefined;
+        }
+
+        fields[key as (typeof ACCEPT_KEYS)[number]] = initializer.getLiteralValue();
+    }
+
+    const { exportName, file, reason, rule } = fields;
+
+    return exportName?.trim() && file?.trim() && reason?.trim() && rule?.trim() ? { exportName, file, reason, rule } : undefined;
+};
+
+/** `advisor.accept` from the `advisor` literal: the entries, or `acceptUnreadable` when any part is not a literal the parser can read. */
+const readAccept = (declared: TsNode | undefined, sourceFile: SourceFile): { accept?: AcceptedFinding[]; acceptUnreadable?: true } => {
+    const member = readPlainMember(declared, sourceFile, "accept");
+
+    if ("absent" in member) {
+        return {};
+    }
+
+    const list = "literal" in member ? unwrapLiteral(member.literal) : undefined;
+
+    if (list === undefined || !TsNode.isArrayLiteralExpression(list)) {
+        return { acceptUnreadable: true };
+    }
+
+    const accept: AcceptedFinding[] = [];
+
+    for (const element of list.getElements()) {
+        const entry = readAcceptedEntry(element);
+
+        if (entry === undefined) {
+            return { acceptUnreadable: true };
+        }
+
+        accept.push(entry);
+    }
+
+    return { accept };
+};
+
+/**
+ * `advisor.minSeverity` and `advisor.accept` from the `advisor` object literal.
+ * `minSeverity` is `unreadable` when it is not a string literal the parser can
+ * see, since a wrong floor hides findings. `accept` is read apart from it, so a
+ * bad list drops only the acceptances, never the floor.
  */
 const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): ProjectConfigLiterals => {
     const member = readPlainMember(declared, sourceFile, "minSeverity");
+    const accepts = readAccept(declared, sourceFile);
 
     if ("absent" in member) {
-        return { advisor: {} };
+        return { advisor: accepts };
     }
 
     return "literal" in member && TsNode.isStringLiteral(member.literal)
-        ? { advisor: { minSeverity: member.literal.getLiteralValue() } }
+        ? { advisor: { ...accepts, minSeverity: member.literal.getLiteralValue() } }
         : { advisor: { unreadable: true } };
 };
 

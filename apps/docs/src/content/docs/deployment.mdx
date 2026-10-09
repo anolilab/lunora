@@ -145,12 +145,13 @@ Three things are worth knowing about this file:
   will throw, and the build warns that the hook was not composed. `import type`
   is erased on both counts, which is why the shape above uses `satisfies` rather
   than a `defineConfig()` call.
-- **Write `target`, `remote`, `advisor.minSeverity` and `codegen.exclude` as literals.** `lunora codegen` resolves the
+- **Write `target`, `remote`, `advisor.minSeverity`, `advisor.accept` and `codegen.exclude` as literals.** `lunora codegen` resolves the
   target synchronously, by parsing this file rather than running it, so a computed
   value, a getter or a spread is not seen. It is not silently defaulted either —
   `lunora verify` reports `platform_unreadable_target`, and an unreadable
-  `minSeverity` reports `advisor_min_severity_invalid` and filters nothing, and an
-  unreadable `codegen.exclude` logs a warning and excludes nothing extra. A
+  `minSeverity` reports `advisor_min_severity_invalid` and filters nothing, an
+  unreadable `advisor.accept` reports `advisor_accept_invalid` and accepts nothing,
+  and an unreadable `codegen.exclude` logs a warning and excludes nothing extra. A
   `const` in the same file and a shorthand property both work.
 
 A config that throws, or whose `app` is not a function, is ignored rather than

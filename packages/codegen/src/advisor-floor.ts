@@ -14,6 +14,7 @@
  */
 import type { Finding, Level } from "@lunora/advisor";
 
+import { applyAcceptedFindings, unreadableAcceptance } from "./advisor-accept";
 import { readProjectConfigLiterals } from "./project-config-file";
 
 /** The values `minSeverity` accepts, and the advisor level each one means. */
@@ -63,5 +64,17 @@ const applyAdvisorFloor = (projectRoot: string, advisories: ReadonlyArray<Findin
     return advisories.filter((advisory) => RANK[advisory.level] >= RANK[floor]);
 };
 
-// eslint-disable-next-line import/prefer-default-export -- named export by package convention
-export { applyAdvisorFloor };
+/**
+ * The advisor policy codegen applies to its findings: `advisor.accept` first
+ * (reviewed ERRORs become INFO, so they stop failing the gate), then the
+ * `advisor.minSeverity` floor. Both read the same config, so the report, the
+ * shard and the gate can never disagree about what is accepted.
+ */
+const applyAdvisorPolicy = (projectRoot: string, advisories: ReadonlyArray<Finding>): Finding[] => {
+    const { advisor } = readProjectConfigLiterals(projectRoot);
+    const accepted = applyAcceptedFindings(advisories, advisor?.accept ?? []);
+
+    return applyAdvisorFloor(projectRoot, advisor?.acceptUnreadable === true ? [...accepted, unreadableAcceptance()] : accepted);
+};
+
+export { applyAdvisorFloor, applyAdvisorPolicy };
