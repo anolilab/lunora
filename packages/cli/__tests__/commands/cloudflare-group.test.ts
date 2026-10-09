@@ -221,6 +221,100 @@ describe("lunora cloudflare", () => {
             expect(output).not.toContain("Did you mean");
             expect(spawned).toHaveLength(0);
         });
+
+        it.each([
+            [["ai", "--dry-run", "gateway"], "lunora cloudflare ai-gateway --dry-run"],
+            [["ai", "--id", "gateway", "gateway"], "lunora cloudflare ai-gateway --id gateway"],
+        ])("drops the old `gateway` positional wherever it sits: %j", async (argv, suggested) => {
+            expect.assertions(2);
+
+            const { code, output } = await cli(argv);
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(output).toContain(`\`lunora ai gateway\` moved to \`lunora cloudflare ai-gateway\`. Run: ${suggested}`);
+        });
+
+        it.each([[["ai"]], [["ai", "foo"]], [["ai", "--id", "gateway"]]])(
+            "`lunora %j` without the `gateway` subcommand names the move but offers nothing to run",
+            async (argv) => {
+                expect.assertions(3);
+
+                const { code, output } = await cli(argv);
+
+                expect(code).toBe(EXIT_CODE.USAGE);
+                expect(output).toContain("`lunora ai` had one subcommand, `gateway`; it moved to `lunora cloudflare ai-gateway`.");
+                expect(output).not.toContain("Run:");
+            },
+        );
+
+        it("shell-quotes every argument of the suggested command so it pastes back as the same argv", async () => {
+            expect.assertions(2);
+
+            const { code, output } = await cli([
+                "deployments",
+                "rollback",
+                "v1",
+                "--yes",
+                "--message",
+                "bad deploy",
+                "it's",
+                "$HOME",
+                "*",
+                "",
+                "--",
+                "a/b:c=d",
+            ]);
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(output).toContain(
+                String.raw`Run: lunora cloudflare deployments rollback v1 --yes --message 'bad deploy' 'it'\''s' '$HOME' '*' '' -- a/b:c=d`,
+            );
+        });
+
+        it.each([
+            ["deployment list", "deployment", "deployments", "cloudflare deployments", "lunora cloudflare deployments list"],
+            ["container list", "container", "containers", "cloudflare containers", "lunora cloudflare containers list"],
+            ["alert", "alert", "alerts", "cloudflare alerts", "lunora cloudflare alerts"],
+        ])("`lunora %s` — a typo of a moved name — still says where it moved", async (line, typed, old, moved, suggested) => {
+            expect.assertions(3);
+
+            const { code, output } = await cli(line.split(" "));
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(output).toContain(`\`lunora ${typed}\` is not a command. \`lunora ${old}\` moved to \`lunora ${moved}\`. Run: ${suggested}`);
+            expect(spawned).toHaveLength(0);
+        });
+
+        it("leaves a typo nearer a real command to did-you-mean", async () => {
+            expect.assertions(2);
+
+            const { output } = await cli(["deployy"]);
+
+            expect(output).toContain('Did you mean "deploy"?');
+            expect(output).not.toContain("moved to");
+        });
+
+        it.each([
+            [["help", "containers"], "`lunora containers` moved to `lunora cloudflare containers`. Run: lunora help cloudflare"],
+            [["help", "deployments", "list"], "`lunora deployments` moved to `lunora cloudflare deployments`. Run: lunora help cloudflare"],
+            [["help", "ai"], "`lunora ai gateway` moved to `lunora cloudflare ai-gateway`. Run: lunora help cloudflare"],
+        ])("`lunora %j` says where the command moved and exits 2", async (argv, message) => {
+            expect.assertions(2);
+
+            const { code, output } = await cli(argv);
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(output).toContain(message);
+        });
+
+        it("still renders help for a command that did not move", async () => {
+            expect.assertions(2);
+
+            const { code, output } = await cli(["help", "cloudflare"]);
+
+            expect(code).toBe(0);
+            expect(output).toContain("lunora cloudflare");
+        });
     });
 
     describe("analyze stays top-level", () => {
