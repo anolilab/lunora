@@ -307,12 +307,13 @@ export const planPolicyWrites = (
         }
 
         const kept = new Set<string>();
+        const wanted = new Set(recipients);
         let keptDestinations = 0;
         const writes = managed.map((policy): PolicyWrite => {
             const existing = (policy.mechanisms["email"] ?? []).map((entry) => entry.id.toLowerCase());
             const emails = [...new Set([...existing, ...recipients])];
 
-            for (const address of existing.filter((entry) => !recipients.includes(entry))) {
+            for (const address of existing.filter((entry) => !wanted.has(entry))) {
                 kept.add(address);
             }
 
@@ -382,7 +383,7 @@ const isAddress = (value: string): boolean => {
  * a count outside 1..{@link MAX_ALERT_RECIPIENTS}, as a message.
  */
 export const normalizeRecipients = (entries: ReadonlyArray<string>): { addresses: string[] } | { error: string } => {
-    const addresses: string[] = [];
+    const addresses = new Set<string>();
 
     for (const entry of entries.map((value) => value.trim()).filter((value) => value !== "")) {
         const address = (NAMED_ADDRESS.exec(entry)?.[1] ?? entry).trim().toLowerCase();
@@ -391,16 +392,14 @@ export const normalizeRecipients = (entries: ReadonlyArray<string>): { addresses
             return { error: `"${entry.slice(0, 80)}" is not an email address` };
         }
 
-        if (!addresses.includes(address)) {
-            addresses.push(address);
-        }
+        addresses.add(address);
     }
 
-    if (addresses.length === 0 || addresses.length > MAX_ALERT_RECIPIENTS) {
+    if (addresses.size === 0 || addresses.size > MAX_ALERT_RECIPIENTS) {
         return { error: `name 1 to ${String(MAX_ALERT_RECIPIENTS)} email addresses` };
     }
 
-    return { addresses };
+    return { addresses: [...addresses] };
 };
 
 /** Where in Cloudflare's dashboard the customer finishes what the API cannot do. */
