@@ -297,7 +297,13 @@ export const notificationsClient = (access: NotificationsAccess): NotificationsC
                 );
             }
 
-            const rows = Array.isArray(envelope.result) ? (envelope.result as Record<string, unknown>[]) : [];
+            // `null` is how Cloudflare's v4 lists may answer "none"; any other non-array is no listing at all, and reading it
+            // as empty would create a duplicate of every managed policy and remove none of them.
+            if (envelope.result !== null && !Array.isArray(envelope.result)) {
+                throw new CloudflareNotificationsError("transient", "Cloudflare answered the policy list without a list of policies", null);
+            }
+
+            const rows = (envelope.result ?? []) as Record<string, unknown>[];
 
             return rows.map((row) => toPolicy(row)).filter((policy): policy is NotificationPolicy => policy !== null);
         },

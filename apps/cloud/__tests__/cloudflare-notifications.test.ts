@@ -198,6 +198,20 @@ describe("the Cloudflare Notifications client", () => {
         expect(failure.message).toMatch(/refusing to treat it as complete/u);
     });
 
+    it.each([{ result: {} }, { result: "oops" }, {}])("refuses a policy list without a list of policies (%j)", async (body) => {
+        const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(answer({ ...body, success: true })));
+        const failure = await failureOf(client(fetch).listPolicies());
+
+        expect(failure.kind).toBe("transient");
+        expect(failure.message).toMatch(/without a list of policies/u);
+    });
+
+    it("reads a null policy list as none", async () => {
+        const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(answer({ result: null, success: true })));
+
+        await expect(client(fetch).listPolicies()).resolves.toStrictEqual([]);
+    });
+
     it("deletes a policy by id", async () => {
         const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(answer({ success: true })));
 
