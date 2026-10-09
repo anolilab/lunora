@@ -22,14 +22,20 @@ const ORG = "org_1";
  * A mutation ctx over in-memory deployment rows.
  *
  * `assertMember` reads `members` and the caller identity, so the double supplies
- * an owner; everything else the pointer paths touch is `deployments`, `projects`
- * and the audit insert.
+ * an owner; everything else the pointer paths touch is `deployments`, `projects`,
+ * the emergency-stop check on `halts` and the organization (neither holds it
+ * here) and the audit insert.
  */
 const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch: Row }[] } => {
     const patched: { id: string; patch: Row }[] = [];
     const byId = new Map(rows.map((row) => [row["_id"] as string, row]));
 
-    const tables: Record<string, Row[]> = { deployments: rows, members: [{ _id: "mem_1", organizationId: ORG, role: "owner", userId: "usr_1" }], projects: [] };
+    const tables: Record<string, Row[]> = {
+        deployments: rows,
+        halts: [],
+        members: [{ _id: "mem_1", organizationId: ORG, role: "owner", userId: "usr_1" }],
+        projects: [],
+    };
     const matches = (row: Row, where: Row): boolean => Object.entries(where).every(([key, value]) => row[key] === value);
     const findMany = (table: string) => (args?: { where?: Row }) =>
         Promise.resolve({ page: (tables[table] ?? []).filter((row) => matches(row, args?.where ?? {})) });
@@ -47,6 +53,7 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
         auth: { getIdentity: () => Promise.resolve({ subject: "usr_1" }), userId: "usr_1" },
         db: {
             deployments: { findMany: findMany("deployments") },
+            halts: { findMany: findMany("halts") },
             query: () => emptyQuery,
             get: (id: string) => Promise.resolve(byId.get(id) ?? { _id: id, organizationId: ORG, slug: "web" }),
             insert: () => Promise.resolve("row_1"),
@@ -56,7 +63,8 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
 
                 return Promise.resolve();
             },
-            projects: { findMany: findMany("projects") },
+            organizations: { get: () => Promise.resolve({ _id: ORG }) },
+            projects: { findMany: findMany("projects"), get: (id: string) => Promise.resolve({ _id: id, organizationId: ORG }) },
         },
         log: { info: () => undefined },
         now: 1_700_000_000_000,

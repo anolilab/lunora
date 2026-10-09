@@ -19,20 +19,21 @@ import readJson from "../read-json";
 import type { TargetFleet } from "../targets/driver";
 import { registeredFleets } from "../targets/registry";
 import type { LiveDeploymentRow } from "./live";
-import { readLiveDeployments, resourceRefOf, servingDeployments } from "./live";
+import { haltKey, readHalted, readLiveDeployments, resourceRefOf, servingDeployments } from "./live";
 import type { QueueRouteCandidate } from "./queue";
 import { routeQueue } from "./queue";
 
 type TenantDispatch = NonNullable<TargetFleet["dispatch"]>;
 
 /**
- * How long a batch for a suspended organization waits before it is offered
- * again: Cloudflare's longest retry delay (12 h). Retried rather than acked so a
- * suspension loses nothing, and delayed so it does not spin the queue — but
- * every redelivery still counts against the queue's `max_retries`, after which
- * Cloudflare moves the message to its dead-letter queue, or drops it if none.
+ * How long a held batch — its organization suspended, or its alias halted by
+ * an emergency stop — waits before it is offered again: Cloudflare's longest
+ * retry delay (12 h). Retried rather than acked so a hold loses nothing, and
+ * delayed so it does not spin the queue — but every redelivery still counts
+ * against the queue's `max_retries`, after which Cloudflare moves the message
+ * to its dead-letter queue, or drops it if none.
  */
-const SUSPENDED_RETRY_DELAY_SECONDS = 43_200;
+export const HELD_RETRY_DELAY_SECONDS = 43_200;
 
 /** A queue batch the platform consumer drains (Cloudflare `MessageBatch`, minimally typed). */
 export interface QueueBatchLike {
@@ -74,6 +75,8 @@ const dispatchQueueBatch = async (dispatch: TenantDispatch, target: { adminToken
 /** What {@link deliverQueueBatch} needs: the in-network paths, the live deployments, and the store their organizations are read from. */
 export interface QueueDeliveryPorts {
     dispatches: ReadonlyMap<TargetId, TenantDispatch>;
+    /** What an emergency stop holds, by `haltKey` (alias and project): their Worker runs the halt stub. */
+    halted?: ReadonlySet<string>;
     live: ReadonlyArray<LiveDeploymentRow>;
     now: number;
     secretEncryptionKey?: string;
@@ -81,9 +84,13 @@ export interface QueueDeliveryPorts {
     store?: ControlPlaneStore;
 }
 
-type QueueTarget = { adminToken: string; dispatch: TenantDispatch; kind: "deliver"; resourceRef: string } | { kind: "suspended" } | undefined;
+type QueueTarget = { adminToken: string; dispatch: TenantDispatch; kind: "deliver"; resourceRef: string } | { kind: "held" } | undefined;
 
-/** The live deployment that owns a per-project queue, with its admin token decrypted in-process — or `suspended` when its organization may not run. */
+/**
+ * The live deployment that owns a per-project queue, with its admin token
+ * decrypted in-process — or `held` when an emergency stop holds its alias or
+ * its organization may not run.
+ */
 const readQueueTarget = async (queue: string, ports: QueueDeliveryPorts): Promise<QueueTarget> => {
     const target = routeQueue(
         queue,
@@ -96,12 +103,16 @@ const readQueueTarget = async (queue: string, ports: QueueDeliveryPorts): Promis
         return undefined;
     }
 
+    if (ports.halted?.has(haltKey(target)) === true) {
+        return { kind: "held" };
+    }
+
     // This path dispatches to the tenant directly, past the dispatcher's
     // admission check, so suspension has to be enforced here as well.
     const serving = ports.store === undefined ? [] : await servingDeployments(ports.store, [target], ports.now);
 
     if (serving.length === 0) {
-        return { kind: "suspended" };
+        return { kind: "held" };
     }
 
     const adminToken = await resolveAdminToken(target, ports.secretEncryptionKey);
@@ -123,9 +134,9 @@ export const deliverQueueBatch = async (batch: QueueBatchLike, ports: QueueDeliv
 
     const target = await readQueueTarget(batch.queue, ports);
 
-    if (target?.kind === "suspended") {
+    if (target?.kind === "held") {
         batch.messages.forEach((message) => {
-            message.retry({ delaySeconds: SUSPENDED_RETRY_DELAY_SECONDS });
+            message.retry({ delaySeconds: HELD_RETRY_DELAY_SECONDS });
         });
 
         return;
@@ -160,6 +171,7 @@ export const handleQueueBatch = async (batch: QueueBatchLike, environment: Contr
 
     await deliverQueueBatch(batch, {
         dispatches,
+        halted: await readHalted(environment),
         live: await readLiveDeployments(environment),
         now: Date.now(),
         secretEncryptionKey: environment.SECRET_ENCRYPTION_KEY,
