@@ -309,7 +309,8 @@ export const requestOrganizationResume = async (
 ): Promise<{ resumed: string[] }> => {
     const { actor, now, organizationId } = input;
     const halts = await organizationHalts(database, organizationId);
-    const rows = halts.filter((row) => row.state !== "resuming" && (input.sources === undefined || input.sources.includes(row.source)));
+    const sources = input.sources === undefined ? undefined : new Set(input.sources);
+    const rows = halts.filter((row) => row.state !== "resuming" && (sources === undefined || sources.has(row.source)));
 
     for (const row of rows) {
         // eslint-disable-next-line no-await-in-loop -- a handful of aliases per organization; sequential keeps the writer simple

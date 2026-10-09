@@ -139,8 +139,8 @@ const toView = (row: HaltRow): HaltView => {
 /** The organization's halt state (any member). */
 export const status = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<HaltStatus> => {
     const member = await assertMember(context, organizationId);
-    const organization = await context.db.organizations.get(member.organizationId);
-    const [halts, deployments] = await Promise.all([
+    const [organization, halts, deployments] = await Promise.all([
+        context.db.organizations.get(member.organizationId),
         collectAll((cursor) => context.db.halts.findMany({ cursor, where: { organizationId: member.organizationId } })),
         collectAll((cursor) => context.db.deployments.findMany({ cursor, where: { organizationId: member.organizationId } })),
     ]);

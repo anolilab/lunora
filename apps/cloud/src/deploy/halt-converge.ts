@@ -174,8 +174,7 @@ export const haltAlias = async (row: HaltRow, deps: HaltConvergeDeps): Promise<H
         return { skipped: "the alias has no live release" };
     }
 
-    const classes = await workerClassesOf(deps, row, { live, rows });
-    const liveRelease = await deps.releases.get(live._id);
+    const [classes, liveRelease] = await Promise.all([workerClassesOf(deps, row, { live, rows }), deps.releases.get(live._id)]);
     const stub = buildHaltStub(classes, {
         ...(liveRelease?.manifest.compatibilityDate === undefined ? {} : { compatibilityDate: liveRelease.manifest.compatibilityDate }),
         ...(liveRelease?.manifest.compatibilityFlags === undefined ? {} : { compatibilityFlags: liveRelease.manifest.compatibilityFlags }),
