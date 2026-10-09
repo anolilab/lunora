@@ -129,6 +129,8 @@ describe(readWorkersCpuByScript, () => {
         expect(String(failure)).toContain(
             'no workersInvocationsAdaptive row\'s dispatchNamespaceId matches the dispatch namespace "lunora-production" or its id; seen: "ns-123", "ns-789"',
         );
+        // The listing that could have placed the ids failed, and the reason says so rather than dropping it.
+        expect(String(failure)).toContain("(the dispatch namespace list could not be read: ");
     });
 
     it("reads an idle hour as zero when the only rows are another listed environment's", async () => {

@@ -101,14 +101,18 @@ export const resetDispatchNamespaces = (): void => {
 /**
  * Every dispatch namespace of the account (`GET /accounts/{id}/workers/dispatch/namespaces`),
  * read once per {@link PROBE_TTL_MS}. A listing that cannot be read is not
- * remembered and answers nothing: rows are then matched by name alone, and a
- * dimension that carries ids shows as unavailable ({@link readWorkersCpuByScript}).
+ * remembered and answers no namespaces with the reason in `failure`: rows are
+ * then matched by name alone, and a dimension that carries ids shows as
+ * unavailable, naming that reason ({@link readWorkersCpuByScript}).
  */
-export const listDispatchNamespaces = async (access: CloudflareAccountAccess, now = Date.now()): Promise<DispatchNamespaceRef[]> => {
+export const listDispatchNamespaces = async (
+    access: CloudflareAccountAccess,
+    now = Date.now(),
+): Promise<{ failure?: string; namespaces: DispatchNamespaceRef[] }> => {
     const known = dispatchNamespaceListings.get(access.accountId);
 
     if (known !== undefined && now - known.at < PROBE_TTL_MS) {
-        return known.namespaces;
+        return { namespaces: known.namespaces };
     }
 
     try {
@@ -121,9 +125,9 @@ export const listDispatchNamespaces = async (access: CloudflareAccountAccess, no
 
         dispatchNamespaceListings.set(access.accountId, { at: now, namespaces });
 
-        return namespaces;
-    } catch {
-        return [];
+        return { namespaces };
+    } catch (error) {
+        return { failure: error instanceof Error ? error.message : String(error), namespaces: [] };
     }
 };
 
@@ -220,16 +224,16 @@ export const readWorkersCpuByScript = async (
         );
     }
 
-    const listed = dispatchNamespace === undefined ? [] : await listDispatchNamespaces(access);
+    const listing = dispatchNamespace === undefined ? { namespaces: [] } : await listDispatchNamespaces(access);
     const groups = await readProbedGroups(access, dataset, window, { label: "Workers", operation: "LunoraWorkerCpu" });
-    const { byScript, matched, unknown } = placeCpuRows(groups, dataset, namespaceValues(listed, dispatchNamespace));
+    const { byScript, matched, unknown } = placeCpuRows(groups, dataset, namespaceValues(listing.namespaces, dispatchNamespace));
 
     if (matched === 0 && unknown.size > 0) {
         throw new UsageUnavailableError(
             `no ${dataset.field} row's ${String(namespace)} matches the dispatch namespace ${JSON.stringify(dispatchNamespace)} or its id; seen: ${[...unknown]
                 .slice(0, SHOWN_VALUES)
                 .map((value) => JSON.stringify(value.slice(0, 64)))
-                .join(", ")}`,
+                .join(", ")}${listing.failure === undefined ? "" : ` (the dispatch namespace list could not be read: ${listing.failure.slice(0, 200)})`}`,
         );
     }
 
