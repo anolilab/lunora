@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.288...@lunora/codegen@1.0.0-alpha.289) (2026-10-09)
+
+### Features
+
+* **codegen:** advisor.accept demotes reviewed ERRORs to INFO by rule, file and export ([#1088](https://github.com/anolilab/lunora/issues/1088)) ([a0f5916](https://github.com/anolilab/lunora/commit/a0f5916d1a24d625b38a27792cfd6802deb13a49))
+
 ## @lunora/codegen [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.287...@lunora/codegen@1.0.0-alpha.288) (2026-10-09)
 
 
