@@ -580,6 +580,15 @@ matches`) and kept in `usageSourceStatus.unattributedQuantity`.
   can be read.
 - **Each window is billed to its own month.** A window that crosses a month
   boundary is split there, so the last hour of a month stays on that month.
+  A part's checkpoint is written before its ledger rows: a failed checkpoint
+  write records nothing, so the retry cannot record the window twice, and a run
+  that dies between the two loses that part (an under-count, like a dropped
+  ledger write). Known gap: the readback holds no lease, so two runs of one
+  (scope, family) that overlap would both read from the same checkpoint and
+  both record the window. Only the hourly tick runs it, and a scheduled
+  invocation is capped well under an hour, so this needs Cloudflare to deliver
+  one tick twice; a lease or a unique ledger key per (scope, family, window,
+  resource, meter) is what would close it.
   Known gap: the six-hourly overage reconcile reads the current period only,
   so `requests` rows of a closed month written after it closed (the last
   readback hour) are never debited as overage. The spend cap, the summary and
