@@ -556,7 +556,11 @@ matches`) and kept in `usageSourceStatus.unattributedQuantity`.
   the storage meters. On a connected account, rows of any dispatch namespace
   are dropped. The dispatcher's and outbound Worker's CPU, which Cloudflare
   bills with the user Worker's as one chain, belongs to no tenant and is not
-  metered: `cpuMs` under-counts the chain, never over-counts it.
+  metered: `cpuMs` under-counts the chain, never over-counts it. Unverified:
+  that the namespace dimension's values are dispatch-namespace names. If they
+  were ids, every cell row would drop and CPU would read as zero with no
+  unavailable status, so check the first readback's `cpuMs` rows against the
+  Workers for Platforms dashboard.
 - **Unavailable is shown, never zero.** When a source cannot read at all — the
   schema has no dataset to meter, the token lacks Account Analytics: Read, or
   Cloudflare rejects the query itself (a 200 with `errors`) — the sweep
@@ -574,10 +578,13 @@ matches`) and kept in `usageSourceStatus.unattributedQuantity`.
 - **Each window is billed to its own month.** A window that crosses a month
   boundary is split there, so the last hour of a month stays on that month.
   Known gap: the six-hourly overage reconcile reads the current period only,
-  so `requests` rows of a closed month written after it closed (the last
-  readback hour) are never debited as overage. The spend cap, the summary and
-  the invoice read them; overage prices only `requests` and `cpuMs`, so
-  storage is unaffected.
+  so rows of a closed month written after it closed are never debited as
+  overage: the last readback hour of `requests`, and the last two or so hours
+  of `cpuMs` (an hourly family, read only once an hour has closed for the
+  lag). The spend cap, the summary and the invoice read them; overage prices
+  only `requests` and `cpuMs`, so storage is unaffected. Billable `cpuMs` rows
+  are new with the CPU readback, so a `cloudflare-wfp` organization past its
+  plan's included CPU (`INCLUDED_USAGE`) is now debited CPU overage.
 - **Spend cap.** On `cloudflare-wfp`, storage rows and the compute meters
   (`cpuMs`, `doRequests`, `doDurationGbS`) are billable like requests:
   priced by `RATE_CARD`, accrued into `organizations.spendNanoCents` at once
@@ -837,7 +844,10 @@ created when the month is already past its threshold fires on the next sweep.
 Display-only rows (a connected account's, a box's) count, so the alert works
 for every target; it is about usage, not the invoice. The sweep runs beside the
 readback on the same tick, so with the readback's closed-hour lag an alert
-arrives up to about two hours after the crossing.
+arrives up to about two hours after the crossing. Known gap: a crossing in the
+last two hours or so of a month is not alerted. Those hours' rows are written
+on the 1st, with the closed month's `periodStart`, and the sweep reads the
+current month only; re-reading the closed month would need a second latch.
 
 | Meter           | Label                        | Unit     | Suggestion floor | `cloudflare-wfp` | `cloudflare-workers` (BYO) | `celld-vps` (box)       |
 | --------------- | ---------------------------- | -------- | ---------------- | ---------------- | -------------------------- | ----------------------- |

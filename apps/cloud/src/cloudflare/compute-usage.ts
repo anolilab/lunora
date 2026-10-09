@@ -51,7 +51,7 @@ import { probeDataset, readDurableObjectsByScript, readProbedGroups } from "./st
 const positive = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
 
 /** A description that states microseconds. */
-const MICROSECONDS = /microsecond|\bµs\b|\bus\b/iu;
+const MICROSECONDS = /microsecond/iu;
 
 /** A description that states gigabyte-seconds. */
 const GB_SECONDS = /\bGB\W{0,3}s(?:ec|\b)|gigabyte\W?second/iu;
