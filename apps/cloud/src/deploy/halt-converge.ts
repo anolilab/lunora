@@ -76,8 +76,15 @@ const manifestOf = async (releases: ReleaseStore, deploymentId: string, why: str
  * The classes that may be on the alias's Worker ({@link classesOnWorker}),
  * limited to the types its target provisions at all. An alias no recording
  * converge has confirmed yet (one deployed before the record) falls back to its
- * live release and every newer release that reached the Worker (`verifyingAt`
- * set: its converge succeeded) — refused when one of those bundles is gone.
+ * live release and the newer releases that may have reached the Worker:
+ *
+ * - one whose converge succeeded (`verifyingAt` set) — refused when its bundle
+ *   is gone, since its classes would be unknown;
+ * - one that started converging and failed or never settled (`provisioningAt`
+ *   without `verifyingAt`) — a job can fail after it uploaded the script, so
+ *   its classes are kept while its bundle is retained. A pruned one is skipped
+ *   (a halt must not block on it); that gap closes at the alias's first
+ *   recorded converge.
  */
 const workerClassesOf = async (deps: HaltConvergeDeps, row: HaltRow, aliasRows: { live: DeploymentRow; rows: DeploymentRow[] }): Promise<BoundClass[]> => {
     const target = targetOf(aliasRows.live.target);
@@ -85,16 +92,20 @@ const workerClassesOf = async (deps: HaltConvergeDeps, row: HaltRow, aliasRows: 
     let { classes } = recorded;
 
     if (!recorded.recorded) {
-        const converged = aliasRows.rows.filter(
+        const newer = aliasRows.rows.filter(
             (deployment) =>
                 deployment._id !== aliasRows.live._id &&
                 deployment.createdAt > aliasRows.live.createdAt &&
-                deployment.verifyingAt != null &&
+                deployment.provisioningAt != null &&
                 deployment.status !== "destroyed",
         );
         const why = "the classes its Worker runs are unknown (the alias predates the class record)";
+        const converged = newer.filter((deployment) => deployment.verifyingAt != null);
+        const unsettled = newer.filter((deployment) => deployment.verifyingAt == null);
         const manifests = await Promise.all([aliasRows.live, ...converged].map(async (deployment) => manifestOf(deps.releases, deployment._id, why)));
+        const maybe = await Promise.all(unsettled.map(async (deployment) => deps.releases.get(deployment._id)));
 
+        manifests.push(...maybe.flatMap((stored) => (stored === null ? [] : [stored.manifest])));
         classes = mergeClasses([...manifests.map((manifest) => classesOf(manifest)), classes]);
     }
 

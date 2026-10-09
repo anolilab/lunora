@@ -1186,7 +1186,7 @@ export interface Caller {
     halts: {
         aliasHalted: (args: { alias: string }) => Promise<boolean>;
         beginConverge: (args: { alias: string; classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; now: number; token: string }) => Promise<null>;
-        endConverge: (args: { alias: string; now: number; outcome: "failed" | "not-uploaded" | "succeeded"; token: string }) => Promise<null>;
+        endConverge: (args: { alias: string; classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; now: number; outcome: "failed" | "not-uploaded" | "succeeded"; startedAt: number; token: string }) => Promise<null>;
         haltOrganization: (args: { organizationId: Id<"organizations"> }) => Promise<import("../../src/deploy/halt.js").HaltRequestResult>;
         operatorHalt: (args: { action: "halt" | "resume"; deploymentId?: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<import("../../src/deploy/halt.js").HaltRequestResult | { resumed: string[]; }>;
         resumeOrganization: (args: { organizationId: Id<"organizations"> }) => Promise<{ resumed: string[]; }>;

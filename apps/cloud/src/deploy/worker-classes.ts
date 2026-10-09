@@ -81,8 +81,16 @@ export const beginConverge = async (store: ControlPlaneStore, input: { alias: st
     );
 };
 
-/** Record how a converge ended. */
-export const endConverge = async (store: ControlPlaneStore, input: { alias: string; now: number; outcome: ConvergeOutcome; token: string }): Promise<void> => {
+/**
+ * Record how a converge ended. It carries its own classes and start, so the
+ * outcome is recorded whether or not its pending entry survived — a concurrent
+ * read-modify-write of the row (the store has no transaction) can overwrite it,
+ * and a success recorded off the stale set would understate the Worker.
+ */
+export const endConverge = async (
+    store: ControlPlaneStore,
+    input: { alias: string; classes: BoundClass[]; now: number; outcome: ConvergeOutcome; startedAt: number; token: string },
+): Promise<void> => {
     const row = await ownershipOf(store, input.alias);
 
     if (row === undefined) {
@@ -94,7 +102,7 @@ export const endConverge = async (store: ControlPlaneStore, input: { alias: stri
     const others = pending.filter((entry) => entry.token !== input.token);
 
     if (input.outcome === "succeeded") {
-        const startedAt = mine?.startedAt ?? input.now;
+        const { startedAt } = input;
 
         await store.patch(
             row._id,
@@ -103,7 +111,7 @@ export const endConverge = async (store: ControlPlaneStore, input: { alias: stri
                     (entry) =>
                         !(entry.endedAt != null && entry.endedAt <= startedAt) && !(entry.endedAt == null && entry.startedAt < startedAt - PENDING_STALE_MS),
                 ),
-                workerClasses: mine?.classes ?? row.workerClasses ?? [],
+                workerClasses: input.classes,
             },
             "aliasOwnership",
         );
@@ -113,7 +121,12 @@ export const endConverge = async (store: ControlPlaneStore, input: { alias: stri
 
     await store.patch(
         row._id,
-        { pendingClasses: input.outcome === "not-uploaded" || mine === undefined ? others : [...others, { ...mine, endedAt: input.now }] },
+        {
+            pendingClasses:
+                input.outcome === "not-uploaded"
+                    ? others
+                    : [...others, { classes: mine?.classes ?? input.classes, endedAt: input.now, startedAt: input.startedAt, token: input.token }],
+        },
         "aliasOwnership",
     );
 };
@@ -143,7 +156,7 @@ export const uploadedNothing = (error: unknown): boolean =>
 /** Where a converge records itself — the store directly (the halt sweep) or the deploy edge's internal mutations. */
 export interface ConvergeRecorder {
     begin: (input: { alias: string; classes: BoundClass[]; now: number; token: string }) => Promise<void>;
-    end: (input: { alias: string; now: number; outcome: ConvergeOutcome; token: string }) => Promise<void>;
+    end: (input: { alias: string; classes: BoundClass[]; now: number; outcome: ConvergeOutcome; startedAt: number; token: string }) => Promise<void>;
 }
 
 /**
@@ -159,8 +172,9 @@ export const recordedConverge = async <T>(
 ): Promise<T> => {
     const clock = input.clock ?? Date.now;
     const token = crypto.randomUUID();
+    const startedAt = clock();
 
-    await recorder.begin({ alias: input.alias, classes: input.classes, now: clock(), token });
+    await recorder.begin({ alias: input.alias, classes: input.classes, now: startedAt, token });
 
     let outcome: ConvergeOutcome = "failed";
 
@@ -175,7 +189,7 @@ export const recordedConverge = async <T>(
 
         throw error;
     } finally {
-        await recorder.end({ alias: input.alias, now: clock(), outcome, token }).catch(() => undefined);
+        await recorder.end({ alias: input.alias, classes: input.classes, now: clock(), outcome, startedAt, token }).catch(() => undefined);
     }
 };
 

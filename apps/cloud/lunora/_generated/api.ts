@@ -261,7 +261,7 @@ export interface InternalApiTypes {
     halts: {
         aliasHalted: FunctionReference<"query", { alias: string }, boolean>;
         beginConverge: FunctionReference<"mutation", { alias: string; classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; now: number; token: string }, null>;
-        endConverge: FunctionReference<"mutation", { alias: string; now: number; outcome: "failed" | "not-uploaded" | "succeeded"; token: string }, null>;
+        endConverge: FunctionReference<"mutation", { alias: string; classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; now: number; outcome: "failed" | "not-uploaded" | "succeeded"; startedAt: number; token: string }, null>;
         operatorHalt: FunctionReference<"mutation", { action: "halt" | "resume"; deploymentId?: Id<"deployments">; organizationId: Id<"organizations"> }, import("../../src/deploy/halt.js").HaltRequestResult | { resumed: string[]; }>;
     };
     hostd_releases: {

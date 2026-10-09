@@ -352,8 +352,10 @@ export const beginConverge = internalMutation
 export const endConverge = internalMutation
     .input({
         alias: v.string(),
+        classes: boundClassInput,
         now: v.number(),
         outcome: v.union(v.literal("failed"), v.literal("not-uploaded"), v.literal("succeeded")),
+        startedAt: v.number(),
         token: v.string(),
     })
     .mutation(async ({ ctx: context, args }): Promise<null> => {

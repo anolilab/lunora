@@ -220,3 +220,26 @@ describe("the classes a halt keeps", () => {
         expect(haltOf(database, "acme")?.lastError).toMatch(/release d_acme0 would delete the data of class\(es\) Counter, Presence/u);
     });
 });
+
+describe("an alias deployed before the class record", () => {
+    it("keeps the classes of a newer release that failed without verifying while its bundle is retained — it may have uploaded", async () => {
+        const unsettled = failedNewer({ failedAt: 7, verifyingAt: undefined });
+        const { converged, database, deps, releases } = await world({}, { deployments: [unsettled] });
+
+        await releases.store.put("d_acme2", release(WITH_PRESENCE));
+        await halt(database);
+        await runHaltConverges(database, ports(deps));
+
+        expect(classNames(acmeSpec(converged))).toStrictEqual(["Counter", "Presence"]);
+    });
+
+    it("does not block on such a release once its bundle was pruned", async () => {
+        const { converged, database, deps } = await world({}, { deployments: [failedNewer({ failedAt: 7, verifyingAt: undefined })] });
+
+        await halt(database);
+        await runHaltConverges(database, ports(deps));
+
+        expect(haltOf(database, "acme")?.state).toBe("halted");
+        expect(classNames(acmeSpec(converged))).toStrictEqual(["Counter"]);
+    });
+});

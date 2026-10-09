@@ -273,8 +273,11 @@ unknown). The stub binds exactly those, and a resume is refused onto any
 release that does not bind every one. Deployment rows and retained bundles do
 not decide this, so no edit to a deployment row can make a halt or a resume
 drop a class. An alias deployed before the record falls back to its live
-release and every newer release that reached the Worker, until its next
-converge records it.
+release and every newer release that may have reached the Worker, until its
+next converge records it. One case stays unknown there: a newer release that
+failed before verifying, whose bundle was already pruned. Its classes are
+skipped. If such an alias is halted, ask the customer whether that release
+added a Durable Object class before you resume it.
 
 **Halt an organization (support).** For a runaway tenant, an abuse case, or a
 customer asking for it:

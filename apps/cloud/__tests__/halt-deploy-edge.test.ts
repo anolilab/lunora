@@ -40,11 +40,11 @@ const contextOf = (halted: Set<string>, store: MemoryStore = recordStore(), fail
                 throw new Error("D1 unavailable");
             }
 
-            const input = args as { alias: string; classes?: BoundClass[]; now: number; outcome?: ConvergeOutcome; token: string };
+            const input = args as { alias: string; classes: BoundClass[]; now: number; outcome?: ConvergeOutcome; startedAt?: number; token: string };
 
-            await (input.classes === undefined
-                ? endConverge(store, { alias: input.alias, now: input.now, outcome: input.outcome as ConvergeOutcome, token: input.token })
-                : beginConverge(store, { alias: input.alias, classes: input.classes, now: input.now, token: input.token }));
+            await (input.outcome === undefined
+                ? beginConverge(store, input)
+                : endConverge(store, { ...input, outcome: input.outcome, startedAt: input.startedAt ?? input.now }));
 
             return null as R;
         },
@@ -181,6 +181,42 @@ describe("the class record each converge writes", () => {
         await ok.deploy(spec("app", ["Counter"]));
 
         expect(classNamesOf(await classesOnWorker(store, "app"))).toStrictEqual(["Counter"]);
+    });
+
+    it("records a success with its own classes even when its pending entry was overwritten meanwhile", async () => {
+        const store = recordStore();
+        const driver = guardedDriver(
+            contextOf(new Set(), store),
+            fakeDriver({
+                deploy: async () => {
+                    // A concurrent read-modify-write of the ownership row lost this converge's pending entry.
+                    await store.patch("ao_app", { pendingClasses: [] });
+
+                    return { url: "https://app.test" };
+                },
+            }),
+        );
+
+        await driver.deploy(spec("app", ["Counter", "Presence"]));
+
+        expect(classNamesOf(await classesOnWorker(store, "app"))).toStrictEqual(["Counter", "Presence"]);
+    });
+
+    it("keeps a failure's classes even when its pending entry was overwritten meanwhile", async () => {
+        const store = recordStore();
+        const driver = guardedDriver(
+            contextOf(new Set(), store),
+            fakeDriver({
+                deploy: async () => {
+                    await store.patch("ao_app", { pendingClasses: [] });
+
+                    throw new Error("alchemy deploy of lunora-worker-app failed with exit code 1");
+                },
+            }),
+        );
+
+        await expect(driver.deploy(spec("app", ["Counter", "Presence"]))).rejects.toThrow(/worker/u);
+        expect(classNamesOf(await classesOnWorker(store, "app"))).toStrictEqual(["Counter", "Presence"]);
     });
 
     it("refuses the converge when the record cannot be written — it fails closed", async () => {

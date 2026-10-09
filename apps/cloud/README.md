@@ -694,7 +694,11 @@ consumers keep firing in the customer's account. A halt stops that code:
   (`droppedDurableObjectClasses`). The `sqlite` flag is never compared: the
   provision box never sends it, and a class keeps its storage. An alias
   deployed before the record falls back to its live release and the newer
-  releases that reached its Worker (`verifyingAt` set). The project stack is additive, so storage the
+  releases that may have reached its Worker. A release that converged
+  (`verifyingAt` set) is refused when its bundle is gone. A release that
+  failed or never settled after it started converging is kept while its bundle
+  is retained, and skipped once it is pruned. That last case is the one gap,
+  and it closes at the alias's first recorded converge. The project stack is additive, so storage the
   stub does not bind (D1, R2, KV, queues) is kept and bound again on resume.
 - **Alarms are parked, not dropped.** A stub object's `alarm()` re-arms itself an
   hour out (`PARK_ALARM_MS`) instead of running anything, so the tenant's own
@@ -748,8 +752,12 @@ resolves the project's placement as a deploy does. The sweep converges at most
 three rows per tick, each under a 20-minute lease and paced like a deploy. A
 claim is re-read before it is used and every write checks the lease is still
 this tick's. The store has no conditional update, so two ticks can still both
-claim in a narrow interleaving. That costs the same idempotent stub converged
-twice, never a lost class. A busy provision box (409) is a one-minute wait,
+claim in a narrow interleaving. The worst outcome is the same idempotent stub
+converged twice. A converge's outcome carries its own classes, so a success is
+recorded right even if a concurrent write lost its pending entry. A failed
+converge whose pending entry a concurrent write lost before it ended is also
+re-recorded. Only the narrow window between the lost write and the converge's
+own end can leave the record short. A busy provision box (409) is a one-minute wait,
 not a failure. One organization that cannot be synced, or one row that cannot
 be converged, never stops the rest. It runs on the tick's
 `waitUntil`, so tenant crons never wait behind it. A failed converge keeps the
