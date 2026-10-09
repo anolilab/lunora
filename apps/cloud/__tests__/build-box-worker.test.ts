@@ -219,10 +219,11 @@ describe("build box worker runtime", () => {
 
         const argv = tagged(records, "ARGV") as string[];
 
-        // The pinned wrangler bundles the generated entry, into a directory outside the repo.
-        // `argv[1]` is the generated entry, beside the repo; asserted through its content below.
-        expect([argv[0], ...argv.slice(2)]).toStrictEqual([
+        // The pinned wrangler bundles the generated entry — at a fixed path in wrangler's own
+        // directory, so the bundle is the same on every build — into a directory outside the repo.
+        expect(argv).toStrictEqual([
             "deploy",
+            expect.stringMatching(/\/build-[^/]+\/\.wrangler\/lunora-cloud\/index\.mjs$/u) as unknown as string,
             "--config",
             expect.stringMatching(/\/build-[^/]+\/wrangler\.json$/u) as unknown as string,
             "--dry-run",
@@ -267,6 +268,23 @@ describe("build box worker runtime", () => {
 
         // The dependency's loop is still dropped; the tenant's alarm is not.
         expect(advisories).toMatchObject([{ file: "src/index.ts", level: "WARN", line: 7, location: "source", name: "alarm_always_rearms" }]);
+        expect(records.at(-1)).toHaveProperty("bundleHash");
+    }, 30_000);
+
+    it("refuses a project whose .wrangler is a symlink, before removing anything through it", async () => {
+        expect.assertions(1);
+
+        const records = await build(await tarball("wrangler-link", { symlinks: { ".wrangler": "/tmp" }, wrangler: WORKER_CONFIG }));
+
+        expect(records.at(-1)?.["error"]).toBe(".wrangler is a symlink in the repository; remove it, it is wrangler's own output directory");
+    }, 30_000);
+
+    it("replaces whatever the repository holds at the shim's path", async () => {
+        expect.assertions(2);
+
+        const records = await build(await tarball("stale-shim", { files: { ".wrangler/lunora-cloud/index.mjs": "planted" }, wrangler: WORKER_CONFIG }));
+
+        expect(tagged(records, "SHIM")).toContain("wrapEntry(worker.default");
         expect(records.at(-1)).toHaveProperty("bundleHash");
     }, 30_000);
 

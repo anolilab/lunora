@@ -105,8 +105,14 @@ A project whose `runtime` setting is `worker` is a plain Cloudflare Worker: a
 --dry-run --outdir <dir>`, with `WRANGLER_SEND_METRICS=false`,
    `WRANGLER_HIDE_BANNER=true` (the banner is what runs the update check),
    wrangler's log beside the repo and every `CLOUDFLARE_*` variable removed.
-   The shim, the out-dir and the logs all live in `<workspace>.worker/`,
-   beside the extracted repo. Then the single module is collected (`rules` /
+   The out-dir, the logs and the resolved config live in `<workspace>.worker/`,
+   beside the extracted repo. The shim is written to the project's
+   `.wrangler/lunora-cloud/` instead — created fresh, refused when `.wrangler`
+   is a symlink — because esbuild names every input relative to the project
+   in the bundle, so an entry under the build's random workspace name would
+   give the same commit a different bundle hash on every build; `.wrangler` is
+   also a directory the scan already treats as generated. Two builds of one
+   commit produce the same bundle. Then the single module is collected (`rules` /
    `find_additional_modules` / split chunks produce several and are refused)
    and the release written to the same file step 6 of a Lunora build reads.
 

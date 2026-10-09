@@ -22,8 +22,10 @@
  * generated shim ({@link shimSource}) instead of its `main`: the shim re-exports
  * everything the Worker exports and answers the platform's `/_lunora/scheduled`
  * and `/_lunora/queue` routes from its own `scheduled()` and `queue()` (see
- * `shim-runtime.mjs` for why). The shim, the out-dir and wrangler's logs all
- * live beside the extracted repo, never in it.
+ * `shim-runtime.mjs` for why). The shim is written to the project's
+ * `.wrangler/lunora-cloud/` ({@link writeShim}, for a bundle that is the same
+ * on every build of a commit); the resolved config, the out-dir and wrangler's
+ * logs live beside the extracted repo, never in it.
  *
  * The shim is applied whatever the project's target: the box does not know it,
  * and a build is reused across a target change. On a target that runs crons and
@@ -32,7 +34,7 @@
  * through the wrapper, unchanged.
  */
 import { readFileSync } from "node:fs";
-import { lstat, mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 
 import { buildBindingManifest, collectAssets } from "./vendor/release-manifest.mjs";
@@ -373,6 +375,48 @@ const shimSource = ({ main, queueNames }) => {
     ].join("\n");
 };
 
+/** Where the generated entry is written, relative to the project: wrangler's own scratch directory. */
+const SHIM_DIRECTORY = [".wrangler", "lunora-cloud"];
+
+/**
+ * Write the generated entry and the shim runtime into
+ * `<project>/.wrangler/lunora-cloud/`, and answer the entry's path.
+ *
+ * In the tree, at a fixed path, rather than beside the repo with the rest of
+ * the scratch files: the bundle's region comments name every input relative to
+ * the project, so an entry under the build's random workspace name would change
+ * the bundle — and its hash — on every build of the same commit. `.wrangler`
+ * is wrangler's own output directory, and one the bundle scan already treats as
+ * generated, so nothing in the shim is ever reported as the tenant's code.
+ * Created fresh, and refused when any part of it resolves elsewhere: the tree
+ * is the tenant's, so the path may arrive as a symlink.
+ * @param {string} project Real path of the project directory.
+ * @param {string} source The entry's source ({@link shimSource}).
+ * @returns {Promise<string>} The entry's absolute path.
+ */
+const writeShim = async (project, source) => {
+    const directory = join(project, ...SHIM_DIRECTORY);
+    const parent = await lstat(join(project, SHIM_DIRECTORY[0])).catch(() => undefined);
+
+    // Checked before anything is removed: through a linked `.wrangler`, the removal would land wherever it points.
+    if (parent?.isSymbolicLink() === true) {
+        throw new BuildError(`${SHIM_DIRECTORY[0]} is a symlink in the repository; remove it, it is wrangler's own output directory`);
+    }
+
+    await rm(directory, { force: true, recursive: true });
+    await mkdir(directory, { recursive: true });
+
+    if ((await realpath(directory)) !== directory) {
+        throw new BuildError(`${SHIM_DIRECTORY.join("/")} resolves outside the project through a symlink and was refused`);
+    }
+
+    // `wx`: a file that appeared since — a link planted in between — fails the write instead of being followed.
+    await writeFile(join(directory, "shim-runtime.mjs"), SHIM_RUNTIME_SOURCE, { flag: "wx" });
+    await writeFile(join(directory, "index.mjs"), source, { flag: "wx" });
+
+    return join(directory, "index.mjs");
+};
+
 /**
  * Whether the project builds with `@cloudflare/vite-plugin`: its deployable
  * config is produced by `vite build`, which `wrangler deploy` does not run, so
@@ -430,7 +474,7 @@ const buildWorker = async ({ onLine, project, repo, run, scratch, timeoutMs, wor
 
     const wrangler = await resolveWranglerBin(project, workspaceRoot);
 
-    await mkdir(join(scratch, "entry"), { recursive: true });
+    await mkdir(scratch, { recursive: true });
 
     const configFile = join(scratch, "config.json");
 
@@ -467,12 +511,7 @@ const buildWorker = async ({ onLine, project, repo, run, scratch, timeoutMs, wor
 
     const { body, main, queueNames } = await releaseFromConfig({ config: parsed.config, configPath, log: onLine, repo });
 
-    // Beside the repo: the entry's directory names the output module
-    // (`index.js`, what the deploy path uploads as its main module).
-    const shim = join(scratch, "entry", "index.mjs");
-
-    await writeFile(join(scratch, "entry", "shim-runtime.mjs"), SHIM_RUNTIME_SOURCE);
-    await writeFile(shim, shimSource({ main, queueNames }));
+    const shim = await writeShim(project, shimSource({ main, queueNames }));
 
     const outDirectory = join(scratch, "out");
 
