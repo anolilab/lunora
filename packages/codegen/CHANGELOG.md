@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.280...@lunora/codegen@1.0.0-alpha.281) (2026-10-09)
+
+### Bug Fixes
+
+* **codegen:** bind a labeled continue to the loop under its label ([#1056](https://github.com/anolilab/lunora/issues/1056)) ([c5a32db](https://github.com/anolilab/lunora/commit/c5a32db7fce8a66e4c5ba7f64a1f36c860dda47b))
+
 ## @lunora/codegen [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.279...@lunora/codegen@1.0.0-alpha.280) (2026-10-09)
 
 ### Features
