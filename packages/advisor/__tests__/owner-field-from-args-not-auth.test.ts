@@ -31,6 +31,46 @@ describe("owner_field_from_args_not_auth", () => {
         expect(ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() })).toHaveLength(0);
     });
 
+    // The handler checked the written value against the identity before the write.
+    it("reports nothing for a write the handler proved equal to the identity", () => {
+        expect.assertions(1);
+
+        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
+            {
+                scope: { kind: "export", name: "createPost" },
+                field: "organizationId",
+                file: "prompts",
+                line: 4,
+                method: "insert",
+                guarded: true,
+                visibility: "public",
+            },
+        ];
+
+        expect(ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() })).toHaveLength(0);
+    });
+
+    // An admin procedure is reachable only by a platform admin: a breadcrumb at INFO, never ERROR.
+    it("reports an admin-only write at INFO, not ERROR", () => {
+        expect.assertions(2);
+
+        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
+            {
+                scope: { kind: "export", name: "setCredits" },
+                field: "userId",
+                file: "billing",
+                line: 9,
+                method: "patch",
+                adminOnly: true,
+                visibility: "public",
+            },
+        ];
+        const findings = ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ level: "INFO", facing: "INTERNAL" });
+    });
+
     it("still reports a public write that is not owner-scoped", () => {
         expect.assertions(2);
 

@@ -108,8 +108,19 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
     return INTERNAL_FACTORIES[rootName] ? "internal" : undefined;
 };
 
+/**
+ * Whether a builder chain roots at an admin builder (`adminMutation` /
+ * `adminAction` / `adminQuery`). Repos name the platform-admin builders by this
+ * convention, so the root's name is the signal; a caller holding the admin role
+ * is trusted by design, which the ownership lints must know.
+ */
+const isAdminBuilderChain = (receiver: Node): boolean => builderChainRoot(receiver)?.getText().startsWith("admin") === true;
+
 /** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
 interface ProcedureClassification {
+    /** Set when the builder chain roots at an admin builder — see {@link isAdminBuilderChain}. Absent otherwise. */
+    adminOnly?: true;
+
     /** Registration kind: `query` | `mutation` | `action` | `stream`. */
     kind: string;
 
@@ -173,7 +184,7 @@ const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureCla
         // security classification, so the stricter of the two wins.
         const internal = candidates.some((node) => node.getType().getProperty("__lunoraVisibility"));
 
-        return { kind: method, receiver, visibility: internal ? "internal" : "public" };
+        return { kind: method, receiver, visibility: internal ? "internal" : "public", ...(isAdminBuilderChain(receiver) && { adminOnly: true }) };
     }
 
     // Robust fallback: walk the builder chain (`.input()`/`.use()`/`.output()`)
@@ -184,7 +195,7 @@ const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureCla
     const rootKind = resolveBuilderRootKind(receiver);
 
     if (rootKind) {
-        return { kind: method, receiver, visibility: rootKind };
+        return { kind: method, receiver, visibility: rootKind, ...(isAdminBuilderChain(receiver) && { adminOnly: true }) };
     }
 
     return undefined;

@@ -1,3 +1,4 @@
+import { callSiteCallers } from "@lunora/advisor";
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, ParameterDeclaration, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
@@ -8,6 +9,7 @@ import { callSiteScopeOf, declarationOf, withCallerVisibility } from "../attribu
 import { denotesContextDatabase, isContextRooted } from "../context-root";
 import type { MutatorImplScope } from "./args-pristine";
 import { mutatorImplScopeOf } from "./args-pristine";
+import isGuardedWrite from "./guarded-args";
 import implTaintOf from "./impl-taint";
 
 /**
@@ -180,9 +182,10 @@ const identityWritesInObjectLiteral = (
         // side is. Outside a mutator impl the root is resolved by
         // `isContextRooted`; inside one, by the impl's own taint model
         // (`ImplTaint`).
-        const isTainted = writtenValues(value).some((written) =>
+        const taintedBranches = writtenValues(value).filter((written) =>
             taint === undefined ? isArgumentDerived(written) && !isContextRooted(written) : taint.isTaintedValue(written, true),
         );
+        const isTainted = taintedBranches.length > 0;
 
         if (isTainted) {
             // Recorded either way — the lint decides what to do with it. Dropping it
@@ -198,6 +201,9 @@ const identityWritesInObjectLiteral = (
             // rewrites or lets it escape. A helper's or a nested function's own
             // parameters can be filled from anything, so they never qualify.
             const ownerScoped = write.ownerField === name && implScope?.pristine === true && resolvesToOwnerArgument(value, implScope.parameter, name);
+            // Guarded only when EVERY branch the write can store is proven: a
+            // ternary whose other branch reads an unproven `args` field still leaks it.
+            const guarded = taintedBranches.every((written) => isGuardedWrite(write.call, written));
 
             rows.push({
                 field: name,
@@ -206,6 +212,7 @@ const identityWritesInObjectLiteral = (
                 method: write.method,
                 scope: write.scope,
                 ...(ownerScoped && { ownerScoped: true }),
+                ...(guarded && { guarded: true }),
             });
         }
     }
@@ -259,7 +266,15 @@ const discoverOwnerFieldWrites = (
         ownerFieldWritesInCall(call, relativePath, (exportName) => ownerByKey.get(`${relativePath}:${exportName}`)),
     );
 
-    return withCallerVisibility(writes, functions);
+    // A write is admin-only when every procedure that reaches it is an admin builder.
+    const adminByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.adminOnly === true]));
+
+    return withCallerVisibility(writes, functions).map((row) => {
+        const callers = callSiteCallers(row.scope);
+        const adminOnly = callers.length > 0 && callers.every((exportName) => adminByKey.get(`${row.file}:${exportName}`) === true);
+
+        return adminOnly ? { ...row, adminOnly: true as const } : row;
+    });
 };
 
 export default discoverOwnerFieldWrites;

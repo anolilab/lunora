@@ -43,6 +43,12 @@ const ownerFieldFromArgsNotAuth: Lint = {
                 return [];
             }
 
+            // The handler proves the written value is the caller's own identity before
+            // the write (a guard or an assert against the identity). Nothing to report.
+            if (write.guarded) {
+                return [];
+            }
+
             const where = `\`${write.method}\` in ${callSiteWhere(write)}`;
             const metadata = {
                 ...callSiteFields(write),
@@ -61,6 +67,21 @@ const ownerFieldFromArgsNotAuth: Lint = {
             // mutations, i.e. zero signal at ERROR. Kept at INFO rather than
             // dropped, because the public procedure that forwards raw `args` into
             // one is a real vector and this is the breadcrumb to it.
+            // An admin builder (`adminMutation` …) is reachable only by a platform
+            // admin, who is trusted with any account by design. The subject from `args`
+            // is the admin's choice; the lint keeps a breadcrumb at INFO, like `internal`.
+            if (write.adminOnly) {
+                return [
+                    emit(ownerFieldFromArgsNotAuth, {
+                        cacheKey: `owner_field_from_args_not_auth:${write.file}:${write.line.toString()}:${write.field}`,
+                        detail: `${where} sets the ownership field \`${write.field}\` from \`args\`. Expected for an admin procedure: only a platform admin can reach it, and the admin role is the trust boundary, not the subject field.`,
+                        facing: "INTERNAL",
+                        level: "INFO",
+                        metadata,
+                    }),
+                ];
+            }
+
             if (write.visibility === "internal") {
                 return [
                     emit(ownerFieldFromArgsNotAuth, {
