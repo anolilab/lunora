@@ -1,3 +1,9 @@
+## @lunora/nuxt [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.213...@lunora/nuxt@1.0.0-alpha.214) (2026-10-09)
+
+### Bug Fixes
+
+* **packages:** align stale @lunora/client pins to 1.0.0-alpha.193 ([#1089](https://github.com/anolilab/lunora/issues/1089)) ([46da632](https://github.com/anolilab/lunora/commit/46da632bc18dfd87f7dceb4522d1d35b6e9f2066))
+
 ## @lunora/nuxt [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.212...@lunora/nuxt@1.0.0-alpha.213) (2026-10-08)
 
 
