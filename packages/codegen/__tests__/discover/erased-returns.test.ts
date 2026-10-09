@@ -162,6 +162,18 @@ const RECURSIVE_ROUTE_OUTPUT = `
         });
 `;
 
+/**
+ * A handler whose type the checker could not resolve because it contains an error:
+ * here an unresolved name, the same failure as an import of an export that a later
+ * release removed (#1072). The return type falls back to `unknown`; the report must
+ * say why, not stay silent.
+ */
+const UNRESOLVED_REFERENCE = `
+    import { query } from "@lunora/server";
+
+    export const getMissing = query({ args: {}, handler: async () => missingReference });
+`;
+
 /** The control: a local interface the expander CAN reproduce, so nothing is lost and nothing is reported. */
 const EXPANDABLE = `
     import { query } from "@lunora/server";
@@ -207,6 +219,17 @@ describe("procedure_return_type_erased", () => {
         expect(findings[0]).toMatchObject({
             level: "WARN",
             metadata: { exportName: "getTree", filePath: "trees", rendered: "Tree" },
+        });
+    }, 300_000);
+
+    it("names the type error that left a handler's return type unknown", () => {
+        expect.assertions(2);
+
+        const findings = advisoriesFor({ "missing.ts": UNRESOLVED_REFERENCE }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            metadata: { exportName: "getMissing", filePath: "missing" },
         });
     }, 300_000);
 

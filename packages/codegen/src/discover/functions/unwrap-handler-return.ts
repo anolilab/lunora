@@ -1,8 +1,72 @@
-import type { Node, Type } from "ts-morph";
+import type { Diagnostic, Node, SourceFile, Type } from "ts-morph";
+import { DiagnosticCategory } from "ts-morph";
 
 import { recordErasedReturn } from "../erased-returns";
 import isAnyDegraded from "./internal/any-token";
 import { containsUnencodableMember, expandUnreachableType, referencesUnreachableLocalType } from "./internal/type-expansion";
+
+/** The error diagnostics of each source file, computed once: a whole-file type-check is the expensive part. */
+const errorsByFile = new WeakMap<SourceFile, Diagnostic[]>();
+
+const errorsOf = (file: SourceFile): Diagnostic[] => {
+    const cached = errorsByFile.get(file);
+
+    if (cached) {
+        return cached;
+    }
+
+    const errors = file.getPreEmitDiagnostics().filter((diagnostic) => diagnostic.getCategory() === DiagnosticCategory.Error);
+
+    errorsByFile.set(file, errors);
+
+    return errors;
+};
+
+/** The text of a diagnostic, whichever shape ts-morph returns it in. */
+const messageOf = (diagnostic: Diagnostic): string => {
+    const text = diagnostic.getMessageText();
+
+    return typeof text === "string" ? text : text.getMessageText();
+};
+
+/**
+ * A consequence of another error rather than a cause: the checker reports an
+ * `unknown` value being used, and the name it was given is not the root.
+ */
+const DERIVATIVE_ERROR = /is of type 'unknown'|on type '\{\}'/;
+
+const isDerivativeError = (message: string): boolean => DERIVATIVE_ERROR.test(message);
+
+/**
+ * The reason a handler's type is `unknown`, or `undefined` when it has no error.
+ * The first error inside the handler is usually a consequence, such as
+ * `'userThreads' is of type 'unknown'`. The cause is often elsewhere in the file:
+ * an import of an export that no longer exists, which is then named as the cause.
+ */
+const typeErrorWithin = (handler: Node): string | undefined => {
+    const start = handler.getStart();
+    const end = handler.getEnd();
+    const errors = errorsOf(handler.getSourceFile());
+    const earliest = errors.find((diagnostic) => {
+        const at = diagnostic.getStart();
+
+        return at !== undefined && at >= start && at <= end;
+    });
+
+    if (earliest === undefined) {
+        return undefined;
+    }
+
+    const first = messageOf(earliest);
+
+    if (!isDerivativeError(first)) {
+        return first;
+    }
+
+    const cause = errors.find((diagnostic) => messageOf(diagnostic).includes("has no exported member"));
+
+    return cause ? `${first}; caused by: ${messageOf(cause)}` : first;
+};
 
 /**
  * Render a handler's resolved return type via ts-morph's type checker. Unwraps
@@ -39,7 +103,18 @@ const unwrapHandlerReturn = (handler: Node): string => {
     const rendered = returnType.getText(handler);
 
     // `any`/empty fall back to `unknown` so downstream typings stay strict.
-    if (!rendered || rendered === "any" || rendered === "never") {
+    // The checker gives up on a handler that contains a type error (an import of a
+    // removed export, an unresolved name), and the result is one of these. The
+    // fallback to `unknown` is deliberate, so the output is unchanged, but that
+    // fallback used to be silent: codegen exited 0 and nothing said why (#1072).
+    // Report it, naming the error, so the cause is visible.
+    if (!rendered || rendered === "any" || rendered === "never" || rendered === "unknown") {
+        const error = typeErrorWithin(handler);
+
+        if (error !== undefined) {
+            recordErasedReturn(handler, `${rendered || "any"} (${error})`);
+        }
+
         return "unknown";
     }
 
