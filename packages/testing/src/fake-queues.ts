@@ -98,18 +98,39 @@ const wireFormOf = (body: unknown, contentType: QueueContentType): { body: unkno
     return { body: JSON.parse(text) as unknown, bytes: encoder.encode(text).byteLength };
 };
 
-const createRecordingQueues = (names: ReadonlyArray<string>): { controls: FakeQueueControls; surfaces: QueueSurface } => {
-    const declared = new Set(names);
-    const messages: SentQueueMessage[] = [];
+/** A message as the consumer decodes it, recorded under the queue or topic it went through. */
+interface RecordedMessage {
+    body: unknown;
+    contentType?: QueueContentType;
+    delaySeconds?: number;
+    destination: string;
+}
 
-    const encode = (queue: string, body: unknown, options: QueueSendOptions | undefined): { bytes: number; message: SentQueueMessage } => {
+/**
+ * A recording producer binding per name in `names`, shared by the queues and
+ * topics fakes: each feeds the bindings to `@lunora/queue`'s own constructor, so
+ * its validation runs before a message reaches the recorder. `read` returns the
+ * record in send order, optionally only `destination`'s (an undeclared one throws,
+ * naming `reader` and the declared names).
+ */
+const createRecorder = (
+    names: ReadonlyArray<string>,
+): {
+    bindings: Record<string, QueueBindingLike>;
+    clear: () => void;
+    read: (destination: string | undefined, reader: string, noun: string) => RecordedMessage[];
+} => {
+    const declared = new Set(names);
+    const messages: RecordedMessage[] = [];
+
+    const encode = (destination: string, body: unknown, options: QueueSendOptions | undefined): { bytes: number; message: RecordedMessage } => {
         const contentType = options?.contentType ?? DEFAULT_CONTENT_TYPE;
         const wire = wireFormOf(body, contentType);
 
         if (wire.bytes > MAX_MESSAGE_BYTES) {
             throw new LunoraError(
                 "VALIDATION_ERROR",
-                `@lunora/queue: ${queue} message is ${String(wire.bytes)} bytes, over the Cloudflare Queues limit of ${String(MAX_MESSAGE_BYTES)} (128 KB)`,
+                `@lunora/queue: ${destination} message is ${String(wire.bytes)} bytes, over the Cloudflare Queues limit of ${String(MAX_MESSAGE_BYTES)} (128 KB)`,
             );
         }
 
@@ -119,15 +140,15 @@ const createRecordingQueues = (names: ReadonlyArray<string>): { controls: FakeQu
                 body: wire.body,
                 contentType,
                 ...(options?.delaySeconds === undefined ? {} : { delaySeconds: options.delaySeconds }),
-                queue,
+                destination,
             },
         };
     };
 
-    const bindingFor = (queue: string): QueueBindingLike => {
+    const bindingFor = (destination: string): QueueBindingLike => {
         return {
             send: (body: unknown, options?: QueueSendOptions): Promise<void> => {
-                messages.push(encode(queue, body, options).message);
+                messages.push(encode(destination, body, options).message);
 
                 return Promise.resolve();
             },
@@ -135,14 +156,14 @@ const createRecordingQueues = (names: ReadonlyArray<string>): { controls: FakeQu
                 // A message's own delay wins over the batch's, as on Cloudflare. Encode the
                 // whole batch before recording any of it, so one bad body records none.
                 const encoded = [...batch].map((message) =>
-                    encode(queue, message.body, { contentType: message.contentType, delaySeconds: message.delaySeconds ?? options?.delaySeconds }),
+                    encode(destination, message.body, { contentType: message.contentType, delaySeconds: message.delaySeconds ?? options?.delaySeconds }),
                 );
                 const total = encoded.reduce((sum, entry) => sum + entry.bytes, 0);
 
                 if (total > MAX_BATCH_BYTES) {
                     throw new LunoraError(
                         "VALIDATION_ERROR",
-                        `@lunora/queue: ${queue} batch is ${String(total)} bytes, over the Cloudflare Queues limit of ${String(MAX_BATCH_BYTES)} (256 KB)`,
+                        `@lunora/queue: ${destination} batch is ${String(total)} bytes, over the Cloudflare Queues limit of ${String(MAX_BATCH_BYTES)} (256 KB)`,
                     );
                 }
 
@@ -153,26 +174,38 @@ const createRecordingQueues = (names: ReadonlyArray<string>): { controls: FakeQu
         };
     };
 
-    const queues = createQueues({ bindings: Object.fromEntries([...declared].map((name) => [name, bindingFor(name)])) });
-
-    const controls: FakeQueueControls = {
+    return {
+        bindings: Object.fromEntries([...declared].map((name) => [name, bindingFor(name)])),
         clear: () => {
             messages.length = 0;
         },
-        sent: (queue) => {
-            if (queue === undefined) {
+        read: (destination, reader, noun) => {
+            if (destination === undefined) {
                 return [...messages];
             }
 
-            if (!declared.has(queue)) {
-                throw new LunoraError("INTERNAL", `harness.queues.sent("${queue}"): no such queue — declared: ${[...declared].join(", ") || "(none)"}`);
+            if (!declared.has(destination)) {
+                throw new LunoraError("INTERNAL", `${reader}("${destination}"): no such ${noun} — declared: ${[...declared].join(", ") || "(none)"}`);
             }
 
-            return messages.filter((message) => message.queue === queue);
+            return messages.filter((message) => message.destination === destination);
         },
     };
+};
 
-    return { controls, surfaces: { queues } };
+const createRecordingQueues = (names: ReadonlyArray<string>): { controls: FakeQueueControls; surfaces: QueueSurface } => {
+    const recorder = createRecorder(names);
+
+    return {
+        controls: {
+            clear: recorder.clear,
+            sent: (queue) =>
+                recorder.read(queue, "harness.queues.sent", "queue").map(({ destination, ...message }) => {
+                    return { ...message, queue: destination };
+                }),
+        },
+        surfaces: { queues: createQueues({ bindings: recorder.bindings }) },
+    };
 };
 
 /**
@@ -192,4 +225,4 @@ const createFakeQueues = (names: ReadonlyArray<string> | undefined): { controls:
 };
 
 export type { FakeQueueControls, QueueSurface, SentQueueMessage };
-export { createFakeQueues };
+export { createFakeQueues, createRecorder };

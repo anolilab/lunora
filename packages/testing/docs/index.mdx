@@ -108,6 +108,7 @@ afterEach(() => {
 | `subscribe(reference, args)` | Async iterable yielding the query result now, then re-emitting after each mutation.                                                                                                                               |
 | `scheduler`                  | Controls for the in-memory scheduler (`list` / `advance` / `runPending`).                                                                                                                                         |
 | `queues`                     | What handlers enqueued through `ctx.queues` (`sent(name?)` / `clear()`).                                                                                                                                          |
+| `topics`                     | What handlers published through `ctx.topics` (`published(name?)` / `clear()`).                                                                                                                                    |
 | `notify`                     | What handlers delivered through `ctx.notify` / `ctx.push` (`sent(channel?)` / `clear()`).                                                                                                                         |
 | `withIdentity(identity)`     | Return a harness view sharing this db but reporting the given identity on `ctx.auth`.                                                                                                                             |
 | `close()`                    | Close the underlying in-memory SQLite database. Idempotent.                                                                                                                                                       |
@@ -250,6 +251,25 @@ expect(t.queues.sent("jobs")).toEqual([{ body: { kind: "fulfil", orderId }, queu
 As in production a send is not transactional: one made by a mutation that then
 throws stays recorded even though the mutation's writes roll back.
 
+### Topics
+
+List the export names of your `lunora/queues.ts` topics in the `topics` option
+and mutations and actions get a recording `ctx.topics`, built by
+`@lunora/queue`'s own `createTopicContext` — so the batch cap, the delay
+ceiling, the reserved key and a topic name you did not list reject as they do in
+production. Bodies are encoded, decoded and size-checked exactly as for
+`queues`. Each published message is recorded once, however many subscriptions
+the app declares, and no subscription handler runs — assert on what was
+published:
+
+```ts
+const t = lunoraTest(schema, { topics: ["signups"] });
+
+const id = await t.mutation(signUp, { email: "ada@example.test" });
+
+expect(t.topics.published("signups")).toEqual([{ body: { email: "ada@example.test", id }, topic: "signups" }]);
+```
+
 ### Notifications and push
 
 Pass your `lunora/notify.ts` default export as the `notify` option and every
@@ -280,7 +300,8 @@ expect(t.notify.sent("push")).toEqual([{ channel: "push", payload: expect.object
 
 Without the option, touching `ctx.notify` or `ctx.push` throws naming it, and
 so does `t.notify.sent()` — a handler that swallows the error cannot make "no
-notification was sent" pass by accident. `queues` behaves the same way.
+notification was sent" pass by accident. `queues` and `topics` behave the same
+way.
 
 ### Scheduler
 
