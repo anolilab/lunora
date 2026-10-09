@@ -36,6 +36,7 @@ import containerPublicInternet from "./lints/static/container-public-internet";
 import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-egress-relaxation";
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
 import crossModuleTableWrite from "./lints/static/cross-module-table-write";
+import dispatchCycle from "./lints/static/dispatch-cycle";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
 import errorWithoutCatalog from "./lints/static/error-without-catalog";
@@ -105,6 +106,7 @@ import tableWithoutInsert from "./lints/static/table-without-insert";
 import topicTooManySubscriptions from "./lints/static/topic-too-many-subscriptions";
 import ttlFieldNotTimestamp from "./lints/static/ttl-field-not-timestamp";
 import unboundedCollect from "./lints/static/unbounded-collect";
+import unboundedLoop from "./lints/static/unbounded-loop";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import unindexedRelationTarget from "./lints/static/unindexed-relation-target";
@@ -133,6 +135,7 @@ export type { AdvisorArgumentValidator } from "./argument-validators";
 export type { AdvisorAuthConfig } from "./auth-config";
 export type { AdvisorAuthApiCall } from "./authapi-calls";
 export type { AdvisorBrowserUrlAccess } from "./browser-url-accesses";
+export type { AdvisorCallEdge } from "./call-edges";
 export type { AdvisorCallSiteScope, CallSiteMetadata } from "./call-site-scope";
 export { callSiteCallers, callSiteDescription, callSiteLabel, callSiteMetadata, helperRole, isReachableSite, readCallSiteCallers } from "./call-site-scope";
 export type { AdvisorConfigCall } from "./config-calls";
@@ -181,6 +184,7 @@ export { default as containerPublicInternet } from "./lints/static/container-pub
 export { default as containerRuntimeEgressRelaxation } from "./lints/static/container-runtime-egress-relaxation";
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
 export { default as crossModuleTableWrite } from "./lints/static/cross-module-table-write";
+export { default as dispatchCycle } from "./lints/static/dispatch-cycle";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
 export { default as errorWithoutCatalog } from "./lints/static/error-without-catalog";
@@ -248,6 +252,7 @@ export { default as storageUploadWithoutMaxSize } from "./lints/static/storage-u
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
 export { default as topicTooManySubscriptions } from "./lints/static/topic-too-many-subscriptions";
 export { default as ttlFieldNotTimestamp } from "./lints/static/ttl-field-not-timestamp";
+export { default as unboundedLoop } from "./lints/static/unbounded-loop";
 export { default as unboundedStringArgument } from "./lints/static/unbounded-string-argument";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
 export { default as unindexedRelationTarget } from "./lints/static/unindexed-relation-target";
@@ -298,6 +303,7 @@ export type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 export type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 export type { AdvisorStorageUpload } from "./storage-uploads";
 export type { AdvisorModule, Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
+export type { AdvisorUnboundedLoop } from "./unbounded-loops";
 export type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 export type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 export type { AdvisorWranglerVariable } from "./wrangler-variables";
@@ -338,6 +344,8 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     filterOnPrimaryKey,
     filterWithoutIndex,
     unboundedCollect,
+    unboundedLoop,
+    dispatchCycle,
     shapeTargetsGlobalTable,
     mutatorFullRowReplace,
     mutatorWithoutOwnerScope,
