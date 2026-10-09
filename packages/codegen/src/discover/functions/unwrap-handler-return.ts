@@ -123,7 +123,16 @@ const unwrapHandlerReturn = (handler: Node): string => {
     // mode — typically because the consuming project lacks the tsconfig
     // wiring to resolve `@lunora/server`/`@lunora/values`. Surfacing such
     // partial types would mislead users; fall back to `unknown` instead.
+    // An object carrying an `any` field is the same silent fallback as a bare
+    // `unknown`: a field that reads a value the checker could not type. Report
+    // it when the handler also has a type error, as the branch above does.
     if (isAnyDegraded(rendered)) {
+        const error = typeErrorWithin(handler);
+
+        if (error !== undefined) {
+            recordErasedReturn(handler, `${rendered} (${error})`);
+        }
+
         return "unknown";
     }
 

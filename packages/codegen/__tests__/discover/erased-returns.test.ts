@@ -174,6 +174,17 @@ const UNRESOLVED_REFERENCE = `
     export const getMissing = query({ args: {}, handler: async () => missingReference });
 `;
 
+/**
+ * A handler whose returned object carries a field the checker could not type. The
+ * object is not `any` as a whole, so it takes the degraded-type fallback, not the
+ * `any` branch, and must be reported the same way.
+ */
+const UNRESOLVED_OBJECT_FIELD = `
+    import { query } from "@lunora/server";
+
+    export const getWrapped = query({ args: {}, handler: async () => { const x = missingRef; return { a: x.b }; } });
+`;
+
 /** The control: a local interface the expander CAN reproduce, so nothing is lost and nothing is reported. */
 const EXPANDABLE = `
     import { query } from "@lunora/server";
@@ -231,6 +242,15 @@ describe("procedure_return_type_erased", () => {
         expect(findings[0]).toMatchObject({
             metadata: { exportName: "getMissing", filePath: "missing" },
         });
+    }, 300_000);
+
+    it("names the type error behind an object whose field the checker could not type", () => {
+        expect.assertions(2);
+
+        const findings = advisoriesFor({ "wrapped.ts": UNRESOLVED_OBJECT_FIELD }).filter((finding) => finding.name === "procedure_return_type_erased");
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ metadata: { exportName: "getWrapped", filePath: "wrapped" } });
     }, 300_000);
 
     it("does not report a handler erasure a declared `.output(...)` replaces", () => {
