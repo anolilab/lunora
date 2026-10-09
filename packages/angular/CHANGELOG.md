@@ -1,3 +1,9 @@
+## @lunora/angular [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.178...@lunora/angular@1.0.0-alpha.179) (2026-10-09)
+
+### Bug Fixes
+
+* **packages:** align stale @lunora/client pins to 1.0.0-alpha.193 ([#1089](https://github.com/anolilab/lunora/issues/1089)) ([46da632](https://github.com/anolilab/lunora/commit/46da632bc18dfd87f7dceb4522d1d35b6e9f2066))
+
 ## @lunora/angular [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/angular@1.0.0-alpha.177...@lunora/angular@1.0.0-alpha.178) (2026-10-09)
 
 
