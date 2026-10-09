@@ -585,9 +585,12 @@ export const DeploymentsSection = ({
                     </CardContent>
                 </Card>
             ) : null}
-            {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
-            {activeBuild && activeBuild.advisoryWarnings + activeBuild.advisoryNotes > 0 ? (
-                <BuildAdvisoriesCard buildId={activeBuild._id} organizationId={organizationId} />
+            {activeBuild ? (
+                <>
+                    <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} />
+                    {/* Renders nothing for a build the scan found nothing in. */}
+                    <BuildAdvisoriesCard buildId={activeBuild._id} organizationId={organizationId} />
+                </>
             ) : null}
             {buildSettings}
             {targetSettings}
