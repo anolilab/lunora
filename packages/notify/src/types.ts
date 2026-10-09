@@ -390,23 +390,10 @@ export interface PushOwner {
 
 /**
  * A push payload without its `to` target — the facade derives `to` from the
- * stored subscription — plus per-message Web Push delivery hints.
+ * stored subscription. Its `ttl` / `urgency` override the channel defaults per
+ * message on every push transport (Web Push, FCM, APNs, Expo).
  */
-export interface PushContent extends Omit<PushPayload, "to"> {
-    /**
-     * Seconds the push service keeps this message for an offline device (the
-     * Web Push `TTL` header), overriding the channel's `ttl`. Web Push only: FCM
-     * targets ignore it.
-     */
-    ttl?: number;
-
-    /**
-     * Delivery urgency of this message (the Web Push `Urgency` header),
-     * overriding the channel's `urgency` — e.g. `"high"` for an approval
-     * request, the default for the rest. Web Push only: FCM targets ignore it.
-     */
-    urgency?: WebPushConfig["urgency"];
-}
+export type PushContent = Omit<PushPayload, "to">;
 
 /**
  * The multi-channel notification facade — spliced onto ctx as `ctx.notify`.

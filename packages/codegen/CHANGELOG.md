@@ -1,3 +1,14 @@
+## @lunora/codegen [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.279...@lunora/codegen@1.0.0-alpha.280) (2026-10-09)
+
+### Features
+
+* **advisor:** flag exitless loops and unguarded dispatch cycles ([#1047](https://github.com/anolilab/lunora/issues/1047)) ([9558953](https://github.com/anolilab/lunora/commit/95589536a1e474c65ccda45e4260ed3436de2362))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.202
+
 ## @lunora/codegen [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.278...@lunora/codegen@1.0.0-alpha.279) (2026-10-08)
 
 ### Bug Fixes
