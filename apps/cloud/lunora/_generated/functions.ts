@@ -99,6 +99,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "alerts:deleteSilence": lunora_alerts_0.deleteSilence as unknown as RegisteredLunoraFunction,
     "alerts:list": lunora_alerts_0.list as unknown as RegisteredLunoraFunction,
     "alerts:markDelivered": lunora_alerts_0.markDelivered as unknown as RegisteredLunoraFunction,
+    "alerts:prepareTestAlert": lunora_alerts_0.prepareTestAlert as unknown as RegisteredLunoraFunction,
     "alerts:rules": lunora_alerts_0.rules as unknown as RegisteredLunoraFunction,
     "alerts:setRuleEnabled": lunora_alerts_0.setRuleEnabled as unknown as RegisteredLunoraFunction,
     "alerts:silences": lunora_alerts_0.silences as unknown as RegisteredLunoraFunction,
@@ -312,6 +313,13 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_alerts_0.prepareTestAlert.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["ruleId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "ruleId": source["ruleId"] };
 });
 installCompiledValidatorMap(lunora_alerts_0.rules.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -1076,6 +1084,7 @@ export interface Caller {
         deleteSilence: (args: { id: Id<"anomalySilences">; organizationId: Id<"organizations"> }) => Promise<Id<"anomalySilences">>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alerts">; channel: "email" | "pagerduty" | "slack" | "webhook"; createdAt: number; deliveredAt?: number; destination: string; status: "failed" | "firing" | "delivered"; subject: string; target: import("../../src/telemetry/alerts.js").AlertTarget }[]>;
         markDelivered: (args: { deployKey: unknown; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }) => Promise<{ delivered: number; }>;
+        prepareTestAlert: (args: { organizationId: Id<"organizations">; ruleId: Id<"alertRules"> }) => Promise<{ body: string; channel: import("../../src/telemetry/alerts.js").AlertChannel; destination: string; organizationId: string; subject: string }>;
         rules: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"alertRules">; channel: "email" | "pagerduty" | "slack" | "webhook"; comparator?: "gt" | "lt"; createdAt: number; destination: string; enabled: boolean; functionPath?: string; name: string; organizationId: Id<"organizations">; target: import("../../src/telemetry/alerts.js").AlertTarget; threshold: number; windowMinutes?: number }[]>;
         setRuleEnabled: (args: { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
         silences: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"anomalySilences">; createdAt: number; createdBy: string; endsAt: number; reason: string; startsAt: number; target: "error_anomaly" | "storage_anomaly" | "usage_anomaly" }[]>;
@@ -1371,6 +1380,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         deleteSilence: (args) => callRegistered(context, "alerts:deleteSilence", args),
         list: (args) => callRegistered(context, "alerts:list", args),
         markDelivered: (args) => callRegistered(context, "alerts:markDelivered", args),
+        prepareTestAlert: (args) => callRegistered(context, "alerts:prepareTestAlert", args),
         rules: (args) => callRegistered(context, "alerts:rules", args),
         setRuleEnabled: (args) => callRegistered(context, "alerts:setRuleEnabled", args),
         silences: (args) => callRegistered(context, "alerts:silences", args),

@@ -577,6 +577,12 @@ rows and returns a `level`:
   the `spend` rules again, and lifts only its own suspensions once spend is back
   under the cap (`organization.unsuspend`).
 
+An organization with no `spend` rule at all is never left uninformed: the
+first warn or breach creates the default rule, "Spend warnings (default)", which
+emails its owners and admins (`org:admins`, below) and is audit-logged as
+`alert_rule.default_created`. It is an ordinary rule from then on: retarget or
+disable it in the Alerts tab, and a disabled `spend` rule is respected.
+
 `usage.spendStatus` is the console's read of the same decision.
 
 The hourly sweep is the authority, but breach is also caught **at admission**.
@@ -793,6 +799,16 @@ threshold or as a deviation from a trailing baseline), an event (`deploy`), and
 an **anomaly score** (`usage_anomaly`, `error_anomaly`, `storage_anomaly`, plan 365 W4). Every
 family is delivered the same way (email, webhook, Slack, PagerDuty) and latches
 in `alertRuleState`, so a sustained breach alerts once and clears on recovery.
+
+An `email` rule may send to `org:admins` instead of an address: the
+organization's owners and admins, resolved when the alert is sent (members →
+the auth plane's users, `src/telemetry/recipients.ts`), so it follows changes in
+membership. Every rule has **Send test** in the Alerts tab: `POST
+/v1/alerts/test` (session; `alerts.prepareTestAlert` checks owner/admin,
+allows one test per rule per 30 s and writes `alert_rule.test` to the audit
+log) sends a clearly marked test through the rule's real channel and answers
+with the real outcome — the addresses it went to, or the delivery's own error —
+so a wrong destination is found before the alert matters.
 
 The anomaly detector follows the score-as-metric design (plan 365 D5/D6).
 `src/telemetry/anomaly-sweep.ts` runs hourly. It measures each organization's

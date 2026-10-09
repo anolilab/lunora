@@ -278,6 +278,36 @@ describe("usage.enforceSpendCaps soft cap (plan 365 W2)", () => {
         expect(String(alerts[0]?.["subject"])).toContain("spend warning");
     });
 
+    it("tells an organization with no spend rule anyway: it gets the default rule, to its owners and admins", async () => {
+        const { ctx, ops } = makeCtx({
+            organizations: [organization({ name: "Acme", spendCapMinor: 1_000_000, spendWarnMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ warned: 1 });
+
+        expect(inserted(ops, "alertRules")).toMatchObject([
+            { channel: "email", destination: "org:admins", enabled: true, name: "Spend warnings (default)", organizationId: "org_1", target: "spend" },
+        ]);
+        expect(inserted(ops, "auditLog")).toContainEqual(expect.objectContaining({ action: "alert_rule.default_created", actorUserId: "system:spend-cap" }));
+        expect(inserted(ops, "alerts")).toMatchObject([
+            { channel: "email", destination: "org:admins", organizationId: "org_1", status: "firing", target: "spend" },
+        ]);
+    });
+
+    it("respects a spend rule that was turned off: no default rule, nothing sent", async () => {
+        const { ctx, ops } = makeCtx({
+            alertRules: [spendRule({ enabled: false })],
+            organizations: [organization({ spendCapMinor: 1_000_000, spendWarnMinor: 1 })],
+            platformUsage: currentSpend(),
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(inserted(ops, "alertRules")).toStrictEqual([]);
+        expect(inserted(ops, "alerts")).toStrictEqual([]);
+    });
+
     it("does not warn again in a period it already warned in", async () => {
         const { ctx, ops } = makeCtx({
             alertRules: [spendRule()],
