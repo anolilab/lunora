@@ -65,6 +65,8 @@ import { LunoraError } from "@lunora/errors";
 import type {
     WorkflowBatchDeleteResult,
     WorkflowBindingLike,
+    WorkflowCreateBatchError,
+    WorkflowCreateOptions,
     WorkflowInstanceLike,
     WorkflowInstanceStatus,
     WorkflowRollbackHandlerLike,
@@ -802,15 +804,41 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
             create: async (createOptions) => startRun(id, createOptions),
             // Sequential, not `Promise.all`: two entries sharing a caller id must
             // collapse onto one run, and concurrent alias reads would both miss.
-            createBatch: async (batch) => {
-                const instances: WorkflowInstanceLike[] = [];
-
-                for (const createOptions of batch) {
-                    // eslint-disable-next-line no-await-in-loop -- see above; the alias read must observe the previous entry's write
-                    instances.push(await startRun(id, createOptions));
+            // Object form, as Cloudflare's binding: an entry that fails is reported
+            // in `errors` at its input index and the rest still run.
+            createBatch: async (batchOptions) => {
+                if ("count" in batchOptions && (!Number.isInteger(batchOptions.count) || batchOptions.count < 0)) {
+                    throw new LunoraError(
+                        "VALIDATION_ERROR",
+                        `@lunora/platform-node: createBatch count must be a non-negative integer, got ${String(batchOptions.count)}`,
+                    );
                 }
 
-                return instances;
+                const entries: ReadonlyArray<WorkflowCreateOptions> =
+                    "instances" in batchOptions
+                        ? batchOptions.instances
+                        : Array.from({ length: batchOptions.count }, () => {
+                              return { params: batchOptions.params };
+                          });
+                const created: WorkflowInstanceLike[] = [];
+                const errors: WorkflowCreateBatchError[] = [];
+
+                for (const [index, createOptions] of entries.entries()) {
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- see above; the alias read must observe the previous entry's write
+                        created.push(await startRun(id, createOptions));
+                    } catch (error) {
+                        // A refused create (a duplicate id, a bad request) is a 400, anything else a 500.
+                        errors.push({
+                            code: error instanceof LunoraError ? 400 : 500,
+                            id: createOptions.id,
+                            index,
+                            message: error instanceof Error ? error.message : String(error),
+                        });
+                    }
+                }
+
+                return { created, errors };
             },
             // Sequential for the same reason as `createBatch`: a duplicate id must
             // find the first entry's delete, so it is reported deleted, not missing.

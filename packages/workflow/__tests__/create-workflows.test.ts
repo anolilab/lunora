@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
 import createWorkflows from "../src/create-workflows";
-import type { WorkflowBindingLike, WorkflowCreateOptions, WorkflowInstanceLike } from "../src/types";
+import type { WorkflowBindingLike, WorkflowCreateBatchOptions, WorkflowCreateBatchResult, WorkflowCreateOptions, WorkflowInstanceLike } from "../src/types";
 
 const fakeInstance = (id: string): WorkflowInstanceLike => {
     return {
@@ -29,10 +29,11 @@ const fakeInstance = (id: string): WorkflowInstanceLike => {
 const fakeBinding = (): WorkflowBindingLike => {
     return {
         create: vi.fn<() => Promise<WorkflowInstanceLike>>(async () => fakeInstance("inst-1")),
-        createBatch: vi.fn<(batch: ReadonlyArray<WorkflowCreateOptions>) => Promise<WorkflowInstanceLike[]>>(
-            async (batch: ReadonlyArray<WorkflowCreateOptions>) =>
-                batch.map((_: WorkflowCreateOptions, index: number) => fakeInstance(`inst-${String(index)}`)),
-        ),
+        createBatch: vi.fn<(options: WorkflowCreateBatchOptions) => Promise<WorkflowCreateBatchResult>>(async (options: WorkflowCreateBatchOptions) => {
+            const entries: ReadonlyArray<WorkflowCreateOptions> = "instances" in options ? options.instances : [];
+
+            return { created: entries.map((_: WorkflowCreateOptions, index: number) => fakeInstance(`inst-${String(index)}`)), errors: [] };
+        }),
         deleteBatch: async (ids: ReadonlyArray<string>) => {
             return {
                 deleted: ids.map((id) => {
@@ -47,7 +48,7 @@ const fakeBinding = (): WorkflowBindingLike => {
 
 describe("createWorkflows", () => {
     it("resolves a handle and forwards create/get/createBatch/deleteBatch", async () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const binding = fakeBinding();
         const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
@@ -64,9 +65,10 @@ describe("createWorkflows", () => {
         expect(got.id).toBe("inst-9");
         expect(binding.get).toHaveBeenCalledWith("inst-9");
 
-        const batch = await handle.createBatch([{ params: {} }, { params: {} }]);
+        const batch = await handle.createBatch({ instances: [{ params: {} }, { params: {} }] });
 
-        expect(batch).toHaveLength(2);
+        expect(batch.created).toHaveLength(2);
+        expect(batch.errors).toStrictEqual([]);
         await expect(handle.deleteBatch(["inst-1"])).resolves.toStrictEqual({ deleted: [{ id: "inst-1" }], errors: [] });
     });
 
@@ -116,12 +118,26 @@ describe("createWorkflows", () => {
 
         const error = await workflows
             .get("orderPipeline")
-            .createBatch([{ params: { ok: true } }, { params: { [BRANCH_MARKER_KEY]: forged } }])
+            .createBatch({ instances: [{ params: { ok: true } }, { params: { [BRANCH_MARKER_KEY]: forged } }] })
             .catch((error_: unknown) => error_);
 
         expect((error as Error).name).toBe("LunoraError");
         expect((error as { code?: string }).code).toBe("BAD_REQUEST");
         expect((error as Error).message).toContain(BRANCH_MARKER_REJECTION);
+        expect(binding.createBatch).not.toHaveBeenCalled();
+    });
+
+    // The `count` form shares one params object across every instance it creates, so that one object is the check.
+    it("rejects createBatch({ count }) when its shared params carry the reserved branch marker", async () => {
+        expect.assertions(2);
+
+        const binding = fakeBinding();
+        const workflows = createWorkflows({ bindings: { orderPipeline: binding } });
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentClassName: "ParentWorkflow", parentId: "victim" };
+
+        await expect(workflows.get("orderPipeline").createBatch({ count: 3, params: { [BRANCH_MARKER_KEY]: forged } })).rejects.toThrow(
+            BRANCH_MARKER_REJECTION,
+        );
         expect(binding.createBatch).not.toHaveBeenCalled();
     });
 });
