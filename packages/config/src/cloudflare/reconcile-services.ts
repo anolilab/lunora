@@ -138,11 +138,13 @@ const reconcileServices = (
         }),
     ];
     const step: ReconcileStep & { owned: OwnedServices } = { added: [], owned: {}, text, updated: [], warnings: [] };
-    // The entrypoints the top-level `services[]` names, by binding, for the env copies to inherit.
+    // The entrypoints the hand-written top-level `services[]` entries name, by binding, for the env copies to
+    // inherit. An owned top-level entry is rewritten from its declaration, so its old entrypoint must not leak.
+    const ownedTopLevel = new Set(recorded[TOP_LEVEL_SCOPE]);
     const topLevelEntrypoints = new Map<string, string>();
 
     for (const entry of parsed.services ?? []) {
-        if (typeof entry?.binding === "string" && typeof entry.entrypoint === "string") {
+        if (typeof entry?.binding === "string" && typeof entry.entrypoint === "string" && !ownedTopLevel.has(entry.binding)) {
             topLevelEntrypoints.set(entry.binding, entry.entrypoint);
         }
     }

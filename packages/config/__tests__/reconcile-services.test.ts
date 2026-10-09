@@ -137,6 +137,18 @@ describe("reconcileServices", () => {
         expect(config()["env"].preview.services).toStrictEqual([{ binding: "SERVICE_GATEWAY", entrypoint: "InternalApi", service: "gateway-preview" }]);
     });
 
+    it("drops an entrypoint the env copies inherited from an owned top-level entry once the declaration stops naming it", () => {
+        expect.assertions(2);
+
+        reconcileWranglerBindings(root, inferred([gateway]));
+
+        expect(config()["env"].production.services).toStrictEqual([{ binding: "SERVICE_GATEWAY", entrypoint: "Gateway", service: "gateway-prod" }]);
+
+        reconcileWranglerBindings(root, inferred([service("gateway", "neore-gateway", { production: "gateway-prod" })]));
+
+        expect(config()["env"].production.services).toStrictEqual([{ binding: "SERVICE_GATEWAY", service: "gateway-prod" }]);
+    });
+
     it("is idempotent, and removes an owned entry once its declaration goes", () => {
         expect.assertions(3);
 
