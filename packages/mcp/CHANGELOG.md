@@ -1,3 +1,9 @@
+## @lunora/mcp [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.225...@lunora/mcp@1.0.0-alpha.226) (2026-10-09)
+
+### Bug Fixes
+
+* **packages:** align stale @lunora/client pins to 1.0.0-alpha.193 ([#1089](https://github.com/anolilab/lunora/issues/1089)) ([46da632](https://github.com/anolilab/lunora/commit/46da632bc18dfd87f7dceb4522d1d35b6e9f2066))
+
 ## @lunora/mcp [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.224...@lunora/mcp@1.0.0-alpha.225) (2026-10-08)
 
 
