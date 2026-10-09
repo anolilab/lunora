@@ -15,6 +15,7 @@ import { fireDeployAlerts } from "./alerts";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
+import { assertProjectNotHalted } from "./halts";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
 
@@ -495,6 +496,9 @@ export const create = mutation
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
         }
 
+        // An emergency stop holds until a resume: a release now would replace the stub.
+        await assertProjectNotHalted(context, project._id);
+
         // Isolation: the `alias`/`scriptName` label is the seed for this tenant's
         // per-deployment D1/R2 resource names (`${alias}-db`/`${alias}-files`) in the
         // provisioner, and for alias→script routing. It MUST be owned by exactly one
@@ -637,6 +641,8 @@ export const rollback = internalMutation
             throw new LunoraError("CONFLICT", `cannot roll back to a ${target.status} deployment`);
         }
 
+        await assertProjectNotHalted(context, target.projectId);
+
         const { now } = context;
         const replaced = await liveRelease(context, target);
 
@@ -697,6 +703,9 @@ export const releaseTarget = internalQuery
             if (target.status !== "superseded" && target.status !== "live") {
                 throw new LunoraError("CONFLICT", `cannot re-provision a ${target.status} deployment`);
             }
+
+            // A rollback, and a failed deploy's automatic revert, would replace an emergency stop's stub.
+            await assertProjectNotHalted(context, target.projectId);
 
             const live = await liveRelease(context, target);
 

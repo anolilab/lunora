@@ -1,3 +1,4 @@
+import { secretsForKind } from "../src/secrets/select";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
@@ -104,22 +105,10 @@ export const listEncrypted = query
             await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId));
             await assertRowInOrg(context, projectId, organizationId, "project");
 
-            const kind = environment ?? "production";
             const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
-            const rows = page.filter((secret) => secret.environment === kind || secret.environment === "all");
 
             // Kind-specific rows override shared ("all") rows of the same name.
-            const byName = new Map<string, SecretRow>();
-
-            for (const secret of rows) {
-                const existing = byName.get(secret.name);
-
-                if (!existing || (existing.environment === "all" && secret.environment !== "all")) {
-                    byName.set(secret.name, secret);
-                }
-            }
-
-            return [...byName.values()].map((secret) => {
+            return secretsForKind(page as SecretRow[], environment ?? "production").map((secret) => {
                 return { ciphertext: secret.ciphertext, iv: secret.iv, name: secret.name };
             });
         },

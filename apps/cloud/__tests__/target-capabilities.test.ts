@@ -50,10 +50,10 @@ describe(refusedBindings, () => {
 });
 
 describe("target limitations", () => {
-    it("says a box has no per-plan runtime limits, point-in-time recovery, recursion or edge protection, citing celld's note", () => {
+    it("says a box has no per-plan runtime limits, point-in-time recovery, recursion or edge protection, or emergency stop, citing celld's note", () => {
         const { limitations } = TARGETS["celld-vps"];
 
-        expect(limitations.map((entry) => entry.id)).toStrictEqual(["runtimeLimits", "pitr", "recursionProtection", "edgeProtection"]);
+        expect(limitations.map((entry) => entry.id)).toStrictEqual(["runtimeLimits", "pitr", "recursionProtection", "edgeProtection", "emergencyStop"]);
         expect(limitations.find((entry) => entry.id === "pitr")?.reason).toBe(CELLD_PITR_NOTE);
     });
 
@@ -64,6 +64,13 @@ describe("target limitations", () => {
 
     it("has nothing to add for Cloudflare", () => {
         expect(TARGETS["cloudflare-wfp"].limitations).toStrictEqual([]);
+    });
+
+    it("says an emergency stop in a connected account needs its token, and what the stub drops there", () => {
+        const stop = TARGETS["cloudflare-workers"].limitations.find((entry) => entry.id === "emergencyStop");
+
+        expect(stop?.reason).toMatch(/token you connected/u);
+        expect(stop?.reason).toMatch(/cron triggers and queue consumers until the resume restores them/u);
     });
 });
 

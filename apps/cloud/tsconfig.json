@@ -10,5 +10,5 @@
         "paths": { "@/*": ["./src/*"] }
     },
     "include": ["src/**/*", "lunora/**/*", "scripts/**/*", "vite.config.ts", "vitest.config.ts", "vitest.bench.config.ts", "__tests__/**/*", "__bench__/**/*"],
-    "exclude": ["node_modules", "dist"]
+    "exclude": ["node_modules", "dist", "__tests__/workerd/halt-stub.generated.js"]
 }

@@ -8,6 +8,9 @@ import { defineTable, v } from "@lunora/server";
 
 import { deployTarget, placementHost } from "./shared";
 
+// One Durable Object or Workflow class a Worker binds (`src/deploy/worker-classes.ts`).
+const boundClass = v.object({ binding: v.string(), className: v.string(), sqlite: v.optional(v.boolean()), type: v.string() });
+
 const deploymentKind = v.union(v.literal("production"), v.literal("preview"), v.literal("dev"));
 
 const deploymentStatus = v.union(
@@ -120,6 +123,56 @@ export const deployTables = {
         // the whole table and filtering after — see its note on page starvation.
         .index("by_status", ["status"]),
 
+    // Emergency stop: one row per deployment alias the organization asked to
+    // halt — by hand (`halts.haltOrganization`, or support over
+    // `POST /v1/halts`) or through a suspension (`haltOnSuspension`). The row is
+    // the intent and its progress; the every-minute halt sweep
+    // (`src/deploy/halt.ts`) converges the alias's Worker onto a generated stub
+    // that keeps every Durable Object class and runs none of the tenant's code,
+    // and back onto its live release on resume. While a project has a row,
+    // deploys, rollbacks and git-build releases of it are refused.
+    halts: defineTable({
+        alias: v.string(),
+        // Retries of a failed converge since the last success, and when the next may run (backoff).
+        attempts: v.optional(v.number()),
+        // A converge claimed the row at this time; another tick leaves it alone until the lease expires.
+        convergingAt: v.optional(v.number()),
+        createdAt: v.number(),
+        // The live release the stub replaced — what a resume converges back onto.
+        deploymentId: v.optional(v.string()),
+        // The lease token of the converge holding the row (with `convergingAt`): every write of that converge checks it is still its own.
+        convergingBy: v.optional(v.string()),
+        // When the stub last converged; absent until the first does.
+        haltedAt: v.optional(v.number()),
+        // Who asked: a member's user id, `support`, or `system:halt-on-suspension`.
+        haltedBy: v.string(),
+        kind: deploymentKind,
+        // Why the last converge failed. Kept until one succeeds.
+        lastError: v.optional(v.string()),
+        nextAttemptAt: v.optional(v.number()),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+        // What the stub answers with: `manual`, `support`, or the suspension's reason.
+        reason: v.string(),
+        // Support's "resume onto release X" (`POST /v1/halts`): the release a resume converges instead of the live one.
+        resumeDeploymentId: v.optional(v.string()),
+        // `manual` halts are lifted by an owner or admin, `support` halts only by
+        // support, and `suspension` halts follow the suspension.
+        source: v.union(v.literal("manual"), v.literal("suspension"), v.literal("support")),
+        // The classes the last stub converge bound, for the studio and the audit trail. The authority is `aliasOwnership`.
+        stubClasses: v.optional(v.array(boundClass)),
+        // `halting` until the stub is on the Worker, `halted` once it is, `resuming` once a resume is asked for.
+        state: v.union(v.literal("halting"), v.literal("halted"), v.literal("resuming")),
+        // When the last stub converge STARTED: a release that converged after it may sit on top of the stub.
+        stubStartedAt: v.optional(v.number()),
+        target: deployTarget,
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_alias", ["alias"], { unique: true })
+        .index("by_org", ["organizationId"])
+        .index("by_project", ["projectId"]),
+
     // One-row-per-alias ownership ledger. An alias (the tenant's stable script
     // label and script name) seeds per-project D1/R2 resource names and names the
     // project's Worker, so it MUST belong to exactly one project.
@@ -132,7 +185,20 @@ export const deployTables = {
         alias: v.string(),
         createdAt: v.number(),
         organizationId: v.id("organizations"),
+        // Converges onto the alias's Worker whose outcome is not known yet, or
+        // never will be (a job that failed after it may have uploaded the
+        // script): each one's classes may be on the Worker. Written right before
+        // the converge; dropped when it provably never uploaded, or once a later
+        // converge succeeded (`src/deploy/worker-classes.ts`).
+        pendingClasses: v.optional(
+            v.array(v.object({ classes: v.array(boundClass), endedAt: v.optional(v.number()), startedAt: v.number(), token: v.string() })),
+        ),
         projectId: v.id("projects"),
+        // The Durable Object and Workflow classes of the script the last
+        // successful converge put on the alias's Worker. On a target that drops
+        // unbound classes these are the classes that can hold data — what an
+        // emergency stop's stub must keep and its resume must not drop.
+        workerClasses: v.optional(v.array(boundClass)),
     })
         .global()
         .index("by_alias", ["alias"], { unique: true })

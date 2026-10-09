@@ -44,6 +44,7 @@ const makeCtx = (tables: Record<string, Row[]>): { ctx: MutationCtx; deleted: st
             },
             deployments: facade("deployments"),
             domains: facade("domains"),
+            halts: facade("halts"),
             get: (id: string) => Promise.resolve({ _id: id, organizationId: ORG }),
             insert: () => Promise.resolve("row_1"),
             members: facade("members"),
@@ -81,6 +82,14 @@ describe("projects.remove", () => {
 
         expect(deleted).toContain("sec_1");
         expect(deleted).toContain(PROJECT);
+    });
+
+    it("m2: deletes the project's emergency stops, so none holds whoever claims its aliases next", async () => {
+        const { ctx, deleted } = makeCtx({ deployments: [], halts: [{ _id: "halt_1", alias: "shop", projectId: PROJECT }], members });
+
+        await remove.handler(ctx, { id: PROJECT as never, organizationId: ORG as never });
+
+        expect(deleted).toContain("halt_1");
     });
 
     it("transitions deployments to destroyed rather than deleting them", async () => {

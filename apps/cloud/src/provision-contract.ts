@@ -112,7 +112,7 @@ export const storedTarget = (stored: null | string | undefined): TargetId | unde
 
 /** A capability a target lacks as a whole (not a binding), with the reason the studio shows. */
 export interface TargetLimitation {
-    id: "customDomains" | "edgeProtection" | "logs" | "pitr" | "recursionProtection" | "runtimeLimits";
+    id: "customDomains" | "edgeProtection" | "emergencyStop" | "logs" | "pitr" | "recursionProtection" | "runtimeLimits";
     label: string;
     reason: string;
 }
@@ -197,6 +197,11 @@ export const TARGETS = {
                 label: "Edge firewall events and rules",
                 reason: "Your server is reached directly, not through Lunora Cloud's Cloudflare zone, so there are no firewall events to show and no DDoS override or anomaly rate limit to apply. Usage anomalies still alert.",
             },
+            {
+                id: "emergencyStop",
+                label: "Emergency stop",
+                reason: "An emergency stop does not reach a project on your own server. A suspension already stops its fleet on the box, keeping its data, and lifting the suspension starts it again; to stop it by hand meanwhile, stop the fleet on the machine.",
+            },
         ],
         metering: "pushed",
         placedOn: "box",
@@ -206,6 +211,7 @@ export const TARGETS = {
         dropsUnboundClasses: true,
         fanout: "dispatcher",
         label: "Lunora Cloud (Cloudflare)",
+        // An emergency stop reaches every tenant here; how it parks alarms and holds queues is in the README.
         limitations: [],
         metering: "readback",
         placedOn: "cell",
@@ -243,6 +249,11 @@ export const TARGETS = {
                 id: "edgeProtection",
                 label: "Edge firewall events and rules",
                 reason: "Your Worker is served from your account, not Lunora Cloud's zone, so its firewall events and DDoS settings live in your Cloudflare dashboard. Usage anomalies still alert.",
+            },
+            {
+                id: "emergencyStop",
+                label: "Emergency stop without a working token",
+                reason: "An emergency stop replaces the Worker in your account through the token you connected, so it fails — and is retried — while that token is revoked or lacks Workers Scripts: Edit. The stub keeps every Durable Object's data and parks its alarms an hour at a time (one invocation and one storage write each), and drops the Worker's cron triggers and queue consumers until the resume restores them; messages sent meanwhile wait on the queue for its retention period.",
             },
         ],
         // Request counts are read back from the account's GraphQL Analytics API, and shown, never billed.

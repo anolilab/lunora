@@ -613,8 +613,8 @@ and past the dispatcher. Both apply the same admission test
 crons do not tick, and its queue batches are held: every message is retried
 with Cloudflare's longest delay (12 h) rather than acked, so a suspension loses
 nothing until the queue's `max_retries` runs out. Code already running inside
-the tenant — a Durable Object alarm that keeps re-arming itself — is not
-stopped by any of this.
+the tenant — a Durable Object alarm that keeps re-arming itself — is stopped
+only by the **Emergency stop** below.
 
 **Edge block.** A cell can also enforce a suspension in front of the Worker, so
 an attack on a suspended tenant stops costing a billed request each time. The
@@ -663,6 +663,109 @@ all, the push fails and the box keeps its last table; the sweep retries every
 minute. An empty table would stop every fleet on the box, so it is never sent
 in that case. `cloudflare-workers` tenants run on the customer's own
 account and are not edge-blocked.
+
+**Emergency stop** (`src/deploy/halt.ts`). Everything above stops _new_
+traffic. Code already running inside a tenant does not stop with it: a Durable
+Object alarm that re-arms itself keeps running and billing however the org is
+suspended, and on `cloudflare-workers` the Worker's own crons and queue
+consumers keep firing in the customer's account. A halt stops that code:
+
+- Each live alias of the org is converged onto a **stub release**
+  (`src/deploy/halt-stub.ts`) generated from the classes recorded for its
+  Worker, never from tenant code. Every request, to the Worker and to each Durable Object, gets
+  `503 {"error":"project halted: <reason>"}`. The stub has no `scheduled` or
+  `queue` handler, no assets, no secrets, crons or queue consumers.
+- **Data is kept.** On both Cloudflare targets a converge deletes the data of a
+  Durable Object class the script stops binding (`dropsUnboundClasses`). So the
+  classes that hold data are those of the script on the Worker now, and every
+  converge records them on the alias's ownership row
+  (`src/deploy/worker-classes.ts`). This covers the deploy edge's deploys,
+  reverts, rollbacks and git-build releases, and the halt sweep's own
+  converges. The record is written before the provision job runs: a pending
+  entry, refused along with the converge if the write fails. On success it is
+  confirmed as `workerClasses`. A failure is dropped only when it provably
+  uploaded nothing (the box was busy, or the project stack failed before the
+  Worker stack ran). Otherwise it is kept, because the job may have uploaded
+  the script before failing. The stub binds exactly `workerClasses` and every
+  pending entry, keyed by class name, under their own binding names where
+  free (`HALTED_CLASS_<n>` otherwise), limited to the types the target
+  provisions. `assertStubKeepsClasses` refuses any other stub before anything
+  converges, and runs the rollback's own drop guard
+  (`droppedDurableObjectClasses`). The `sqlite` flag is never compared: the
+  provision box never sends it, and a class keeps its storage. An alias
+  deployed before the record falls back to its live release and the newer
+  releases that may have reached its Worker. A release that converged
+  (`verifyingAt` set) is refused when its bundle is gone. A release that
+  failed or never settled after it started converging is kept while its bundle
+  is retained, and skipped once it is pruned. That last case is the one gap,
+  and it closes at the alias's first recorded converge. The project stack is additive, so storage the
+  stub does not bind (D1, R2, KV, queues) is kept and bound again on resume.
+- **Alarms are parked, not dropped.** A stub object's `alarm()` re-arms itself an
+  hour out (`PARK_ALARM_MS`) instead of running anything, so the tenant's own
+  alarm runs again within the hour after a resume. A parked alarm costs one
+  alarm invocation and one storage write per object per hour. Letting it lapse
+  instead would lose the tenant's schedule for good.
+- **Resume** re-converges the alias's live release, retained in `RELEASES`
+  because `pruneSuperseded` never prunes it, through `reprovision` with
+  `keepClasses`: crons, queue consumers, assets and secrets come back as on a
+  deploy. Support may resume an alias onto another retained release instead.
+  Either way the resume is refused, and the alias stays halted, unless the
+  release binds every class the record says may be on the Worker. That check
+  is independent of the deployment rows (RUNBOOK § 6c).
+- **While halted**, deploys (`deployments.create`), git-build releases,
+  rollbacks and re-provisions (`releaseTarget`, `rollback`) of the project are
+  refused with "project halted — resume it first". The deploy edge checks again
+  right before it converges (`guardedDriver`), so a deploy, rollback or
+  failed health check's revert that was already in flight cannot land on the
+  stub. The sweep waits for an in-flight deploy of the alias before stubbing,
+  and puts the stub back over any converge of the alias that finished after
+  the stub's started (one already running past that wait). The cron
+  fan-out skips halted releases. The platform queue consumer holds their batches
+  undelivered, retrying them every 12 hours, so a message outlives a halt only
+  as long as the queue's retry limit allows. On `cloudflare-workers` the stub
+  removes the consumers, and messages wait on the queue for its retention
+  period. The uptime probe sees the 503, and the daily tenant backup fails
+  until the resume.
+
+Triggers. Owners and admins halt or resume all their org's projects from the
+Usage tab's **Emergency stop** card. That is a **manual** halt, which only a
+person lifts. Support halts over `POST /v1/halts` (admin token, RUNBOOK § 6c).
+A **support** halt holds the whole organization (`supportHaltedAt`), so a
+deploy of an alias that has no live release yet is refused too. Owners and
+admins cannot lift it, and only support's resume does. `organizations.haltOnSuspension` (absent means on; owners turn it
+off) makes a `spend-cap` or `overage` suspension halt the org too, never
+`dunning` or `support`. The every-minute halt sweep converges halts to
+suspensions idempotently: it halts an eligible suspended org's live aliases and
+resumes them when the suspension lifts, its reason changes, or the setting is
+turned off. It never resumes a manual or support halt, and a resume asked for while an
+eligible suspension holds is refused. The sweep only reads the suspension and
+never writes it.
+
+Each `halts` row (one per alias) is intent plus progress: `halting`, then
+`halted` once the stub converged, and `resuming` until the release is back,
+when the row is deleted. The halts and fan-out holds belong to the alias's
+owning project. Deleting the project, or the teardown releasing its alias,
+deletes them, and a halt left on an alias another project claimed since holds
+nothing of that project. Every cell's control plane runs the sweep, and each
+acts only on the organizations placed on its own cell, where a resume also
+resolves the project's placement as a deploy does. The sweep converges at most
+three rows per tick, each under a 20-minute lease and paced like a deploy. A
+claim is re-read before it is used and every write checks the lease is still
+this tick's. The store has no conditional update, so two ticks can still both
+claim in a narrow interleaving. The worst outcome is the same idempotent stub
+converged twice. A converge's outcome carries its own classes, so a success is
+recorded right even if a concurrent write lost its pending entry. A failed
+converge whose pending entry a concurrent write lost before it ended is also
+re-recorded. Only the narrow window between the lost write and the converge's
+own end can leave the record short. A busy provision box (409) is a one-minute wait,
+not a failure. One organization that cannot be synced, or one row that cannot
+be converged, never stops the rest. It runs on the tick's
+`waitUntil`, so tenant crons never wait behind it. A failed converge keeps the
+row, records `lastError` and backs off from a minute up to an hour. It is
+logged as `[halt]` every time, and audit-logged and alerted (the org's `deploy`
+rules) once per run of failures. Every request, halt and resume is
+audit-logged. Box projects (`celld-vps`) are not halted, because a suspension
+already stops their fleets on the box.
 
 **Billing for agents** (plan 365 W6). Two read-only, deploy-key routes are
 opted in as tools on the MCP surface (`POST /v1/mcp`):

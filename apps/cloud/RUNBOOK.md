@@ -258,6 +258,95 @@ the edge. In `delete-hostnames` mode the domain also reads "blocked:
 suspended". Lift the suspension and, within the hour, the domain serves again
 (in `delete-hostnames` mode, with a fresh certificate).
 
+## 6c. Emergency stop (halt and resume)
+
+A suspension blocks new requests but does not stop code already running in a
+tenant. A Durable Object alarm that re-arms itself keeps billing. A halt
+converges the tenant onto a stub that keeps all data, parks alarms an hour at a
+time and runs none of the tenant's code (README § Emergency stop). Nothing to
+set up: the every-minute halt sweep runs wherever `RELEASES` is bound.
+
+**Which classes are kept.** Every converge onto a Cloudflare tenant records the
+Durable Object classes it puts on the alias's Worker
+(`aliasOwnership.workerClasses`, and `pendingClasses` for one whose outcome is
+unknown). The stub binds exactly those, and a resume is refused onto any
+release that does not bind every one. Deployment rows and retained bundles do
+not decide this, so no edit to a deployment row can make a halt or a resume
+drop a class. An alias deployed before the record falls back to its live
+release and every newer release that may have reached the Worker, until its
+next converge records it. One case stays unknown there: a newer release that
+failed before verifying, whose bundle was already pruned. Its classes are
+skipped. If such an alias is halted, ask the customer whether that release
+added a Durable Object class before you resume it.
+
+**Halt an organization (support).** For a runaway tenant, an abuse case, or a
+customer asking for it:
+
+```bash
+curl -X POST "https://$CONTROL_PLANE/v1/halts" \
+  -H "authorization: Bearer $LUNORA_ADMIN_TOKEN" -H "content-type: application/json" \
+  -d '{"organizationId":"<org id>","action":"halt"}'
+```
+
+The answer names the aliases asked to halt and those it cannot reach (box
+projects; stop those on the machine). Each alias converges within a minute or
+two. The org's Usage tab shows each one's state, and the audit log records
+`halt.requested`, then `halt.halted` per alias. A support halt holds the whole
+organization (`organizations.supportHaltedAt`), so a deploy of an alias that has
+no live release yet is refused too. No owner or admin can lift it, and no
+suspension change touches it. Only support's resume does.
+
+**Resume.** The same call with `"action":"resume"`. It is refused while a
+`spend-cap` or `overage` suspension still halts the org with
+`haltOnSuspension` on, because the sweep would halt it again on the next tick.
+Lift the suspension first, or have the owner turn the setting off. Each alias
+converges back onto its live release (`halt.resumed` in the audit log), with
+crons, queue consumers and secrets as on a deploy. Durable Object alarms that
+were parked run the tenant's code again within the hour.
+
+**Resume onto a chosen release.** Add `"deploymentId":"<release id>"` to a
+resume to converge that release's alias onto it instead of its live release. It
+must be a live or retained (superseded) release of the organization. The same
+class check applies: it is refused unless the release binds every class that
+may be on the Worker. On success it becomes the alias's live release, as after a
+rollback.
+
+**Failures.** A converge that fails keeps its row and its error (`lastError`,
+shown on the card as "Retrying: …"). It is retried with backoff (1, 2, 4, …
+minutes, at most an hour). It is logged as `[halt]` in Workers Logs every time,
+and audit-logged (`halt.halt_failed` / `halt.resume_failed`) and alerted over
+the org's `deploy` rules once per run of failures. A failure never touches the
+suspension. Causes, by message:
+
+- `resuming onto release … would delete the data of class(es) …, which may be on
+the Worker`: the release you resume onto does not bind a class the Worker may
+  run. That is typically a newer release whose converge failed after it may
+  have uploaded the script (its health check failed and its revert failed too,
+  or the job died mid-way). The alias stays halted. Resume it onto a release
+  that binds every named class with `deploymentId` (usually that newer
+  release). Once it runs again, fix forward with a deploy. Never edit
+  `aliasOwnership.workerClasses` or `pendingClasses` by hand to get past this:
+  they are the only record of which classes hold data.
+- `release … is no longer retained, so the classes its Worker runs are unknown`:
+  only for an alias deployed before the class record. A release that reached
+  that Worker is pruned. Support can still stop the tenant at its source: ask
+  the customer which release runs and resume onto it, or wait for the
+  customer's next converge to record the Worker.
+- `alias … has no ownership row`: the alias was released while a converge ran.
+  It retries, then forgets the halt once the alias has no live release.
+- `the job carries no token` or a Cloudflare 401/403 on `cloudflare-workers`:
+  the customer's connected token is revoked or lacks Workers Scripts: Edit. It
+  retries until they reconnect the account.
+- A provision-box 409 (`SERVICE_UNAVAILABLE`): another job for the alias was
+  running. This is not a failure: no attempt or alert is recorded, and the next
+  try is a minute out.
+
+**Check:** halt a test org with one `cloudflare-wfp` project that has a Durable
+Object with a pending alarm. Within two minutes `https://<alias>.<app domain>/`
+answers `503 {"error":"project halted: support"}`, and its object's alarm is an
+hour out. Deploy to it: refused with "project halted — resume it first". Resume.
+The app serves again, and its data is intact.
+
 ## 7. `hostd` release signing key
 
 Exact steps in [`../hostd/README.md`](../hostd/README.md) § Releases & signing:

@@ -148,7 +148,7 @@ export interface DeployAlertSource {
     /** What went wrong, in the operator's words — a build error, a status, an abort reason. */
     detail: string;
     /** Which part of the release path produced it. */
-    kind: "box" | "build" | "deployment";
+    kind: "box" | "build" | "deployment" | "halt" | "halt_failed";
     /** The project the release belongs to — for `box`, the box's name. */
     project: string;
     /** What identifies the failing thing — a branch, a commit, a script name, a box's slug. */
@@ -160,6 +160,8 @@ const DEPLOY_KIND_LABEL: Record<DeployAlertSource["kind"], string> = {
     box: "Box outdated",
     build: "Build failed",
     deployment: "Deployment failed",
+    halt: "Project halted",
+    halt_failed: "Emergency stop failed",
 };
 
 /**
