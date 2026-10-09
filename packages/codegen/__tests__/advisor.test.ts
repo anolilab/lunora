@@ -317,7 +317,8 @@ export const schema = defineSchema({
             const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
             const invalid = advisories.filter((advisory) => advisory.name === "advisor_min_severity_invalid");
 
-            expect(advisories).toHaveLength(unfiltered.length + 1);
+            // A spread also makes `accept` unreadable, which reports its own warning; only the floor's is asserted here.
+            expect(advisories.filter((advisory) => advisory.name !== "advisor_accept_invalid")).toHaveLength(unfiltered.length + 1);
             expect(invalid).toHaveLength(1);
             expect(invalid[0]?.detail).toContain(detail);
         });
@@ -385,6 +386,45 @@ export const schema = defineSchema({
             expect(levels(advisories)["ERROR"]).toBe(levels(before)["ERROR"]);
             expect(advisories.filter((advisory) => advisory.name === "advisor_accept_invalid")).toHaveLength(1);
             expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
+        });
+
+        // A floor of "error" must not hide what the accept list did: the demoted finding and the stale warning both stay.
+        it('keeps an accepted finding and a stale-accept warning when minSeverity is "error"', () => {
+            expect.assertions(3);
+
+            seedAllLevels();
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { minSeverity: "error", accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }, { rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "nobody", reason: "stale" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(advisories.find((advisory) => advisory.name === "shape_unknown_table")?.level).toBe("INFO");
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(1);
+            expect(levels(advisories)["ERROR"] ?? 0).toBe(0);
+        });
+
+        // An unreadable minSeverity disables only the floor; a valid accept list still demotes its ERROR.
+        it("still applies a valid accept list when minSeverity is not a literal", () => {
+            expect.assertions(2);
+
+            seedAllLevels();
+
+            const before = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `const level = ["warn"][0];\nexport default { advisor: { minSeverity: level, accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(levels(advisories)["ERROR"] ?? 0).toBe((levels(before)["ERROR"] ?? 0) - 1);
+            expect(advisories.map((advisory) => advisory.name)).toContain("advisor_min_severity_invalid");
         });
     });
 

@@ -369,9 +369,10 @@ const readAdvisor = (declared: TsNode | undefined, sourceFile: SourceFile): Proj
         return { advisor: accepts };
     }
 
+    // `accept` is read from the same plain object, so it stays valid when only `minSeverity` is not a literal.
     return "literal" in member && TsNode.isStringLiteral(member.literal)
         ? { advisor: { ...accepts, minSeverity: member.literal.getLiteralValue() } }
-        : { advisor: { unreadable: true } };
+        : { advisor: { ...accepts, unreadable: true } };
 };
 
 /** `codegen.exclude` from the `codegen` object literal: an array of non-negated string literals, or `unreadable`. */

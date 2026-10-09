@@ -57,7 +57,12 @@ const applyAcceptedFindings = (advisories: ReadonlyArray<Finding>, accepted: Rea
 
         matched.add(entry);
 
-        return { ...advisory, detail: `Accepted: ${entry.reason}. ${advisory.detail}`, level: "INFO" };
+        return {
+            ...advisory,
+            detail: `Accepted: ${entry.reason}. ${advisory.detail}`,
+            level: "INFO",
+            metadata: { ...advisory.metadata, accepted: entry.reason },
+        };
     });
 
     return [...demoted, ...accepted.filter((entry) => !matched.has(entry)).map((entry) => staleAcceptance(entry))];
@@ -80,5 +85,9 @@ const unreadableAcceptance = (): Finding => {
     };
 };
 
-export { applyAcceptedFindings, unreadableAcceptance };
+/** Whether a finding is an acceptance outcome: a demoted ERROR, or a warning about the `accept` list itself. The floor never drops these. */
+const isAcceptanceOutcome = (advisory: Finding): boolean =>
+    advisory.metadata["accepted"] !== undefined || advisory.name === "advisor_accept_unused" || advisory.name === "advisor_accept_invalid";
+
+export { applyAcceptedFindings, isAcceptanceOutcome, unreadableAcceptance };
 export type { AcceptedFinding };

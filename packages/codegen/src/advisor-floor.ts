@@ -14,7 +14,7 @@
  */
 import type { Finding, Level } from "@lunora/advisor";
 
-import { applyAcceptedFindings, unreadableAcceptance } from "./advisor-accept";
+import { applyAcceptedFindings, isAcceptanceOutcome, unreadableAcceptance } from "./advisor-accept";
 import { readProjectConfigLiterals } from "./project-config-file";
 
 /** The values `minSeverity` accepts, and the advisor level each one means. */
@@ -61,7 +61,9 @@ const applyAdvisorFloor = (projectRoot: string, advisories: ReadonlyArray<Findin
         ];
     }
 
-    return advisories.filter((advisory) => RANK[advisory.level] >= RANK[floor]);
+    // Acceptance outcomes stay in the report whatever the floor: an accepted ERROR is still reported, and a stale or invalid
+    // `accept` list still warns.
+    return advisories.filter((advisory) => isAcceptanceOutcome(advisory) || RANK[advisory.level] >= RANK[floor]);
 };
 
 /**
