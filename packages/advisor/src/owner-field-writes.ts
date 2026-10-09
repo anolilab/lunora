@@ -17,8 +17,18 @@ export interface AdvisorOwnerFieldWrite {
     field: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
+
+    /**
+     * The handler proves the written value equals the server identity before the
+     * write (an `if (args.field !== identity) throw`, or an `assert*(…)` given both):
+     * the value is validated, so the write is not reported. Mirrors the codegen
+     * feeder's `guarded` stamp; see `isGuardedWrite` there.
+     */
+    guarded?: true;
+
     /** 1-based line of the `ctx.db` write call, or `0` when unknown. */
     line: number;
+
     /** The `ctx.db` write method (`insert` / `replace` / `patch` / `insertManyUnsafe`). */
     method: string;
 

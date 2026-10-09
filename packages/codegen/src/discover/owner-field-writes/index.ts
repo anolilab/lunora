@@ -8,6 +8,7 @@ import { callSiteScopeOf, declarationOf, withCallerVisibility } from "../attribu
 import { denotesContextDatabase, isContextRooted } from "../context-root";
 import type { MutatorImplScope } from "./args-pristine";
 import { mutatorImplScopeOf } from "./args-pristine";
+import isGuardedWrite from "./guarded-args";
 import implTaintOf from "./impl-taint";
 
 /**
@@ -180,9 +181,10 @@ const identityWritesInObjectLiteral = (
         // side is. Outside a mutator impl the root is resolved by
         // `isContextRooted`; inside one, by the impl's own taint model
         // (`ImplTaint`).
-        const isTainted = writtenValues(value).some((written) =>
+        const taintedBranches = writtenValues(value).filter((written) =>
             taint === undefined ? isArgumentDerived(written) && !isContextRooted(written) : taint.isTaintedValue(written, true),
         );
+        const isTainted = taintedBranches.length > 0;
 
         if (isTainted) {
             // Recorded either way — the lint decides what to do with it. Dropping it
@@ -198,6 +200,9 @@ const identityWritesInObjectLiteral = (
             // rewrites or lets it escape. A helper's or a nested function's own
             // parameters can be filled from anything, so they never qualify.
             const ownerScoped = write.ownerField === name && implScope?.pristine === true && resolvesToOwnerArgument(value, implScope.parameter, name);
+            // Guarded only when EVERY branch the write can store is proven: a
+            // ternary whose other branch reads an unproven `args` field still leaks it.
+            const guarded = taintedBranches.every((written) => isGuardedWrite(write.call, written));
 
             rows.push({
                 field: name,
@@ -206,6 +211,7 @@ const identityWritesInObjectLiteral = (
                 method: write.method,
                 scope: write.scope,
                 ...(ownerScoped && { ownerScoped: true }),
+                ...(guarded && { guarded: true }),
             });
         }
     }
