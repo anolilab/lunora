@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.369](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.368...@lunora/cli@1.0.0-alpha.369) (2026-10-09)
+
+### Bug Fixes
+
+* **cli:** stop doctor advising removal of service auth ([#1074](https://github.com/anolilab/lunora/issues/1074)) ([efaf451](https://github.com/anolilab/lunora/commit/efaf451b7dbfbdd1f5d8e261ae1aa7fb480a92e2))
+
 ## @lunora/cli [1.0.0-alpha.368](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.367...@lunora/cli@1.0.0-alpha.368) (2026-10-09)
 
 

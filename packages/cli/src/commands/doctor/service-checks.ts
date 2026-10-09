@@ -22,9 +22,14 @@ const checkServices = (cwd: string, findings: Finding[]): void => {
 
             findings.push({
                 code: "service-workers-dev",
-                fix: `Set \`"workers_dev": false\`${where} in ${service.wranglerPath} — the app's service binding is its only way in, so internal auth (HMAC) can go too.`,
+                // This check reads only the service's wrangler config. A custom domain is often
+                // attached outside it (Alchemy's `alchemy.run.ts`, the dashboard), so a
+                // Worker can be publicly reachable here without this file showing a route. The
+                // advice therefore never says the binding is the only way in: turning off
+                // workers.dev is safe only when no public route exists, and internal auth stays.
+                fix: `If ${service.name} has no public route (custom domain or route, including ones set outside ${service.wranglerPath}), set \`"workers_dev": false\`${where}. Keep its internal auth (HMAC) either way.`,
                 level: "warn",
-                message: `service ${service.name} (${service.worker}) is bound by the app but still public on workers.dev${where}.`,
+                message: `service ${service.name} (${service.worker}) has no route in its wrangler config and still serves on workers.dev${where}; a custom domain set elsewhere would also be public.`,
             });
         }
     }
