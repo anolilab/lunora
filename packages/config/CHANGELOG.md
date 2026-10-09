@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.327](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.326...@lunora/config@1.0.0-alpha.327) (2026-10-09)
+
+### Bug Fixes
+
+* **config:** carry a top-level service entrypoint into the env copies ([#1064](https://github.com/anolilab/lunora/issues/1064)) ([1791189](https://github.com/anolilab/lunora/commit/1791189866aea6600f16a3ac02f0c2cda4f2065d))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.282
+* **@lunora/seed:** upgraded to 1.0.0-alpha.206
+* **@lunora/studio:** upgraded to 1.0.0-alpha.280
+
 ## @lunora/config [1.0.0-alpha.326](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.325...@lunora/config@1.0.0-alpha.326) (2026-10-09)
 
 
