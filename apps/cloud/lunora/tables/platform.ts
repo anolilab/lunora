@@ -85,6 +85,10 @@ export const platformTables = {
         // stopping code that is already running. Absent ⇒ on; owners turn it off
         // through `halts.setHaltOnSuspension`. Never applies to `dunning`.
         haltOnSuspension: v.optional(v.boolean()),
+        // Support's emergency stop (`POST /v1/halts`): while set, every project of
+        // the organization is held — a deploy of an alias that has no live
+        // release yet included — and only support lifts it.
+        supportHaltedAt: v.optional(v.number()),
     })
         .global()
         .index("by_slug", ["slug"], { unique: true }),

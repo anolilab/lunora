@@ -23,7 +23,8 @@ const ORG = "org_1";
  *
  * `assertMember` reads `members` and the caller identity, so the double supplies
  * an owner; everything else the pointer paths touch is `deployments`, `projects`,
- * the emergency-stop check on `halts` (none here) and the audit insert.
+ * the emergency-stop check on `halts` and the organization (neither holds it
+ * here) and the audit insert.
  */
 const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch: Row }[] } => {
     const patched: { id: string; patch: Row }[] = [];
@@ -62,7 +63,8 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
 
                 return Promise.resolve();
             },
-            projects: { findMany: findMany("projects") },
+            organizations: { get: () => Promise.resolve({ _id: ORG }) },
+            projects: { findMany: findMany("projects"), get: (id: string) => Promise.resolve({ _id: id, organizationId: ORG }) },
         },
         log: { info: () => undefined },
         now: 1_700_000_000_000,

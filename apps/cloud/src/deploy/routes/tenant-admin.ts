@@ -209,14 +209,17 @@ export const handleCellRegisterRoute = async (request: Request, environment: Rou
 
 /**
  * `POST /v1/halts` — support's emergency stop and resume of an organization's
- * projects (`{ organizationId, action: "halt" | "resume" }`), admin-token gated.
+ * projects (`{ organizationId, action: "halt" | "resume", deploymentId? }`),
+ * admin-token gated. `deploymentId` resumes that release's alias onto it
+ * instead of its live release — refused unless it binds every class that may
+ * be on the Worker.
  * Writes the intent only; the every-minute halt sweep converges it
  * (`src/deploy/halt.ts`, RUNBOOK "Emergency stop"). A resume is refused while
  * a suspension `haltOnSuspension` covers still holds, exactly as an owner's is.
  */
 export const handleHaltRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    let body: { action?: unknown; organizationId?: unknown };
+    let body: { action?: unknown; deploymentId?: unknown; organizationId?: unknown };
 
     try {
         body = await request.json();
@@ -224,14 +227,25 @@ export const handleHaltRoute = async (request: Request, environment: RouterEnv):
         return jsonError(400, "invalid JSON body");
     }
 
-    const { action, organizationId } = body;
+    const { action, deploymentId, organizationId } = body;
 
     if (typeof organizationId !== "string" || (action !== "halt" && action !== "resume")) {
         return jsonError(400, 'organizationId and action ("halt" or "resume") are required');
     }
 
+    if (deploymentId !== undefined && (typeof deploymentId !== "string" || action !== "resume")) {
+        return jsonError(400, "deploymentId is a release id, and only a resume takes one");
+    }
+
     try {
-        return Response.json({ ok: true, ...(await context.runMutation<Record<string, unknown>>(internal.halts.operatorHalt, { action, organizationId })) });
+        return Response.json({
+            ok: true,
+            ...(await context.runMutation<Record<string, unknown>>(internal.halts.operatorHalt, {
+                action,
+                ...(deploymentId === undefined ? {} : { deploymentId }),
+                organizationId,
+            })),
+        });
     } catch (error) {
         return rejected(error, "halt request failed");
     }

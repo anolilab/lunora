@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { withoutHalted } from "../src/fanout/live";
+import { haltKey, withoutHalted } from "../src/fanout/live";
 import { deliverQueueBatch, HELD_RETRY_DELAY_SECONDS } from "../src/fanout/platform-queue";
 import { tenantResourceName } from "../src/provision-contract";
 import type { TargetFleet } from "../src/targets/driver";
@@ -28,7 +28,7 @@ const delivery = (halted: ReadonlySet<string>) => {
         ports: {
             dispatches: new Map([["cloudflare-wfp" as const, dispatch]]),
             halted,
-            live: [{ adminToken: "admin", alias: "shop", organizationId: "org_ok", scriptName: "shop", target: "cloudflare-wfp" }],
+            live: [{ adminToken: "admin", alias: "shop", organizationId: "org_ok", projectId: "p_shop", scriptName: "shop", target: "cloudflare-wfp" }],
             now: NOW,
             store: memoryStore({ organizations: [{ _id: "org_ok", plan: "pro" }] }),
         },
@@ -59,7 +59,7 @@ describe("the platform queue consumer under an emergency stop", () => {
         expect.assertions(3);
 
         const { batch: halted, outcome } = batch();
-        const { ports, sent } = delivery(new Set(["shop"]));
+        const { ports, sent } = delivery(new Set([haltKey({ alias: "shop", projectId: "p_shop", scriptName: "shop" })]));
 
         await deliverQueueBatch(halted, ports);
 
@@ -82,13 +82,33 @@ describe("the platform queue consumer under an emergency stop", () => {
         expect(sent).toStrictEqual(["/_lunora/queue"]);
         expect(outcome.acked).toStrictEqual(["m1", "m2"]);
     });
+
+    it("delivers to the project that owns the alias now, whatever a halt another project left on it holds", async () => {
+        expect.assertions(1);
+
+        const { batch: claimed } = batch();
+        const { ports, sent } = delivery(new Set([haltKey({ alias: "shop", projectId: "p_previous_owner", scriptName: "shop" })]));
+
+        await deliverQueueBatch(claimed, ports);
+
+        expect(sent).toStrictEqual(["/_lunora/queue"]);
+    });
 });
 
 describe(withoutHalted, () => {
-    it("leaves a halted alias's releases out of the cron fan-out, by alias or by script name", () => {
-        const live = [{ alias: "shop", scriptName: "shop" }, { alias: "blog", scriptName: "blog" }, { scriptName: "legacy" }];
+    it("leaves a halted release out of the cron fan-out, by alias or by script name — and only the halted project's", () => {
+        const live = [
+            { alias: "shop", projectId: "p_shop", scriptName: "shop" },
+            { alias: "blog", projectId: "p_blog", scriptName: "blog" },
+            { projectId: "p_legacy", scriptName: "legacy" },
+        ];
+        const halted = new Set([
+            haltKey({ alias: "legacy", projectId: "p_legacy", scriptName: "legacy" }),
+            haltKey({ alias: "shop", projectId: "p_shop", scriptName: "shop" }),
+        ]);
 
-        expect(withoutHalted(live, new Set(["legacy", "shop"]))).toStrictEqual([{ alias: "blog", scriptName: "blog" }]);
+        expect(withoutHalted(live, halted)).toStrictEqual([{ alias: "blog", projectId: "p_blog", scriptName: "blog" }]);
+        expect(withoutHalted(live, new Set([haltKey({ alias: "shop", projectId: "p_other", scriptName: "shop" })]))).toStrictEqual(live);
         expect(withoutHalted(live, new Set())).toStrictEqual(live);
     });
 });

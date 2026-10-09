@@ -25,7 +25,7 @@ const halt = (overrides: Partial<HaltView> = {}): HaltView => {
 };
 
 const status = (overrides: Partial<HaltStatusView> = {}): HaltStatusView => {
-    return { autoHalted: false, haltable: 0, halts: [], haltOnSuspension: true, unsupported: [], ...overrides };
+    return { autoHalted: false, haltable: 0, halts: [], haltOnSuspension: true, supportHalted: false, unsupported: [], ...overrides };
 };
 
 describe(emergencyStopActions, () => {
@@ -48,6 +48,20 @@ describe(emergencyStopActions, () => {
     });
 });
 
+describe("support's stop in the card (L3)", () => {
+    it("offers neither stop nor resume while support holds the organization, and says who lifts it", () => {
+        const actions = emergencyStopActions(status({ haltable: 1, halts: [halt({ source: "support" })], supportHalted: true }));
+
+        expect(actions).toMatchObject({ canHalt: false, canResume: false });
+        expect(actions.resumeBlocked).toMatch(/Only support can resume them/u);
+    });
+
+    it("offers a resume only for the stops an owner or admin may lift", () => {
+        expect(emergencyStopActions(status({ halts: [halt({ source: "support" })] })).canResume).toBe(false);
+        expect(emergencyStopActions(status({ halts: [halt({ source: "support" }), halt({ alias: "shop" })] })).canResume).toBe(true);
+    });
+});
+
 describe(confirmsHalt, () => {
     it("takes the exact word, surrounding space aside", () => {
         expect(confirmsHalt(HALT_CONFIRMATION)).toBe(true);
@@ -63,6 +77,7 @@ describe("how a halt reads", () => {
         ["suspension", "overage", "prepaid credits ran out"],
         ["manual", "manual", "stopped by hand"],
         ["manual", "support", "stopped by Lunora support"],
+        ["support", "support", "stopped by Lunora support"],
     ] as const)("names a %s halt for %s as %j", (source, reason, expected) => {
         expect(describeHaltReason({ reason, source })).toBe(expected);
     });

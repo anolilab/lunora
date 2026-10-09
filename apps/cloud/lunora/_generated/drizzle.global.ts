@@ -40,6 +40,7 @@ export const organizations = sqliteTable("organizations", {
     deletionRequestedAt: real("deletionRequestedAt"),
     recursionPolicy: text("recursionPolicy", { mode: "json" }).$type<"terminate" | "allow">(),
     haltOnSuspension: integer("haltOnSuspension", { mode: "boolean" }),
+    supportHaltedAt: real("supportHaltedAt"),
 }, (t) => ({
     by_slug: uniqueIndex("by_slug").on(t.slug),
 }));
@@ -173,6 +174,7 @@ export const halts = sqliteTable("halts", {
     convergingAt: real("convergingAt"),
     createdAt: real("createdAt").notNull(),
     deploymentId: text("deploymentId"),
+    convergingBy: text("convergingBy"),
     haltedAt: real("haltedAt"),
     haltedBy: text("haltedBy").notNull(),
     kind: text("kind", { mode: "json" }).$type<"production" | "preview" | "dev">().notNull(),
@@ -181,7 +183,9 @@ export const halts = sqliteTable("halts", {
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
     reason: text("reason").notNull(),
-    source: text("source", { mode: "json" }).$type<"manual" | "suspension">().notNull(),
+    resumeDeploymentId: text("resumeDeploymentId"),
+    source: text("source", { mode: "json" }).$type<"manual" | "suspension" | "support">().notNull(),
+    stubClasses: text("stubClasses", { mode: "json" }).$type<Array<{ binding: string; className: string; sqlite?: boolean; type: string }>>(),
     state: text("state", { mode: "json" }).$type<"halting" | "halted" | "resuming">().notNull(),
     stubStartedAt: real("stubStartedAt"),
     target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">().notNull(),
@@ -198,7 +202,9 @@ export const aliasOwnership = sqliteTable("aliasOwnership", {
     alias: text("alias").notNull(),
     createdAt: real("createdAt").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
+    pendingClasses: text("pendingClasses", { mode: "json" }).$type<Array<{ classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; endedAt?: number; startedAt: number; token: string }>>(),
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
+    workerClasses: text("workerClasses", { mode: "json" }).$type<Array<{ binding: string; className: string; sqlite?: boolean; type: string }>>(),
 }, (t) => ({
     by_project: index("by_project").on(t.projectId),
     by_alias: uniqueIndex("by_alias").on(t.alias),

@@ -93,7 +93,7 @@ export interface ApiTypes {
         haltOrganization: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, import("../../src/deploy/halt.js").HaltRequestResult>;
         resumeOrganization: FunctionReference<"mutation", { organizationId: Id<"organizations"> }, { resumed: string[]; }>;
         setHaltOnSuspension: FunctionReference<"mutation", { enabled: boolean; organizationId: Id<"organizations"> }, null>;
-        status: FunctionReference<"query", { organizationId: Id<"organizations"> }, { autoHalted: boolean; haltable: number; haltOnSuspension: boolean; halts: { alias: string; attempts: number; haltedAt?: number; haltedBy: string; kind: string; lastError?: string; projectId: string; reason: string; requestedAt: number; source: "manual" | "suspension"; state: "halted" | "halting" | "resuming" }[]; suspendedReason?: string; unsupported: { alias: string; reason: string; }[] }>;
+        status: FunctionReference<"query", { organizationId: Id<"organizations"> }, { autoHalted: boolean; haltable: number; haltOnSuspension: boolean; halts: { alias: string; attempts: number; haltedAt?: number; haltedBy: string; kind: string; lastError?: string; projectId: string; reason: string; requestedAt: number; source: "manual" | "support" | "suspension"; state: "halted" | "halting" | "resuming" }[]; supportHalted: boolean; suspendedReason?: string; unsupported: { alias: string; reason: string; }[] }>;
     };
     incidents: {
         investigate: FunctionReference<"action", { id: Id<"incidents">; organizationId: Id<"organizations"> }, { by: "deterministic" | "llm"; confidence: "low" | "medium" | "high"; evidenceNote: string; relatedTraceIds: string[]; rootCauseHypothesis: string; suggestedRemediation: string; summary: string }>;
@@ -260,7 +260,9 @@ export interface InternalApiTypes {
     };
     halts: {
         aliasHalted: FunctionReference<"query", { alias: string }, boolean>;
-        operatorHalt: FunctionReference<"mutation", { action: "halt" | "resume"; organizationId: Id<"organizations"> }, import("../../src/deploy/halt.js").HaltRequestResult | { resumed: string[]; }>;
+        beginConverge: FunctionReference<"mutation", { alias: string; classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; now: number; token: string }, null>;
+        endConverge: FunctionReference<"mutation", { alias: string; now: number; outcome: "failed" | "not-uploaded" | "succeeded"; token: string }, null>;
+        operatorHalt: FunctionReference<"mutation", { action: "halt" | "resume"; deploymentId?: Id<"deployments">; organizationId: Id<"organizations"> }, import("../../src/deploy/halt.js").HaltRequestResult | { resumed: string[]; }>;
     };
     hostd_releases: {
         envelope: FunctionReference<"query", { releaseId: unknown }, string | null>;

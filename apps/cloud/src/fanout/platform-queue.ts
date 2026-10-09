@@ -19,7 +19,7 @@ import readJson from "../read-json";
 import type { TargetFleet } from "../targets/driver";
 import { registeredFleets } from "../targets/registry";
 import type { LiveDeploymentRow } from "./live";
-import { readHaltedAliases, readLiveDeployments, resourceRefOf, servingDeployments } from "./live";
+import { haltKey, readHalted, readLiveDeployments, resourceRefOf, servingDeployments } from "./live";
 import type { QueueRouteCandidate } from "./queue";
 import { routeQueue } from "./queue";
 
@@ -75,7 +75,7 @@ const dispatchQueueBatch = async (dispatch: TenantDispatch, target: { adminToken
 /** What {@link deliverQueueBatch} needs: the in-network paths, the live deployments, and the store their organizations are read from. */
 export interface QueueDeliveryPorts {
     dispatches: ReadonlyMap<TargetId, TenantDispatch>;
-    /** Aliases an emergency stop holds: their Worker runs the halt stub. */
+    /** What an emergency stop holds, by `haltKey` (alias and project): their Worker runs the halt stub. */
     halted?: ReadonlySet<string>;
     live: ReadonlyArray<LiveDeploymentRow>;
     now: number;
@@ -103,7 +103,7 @@ const readQueueTarget = async (queue: string, ports: QueueDeliveryPorts): Promis
         return undefined;
     }
 
-    if (ports.halted?.has(target.alias) === true) {
+    if (ports.halted?.has(haltKey(target)) === true) {
         return { kind: "held" };
     }
 
@@ -171,7 +171,7 @@ export const handleQueueBatch = async (batch: QueueBatchLike, environment: Contr
 
     await deliverQueueBatch(batch, {
         dispatches,
-        halted: await readHaltedAliases(environment),
+        halted: await readHalted(environment),
         live: await readLiveDeployments(environment),
         now: Date.now(),
         secretEncryptionKey: environment.SECRET_ENCRYPTION_KEY,

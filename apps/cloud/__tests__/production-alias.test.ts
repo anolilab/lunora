@@ -77,6 +77,7 @@ describe("deployments.create", () => {
             deployments: [],
             halts: [],
             members: [owner("org_1")],
+            organizations: [{ _id: "org_1" }],
             projects: [{ _id: "proj_1", organizationId: "org_1", productionAlias: "web-org1", slug: "web" }],
         });
 

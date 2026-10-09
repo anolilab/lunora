@@ -5,10 +5,11 @@
  * that keeps re-arming itself — while its data stays exactly where it is. On
  * both Cloudflare targets a converge DELETES the data of a Durable Object
  * class the new script stops binding (`TARGETS[target].dropsUnboundClasses`:
- * Alchemy emits `deleted_classes` for it). So the stub is generated from the
- * manifests of what may be on the Worker and binds every Durable Object and
- * Workflow class they bind, under the same binding and class names and storage
- * flag — and nothing else: no assets, no secrets, no crons, no queue consumers.
+ * Alchemy emits `deleted_classes` for it). So the stub binds every Durable
+ * Object and Workflow class that may be on the Worker — the classes recorded
+ * for the alias's Worker (`./worker-classes.ts`), keyed by class name, under
+ * their own binding names where those are free — and nothing else: no assets,
+ * no secrets, no crons, no queue consumers.
  * The project stack is additive (`containers/provision/program.mjs`), so a
  * resource the stub stops binding is kept, and a resume binds it again.
  *
@@ -40,10 +41,8 @@ import type { BindingRequirement, DeployManifest } from "../provision-contract";
 /** How far out a parked alarm is re-armed: the most a resumed tenant waits for its own alarm to run again. */
 export const PARK_ALARM_MS = 60 * 60 * 1000;
 
-/** A class-backed binding the stub must keep: these are the ones whose data a converge can delete. */
-type ClassType = "durable_object" | "workflow";
-
-const CLASS_TYPES: ReadonlySet<BindingRequirement["type"]> = new Set<ClassType>(["durable_object", "workflow"]);
+/** The class-backed binding types: the ones whose data a converge can delete. */
+const CLASS_TYPES: ReadonlySet<string> = new Set(["durable_object", "workflow"]);
 
 /**
  * The class-name grammar `containers/provision/plan.mjs` enforces (`CLASS_NAME`)
@@ -58,115 +57,114 @@ const BINDING_NAME = /^[A-Za-z_]\w{0,63}$/u;
 /** Why a stub cannot be generated, or would not keep every class — always before anything converges. */
 export class HaltStubError extends Error {}
 
-/** One class the Worker binds, as the stub must keep it. */
+/**
+ * One class a Worker binds. Data lives per CLASS, not per binding: the
+ * binding is only the `env` name the class is reached by. `sqlite` is the
+ * manifest's flag, kept for display — the provision box never sends it, and a
+ * class keeps the storage it was created with whatever a later release says.
+ */
 export interface BoundClass {
     binding: string;
     className: string;
     sqlite?: boolean;
-    type: ClassType;
+    type: string;
 }
 
-const isClassRequirement = (requirement: BindingRequirement): requirement is BindingRequirement & { type: ClassType } => CLASS_TYPES.has(requirement.type);
-
-/** Every Durable Object and Workflow class a manifest binds, keyed `type:binding`. */
-export const boundClasses = (manifest: DeployManifest): Map<string, BoundClass> => {
-    const classes = new Map<string, BoundClass>();
-
-    for (const requirement of manifest.bindings) {
-        if (!isClassRequirement(requirement)) {
-            continue;
+/** Every Durable Object and Workflow class a manifest binds, in manifest order. */
+export const classesOf = (manifest: DeployManifest): BoundClass[] =>
+    manifest.bindings.flatMap((requirement) => {
+        if (!CLASS_TYPES.has(requirement.type)) {
+            return [];
         }
 
         if (requirement.className === undefined) {
             throw new HaltStubError(`binding ${requirement.binding} (${requirement.type}) names no class`);
         }
 
-        classes.set(`${requirement.type}:${requirement.binding}`, {
-            binding: requirement.binding,
-            className: requirement.className,
-            ...(requirement.sqlite === undefined ? {} : { sqlite: requirement.sqlite }),
-            type: requirement.type,
-        });
-    }
-
-    return classes;
-};
-
-const describeClass = (bound: BoundClass): string => {
-    if (bound.type === "workflow") {
-        return `${bound.binding} → ${bound.className} (workflow)`;
-    }
-
-    return `${bound.binding} → ${bound.className} (${bound.sqlite === true ? "sqlite" : "kv"} storage)`;
-};
-
-const sameClass = (a: BoundClass, b: BoundClass): boolean => a.className === b.className && a.type === b.type && a.sqlite === b.sqlite;
+        return [
+            {
+                binding: requirement.binding,
+                className: requirement.className,
+                ...(requirement.sqlite === undefined ? {} : { sqlite: requirement.sqlite }),
+                type: requirement.type,
+            },
+        ];
+    });
 
 /**
- * The classes a stub must bind: the union of every manifest that may be on the
- * Worker. Two manifests that bind one name to different classes, or one class
- * under different storage, cannot both be kept, so the stub is refused.
+ * The union of several class sets, keyed by CLASS name — the first list's
+ * entry wins, so the classes on the Worker keep their binding names. A class
+ * whose binding name another class already took is bound under a name of its
+ * own (`HALTED_CLASS_&lt;n>`): two releases that bound one name to different
+ * classes, or one class under different names, can never make a stub impossible.
  */
-const unionOfClasses = (manifests: ReadonlyArray<DeployManifest>): Map<string, BoundClass> => {
-    const union = new Map<string, BoundClass>();
+export const mergeClasses = (lists: ReadonlyArray<ReadonlyArray<BoundClass>>): BoundClass[] => {
+    const byClass = new Map<string, BoundClass>();
+    const bindings = new Set<string>();
 
-    for (const manifest of manifests) {
-        for (const [key, bound] of boundClasses(manifest)) {
-            const known = union.get(key);
-
-            if (known !== undefined && !sameClass(known, bound)) {
-                throw new HaltStubError(`binding ${bound.binding} is ${describeClass(known)} in one release and ${describeClass(bound)} in another`);
-            }
-
-            union.set(key, bound);
+    for (const bound of lists.flat()) {
+        if (byClass.has(bound.className)) {
+            continue;
         }
+
+        let { binding } = bound;
+        let index = 0;
+
+        while (bindings.has(binding)) {
+            binding = `HALTED_CLASS_${String(index)}`;
+            index += 1;
+        }
+
+        bindings.add(binding);
+        byClass.set(bound.className, { ...bound, binding });
     }
 
-    return union;
+    return [...byClass.values()];
+};
+
+/** The classes a target can provision at all: a class of a type it refuses never existed on it. */
+export const provisionableClasses = (classes: ReadonlyArray<BoundClass>, supports: (type: string) => boolean): BoundClass[] =>
+    classes.filter((bound) => supports(bound.type));
+
+const classKey = (bound: Pick<BoundClass, "className" | "type">): string => `${bound.type}:${bound.className}`;
+
+/** A manifest binding exactly `classes`. */
+const manifestOf = (classes: ReadonlyArray<BoundClass>): DeployManifest => {
+    return {
+        bindings: classes.map((bound): BindingRequirement => {
+            return {
+                binding: bound.binding,
+                className: bound.className,
+                ...(bound.sqlite === undefined ? {} : { sqlite: bound.sqlite }),
+                type: bound.type as BindingRequirement["type"],
+            };
+        }),
+    };
 };
 
 /**
- * Refuse a stub that does not bind exactly the classes of every manifest that
- * may be on the Worker — same binding names, class names and storage flags —
- * or that would stop binding a class any of them binds (the converge deletes
- * that class's data). `dropped` is `droppedDurableObjectClasses`
- * (`./release.ts`), the check a rollback already runs, passed in so this
- * module stays free of the release wiring.
+ * Refuse a stub that does not bind exactly `expected` — the classes that may
+ * be on the Worker, by class name and type — or that would stop binding one
+ * of them (the converge deletes that class's data). `dropped` is
+ * `droppedDurableObjectClasses` (`./release.ts`), the check a rollback runs,
+ * passed in so this module stays free of the release wiring.
  * @throws {HaltStubError} naming every class that differs.
  */
 export const assertStubKeepsClasses = (
     stub: DeployManifest,
-    onWorker: ReadonlyArray<DeployManifest>,
+    expected: ReadonlyArray<BoundClass>,
     dropped: (previous: DeployManifest, next: DeployManifest) => string[],
 ): void => {
-    if (onWorker.length === 0) {
-        throw new HaltStubError("no release is known to be on the Worker, so the classes a stub must keep are unknown");
-    }
-
-    const expected = unionOfClasses(onWorker);
-    const actual = boundClasses(stub);
-    const differences: string[] = [];
-
-    for (const [key, bound] of expected) {
-        const kept = actual.get(key);
-
-        if (kept === undefined) {
-            differences.push(`missing ${describeClass(bound)}`);
-        } else if (!sameClass(kept, bound)) {
-            differences.push(`${describeClass(kept)} instead of ${describeClass(bound)}`);
-        }
-    }
-
-    for (const [key, bound] of actual) {
-        if (!expected.has(key)) {
-            differences.push(`unexpected ${describeClass(bound)}`);
-        }
-    }
-
-    const deleted = onWorker.flatMap((manifest) => dropped(manifest, stub));
+    const want = new Set(expected.map((bound) => classKey(bound)));
+    const have = new Set(classesOf(stub).map((bound) => classKey(bound)));
+    const differences = [
+        ...[...want].filter((key) => !have.has(key)).map((key) => `missing ${key}`),
+        ...[...have].filter((key) => !want.has(key)).map((key) => `unexpected ${key}`),
+    ];
+    const deleted = dropped(manifestOf(expected), stub);
 
     if (deleted.length > 0) {
-        differences.push(`would delete the data of ${[...new Set(deleted)].join(", ")}`);
+        differences.push(`would delete the data of ${deleted.join(", ")}`);
     }
 
     if (differences.length > 0) {
@@ -200,7 +198,7 @@ const checkClass = (bound: BoundClass): void => {
 /** The stub module for `classes`, answering `reason`. */
 const stubSource = (classes: ReadonlyArray<BoundClass>, reason: string): string => {
     // One class per exported name, so two bindings of one class still export it once.
-    const exported = new Map<string, ClassType>();
+    const exported = new Map<string, string>();
 
     for (const bound of classes) {
         exported.set(bound.className, bound.type);
@@ -251,39 +249,28 @@ const stubSource = (classes: ReadonlyArray<BoundClass>, reason: string): string 
 };
 
 /**
- * Generate the stub release for a Worker that may be running any of
- * `onWorker` (newest first: its compatibility settings are the stub's). The
- * stub binds exactly their classes ({@link assertStubKeepsClasses} is the
- * caller's to run before converging it).
- * @throws {HaltStubError} when the manifests disagree on a class, or name one a Worker cannot export.
+ * Generate the stub release binding exactly `classes` — merged
+ * ({@link mergeClasses}) and filtered to what the target provisions by the
+ * caller — with the Worker's compatibility settings. The caller runs
+ * {@link assertStubKeepsClasses} before converging it.
+ * @throws {HaltStubError} when a class or binding name is not one a Worker can export.
  */
-export const buildHaltStub = (onWorker: ReadonlyArray<DeployManifest>, reason: string): HaltStub => {
-    if (onWorker.length === 0) {
-        throw new HaltStubError("no release is known to be on the Worker, so the classes a stub must keep are unknown");
-    }
-
-    const [newest] = onWorker;
-    const classes = [...unionOfClasses(onWorker).values()];
-
+export const buildHaltStub = (
+    classes: ReadonlyArray<BoundClass>,
+    options: { compatibilityDate?: string; compatibilityFlags?: ReadonlyArray<string>; reason: string },
+): HaltStub => {
     for (const bound of classes) {
         checkClass(bound);
     }
 
-    const source = stubSource(classes, reason);
+    const source = stubSource(classes, options.reason);
 
     return {
         bundle: new TextEncoder().encode(source).buffer,
         manifest: {
-            bindings: classes.map((bound): BindingRequirement => {
-                return {
-                    binding: bound.binding,
-                    className: bound.className,
-                    ...(bound.sqlite === undefined ? {} : { sqlite: bound.sqlite }),
-                    type: bound.type,
-                };
-            }),
-            ...(newest.compatibilityDate === undefined ? {} : { compatibilityDate: newest.compatibilityDate }),
-            ...(newest.compatibilityFlags === undefined ? {} : { compatibilityFlags: [...newest.compatibilityFlags] }),
+            ...manifestOf(classes),
+            ...(options.compatibilityDate === undefined ? {} : { compatibilityDate: options.compatibilityDate }),
+            ...(options.compatibilityFlags === undefined ? {} : { compatibilityFlags: [...options.compatibilityFlags] }),
         },
         source,
     };

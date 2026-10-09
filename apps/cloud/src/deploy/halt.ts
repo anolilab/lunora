@@ -27,12 +27,15 @@
  * Box projects (`celld-vps`) are never halted here: a suspension already stops
  * their fleets on the box.
  */
+import { isLunoraError } from "@lunora/errors";
+
 import type { ControlPlaneStore } from "../d1-store";
 import type { TargetId } from "../provision-contract";
 import { storedTarget, TARGETS } from "../provision-contract";
 import { drainTable } from "../store";
 import type { AlertChannel, EventRule } from "../telemetry/alerts";
 import { fireDeployRules } from "../telemetry/alerts";
+import type { BoundClass } from "./halt-stub";
 
 /** The message every refused deploy, rollback and release of a halted project gets. */
 export const HALTED_REFUSAL = "project halted — resume it first";
@@ -64,7 +67,14 @@ export const MAX_HALT_BACKOFF_MS = 60 * 60 * 1000;
 /** Longest error kept on a row. */
 const MAX_ERROR = 512;
 
-export type HaltSource = "manual" | "suspension";
+/**
+ * Who halted an alias, in rising precedence: `suspension` follows the
+ * suspension, `manual` (an owner or admin) is lifted by an owner or admin,
+ * `support` only by support. A request never takes over a row of a higher one.
+ */
+export type HaltSource = "manual" | "support" | "suspension";
+
+const HALT_PRECEDENCE: Readonly<Record<HaltSource, number>> = { manual: 2, support: 3, suspension: 1 };
 
 export type HaltState = "halted" | "halting" | "resuming";
 
@@ -74,6 +84,7 @@ export interface HaltRow {
     alias: string;
     attempts?: null | number;
     convergingAt?: null | number;
+    convergingBy?: null | string;
     createdAt: number;
     deploymentId?: null | string;
     haltedAt?: null | number;
@@ -84,6 +95,7 @@ export interface HaltRow {
     organizationId: string;
     projectId: string;
     reason: string;
+    resumeDeploymentId?: null | string;
     source: HaltSource;
     state: HaltState;
     stubStartedAt?: null | number;
@@ -136,7 +148,12 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 
 const aliasOf = (row: Pick<HaltDeploymentRow, "alias" | "scriptName">): string => row.alias ?? row.scriptName;
 
-/** The release currently live on each alias of `deployments`: the newest `live` row per alias. */
+/**
+ * The release currently live on each alias of `deployments`: of its `live`
+ * rows (two can be, briefly, between a release and its activation), the one
+ * activated last — `liveAt`, which a deploy's `updateStatus` and a rollback
+ * stamp — not the one created last.
+ */
 export const liveByAlias = (deployments: ReadonlyArray<HaltDeploymentRow>): Map<string, HaltDeploymentRow> => {
     const live = new Map<string, HaltDeploymentRow>();
 
@@ -144,7 +161,7 @@ export const liveByAlias = (deployments: ReadonlyArray<HaltDeploymentRow>): Map<
         const alias = aliasOf(row);
         const known = live.get(alias);
 
-        if (row.status === "live" && (known === undefined || row.createdAt > known.createdAt)) {
+        if (row.status === "live" && (known === undefined || (row.liveAt ?? row.createdAt) > (known.liveAt ?? known.createdAt))) {
             live.set(alias, row);
         }
     }
@@ -184,14 +201,14 @@ export interface HaltRequestResult {
 export const BOX_HALT_REFUSAL = "runs on your own server; a suspension stops its fleet there, and an emergency stop does not reach it";
 
 /**
- * What a halt request changes on an alias that already has a row: a `manual`
- * request takes a suspension's row over, and a `resuming` row is turned back
- * — by a manual request, or by a suspension request for its own row. A
- * suspension request never touches a manual row. `undefined`: nothing changes.
+ * What a halt request changes on an alias that already has a row: a request
+ * takes over a row of a lower precedence ({@link HaltSource}), and turns a
+ * `resuming` row of its own or a lower one back. It never touches a row of a
+ * higher one. `undefined`: nothing changes.
  */
 const haltAgain = (row: HaltRow, request: { actor: string; source: HaltSource }): Record<string, unknown> | undefined => {
-    const takeOver = request.source === "manual" && row.source === "suspension";
-    const reHalt = row.state === "resuming" && (request.source === "manual" || row.source === "suspension");
+    const takeOver = HALT_PRECEDENCE[request.source] > HALT_PRECEDENCE[row.source];
+    const reHalt = row.state === "resuming" && HALT_PRECEDENCE[request.source] >= HALT_PRECEDENCE[row.source];
 
     if (!takeOver && !reHalt) {
         return undefined;
@@ -203,11 +220,22 @@ const haltAgain = (row: HaltRow, request: { actor: string; source: HaltSource })
     };
 };
 
+/** Delete a `halts` row of `alias` that belongs to another project than `projectId` — one its project's deletion left behind. */
+const deleteStaleHalt = async (database: ControlPlaneStore, alias: string, projectId: string): Promise<void> => {
+    const { page } = await database.findMany("halts", { where: { alias } });
+
+    for (const stale of page as HaltRow[]) {
+        if (stale.projectId !== projectId) {
+            // eslint-disable-next-line no-await-in-loop -- `by_alias` is unique: at most one
+            await database.delete(stale._id, "halts");
+        }
+    }
+};
+
 /**
  * Ask for every live alias of an organization to be halted: insert a `halting`
- * row per alias that has none, and turn a `resuming` row back. A `manual` request
- * takes over a suspension's rows, so they are no longer lifted with the
- * suspension; a `suspension` request leaves every other row as it is.
+ * row per alias that has none, take over the rows of a lower precedence, and
+ * turn a `resuming` row back ({@link HaltSource}).
  * Converging is the sweep's ({@link runHaltConverges}).
  */
 export const requestOrganizationHalt = async (
@@ -230,7 +258,10 @@ export const requestOrganizationHalt = async (
         const row = existing.get(alias);
 
         if (row === undefined) {
+            // A row another project left on the alias (it was released and claimed again) holds nothing of this one.
             // eslint-disable-next-line no-await-in-loop -- a handful of aliases per organization; sequential keeps the writer simple
+            await deleteStaleHalt(database, alias, live.projectId);
+            // eslint-disable-next-line no-await-in-loop -- see above
             await database.insert("halts", {
                 alias,
                 createdAt: now,
@@ -269,16 +300,16 @@ export const requestOrganizationHalt = async (
 
 /**
  * Ask for an organization's halted aliases to be resumed — every one, or only
- * those `source` halted. Converging is the sweep's; a row is deleted once its
- * alias runs its live release again.
+ * those one of `sources` halted (an owner never lifts support's). Converging is
+ * the sweep's; a row is deleted once its alias runs its release again.
  */
 export const requestOrganizationResume = async (
     database: ControlPlaneStore,
-    input: { actor: string; now: number; organizationId: string; source?: HaltSource },
+    input: { actor: string; now: number; organizationId: string; sources?: ReadonlyArray<HaltSource> },
 ): Promise<{ resumed: string[] }> => {
     const { actor, now, organizationId } = input;
     const halts = await organizationHalts(database, organizationId);
-    const rows = halts.filter((row) => row.state !== "resuming" && (input.source === undefined || row.source === input.source));
+    const rows = halts.filter((row) => row.state !== "resuming" && (input.sources === undefined || input.sources.includes(row.source)));
 
     for (const row of rows) {
         // eslint-disable-next-line no-await-in-loop -- a handful of aliases per organization; sequential keeps the writer simple
@@ -335,7 +366,8 @@ export const syncSuspensionHalts = async (
     database: ControlPlaneStore,
     now: number,
     owns: OwnsOrganization = everyOrganization,
-): Promise<{ halted: number; resumed: number }> => {
+    log: (line: string) => void = () => undefined,
+): Promise<{ failed: number; halted: number; resumed: number }> => {
     const [suspended, halts] = await Promise.all([
         drainTable<HaltOrganizationRow>(database, "organizations", { where: { suspendedAt: { gt: 0 } } }),
         drainTable<HaltRow>(database, "halts", { where: { source: "suspension" } }),
@@ -344,18 +376,33 @@ export const syncSuspensionHalts = async (
     const halting = suspended.filter((organization) => owned.has(organization._id) && haltsOnSuspension(organization));
     const haltingIds = new Set(halting.map((organization) => organization._id));
     let halted = 0;
+    let failed = 0;
+
+    // Each organization on its own: one that cannot be synced must not stop the rest — or the converges after.
+    const isolated = async (organizationId: string, work: () => Promise<number>): Promise<number> => {
+        try {
+            return await work();
+        } catch (error) {
+            failed += 1;
+            log(`[halt] suspension sync of organization ${organizationId} failed: ${messageOf(error)}`);
+
+            return 0;
+        }
+    };
 
     for (const organization of halting) {
         // eslint-disable-next-line no-await-in-loop -- one organization at a time keeps the writer simple
-        const result = await requestOrganizationHalt(database, {
-            actor: SUSPENSION_ACTOR,
-            now,
-            organizationId: organization._id,
-            reason: organization.suspendedReason ?? "suspended",
-            source: "suspension",
-        });
+        halted += await isolated(organization._id, async () => {
+            const result = await requestOrganizationHalt(database, {
+                actor: SUSPENSION_ACTOR,
+                now,
+                organizationId: organization._id,
+                reason: organization.suspendedReason ?? "suspended",
+                source: "suspension",
+            });
 
-        halted += result.halted.length;
+            return result.halted.length;
+        });
     }
 
     const lifted = new Set(
@@ -367,16 +414,21 @@ export const syncSuspensionHalts = async (
 
     for (const organizationId of lifted) {
         // eslint-disable-next-line no-await-in-loop -- see above
-        const result = await requestOrganizationResume(database, { actor: SUSPENSION_ACTOR, now, organizationId, source: "suspension" });
+        resumed += await isolated(organizationId, async () => {
+            const result = await requestOrganizationResume(database, { actor: SUSPENSION_ACTOR, now, organizationId, sources: ["suspension"] });
 
-        resumed += result.resumed.length;
+            return result.resumed.length;
+        });
     }
 
-    return { halted, resumed };
+    return { failed, halted, resumed };
 };
 
-/** What converging one row did. `skipped`: the alias has no live release, so there is nothing to stop or restore. */
-export type HaltConvergeOutcome = { deploymentId: string } | { skipped: string };
+/**
+ * What converging one row did. `skipped`: the alias has no live release, so
+ * there is nothing to stop or restore. `stubClasses`: the classes a stub bound.
+ */
+export type HaltConvergeOutcome = { deploymentId: string; stubClasses?: BoundClass[] } | { skipped: string };
 
 /** The converges the sweep drives, and where it reports. */
 export interface HaltConvergePorts {
@@ -459,7 +511,10 @@ const planConverges = async (
             row.state === "halted" &&
             ofAlias.some((deployment) => deployment.provisioningAt != null && convergeFinishedAt(deployment) >= (row.stubStartedAt ?? 0));
 
-        if (row.state === "halted" && !landedOnTop) {
+        // A halted alias whose release is gone (a deleted project, an expired preview) is forgotten: `haltAlias` skips it.
+        const released = row.state === "halted" && !ofAlias.some((deployment) => deployment.status === "live");
+
+        if (row.state === "halted" && !landedOnTop && !released) {
             continue;
         }
 
@@ -474,14 +529,78 @@ const planConverges = async (
     return { deferred, due: due.toSorted((a, b) => a.row.createdAt - b.row.createdAt) };
 };
 
+/**
+ * The row while this converge still holds it — `null` once another tick took
+ * the lease over (it expired), the row was deleted, or a newer claim won —
+ * so every write of a converge lands only on a row it still owns.
+ */
+const heldRow = async (database: ControlPlaneStore, id: string, token: string): Promise<HaltRow | null> => {
+    const current = (await database.get(id, "halts")) as HaltRow | null;
+
+    return current?.convergingBy === token ? current : null;
+};
+
+/**
+ * Claim a row's lease for one converge: only when it is unchanged since the
+ * tick planned it and no other converge holds a live lease, then read back to
+ * confirm the claim is this one's. The store has no conditional update, so two
+ * ticks interleaving the read-back can both win; the provision box still runs
+ * one job per alias at a time and a converge is idempotent, so the worst is
+ * the same stub converged twice.
+ */
+const claim = async (database: ControlPlaneStore, planned: HaltRow, input: { mode: "halt" | "resume"; now: number; token: string }): Promise<boolean> => {
+    const current = (await database.get(planned._id, "halts")) as HaltRow | null;
+    const leaseFree = current?.convergingAt == null || input.now - current.convergingAt >= HALT_LEASE_MS;
+
+    if (current?.updatedAt !== planned.updatedAt || current.state !== planned.state || !leaseFree) {
+        return false;
+    }
+
+    await database.patch(
+        planned._id,
+        { convergingAt: input.now, convergingBy: input.token, ...(input.mode === "halt" ? { stubStartedAt: input.now } : {}), updatedAt: input.now },
+        "halts",
+    );
+
+    return (await heldRow(database, planned._id, input.token)) !== null;
+};
+
+/** Whether a converge failed because the provision box was busy with another job for the alias: retried shortly, never a failure. */
+const busy = (error: unknown): boolean => isLunoraError(error) && error.code === "SERVICE_UNAVAILABLE";
+
 /** Record a failed converge: error, attempts and backoff on the row; logged every time, audited and alerted on the first of a run. */
-const recordFailure = async (database: ControlPlaneStore, ports: HaltConvergePorts, row: HaltRow, mode: "halt" | "resume", error: unknown): Promise<void> => {
+const recordFailure = async (
+    database: ControlPlaneStore,
+    ports: HaltConvergePorts,
+    row: HaltRow,
+    failure: { error: unknown; mode: "halt" | "resume"; token: string },
+): Promise<void> => {
+    const { error, mode, token } = failure;
+
+    if ((await heldRow(database, row._id, token).catch(() => null)) === null) {
+        return;
+    }
+
+    if (busy(error)) {
+        // Another job runs on the alias's box: no attempt, no error, no alert — this converge's lease released, a minute's wait.
+        ports.log(`[halt] ${mode} of ${row.alias} waits: the provision box is busy with another job for it`);
+        await database
+            .patch(row._id, { convergingAt: null, convergingBy: null, nextAttemptAt: ports.now + 60_000, updatedAt: ports.now }, "halts")
+            .catch(() => undefined);
+
+        return;
+    }
+
     const message = messageOf(error);
     const attempts = (row.attempts ?? 0) + 1;
 
     ports.log(`[halt] ${mode} of ${row.alias} failed (attempt ${String(attempts)}): ${message}`);
     await database
-        .patch(row._id, { attempts, convergingAt: null, lastError: message, nextAttemptAt: ports.now + haltBackoff(attempts), updatedAt: ports.now }, "halts")
+        .patch(
+            row._id,
+            { attempts, convergingAt: null, convergingBy: null, lastError: message, nextAttemptAt: ports.now + haltBackoff(attempts), updatedAt: ports.now },
+            "halts",
+        )
         .catch(() => undefined);
 
     if (row.lastError == null) {
@@ -498,12 +617,26 @@ const recordFailure = async (database: ControlPlaneStore, ports: HaltConvergePor
     }
 };
 
-/** Settle a successful halt converge, unless the row changed under it (a resume was asked for meanwhile). */
-const settleHalted = async (database: ControlPlaneStore, ports: HaltConvergePorts, row: HaltRow, outcome: HaltConvergeOutcome): Promise<void> => {
-    const current = (await database.get(row._id, "halts")) as HaltRow | null;
+const RELEASED = { convergingAt: null, convergingBy: null } as const;
+
+/** Settle a successful halt converge on the row this converge holds, unless a resume was asked for meanwhile. */
+const settleHalted = async (
+    database: ControlPlaneStore,
+    ports: HaltConvergePorts,
+    row: HaltRow,
+    settle: { outcome: HaltConvergeOutcome; token: string },
+): Promise<void> => {
+    const { outcome, token } = settle;
+    const current = await heldRow(database, row._id, token);
+
+    if (current === null) {
+        return;
+    }
 
     if ("skipped" in outcome) {
-        if (current !== null && current.state !== "resuming") {
+        if (current.state === "resuming") {
+            await database.patch(row._id, { ...RELEASED, updatedAt: ports.now }, "halts");
+        } else {
             await database.delete(row._id, "halts");
             await audit(database, {
                 action: "halt.skipped",
@@ -517,27 +650,18 @@ const settleHalted = async (database: ControlPlaneStore, ports: HaltConvergePort
         return;
     }
 
-    if (current === null || current.state === "resuming") {
+    const converged = { deploymentId: outcome.deploymentId, ...(outcome.stubClasses === undefined ? {} : { stubClasses: outcome.stubClasses }) };
+
+    if (current.state === "resuming") {
         // A resume was asked for while the stub converged: the next tick restores the release.
-        await (current === null
-            ? Promise.resolve()
-            : database.patch(row._id, { convergingAt: null, deploymentId: outcome.deploymentId, updatedAt: ports.now }, "halts"));
+        await database.patch(row._id, { ...RELEASED, ...converged, updatedAt: ports.now }, "halts");
 
         return;
     }
 
     await database.patch(
         row._id,
-        {
-            attempts: 0,
-            convergingAt: null,
-            deploymentId: outcome.deploymentId,
-            haltedAt: ports.now,
-            lastError: null,
-            nextAttemptAt: null,
-            state: "halted",
-            updatedAt: ports.now,
-        },
+        { ...RELEASED, ...converged, attempts: 0, haltedAt: ports.now, lastError: null, nextAttemptAt: null, state: "halted", updatedAt: ports.now },
         "halts",
     );
     await audit(database, {
@@ -555,9 +679,15 @@ const settleHalted = async (database: ControlPlaneStore, ports: HaltConvergePort
     }
 };
 
-/** Settle a successful resume, unless a halt was asked for again while it converged. */
-const settleResumed = async (database: ControlPlaneStore, ports: HaltConvergePorts, row: HaltRow, outcome: HaltConvergeOutcome): Promise<void> => {
-    const current = (await database.get(row._id, "halts")) as HaltRow | null;
+/** Settle a successful resume on the row this converge holds, unless a halt was asked for again while it converged. */
+const settleResumed = async (
+    database: ControlPlaneStore,
+    ports: HaltConvergePorts,
+    row: HaltRow,
+    settle: { outcome: HaltConvergeOutcome; token: string },
+): Promise<void> => {
+    const { outcome, token } = settle;
+    const current = await heldRow(database, row._id, token);
 
     if (current === null) {
         return;
@@ -565,7 +695,7 @@ const settleResumed = async (database: ControlPlaneStore, ports: HaltConvergePor
 
     if (current.state !== "resuming") {
         // Halted again mid-resume: the release is back on the Worker, so the stub goes on again.
-        await database.patch(row._id, { convergingAt: null, state: "halting", updatedAt: ports.now }, "halts");
+        await database.patch(row._id, { ...RELEASED, state: "halting", updatedAt: ports.now }, "halts");
 
         return;
     }
@@ -580,9 +710,44 @@ const settleResumed = async (database: ControlPlaneStore, ports: HaltConvergePor
     });
 };
 
+/** Claim, converge and settle one row. Never throws: a row that cannot even be claimed is left for the next tick. */
+const convergeOne = async (
+    database: ControlPlaneStore,
+    ports: HaltConvergePorts,
+    planned: HaltRow,
+    mode: "halt" | "resume",
+): Promise<"converged" | "failed" | "skipped"> => {
+    // The row as planned: what it was before this tick wrote to it decides what the settle reports.
+    const row = { ...planned };
+    const token = crypto.randomUUID();
+
+    try {
+        if (!(await claim(database, row, { mode, now: ports.now, token }))) {
+            return "skipped";
+        }
+    } catch (error) {
+        ports.log(`[halt] could not claim ${row.alias}: ${messageOf(error)}`);
+
+        return "skipped";
+    }
+
+    try {
+        const outcome = await (mode === "halt" ? ports.halt(row) : ports.resume(row));
+
+        await (mode === "halt" ? settleHalted(database, ports, row, { outcome, token }) : settleResumed(database, ports, row, { outcome, token }));
+
+        return "converged";
+    } catch (error) {
+        await recordFailure(database, ports, row, { error, mode, token }).catch(() => undefined);
+
+        return busy(error) ? "skipped" : "failed";
+    }
+};
+
 /**
  * One tick of the halt sweep: converge at most `limit` rows whose Worker is
- * not where the row wants it, each under a lease, one at a time.
+ * not where the row wants it, each under a lease, one at a time. One row's
+ * failure never stops the others.
  */
 export const runHaltConverges = async (database: ControlPlaneStore, ports: HaltConvergePorts): Promise<HaltSweepResult> => {
     const rows = await drainTable<HaltRow>(database, "halts");
@@ -591,28 +756,18 @@ export const runHaltConverges = async (database: ControlPlaneStore, ports: HaltC
 
     const clock = ports.clock ?? Date.now;
 
-    for (const { mode, row: planned } of due.slice(0, ports.limit ?? MAX_HALT_CONVERGES_PER_TICK)) {
+    for (const { mode, row } of due.slice(0, ports.limit ?? MAX_HALT_CONVERGES_PER_TICK)) {
         if (ports.startBefore !== undefined && clock() >= ports.startBefore) {
             break;
         }
 
-        // The row as planned: what it was before this tick wrote to it decides what the settle reports.
-        const row = { ...planned };
-
         // eslint-disable-next-line no-await-in-loop -- one converge at a time keeps the provision box's budget flat
-        await database.patch(row._id, { convergingAt: ports.now, ...(mode === "halt" ? { stubStartedAt: ports.now } : {}), updatedAt: ports.now }, "halts");
+        const done = await convergeOne(database, ports, row, mode);
 
-        try {
-            // eslint-disable-next-line no-await-in-loop -- see above
-            const outcome = await (mode === "halt" ? ports.halt(row) : ports.resume(row));
-
-            // eslint-disable-next-line no-await-in-loop -- see above
-            await (mode === "halt" ? settleHalted(database, ports, row, outcome) : settleResumed(database, ports, row, outcome));
-            result[mode === "halt" ? "halted" : "resumed"] += 1;
-        } catch (error) {
-            // eslint-disable-next-line no-await-in-loop -- see above
-            await recordFailure(database, ports, row, mode, error);
+        if (done === "failed") {
             result.failed += 1;
+        } else if (done === "converged") {
+            result[mode === "halt" ? "halted" : "resumed"] += 1;
         }
     }
 

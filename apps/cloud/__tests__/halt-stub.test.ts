@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ProvisionJob } from "../containers/provision/plan.mjs";
 import { planJob } from "../containers/provision/plan.mjs";
-import { assertStubKeepsClasses, boundClasses, buildHaltStub, haltedBody, HaltStubError, PARK_ALARM_MS } from "../src/deploy/halt-stub";
+import type { HaltStub } from "../src/deploy/halt-stub";
+import { assertStubKeepsClasses, buildHaltStub, classesOf, haltedBody, mergeClasses, PARK_ALARM_MS, provisionableClasses } from "../src/deploy/halt-stub";
 import { droppedDurableObjectClasses } from "../src/deploy/release";
 import type { BindingRequirement, DeployManifest, TenantDeploymentSpec } from "../src/provision-contract";
 import { BINDING_SUPPORT } from "../src/provision-contract";
@@ -37,6 +38,17 @@ const LIVE: DeployManifest = {
 
 const durableObjects = (manifest: DeployManifest): BindingRequirement[] => manifest.bindings.filter((binding) => binding.type === "durable_object");
 
+/** The stub for a Worker that may run any of `manifests`, newest first — as the halt builds it from the recorded classes. */
+const stubOf = (manifests: DeployManifest[], reason: string): HaltStub => {
+    const [newest] = manifests;
+
+    return buildHaltStub(mergeClasses(manifests.map((manifest) => classesOf(manifest))), {
+        ...(newest?.compatibilityDate === undefined ? {} : { compatibilityDate: newest.compatibilityDate }),
+        ...(newest?.compatibilityFlags === undefined ? {} : { compatibilityFlags: newest.compatibilityFlags }),
+        reason,
+    });
+};
+
 /** Load the stub module in node, its one workerd import replaced by a minimal `DurableObject` base. */
 const loadStub = async (source: string): Promise<Record<string, unknown> & { default: { fetch: () => Response } }> => {
     const runnable = source.replace(
@@ -51,9 +63,9 @@ const loadStub = async (source: string): Promise<Record<string, unknown> & { def
 
 describe(buildHaltStub, () => {
     it("binds exactly the live release's Durable Object and Workflow classes — names, classes and storage flags", () => {
-        const stub = buildHaltStub([LIVE], "spend-cap");
+        const stub = stubOf([LIVE], "spend-cap");
 
-        expect(boundClasses(stub.manifest)).toStrictEqual(boundClasses(LIVE));
+        expect(classesOf(stub.manifest)).toStrictEqual(classesOf(LIVE));
         expect(durableObjects(stub.manifest)).toStrictEqual(durableObjects(LIVE));
         expect(stub.manifest.bindings.map((binding) => binding.type).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
             "durable_object",
@@ -63,7 +75,7 @@ describe(buildHaltStub, () => {
     });
 
     it("drops every other binding — assets, storage, queues and their consumers — and keeps the compatibility settings", () => {
-        const stub = buildHaltStub([LIVE], "spend-cap");
+        const stub = stubOf([LIVE], "spend-cap");
 
         expect(stub.manifest.bindings.some((binding) => ["ai", "assets", "d1", "kv", "queue_consumer", "queue_producer", "r2"].includes(binding.type))).toBe(
             false,
@@ -77,27 +89,34 @@ describe(buildHaltStub, () => {
             bindings: [...LIVE.bindings, { binding: "PRESENCE", className: "Presence", sqlite: true, type: "durable_object" }],
             compatibilityDate: "2026-06-01",
         };
-        const stub = buildHaltStub([newer, LIVE], "manual");
+        const stub = stubOf([newer, LIVE], "manual");
 
-        expect([...boundClasses(stub.manifest).values()].map((bound) => bound.className).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
-            "Counter",
-            "LegacyRoom",
-            "Presence",
-            "SignupFlow",
-        ]);
+        expect(
+            classesOf(stub.manifest)
+                .map((bound) => bound.className)
+                .toSorted((a, b) => a.localeCompare(b)),
+        ).toStrictEqual(["Counter", "LegacyRoom", "Presence", "SignupFlow"]);
         expect(stub.manifest.compatibilityDate).toBe("2026-06-01");
     });
 
-    it("refuses releases that bind one name to two classes, or one class under two storage backends", () => {
+    it("binds a class whose binding name another class took under a name of its own — data lives per class, not per binding", () => {
         const renamed: DeployManifest = { bindings: [{ binding: "COUNTER", className: "OtherCounter", sqlite: true, type: "durable_object" }] };
-        const restorage: DeployManifest = { bindings: [{ binding: "COUNTER", className: "Counter", sqlite: false, type: "durable_object" }] };
+        const stub = stubOf([LIVE, renamed], "manual");
 
-        expect(() => buildHaltStub([renamed, LIVE], "manual")).toThrow(HaltStubError);
-        expect(() => buildHaltStub([restorage, LIVE], "manual")).toThrow(/sqlite storage|kv storage/u);
+        expect(classesOf(stub.manifest).find((bound) => bound.className === "OtherCounter")?.binding).toBe("HALTED_CLASS_0");
+        expect(classesOf(stub.manifest).find((bound) => bound.className === "Counter")?.binding).toBe("COUNTER");
     });
 
-    it("refuses with nothing known to be on the Worker", () => {
-        expect(() => buildHaltStub([], "manual")).toThrow(/no release is known/u);
+    it("keeps one entry per class whatever storage flag another release gave it — the flag is never sent, a class keeps its storage", () => {
+        const restorage: DeployManifest = { bindings: [{ binding: "COUNTER", className: "Counter", sqlite: false, type: "durable_object" }] };
+
+        expect(classesOf(stubOf([LIVE, restorage], "manual").manifest).filter((bound) => bound.className === "Counter")).toStrictEqual([
+            { binding: "COUNTER", className: "Counter", sqlite: true, type: "durable_object" },
+        ]);
+    });
+
+    it("binds nothing for a Worker with no classes", () => {
+        expect(buildHaltStub([], { reason: "manual" }).manifest.bindings).toStrictEqual([]);
     });
 
     it.each([
@@ -108,11 +127,11 @@ describe(buildHaltStub, () => {
     ])("refuses the class name %j (%s) rather than write it into the module", (className) => {
         const manifest: DeployManifest = { bindings: [{ binding: "COUNTER", className, sqlite: true, type: "durable_object" }] };
 
-        expect(() => buildHaltStub([manifest], "manual")).toThrow(/is not one a Worker can export/u);
+        expect(() => stubOf([manifest], "manual")).toThrow(/is not one a Worker can export/u);
     });
 
     it("is a syntactically valid module that exports each class only as an alias of its own classes", () => {
-        const { source } = buildHaltStub(
+        const { source } = stubOf(
             [{ bindings: [...LIVE.bindings, { binding: "RESPONSE", className: "Response", sqlite: true, type: "durable_object" }] }],
             "spend-cap",
         );
@@ -129,7 +148,7 @@ describe(buildHaltStub, () => {
     });
 
     it("answers 503 with the reason, from the Worker and from every Durable Object class", async () => {
-        const module = await loadStub(buildHaltStub([LIVE], "spend-cap").source);
+        const module = await loadStub(stubOf([LIVE], "spend-cap").source);
         const response = module.default.fetch();
         const Counter = module["Counter"] as new (ctx: unknown, env: unknown) => { fetch: () => Response };
 
@@ -140,7 +159,7 @@ describe(buildHaltStub, () => {
     });
 
     it("parks an alarm an hour out rather than running anything — and lets a failed re-arm throw so Cloudflare retries it", async () => {
-        const module = await loadStub(buildHaltStub([LIVE], "manual").source);
+        const module = await loadStub(stubOf([LIVE], "manual").source);
         const LegacyRoom = module["LegacyRoom"] as new (ctx: unknown, env: unknown) => { alarm: () => Promise<void> };
         const setAlarm = vi.fn<(at: number) => Promise<void>>(async () => undefined);
         const before = Date.now();
@@ -158,37 +177,45 @@ describe(buildHaltStub, () => {
     });
 
     it("fails a Workflow instance that runs while halted, with the same message", async () => {
-        const module = await loadStub(buildHaltStub([LIVE], "support").source);
+        const module = await loadStub(stubOf([LIVE], "support").source);
         const SignupFlow = module["SignupFlow"] as new () => { run: () => Promise<void> };
 
         await expect(new SignupFlow().run()).rejects.toThrow("project halted: support");
     });
 });
 
+describe(provisionableClasses, () => {
+    it("drops a class of a type the target refuses — it never existed there", () => {
+        const supported = (type: string): boolean => (BINDING_SUPPORT["cloudflare-wfp"] as Readonly<Record<string, string>>)[type] !== "unsupported";
+
+        expect(provisionableClasses(classesOf(LIVE), supported).map((bound) => bound.className)).toStrictEqual(["Counter", "LegacyRoom"]);
+    });
+});
+
 describe(assertStubKeepsClasses, () => {
     it("passes the generated stub", () => {
         expect(() => {
-            assertStubKeepsClasses(buildHaltStub([LIVE], "manual").manifest, [LIVE], droppedDurableObjectClasses);
+            assertStubKeepsClasses(stubOf([LIVE], "manual").manifest, classesOf(LIVE), droppedDurableObjectClasses);
         }).not.toThrow();
     });
 
     it("refuses a stub missing a class, naming the data the converge would delete", () => {
-        const stub = buildHaltStub([LIVE], "manual").manifest;
+        const stub = stubOf([LIVE], "manual").manifest;
         const missing: DeployManifest = { ...stub, bindings: stub.bindings.filter((binding) => binding.className !== "LegacyRoom") };
 
         expect(() => {
-            assertStubKeepsClasses(missing, [LIVE], droppedDurableObjectClasses);
-        }).toThrow(/missing LEGACY → LegacyRoom/u);
+            assertStubKeepsClasses(missing, classesOf(LIVE), droppedDurableObjectClasses);
+        }).toThrow(/missing durable_object:LegacyRoom/u);
         expect(() => {
-            assertStubKeepsClasses(missing, [LIVE], droppedDurableObjectClasses);
+            assertStubKeepsClasses(missing, classesOf(LIVE), droppedDurableObjectClasses);
         }).toThrow(/would delete the data of LegacyRoom/u);
     });
 
-    it("refuses a stub that changes a class's storage backend, binds it under another name, or adds one", () => {
-        const stub = buildHaltStub([LIVE], "manual").manifest;
+    it("refuses a stub that adds a class, and ignores what does not decide data — the storage flag and the binding name", () => {
+        const stub = stubOf([LIVE], "manual").manifest;
         const flipped: DeployManifest = {
             ...stub,
-            bindings: stub.bindings.map((binding) => (binding.className === "Counter" ? { ...binding, sqlite: false } : binding)),
+            bindings: stub.bindings.map((binding) => (binding.className === "Counter" ? { ...binding, sqlite: undefined } : binding)),
         };
         const renamed: DeployManifest = {
             ...stub,
@@ -197,26 +224,26 @@ describe(assertStubKeepsClasses, () => {
         const extra: DeployManifest = { ...stub, bindings: [...stub.bindings, { binding: "NEW", className: "New", sqlite: true, type: "durable_object" }] };
 
         expect(() => {
-            assertStubKeepsClasses(flipped, [LIVE], droppedDurableObjectClasses);
-        }).toThrow(/instead of/u);
+            assertStubKeepsClasses(flipped, classesOf(LIVE), droppedDurableObjectClasses);
+        }).not.toThrow();
         expect(() => {
-            assertStubKeepsClasses(renamed, [LIVE], droppedDurableObjectClasses);
-        }).toThrow(/missing COUNTER/u);
+            assertStubKeepsClasses(renamed, classesOf(LIVE), droppedDurableObjectClasses);
+        }).not.toThrow();
         expect(() => {
-            assertStubKeepsClasses(extra, [LIVE], droppedDurableObjectClasses);
-        }).toThrow(/unexpected NEW/u);
+            assertStubKeepsClasses(extra, classesOf(LIVE), droppedDurableObjectClasses);
+        }).toThrow(/unexpected durable_object:New/u);
     });
 
-    it("runs the rollback's own drop guard over every release that may be on the Worker", () => {
+    it("runs the rollback's own drop guard over the classes that may be on the Worker", () => {
         const dropped = vi.fn<typeof droppedDurableObjectClasses>(droppedDurableObjectClasses);
         const newer: DeployManifest = { bindings: [...LIVE.bindings, { binding: "PRESENCE", className: "Presence", sqlite: true, type: "durable_object" }] };
-        const stub = buildHaltStub([newer, LIVE], "manual").manifest;
+        const expected = mergeClasses([classesOf(newer), classesOf(LIVE)]);
 
-        assertStubKeepsClasses(stub, [newer, LIVE], dropped);
+        assertStubKeepsClasses(stubOf([newer, LIVE], "manual").manifest, expected, dropped);
 
-        expect(dropped).toHaveBeenCalledTimes(2);
+        expect(dropped).toHaveBeenCalledTimes(1);
         expect(() => {
-            assertStubKeepsClasses(buildHaltStub([LIVE], "manual").manifest, [newer, LIVE], droppedDurableObjectClasses);
+            assertStubKeepsClasses(stubOf([LIVE], "manual").manifest, expected, droppedDurableObjectClasses);
         }).toThrow(/would delete the data of Presence/u);
     });
 });
@@ -261,18 +288,18 @@ describe("the stub as the provision box plans it", () => {
     it.each(["cloudflare-wfp", "cloudflare-workers"] as const)("binds the same Durable Object classes on %s as the live release", (target) => {
         const live = LIVE_CF;
         const livePlan = planOf(target, spec(live, { assets: { files: [{ content: "aGk=", path: "/index.html" }] } }));
-        const stubPlan = planOf(target, spec(buildHaltStub([live], "manual").manifest));
-        const classesOf = (plan: typeof livePlan) => plan.worker?.bindings.filter((binding) => binding.kind === "durable_object");
+        const stubPlan = planOf(target, spec(stubOf([live], "manual").manifest));
+        const planned = (plan: typeof livePlan) => plan.worker?.bindings.filter((binding) => binding.kind === "durable_object");
 
-        expect(classesOf(stubPlan)).toStrictEqual(classesOf(livePlan));
-        expect(classesOf(stubPlan)).toHaveLength(2);
+        expect(planned(stubPlan)).toStrictEqual(planned(livePlan));
+        expect(planned(stubPlan)).toHaveLength(2);
         expect(stubPlan.worker?.assets).toBeUndefined();
     });
 
     it("leaves a plain Worker with no cron triggers and no queue consumers, which the live release had", () => {
         const live = LIVE_CF;
         const livePlan = planOf("cloudflare-workers", spec(live, { assets: { files: [{ content: "aGk=", path: "/index.html" }] }, crons: ["*/5 * * * *"] }));
-        const stubPlan = planOf("cloudflare-workers", spec(buildHaltStub([live], "manual").manifest));
+        const stubPlan = planOf("cloudflare-workers", spec(stubOf([live], "manual").manifest));
 
         expect(livePlan.worker?.crons).toStrictEqual(["*/5 * * * *"]);
         expect(livePlan.worker?.consumers).toHaveLength(1);

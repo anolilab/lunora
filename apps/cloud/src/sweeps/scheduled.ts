@@ -36,7 +36,7 @@ import { runCertificateSweep } from "../domains/certificate-sweep";
 import { localIssuer } from "../domains/issuers";
 import { edgeBudget } from "../edge/protection";
 import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../edge/rules";
-import { readHaltedAliases, readLiveDeployments, resourceRefOf, withoutHalted } from "../fanout/live";
+import { readHalted, readLiveDeployments, resourceRefOf, withoutHalted } from "../fanout/live";
 import { runTenantCrons } from "../fanout/tenant-crons";
 import { deliverAlert } from "../mail/notify";
 import { storedTarget } from "../provision-contract";
@@ -552,7 +552,16 @@ const sweepHalts = async (env: ControlPlaneEnv): Promise<void> => {
     const cell = env.LUNORA_CELL ?? "default";
     // Every cell's control plane runs this sweep over the same rows: each acts on its own cell's organizations.
     const owns = organizationsOnCell(database, cell);
-    const synced = await syncSuspensionHalts(database, now, owns);
+    const log = (line: string): void => {
+        // eslint-disable-next-line no-console -- a failed sync or converge is only visible here and on the halt row
+        console.warn(line);
+    };
+    // A sync that fails as a whole must not stop the converges: halts asked for by hand still land.
+    const synced = await syncSuspensionHalts(database, now, owns, log).catch((error: unknown) => {
+        log(`[halt] suspension sync failed: ${error instanceof Error ? error.message : String(error)}`);
+
+        return { failed: 1, halted: 0, resumed: 0 };
+    });
     const deps: HaltConvergeDeps = {
         cell,
         database,
@@ -566,10 +575,7 @@ const sweepHalts = async (env: ControlPlaneEnv): Promise<void> => {
     const result = await runHaltConverges(database, {
         alert: deployRuleAlert(database, now),
         halt: async (row) => haltAlias(row, deps),
-        log: (line) => {
-            // eslint-disable-next-line no-console -- a failed converge is only visible here and on the halt row
-            console.warn(line);
-        },
+        log,
         now,
         owns,
         resume: async (row) => resumeAlias(row, deps),
@@ -577,7 +583,7 @@ const sweepHalts = async (env: ControlPlaneEnv): Promise<void> => {
         startBefore: now + HALT_CONVERGE_WINDOW_MS,
     });
 
-    if (synced.halted + synced.resumed + result.halted + result.resumed + result.failed + result.deferred > 0) {
+    if (synced.failed + synced.halted + synced.resumed + result.halted + result.resumed + result.failed + result.deferred > 0) {
         // eslint-disable-next-line no-console -- counts only; the one record of what a tick did
         console.log("[halt]", JSON.stringify({ ...result, requested: synced }));
     }
@@ -706,7 +712,7 @@ const fanOutTenantCrons = async (env: ControlPlaneEnv): Promise<void> => {
         return;
     }
 
-    const [live, halted] = await Promise.all([readLiveDeployments(env), readHaltedAliases(env)]);
+    const [live, halted] = await Promise.all([readLiveDeployments(env), readHalted(env)]);
 
     await runTenantCrons({
         fleets,

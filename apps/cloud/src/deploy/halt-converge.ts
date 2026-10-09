@@ -16,7 +16,7 @@ import { LunoraError } from "@lunora/errors";
 
 import type { ControlPlaneStore } from "../d1-store";
 import type { DeployKind, DeployManifest, TargetId } from "../provision-contract";
-import { storedTarget } from "../provision-contract";
+import { BINDING_SUPPORT, storedTarget } from "../provision-contract";
 import type { EncryptedSecret } from "../secrets/select";
 import { decryptSecrets, secretsForKind } from "../secrets/select";
 import { drainTable } from "../store";
@@ -27,11 +27,13 @@ import type { StoredAdminToken } from "./admin-token";
 import { resolveAdminToken } from "./admin-token";
 import type { HaltConvergeOutcome, HaltDeploymentRow, HaltRow, OwnsOrganization } from "./halt";
 import { liveByAlias } from "./halt";
-import { assertStubKeepsClasses, buildHaltStub } from "./halt-stub";
+import type { BoundClass } from "./halt-stub";
+import { assertStubKeepsClasses, buildHaltStub, classesOf, mergeClasses, provisionableClasses } from "./halt-stub";
 import type { DeployPacer } from "./pacing";
 import type { DeployTelemetry, ReleaseDeps } from "./release";
 import { droppedDurableObjectClasses, reprovision } from "./release";
 import type { ReleaseStore } from "./release-store";
+import { classesOnWorker, recordingDriver, storeRecorder } from "./worker-classes";
 
 /** Everything both converges need. */
 export interface HaltConvergeDeps {
@@ -51,43 +53,53 @@ export interface HaltConvergeDeps {
 
 type DeploymentRow = HaltDeploymentRow & StoredAdminToken & { cronSpecs?: null | string[] };
 
-/** The alias's deployment rows, its live release, and every release that may be on its Worker, newest first. */
-const aliasReleases = async (database: ControlPlaneStore, row: HaltRow): Promise<{ live: DeploymentRow; onWorker: DeploymentRow[] } | undefined> => {
+/** The alias's deployment rows and its live release. */
+const aliasDeployments = async (database: ControlPlaneStore, row: HaltRow): Promise<{ live: DeploymentRow | undefined; rows: DeploymentRow[] }> => {
     const projectRows = await drainTable<DeploymentRow>(database, "deployments", { where: { projectId: row.projectId } });
     const rows = projectRows.filter((deployment) => (deployment.alias ?? deployment.scriptName) === row.alias);
-    const live = liveByAlias(rows).get(row.alias);
 
-    if (live === undefined) {
-        return undefined;
-    }
-
-    // A release newer than the live one that started converging may be what the
-    // Worker runs — a failed health check whose revert failed, or a converge
-    // stranded mid-flight. Its classes must survive too.
-    const newer = rows.filter(
-        (deployment) =>
-            deployment._id !== live._id && deployment.createdAt > live.createdAt && deployment.provisioningAt != null && deployment.status !== "destroyed",
-    );
-
-    return { live, onWorker: [live, ...newer].toSorted((a, b) => b.createdAt - a.createdAt) };
+    return { live: liveByAlias(rows).get(row.alias), rows };
 };
 
-/** The stored manifests of `deployments`, refusing when one is gone: its classes could not be kept. */
-const manifestsOf = async (releases: ReleaseStore, deployments: ReadonlyArray<DeploymentRow>): Promise<DeployManifest[]> =>
-    Promise.all(
-        deployments.map(async (deployment) => {
-            const release = await releases.get(deployment._id);
+/** A stored release's manifest, refusing when it is gone. */
+const manifestOf = async (releases: ReleaseStore, deploymentId: string, why: string): Promise<DeployManifest> => {
+    const release = await releases.get(deploymentId);
 
-            if (release === null) {
-                throw new LunoraError(
-                    "CONFLICT",
-                    `release ${deployment._id} may be on the Worker but is no longer retained, so the classes a stub must keep are unknown; nothing was converged`,
-                );
-            }
+    if (release === null) {
+        throw new LunoraError("CONFLICT", `release ${deploymentId} is no longer retained, so ${why}; nothing was converged`);
+    }
 
-            return release.manifest;
-        }),
-    );
+    return release.manifest;
+};
+
+/**
+ * The classes that may be on the alias's Worker ({@link classesOnWorker}),
+ * limited to the types its target provisions at all. An alias no recording
+ * converge has confirmed yet (one deployed before the record) falls back to its
+ * live release and every newer release that reached the Worker (`verifyingAt`
+ * set: its converge succeeded) — refused when one of those bundles is gone.
+ */
+const workerClassesOf = async (deps: HaltConvergeDeps, row: HaltRow, aliasRows: { live: DeploymentRow; rows: DeploymentRow[] }): Promise<BoundClass[]> => {
+    const target = targetOf(aliasRows.live.target);
+    const recorded = await classesOnWorker(deps.database, row.alias);
+    let { classes } = recorded;
+
+    if (!recorded.recorded) {
+        const converged = aliasRows.rows.filter(
+            (deployment) =>
+                deployment._id !== aliasRows.live._id &&
+                deployment.createdAt > aliasRows.live.createdAt &&
+                deployment.verifyingAt != null &&
+                deployment.status !== "destroyed",
+        );
+        const why = "the classes its Worker runs are unknown (the alias predates the class record)";
+        const manifests = await Promise.all([aliasRows.live, ...converged].map(async (deployment) => manifestOf(deps.releases, deployment._id, why)));
+
+        classes = mergeClasses([...manifests.map((manifest) => classesOf(manifest)), classes]);
+    }
+
+    return provisionableClasses(classes, (type) => (BINDING_SUPPORT[target] as Readonly<Record<string, string>>)[type] !== "unsupported");
+};
 
 /** Where a deployment's tenant lives, or why this control plane cannot reach it. */
 const placementOf = async (deployment: DeploymentRow, read: RowReader): Promise<Placement> => {
@@ -139,28 +151,33 @@ const projectPlacement = async (deps: HaltConvergeDeps, organizationId: string, 
 };
 
 /**
- * Converge an alias onto its stub. The stub binds the classes of the live
- * release and of every newer release that may be on the Worker, and the guard
- * runs before the converge: a stub that would stop binding one of them is
- * refused, never uploaded.
+ * Converge an alias onto its stub: exactly the classes that may be on its
+ * Worker ({@link workerClassesOf}), checked before anything converges — a stub
+ * that would stop binding one of them is refused, never uploaded — and the
+ * converge itself recorded like any other.
  */
 export const haltAlias = async (row: HaltRow, deps: HaltConvergeDeps): Promise<HaltConvergeOutcome> => {
-    const releases = await aliasReleases(deps.database, row);
+    const { live, rows } = await aliasDeployments(deps.database, row);
 
-    if (releases === undefined) {
+    if (live === undefined) {
         return { skipped: "the alias has no live release" };
     }
 
-    const { live, onWorker } = releases;
-    const manifests = await manifestsOf(deps.releases, onWorker);
-    const stub = buildHaltStub(manifests, row.reason);
+    const classes = await workerClassesOf(deps, row, { live, rows });
+    const liveRelease = await deps.releases.get(live._id);
+    const stub = buildHaltStub(classes, {
+        ...(liveRelease?.manifest.compatibilityDate === undefined ? {} : { compatibilityDate: liveRelease.manifest.compatibilityDate }),
+        ...(liveRelease?.manifest.compatibilityFlags === undefined ? {} : { compatibilityFlags: liveRelease.manifest.compatibilityFlags }),
+        reason: row.reason,
+    });
 
-    assertStubKeepsClasses(stub.manifest, manifests, droppedDurableObjectClasses);
+    assertStubKeepsClasses(stub.manifest, classes, droppedDurableObjectClasses);
 
     const placement = await placementOf(live, deps.read);
+    const driver = recordingDriver(deps.driverFor(placement), storeRecorder(deps.database));
 
     await deps.pacer.schedulerFor(placement).run(async () =>
-        deps.driverFor(placement).deploy({
+        driver.deploy({
             alias: row.alias,
             bundle: stub.bundle,
             deploymentId: live._id,
@@ -172,7 +189,7 @@ export const haltAlias = async (row: HaltRow, deps: HaltConvergeDeps): Promise<H
         }),
     );
 
-    return { deploymentId: live._id };
+    return { deploymentId: live._id, stubClasses: classes };
 };
 
 /**
@@ -181,7 +198,7 @@ export const haltAlias = async (row: HaltRow, deps: HaltConvergeDeps): Promise<H
  * as a deploy does, so `reprovision` refuses a release whose project moved to
  * another target since, exactly as a rollback would.
  */
-const storeReleaseDeps = (deps: HaltConvergeDeps, deployment: DeploymentRow, target: TargetId): ReleaseDeps => {
+const storeReleaseDeps = (deps: HaltConvergeDeps, deployment: DeploymentRow, live: DeploymentRow | undefined, target: TargetId): ReleaseDeps => {
     return {
         backend: {
             placement: async ({ organizationId, projectId }) => projectPlacement(deps, organizationId, projectId),
@@ -197,7 +214,7 @@ const storeReleaseDeps = (deps: HaltConvergeDeps, deployment: DeploymentRow, tar
                 );
 
                 if (!adminToken) {
-                    throw new LunoraError("CONFLICT", "the live release has no usable admin token");
+                    throw new LunoraError("CONFLICT", "the release to resume onto has no usable admin token");
                 }
 
                 return {
@@ -205,7 +222,7 @@ const storeReleaseDeps = (deps: HaltConvergeDeps, deployment: DeploymentRow, tar
                     alias: deployment.alias ?? deployment.scriptName,
                     ...(deployment.cronSpecs != null && deployment.cronSpecs.length > 0 ? { cronSpecs: deployment.cronSpecs } : {}),
                     kind: deployment.kind as DeployKind,
-                    liveDeploymentId: deployment._id,
+                    ...(live === undefined ? {} : { liveDeploymentId: live._id }),
                     organizationId: deployment.organizationId,
                     projectId: deployment.projectId,
                     target,
@@ -217,44 +234,78 @@ const storeReleaseDeps = (deps: HaltConvergeDeps, deployment: DeploymentRow, tar
                 return decryptSecrets(secretsForKind(rows, kind), deps.masterKey);
             },
             rollbackDeployment: () => {
-                throw new LunoraError("INTERNAL", "a resume re-converges the live release; it records no rollback");
+                throw new LunoraError("INTERNAL", "a resume records its release itself; it records no rollback");
             },
         },
-        driverFor: deps.driverFor,
+        driverFor: (placement) => recordingDriver(deps.driverFor(placement), storeRecorder(deps.database)),
         pacer: deps.pacer,
         releases: deps.releases,
         ...(deps.telemetry ? { resolveTelemetry: async ({ organizationId }: { organizationId: string }) => deps.telemetry?.(organizationId) } : {}),
     };
 };
 
-/**
- * Converge an alias back onto its live release — crons, queue consumers,
- * assets and secrets included, all resolved as a deploy would. Refused before
- * anything converges unless the live release binds every Durable Object class
- * the stub kept (`reprovision`'s own guard is skipped for the live release,
- * which it compares with itself).
- */
-export const resumeAlias = async (row: HaltRow, deps: HaltConvergeDeps): Promise<HaltConvergeOutcome> => {
-    const releases = await aliasReleases(deps.database, row);
+/** The release a resume converges: support's choice (`resumeDeploymentId`) when it made one, else the alias's live release. */
+const resumeTarget = (row: HaltRow, aliasRows: { live: DeploymentRow | undefined; rows: DeploymentRow[] }): DeploymentRow | undefined => {
+    if (row.resumeDeploymentId == null) {
+        return aliasRows.live;
+    }
 
-    if (releases === undefined) {
+    const chosen = aliasRows.rows.find((deployment) => deployment._id === row.resumeDeploymentId);
+
+    if (chosen === undefined || (chosen.status !== "live" && chosen.status !== "superseded")) {
+        throw new LunoraError("CONFLICT", `release ${row.resumeDeploymentId} is not a live or retained release of ${row.alias}`);
+    }
+
+    return chosen;
+};
+
+/** Record a resume onto a release other than the live one, as a rollback records it: it becomes live and the project points at it. */
+const recordResumedOnto = async (deps: HaltConvergeDeps, target: DeploymentRow, live: DeploymentRow | undefined, now: number): Promise<void> => {
+    if (live !== undefined && live._id !== target._id) {
+        await deps.database.patch(live._id, { status: "superseded", supersededAt: now, updatedAt: now }, "deployments");
+    }
+
+    if (live?._id !== target._id) {
+        await deps.database.patch(target._id, { liveAt: now, status: "live", updatedAt: now }, "deployments");
+
+        if (target.kind === "production") {
+            await deps.database.patch(target.projectId, { activeDeploymentId: target._id, activeScriptName: target.scriptName }, "projects");
+        }
+    }
+};
+
+/**
+ * Converge an alias back onto its live release — or the release support chose
+ * — with crons, queue consumers, assets and secrets resolved as a deploy would.
+ * Refused before anything converges unless that release binds every class that
+ * may be on the Worker: the record of the Worker decides, never the deployment
+ * rows, so no row an operator edits can make a resume drop a class.
+ */
+export const resumeAlias = async (row: HaltRow, deps: HaltConvergeDeps, now: number = Date.now()): Promise<HaltConvergeOutcome> => {
+    const aliasRows = await aliasDeployments(deps.database, row);
+    const target = resumeTarget(row, aliasRows);
+
+    if (target === undefined) {
         return { skipped: "the alias has no live release to restore" };
     }
 
-    const { live, onWorker } = releases;
-    const [liveManifest, ...newer] = await manifestsOf(deps.releases, [live, ...onWorker.filter((deployment) => deployment._id !== live._id)]);
-    const dropped = [...new Set(newer.flatMap((manifest) => droppedDurableObjectClasses(manifest, liveManifest)))];
+    const onWorker = await workerClassesOf(deps, row, { live: aliasRows.live ?? target, rows: aliasRows.rows });
+    const kept = new Set(classesOf(await manifestOf(deps.releases, target._id, "what it binds is unknown")).map((bound) => bound.className));
+    const dropped = onWorker.filter((bound) => !kept.has(bound.className)).map((bound) => bound.className);
 
     if (dropped.length > 0) {
         throw new LunoraError(
             "CONFLICT",
-            `resuming onto the live release would delete the data of Durable Object class(es) ${dropped.join(", ")}, which a newer release on the Worker binds; the alias stays halted — see the RUNBOOK`,
+            `resuming onto release ${target._id} would delete the data of class(es) ${dropped.join(", ")}, which may be on the Worker; the alias stays halted — resume onto a release that binds them (RUNBOOK § 6c)`,
         );
     }
 
-    const target = targetOf(live.target);
+    await reprovision(
+        { deploymentId: target._id, organizationId: row.organizationId },
+        storeReleaseDeps(deps, target, aliasRows.live, targetOf(target.target)),
+        { keepClasses: true },
+    );
+    await recordResumedOnto(deps, target, aliasRows.live, now);
 
-    await reprovision({ deploymentId: live._id, organizationId: row.organizationId }, storeReleaseDeps(deps, live, target), { keepClasses: true });
-
-    return { deploymentId: live._id };
+    return { deploymentId: target._id };
 };

@@ -31,7 +31,7 @@ export const describeHaltReason = (halt: Pick<HaltView, "reason" | "source">): s
         return halt.reason === "overage" ? "prepaid credits ran out" : "spend cap reached";
     }
 
-    return halt.reason === "support" ? "stopped by Lunora support" : "stopped by hand";
+    return halt.source === "support" || halt.reason === "support" ? "stopped by Lunora support" : "stopped by hand";
 };
 
 /** What the card offers right now. */
@@ -44,8 +44,18 @@ export interface EmergencyStopActions {
     resumeBlocked?: string;
 }
 
-export const emergencyStopActions = (status: Pick<HaltStatusView, "autoHalted" | "haltable" | "halts" | "suspendedReason">): EmergencyStopActions => {
-    const resumable = status.halts.some((halt) => halt.state !== "resuming");
+export const emergencyStopActions = (
+    status: Pick<HaltStatusView, "autoHalted" | "haltable" | "halts" | "supportHalted" | "suspendedReason">,
+): EmergencyStopActions => {
+    if (status.supportHalted) {
+        return {
+            canHalt: false,
+            canResume: false,
+            resumeBlocked: "Lunora support stopped this organization's projects. Only support can resume them — contact support.",
+        };
+    }
+
+    const resumable = status.halts.some((halt) => halt.state !== "resuming" && halt.source !== "support");
 
     if (resumable && status.autoHalted) {
         return {

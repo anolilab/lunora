@@ -1,28 +1,53 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { HALTED_REFUSAL } from "../src/deploy/halt";
+import type { BoundClass } from "../src/deploy/halt-stub";
 import { handleDeployRequest } from "../src/deploy/handler";
 import { createDeployPacer } from "../src/deploy/pacing";
 import type { DeployBackend } from "../src/deploy/release-core";
-import { refuseHaltedConverge } from "../src/deploy/routes/deploy";
+import { guardedDriver } from "../src/deploy/routes/deploy";
 import type { LunoraActionContext } from "../src/deploy/routes/shared";
+import type { ConvergeOutcome } from "../src/deploy/worker-classes";
+import { beginConverge, classesOnWorker, endConverge } from "../src/deploy/worker-classes";
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import memoryReleaseStore from "./_helpers/memory-release-store";
 import { fakeDriver } from "./support/memory-driver";
+import type { MemoryStore } from "./support/memory-store";
+import { memoryStore } from "./support/memory-store";
 
 /**
- * The deploy edge's last check before anything lands on an alias's Worker
- * (`refuseHaltedConverge`): a deploy, revert or rollback already queued when
- * an emergency stop was asked for must not land on top of the stub. The
- * up-front refusals (`deployments.create`, `releaseTarget`, `rollback`) are in
+ * The deploy edge's driver (`guardedDriver`): the last check before anything
+ * lands on an alias's Worker — a deploy, revert or rollback already queued when
+ * an emergency stop was asked for must not land on top of the stub — and the
+ * record of which classes each converge put there. The up-front refusals
+ * (`deployments.create`, `releaseTarget`, `rollback`) are in
  * `halts-functions.test.ts`; this is the converge-time one, on the real deploy core.
  */
 
-/** A Lunora context whose `halts.aliasHalted` answers from `halted`. */
-const contextOf = (halted: Set<string>): LunoraActionContext => {
+/** The ownership rows the class record lives on. */
+const recordStore = (): MemoryStore => memoryStore({ aliasOwnership: [{ _id: "ao_app", alias: "app", organizationId: "org_1", projectId: "proj_1" }] });
+
+/**
+ * A Lunora context whose `halts.aliasHalted` answers from `halted`, and whose
+ * `halts.beginConverge` / `endConverge` write the class record into `store`
+ * (or fail, with `failRecord`).
+ */
+const contextOf = (halted: Set<string>, store: MemoryStore = recordStore(), failRecord = false): LunoraActionContext => {
     return {
         runAction: async () => undefined as never,
-        runMutation: async () => undefined as never,
+        runMutation: async <R>(_reference: unknown, args?: Record<string, unknown>) => {
+            if (failRecord) {
+                throw new Error("D1 unavailable");
+            }
+
+            const input = args as { alias: string; classes?: BoundClass[]; now: number; outcome?: ConvergeOutcome; token: string };
+
+            await (input.classes === undefined
+                ? endConverge(store, { alias: input.alias, now: input.now, outcome: input.outcome as ConvergeOutcome, token: input.token })
+                : beginConverge(store, { alias: input.alias, classes: input.classes, now: input.now, token: input.token }));
+
+            return null as R;
+        },
         runQuery: async <R>(_reference: unknown, args?: Record<string, unknown>) => halted.has(String(args?.["alias"])) as R,
     };
 };
@@ -84,13 +109,96 @@ const lines = async (response: Response): Promise<Record<string, unknown>[]> => 
         .map((line) => JSON.parse(line) as Record<string, unknown>);
 };
 
-describe(refuseHaltedConverge, () => {
+const classNamesOf = (record: { classes: BoundClass[] }): string[] => record.classes.map((bound) => bound.className);
+
+const spec = (alias: string, classes: string[] = []): TenantDeploymentSpec => {
+    return {
+        alias,
+        bundle: new ArrayBuffer(0),
+        deploymentId: "d",
+        kind: "production",
+        manifest: {
+            bindings: classes.map((className) => {
+                return { binding: className.toUpperCase(), className, sqlite: true, type: "durable_object" as const };
+            }),
+        },
+        secrets: {},
+        tags: [],
+    };
+};
+
+describe("the class record each converge writes", () => {
+    it("confirms the classes a converge put on the Worker", async () => {
+        const store = recordStore();
+        const driver = guardedDriver(
+            contextOf(new Set(), store),
+            fakeDriver({
+                deploy: async () => {
+                    return { url: "https://app.test" };
+                },
+            }),
+        );
+
+        await driver.deploy(spec("app", ["Counter", "Presence"]));
+
+        await expect(classesOnWorker(store, "app")).resolves.toMatchObject({ recorded: true });
+        expect(classNamesOf(await classesOnWorker(store, "app"))).toStrictEqual(["Counter", "Presence"]);
+        expect(store.tables["aliasOwnership"]?.[0]?.["pendingClasses"]).toStrictEqual([]);
+    });
+
+    it("keeps the classes of a converge that failed after it may have uploaded, and drops one that provably uploaded nothing", async () => {
+        const store = recordStore();
+        const ok = guardedDriver(
+            contextOf(new Set(), store),
+            fakeDriver({
+                deploy: async () => {
+                    return { url: "https://app.test" };
+                },
+            }),
+        );
+        const failing = (message: string) =>
+            guardedDriver(
+                contextOf(new Set(), store),
+                fakeDriver({
+                    deploy: async () => {
+                        throw new Error(message);
+                    },
+                }),
+            );
+
+        await ok.deploy(spec("app", ["Counter"]));
+
+        await expect(failing("alchemy deploy of lunora-project-app failed with exit code 1").deploy(spec("app", ["Counter", "Early"]))).rejects.toThrow(
+            /project/u,
+        );
+        await expect(failing("alchemy deploy of lunora-worker-app failed with exit code 1").deploy(spec("app", ["Counter", "Late"]))).rejects.toThrow(
+            /worker/u,
+        );
+
+        expect(classNamesOf(await classesOnWorker(store, "app"))).toStrictEqual(["Counter", "Late"]);
+
+        // A later success is what the Worker runs: the failure before it no longer counts.
+        await ok.deploy(spec("app", ["Counter"]));
+
+        expect(classNamesOf(await classesOnWorker(store, "app"))).toStrictEqual(["Counter"]);
+    });
+
+    it("refuses the converge when the record cannot be written — it fails closed", async () => {
+        const { deploy } = capture();
+        const driver = guardedDriver(contextOf(new Set(), recordStore(), true), fakeDriver({ deploy }));
+
+        await expect(driver.deploy(spec("app", ["Counter"]))).rejects.toThrow(/D1 unavailable/u);
+        expect(deploy).not.toHaveBeenCalled();
+    });
+});
+
+describe(guardedDriver, () => {
     it("refuses to converge onto a halted alias, and passes any other through", async () => {
         const { deploy } = capture();
-        const driver = refuseHaltedConverge(contextOf(new Set(["app"])), fakeDriver({ deploy }));
-        const spec = (alias: string): TenantDeploymentSpec => {
-            return { alias, bundle: new ArrayBuffer(0), deploymentId: "d", kind: "production", manifest: { bindings: [] }, secrets: {}, tags: [] };
-        };
+        const driver = guardedDriver(
+            contextOf(new Set(["app"]), memoryStore({ aliasOwnership: [{ _id: "ao_other", alias: "other", projectId: "p_o" }] })),
+            fakeDriver({ deploy }),
+        );
 
         await expect(driver.deploy(spec("app"))).rejects.toThrow(HALTED_REFUSAL);
         expect(deploy).not.toHaveBeenCalled();
@@ -101,7 +209,7 @@ describe(refuseHaltedConverge, () => {
         const { deploy, deployed } = capture();
         const response = await handleDeployRequest(deployRequest(), {
             backend: backend(),
-            driverFor: () => refuseHaltedConverge(contextOf(new Set(["app"])), fakeDriver({ deploy })),
+            driverFor: () => guardedDriver(contextOf(new Set(["app"])), fakeDriver({ deploy })),
             pacer: createDeployPacer(),
             releases: memoryReleaseStore().store,
         });
@@ -122,7 +230,7 @@ describe(refuseHaltedConverge, () => {
 
         const response = await handleDeployRequest(deployRequest(), {
             backend: backend(),
-            driverFor: () => refuseHaltedConverge(contextOf(halted), fakeDriver({ deploy })),
+            driverFor: () => guardedDriver(contextOf(halted), fakeDriver({ deploy })),
             // The halt is asked for, and its stub converged, while the release is being verified: the dispatcher answers 503.
             healthCheck: async () => {
                 halted.add("app");

@@ -7,11 +7,14 @@
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { buildHaltStub } from "../../src/deploy/halt-stub";
+import { buildHaltStub, classesOf } from "../../src/deploy/halt-stub";
 import { HALT_STUB_FIXTURE, HALT_STUB_REASON } from "./halt-stub-fixture";
 
 const setup = (): void => {
-    writeFileSync(fileURLToPath(new URL("halt-stub.generated.js", import.meta.url)), buildHaltStub([HALT_STUB_FIXTURE], HALT_STUB_REASON).source);
+    writeFileSync(
+        fileURLToPath(new URL("halt-stub.generated.js", import.meta.url)),
+        buildHaltStub(classesOf(HALT_STUB_FIXTURE), { reason: HALT_STUB_REASON }).source,
+    );
 };
 
 export default setup;

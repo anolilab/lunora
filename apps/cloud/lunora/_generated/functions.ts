@@ -189,6 +189,8 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "github_installations:remove": lunora_github_installations_13.remove as unknown as RegisteredLunoraFunction,
     "github_installations:unclaim": lunora_github_installations_13.unclaim as unknown as RegisteredLunoraFunction,
     "halts:aliasHalted": lunora_halts_14.aliasHalted as unknown as RegisteredLunoraFunction,
+    "halts:beginConverge": lunora_halts_14.beginConverge as unknown as RegisteredLunoraFunction,
+    "halts:endConverge": lunora_halts_14.endConverge as unknown as RegisteredLunoraFunction,
     "halts:haltOrganization": lunora_halts_14.haltOrganization as unknown as RegisteredLunoraFunction,
     "halts:operatorHalt": lunora_halts_14.operatorHalt as unknown as RegisteredLunoraFunction,
     "halts:resumeOrganization": lunora_halts_14.resumeOrganization as unknown as RegisteredLunoraFunction,
@@ -647,6 +649,33 @@ if (typeof source !== "object" || source === null || Array.isArray(source)) retu
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
 if (typeof source["alias"] !== "string") return DEFER;
 return { "alias": source["alias"] };
+});
+installCompiledValidatorMap(lunora_halts_14.beginConverge.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["alias"] !== "string") return DEFER;
+if (!Array.isArray(source["classes"])) return DEFER;
+const __arr1 = new Array(source["classes"].length);
+for (let __i1 = 0; __i1 < source["classes"].length; __i1++) {
+const __e1 = source["classes"][__i1];
+if (typeof __e1 !== "object" || __e1 === null || Array.isArray(__e1)) return DEFER;
+if (Object.getPrototypeOf(__e1) !== Object.prototype && Object.getPrototypeOf(__e1) !== null) return DEFER;
+if (typeof __e1["binding"] !== "string") return DEFER;
+if (typeof __e1["className"] !== "string") return DEFER;
+let __has2 = false;
+let __val2;
+if (__e1["sqlite"] !== undefined) {
+if (typeof __e1["sqlite"] !== "boolean") return DEFER;
+__val2 = __e1["sqlite"];
+__has2 = true;
+}
+if (typeof __e1["type"] !== "string") return DEFER;
+const __obj3 = { "binding": __e1["binding"], "className": __e1["className"], ...(__has2 ? { "sqlite": __val2 } : {}), "type": __e1["type"] };
+__arr1[__i1] = __obj3;
+}
+if (typeof source["now"] !== "number" || !Number.isFinite(source["now"])) return DEFER;
+if (typeof source["token"] !== "string") return DEFER;
+return { "alias": source["alias"], "classes": __arr1, "now": source["now"], "token": source["token"] };
 });
 installCompiledValidatorMap(lunora_halts_14.haltOrganization.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -1156,11 +1185,13 @@ export interface Caller {
     };
     halts: {
         aliasHalted: (args: { alias: string }) => Promise<boolean>;
+        beginConverge: (args: { alias: string; classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; now: number; token: string }) => Promise<null>;
+        endConverge: (args: { alias: string; now: number; outcome: "failed" | "not-uploaded" | "succeeded"; token: string }) => Promise<null>;
         haltOrganization: (args: { organizationId: Id<"organizations"> }) => Promise<import("../../src/deploy/halt.js").HaltRequestResult>;
-        operatorHalt: (args: { action: "halt" | "resume"; organizationId: Id<"organizations"> }) => Promise<import("../../src/deploy/halt.js").HaltRequestResult | { resumed: string[]; }>;
+        operatorHalt: (args: { action: "halt" | "resume"; deploymentId?: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<import("../../src/deploy/halt.js").HaltRequestResult | { resumed: string[]; }>;
         resumeOrganization: (args: { organizationId: Id<"organizations"> }) => Promise<{ resumed: string[]; }>;
         setHaltOnSuspension: (args: { enabled: boolean; organizationId: Id<"organizations"> }) => Promise<null>;
-        status: (args: { organizationId: Id<"organizations"> }) => Promise<{ autoHalted: boolean; haltable: number; haltOnSuspension: boolean; halts: { alias: string; attempts: number; haltedAt?: number; haltedBy: string; kind: string; lastError?: string; projectId: string; reason: string; requestedAt: number; source: "manual" | "suspension"; state: "halted" | "halting" | "resuming" }[]; suspendedReason?: string; unsupported: { alias: string; reason: string; }[] }>;
+        status: (args: { organizationId: Id<"organizations"> }) => Promise<{ autoHalted: boolean; haltable: number; haltOnSuspension: boolean; halts: { alias: string; attempts: number; haltedAt?: number; haltedBy: string; kind: string; lastError?: string; projectId: string; reason: string; requestedAt: number; source: "manual" | "support" | "suspension"; state: "halted" | "halting" | "resuming" }[]; supportHalted: boolean; suspendedReason?: string; unsupported: { alias: string; reason: string; }[] }>;
     };
     hostd_releases: {
         envelope: (args: { releaseId: unknown }) => Promise<string | null>;
@@ -1447,6 +1478,8 @@ export const createCaller = (context: CallerCtx): Caller => ({
     },
     halts: {
         aliasHalted: (args) => callRegistered(context, "halts:aliasHalted", args),
+        beginConverge: (args) => callRegistered(context, "halts:beginConverge", args),
+        endConverge: (args) => callRegistered(context, "halts:endConverge", args),
         haltOrganization: (args) => callRegistered(context, "halts:haltOrganization", args),
         operatorHalt: (args) => callRegistered(context, "halts:operatorHalt", args),
         resumeOrganization: (args) => callRegistered(context, "halts:resumeOrganization", args),

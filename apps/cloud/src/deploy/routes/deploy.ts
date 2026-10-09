@@ -34,6 +34,8 @@ import type { ReleaseDeps } from "../release";
 import { rollbackRelease } from "../release";
 import type { DeployBackend, DeployHandlerDeps, DeployTarget } from "../release-core";
 import { createReleaseStore } from "../release-store";
+import type { ConvergeRecorder } from "../worker-classes";
+import { recordingDriver } from "../worker-classes";
 import type { LunoraActionContext, RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext, strictBearer } from "./shared";
 
@@ -60,22 +62,48 @@ const resolveSecrets =
         );
 
 /**
- * The last check before anything lands on an alias's Worker: refuse to converge
- * onto a halted alias. Deploys, rollbacks and reverts are refused up front
- * (`deployments.create`, `releaseTarget`, `rollback`), but one already queued on
- * the pacer when the halt was asked for would otherwise land on top of the
- * emergency stop's stub. The halt sweep converges stubs through its own
- * drivers, never through this one.
+ * The deploy edge's converge recorder: the class record of each alias's Worker
+ * (`src/deploy/worker-classes.ts`), written through internal mutations.
  */
-export const refuseHaltedConverge = (context: LunoraActionContext, driver: TargetDriver): TargetDriver => {
+const mutationRecorder = (context: LunoraActionContext): ConvergeRecorder => {
     return {
-        ...driver,
+        begin: async (input) => {
+            await context.runMutation(internal.halts.beginConverge, { ...input });
+        },
+        end: async (input) => {
+            await context.runMutation(internal.halts.endConverge, { ...input });
+        },
+    };
+};
+
+/**
+ * Every converge the deploy edge runs — deploys, a failed health check's
+ * revert, rollbacks, git-build releases — goes through this driver:
+ *
+ * - The last check before anything lands on an alias's Worker: refuse to
+ *   converge onto a halted alias. Deploys, rollbacks and reverts are refused up
+ *   front (`deployments.create`, `releaseTarget`, `rollback`), but one already
+ *   queued on the pacer when the halt was asked for would otherwise land on top
+ *   of the emergency stop's stub.
+ * - The converge is recorded, so the classes on the alias's Worker are known to
+ *   a later halt and its resume (`recordingDriver`). A record that cannot be
+ *   written refuses the converge: it fails closed, so a control-plane D1 write
+ *   now gates every converge on a target that drops unbound classes.
+ *
+ * The halt sweep converges stubs and resumes through its own drivers, never
+ * through this one.
+ */
+export const guardedDriver = (context: LunoraActionContext, driver: TargetDriver): TargetDriver => {
+    const recorded = recordingDriver(driver, mutationRecorder(context));
+
+    return {
+        ...recorded,
         deploy: async (spec, options) => {
             if (await context.runQuery<boolean>(internal.halts.aliasHalted, { alias: spec.alias })) {
                 throw new LunoraError("CONFLICT", HALTED_REFUSAL);
             }
 
-            return driver.deploy(spec, options);
+            return recorded.deploy(spec, options);
         },
     };
 };
@@ -125,7 +153,7 @@ const releaseDeps = (context: LunoraActionContext, environment: RouterEnv, pacer
                     organizationId,
                 }),
         },
-        driverFor: (placement) => refuseHaltedConverge(context, resolveTargetDriver(placement, environment)),
+        driverFor: (placement) => guardedDriver(context, resolveTargetDriver(placement, environment)),
         releases: createReleaseStore(environment.RELEASES),
         // Provision (once per org) the scoped ingest key + hand the tenant its
         // OTLP endpoint/token (src/telemetry/ingest-key).

@@ -13,6 +13,7 @@ import {
     requestOrganizationResume,
     SUPPORT_ACTOR,
 } from "../src/deploy/halt";
+import { beginConverge as beginConvergeOnStore, endConverge as endConvergeOnStore } from "../src/deploy/worker-classes";
 import { storedTarget } from "../src/provision-contract";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
@@ -63,11 +64,22 @@ const storeOf = (database: MutationContext["db"]): ControlPlaneStore => {
     };
 };
 
-/** Whether a project has a `halts` row — the condition every deploy, rollback and release of it is refused under. */
+/**
+ * Whether a project is halted — the condition every deploy, rollback and
+ * release of it is refused under: it has a `halts` row, or support holds its
+ * whole organization (which also covers an alias that has no live release yet).
+ */
 export const projectHalted = async (context: QueryContext, projectId: Id<"projects">): Promise<boolean> => {
     const { page } = await context.db.halts.findMany({ limit: 1, where: { projectId } });
 
-    return page.length > 0;
+    if (page.length > 0) {
+        return true;
+    }
+
+    const project = await context.db.projects.get(projectId);
+    const organization = project ? await context.db.organizations.get(project.organizationId) : null;
+
+    return organization?.supportHaltedAt != null;
 };
 
 /** Refuse a deploy, rollback or release of a halted project. */
@@ -88,7 +100,7 @@ export interface HaltView {
     projectId: string;
     reason: string;
     requestedAt: number;
-    source: "manual" | "suspension";
+    source: "manual" | "support" | "suspension";
     state: "halted" | "halting" | "resuming";
 }
 
@@ -101,6 +113,8 @@ export interface HaltStatus {
     /** The organization's setting: absent means on. */
     haltOnSuspension: boolean;
     halts: HaltView[];
+    /** Support holds the organization: only support lifts it. */
+    supportHalted: boolean;
     suspendedReason?: string;
     /** Live aliases a halt does not reach, with the reason. */
     unsupported: HaltRequestResult["unsupported"];
@@ -148,6 +162,7 @@ export const status = query.input({ organizationId: v.id("organizations") }).que
         halts: (halts as HaltRow[]).map((row) => toView(row)).toSorted((a, b) => a.alias.localeCompare(b.alias)),
         haltable,
         haltOnSuspension: organization?.haltOnSuspension !== false,
+        supportHalted: organization?.supportHaltedAt != null,
         ...(organization?.suspendedAt != null && organization.suspendedReason != null ? { suspendedReason: organization.suspendedReason } : {}),
         unsupported,
     };
@@ -188,16 +203,30 @@ export const haltOrganization = mutation
         });
     });
 
-/** Resume (owners/admins): converge every halted alias back onto its live release. Refused while a covered suspension holds. */
+/**
+ * Resume (owners/admins): converge every alias they or a suspension halted
+ * back onto its live release. Refused while a covered suspension holds, and
+ * while support holds the organization — support's stop is support's to lift.
+ */
 export const resumeOrganization = mutation
     .use(rateLimit("sensitive"))
     .input({ organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<{ resumed: string[] }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
+        const organization = await context.db.organizations.get(member.organizationId);
+
+        if (organization?.supportHaltedAt != null) {
+            throw new LunoraError("FORBIDDEN", "Lunora support stopped this organization's projects; only support can resume them — contact support");
+        }
 
         await assertResumable(context, member.organizationId);
 
-        return requestOrganizationResume(storeOf(context.db), { actor: member.userId, now: context.now, organizationId: member.organizationId });
+        return requestOrganizationResume(storeOf(context.db), {
+            actor: member.userId,
+            now: context.now,
+            organizationId: member.organizationId,
+            sources: ["manual", "suspension"],
+        });
     });
 
 /**
@@ -224,14 +253,56 @@ export const setHaltOnSuspension = mutation
         return null;
     });
 
+/** Support's "resume this alias onto release X": the release must be the organization's, live or retained, and its alias halted. */
+const resumeOnto = async (
+    context: MutationContext,
+    input: { deploymentId: Id<"deployments">; organizationId: Id<"organizations"> },
+): Promise<{ resumed: string[] }> => {
+    const deployment = await context.db.deployments.get(input.deploymentId);
+
+    if (deployment?.organizationId !== input.organizationId || (deployment.status !== "live" && deployment.status !== "superseded")) {
+        throw new LunoraError("NOT_FOUND", "no live or retained release with that id in this organization");
+    }
+
+    const alias = deployment.alias ?? deployment.scriptName;
+    const { page } = await context.db.halts.findMany({ limit: 1, where: { alias, projectId: deployment.projectId } });
+    if (page.length === 0) {
+        throw new LunoraError("CONFLICT", `${alias} is not halted`);
+    }
+
+    await context.db.patch((page[0] as { _id: Id<"halts"> })._id, {
+        attempts: 0,
+        lastError: null,
+        nextAttemptAt: null,
+        resumeDeploymentId: input.deploymentId,
+        state: "resuming",
+        updatedAt: context.now,
+    });
+    await context.db.insert("auditLog", {
+        action: "halt.resume_requested",
+        actorUserId: SUPPORT_ACTOR,
+        createdAt: context.now,
+        organizationId: input.organizationId,
+        target: `${alias} onto release ${input.deploymentId}`,
+    });
+
+    return { resumed: [alias] };
+};
+
 /**
  * Support's emergency stop and resume (`POST /v1/halts`, admin-token gated).
- * A support halt is a manual halt; a resume follows the same rule an owner's
- * does, so it never fights the suspension sweep.
+ *
+ * A support halt holds the whole organization (`organizations.supportHaltedAt`:
+ * a deploy of an alias with no live release is refused too) and its rows are
+ * `support` rows, which no owner or admin can lift and no suspension change
+ * touches. A resume clears both, follows the same suspension rule an owner's
+ * does, and with `deploymentId` resumes that one alias onto that release
+ * instead of its live one — still refused unless it binds every class that
+ * may be on the Worker.
  */
 export const operatorHalt = internalMutation
-    .input({ action: v.union(v.literal("halt"), v.literal("resume")), organizationId: v.id("organizations") })
-    .mutation(async ({ ctx: context, args: { action, organizationId } }): Promise<HaltRequestResult | { resumed: string[] }> => {
+    .input({ action: v.union(v.literal("halt"), v.literal("resume")), deploymentId: v.optional(v.id("deployments")), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { action, deploymentId, organizationId } }): Promise<HaltRequestResult | { resumed: string[] }> => {
         const organization = await context.db.organizations.get(organizationId);
 
         if (!organization) {
@@ -239,28 +310,67 @@ export const operatorHalt = internalMutation
         }
 
         if (action === "halt") {
+            await context.db.organizations.patch(organizationId, { supportHaltedAt: context.now });
+
             return requestOrganizationHalt(storeOf(context.db), {
                 actor: SUPPORT_ACTOR,
                 now: context.now,
                 organizationId,
                 reason: "support",
-                source: "manual",
+                source: "support",
             });
         }
 
         await assertResumable(context, organizationId);
 
+        if (deploymentId !== undefined) {
+            return resumeOnto(context, { deploymentId, organizationId });
+        }
+
+        await context.db.patch(organizationId, { supportHaltedAt: null });
+
         return requestOrganizationResume(storeOf(context.db), { actor: SUPPORT_ACTOR, now: context.now, organizationId });
+    });
+
+/** The class shape the converge record stores (`src/deploy/worker-classes.ts`). */
+const boundClassInput = v.array(v.object({ binding: v.string(), className: v.string(), sqlite: v.optional(v.boolean()), type: v.string() }));
+
+/**
+ * Record a converge about to start on an alias's Worker (the deploy edge's
+ * `recordingDriver`): its classes may be on the Worker from now on. The
+ * converge is refused when this fails.
+ */
+export const beginConverge = internalMutation
+    .input({ alias: v.string(), classes: boundClassInput, now: v.number(), token: v.string() })
+    .mutation(async ({ ctx: context, args }): Promise<null> => {
+        await beginConvergeOnStore(storeOf(context.db), args);
+
+        return null;
+    });
+
+/** Record how a converge on an alias's Worker ended. */
+export const endConverge = internalMutation
+    .input({
+        alias: v.string(),
+        now: v.number(),
+        outcome: v.union(v.literal("failed"), v.literal("not-uploaded"), v.literal("succeeded")),
+        token: v.string(),
+    })
+    .mutation(async ({ ctx: context, args }): Promise<null> => {
+        await endConvergeOnStore(storeOf(context.db), args);
+
+        return null;
     });
 
 /**
  * Whether an alias is halted — read by the deploy edge right before it
  * converges anything onto the alias's Worker (`src/deploy/routes/deploy.ts`),
  * so a deploy, revert or rollback already in flight when the halt was asked
- * for cannot land on top of the stub.
+ * for cannot land on top of the stub. Scoped to the alias's OWNER: a row a
+ * previous owner left behind holds nothing of the project that claimed it since.
  */
 export const aliasHalted = internalQuery.input({ alias: v.string() }).query(async ({ ctx: context, args: { alias } }): Promise<boolean> => {
-    const { page } = await context.db.halts.findMany({ limit: 1, where: { alias } });
+    const { page: owners } = await context.db.aliasOwnership.findMany({ limit: 1, where: { alias } });
 
-    return page.length > 0;
+    return owners.length > 0 && projectHalted(context, (owners[0] as { projectId: Id<"projects"> }).projectId);
 });

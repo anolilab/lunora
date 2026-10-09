@@ -19,6 +19,10 @@ const live = (id: string, alias: string, target: string, projectId: string): Row
 
 const tables = (overrides: Record<string, Row[]> = {}): Record<string, Row[]> => {
     return {
+        aliasOwnership: [
+            { _id: "ao_acme", alias: "acme", organizationId: "org_1", projectId: "p_acme" },
+            { _id: "ao_shop", alias: "shop", organizationId: "org_1", projectId: "p_shop" },
+        ],
         deployments: [
             live("d_acme", "acme", "cloudflare-wfp", "p_acme"),
             live("d_shop", "shop", "cloudflare-workers", "p_shop"),
@@ -127,15 +131,64 @@ describe("halts.setHaltOnSuspension", () => {
 });
 
 describe("halts.operatorHalt", () => {
-    it("records support's stop as a manual halt by support", async () => {
+    it("records support's stop as support's, holding the whole organization", async () => {
         const { ctx, ops } = makeCtx(tables({ members: [] }), { userId: null });
 
         await operatorHalt.handler(ctx, { action: "halt", organizationId: "org_1" } as never);
 
         expect(inserted(ops, "halts").map((row) => [row["haltedBy"], row["reason"], row["source"]])).toStrictEqual([
-            ["support", "support", "manual"],
-            ["support", "support", "manual"],
+            ["support", "support", "support"],
+            ["support", "support", "support"],
         ]);
+        expect(ops).toContainEqual({ id: "org_1", kind: "patch", patch: { supportHaltedAt: 1_700_000_000_000 } });
+    });
+
+    it("l3: lets no owner or admin lift support's stop", async () => {
+        const { ctx, ops } = makeCtx(tables({ halts: [halt("acme", "p_acme", { source: "support" })], organizations: [{ _id: "org_1", supportHaltedAt: 1 }] }));
+
+        await expect(resumeOrganization.handler(ctx, { organizationId: "org_1" } as never)).rejects.toThrow(/only support can resume/u);
+        expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
+    });
+
+    it("l3: holds a project with no live release while support holds its organization", async () => {
+        const { ctx, ops } = makeCtx(tables({ organizations: [{ _id: "org_1", supportHaltedAt: 1 }] }));
+
+        await expect(create.handler(ctx, { kind: "preview", organizationId: "org_1", projectId: "p_shop", scriptName: "shop-pr-1" } as never)).rejects.toThrow(
+            HALTED_REFUSAL,
+        );
+        expect(inserted(ops, "deployments")).toStrictEqual([]);
+    });
+
+    it("lifts support's stop on support's resume", async () => {
+        const { ctx, ops } = makeCtx(
+            tables({ halts: [halt("acme", "p_acme", { source: "support" })], organizations: [{ _id: "org_1", supportHaltedAt: 1 }] }),
+            {
+                userId: null,
+            },
+        );
+
+        await expect(operatorHalt.handler(ctx, { action: "resume", organizationId: "org_1" } as never)).resolves.toStrictEqual({ resumed: ["acme"] });
+        expect(ops).toContainEqual({ id: "org_1", kind: "patch", patch: { supportHaltedAt: null } });
+    });
+
+    it("resumes one alias onto the release support chose, and refuses one that is not the organization's", async () => {
+        const superseded = { ...live("d_acme_old", "acme", "cloudflare-wfp", "p_acme"), status: "superseded" };
+        const { ctx, ops } = makeCtx(
+            tables({ deployments: [live("d_acme", "acme", "cloudflare-wfp", "p_acme"), superseded], halts: [halt("acme", "p_acme")] }),
+            {
+                userId: null,
+            },
+        );
+
+        await expect(operatorHalt.handler(ctx, { action: "resume", deploymentId: "d_acme_old", organizationId: "org_1" } as never)).resolves.toStrictEqual({
+            resumed: ["acme"],
+        });
+        expect(ops).toContainEqual(
+            expect.objectContaining({ id: "h_acme", kind: "patch", patch: expect.objectContaining({ resumeDeploymentId: "d_acme_old", state: "resuming" }) }),
+        );
+        await expect(operatorHalt.handler(ctx, { action: "resume", deploymentId: "d_unknown", organizationId: "org_1" } as never)).rejects.toThrow(
+            /no live or retained release/u,
+        );
     });
 
     it("refuses support's resume while a covered suspension holds, like an owner's", async () => {
@@ -206,5 +259,17 @@ describe("a halted project's release path", () => {
 
         await expect(aliasHalted.handler(ctx, { alias: "acme" })).resolves.toBe(true);
         await expect(aliasHalted.handler(ctx, { alias: "shop" })).resolves.toBe(false);
+    });
+
+    it("m2: holds nothing of the project that claimed an alias since a halt was left on it", async () => {
+        const { ctx } = makeCtx(
+            tables({
+                aliasOwnership: [{ _id: "ao_acme", alias: "acme", organizationId: "org_2", projectId: "p_new_owner" }],
+                halts: [halt("acme", "p_acme")],
+                projects: [{ _id: "p_new_owner", name: "New", organizationId: "org_2", slug: "acme" }],
+            }),
+        );
+
+        await expect(aliasHalted.handler(ctx, { alias: "acme" })).resolves.toBe(false);
     });
 });

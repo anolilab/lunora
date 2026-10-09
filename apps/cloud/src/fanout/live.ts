@@ -19,6 +19,7 @@ export interface LiveDeploymentRow {
     cronSpecs?: string[];
     liveAt?: number;
     organizationId?: string;
+    projectId?: string;
     resourceRef?: string;
     scriptName: string;
     target?: string;
@@ -50,25 +51,30 @@ export const servingDeployments = async (store: ControlPlaneStore, rows: Readonl
     return rows.filter((row) => row.organizationId !== undefined && serving.has(row.organizationId));
 };
 
+/** The key an emergency stop holds a release by: its alias AND its project, so a row another project left on the alias holds nothing. */
+export const haltKey = (row: Pick<LiveDeploymentRow, "alias" | "projectId" | "scriptName">): string => `${row.projectId ?? ""}/${row.alias ?? row.scriptName}`;
+
 /**
- * The aliases an emergency stop holds (`halts`, `src/deploy/halt.ts`), whatever
- * the row's progress: their crons are not ticked and their queue batches are
- * not delivered — the stub on their Worker would only answer 503 — until the
- * row is gone. None without the control-plane D1.
+ * What an emergency stop holds (`halts`, `src/deploy/halt.ts`), whatever the
+ * row's progress, keyed by {@link haltKey}: their crons are not ticked and
+ * their queue batches are not delivered — the stub on their Worker would only
+ * answer 503 — until the row is gone. None without the control-plane D1.
  */
-export const readHaltedAliases = async (environment: { DB?: unknown }): Promise<Set<string>> => {
+export const readHalted = async (environment: { DB?: unknown }): Promise<Set<string>> => {
     if (!environment.DB) {
         return new Set();
     }
 
-    const rows = await drainTable<{ alias: string }>(controlPlaneDatabase(environment.DB as D1DatabaseLike), "halts");
+    const rows = await drainTable<{ alias: string; projectId: string }>(controlPlaneDatabase(environment.DB as D1DatabaseLike), "halts");
 
-    return new Set(rows.map((row) => row.alias));
+    return new Set(rows.map((row) => haltKey({ alias: row.alias, projectId: row.projectId, scriptName: row.alias })));
 };
 
-/** The live deployments whose alias no emergency stop holds — the ones the cron fan-out ticks. */
-export const withoutHalted = <Row extends Pick<LiveDeploymentRow, "alias" | "scriptName">>(live: ReadonlyArray<Row>, halted: ReadonlySet<string>): Row[] =>
-    live.filter((row) => !halted.has(row.alias ?? row.scriptName));
+/** The live deployments no emergency stop holds — the ones the cron fan-out ticks. */
+export const withoutHalted = <Row extends Pick<LiveDeploymentRow, "alias" | "projectId" | "scriptName">>(
+    live: ReadonlyArray<Row>,
+    halted: ReadonlySet<string>,
+): Row[] => live.filter((row) => !halted.has(haltKey(row)));
 
 /** The handle a target addresses a deployment by: `resourceRef`, or the script name on rows that predate it. */
 export const resourceRefOf = (row: { resourceRef?: null | string; scriptName: string }): string => row.resourceRef ?? row.scriptName;

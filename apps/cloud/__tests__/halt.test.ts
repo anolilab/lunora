@@ -1,27 +1,24 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import type { HaltConvergePorts, HaltRow } from "../src/deploy/halt";
+import type { HaltRow } from "../src/deploy/halt";
 import {
-    deployRuleAlert,
     HALT_LEASE_MS,
     haltBackoff,
+    liveByAlias,
     requestOrganizationHalt,
     requestOrganizationResume,
     runHaltConverges,
     syncSuspensionHalts,
 } from "../src/deploy/halt";
-import type { HaltConvergeDeps } from "../src/deploy/halt-converge";
-import { haltAlias, organizationsOnCell, resumeAlias } from "../src/deploy/halt-converge";
-import { buildHaltStub } from "../src/deploy/halt-stub";
-import { createDeployPacer } from "../src/deploy/pacing";
-import type { StoredRelease } from "../src/deploy/release-store";
+import { haltAlias, organizationsOnCell } from "../src/deploy/halt-converge";
+import { buildHaltStub, classesOf } from "../src/deploy/halt-stub";
+import { teardownPorts } from "../src/deploy/sweeps";
 import type { DeployManifest, TenantDeploymentSpec } from "../src/provision-contract";
-import { encryptSecret } from "../src/secrets/crypto";
 import { storeRowReader } from "../src/targets/placement";
-import memoryReleaseStore from "./_helpers/memory-release-store";
+import { actions, deployment, haltOf, halts, LIVE_MANIFEST, NOW, ports, release, sourceOf, world } from "./support/halt-world";
 import { fakeDriver } from "./support/memory-driver";
 import type { MemoryStore } from "./support/memory-store";
-import { memoryStore } from "./support/memory-store";
 
 /**
  * The emergency stop's sweep (`src/deploy/halt.ts`) and its two converges
@@ -30,136 +27,18 @@ import { memoryStore } from "./support/memory-store";
  * the Worker each way, and how a failing converge is recorded, retried and paced.
  */
 
-const NOW = 1_800_000_000_000;
-const KEY = "0f".repeat(32);
-
-const LIVE_MANIFEST: DeployManifest = {
-    bindings: [
-        { binding: "COUNTER", className: "Counter", sqlite: true, type: "durable_object" },
-        { binding: "FILES", resource: "files", type: "r2" },
-        { binding: "JOBS", resource: "jobs", type: "queue_producer" },
-        { binding: "jobs", resource: "jobs", type: "queue_consumer" },
-    ],
-    compatibilityDate: "2026-05-01",
-};
-
-const release = (manifest: DeployManifest): StoredRelease => {
-    return { bundle: Buffer.from("export default { fetch: () => new Response('real') }").toString("base64"), manifest };
-};
-
-type Row = Record<string, unknown>;
-
-const deployment = (id: string, overrides: Row): Row => {
-    return {
-        _id: id,
-        adminToken: `admin-${id}`,
-        createdAt: 1,
-        createdBy: "u",
-        kind: "production",
-        organizationId: "org_1",
-        scriptName: overrides["alias"],
-        status: "live",
-        updatedAt: 1,
-        ...overrides,
-    };
-};
-
-/** One organization with a live alias on each target: `acme` (wfp), `shop` (a connected account, with a cron), `edge` (a box). */
-const world = async (organization: Row = {}, extra: { deployments?: Row[] } = {}) => {
-    const { encrypted } = { encrypted: await encryptSecret(KEY, "s3cret") };
-    const database = memoryStore({
-        alertRules: [
-            {
-                _id: "rule_1",
-                channel: "webhook",
-                destination: "https://hooks.example/x",
-                enabled: true,
-                name: "Ops",
-                organizationId: "org_1",
-                target: "deploy",
-            },
-        ],
-        cloudflareAccounts: [{ _id: "acct_1", accountId: "a".repeat(32), organizationId: "org_1", workersSubdomain: "acme-co" }],
-        deployments: [
-            deployment("d_acme", { alias: "acme", projectId: "p_acme", target: "cloudflare-wfp" }),
-            deployment("d_shop", { alias: "shop", cronSpecs: ["*/5 * * * *"], placementRef: "acct_1", projectId: "p_shop", target: "cloudflare-workers" }),
-            deployment("d_edge", { alias: "edge", placementRef: "box_1", projectId: "p_edge", target: "celld-vps" }),
-            ...(extra.deployments ?? []),
-        ],
-        cells: [{ _id: "cell_1", name: "cell-1" }],
-        organizations: [{ _id: "org_1", cellId: "cell_1", name: "Acme", ...organization }],
-        projects: [
-            { _id: "p_acme", name: "Acme", organizationId: "org_1", target: "cloudflare-wfp" },
-            { _id: "p_shop", name: "Shop", organizationId: "org_1", placementRef: "acct_1", target: "cloudflare-workers" },
-            { _id: "p_edge", name: "Edge", organizationId: "org_1" },
-        ],
-        secrets: [
-            {
-                _id: "sec_1",
-                ciphertext: encrypted.ciphertext,
-                environment: "all",
-                iv: encrypted.iv,
-                name: "API_KEY",
-                organizationId: "org_1",
-                projectId: "p_shop",
-            },
-        ],
-    });
-    const releases = memoryReleaseStore();
-
-    await releases.store.put("d_acme", release(LIVE_MANIFEST));
-    await releases.store.put("d_shop", release(LIVE_MANIFEST));
-
-    const converged: TenantDeploymentSpec[] = [];
-    const deps: HaltConvergeDeps = {
-        cell: "cell-1",
-        database,
-        driverFor: () =>
-            fakeDriver({
-                deploy: async (spec) => {
-                    converged.push(spec);
-
-                    return { url: `https://${spec.alias}.test` };
-                },
-            }),
-        masterKey: KEY,
-        pacer: createDeployPacer(),
-        read: storeRowReader(database),
-        releases: releases.store,
-    };
-
-    return { converged, database, deps, releases };
-};
-
-const ports = (deps: HaltConvergeDeps, now = NOW, overrides: Partial<HaltConvergePorts> = {}): HaltConvergePorts => {
-    return {
-        alert: deployRuleAlert(deps.database, now),
-        halt: async (row) => haltAlias(row, deps),
-        log: () => undefined,
-        now,
-        owns: organizationsOnCell(deps.database, deps.cell),
-        resume: async (row) => resumeAlias(row, deps),
-        ...overrides,
-    };
-};
-
-const halts = (database: MemoryStore): HaltRow[] => (database.tables["halts"] ?? []) as unknown as HaltRow[];
-const haltOf = (database: MemoryStore, alias: string): HaltRow | undefined => halts(database).find((row) => row.alias === alias);
-const actions = (database: MemoryStore): string[] => (database.tables["auditLog"] ?? []).map((row) => row["action"] as string);
-const sourceOf = (spec: TenantDeploymentSpec): string => new TextDecoder().decode(spec.bundle);
-
 describe(syncSuspensionHalts, () => {
     it("halts every live alias on a suspension the setting covers — but not a box's", async () => {
         const { database } = await world({ suspendedAt: NOW - 1, suspendedReason: "spend-cap" });
 
-        await expect(syncSuspensionHalts(database, NOW)).resolves.toStrictEqual({ halted: 2, resumed: 0 });
+        await expect(syncSuspensionHalts(database, NOW)).resolves.toStrictEqual({ failed: 0, halted: 2, resumed: 0 });
         expect(halts(database).map((row) => [row.alias, row.state, row.source, row.reason, row.haltedBy])).toStrictEqual([
             ["acme", "halting", "suspension", "spend-cap", "system:halt-on-suspension"],
             ["shop", "halting", "suspension", "spend-cap", "system:halt-on-suspension"],
         ]);
         expect(actions(database)).toStrictEqual(["halt.requested"]);
         // Idempotent: a second tick asks for nothing new.
-        await expect(syncSuspensionHalts(database, NOW + 60_000)).resolves.toStrictEqual({ halted: 0, resumed: 0 });
+        await expect(syncSuspensionHalts(database, NOW + 60_000)).resolves.toStrictEqual({ failed: 0, halted: 0, resumed: 0 });
     });
 
     it("halts on an overage suspension too", async () => {
@@ -176,7 +55,7 @@ describe(syncSuspensionHalts, () => {
     ])("never halts on %s", async (_label, organization) => {
         const { database } = await world(organization);
 
-        await expect(syncSuspensionHalts(database, NOW)).resolves.toStrictEqual({ halted: 0, resumed: 0 });
+        await expect(syncSuspensionHalts(database, NOW)).resolves.toStrictEqual({ failed: 0, halted: 0, resumed: 0 });
         expect(halts(database)).toStrictEqual([]);
     });
 
@@ -187,7 +66,7 @@ describe(syncSuspensionHalts, () => {
         await database.patch((haltOf(database, "acme") as HaltRow)._id, { haltedBy: "usr_1", source: "manual" });
         await database.patch("org_1", { suspendedAt: null, suspendedReason: null });
 
-        await expect(syncSuspensionHalts(database, NOW + 60_000)).resolves.toStrictEqual({ halted: 0, resumed: 1 });
+        await expect(syncSuspensionHalts(database, NOW + 60_000)).resolves.toStrictEqual({ failed: 0, halted: 0, resumed: 1 });
         expect(haltOf(database, "acme")?.state).toBe("halting");
         expect(haltOf(database, "shop")?.state).toBe("resuming");
     });
@@ -242,8 +121,10 @@ describe(runHaltConverges, () => {
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["acme", "shop"]);
 
         for (const spec of converged) {
-            expect(sourceOf(spec)).toBe(buildHaltStub([LIVE_MANIFEST], "spend-cap").source);
-            expect(spec.manifest).toStrictEqual(buildHaltStub([LIVE_MANIFEST], "spend-cap").manifest);
+            const expected = buildHaltStub(classesOf(LIVE_MANIFEST), { compatibilityDate: "2026-05-01", reason: "spend-cap" });
+
+            expect(sourceOf(spec)).toBe(expected.source);
+            expect(spec.manifest).toStrictEqual(expected.manifest);
             expect(spec.secrets).toStrictEqual({});
             expect(spec.crons).toBeUndefined();
             expect(spec.assets).toBeUndefined();
@@ -288,7 +169,15 @@ describe(runHaltConverges, () => {
             {},
             {
                 deployments: [
-                    deployment("d_acme2", { alias: "acme", createdAt: 5, projectId: "p_acme", provisioningAt: 6, status: "failed", target: "cloudflare-wfp" }),
+                    deployment("d_acme2", {
+                        alias: "acme",
+                        createdAt: 5,
+                        projectId: "p_acme",
+                        provisioningAt: 6,
+                        status: "failed",
+                        target: "cloudflare-wfp",
+                        verifyingAt: 7,
+                    }),
                 ],
             },
         );
@@ -307,7 +196,15 @@ describe(runHaltConverges, () => {
             {},
             {
                 deployments: [
-                    deployment("d_acme2", { alias: "acme", createdAt: 5, projectId: "p_acme", provisioningAt: 6, status: "failed", target: "cloudflare-wfp" }),
+                    deployment("d_acme2", {
+                        alias: "acme",
+                        createdAt: 5,
+                        projectId: "p_acme",
+                        provisioningAt: 6,
+                        status: "failed",
+                        target: "cloudflare-wfp",
+                        verifyingAt: 7,
+                    }),
                 ],
             },
         );
@@ -318,7 +215,7 @@ describe(runHaltConverges, () => {
         await expect(runHaltConverges(database, ports(deps, NOW, { log: (line) => logged.push(line) }))).resolves.toMatchObject({ failed: 1 });
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["shop"]);
         expect(haltOf(database, "acme")).toMatchObject({ attempts: 1, convergingAt: null, nextAttemptAt: NOW + haltBackoff(1), state: "halting" });
-        expect(haltOf(database, "acme")?.lastError).toMatch(/d_acme2 may be on the Worker but is no longer retained/u);
+        expect(haltOf(database, "acme")?.lastError).toMatch(/release d_acme2 is no longer retained/u);
         expect(logged).toHaveLength(1);
 
         // Before the backoff: not tried. After it: tried, failed again, backed off further — audited and alerted only once.
@@ -469,7 +366,15 @@ describe(runHaltConverges, () => {
             {},
             {
                 deployments: [
-                    deployment("d_acme2", { alias: "acme", createdAt: 5, projectId: "p_acme", provisioningAt: 6, status: "failed", target: "cloudflare-wfp" }),
+                    deployment("d_acme2", {
+                        alias: "acme",
+                        createdAt: 5,
+                        projectId: "p_acme",
+                        provisioningAt: 6,
+                        status: "failed",
+                        target: "cloudflare-wfp",
+                        verifyingAt: 7,
+                    }),
                 ],
             },
         );
@@ -482,7 +387,7 @@ describe(runHaltConverges, () => {
 
         await expect(runHaltConverges(database, ports(deps, NOW + 60_000))).resolves.toMatchObject({ failed: 1 });
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["shop"]);
-        expect(haltOf(database, "acme")?.lastError).toMatch(/would delete the data of Durable Object class\(es\) Presence/u);
+        expect(haltOf(database, "acme")?.lastError).toMatch(/would delete the data of class\(es\) Presence/u);
         expect(actions(database)).toContain("halt.resume_failed");
     });
 
@@ -490,7 +395,7 @@ describe(runHaltConverges, () => {
         const { converged, database, deps } = await world({ suspendedAt: NOW - 1, suspendedReason: "spend-cap" });
         const elsewhere = organizationsOnCell(database, "cell-2");
 
-        await expect(syncSuspensionHalts(database, NOW, elsewhere)).resolves.toStrictEqual({ halted: 0, resumed: 0 });
+        await expect(syncSuspensionHalts(database, NOW, elsewhere)).resolves.toStrictEqual({ failed: 0, halted: 0, resumed: 0 });
 
         await requestOrganizationHalt(database, { actor: "support", now: NOW, organizationId: "org_1", reason: "support", source: "manual" });
 
@@ -531,5 +436,210 @@ describe(runHaltConverges, () => {
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["shop"]);
         expect(haltOf(database, "acme")).toBeUndefined();
         expect(actions(database)).toContain("halt.skipped");
+    });
+});
+
+describe("review fixes: rows that outlive their project (M2)", () => {
+    it("drops a halt another project left on the alias before halting its new owner", async () => {
+        const { database } = await world();
+
+        await database.insert("halts", {
+            alias: "acme",
+            createdAt: 1,
+            organizationId: "org_old",
+            projectId: "p_old",
+            source: "manual",
+            state: "halted",
+            updatedAt: 1,
+        });
+        await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
+
+        expect(
+            halts(database)
+                .filter((row) => row.alias === "acme")
+                .map((row) => row.projectId),
+        ).toStrictEqual(["p_acme"]);
+    });
+
+    it("forgets a halted alias once its release is gone — a deleted project or an expired preview", async () => {
+        const { converged, database, deps } = await world();
+
+        await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
+        await runHaltConverges(database, ports(deps));
+        await database.patch("d_acme", { status: "destroyed" });
+        converged.length = 0;
+        await runHaltConverges(database, ports(deps, NOW + 60_000));
+
+        expect(haltOf(database, "acme")).toBeUndefined();
+        expect(converged).toStrictEqual([]);
+        expect(actions(database)).toContain("halt.skipped");
+    });
+
+    it("deletes the alias's halt when the teardown releases the alias, and only that project's", async () => {
+        const { database } = await world();
+
+        await database.insert("halts", { alias: "acme", projectId: "p_acme", state: "halted" });
+        await database.insert("halts", { alias: "shop", projectId: "p_shop", state: "halted" });
+        await teardownPorts(
+            database,
+            { deleteRelease: async () => undefined, driverFor: () => fakeDriver(), log: () => undefined, read: storeRowReader(database) },
+            NOW,
+            () => true,
+        ).releaseAlias("acme", "p_acme");
+
+        expect(halts(database).map((row) => row.alias)).toStrictEqual(["shop"]);
+    });
+
+    it("keeps syncing the other organizations when one cannot be synced, and says which", async () => {
+        const { database } = await world({ suspendedAt: NOW - 1, suspendedReason: "spend-cap" });
+        const logged: string[] = [];
+        const brokenId = (await database.insert("organizations", { cellId: "cell_1", suspendedAt: NOW - 1, suspendedReason: "spend-cap" })) as string;
+        const findMany = database.findMany.bind(database);
+
+        database.findMany = async (table, args) => {
+            if (table === "deployments" && args?.where?.["organizationId"] === brokenId) {
+                throw new Error("d1 read failed");
+            }
+
+            return findMany(table, args);
+        };
+
+        await expect(syncSuspensionHalts(database, NOW, organizationsOnCell(database, "cell-1"), (line) => logged.push(line))).resolves.toStrictEqual({
+            failed: 1,
+            halted: 2,
+            resumed: 0,
+        });
+        expect(halts(database).map((row) => row.alias)).toStrictEqual(["acme", "shop"]);
+        expect(logged).toStrictEqual([`[halt] suspension sync of organization ${brokenId} failed: d1 read failed`]);
+    });
+});
+
+describe("review fixes: the lease (L1)", () => {
+    const halting = async () => {
+        const fixture = await world();
+
+        await requestOrganizationHalt(fixture.database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
+
+        return fixture;
+    };
+
+    /** Run `between` the first time the sweep re-reads `alias`'s row — after it planned, before it claims. */
+    const betweenPlanAndClaim = (store: MemoryStore, alias: string, between: (row: HaltRow) => Promise<void>): void => {
+        const database = store;
+        const get = database.get.bind(database);
+        let done = false;
+
+        database.get = async (id, table) => {
+            const row = (await get(id, table)) as HaltRow | null;
+
+            if (!done && table === "halts" && row?.alias === alias) {
+                done = true;
+                await between(row);
+
+                return get(id, table);
+            }
+
+            return row;
+        };
+    };
+
+    it("does not converge a row another tick claimed after this one planned it", async () => {
+        const { database, deps } = await halting();
+        const halted: string[] = [];
+
+        betweenPlanAndClaim(database, "acme", async (row) => {
+            await database.patch(row._id, { convergingAt: NOW, convergingBy: "another-tick" });
+        });
+
+        await runHaltConverges(
+            database,
+            ports(deps, NOW, {
+                halt: async (row) => {
+                    halted.push(row.alias);
+
+                    return haltAlias(row, deps);
+                },
+            }),
+        );
+
+        expect(halted).toStrictEqual(["shop"]);
+        expect(haltOf(database, "acme")?.convergingBy).toBe("another-tick");
+    });
+
+    it("skips a row deleted between plan and claim without aborting the tick", async () => {
+        const { database, deps } = await halting();
+
+        betweenPlanAndClaim(database, "acme", async (row) => {
+            await database.delete(row._id, "halts");
+        });
+
+        await expect(runHaltConverges(database, ports(deps))).resolves.toStrictEqual({ deferred: 0, failed: 0, halted: 1, resumed: 0 });
+        expect(halts(database).map((row) => [row.alias, row.state])).toStrictEqual([["shop", "halted"]]);
+    });
+
+    it("treats a busy provision box as a wait, not a failure: no attempt, no error, no alert, its own lease released", async () => {
+        const { database, deps } = await halting();
+
+        await runHaltConverges(
+            database,
+            ports(deps, NOW, {
+                halt: () =>
+                    Promise.reject(new LunoraError("SERVICE_UNAVAILABLE", "the provision box is busy with another job for this project; retry shortly")),
+                limit: 1,
+            }),
+        );
+
+        expect(haltOf(database, "acme")).toMatchObject({ convergingAt: null, convergingBy: null, nextAttemptAt: NOW + 60_000, state: "halting" });
+        expect(haltOf(database, "acme")?.attempts).toBeUndefined();
+        expect(haltOf(database, "acme")?.lastError).toBeUndefined();
+        expect(actions(database)).not.toContain("halt.halt_failed");
+        expect(database.tables["alerts"] ?? []).toStrictEqual([]);
+    });
+
+    it("writes nothing when another tick took the row over while this one converged", async () => {
+        const { database, deps } = await halting();
+
+        await runHaltConverges(
+            database,
+            ports(deps, NOW, {
+                halt: async (row) => {
+                    const outcome = await haltAlias(row, deps);
+
+                    await database.patch(row._id, { convergingAt: NOW + HALT_LEASE_MS, convergingBy: "took-over" });
+
+                    return outcome;
+                },
+                limit: 1,
+            }),
+        );
+
+        expect(haltOf(database, "acme")).toMatchObject({ convergingBy: "took-over", state: "halting" });
+        expect(actions(database)).not.toContain("halt.halted");
+    });
+});
+
+describe("review fixes: which live release, and support's halts (L3, L4)", () => {
+    it("l4: takes the live release activated last, not the one created last", () => {
+        const rows = [
+            { ...deployment("d_new", { alias: "acme", createdAt: 9, liveAt: 10, projectId: "p_acme" }) },
+            { ...deployment("d_newer_row", { alias: "acme", createdAt: 12, liveAt: 5, projectId: "p_acme" }) },
+        ] as unknown as Parameters<typeof liveByAlias>[0];
+
+        expect(liveByAlias(rows).get("acme")?._id).toBe("d_new");
+    });
+
+    it("l3: an owner's stop never takes over support's rows, and neither the owner's resume nor a suspension lifts them", async () => {
+        const { database } = await world({ suspendedAt: NOW - 1, suspendedReason: "spend-cap" });
+
+        await requestOrganizationHalt(database, { actor: "support", now: NOW, organizationId: "org_1", reason: "support", source: "support" });
+        await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
+        await requestOrganizationResume(database, { actor: "usr_1", now: NOW, organizationId: "org_1", sources: ["manual", "suspension"] });
+        await database.patch("org_1", { suspendedAt: null, suspendedReason: null });
+        await syncSuspensionHalts(database, NOW + 60_000);
+
+        expect(halts(database).map((row) => [row.alias, row.source, row.haltedBy, row.state])).toStrictEqual([
+            ["acme", "support", "support", "halting"],
+            ["shop", "support", "support", "halting"],
+        ]);
     });
 });

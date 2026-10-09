@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { HaltRow } from "../src/deploy/halt";
 import { haltAlias } from "../src/deploy/halt-converge";
 import { createDeployPacer } from "../src/deploy/pacing";
-import type { DeployManifest } from "../src/provision-contract";
 import { storeRowReader } from "../src/targets/placement";
 import memoryReleaseStore from "./_helpers/memory-release-store";
 import { fakeDriver } from "./support/memory-driver";
@@ -21,8 +20,8 @@ vi.mock(import("../src/deploy/halt-stub"), async (importOriginal) => {
 
     return {
         ...original,
-        buildHaltStub: (onWorker: ReadonlyArray<DeployManifest>, reason: string) => {
-            const stub = original.buildHaltStub(onWorker, reason);
+        buildHaltStub: (...args: Parameters<typeof original.buildHaltStub>) => {
+            const stub = original.buildHaltStub(...args);
 
             return { ...stub, manifest: { ...stub.manifest, bindings: stub.manifest.bindings.filter((binding) => binding.className !== "Legacy") } };
         },
@@ -32,6 +31,7 @@ vi.mock(import("../src/deploy/halt-stub"), async (importOriginal) => {
 describe("a stub that drops a class", () => {
     it("is refused before the driver is ever called", async () => {
         const database = memoryStore({
+            aliasOwnership: [{ _id: "ao_1", alias: "acme", organizationId: "org_1", projectId: "p_1" }],
             deployments: [
                 {
                     _id: "d_1",
@@ -73,7 +73,7 @@ describe("a stub that drops a class", () => {
                 read: storeRowReader(database),
                 releases: releases.store,
             }),
-        ).rejects.toThrow(/missing LEGACY → Legacy .*would delete the data of Legacy/u);
+        ).rejects.toThrow(/missing durable_object:Legacy.*would delete the data of Legacy/u);
         expect(deploy).not.toHaveBeenCalled();
     });
 });

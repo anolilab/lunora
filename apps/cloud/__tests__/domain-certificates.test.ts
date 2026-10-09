@@ -841,6 +841,7 @@ describe("deleting what a certificate belongs to", () => {
             ],
             members: [owner("org_1")],
             projects: [{ _id: "proj_1", organizationId: "org_1" }],
+            halts: [],
             secrets: [],
         });
 

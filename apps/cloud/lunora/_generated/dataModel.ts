@@ -55,6 +55,7 @@ export interface Doc_organizations {
     deletionRequestedAt?: number;
     recursionPolicy?: "terminate" | "allow";
     haltOnSuspension?: boolean;
+    supportHaltedAt?: number;
 }
 
 export interface Doc_members {
@@ -173,6 +174,7 @@ export interface Doc_halts {
     convergingAt?: number;
     createdAt: number;
     deploymentId?: string;
+    convergingBy?: string;
     haltedAt?: number;
     haltedBy: string;
     kind: "production" | "preview" | "dev";
@@ -181,7 +183,9 @@ export interface Doc_halts {
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     reason: string;
-    source: "manual" | "suspension";
+    resumeDeploymentId?: string;
+    source: "manual" | "suspension" | "support";
+    stubClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>;
     state: "halting" | "halted" | "resuming";
     stubStartedAt?: number;
     target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
@@ -194,7 +198,9 @@ export interface Doc_aliasOwnership {
     alias: string;
     createdAt: number;
     organizationId: Id<"organizations">;
+    pendingClasses?: Array<{ classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; endedAt?: number; startedAt: number; token: string }>;
     projectId: Id<"projects">;
+    workerClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>;
 }
 
 export interface Doc_deployKeys {
@@ -1030,6 +1036,7 @@ export interface Insert_organizations {
     deletionRequestedAt?: number;
     recursionPolicy?: "terminate" | "allow";
     haltOnSuspension?: boolean;
+    supportHaltedAt?: number;
 }
 
 export interface Insert_members {
@@ -1148,6 +1155,7 @@ export interface Insert_halts {
     convergingAt?: number;
     createdAt: number;
     deploymentId?: string;
+    convergingBy?: string;
     haltedAt?: number;
     haltedBy: string;
     kind: "production" | "preview" | "dev";
@@ -1156,7 +1164,9 @@ export interface Insert_halts {
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     reason: string;
-    source: "manual" | "suspension";
+    resumeDeploymentId?: string;
+    source: "manual" | "suspension" | "support";
+    stubClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>;
     state: "halting" | "halted" | "resuming";
     stubStartedAt?: number;
     target: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
@@ -1169,7 +1179,9 @@ export interface Insert_aliasOwnership {
     alias: string;
     createdAt: number;
     organizationId: Id<"organizations">;
+    pendingClasses?: Array<{ classes: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>; endedAt?: number; startedAt: number; token: string }>;
     projectId: Id<"projects">;
+    workerClasses?: Array<{ binding: string; className: string; sqlite?: boolean; type: string }>;
 }
 
 export interface Insert_deployKeys {
