@@ -771,17 +771,24 @@ lunora deployments promote <version-id> --yes # send 100% of traffic to a versio
 
 `rollback` and `promote` change live traffic, so they require `--yes`.
 
-### `lunora alerts`
+### `lunora cloudflare`
+
+Tools that only apply to an app deployed to your own Cloudflare account; Lunora
+also deploys to Node and celld hosts, where they have no meaning, and on such a
+project they refuse and name the host in use. One tool so far:
+
+#### `lunora cloudflare alerts`
 
 Usage alerts for a self-hosted Cloudflare account, so a runaway Worker or a
 Durable Object loop shows up in your inbox instead of on next month's invoice.
-Walkthrough: [Protect yourself from a runaway bill](/docs/runaway-bill).
+`lunora cloudflare alert` works too. Walkthrough:
+[Protect yourself from a runaway bill](/docs/runaway-bill).
 
 ```bash
-lunora alerts                                          # last month's usage + which products have an alert
-lunora alerts setup --email ops@example.com --dry-run  # the plan, nothing written
-lunora alerts setup --email ops@example.com --yes      # create / update the alerts
-lunora alerts test                                     # what Cloudflare has delivered so far
+lunora cloudflare alerts                                          # last month's usage + which products have an alert
+lunora cloudflare alerts setup --email ops@example.com --dry-run  # the plan, nothing written
+lunora cloudflare alerts setup --email ops@example.com --yes      # create / update the alerts
+lunora cloudflare alerts test                                     # what Cloudflare has delivered so far
 ```
 
 It calls the Cloudflare API with `CLOUDFLARE_API_TOKEN` (a `wrangler login`

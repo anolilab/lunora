@@ -1,5 +1,5 @@
 /**
- * Every Cloudflare call `lunora alerts` makes: the account-scoped REST API
+ * Every Cloudflare call `lunora cloudflare alerts` makes: the account-scoped REST API
  * (Notifications) and the GraphQL Analytics API. One module so the timeout,
  * the injectable `fetch` and the error classification are decided once.
  *
@@ -8,8 +8,8 @@
  * through verbatim. The one exception is the malformed-token code observed
  * live (see `MALFORMED_TOKEN_CODE`).
  */
-import { cloudflareRestRequest } from "../../../../../shared/cloudflare-rest";
-import { EXIT_CODE } from "../../util/exit-code";
+import { cloudflareRestRequest } from "../../../../../../shared/cloudflare-rest";
+import { EXIT_CODE } from "../../../util/exit-code";
 
 /** How long one Cloudflare call may take. */
 const DEFAULT_TIMEOUT_MS = 15_000;

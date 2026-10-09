@@ -1,5 +1,5 @@
 /**
- * `lunora alerts` — protect a self-hosted Cloudflare account from a runaway bill.
+ * `lunora cloudflare alerts` — protect a self-hosted Cloudflare account from a runaway bill.
  *
  * `status` (default) reads last month's usage and the notification policies;
  * `setup` creates or updates a Usage Based Billing notification per product,
@@ -11,16 +11,13 @@ import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
-import type { CloudflareEnvironment } from "../../util/cloudflare-credentials";
-import { resolveCloudflareCredentials } from "../../util/cloudflare-credentials";
-import type { CommandHandler } from "../../util/command";
-import { defineHandler } from "../../util/command";
-import { EXIT_CODE } from "../../util/exit-code";
+import type { CloudflareEnvironment } from "../../../util/cloudflare-credentials";
+import { resolveCloudflareCredentials } from "../../../util/cloudflare-credentials";
+import { EXIT_CODE } from "../../../util/exit-code";
 import type { CloudflareClient } from "./api";
 import { createCloudflareClient, PERMISSION } from "./api";
 import { reportDeliveries } from "./deliveries";
-import type { AlertsOptions } from "./index";
-import type { AccountState, AlertsData, AlertsResult } from "./outcome";
+import type { AccountState, AlertsResult } from "./outcome";
 import { baseData, BUDGET_ALERT_NOTE, fail, failFromError, success } from "./outcome";
 import type { Policy } from "./plan";
 import { discoverProducts } from "./products";
@@ -41,6 +38,9 @@ interface AlertsCommandOptions extends SetupOptions {
     subcommand: AlertsSubcommand;
 }
 
+/** How the refusal names each non-Cloudflare host. */
+const TARGET_NAMES: Readonly<Record<string, string>> = { celld: "celld", node: "Node" };
+
 /** The `account_id` in the project's wrangler config, when it has a readable one. */
 const wranglerAccountId = (cwd: string): unknown => {
     const path = findWranglerFile(cwd);
@@ -53,7 +53,11 @@ const connect = (options: AlertsCommandOptions): AlertsResult | CloudflareClient
     const target = readProjectTarget(options.cwd) ?? DEFAULT_TARGET;
 
     if (target !== "cloudflare") {
-        return fail(options.logger, EXIT_CODE.USAGE, `lunora alerts manages Cloudflare usage notifications; this project targets "${target}".`);
+        return fail(
+            options.logger,
+            EXIT_CODE.USAGE,
+            `this project deploys to ${TARGET_NAMES[target] ?? `"${target}"`} — \`lunora cloudflare alerts\` only applies to Cloudflare accounts.`,
+        );
     }
 
     const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, wranglerAccountId(options.cwd));
@@ -62,7 +66,7 @@ const connect = (options: AlertsCommandOptions): AlertsResult | CloudflareClient
         return fail(
             options.logger,
             EXIT_CODE.AUTH,
-            `CLOUDFLARE_API_TOKEN is not set. lunora alerts calls the Cloudflare API with an API token (a wrangler login session is not reused); ` +
+            `CLOUDFLARE_API_TOKEN is not set. \`lunora cloudflare alerts\` calls the Cloudflare API with an API token (a wrangler login session is not reused); ` +
                 `create one with the "${PERMISSION.notificationsWrite}" and "${PERMISSION.analytics}" permissions ` +
                 `("${PERMISSION.notificationsRead}" is enough for status and test).`,
         );
@@ -155,31 +159,5 @@ const runAlertsCommand = async (options: AlertsCommandOptions): Promise<AlertsRe
     }
 };
 
-const isSubcommand = (value: string): value is AlertsSubcommand => value === "status" || value === "setup" || value === "test";
-
-/** `lunora alerts [status|setup|test]` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<AlertsOptions> = defineHandler<AlertsOptions, AlertsData>(async ({ argument, cwd, format, logger, options }) => {
-    const sub = argument[0] ?? "status";
-
-    if (!isSubcommand(sub)) {
-        return fail(logger, EXIT_CODE.USAGE, `alerts: unknown subcommand "${sub}" — expected status | setup | test`);
-    }
-
-    return runAlertsCommand({
-        allowFloor: options.allowFloor === true,
-        cwd,
-        dryRun: options.dryRun === true,
-        format,
-        logger,
-        replaceRecipients: options.replaceRecipients === true,
-        subcommand: sub,
-        yes: options.yes === true,
-        ...(options.email === undefined ? {} : { emails: options.email }),
-        ...(options.webhook === undefined ? {} : { webhooks: options.webhook }),
-        ...(options.multiplier === undefined ? {} : { multiplier: options.multiplier }),
-        ...(options.threshold === undefined ? {} : { thresholds: options.threshold }),
-    });
-});
-
 export type { AlertsCommandOptions, AlertsSubcommand };
-export { execute, runAlertsCommand };
+export { runAlertsCommand };

@@ -1,6 +1,6 @@
 ---
 title: Protect yourself from a runaway bill
-description: Set Cloudflare usage alerts well above normal with `lunora alerts`, add the budget alert the API cannot, and check what actually reaches you.
+description: Set Cloudflare usage alerts well above normal with `lunora cloudflare alerts`, add the budget alert the API cannot, and check what actually reaches you.
 ---
 
 A self-hosted Lunora app runs on your own Cloudflare account, and Workers and
@@ -22,7 +22,7 @@ export CLOUDFLARE_ACCOUNT_ID=…       # or set account_id in wrangler.jsonc
 ## 1. See where you stand
 
 ```bash
-lunora alerts
+lunora cloudflare alerts
 ```
 
 This prints last month's usage for Workers requests and CPU time, Durable
@@ -36,7 +36,7 @@ Account Analytics Read, or the analytics schema has no field for that metric.
 Preview first:
 
 ```bash
-lunora alerts setup --email you@example.com --dry-run
+lunora cloudflare alerts setup --email you@example.com --dry-run
 ```
 
 `setup` creates two alerts on its own: **Workers requests** and **Durable
@@ -56,7 +56,7 @@ accept the floor anyway.
 The other metered products take a limit only from you:
 
 ```bash
-lunora alerts setup --email you@example.com --threshold do-duration=500000 --dry-run
+lunora cloudflare alerts setup --email you@example.com --threshold do-duration=500000 --dry-run
 ```
 
 Durable Objects duration and storage reads/writes are billed in units that
@@ -71,7 +71,7 @@ Compare it with the dashboard the first time.
 When the plan looks right:
 
 ```bash
-lunora alerts setup --email you@example.com --yes
+lunora cloudflare alerts setup --email you@example.com --yes
 ```
 
 Pass `--email` more than once for several recipients, or
@@ -93,7 +93,7 @@ alert is disabled.
 
 Usage alerts watch one product each. A **budget alert** watches the whole
 account's spend in dollars, and Cloudflare offers it only in the dashboard. It
-has no API, so `lunora alerts` can neither create one nor tell you whether you
+has no API, so `lunora cloudflare alerts` can neither create one nor tell you whether you
 have one:
 
 1. In the Cloudflare dashboard, go to **Manage Account > Billing > Billable Usage**.
@@ -106,7 +106,7 @@ is crossed.
 ## 4. Check delivery
 
 ```bash
-lunora alerts test
+lunora cloudflare alerts test
 ```
 
 Cloudflare's API cannot send a test notification, either to email or to a
@@ -125,6 +125,6 @@ right and that mail from Cloudflare is not filtered as spam.
 ## In CI
 
 Every subcommand takes `--format json` and exits with a [documented
-code](/docs/exit-codes). For example, `lunora alerts --format json` in a
+code](/docs/exit-codes). For example, `lunora cloudflare alerts --format json` in a
 scheduled job can flag a product whose usage has grown past the alert you set
 months ago.

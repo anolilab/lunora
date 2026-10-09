@@ -1,5 +1,5 @@
 /**
- * `lunora alerts test` — what can honestly be said about alert delivery.
+ * `lunora cloudflare alerts test` — what can honestly be said about alert delivery.
  *
  * Cloudflare's API has no endpoint that sends a test notification: the
  * webhook-destination resource is create / get / update / delete / list, and
@@ -8,7 +8,7 @@
  * destination's last successful and failed dispatch, and the notifications
  * Cloudflare actually sent for this command's policies — and never fakes a send.
  */
-import type { Logger } from "../../util/logger";
+import type { Logger } from "../../../util/logger";
 import type { CloudflareClient } from "./api";
 import type { Policy } from "./plan";
 import { mechanismsOf, POLICY_NAME_PREFIX } from "./plan";
@@ -40,7 +40,7 @@ interface DeliveryReport {
 }
 
 const NO_TEST_SEND =
-    "Cloudflare's API has no endpoint that sends a test notification — not for webhooks and not for email — so `lunora alerts test` sends nothing.";
+    "Cloudflare's API has no endpoint that sends a test notification — not for webhooks and not for email — so `lunora cloudflare alerts test` sends nothing.";
 
 const WEBHOOK_TEST_PATH = "To test a webhook for real, create it in the dashboard (Alerts > Destinations > Webhooks > Create) and finish with Save and Test.";
 
@@ -80,7 +80,7 @@ const reportDeliveries = async (
     logger.warn(NO_TEST_SEND);
 
     if (own.length === 0) {
-        logger.info("No `lunora alerts setup` policies exist on this account yet — run `lunora alerts setup` first.");
+        logger.info("No `lunora cloudflare alerts setup` policies exist on this account yet — run `lunora cloudflare alerts setup` first.");
     }
 
     for (const missing of [...referenced].filter((id) => !webhooks.some((hook) => hook.id === id))) {

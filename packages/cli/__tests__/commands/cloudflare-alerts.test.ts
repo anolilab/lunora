@@ -1,15 +1,16 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { AlertsCommandOptions } from "../../src/commands/alerts/handler";
-import { runAlertsCommand } from "../../src/commands/alerts/handler";
-import type { Policy } from "../../src/commands/alerts/plan";
-import { planAlerts, roundUpNice, thresholdFor } from "../../src/commands/alerts/plan";
-import { discoverProducts, matchProduct } from "../../src/commands/alerts/products";
-import { previousMonth } from "../../src/commands/alerts/usage";
+import { runCli } from "../../src/cli";
+import type { AlertsCommandOptions } from "../../src/commands/cloudflare/alerts/handler";
+import { runAlertsCommand } from "../../src/commands/cloudflare/alerts/handler";
+import type { Policy } from "../../src/commands/cloudflare/alerts/plan";
+import { planAlerts, roundUpNice, thresholdFor } from "../../src/commands/cloudflare/alerts/plan";
+import { discoverProducts, matchProduct } from "../../src/commands/cloudflare/alerts/products";
+import { previousMonth } from "../../src/commands/cloudflare/alerts/usage";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
@@ -323,6 +324,64 @@ describe("lunora alerts", () => {
     const setup = async (account: FakeAccount, options: Partial<AlertsCommandOptions> = {}) =>
         run(account, { emails: ["ops@example.com"], subcommand: "setup", yes: true, ...options });
 
+    describe("the cloudflare group", () => {
+        /** Run the real CLI in `cwd` with a capturing logger; the CLI's own env has no token, so a reached alerts run stops at AUTH. */
+        const cli = async (argv: string[]): Promise<{ code: number; output: string }> => {
+            const lines: string[] = [];
+            const push = (...values: unknown[]): void => {
+                lines.push(values.map(String).join(" "));
+            };
+            const code = await runCli({ argv, cwd, logger: { debug: push, error: push, info: push, log: push, warn: push } as unknown as Console });
+
+            return { code, output: lines.join("\n") };
+        };
+
+        it.each(["cloudflare alerts", "cloudflare alert", "cloudflare alert test"])("`lunora %s` reaches the alerts tool", async (line) => {
+            expect.assertions(2);
+
+            const { code, output } = await cli(line.split(" "));
+
+            expect(code).toBe(EXIT_CODE.AUTH);
+            expect(output).toContain("`lunora cloudflare alerts` calls the Cloudflare API");
+        });
+
+        it("refuses an unknown tool and an unknown alerts subcommand", async () => {
+            expect.assertions(4);
+
+            const tool = await cli(["cloudflare", "budget"]);
+            const sub = await cli(["cloudflare", "alerts", "delete"]);
+
+            expect(tool.code).toBe(EXIT_CODE.USAGE);
+            expect(tool.output).toContain('cloudflare: unknown tool "budget" — expected alerts');
+            expect(sub.code).toBe(EXIT_CODE.USAGE);
+            expect(sub.output).toContain('cloudflare alerts: unknown subcommand "delete"');
+        });
+
+        it("no longer answers to the top-level `lunora alerts`", async () => {
+            expect.assertions(2);
+
+            const { code, output } = await cli(["alerts"]);
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(output).not.toContain("Cloudflare API");
+        });
+
+        it.each([
+            ["node", "Node"],
+            ["celld", "celld"],
+        ])("refuses a %s project, naming the host it deploys to", async (target, name) => {
+            expect.assertions(3);
+
+            writeFileSync(join(cwd, "lunora.config.ts"), `export default { target: "${target}" };\n`, "utf8");
+
+            const { calls, result } = await run(baseAccount(), { subcommand: "status" });
+
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(result.error).toBe(`this project deploys to ${name} — \`lunora cloudflare alerts\` only applies to Cloudflare accounts.`);
+            expect(calls).toHaveLength(0);
+        });
+    });
+
     describe("status", () => {
         it("reports last month's usage per product and which products an enabled alert covers", async () => {
             expect.assertions(6);
@@ -626,7 +685,9 @@ describe("lunora alerts", () => {
 
             expect(writes(calls).map((call) => route(call))).toStrictEqual(["PUT /alerting/v3/policies/p1", "POST /alerting/v3/policies"]);
             expect(result.data?.plan?.alerts[0]?.previousProduct).toStrictEqual(["old_product"]);
-            expect(output).toContain('"Lunora usage: Workers bandwidth" (p9) is named like a lunora alert but matches no metric; it was left alone.');
+            expect(output).toContain(
+                '"Lunora usage: Workers bandwidth" (p9) is named like a `lunora cloudflare alerts` policy but matches no metric; it was left alone.',
+            );
         });
 
         it("reads every written policy back and flags a limit Cloudflare stored differently", async () => {

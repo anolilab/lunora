@@ -1,9 +1,9 @@
 /**
- * What every `lunora alerts` subcommand returns, and the helpers that build it.
+ * What every `lunora cloudflare alerts` subcommand returns, and the helpers that build it.
  */
-import { EXIT_CODE } from "../../util/exit-code";
-import type { Logger } from "../../util/logger";
-import type { CommandResult } from "../../util/output-format";
+import { EXIT_CODE } from "../../../util/exit-code";
+import type { Logger } from "../../../util/logger";
+import type { CommandResult } from "../../../util/output-format";
 import type { CloudflareClient } from "./api";
 import { CloudflareApiError, EXIT_CODE_BY_KIND } from "./api";
 import type { DeliveryReport } from "./deliveries";

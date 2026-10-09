@@ -1,5 +1,5 @@
 /**
- * The pure half of `lunora alerts setup`: given last month's usage, the
+ * The pure half of `lunora cloudflare alerts setup`: given last month's usage, the
  * products and the existing policies, decide which usage alerts to create,
  * update or leave alone, and at what threshold.
  */
@@ -337,7 +337,7 @@ const planOne = (definition: (typeof METRICS)[number], input: PlanInput, billing
     const afterTargets = new Set(flatTargets(mechanisms));
     const body: PolicyBody = {
         alert_type: BILLING_ALERT_TYPE,
-        description: `Managed by \`lunora alerts setup\`: ${describeBasis(decided.basis, input.multiplier)}.`,
+        description: `Managed by \`lunora cloudflare alerts setup\`: ${describeBasis(decided.basis, input.multiplier)}.`,
         enabled: true,
         filters: { limit: [String(decided.threshold)], product: [product.id] },
         mechanisms,

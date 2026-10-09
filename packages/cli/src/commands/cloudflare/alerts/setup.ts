@@ -1,10 +1,10 @@
 /**
- * `lunora alerts setup` — plan, confirm, write, and read back the usage alerts.
+ * `lunora cloudflare alerts setup` — plan, confirm, write, and read back the usage alerts.
  */
-import { EXIT_CODE } from "../../util/exit-code";
-import type { Logger } from "../../util/logger";
-import type { OutputFormat } from "../../util/output-format";
-import { tuiConfirm } from "../../util/tui-prompts";
+import { EXIT_CODE } from "../../../util/exit-code";
+import type { Logger } from "../../../util/logger";
+import type { OutputFormat } from "../../../util/output-format";
+import { tuiConfirm } from "../../../util/tui-prompts";
 import type { CloudflareClient } from "./api";
 import { CloudflareApiError } from "./api";
 import type { AccountState, AlertsData, AlertsResult, StoredPolicy } from "./outcome";
@@ -139,7 +139,9 @@ const logPlan = (plan: AlertPlan, multiplier: number, period: UsagePeriod, logge
     }
 
     for (const orphan of plan.orphans) {
-        logger.warn(`"${orphan.name ?? "?"}" (${orphan.id ?? "?"}) is named like a lunora alert but matches no metric; it was left alone.`);
+        logger.warn(
+            `"${orphan.name ?? "?"}" (${orphan.id ?? "?"}) is named like a \`lunora cloudflare alerts\` policy but matches no metric; it was left alone.`,
+        );
     }
 
     for (const duplicate of plan.duplicates) {

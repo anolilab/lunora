@@ -1,8 +1,8 @@
 /**
- * `lunora alerts` / `lunora alerts status` — last month's usage per product and
+ * `lunora cloudflare alerts` / `lunora cloudflare alerts status` — last month's usage per product and
  * what, if anything, alerts on it.
  */
-import type { Logger } from "../../util/logger";
+import type { Logger } from "../../../util/logger";
 import type { CloudflareClient } from "./api";
 import type { AccountState, AlertsResult, MetricStatus } from "./outcome";
 import { baseData, BUDGET_ALERT_NOTE, formatNumber, logEligibility, success } from "./outcome";

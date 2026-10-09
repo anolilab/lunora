@@ -7,10 +7,10 @@ import versionCommand from "@visulima/cerebro/command/version";
 import { addCommand } from "./commands/add";
 import { advisorCommand } from "./commands/advisor";
 import { aiCommand } from "./commands/ai";
-import { alertsCommand } from "./commands/alerts";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
+import { cloudflareCommand } from "./commands/cloudflare";
 import { codegenCommand } from "./commands/codegen";
 import { containersCommand } from "./commands/containers";
 import { deployCommand } from "./commands/deploy";
@@ -62,7 +62,7 @@ const COMMANDS = [
     "prepare",
     "link",
     "deployments",
-    "alerts",
+    "cloudflare",
     "logs",
     "run",
     "insights",
@@ -104,7 +104,7 @@ const CLI_COMMANDS = [
     prepareCommand,
     linkCommand,
     deploymentsCommand,
-    alertsCommand,
+    cloudflareCommand,
     logsCommand,
     runCommand,
     insightsCommand,

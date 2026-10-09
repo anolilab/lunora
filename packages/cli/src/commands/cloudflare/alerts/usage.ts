@@ -53,7 +53,7 @@ const DO_PERIODIC_DATASET = "durableObjectsPeriodicGroups";
 const D1_DATASET = "d1AnalyticsAdaptiveGroups";
 /* eslint-enable no-secrets/no-secrets */
 
-/** The metrics `lunora alerts` reports. */
+/** The metrics `lunora cloudflare alerts` reports. */
 const METRICS: ReadonlyArray<MetricDefinition> = [
     {
         candidates: [{ field: "requests", unit: "count" }],

@@ -59,7 +59,7 @@ const COMMANDS: readonly [
     "prepare",
     "link",
     "deployments",
-    "alerts",
+    "cloudflare",
     "logs",
     "run",
     "insights",
