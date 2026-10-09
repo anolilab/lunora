@@ -10,8 +10,9 @@ const isLoop = (node: TsNode): boolean =>
 /**
  * What a `break`/`continue` transfers to: an unlabeled `break` binds to the
  * nearest loop or `switch`, an unlabeled `continue` to the nearest loop, and a
- * labeled one to the statement its label wraps. `undefined` when a function
- * boundary comes first — a jump never crosses a function.
+ * labeled `break` to the statement its label wraps, a labeled `continue` to
+ * the loop under that label. `undefined` when a function boundary comes first
+ * — a jump never crosses a function.
  */
 const jumpTargetOf = (jump: BreakStatement | ContinueStatement): TsNode | undefined => {
     const label = jump.getLabel()?.getText();
@@ -22,9 +23,20 @@ const jumpTargetOf = (jump: BreakStatement | ContinueStatement): TsNode | undefi
 
         return isLoop(node) || (Node.isBreakStatement(jump) && Node.isSwitchStatement(node));
     };
-    const target = jump.getFirstAncestor((ancestor) => isFunctionLike(ancestor) || bindsTo(ancestor));
+    let target = jump.getFirstAncestor((ancestor) => isFunctionLike(ancestor) || bindsTo(ancestor));
 
-    return target === undefined || isFunctionLike(target) ? undefined : target;
+    if (target === undefined || isFunctionLike(target)) {
+        return undefined;
+    }
+
+    // A labeled `continue` starts the next pass of the loop its label wraps
+    // (through any stacked labels), so it lands on that loop, not on the label:
+    // `outer: while (true) { continue outer; }` never leaves the loop.
+    while (Node.isContinueStatement(jump) && Node.isLabeledStatement(target)) {
+        target = target.getStatement();
+    }
+
+    return target;
 };
 
 /**
