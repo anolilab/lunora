@@ -87,8 +87,11 @@ describe("build box image contents", () => {
             "scan.mjs",
             "server.mjs",
             "vendor/acorn.mjs",
+            "vendor/release-manifest.mjs",
+            "worker.mjs",
             "workspace.mjs",
         ]);
-        expect([...modules].filter((module) => !copied.has(module))).toStrictEqual([]);
+        // `shim-runtime.mjs` is read as text at start-up, not imported, so the walk above cannot see it.
+        expect([...modules, "shim-runtime.mjs"].filter((module) => !copied.has(module))).toStrictEqual([]);
     });
 });

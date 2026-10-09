@@ -76,6 +76,7 @@
         "@vitejs/plugin-react": "catalog:web",
         "acorn": "catalog:node",
         "babel-plugin-react-compiler": "catalog:build",
+        "esbuild": "catalog:build",
         "jsonc-parser": "catalog:vite",
         "tailwindcss": "catalog:vite",
         "tw-animate-css": "catalog:vite",

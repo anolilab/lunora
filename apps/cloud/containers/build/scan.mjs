@@ -1510,7 +1510,7 @@ const candidateLine = (node) => {
  * Scan one built Worker module. Throws a {@link ScanError} (message safe to
  * show) when it cannot: an oversized or unparsable bundle, a malformed
  * sourcemap, or the deadline — the caller logs that as a skipped scan.
- * @param {{ bundle: Buffer, bundlePath: string, heapAvailable?: () => number, limits?: Partial<typeof DEFAULT_SCAN_LIMITS>, manifest?: unknown, now?: () => number, project: string, repo: string }} input The module's bytes and path, the release manifest, the project and repo directories (real paths), and — for tests — the free heap and the clock.
+ * @param {{ bundle: Buffer, bundleName?: string, bundlePath: string, heapAvailable?: () => number, limits?: Partial<typeof DEFAULT_SCAN_LIMITS>, manifest?: unknown, now?: () => number, project: string, repo: string }} input The module's bytes and path, the release manifest, the project and repo directories (real paths), and — for tests — the free heap and the clock. `bundleName` is what a finding no source names is reported against; by default the bundle's repo-relative path, which a bundle written outside the repo does not have.
  * @returns {Promise<{ advisories: ReturnType<typeof advisoryOf>[], notes: string[], omitted: number }>} What to report, why attribution or the report is incomplete, and how many findings the caps held back.
  */
 const scanBundle = async (input) => {
@@ -1542,7 +1542,7 @@ const scanBundle = async (input) => {
         }
     });
 
-    const bundleFile = relative(input.repo, input.bundlePath).split(sep).join("/");
+    const bundleFile = input.bundleName ?? relative(input.repo, input.bundlePath).split(sep).join("/");
     const attribute =
         sourcemap === undefined ? regionAttributor(comments, input.project, input.repo, bundleFile) : sourcemapAttributor(sourcemap, input.repo, lines, check);
     const attributions = new Map();
