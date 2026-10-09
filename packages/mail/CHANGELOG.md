@@ -1,3 +1,9 @@
+## @lunora/mail [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.103...@lunora/mail@1.0.0-alpha.104) (2026-10-09)
+
+### Bug Fixes
+
+* **mail:** honour an explicitly passed cloudflareSend whatever the binding is named ([#1059](https://github.com/anolilab/lunora/issues/1059)) ([1471003](https://github.com/anolilab/lunora/commit/147100333f66809a7159ccd05ae97c8cf51cdafb))
+
 ## @lunora/mail [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.102...@lunora/mail@1.0.0-alpha.103) (2026-10-08)
 
 ### Bug Fixes
