@@ -1,3 +1,22 @@
+## @lunora/codegen [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.285...@lunora/codegen@1.0.0-alpha.286) (2026-10-09)
+
+### Features
+
+* **server,codegen:** platformAdmin admin marker and defineIdentityGuard declared guards ([#1085](https://github.com/anolilab/lunora/issues/1085)) ([b37d345](https://github.com/anolilab/lunora/commit/b37d3454e504d707e503c23b5f2af22ee5e3315c))
+
+### Bug Fixes
+
+* **advisor:** close module-load admin downgrade and resolve guard policy by type ([884a2b9](https://github.com/anolilab/lunora/commit/884a2b946d93a9438a842185821feaec8bbd113e))
+* **advisor:** verify marker imports, await guards, and fail closed on untracked callers ([a993fdf](https://github.com/anolilab/lunora/commit/a993fdfef1795e752b4d4b1c8b2302ce5d6acad2))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.204
+* **@lunora/agent:** upgraded to 1.0.0-alpha.192
+* **@lunora/server:** upgraded to 1.0.0-alpha.188
+* **@visulima/fs:** 6.0.28 → 6.0.29
+
 ## @lunora/codegen [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.284...@lunora/codegen@1.0.0-alpha.285) (2026-10-09)
 
 ### Bug Fixes
