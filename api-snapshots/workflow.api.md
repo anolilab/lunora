@@ -205,7 +205,7 @@ interface WorkflowBatchDeleteResult {
 ```ts
 interface WorkflowBindingLike<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
-    createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    createBatch: (options: WorkflowCreateBatchOptions<Params>) => Promise<WorkflowCreateBatchResult>;
     deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
 }
@@ -252,6 +252,38 @@ interface WorkflowConfig<Params = Record<string, unknown>, Output = unknown> {
     };
     name?: string;
     schedules?: ReadonlyArray<string>;
+}
+```
+
+### `WorkflowCreateBatchError` (interface)
+
+```ts
+interface WorkflowCreateBatchError {
+    code: number;
+    id?: string;
+    index: number;
+    message: string;
+}
+```
+
+### `WorkflowCreateBatchOptions` (type)
+
+```ts
+type WorkflowCreateBatchOptions<Params = Record<string, unknown>> = {
+    instances: ReadonlyArray<WorkflowCreateOptions<Params>>;
+} | {
+    count: number;
+    params?: Params;
+    retention?: WorkflowRetention;
+};
+```
+
+### `WorkflowCreateBatchResult` (interface)
+
+```ts
+interface WorkflowCreateBatchResult {
+    created: WorkflowInstanceLike[];
+    errors: WorkflowCreateBatchError[];
 }
 ```
 
@@ -310,7 +342,7 @@ interface WorkflowEventLike<Params = Record<string, unknown>> {
 ```ts
 interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
-    createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    createBatch: (options: WorkflowCreateBatchOptions<Params>) => Promise<WorkflowCreateBatchResult>;
     deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
     sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;

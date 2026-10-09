@@ -73,6 +73,35 @@ describe("@lunora/workflow (workerd)", () => {
         }
     });
 
+    // The shape the deprecated array form lost: an entry the engine refuses is reported at its index, and the rest are created.
+    it("createBatch through ctx.exports reports a duplicate id in errors and still creates the other instances", async () => {
+        expect.hasAssertions();
+
+        const viaExports = createWorkflowContext({}, [{ className: "SmokeWorkflow", exportName: "smokeWorkflow" }], exports);
+        const handle = viaExports.get<SmokeParams>("smokeWorkflow");
+
+        const result = await handle.createBatch({
+            instances: [
+                { id: "batch-dup-a", params: { orderId: "a" } },
+                { id: "batch-dup-a", params: { orderId: "a" } },
+                { id: "batch-dup-c", params: { orderId: "c" } },
+            ],
+        });
+
+        expect(result.created.map((instance) => instance.id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["batch-dup-a", "batch-dup-c"]);
+        expect(result.errors).toStrictEqual([expect.objectContaining({ id: "batch-dup-a", index: 1 })]);
+    });
+
+    it("createBatch({ count }) through ctx.exports creates count instances that share their params", async () => {
+        expect.hasAssertions();
+
+        const viaExports = createWorkflowContext({}, [{ className: "SmokeWorkflow", exportName: "smokeWorkflow" }], exports);
+        const result = await viaExports.get<SmokeParams>("smokeWorkflow").createBatch({ count: 2, params: { orderId: "n" } });
+
+        expect(result.created).toHaveLength(2);
+        expect(result.errors).toStrictEqual([]);
+    });
+
     it("ctx.workflows.get(name).get(id) reads a real instance's status", async () => {
         expect.hasAssertions();
 

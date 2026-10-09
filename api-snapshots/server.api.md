@@ -3012,7 +3012,7 @@ interface WorkflowEventDefinition<Payload = unknown> {
 ```ts
 interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
-    createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
+    createBatch: (options: WorkflowCreateBatchOptions<Params>) => Promise<WorkflowCreateBatchResult>;
     deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<{
         deleted: {
             id: string;
@@ -6694,4 +6694,39 @@ interface UpsertResult {
 
 ```ts
 type UpsertTarget = ReadonlyArray<string> | string;
+```
+
+### `WorkflowCreateBatchError` (interface)
+
+```ts
+interface WorkflowCreateBatchError {
+    code: number;
+    id?: string;
+    index: number;
+    message: string;
+}
+```
+
+### `WorkflowCreateBatchOptions` (type)
+
+```ts
+type WorkflowCreateBatchOptions<Params = Record<string, unknown>> = {
+    instances: ReadonlyArray<WorkflowCreateOptions<Params>>;
+} | {
+    count: number;
+    params?: Params;
+    retention?: {
+        errorRetention?: string;
+        successRetention?: string;
+    };
+};
+```
+
+### `WorkflowCreateBatchResult` (interface)
+
+```ts
+interface WorkflowCreateBatchResult {
+    created: WorkflowInstance[];
+    errors: WorkflowCreateBatchError[];
+}
 ```

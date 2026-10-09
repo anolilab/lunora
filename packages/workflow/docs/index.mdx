@@ -482,7 +482,7 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
         before the instance exists.
     </Callout>
 
-- `createBatch([...])`: start many in one batch.
+- `createBatch({ instances: [...] })` or `createBatch({ count, params })`: start many in one batch. Returns `{ created, errors }`; an instance that could not be created is in `errors` with its input `index`, not dropped.
 - `deleteBatch([...ids])`: delete up to 100 instances and their stored state. Returns
   `{ deleted, errors }` with one entry per id; unknown ids come back as errors.
 - `get(id)`: a handle to an existing instance.

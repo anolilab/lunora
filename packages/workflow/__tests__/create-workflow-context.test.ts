@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorkflowContext } from "../src/create-workflow-context";
-import type { WorkflowBindingLike, WorkflowInstanceLike } from "../src/types";
+import type { WorkflowBindingLike, WorkflowCreateBatchResult, WorkflowInstanceLike } from "../src/types";
 
 const fakeInstance = (id: string): WorkflowInstanceLike => {
     return {
@@ -28,7 +28,9 @@ const fakeInstance = (id: string): WorkflowInstanceLike => {
 const fakeBinding = (): WorkflowBindingLike => {
     return {
         create: vi.fn<() => Promise<WorkflowInstanceLike>>(async () => fakeInstance("inst-1")),
-        createBatch: vi.fn<() => Promise<WorkflowInstanceLike[]>>(async () => [fakeInstance("inst-1")]),
+        createBatch: vi.fn<() => Promise<WorkflowCreateBatchResult>>(async () => {
+            return { created: [fakeInstance("inst-1")], errors: [] };
+        }),
         deleteBatch: async (ids: ReadonlyArray<string>) => {
             return {
                 deleted: ids.map((id) => {
