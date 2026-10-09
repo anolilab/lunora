@@ -1,3 +1,9 @@
+## @lunora/react-native [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.172...@lunora/react-native@1.0.0-alpha.173) (2026-10-09)
+
+### Bug Fixes
+
+* **packages:** align stale @lunora/client pins to 1.0.0-alpha.193 ([#1089](https://github.com/anolilab/lunora/issues/1089)) ([46da632](https://github.com/anolilab/lunora/commit/46da632bc18dfd87f7dceb4522d1d35b6e9f2066))
+
 ## @lunora/react-native [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.171...@lunora/react-native@1.0.0-alpha.172) (2026-10-08)
 
 
