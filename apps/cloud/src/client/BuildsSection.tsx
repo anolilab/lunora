@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { api } from "../../lunora/_generated/api.js";
 import type { Id } from "../../lunora/_generated/dataModel.js";
 import { AsyncList } from "./AsyncList";
+import { BuildAdvisoriesCard } from "./BuildAdvisoriesCard";
 import { formatDateTime } from "./format";
 import { Field, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
@@ -85,6 +86,11 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
                                             <span className="shrink-0 font-mono text-sm">{build.commitSha.slice(0, 10)}</span>
                                             <span className="text-muted-foreground truncate font-mono text-xs">{build.branch}</span>
                                             <StatusBadge tone={BUILD_TONE[build.status]}>{build.status}</StatusBadge>
+                                            {build.advisories?.length ? (
+                                                <StatusBadge tone="warning">
+                                                    {build.advisories.length} {build.advisories.length === 1 ? "warning" : "warnings"}
+                                                </StatusBadge>
+                                            ) : null}
                                             {build.skipReason === undefined ? null : (
                                                 <span className="text-muted-foreground truncate text-xs" title={build.skipReason}>
                                                     {build.skipReason}
@@ -113,6 +119,8 @@ export const BuildsSection = ({ organizationId, preloaded }: SectionProps<Return
                     ) : null}
                 </CardContent>
             </Card>
+
+            {openBuildId ? <BuildAdvisoriesCard advisories={builds?.find((build) => build._id === openBuildId)?.advisories} /> : null}
 
             {openBuildId ? (
                 <Card>

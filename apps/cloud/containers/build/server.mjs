@@ -13,6 +13,11 @@
  * dashboard tail a build live and sidesteps exec's 1MB buffered-response cap.
  * A real build log is bigger than that.
  *
+ * Before the release is sent, the built module is scanned (`scan.mjs`) for code
+ * that can run without end — an alarm that always re-arms, a loop with no exit.
+ * Each finding is one `{"advisory"}` record plus a `warning: …` log line; the
+ * scan only ever warns, and a scan that cannot run is one `warning:` line too.
+ *
  * `POST /__lunora/exec` is the `@lunora/container` exec contract, verbatim, so
  * `ctx.containers.<name>.exec()` works against this image and an operator can
  * poke at a wedged build box with the tooling that already exists.
@@ -31,6 +36,10 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { readRelease, releaseFailure } from "./release.mjs";
+// Imported here, at start-up, never lazily: `/srv` is writable by the user
+// tenant builds run as, so a module first loaded after a build ran could be one
+// that build replaced.
+import { DEFAULT_SCAN_LIMITS, scanBundle, scanFailure } from "./scan.mjs";
 import { BuildError, findWorkspaceRoot, resolveLunoraBin, resolveProjectDirectory, validateRootDirectory, workspacePackages } from "./workspace.mjs";
 
 /** Where the deploy path expects the entry module. The provision box defaults `mainModule` to this. */
@@ -161,7 +170,7 @@ const run = (command, args, options, onLine) =>
  * multi-module tenant would otherwise get a Worker missing half its code, and
  * the first sign would be a runtime import error in production.
  * @param {string} projectDirectory Extracted project root.
- * @returns {Promise<{ bundle: string, bundleHash: string, path: string }>} Base64 module, its sha256, and where it is.
+ * @returns {Promise<{ bundle: string, bundleHash: string, bytes: Buffer, path: string }>} Base64 module, its sha256, its bytes, and where it is.
  */
 const collectBundle = async (projectDirectory) => {
     const outDirectory = join(projectDirectory, OUT_DIR);
@@ -196,7 +205,42 @@ const collectBundle = async (projectDirectory) => {
     const path = join(module.parentPath, module.name);
     const bytes = await readFile(path);
 
-    return { bundle: bytes.toString("base64"), bundleHash: createHash("sha256").update(bytes).digest("hex"), path };
+    return { bundle: bytes.toString("base64"), bundleHash: createHash("sha256").update(bytes).digest("hex"), bytes, path };
+};
+
+/**
+ * Scan the built module and report what it finds as warnings: one
+ * `{"advisory"}` record per finding, for the control plane to store, and one
+ * `warning: …` line, for the build log. Never throws and never fails the build
+ * — a scan that cannot run says so in a single warning line and the build goes
+ * on. The findings never ride on the release record.
+ * @param {(payload: unknown) => void} emit The NDJSON writer.
+ * @param {{ bundle: Buffer, bundlePath: string, manifest: unknown, project: string, repo: string }} input The exact bytes that were hashed, and what attributes them.
+ * @returns {Promise<void>} Resolves once everything is written.
+ */
+const reportAdvisories = async (emit, input) => {
+    emit({ line: "scanning the Worker bundle for code that can run without end" });
+
+    let result;
+
+    try {
+        result = await scanBundle(input);
+    } catch (error) {
+        emit({ line: `warning: build scan skipped: ${scanFailure(error)}` });
+
+        return;
+    }
+
+    for (const advisory of result.advisories) {
+        emit({ advisory });
+        emit({ line: `warning: ${advisory.title} — ${advisory.detail}` });
+    }
+
+    if (result.omitted > 0) {
+        emit({
+            line: `warning: build scan: ${String(result.omitted)} more findings not shown (at most ${String(DEFAULT_SCAN_LIMITS.maxFindings)} are reported per build)`,
+        });
+    }
 };
 
 /**
@@ -298,7 +342,7 @@ const handleBuild = async (request, response) => {
             return;
         }
 
-        const { bundle, bundleHash, path: bundlePath } = await collectBundle(project);
+        const { bundle, bundleHash, bytes, path: bundlePath } = await collectBundle(project);
 
         // The rest of the release — binding manifest, crons, static assets —
         // derived by the project's own pinned CLI, the same code a CLI deploy
@@ -328,9 +372,16 @@ const handleBuild = async (request, response) => {
             return;
         }
 
+        const release = await readRelease(releaseFile);
+
+        // After the release, for its manifest (which queue a producer feeds),
+        // and over the bytes just hashed — the tenant's CLI ran in between, and
+        // the module on disk is no longer proof of what deploys.
+        await reportAdvisories(emit, { bundle: bytes, bundlePath, manifest: release.manifest, project, repo });
+
         // The bundle travels from the module just hashed, so the hash on the
         // build row always describes the bytes that deploy.
-        emit({ ...(await readRelease(releaseFile)), bundle, bundleHash, ...(packages === undefined ? {} : { workspacePackages: packages }) });
+        emit({ ...release, bundle, bundleHash, ...(packages === undefined ? {} : { workspacePackages: packages }) });
     } catch (error) {
         emit({ error: clientError(error) });
     } finally {

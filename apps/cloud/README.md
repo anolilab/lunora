@@ -121,7 +121,7 @@ src/
                      (pure over ports)
     dispatch.ts      claim → hand-off loop, bounded per tick
     runner-do.ts     BuildRunnerDO: one per build, each half in its own alarm
-    container-exec.ts the build box's NDJSON reply → log lines + the release it produced
+    container-exec.ts the build box's NDJSON reply → log lines, scan advisories + the release it produced
     release.ts       a build's release through the deploy core (production vs preview, per-release key)
     control-plane.ts the real ports: POST /v1/builds/dispatch (the cron's claim) and
                      POST /v1/builds/run (a runner alarm's half)
@@ -1217,6 +1217,8 @@ A connected repository deploys without the CLI. The flow, end to end:
    last NDJSON line is the whole release: bundle, hash, binding manifest, crons
    and static assets, held to the deploy caps (100 MiB body, 50 MiB / 20,000
    asset files) so an oversized project fails its build, not its release.
+   Before it, the box **scans the built bundle** (see _Build scan_ below) and
+   streams each finding as an `{"advisory"}` record plus a `warning: …` log line.
 4. **Release.** `src/builds/release.ts` hands it to `startRelease`, the same
    deploy core `POST /v1/deploy` runs: validation, the stored release in
    `RELEASES`, provisioning, the health check with automatic revert, and
@@ -1237,6 +1239,37 @@ A connected repository deploys without the CLI. The flow, end to end:
 5. **Record.** Release progress streams into the build's log; the build is
    completed with `deploymentId` linked; the commit status says whether it went
    live, linking the URL. A failed release never fails the build.
+
+### Build scan
+
+The build box statically scans the one module `lunora build` produced
+(`containers/build/scan.mjs`) for code that, once started, can run without end
+and bill storage operations on every pass. It only ever **warns**: findings never
+fail a build, never ride on the release, and a scan that cannot run (unparsable
+bundle, over 32 MiB, more than the free heap holds, past its 10 s budget) is one
+`warning: build scan skipped: …` line.
+
+| Advisory              | Reported when                                                                                                                                                                                                                                                                                                        |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unbounded_loop`      | `while (true)`, `for (;;)`, `for (; true;)` or `do … while (true)` has no statically reachable exit: no `break` bound to it, no jump to a label outside it, no `return`/`throw`/`yield` in its own function, no `signal.throwIfAborted()`. An `await` is not an exit.                                                |
+| `alarm_always_rearms` | A class's `alarm()` calls `<x>.storage.setAlarm(…)` at a position that runs on every call — not in a branch, loop body, `case`, `catch`, ternary arm, the far side of `&&`/`\|\|`/`??`, an optional chain, a nested callback, or after an earlier statement that may leave; not kept, and not followed by a `throw`. |
+| `queue_self_resend`   | A `queue(batch, env)` handler unconditionally `send`s/`sendBatch`es to a producer binding that the release manifest maps to a queue the same Worker consumes.                                                                                                                                                        |
+
+Every candidate is attributed through the bundle's sourcemap (wrangler writes
+`index.js.map` beside the module) and **dropped when its source is under
+`node_modules`, in generated output (`.wrangler`, `.lunora`) or outside the
+repository** — third-party code is not the tenant's to fix. The boundary is the
+repository rather than the root directory, so a monorepo's own workspace
+packages are still scanned. Without a sourcemap, esbuild's `// <path>` region
+comments name each statement's input (the line reported is then the bundle's);
+without either, a finding is kept against the bundle itself, at most 10. At most
+50 findings are reported per build.
+
+The control plane stores them on the build row (`builds.advisories`, written
+through the lease-checked `builds.recordAdvisory`, one per `cacheKey`, best-effort
+so a failed write never changes the build), carries them over when a push
+re-releases an earlier build's stored release, and the Studio shows the count on
+the Builds tab and the list under the deployment's build logs.
 
 What still needs credentials (🌐): `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`
 for the source fetch and commit statuses, `LUNORA_ADMIN_TOKEN` for the drain, a

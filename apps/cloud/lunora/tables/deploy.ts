@@ -251,6 +251,24 @@ export const deployTables = {
     // bundle to the deploy pipeline. Dedup: a successful build for the same
     // (project, commitSha) is reused instead of rebuilt.
     builds: defineTable({
+        // The build box's bundle-scan findings (`containers/build/scan.mjs`):
+        // code in the built Worker that can run without end. Warnings only, at
+        // most 50, one per `cacheKey`; a re-release carries the earlier build's.
+        advisories: v.optional(
+            v.array(
+                v.object({
+                    cacheKey: v.string(),
+                    detail: v.string(),
+                    file: v.string(),
+                    level: v.literal("WARN"),
+                    line: v.number(),
+                    location: v.optional(v.union(v.literal("bundle"), v.literal("source"))),
+                    name: v.string(),
+                    remediation: v.string(),
+                    title: v.string(),
+                }),
+            ),
+        ),
         branch: v.string(),
         bundleHash: v.optional(v.string()),
         commitSha: v.string(),

@@ -229,6 +229,7 @@ export interface Doc_githubDeliveries {
 export interface Doc_builds {
     _id: Id<"builds">;
     _creationTime: number;
+    advisories?: Array<{ cacheKey: string; detail: string; file: string; level: "WARN"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }>;
     branch: string;
     bundleHash?: string;
     commitSha: string;
@@ -1210,6 +1211,7 @@ export interface Insert_githubDeliveries {
 export interface Insert_builds {
     _id?: Id<"builds">;
     _creationTime?: number;
+    advisories?: Array<{ cacheKey: string; detail: string; file: string; level: "WARN"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }>;
     branch: string;
     bundleHash?: string;
     commitSha: string;

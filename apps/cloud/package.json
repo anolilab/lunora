@@ -74,6 +74,7 @@
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
         "@vitejs/plugin-react": "catalog:web",
+        "acorn": "catalog:node",
         "babel-plugin-react-compiler": "catalog:build",
         "jsonc-parser": "catalog:vite",
         "tailwindcss": "catalog:vite",

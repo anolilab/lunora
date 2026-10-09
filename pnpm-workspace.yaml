@@ -323,6 +323,11 @@ catalogs:
     # reports findings a contributor cannot reproduce locally.
     react-doctor: 0.9.14
   node:
+    # Exact-pinned (no caret): apps/cloud's build box ships a byte-for-byte copy
+    # of this version's `dist/acorn.mjs` in `containers/build/vendor/` (the box
+    # installs nothing at image build). `__tests__/build-scan-vendor.test.ts`
+    # fails until the vendored copy is refreshed after a bump.
+    acorn: 8.18.0
     # Exact-pinned (no caret): this is the parser `wrangler dev` runs over
     # `.dev.vars`, and `@lunora/config` reads that file with the same library so
     # the CLI/studio can't disagree with the worker about what a line means.
