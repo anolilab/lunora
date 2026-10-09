@@ -1,3 +1,13 @@
+## @lunora/ai [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.120...@lunora/ai@1.0.0-alpha.121) (2026-10-09)
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** move Cloudflare-only commands under lunora cloudflare (#1080)
+
+### Code Refactoring
+
+* **cli:** move Cloudflare-only commands under lunora cloudflare ([#1080](https://github.com/anolilab/lunora/issues/1080)) ([e467884](https://github.com/anolilab/lunora/commit/e46788465b08a71b354556df1284fda20c429d37))
+
 ## @lunora/ai [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.119...@lunora/ai@1.0.0-alpha.120) (2026-10-08)
 
 ### Bug Fixes
