@@ -9,7 +9,7 @@ import {
     resetDispatchNamespaces,
     WORKERS_CPU,
 } from "../src/cloudflare/compute-usage";
-import { probeDataset, probeDurableObjectsDataset, resetDurableObjectsProbe } from "../src/cloudflare/storage-usage";
+import { probeDataset, probeDurableObjectsDataset, resetDurableObjectsProbe, statedUnits } from "../src/cloudflare/storage-usage";
 import { UsageUnavailableError } from "../src/metering/unavailable";
 import { access, ACCOUNT, fakeCloudflare, fakeGraphql, HOURLY_FILTER, namespace, NAMESPACES, WINDOW } from "./support/cloudflare-api-fake";
 
@@ -337,5 +337,61 @@ describe(readDurableObjectDurationByScript, () => {
 
         expect(failure).toBeInstanceOf(UsageUnavailableError);
         expect(String(failure)).toContain('duration does not state its unit ("Sum of duration")');
+    });
+});
+
+describe(statedUnits, () => {
+    it.each([
+        ["Sum of CPU time, in microseconds", ["microseconds"]],
+        ["CPU time (µs)", ["microseconds"]],
+        ["Sum of duration (GB*s)", ["gbSeconds"]],
+        ["Sum of duration in GB-seconds", ["gbSeconds"]],
+        ["Duration in seconds (multiply by 0.125 GB for GB-s)", ["gbSeconds", "seconds"]],
+        ["milliseconds (was microseconds before 2025)", ["microseconds", "milliseconds"]],
+        ["Sum of duration", []],
+    ])("reads %j as %j", (description, units) => {
+        expect([...statedUnits(description)].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(units);
+    });
+});
+
+describe("a sum whose description names more than one unit", () => {
+    afterEach(() => {
+        resetDurableObjectsProbe();
+        resetDispatchNamespaces();
+    });
+
+    it("is not read as GB-seconds when it is seconds with a conversion note", async () => {
+        const fetch = fakeCloudflare({
+            graphql: fakeGraphql({
+                durableObjectsPeriodicGroups: {
+                    dimensions: ["namespaceId"],
+                    filter: HOURLY_FILTER,
+                    sum: [{ description: "Duration in seconds (multiply by 0.125 GB for GB-s)", name: "duration" }],
+                },
+            }),
+            rest: DO_NAMESPACES,
+        });
+
+        const failure = await readDurableObjectDurationByScript(access(fetch), WINDOW).catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(UsageUnavailableError);
+        expect(String(failure)).toContain('duration names more than one unit ("Duration in seconds (multiply by 0.125 GB for GB-s)")');
+    });
+
+    it("is not read as microseconds when it is milliseconds that once were microseconds", async () => {
+        const fetch = fakeCloudflare({
+            graphql: fakeGraphql({
+                workersInvocationsAdaptive: {
+                    dimensions: ["scriptName"],
+                    filter: HOURLY_FILTER,
+                    sum: [{ description: "milliseconds (was microseconds before 2025)", name: "cpuTime" }],
+                },
+            }),
+        });
+
+        const failure = await readWorkersCpuByScript(access(fetch), WINDOW).catch((error: unknown) => error);
+
+        expect(failure).toBeInstanceOf(UsageUnavailableError);
+        expect(String(failure)).toContain('cpuTime names more than one unit ("milliseconds (was microseconds before 2025)")');
     });
 });

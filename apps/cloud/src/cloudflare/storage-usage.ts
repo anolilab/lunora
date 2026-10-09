@@ -198,16 +198,51 @@ export const listDurableObjectNamespaces = async (access: CloudflareAccountAcces
     );
 };
 
+/** A unit a schema description can state. */
+export type StatedUnit = "gbSeconds" | "microseconds" | "milliseconds" | "nanoseconds" | "seconds";
+
+/**
+ * How each unit is spelled, in the order they are looked for. A match is cut
+ * out of the text before the next is tried, so the "seconds" of
+ * "GB-seconds" or "microseconds" is not counted again as plain seconds.
+ */
+const UNIT_SPELLINGS: ReadonlyArray<[StatedUnit, RegExp]> = [
+    ["gbSeconds", /\bGB\W{0,3}s(?:ec(?:ond)?s?)?\b|gigabyte\W{0,3}seconds?/giu],
+    ["microseconds", /microseconds?|µs\b/giu],
+    ["milliseconds", /milliseconds?|\bms\b/giu],
+    ["nanoseconds", /nanoseconds?|\bns\b/giu],
+    ["seconds", /\bsec(?:ond)?s?\b/giu],
+];
+
+/** Every unit a description names. */
+export const statedUnits = (description: string): Set<StatedUnit> => {
+    const units = new Set<StatedUnit>();
+    let rest = description;
+
+    for (const [unit, spelling] of UNIT_SPELLINGS) {
+        const next = rest.replaceAll(spelling, " ");
+
+        if (next !== rest) {
+            units.add(unit);
+            rest = next;
+        }
+    }
+
+    return units;
+};
+
 /** One sum field a probe looks for. */
 export interface SumWant<TSum extends string = string> {
     name: TSum;
 
     /**
-     * What the field's schema description must say for it to be taken, when
-     * the name alone does not state its unit. A field whose description does
-     * not match is left alone and reported, never read in a unit we guessed.
+     * The unit the field's schema description must state, and state alone, for
+     * it to be taken, when the name does not say. A description naming no unit,
+     * another one, or more than one ("seconds; multiply by 0.125 GB for GB-s",
+     * "milliseconds (was microseconds)") is left alone and reported, never read
+     * in a unit we guessed.
      */
-    unit?: RegExp;
+    unit?: StatedUnit;
 }
 
 /**
@@ -374,11 +409,13 @@ const wantedSums = <TSum extends string>(spec: DatasetSpec<TSum>, sums: Describe
         }
 
         const description = sums.get(want.name) ?? "";
+        const units = statedUnits(description);
+        const quoted = description === "" ? "no description" : JSON.stringify(description.slice(0, 80));
 
-        if (want.unit === undefined || want.unit.test(description)) {
+        if (want.unit === undefined || (units.size === 1 && units.has(want.unit))) {
             present.push(want.name);
         } else {
-            unstated.push(`${want.name} does not state its unit (${description === "" ? "no description" : JSON.stringify(description.slice(0, 80))})`);
+            unstated.push(units.size > 1 ? `${want.name} names more than one unit (${quoted})` : `${want.name} does not state its unit (${quoted})`);
         }
     }
 

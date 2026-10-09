@@ -50,12 +50,6 @@ import { listAll, PROBE_TTL_MS, probeDataset, readDurableObjectsByScript, readPr
 /** A positive, finite number; anything else is nothing. */
 const positive = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0);
 
-/** A description that states microseconds. */
-const MICROSECONDS = /microsecond/iu;
-
-/** A description that states gigabyte-seconds. */
-const GB_SECONDS = /\bGB\W{0,3}s(?:ec|\b)|gigabyte\W?second/iu;
-
 /** The CPU-time dataset: `cpuTimeUs` (µs by name), else a `cpuTime` the schema says is in µs. */
 export const WORKERS_CPU: DatasetSpec<"cpuTime" | "cpuTimeUs", "scriptName"> = {
     by: ["scriptName"],
@@ -65,7 +59,7 @@ export const WORKERS_CPU: DatasetSpec<"cpuTime" | "cpuTimeUs", "scriptName"> = {
     preferred: ["workersInvocationsAdaptive"],
     prefix: "workersInvocations",
     requirement: "CPU time in microseconds (cpuTimeUs, or a cpuTime described in microseconds) with a scriptName dimension",
-    sums: [{ name: "cpuTimeUs" }, { name: "cpuTime", unit: MICROSECONDS }],
+    sums: [{ name: "cpuTimeUs" }, { name: "cpuTime", unit: "microseconds" }],
 };
 
 /** The Durable Objects requests dataset. */
@@ -87,7 +81,7 @@ export const DURABLE_OBJECTS_DURATION: DatasetSpec<"duration", "namespaceId" | "
     preferred: ["durableObjectsPeriodicGroups"],
     prefix: "durableObjects",
     requirement: "duration in GB-seconds with a scriptName or namespaceId dimension",
-    sums: [{ name: "duration", unit: GB_SECONDS }],
+    sums: [{ name: "duration", unit: "gbSeconds" }],
 };
 
 /** A dispatch namespace as the account's listing reports it. */
