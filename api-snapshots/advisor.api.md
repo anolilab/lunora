@@ -500,6 +500,7 @@ interface AdvisorNotifyConfig {
 interface AdvisorOwnerFieldWrite {
     field: string;
     file: string;
+    guarded?: true;
     line: number;
     method: string;
     ownerScoped?: true;

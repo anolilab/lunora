@@ -331,6 +331,7 @@ export interface ExposeCacheIR {
 
 export interface FunctionIR {
     args: Record<string, ValidatorIR>;
+
     exportName: string;
 
     /**
@@ -348,6 +349,7 @@ export interface FunctionIR {
     expose?: { cache?: ExposeCacheIR; rest?: boolean };
     /** Path relative to `<projectRoot>/lunora/` without extension, e.g. "messages". */
     filePath: string;
+
     kind: "action" | "mutation" | "query" | "stream";
 
     /**
@@ -1634,8 +1636,19 @@ export interface OwnerFieldWriteIR {
     field: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
+
+    /**
+     * The handler proves the value it writes equals the server identity before the
+     * write: an `if (<args.field> !== <ctx identity>) throw` (also inside an `&&` or
+     * `||` condition), or an `assert*(...)` call given both the argument and the
+     * identity. The write is then validated, so `owner_field_from_args_not_auth`
+     * declines to report it. Only facts that hold before the write count.
+     */
+    guarded?: true;
+
     /** 1-based line of the `ctx.db` write call, or `0` when unknown. */
     line: number;
+
     /** The `ctx.db` write method (`insert` / `replace` / `patch` / `insertManyUnsafe`). */
     method: string;
 

@@ -2707,6 +2707,7 @@ interface NormalizeIdAuthorizationIR {
 interface OwnerFieldWriteIR {
     field: string;
     file: string;
+    guarded?: true;
     line: number;
     method: string;
     ownerScoped?: true;

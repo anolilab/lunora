@@ -43,6 +43,12 @@ const ownerFieldFromArgsNotAuth: Lint = {
                 return [];
             }
 
+            // The handler proves the written value is the caller's own identity before
+            // the write (a guard or an assert against the identity). Nothing to report.
+            if (write.guarded) {
+                return [];
+            }
+
             const where = `\`${write.method}\` in ${callSiteWhere(write)}`;
             const metadata = {
                 ...callSiteFields(write),

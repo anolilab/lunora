@@ -1,3 +1,9 @@
+## @lunora/advisor [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.202...@lunora/advisor@1.0.0-alpha.203) (2026-10-09)
+
+### Bug Fixes
+
+* **advisor:** owner_field_from_args_not_auth recognizes guards and admin builders ([#1076](https://github.com/anolilab/lunora/issues/1076)) ([9371f94](https://github.com/anolilab/lunora/commit/9371f9473e4b8705b4409831bfe0271504fc00b9))
+
 ## @lunora/advisor [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.201...@lunora/advisor@1.0.0-alpha.202) (2026-10-09)
 
 ### Features

@@ -31,6 +31,25 @@ describe("owner_field_from_args_not_auth", () => {
         expect(ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() })).toHaveLength(0);
     });
 
+    // The handler checked the written value against the identity before the write.
+    it("reports nothing for a write the handler proved equal to the identity", () => {
+        expect.assertions(1);
+
+        const ownerFieldWrites: AdvisorOwnerFieldWrite[] = [
+            {
+                scope: { kind: "export", name: "createPost" },
+                field: "organizationId",
+                file: "prompts",
+                line: 4,
+                method: "insert",
+                guarded: true,
+                visibility: "public",
+            },
+        ];
+
+        expect(ownerFieldFromArgsNotAuth.run({ ownerFieldWrites, schema: schema() })).toHaveLength(0);
+    });
+
     it("still reports a public write that is not owner-scoped", () => {
         expect.assertions(2);
 
