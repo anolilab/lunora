@@ -105,7 +105,8 @@ const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall
             update: async (parameters: Record<string, unknown>) => {
                 calls.push({ args: [parameters], name: "sub.update" });
 
-                const update = (parameters as { subscriptionUpdate?: { cancelAtPeriodEnd?: boolean; productId?: string } }).subscriptionUpdate ?? {};
+                const update =
+                    (parameters as { subscriptionUpdate?: { cancelAtPeriodEnd?: boolean; productId?: string; seats?: number } }).subscriptionUpdate ?? {};
 
                 // Echo the update back onto the response (Date fields, as the real SDK returns) so tests
                 // can assert the mapped Subscription reflects it, not just the raw request payload.
@@ -116,7 +117,7 @@ const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall
                     id: "sub_1",
                     metadata: { referenceId: "user_1" },
                     productId: update.productId ?? "prod_pro",
-                    seats: (update as { seats?: number }).seats ?? null,
+                    seats: update.seats ?? null,
                     status: "active",
                 };
             },
@@ -448,13 +449,50 @@ describe("polar adapter", () => {
         expect(subscription.quantity).toBe(1);
     });
 
+    it("refuses a seat count that is not a non-negative safe integer, before any call", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        await expect(adapter.updateSubscription("sub_1", { quantity: -1 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(adapter.updateSubscription("sub_1", { quantity: 1.5 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(calls.some((entry) => entry.name === "sub.update")).toBe(false);
+    });
+
+    it("throws when Polar answers with a different seat count than was requested, rather than reporting success", async () => {
+        expect.assertions(1);
+
+        const client = makeClient();
+
+        (client as { subscriptions: unknown }).subscriptions = {
+            get: async () => {return { id: "sub_1", metadata: { referenceId: "user_1" }, seats: 1, status: "active" }},
+            update: async () => {return { id: "sub_1", metadata: { referenceId: "user_1" }, seats: null, status: "active" }},
+        };
+        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+
+        await expect(adapter.updateSubscription("sub_1", { quantity: 5 })).rejects.toMatchObject({ code: "PROVIDER_ERROR" });
+    });
+
+    it("reads the subscription and writes nothing for a patch that changes neither plan nor seats", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        const subscription = await adapter.updateSubscription("sub_1", { idempotencyKey: "k_1" });
+
+        expect(calls.some((entry) => entry.name === "sub.update")).toBe(false);
+        expect(subscription.id).toBe("sub_1");
+    });
+
     it("refuses a plan change and a seat change in one patch, since they are separate Polar updates", async () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
         const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
 
-        await expect(adapter.updateSubscription("sub_1", { priceId: "prod_enterprise", quantity: 5 })).rejects.toThrow(/plan and the seat count/);
+        await expect(adapter.updateSubscription("sub_1", { priceId: "prod_enterprise", quantity: 5 })).rejects.toThrow(/plan and the quantity/);
         expect(calls.some((entry) => entry.name === "sub.update")).toBe(false);
     });
 

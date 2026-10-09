@@ -11,6 +11,7 @@
 import type { Polar } from "@polar-sh/sdk";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
+import { LunoraPaymentError } from "../errors";
 import { asRecord, readBoolean, readEpochMs, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, moneyFromMinor, zeroMoney } from "../money";
 import type {
@@ -78,13 +79,16 @@ const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
 
 const notSupported = makeNotSupported("polar (merchant-of-record)");
 
-/** The one Polar update variant a patch maps to: seats, a plan change, or an empty update (no plan and no seats). */
-const polarSubscriptionUpdate = (patch: SubscriptionPatch): { productId?: string; seats?: number } => {
+/**
+ * The one Polar update a patch maps to: a seat count, a plan change, or nothing. The caller reads the
+ * subscription instead of sending an empty update.
+ */
+const polarSubscriptionUpdate = (patch: SubscriptionPatch): { productId: string } | { seats: number } => {
     if (patch.quantity !== undefined) {
         return { seats: patch.quantity };
     }
 
-    return patch.priceId ? { productId: patch.priceId } : {};
+    return { productId: patch.priceId ?? "" };
 };
 
 type PolarRefundReason = Parameters<Polar["refunds"]["create"]>[0]["reason"];
@@ -444,10 +448,35 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
             // Polar's plan change (`productId`) and seat change (`seats`) are separate update variants,
             // so one call cannot carry both. Refuse the combined patch rather than drop one half.
             if (patch.priceId !== undefined && patch.quantity !== undefined) {
-                return notSupported("changing the plan and the seat count in one update; apply them as two updates");
+                return notSupported("changing the plan and the quantity in one update; apply them as two updates");
             }
 
-            return subscriptionFromPolar(await client.subscriptions.update({ id: subscriptionId, subscriptionUpdate: polarSubscriptionUpdate(patch) }));
+            if (patch.quantity !== undefined && (!Number.isSafeInteger(patch.quantity) || patch.quantity < 0)) {
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    `updateSubscription(): \`quantity\` must be a non-negative safe integer (got ${String(patch.quantity)})`,
+                );
+            }
+
+            // Nothing to change: read the subscription rather than send an empty update.
+            if (patch.priceId === undefined && patch.quantity === undefined) {
+                return subscriptionFromPolar(await client.subscriptions.get({ id: subscriptionId }));
+            }
+
+            const subscription = subscriptionFromPolar(
+                await client.subscriptions.update({ id: subscriptionId, subscriptionUpdate: polarSubscriptionUpdate(patch) }),
+            );
+
+            // Confirm the seat count landed: a non-seat subscription answers `seats: null`, which would
+            // otherwise read back as one unit and look like success.
+            if (patch.quantity !== undefined && subscription.quantity !== patch.quantity) {
+                throw new LunoraPaymentError(
+                    "PROVIDER_ERROR",
+                    `polar did not apply the seat count ${String(patch.quantity)} to subscription ${subscriptionId}`,
+                );
+            }
+
+            return subscription;
         },
     };
 };
