@@ -46,11 +46,16 @@ interface ServiceEntry {
 
 type ServicesShape = WranglerShape & { services?: ReadonlyArray<ServiceEntry | null | undefined> };
 
-/** The entry Lunora writes for `service` in `environment` (top level when `undefined`). */
-const entryFor = (service: ServiceBindingIR, environment: string | undefined): Record<string, string> => {
+/**
+ * The entry Lunora writes for `service` in `environment` (top level when `undefined`). An env copy takes the
+ * entrypoint its top-level entry names when the declaration names none: a hand-written top-level
+ * `entrypoint` (e.g. an internal `WorkerEntrypoint` rather than the public `fetch`) must not be dropped there.
+ */
+const entryFor = (service: ServiceBindingIR, environment: string | undefined, inheritedEntrypoint: string | undefined): Record<string, string> => {
     const worker = environment === undefined ? service.worker : (service.envWorkers[environment] ?? `${service.worker}-${environment}`);
+    const entrypoint = service.entrypoint ?? (environment === undefined ? undefined : inheritedEntrypoint);
 
-    return { binding: service.binding, ...(service.entrypoint === undefined ? {} : { entrypoint: service.entrypoint }), service: worker };
+    return { binding: service.binding, ...(entrypoint === undefined ? {} : { entrypoint }), service: worker };
 };
 
 const bindingOf = (entry: ServiceEntry | null | undefined): string => (typeof entry?.binding === "string" ? entry.binding : "");
@@ -63,9 +68,10 @@ const reconcileScope = (
     declared: ReadonlyArray<ServiceBindingIR>,
     owned: ReadonlySet<string>,
     environment: string | undefined,
+    topLevelEntrypoints: ReadonlyMap<string, string>,
 ): ReconcileStep & { owned: string[] } => {
     const scope = path.join(".");
-    const desired = new Map(declared.map((service) => [service.binding, entryFor(service, environment)]));
+    const desired = new Map(declared.map((service) => [service.binding, entryFor(service, environment, topLevelEntrypoints.get(service.binding))]));
     const handWritten = current.filter((entry) => !owned.has(bindingOf(entry)));
     const handWrittenBindings = new Set(handWritten.map((entry) => bindingOf(entry)));
     const previous = new Map(current.filter((entry) => owned.has(bindingOf(entry))).map((entry) => [bindingOf(entry), entry]));
@@ -132,10 +138,18 @@ const reconcileServices = (
         }),
     ];
     const step: ReconcileStep & { owned: OwnedServices } = { added: [], owned: {}, text, updated: [], warnings: [] };
+    // The entrypoints the top-level `services[]` names, by binding, for the env copies to inherit.
+    const topLevelEntrypoints = new Map<string, string>();
+
+    for (const entry of parsed.services ?? []) {
+        if (typeof entry?.binding === "string" && typeof entry.entrypoint === "string") {
+            topLevelEntrypoints.set(entry.binding, entry.entrypoint);
+        }
+    }
 
     for (const { current, environment, path } of scopes) {
         const key = path.join(".");
-        const result = reconcileScope(step.text, path, current, declared, new Set(recorded[key]), environment);
+        const result = reconcileScope(step.text, path, current, declared, new Set(recorded[key]), environment, topLevelEntrypoints);
 
         step.text = result.text;
         step.added.push(...result.added);
@@ -177,7 +191,7 @@ const reconcileDevConfigServices = (
         return { ...unchanged, owned: previous === undefined || previous.length === 0 ? {} : { [DEV_CONFIG_SCOPE]: previous } };
     }
 
-    const step = reconcileScope(text, ["services"], parsed.services ?? [], declared, new Set(recorded[DEV_CONFIG_SCOPE]), undefined);
+    const step = reconcileScope(text, ["services"], parsed.services ?? [], declared, new Set(recorded[DEV_CONFIG_SCOPE]), undefined, new Map());
 
     if (step.text !== text) {
         writeFileSync(path, step.text, "utf8");

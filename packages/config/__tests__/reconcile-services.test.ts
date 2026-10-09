@@ -116,6 +116,27 @@ describe("reconcileServices", () => {
         });
     });
 
+    it("carries a hand-written top-level entrypoint into the env copies, so a named entrypoint is not lost on dev", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "app",
+    "observability": { "enabled": true },
+    "services": [{ "binding": "SERVICE_GATEWAY", "entrypoint": "InternalApi", "service": "neore-gateway" }],
+    "env": { "preview": {} },
+}
+`,
+            "utf8",
+        );
+
+        reconcileWranglerBindings(root, inferred([service("gateway", "neore-gateway", { preview: "gateway-preview" })]));
+
+        expect(config()["services"]).toStrictEqual([{ binding: "SERVICE_GATEWAY", entrypoint: "InternalApi", service: "neore-gateway" }]);
+        expect(config()["env"].preview.services).toStrictEqual([{ binding: "SERVICE_GATEWAY", entrypoint: "InternalApi", service: "gateway-preview" }]);
+    });
+
     it("is idempotent, and removes an owned entry once its declaration goes", () => {
         expect.assertions(3);
 
