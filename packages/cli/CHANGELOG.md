@@ -1,3 +1,22 @@
+## @lunora/cli [1.0.0-alpha.372](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.371...@lunora/cli@1.0.0-alpha.372) (2026-10-09)
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** move Cloudflare-only commands under lunora cloudflare (#1080)
+
+### Code Refactoring
+
+* **cli:** move Cloudflare-only commands under lunora cloudflare ([#1080](https://github.com/anolilab/lunora/issues/1080)) ([e467884](https://github.com/anolilab/lunora/commit/e46788465b08a71b354556df1284fda20c429d37))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.284
+* **@lunora/config:** upgraded to 1.0.0-alpha.329
+* **@lunora/container:** upgraded to 1.0.0-alpha.72
+* **@lunora/seed:** upgraded to 1.0.0-alpha.207
+* **@lunora/testing:** upgraded to 1.0.0-alpha.250
+
 ## @lunora/cli [1.0.0-alpha.371](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.370...@lunora/cli@1.0.0-alpha.371) (2026-10-09)
 
 ### Features
