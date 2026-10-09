@@ -1,3 +1,9 @@
+## @lunora/advisor [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.201...@lunora/advisor@1.0.0-alpha.202) (2026-10-09)
+
+### Features
+
+* **advisor:** flag exitless loops and unguarded dispatch cycles ([#1047](https://github.com/anolilab/lunora/issues/1047)) ([9558953](https://github.com/anolilab/lunora/commit/95589536a1e474c65ccda45e4260ed3436de2362))
+
 ## @lunora/advisor [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.200...@lunora/advisor@1.0.0-alpha.201) (2026-10-08)
 
 ### Bug Fixes
