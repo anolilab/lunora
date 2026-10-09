@@ -232,8 +232,12 @@ List the export names of your `lunora/queues.ts` queues in the `queues` option
 and mutations and actions get a recording `ctx.queues`. Sends go through
 `@lunora/queue`'s own validation, so a batch over 100 messages, a delay past
 12 hours, or a queue name you did not list rejects as it would in production.
-Bodies are recorded as structured clones, the way the default `v8` content type
-serializes them. Nothing is consumed — assert on what was enqueued:
+Each body is recorded as the consumer decodes it: encoded with its content type
+(Cloudflare's default `json`, unless the send names one) and decoded back, so a
+`Date` arrives as its ISO string and a `BigInt` rejects. Encoded sizes are checked
+against the 128 KB message and 256 KB batch limits. The harness cannot read a
+queue's content type from wrangler config, so name `contentType` on the send when
+the queue is not `json`. Nothing is consumed — assert on what was enqueued:
 
 ```ts
 const t = lunoraTest(schema, { queues: ["jobs"] });

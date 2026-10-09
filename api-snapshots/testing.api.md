@@ -303,7 +303,7 @@ type SentNotification = {
 ```ts
 interface SentQueueMessage {
     body: unknown;
-    contentType?: QueueSendOptions["contentType"];
+    contentType?: QueueContentType;
     delaySeconds?: number;
     queue: string;
 }

@@ -66,10 +66,6 @@ const sendThenMutate = mutation.input({}).mutation(async ({ ctx }) => {
     body.status = "changed";
 });
 
-const sendFunction = mutation.input({}).mutation(async ({ ctx }) => {
-    await (ctx as unknown as WithQueues).queues.jobs.send({ callback: () => undefined });
-});
-
 /** Swallows a failing send, the way "a notification must not fail the order" code does. */
 const enqueueBestEffort = mutation.input({}).mutation(async ({ ctx }) => {
     try {
@@ -132,7 +128,7 @@ describe("recording ctx.queues", () => {
         const t = start({ queues: ["emails", "jobs"] });
         const id = await t.mutation(placeOrder, { item: "lamp" });
 
-        expect(t.queues.sent("jobs")).toStrictEqual([{ body: { id, kind: "fulfil" }, queue: "jobs" }]);
+        expect(t.queues.sent("jobs")).toStrictEqual([{ body: { id, kind: "fulfil" }, contentType: "json", queue: "jobs" }]);
         expect(t.queues.sent("emails")).toStrictEqual([]);
     });
 
@@ -144,8 +140,8 @@ describe("recording ctx.queues", () => {
         await t.action(sendDigest, { count: 2 });
 
         expect(t.queues.sent()).toStrictEqual([
-            { body: { index: 0 }, delaySeconds: 5, queue: "emails" },
-            { body: { index: 1 }, delaySeconds: 60, queue: "emails" },
+            { body: { index: 0 }, contentType: "json", delaySeconds: 5, queue: "emails" },
+            { body: { index: 1 }, contentType: "json", delaySeconds: 60, queue: "emails" },
         ]);
     });
 
@@ -198,17 +194,88 @@ describe("recording ctx.queues", () => {
         expect(t.queues.sent("jobs")).toHaveLength(100);
     });
 
-    it("records the body as sent, not as later mutated, and rejects one that cannot be serialized", async () => {
-        expect.assertions(3);
+    it("records the body as sent, not as later mutated", async () => {
+        expect.assertions(1);
 
         const t = start({ queues: ["jobs"] });
 
         await t.mutation(sendThenMutate, {});
 
-        expect(t.queues.sent("jobs")).toStrictEqual([{ body: { status: "queued" }, queue: "jobs" }]);
+        expect(t.queues.sent("jobs")).toStrictEqual([{ body: { status: "queued" }, contentType: "json", queue: "jobs" }]);
+    });
 
-        await expect(t.mutation(sendFunction, {})).rejects.toThrow(/could not be cloned/u);
+    it("encodes a default message as json, as the wire does: a Date arrives as its string, a function is dropped", async () => {
+        expect.assertions(2);
+
+        const t = start({ queues: ["jobs"] });
+
+        await t.mutation(async (ctx) => {
+            await (ctx as unknown as WithQueues).queues.jobs.send({ at: new Date(0), callback: () => undefined });
+        });
+
+        expect(t.queues.sent("jobs")).toStrictEqual([{ body: { at: "1970-01-01T00:00:00.000Z" }, contentType: "json", queue: "jobs" }]);
+        await expect(
+            t.mutation(async (ctx) => {
+                await (ctx as unknown as WithQueues).queues.jobs.send({ n: 1n });
+            }),
+        ).rejects.toThrow(/BigInt/u);
+    });
+
+    it("keeps a v8 message's Date and rejects a function it cannot serialize", async () => {
+        expect.assertions(3);
+
+        const t = start({ queues: ["jobs"] });
+
+        await t.mutation(async (ctx) => {
+            await (ctx as unknown as WithQueues).queues.jobs.send({ at: new Date(0) }, { contentType: "v8" });
+        });
+
+        const [message] = t.queues.sent("jobs");
+
+        expect(message?.body).toStrictEqual({ at: expect.any(Date) });
+        await expect(
+            t.mutation(async (ctx) => {
+                await (ctx as unknown as WithQueues).queues.jobs.send({ callback: () => undefined }, { contentType: "v8" });
+            }),
+        ).rejects.toThrow(/could not be cloned/u);
         expect(t.queues.sent("jobs")).toHaveLength(1);
+    });
+
+    it("rejects a message over 128 KB and a batch over 256 KB, recording nothing from an oversized batch", async () => {
+        expect.assertions(4);
+
+        const t = start({ queues: ["jobs"] });
+        const chunk = "x".repeat(100 * 1024);
+
+        await expect(
+            t.mutation(async (ctx) => {
+                await (ctx as unknown as WithQueues).queues.jobs.send("x".repeat(200 * 1024));
+            }),
+        ).rejects.toThrow(/over the Cloudflare Queues limit of 131072 \(128 KB\)/u);
+        await expect(
+            t.mutation(async (ctx) => {
+                await (ctx as unknown as WithQueues).queues.jobs.sendBatch([{ body: chunk }, { body: chunk }, { body: chunk }]);
+            }),
+        ).rejects.toThrow(/over the Cloudflare Queues limit of 262144 \(256 KB\)/u);
+        expect(t.queues.sent("jobs")).toStrictEqual([]);
+
+        await t.mutation(async (ctx) => {
+            await (ctx as unknown as WithQueues).queues.jobs.sendBatch([{ body: chunk }, { body: chunk }]);
+        });
+
+        expect(t.queues.sent("jobs")).toHaveLength(2);
+    });
+
+    it("rejects a text message whose body is not a string", async () => {
+        expect.assertions(1);
+
+        const t = start({ queues: ["jobs"] });
+
+        await expect(
+            t.mutation(async (ctx) => {
+                await (ctx as unknown as WithQueues).queues.jobs.send({ not: "text" }, { contentType: "text" });
+            }),
+        ).rejects.toThrow(/must be a string/u);
     });
 
     it("without the option, ctx.queues and sent() both throw naming it — so a swallowed send cannot pass vacuously", async () => {
@@ -308,6 +375,28 @@ describe("recording ctx.notify / ctx.push", () => {
             expect.objectContaining({ errorMessages: [expect.stringContaining("no `fcm` channel is configured")], successful: false }),
         );
         expect(t.notify.sent()).toStrictEqual([]);
+    });
+
+    it("records a notification as sent, not as the handler later mutated it", async () => {
+        expect.assertions(1);
+
+        const t = start({
+            notify: defineNotify({
+                chat: () => {
+                    return {};
+                },
+                fcm: { accessToken: "test", projectId: "test" },
+            }),
+        });
+
+        await t.action(async (ctx) => {
+            const message = { text: "hi" };
+
+            await (ctx as unknown as WithNotify).notify.chat(message);
+            message.text = "changed";
+        });
+
+        expect(t.notify.sent("chat")).toStrictEqual([{ channel: "chat", payload: { text: "hi" } }]);
     });
 
     it("never calls the definition's store", async () => {

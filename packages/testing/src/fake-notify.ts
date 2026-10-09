@@ -72,7 +72,8 @@ const createRecordingNotify = (definition: NotifyDefinition, env: Record<string,
 
     const record = (channel: NotifyChannel, payload: unknown): Awaited<ReturnType<Provider["send"]>> => {
         // `Provider.send`'s payload is not narrowed by channel; each recorder only ever sees its own channel's.
-        deliveries.push({ channel, payload } as SentNotification);
+        // Copy it now: a handler that changes the object after sending must not rewrite this delivery.
+        deliveries.push({ channel, payload: structuredClone(payload) } as SentNotification);
 
         return { data: { messageId: `${channel}-${String(deliveries.length)}`, sent: true, timestamp: new Date() }, success: true };
     };
