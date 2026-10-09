@@ -436,7 +436,11 @@ interface TailBody {
  * secret, not per-org deploy keys) and resolves each batch's `scriptName` → org
  * via `internal.logs.orgForScript` before storing through
  * `internal.logs.ingestInternal`. Batches for an unknown script (a superseded
- * release the tail lags behind) are dropped, not errored.
+ * release the tail lags behind) are dropped, not errored; a batch whose ingest
+ * throws is counted in `failed` and the rest of the flush still lands. The
+ * tail worker splits a script's lines into batches the ingest accepts
+ * (`src/tail/parse.ts`), and the ingest holds each organization to its ceiling
+ * (`src/tail/ingest-budget.ts`).
  */
 const handleLogsTailRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
@@ -461,7 +465,10 @@ const handleLogsTailRoute = async (request: Request, environment: RouterEnv): Pr
 
     let ingested = 0;
     let scripts = 0;
+    let failed = 0;
 
+    // One batch at a time, each on its own: a script whose ingest fails — over a
+    // cap, or a store error — never costs another script (another org's) its lines.
     for (const batch of body.batches) {
         if (!batch.scriptName || !Array.isArray(batch.lines) || batch.lines.length === 0) {
             continue;
@@ -475,17 +482,22 @@ const handleLogsTailRoute = async (request: Request, environment: RouterEnv): Pr
         }
 
         scripts += 1;
-        // eslint-disable-next-line no-await-in-loop -- see above
-        const result = await context.runMutation<{ ingested: number }>(internal.logs.ingestInternal, {
-            lines: batch.lines,
-            organizationId: resolved.organizationId,
-            scriptName: batch.scriptName,
-        });
 
-        ingested += result.ingested;
+        try {
+            // eslint-disable-next-line no-await-in-loop -- see above
+            const result = await context.runMutation<{ ingested: number }>(internal.logs.ingestInternal, {
+                lines: batch.lines,
+                organizationId: resolved.organizationId,
+                scriptName: batch.scriptName,
+            });
+
+            ingested += result.ingested;
+        } catch {
+            failed += 1;
+        }
     }
 
-    return Response.json({ ingested, scripts });
+    return Response.json({ failed, ingested, scripts });
 };
 
 /**

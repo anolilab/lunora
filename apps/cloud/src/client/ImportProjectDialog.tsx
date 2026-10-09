@@ -9,6 +9,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 
 import { api } from "../../lunora/_generated/api.js";
+import type { ProjectRuntime } from "../project-runtime";
+import { DEFAULT_RUNTIME } from "../project-runtime";
+import { RuntimeField } from "./RuntimeField";
 import { Field, FieldForm, FormError } from "./section-ui";
 import type { OrgId, ProjectId } from "./types";
 
@@ -84,6 +87,7 @@ export const ImportProjectDialog = ({ onImported, onOpenChange, open, organizati
     const [repo, setRepo] = useState("");
     const [name, setName] = useState("");
     const [framework, setFramework] = useState("");
+    const [runtime, setRuntime] = useState<ProjectRuntime>(DEFAULT_RUNTIME);
     const [error, setError] = useState<null | string>(null);
 
     const activeProvider = PROVIDERS.find((entry) => entry.id === selected);
@@ -165,6 +169,7 @@ export const ImportProjectDialog = ({ onImported, onOpenChange, open, organizati
                                             githubRepo: parsed,
                                             name: finalName,
                                             organizationId,
+                                            runtime,
                                             slug: slugify(finalName),
                                         });
                                         onImported(id);
@@ -197,6 +202,7 @@ export const ImportProjectDialog = ({ onImported, onOpenChange, open, organizati
                                     value={name}
                                 />
                             </Field>
+                            <RuntimeField id="import-runtime" onChange={setRuntime} value={runtime} />
                             <Field htmlFor="import-framework" label="Framework">
                                 <Input
                                     id="import-framework"

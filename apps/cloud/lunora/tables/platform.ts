@@ -7,7 +7,7 @@
  */
 import { defineTable, v } from "@lunora/server";
 
-import { deployTarget, memberRole, placementHost, plan } from "./shared";
+import { deployTarget, memberRole, placementHost, plan, storedProjectRuntime } from "./shared";
 
 const cellStatus = v.union(v.literal("active"), v.literal("draining"), v.literal("suspended"));
 
@@ -143,6 +143,10 @@ export const platformTables = {
         // normalized (absent = repo root), and the globs a push must touch to
         // rebuild (absent = everything under rootDirectory). See src/builds/paths.ts.
         rootDirectory: v.optional(v.string()),
+        // What the project's code is (`src/project-runtime.ts`): absent is a
+        // Lunora app, `worker` a plain Cloudflare Worker the build box builds
+        // with its own wrangler. Copied onto each build and deployment row.
+        runtime: v.optional(storedProjectRuntime),
         slug: v.string(),
         // Where this project deploys (`src/targets/registry.ts`). A property of
         // the project, never of a deploy request. Absent → `cloudflare-wfp`,

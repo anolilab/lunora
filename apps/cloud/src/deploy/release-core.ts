@@ -12,6 +12,7 @@
  */
 import { isLunoraError } from "@lunora/errors";
 
+import type { ProjectRuntime } from "../project-runtime";
 import type { AssetsUpload, DeployKind, DeployManifest, TenantDeploymentSpec } from "../provision-contract";
 import type { TargetDriver } from "../targets/driver";
 import type { Placement } from "../targets/placement";
@@ -42,13 +43,19 @@ export interface DeployBackend extends ReleaseBackend {
     /** Record a queued deployment; `previousDeploymentId` is the release of the same alias live before it, if any. */
     createDeployment: (input: {
         adminToken: string;
+        /** Durable Object classes the caller agreed this release may delete (CLI/API only). */
+        allowDeleteClasses?: string[];
         branch?: string;
         /** The tenant's compiled cron expressions for the WfP cron fan-out (§2.4). */
         cronSpecs?: string[];
+        /** The Durable Object classes this release binds, which the next release of its alias must keep. */
+        durableObjectClasses: string[];
         key: string;
         kind: DeployKind;
         organizationId: string;
         projectId: string; // secret-scanner:allow -- domain field name
+        /** What the release is, recorded on the row (`src/project-runtime.ts`). */
+        runtime: ProjectRuntime;
         scriptName: string;
     }) => Promise<{ deploymentId: string; previousDeploymentId?: string; version?: number }>;
     updateStatus: (input: {
@@ -140,6 +147,12 @@ const settleFailedConverge = async (
 
 /** What a release ships: the deploy request body minus its credential, whichever transport carried it. */
 export interface ReleaseRequest {
+    /**
+     * Durable Object classes this release may stop binding — deleting their
+     * data — by name. Without it, a release that drops a class the alias's
+     * Worker binds is refused (`deployments.create`). CLI/API only; a git build never sends it.
+     */
+    allowDeleteClasses?: string[];
     /** Static files behind the manifest's `assets` binding. Validated by `parsePayload` (`./manifest-parse`). */
     assets?: unknown;
     branch?: string;
@@ -152,6 +165,13 @@ export interface ReleaseRequest {
     /** The Worker's binding manifest. `unknown` because it is untrusted wire data; `parsePayload` validates it. */
     manifest?: unknown;
     projectId: string;
+
+    /**
+     * What the bundle is (`src/project-runtime.ts`): a Lunora app — what every
+     * caller that does not say is — or a plain Cloudflare Worker, which gets no
+     * `ShardDO` floor and keeps its console logs. A git build passes its row's.
+     */
+    runtime?: ProjectRuntime;
     scriptName: string;
 }
 
@@ -211,6 +231,7 @@ interface RecordedRelease {
     placement: Placement;
     previousDeploymentId: string | undefined;
     projectId: string;
+    runtime: ProjectRuntime;
     scriptName: string;
 }
 
@@ -302,6 +323,7 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
                 manifest,
                 organizationId,
                 projectId: release.projectId, // secret-scanner:allow -- domain field name
+                runtime: release.runtime,
             },
             deps,
         );
@@ -419,7 +441,8 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
     }
 
     const { driver, placement } = placed;
-    const payload = parsePayload(request, request.scriptName, placement.target);
+    const runtime = request.runtime ?? "lunora";
+    const payload = parsePayload(request, request.scriptName, placement.target, runtime);
 
     if ("error" in payload) {
         return { error: payload.error, status: 400 };
@@ -439,12 +462,15 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
     try {
         created = await deps.backend.createDeployment({
             adminToken,
+            ...(request.allowDeleteClasses === undefined ? {} : { allowDeleteClasses: request.allowDeleteClasses }),
             branch,
             ...(cronSpecs && cronSpecs.length > 0 ? { cronSpecs } : {}),
+            durableObjectClasses: manifest.bindings.flatMap((binding) => (binding.type === "durable_object" && binding.className ? [binding.className] : [])),
             key: caller.key,
             kind,
             organizationId: caller.organizationId,
             projectId,
+            runtime,
             scriptName,
         });
     } catch (error) {
@@ -471,6 +497,7 @@ export const startRelease = async (request: ReleaseRequest, caller: ReleaseCalle
                     manifest,
                     previousDeploymentId,
                     projectId,
+                    runtime,
                     scriptName,
                 },
                 deps,

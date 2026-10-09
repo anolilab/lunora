@@ -412,7 +412,7 @@ describe("projects.updateBuildSettings", () => {
             watchPaths: ["apps/web/**", " ", "packages/ui/**"],
         });
 
-        expect(result).toStrictEqual({ rootDirectory: "apps/web", watchPaths: ["apps/web/**", "packages/ui/**"] });
+        expect(result).toStrictEqual({ rootDirectory: "apps/web", runtime: "lunora", watchPaths: ["apps/web/**", "packages/ui/**"] });
         expect(ops.find((op) => op.kind === "patch")).toMatchObject({ patch: { rootDirectory: "apps/web", watchPaths: ["apps/web/**", "packages/ui/**"] } });
         expect(ops.find((op) => op.kind === "insert" && op.table === "auditLog")).toMatchObject({ document: { action: "project.build_settings.update" } });
     });

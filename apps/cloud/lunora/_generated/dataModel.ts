@@ -81,6 +81,7 @@ export interface Doc_projects {
     previewPasswordSalt?: string;
     productionAlias?: string;
     rootDirectory?: string;
+    runtime?: "worker";
     slug: string;
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
@@ -149,6 +150,8 @@ export interface Doc_deployments {
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     resourceRef?: string;
+    durableObjectClasses?: Array<string>;
+    runtime?: "worker";
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
@@ -229,6 +232,7 @@ export interface Doc_githubDeliveries {
 export interface Doc_builds {
     _id: Id<"builds">;
     _creationTime: number;
+    advisories?: Array<{ cacheKey: string; detail: string; file: string; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }>;
     branch: string;
     bundleHash?: string;
     commitSha: string;
@@ -243,6 +247,7 @@ export interface Doc_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    runtime?: "worker";
     pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
@@ -1062,6 +1067,7 @@ export interface Insert_projects {
     previewPasswordSalt?: string;
     productionAlias?: string;
     rootDirectory?: string;
+    runtime?: "worker";
     slug: string;
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
@@ -1130,6 +1136,8 @@ export interface Insert_deployments {
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     resourceRef?: string;
+    durableObjectClasses?: Array<string>;
+    runtime?: "worker";
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
@@ -1210,6 +1218,7 @@ export interface Insert_githubDeliveries {
 export interface Insert_builds {
     _id?: Id<"builds">;
     _creationTime?: number;
+    advisories?: Array<{ cacheKey: string; detail: string; file: string; level: "WARN" | "INFO"; line: number; location?: "bundle" | "source"; name: string; remediation: string; title: string }>;
     branch: string;
     bundleHash?: string;
     commitSha: string;
@@ -1224,6 +1233,7 @@ export interface Insert_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    runtime?: "worker";
     pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";

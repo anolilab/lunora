@@ -23,6 +23,11 @@ pnpm-workspace.yaml
 
 /.nx/cache
 
+# The cloud build box's vendored files — byte-for-byte the catalog-pinned
+# acorn dist file, and the esbuild bundle of the release-manifest translation;
+# a reformat fails apps/cloud's build-scan-vendor / build-box-worker-vendor tests.
+apps/cloud/containers/build/vendor/
+
 # Vendored agent skills (managed by skills-lock.json) — keep upstream content byte-for-byte
 .agents/
 .claude/skills/
