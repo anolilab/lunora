@@ -4,7 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { singleHopInitializer } from "../../argument-taint";
 import { bindingKeyName, isConstDeclaration, memberAccessOf, unwrapExpression } from "../ast";
 import { declarationOf } from "../attribution";
-import { isContextRooted } from "../context-root";
+import { contextSurfacePathOf } from "../context-root";
 
 /** The name every handler spells its argument object with (`({ args }) => …`, `({ args: { x } }) => …`). */
 const ARGS = "args";
@@ -47,17 +47,29 @@ const argumentFieldOf = (node: TsNode): string | undefined => {
     return destructuredFromArgs ? bindingKeyName(declaration) : undefined;
 };
 
-/** Whether `node` (or its one-hop local initializer) comes from the handler's context — the server identity. */
+/**
+ * The context surfaces that carry the caller's identity. Anything else in the
+ * context (`ctx.db`, `ctx.storage`, a helper's return value) is not a proof that a
+ * value is the caller's own, so only these count.
+ */
+const IDENTITY_SURFACES = new Set<string>(["auth", "identity", "user"]);
+
+/** Whether `node` (or its one-hop local initializer) reads a caller-identity surface of the context. */
 const isIdentity = (node: TsNode): boolean => {
+    const readsIdentity = (candidate: TsNode): boolean => {
+        const path = contextSurfacePathOf(candidate);
+
+        return path !== undefined && path.length > 0 && IDENTITY_SURFACES.has(path[0] ?? "");
+    };
     const unwrapped = unwrapExpression(node) ?? node;
 
-    if (isContextRooted(unwrapped)) {
+    if (readsIdentity(unwrapped)) {
         return true;
     }
 
     const initializer = singleHopInitializer(unwrapped);
 
-    return initializer !== undefined && isContextRooted(initializer);
+    return initializer !== undefined && readsIdentity(initializer);
 };
 
 /**
@@ -171,18 +183,61 @@ const assertedFields = (call: CallExpression): string[] => {
     });
 };
 
-/** Whether a statement throws on its own path: `throw …`, or a block that contains one. */
-const throws = (statement: TsNode): boolean => Node.isThrowStatement(statement) || statement.getDescendantsOfKind(SyntaxKind.ThrowStatement).length > 0;
+/**
+ * Whether a guard's then-branch ends the handler: a `throw`, or a block whose LAST
+ * statement is one. A throw nested deeper (inside a nested `if`, a `try`, or a
+ * callback) may not run, so it does not prove anything.
+ */
+const endsWithThrow = (statement: TsNode): boolean => {
+    if (Node.isThrowStatement(statement)) {
+        return true;
+    }
+
+    if (!Node.isBlock(statement)) {
+        return false;
+    }
+
+    const last = statement.getStatements().at(-1);
+
+    return last !== undefined && Node.isThrowStatement(last);
+};
 
 const isFunctionNode = (node: TsNode): boolean =>
     Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isFunctionDeclaration(node) || Node.isMethodDeclaration(node);
 
-/** Fields the handler has proven equal to the identity by `position`: guards and asserts that finish before it. */
+/**
+ * Whether `node` runs on every path through `handler`: every ancestor up to the
+ * handler is a plain statement container. A branch, loop, `try`, conditional or
+ * nested function between them can skip the node, so it is not a proof.
+ */
+const runsUnconditionally = (node: TsNode, handler: TsNode): boolean => {
+    for (let ancestor = node.getParent(); ancestor !== undefined; ancestor = ancestor.getParent()) {
+        if (ancestor === handler || ancestor.compilerNode === handler.compilerNode) {
+            return true;
+        }
+
+        if (!(
+            Node.isBlock(ancestor) ||
+            Node.isExpressionStatement(ancestor) ||
+            Node.isAwaitExpression(ancestor) ||
+            Node.isParenthesizedExpression(ancestor) ||
+            Node.isVariableStatement(ancestor) ||
+            Node.isVariableDeclarationList(ancestor) ||
+            Node.isVariableDeclaration(ancestor)
+        )) {
+            return false;
+        }
+    }
+
+    return false;
+};
+
+/** Fields the handler has proven equal to the identity by `position`: unconditional guards and asserts that finish before it. */
 const provenBefore = (handler: TsNode, position: number): Set<string> => {
     const proven = new Set<string>();
 
     for (const statement of handler.getDescendantsOfKind(SyntaxKind.IfStatement)) {
-        if (statement.getEnd() <= position && throws(statement.getThenStatement())) {
+        if (statement.getEnd() <= position && runsUnconditionally(statement, handler) && endsWithThrow(statement.getThenStatement())) {
             for (const field of provenFields(statement.getExpression())) {
                 proven.add(field);
             }
@@ -190,7 +245,7 @@ const provenBefore = (handler: TsNode, position: number): Set<string> => {
     }
 
     for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        if (call.getEnd() <= position) {
+        if (call.getEnd() <= position && runsUnconditionally(call, handler)) {
             for (const field of assertedFields(call)) {
                 proven.add(field);
             }

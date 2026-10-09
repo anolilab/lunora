@@ -10,8 +10,6 @@ import discoverOwnerFieldWrites from "../../src/discover/owner-field-writes";
 
 type Row = ReturnType<typeof discoverOwnerFieldWrites>[number];
 
-type FunctionList = Parameters<typeof discoverOwnerFieldWrites>[2];
-
 /**
  * A `lunora/` workdir to create before and remove after each test, and
  * `discover`, which writes ONE fixture file there and discovers its owner-field
@@ -19,7 +17,7 @@ type FunctionList = Parameters<typeof discoverOwnerFieldWrites>[2];
  * `beforeEach` / `afterEach` of the `describe` that uses it.
  */
 const createOwnerFieldFixture = (): {
-    discover: (source: string, file?: string, project?: Project, functions?: FunctionList) => Row[];
+    discover: (source: string, file?: string, project?: Project) => Row[];
     setUp: () => void;
     tearDown: () => void;
 } => {
@@ -27,17 +25,12 @@ const createOwnerFieldFixture = (): {
 
     return {
         /** Pass `project` to reuse one across runs, as the Vite dev loop does. */
-        discover: (
-            source: string,
-            file = "mutators.ts",
-            project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false }),
-            functions: FunctionList = [],
-        ): Row[] => {
+        discover: (source: string, file = "mutators.ts", project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false })): Row[] => {
             const lunoraDirectory = join(workdir, "lunora");
 
             writeFileSync(join(lunoraDirectory, file), source, "utf8");
 
-            return discoverOwnerFieldWrites(project, lunoraDirectory, functions, discoverMutators(project, lunoraDirectory));
+            return discoverOwnerFieldWrites(project, lunoraDirectory, [], discoverMutators(project, lunoraDirectory));
         },
         setUp: (): void => {
             workdir = mkdtempSync(join(tmpdir(), "lunora-owner-"));

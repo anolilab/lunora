@@ -1,4 +1,3 @@
-import { callSiteCallers } from "@lunora/advisor";
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, ParameterDeclaration, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
@@ -266,15 +265,7 @@ const discoverOwnerFieldWrites = (
         ownerFieldWritesInCall(call, relativePath, (exportName) => ownerByKey.get(`${relativePath}:${exportName}`)),
     );
 
-    // A write is admin-only when every procedure that reaches it is an admin builder.
-    const adminByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.adminOnly === true]));
-
-    return withCallerVisibility(writes, functions).map((row) => {
-        const callers = callSiteCallers(row.scope);
-        const adminOnly = callers.length > 0 && callers.every((exportName) => adminByKey.get(`${row.file}:${exportName}`) === true);
-
-        return adminOnly ? { ...row, adminOnly: true as const } : row;
-    });
+    return withCallerVisibility(writes, functions);
 };
 
 export default discoverOwnerFieldWrites;

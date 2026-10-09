@@ -330,12 +330,6 @@ export interface ExposeCacheIR {
 }
 
 export interface FunctionIR {
-    /**
-     * Set when the procedure is registered through an admin builder
-     * (`adminMutation` / `adminAction` / `adminQuery`): only a platform admin can
-     * reach it, so the ownership lints treat its writes as trusted by design.
-     */
-    adminOnly?: true;
     args: Record<string, ValidatorIR>;
 
     exportName: string;
@@ -1638,11 +1632,6 @@ export interface UnrestrictedWhereBranchIR {
 }
 
 export interface OwnerFieldWriteIR {
-    /**
-     * Every procedure that reaches the write is registered through an admin builder
-     * (see {@link FunctionIR.adminOnly}), so the caller is a platform admin by design.
-     */
-    adminOnly?: true;
     /** The identity column being written from `args` (e.g. `userId`). */
     field: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */

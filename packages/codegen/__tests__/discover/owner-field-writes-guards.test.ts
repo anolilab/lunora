@@ -123,30 +123,38 @@ describe("owner-field writes: guards and admin builders", () => {
         expect(rowAt(found, 3)).toMatchObject({ guarded: true });
     });
 
-    // An admin procedure is reachable only by a platform admin; the lint reads
-    // `adminOnly` off the caller's registration.
-    it("stamps adminOnly on a write reached only through an admin builder", () => {
+    // A guard that may not run cannot prove the write: a branch or a `try` can skip it.
+    it("does not mark a write whose guard sits under a branch", () => {
         expect.assertions(1);
 
         const found = discover(
-            `export const createPost = adminMutation.mutation(async ({ args, ctx }) => {
-  await ctx.db.insert("posts", { userId: args.userId });
-});`,
-            "mutators.ts",
-            undefined,
-            [{ args: {}, exportName: "createPost", filePath: "mutators", kind: "mutation", returnType: "unknown", visibility: "public", adminOnly: true }],
+            handler(`  if (args.share) { if (args.organizationId !== ctx.user.activeOrganization?.id) throw new Error("no"); }
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`),
         );
 
-        expect(rowAt(found, 2)).toMatchObject({ field: "userId", adminOnly: true });
+        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
     });
 
-    it("does not stamp adminOnly on a write reached through an ordinary builder", () => {
+    it("does not mark a write whose guard is inside a try block", () => {
         expect.assertions(1);
 
-        const found = discover(handler(`  await ctx.db.insert("posts", { userId: args.userId });`), "mutators.ts", undefined, [
-            { args: {}, exportName: "createPost", filePath: "mutators", kind: "mutation", returnType: "unknown", visibility: "public" },
-        ]);
+        const found = discover(
+            handler(`  try { if (args.organizationId !== ctx.user.activeOrganization?.id) throw new Error("no"); } catch {}
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`),
+        );
 
-        expect(rowAt(found, 2)).not.toHaveProperty("adminOnly");
+        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
+    });
+
+    // Only the caller's identity proves a value; a database read does not.
+    it("does not treat a database read as the caller's identity", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            handler(`  if (args.organizationId !== (await ctx.db.get("organizations", args.organizationId))?._id) throw new Error("no");
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`),
+        );
+
+        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
     });
 });
