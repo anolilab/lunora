@@ -23,8 +23,12 @@ export default createConfig(
             // to keep it out of the lint surface. Matches apps/docs.
             "**/routeTree.gen.ts",
             // The emergency stop's stub, written by the workerd project's global
-            // setup (`__tests__/workerd/generate-halt-stub.ts`) — generated output.
+            // setup (`__tests__/workerd/generate-halt-stub.ts`) — generated output —
+            // and the declaration of its shape. A Worker module has to export its
+            // Durable Object classes by name beside its default handler, which the
+            // one-default-or-named-only rule and max-classes-per-file both forbid.
             "__tests__/workerd/halt-stub.generated.js",
+            "__tests__/workerd/halt-stub.generated.d.ts",
             // Vendored shadcn / Base UI primitives — copied verbatim from
             // packages/studio (or written to match them) so `shadcn add`/diff stays
             // clean. Not hand-authored source, so the strict import/sort/style rules
