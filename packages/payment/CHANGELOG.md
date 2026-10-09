@@ -1,3 +1,9 @@
+## @lunora/payment [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.189...@lunora/payment@1.0.0-alpha.190) (2026-10-09)
+
+### Bug Fixes
+
+* **payment:** apply polar seat changes instead of dropping them ([#1058](https://github.com/anolilab/lunora/issues/1058)) ([0d81f7c](https://github.com/anolilab/lunora/commit/0d81f7c3d18573c331fe391f0841f13d1770224d))
+
 ## @lunora/payment [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.188...@lunora/payment@1.0.0-alpha.189) (2026-10-09)
 
 ### Bug Fixes
