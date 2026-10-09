@@ -2097,6 +2097,165 @@
         "x-lunora-function-kind": "query"
       }
     },
+    "/_lunora/rpc#cloudflare_alerts:apply": {
+      "post": {
+        "description": "Invoke the `action` `cloudflare_alerts:apply` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "cloudflare_alerts:apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"cloudflareAccounts\">",
+                        "type": "string",
+                        "x-lunora-table": "cloudflareAccounts"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      },
+                      "products": {
+                        "items": {
+                          "properties": {
+                            "id": {},
+                            "limit": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "limit"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "recipients": {
+                        "items": {},
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId",
+                      "products",
+                      "recipients"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "cloudflare_alerts:apply",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "action: cloudflare_alerts:apply",
+        "tags": [
+          "cloudflare_alerts"
+        ],
+        "x-lunora-function-kind": "action"
+      }
+    },
+    "/_lunora/rpc#cloudflare_alerts:overview": {
+      "post": {
+        "description": "Invoke the `action` `cloudflare_alerts:overview` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "cloudflare_alerts:overview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"cloudflareAccounts\">",
+                        "type": "string",
+                        "x-lunora-table": "cloudflareAccounts"
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "cloudflare_alerts:overview",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "action: cloudflare_alerts:overview",
+        "tags": [
+          "cloudflare_alerts"
+        ],
+        "x-lunora-function-kind": "action"
+      }
+    },
     "/_lunora/rpc#dashboards:create": {
       "post": {
         "description": "Invoke the `mutation` `dashboards:create` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -9069,6 +9228,10 @@
     {
       "description": "Operations declared in `lunora/cloudflare_accounts`.",
       "name": "cloudflare_accounts"
+    },
+    {
+      "description": "Operations declared in `lunora/cloudflare_alerts`.",
+      "name": "cloudflare_alerts"
     },
     {
       "description": "Operations declared in `lunora/dashboards`.",

@@ -14,12 +14,14 @@ import { api } from "../../lunora/_generated/api.js";
 import { canManage } from "./boxes";
 import type { CloudflareAccountView } from "./cloudflare-accounts";
 import { accountTitle, missingPermissions, permissionLabel } from "./cloudflare-accounts";
+import { CloudflareUsageAlerts } from "./CloudflareUsageAlerts";
 import { ConnectCloudflareAccountDialog } from "./ConnectCloudflareAccountDialog";
 import { DisconnectCloudflareAccountDialog } from "./DisconnectCloudflareAccountDialog";
 import { COLUMN_LABEL } from "./section-styles";
 import { RelativeTime, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { projectNamesByHost } from "./target-capabilities";
+import type { OrgId } from "./types";
 import { useMyRole } from "./use-boxes";
 
 /** Stable empty list for an account no project uses (a fresh `[]` per row trips react-perf). */
@@ -33,12 +35,14 @@ const AccountItem = ({
     manage,
     onDisconnect,
     onRotate,
+    organizationId,
     projects,
 }: {
     account: CloudflareAccountView;
     manage: boolean;
     onDisconnect: () => void;
     onRotate: () => void;
+    organizationId: OrgId;
     projects: ReadonlyArray<string>;
 }): ReactElement => {
     const missing = missingPermissions(account.permissions);
@@ -91,6 +95,7 @@ const AccountItem = ({
                 <dt className={`${COLUMN_LABEL} text-muted-foreground`}>Projects</dt>
                 <dd className="m-0">{projects.length > 0 ? projects.join(", ") : <span className="text-muted-foreground">none yet</span>}</dd>
             </dl>
+            {manage ? <CloudflareUsageAlerts account={account} organizationId={organizationId} /> : null}
         </li>
     );
 };
@@ -163,6 +168,7 @@ export const CloudflareAccountsSection = ({ organizationId, preloaded }: Section
                         onRotate={() => {
                             setDialog({ account, mode: "rotate" });
                         }}
+                        organizationId={organizationId}
                         projects={projectsByAccount.get(account._id) ?? NO_PROJECTS}
                     />
                 ))}

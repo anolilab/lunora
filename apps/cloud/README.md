@@ -268,7 +268,7 @@ namespace — at `https://{alias}.{account subdomain}.workers.dev`.
   verify as active (`/user/tokens/verify`, or `/accounts/{id}/tokens/verify`
   for an account-owned token), reach the account with Workers Scripts, and the
   account must have a workers.dev subdomain. D1, KV, R2, Queues, Account
-  Analytics and Billing are probed with read-only calls and recorded on the
+  Analytics, Billing and Notifications are probed with read-only calls and recorded on the
   row, which also carries its organization's cell (`cellId`). The token
   is then sealed with `SECRET_ENCRYPTION_KEY` like a tenant secret
   (`cloudflareAccounts`, `lunora/cloudflare-accounts.ts`); rotate replaces it
@@ -279,8 +279,9 @@ namespace — at `https://{alias}.{account subdomain}.workers.dev`.
   `CLOUDFLARE_TOKEN_PERMISSIONS`): Workers Scripts: Edit (required); D1: Edit,
   Workers KV Storage: Edit, Workers R2 Storage: Edit, Queues: Edit as the app's
   bindings need them; Account Analytics: Read for the usage chart; Billing:
-  Read for the Cloudflare costs tab. No zone permission: custom routes on the
-  customer's zone are not wired yet.
+  Read for the Cloudflare costs tab; Notifications: Edit for Cloudflare usage
+  alerts (below). No zone permission: custom routes on the customer's zone are
+  not wired yet.
 - **Converge.** The same provision box and Alchemy program as `cloudflare-wfp`,
   with an `account` job target carrying the account id and the unsealed token
   (as process env to the Alchemy child, scrubbed from every log line). The
@@ -306,6 +307,39 @@ namespace — at `https://{alias}.{account subdomain}.workers.dev`.
   charge period (`cloudflareAccounts.costs`, an action over the Billable Usage
   API, `src/cloudflare-accounts/costs.ts`). There is no separate billing
   connection: the account is connected once, here.
+- **Spend protection: Cloudflare's own usage alerts.** The platform's spend cap
+  never applies to these projects (their rows are `billable: false`; Cloudflare
+  bills the customer's card). Instead, an owner or admin sets up Cloudflare's
+  **Usage Based Billing notifications** on the account from its row on the
+  Cloudflare accounts tab (`lunora/cloudflare-alerts.ts`: `overview` and
+  `apply`, actions over `src/cloudflare/notifications.ts`). Cloudflare sends
+  them, so they keep firing while Lunora Cloud is down.
+    - _Products_ are never guessed: only the `product` values Cloudflare lists for
+      the `billing_usage_alert` type in `GET alerting/v3/available_alerts`
+      (`filter_options` → `AvailableValues`), plus any a policy on the account
+      already stores. None listed ⇒ nothing is created, and the studio sends the
+      customer to the dashboard (Notifications → Add → Usage Based Billing).
+    - _Thresholds_ (`src/cloudflare-accounts/usage-alerts.ts`) are 3× last month's
+      usage of the meter the product maps to (by Cloudflare's product name),
+      from this account's `platformUsage` rows, rounded up to 1/2/5 × 10ⁿ and
+      never below the Workers Paid included amount; that amount alone without
+      history; nothing for a product no meter maps to. The ledger counts only
+      Lunora projects' scripts, so the studio says to raise thresholds when other
+      Workers share the account. Every threshold is editable.
+    - _Recipients_ default to the organization's owners' and admins' addresses
+      (better-auth `user` rows via `src/cloudflare-accounts/recipients.ts`), and
+      are editable. Email only: Cloudflare documents no test send.
+    - _Idempotent._ One policy per product named `Lunora Cloud usage alert:
+{product}`; a re-run replaces it (`PUT`), never duplicates it, and policies
+      the customer made are listed as coverage and never touched. Each run is
+      audited (`cloudflare_account.usage_alerts`).
+    - _Failures_ are classified: a refused token (add Notifications: Edit — the
+      connect-time probe can only show that policies are readable), an
+      ineligible account (Usage Based Billing notifications are Pay-as-you-go
+      only; most Enterprise contracts are not), a rejected body, or transient.
+    - _Budget alerts_ (an account-wide USD threshold) exist only in Cloudflare's
+      dashboard — Manage Account → Billing → Billable Usage → Create budget alert —
+      so the studio links there and never claims to create or check one.
 - **Not yet:** custom domains on the customer's zone, platform runtime logs
   (the tail consumer lives in the platform's account), per-plan runtime limits
   (no dispatcher in front), and Workflows, containers, Hyperdrive, Vectorize,

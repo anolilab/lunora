@@ -66,6 +66,13 @@ describe("target limitations", () => {
         expect(TARGETS["cloudflare-wfp"].limitations).toStrictEqual([]);
     });
 
+    it("says the spend cap never stops a project in a connected account, and where Cloudflare's own alerts are set up", () => {
+        const cap = TARGETS["cloudflare-workers"].limitations.find((entry) => entry.id === "spendCap");
+
+        expect(cap?.reason).toMatch(/spend cap never stops/u);
+        expect(cap?.reason).toMatch(/Billable Usage → Create budget alert/u);
+    });
+
     it("says an emergency stop in a connected account needs its token, and what the stub drops there", () => {
         const stop = TARGETS["cloudflare-workers"].limitations.find((entry) => entry.id === "emergencyStop");
 
