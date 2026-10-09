@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 
 import { api } from "../../lunora/_generated/api.js";
 import type { RecordedWorkspacePackages } from "../builds/paths";
+import type { ProjectRuntime } from "../project-runtime";
 import type { TargetId } from "../provision-contract";
 import { BackupsSection } from "./BackupsSection";
 import { BuildAdvisoriesCard } from "./BuildAdvisoriesCard";
@@ -30,6 +31,7 @@ import { formatDateTime, formatTime } from "./format";
 import { PreviewProtectionCard } from "./PreviewProtectionCard";
 import { ProjectGraph } from "./ProjectGraph";
 import { ProjectTargetCard } from "./ProjectTargetCard";
+import { RuntimeGapsCard } from "./RuntimeGapsCard";
 import { RelativeTime, StatusBadge } from "./section-ui";
 import { TargetCapabilitiesCard } from "./TargetCapabilitiesCard";
 import type { OrgId, ProjectId } from "./types";
@@ -46,6 +48,8 @@ interface DeploymentsSectionProps {
     projectId: ProjectId; // secret-scanner:allow -- domain field name
     projectName: string;
     rootDirectory?: string;
+    /** What the project's code is; a Cloudflare Worker gets no backups, and the view says what else it lacks. */
+    runtime: ProjectRuntime;
     /** Where the project deploys; gates what the view offers (plan 458 W9). */
     target: TargetId;
     watchPaths?: string[];
@@ -487,6 +491,41 @@ const requestRollback = async (deploymentId: string, organizationId: OrgId): Pro
     return payload?.error ?? `rollback failed (${String(response.status)})`;
 };
 
+/** The Lunora CLI's half of the empty state. */
+const LunoraDeployHint = (): ReactElement => (
+    <>
+        {" "}
+        or run <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">lunora deploy</code>.
+    </>
+);
+
+/** The empty state: where a first deploy comes from — a push, and for a Lunora app the CLI too. */
+const NoDeploymentsCard = ({ githubRepo, runtime }: { githubRepo?: string; runtime: ProjectRuntime }): ReactElement => (
+    <Card>
+        <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            No deployments yet — push to {githubRepo ? <span className="font-medium text-foreground">{githubRepo}</span> : "the connected repo"}
+            {runtime === "worker" ? "." : <LunoraDeployHint />}
+        </CardContent>
+    </Card>
+);
+
+/**
+ * The project's data: a Lunora app's backups, or — for a Cloudflare Worker,
+ * which serves no admin export to back up — what it does not get, and why.
+ */
+const ProjectDataCard = ({
+    organizationId,
+    projectId,
+    runtime,
+    target,
+}: {
+    organizationId: OrgId;
+    projectId: ProjectId;
+    runtime: ProjectRuntime;
+    target: TargetId;
+}): ReactElement =>
+    runtime === "worker" ? <RuntimeGapsCard runtime={runtime} /> : <BackupsSection organizationId={organizationId} projectId={projectId} target={target} />;
+
 export const DeploymentsSection = ({
     gitProvider,
     githubRepo,
@@ -497,6 +536,7 @@ export const DeploymentsSection = ({
     projectId,
     projectName,
     rootDirectory,
+    runtime,
     target,
     watchPaths,
     workspacePackages,
@@ -515,10 +555,11 @@ export const DeploymentsSection = ({
     // set before the first push can build at all.
     const buildSettings = (
         <BuildSettingsCard
-            key={`${rootDirectory ?? ""}|${(watchPaths ?? []).join("\n")}`}
+            key={`${runtime}|${rootDirectory ?? ""}|${(watchPaths ?? []).join("\n")}`}
             organizationId={organizationId}
             projectId={projectId}
             rootDirectory={rootDirectory}
+            runtime={runtime}
             watchPaths={watchPaths}
             workspacePackages={workspacePackages}
         />
@@ -552,12 +593,7 @@ export const DeploymentsSection = ({
         return (
             <div className="flex flex-col gap-6">
                 {header}
-                <Card>
-                    <CardContent className="py-10 text-center text-sm text-muted-foreground">
-                        No deployments yet — push to {githubRepo ? <span className="font-medium text-foreground">{githubRepo}</span> : "the connected repo"} or
-                        run <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">lunora deploy</code>.
-                    </CardContent>
-                </Card>
+                <NoDeploymentsCard githubRepo={githubRepo} runtime={runtime} />
                 {buildSettings}
                 {targetSettings}
             </div>
@@ -595,7 +631,7 @@ export const DeploymentsSection = ({
             {buildSettings}
             {targetSettings}
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
-            <BackupsSection organizationId={organizationId} projectId={projectId} target={target} />
+            <ProjectDataCard organizationId={organizationId} projectId={projectId} runtime={runtime} target={target} />
             <DeleteProjectCard onDeleted={onBack} organizationId={organizationId} projectId={projectId} projectName={projectName} />
             {rollbackError ? (
                 <p className="text-sm text-destructive" role="alert">
