@@ -310,6 +310,108 @@ const TRY_GUARDED_FETCH = `
     });
 `;
 
+/** A same-file guard helper that rethrows a coded error; the action wraps its outbound call in it. */
+const GUARD_HELPER_FETCH = `
+    import { action } from "@lunora/server";
+
+    const withDependency = async <T>(dependency: string, call: () => T): Promise<T> => {
+        try {
+            return await call();
+        } catch (error) {
+            throw new Error(dependency + " failed", { cause: error });
+        }
+    };
+
+    export const notify = action({
+        args: {},
+        handler: async (ctx) => withDependency("webhook", () => ctx.fetch("https://example.com/hook")),
+    });
+`;
+
+/** A helper that swallows the failure: the caller's outbound call is not guarded. */
+const SWALLOWING_HELPER_FETCH = `
+    import { action } from "@lunora/server";
+
+    const withDependency = async <T>(dependency: string, call: () => T): Promise<T | undefined> => {
+        try {
+            return await call();
+        } catch {
+            return undefined;
+        }
+    };
+
+    export const notify = action({
+        args: {},
+        handler: async (ctx) => withDependency("webhook", () => ctx.fetch("https://example.com/hook")),
+    });
+`;
+
+/** The guard helper imported from a sibling module, the way the repo's `lib/dependency.ts` is used. */
+const IMPORTED_GUARD_HELPER_FETCH = `
+    import { action } from "@lunora/server";
+
+    import { withDependency } from "./dependency.js";
+
+    export const notify = action({
+        args: {},
+        handler: async (ctx) => withDependency("webhook", () => ctx.fetch("https://example.com/hook")),
+    });
+`;
+
+const GUARD_HELPER_MODULE = `
+    export const withDependency = async <T>(dependency: string, call: () => T): Promise<T> => {
+        try {
+            return await call();
+        } catch (error) {
+            throw new Error(dependency + " failed", { cause: error });
+        }
+    };
+`;
+
+/** A fan-out whose failures `Promise.allSettled` records; the outbound call is not wrapped in a try. */
+const ALL_SETTLED_FANOUT_FETCH = `
+    import { action } from "@lunora/server";
+
+    export const notify = action({
+        args: { urls: [] as string[] },
+        handler: async (ctx, { urls }) => {
+            await Promise.allSettled(urls.map(async (url) => await ctx.fetch(url)));
+            return { ok: true };
+        },
+    });
+`;
+
+/** A guard helper that does not await its callback: the rejection escapes the try, so the action is NOT guarded. */
+const UNAWAITED_GUARD_HELPER_FETCH = `
+    import { action } from "@lunora/server";
+
+    const withDependency = async <T>(dependency: string, call: () => T): Promise<T> => {
+        try {
+            return call();
+        } catch (error) {
+            throw new Error(dependency + " failed", { cause: error });
+        }
+    };
+
+    export const notify = action({
+        args: {},
+        handler: async (ctx) => withDependency("webhook", () => ctx.fetch("https://example.com/hook")),
+    });
+`;
+
+/** A fan-out whose outbound call is deferred to a timer: `allSettled` has already returned when it runs. */
+const DEFERRED_ALL_SETTLED_FETCH = `
+    import { action } from "@lunora/server";
+
+    export const notify = action({
+        args: { urls: [] as string[] },
+        handler: async (ctx, { urls }) => {
+            await Promise.allSettled(urls.map(async (url) => setTimeout(() => ctx.fetch(url), 0)));
+            return { ok: true };
+        },
+    });
+`;
+
 /**
  * A bare-factory public action whose outbound calls run inside a `Promise.all(items.map(...))`
  * fan-out, itself inside a `try` — the calls sit in an arrow passed to `.map`, one function
@@ -773,6 +875,67 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: true, reachesOutbound: true });
+    });
+
+    it("treats an outbound call inside a same-file guard helper that rethrows as error-handled", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), GUARD_HELPER_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: true, reachesOutbound: true });
+    });
+
+    it("does not treat an outbound call inside a helper that swallows the error as guarded", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), SWALLOWING_HELPER_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: false, reachesOutbound: true });
+    });
+
+    it("resolves an imported guard helper through its alias", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "dependency.ts"), GUARD_HELPER_MODULE, "utf8");
+        writeFileSync(join(workdir, "lunora", "notify.ts"), IMPORTED_GUARD_HELPER_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found.find((row) => row.exportName === "notify")).toMatchObject({ handlesErrors: true, reachesOutbound: true });
+    });
+
+    it("treats an outbound call inside `Promise.allSettled` as error-isolated", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), ALL_SETTLED_FANOUT_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: true, reachesOutbound: true });
+    });
+
+    it("does not treat a guard helper that leaves its callback unawaited as guarded", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), UNAWAITED_GUARD_HELPER_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: false, reachesOutbound: true });
+    });
+
+    it("does not treat an outbound call deferred to a timer inside `allSettled` as isolated", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "notify.ts"), DEFERRED_ALL_SETTLED_FETCH, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "notify", handlesErrors: false, reachesOutbound: true });
     });
 
     it("recognizes an outbound call inside `try { await Promise.all(items.map(...)) }` as guarded", () => {
