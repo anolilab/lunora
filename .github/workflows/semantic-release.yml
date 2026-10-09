@@ -130,6 +130,12 @@
                   "GIT_COMMITTER_EMAIL": "github-actions[bot]@users.noreply.github.com"
               "run": "pnpm exec multi-semantic-release"
 
+            # `lunorash` pins its `@lunora/*` siblings, and multi-semantic-release bumps those pins only when it
+            # releases the umbrella in the same run. A pin left behind ships two copies of `@lunora/server` to
+            # every app on the latest alphas (#1054), so the release run fails here instead of shipping that.
+            - "name": "Check the lunorash umbrella pins match the released versions"
+              "run": "node --test scripts/check-umbrella-pins.test.mjs && node scripts/check-umbrella-pins.mjs"
+
             # The release bumps every package.json, but @semantic-release/git stages only
             # per-package assets — the root pnpm-lock.yaml drifts, and a drifted lockfile
             # fails `--frozen-lockfile`, blocking every later push to the branch.
