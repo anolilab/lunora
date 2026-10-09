@@ -290,6 +290,9 @@ export const CLOUDFLARE_TOKEN_PERMISSIONS = {
     d1: { label: "D1: Edit", required: false, use: "d1 bindings" },
     kv: { label: "Workers KV Storage: Edit", required: false, use: "kv bindings" },
     notifications: {
+        // The connect probe and the alerts overview can only prove the token READS notification
+        // policies (Account Settings Read also allows that); a write is proven by the setup itself.
+        grantedLabel: "Notifications: read verified",
         label: "Notifications: Edit",
         required: false,
         use: "setting up Cloudflare's own usage alerts on the account from the Cloudflare accounts tab",
@@ -301,7 +304,7 @@ export const CLOUDFLARE_TOKEN_PERMISSIONS = {
         required: true,
         use: "uploading the Worker, its cron triggers and queue consumers, and reading the workers.dev subdomain",
     },
-} as const satisfies Record<string, { label: string; required: boolean; use: string }>;
+} as const satisfies Record<string, { grantedLabel?: string; label: string; required: boolean; use: string }>;
 
 export type CloudflarePermission = keyof typeof CLOUDFLARE_TOKEN_PERMISSIONS;
 

@@ -30,6 +30,32 @@ const AVAILABLE = {
     "Origin Monitoring": [{ display_name: "Origin Error Rate Alert", filter_options: [], type: "http_alert_origin_error" }],
 };
 
+/**
+ * `available_alerts`'s example result, copied verbatim from Cloudflare's OpenAPI schema
+ * (github.com/cloudflare/api-schemas `openapi.json`, `aaa_alerts-response_collection`).
+ */
+const OPENAPI_EXAMPLE = {
+    "Origin Monitoring": [
+        {
+            description: "High levels of 5xx HTTP errors at your origin.",
+            display_name: "Origin Error Rate Alert",
+            filter_options: [
+                { AvailableValues: null, ComparisonOperator: "==", Key: "zones", Range: "1-n" },
+                {
+                    AvailableValues: [
+                        { Description: "Service-Level Objective of 99.7", ID: "99.7" },
+                        { Description: "Service-Level Objective of 99.8", ID: "99.8" },
+                    ],
+                    ComparisonOperator: ">=",
+                    Key: "slo",
+                    Range: "0-1",
+                },
+            ],
+            type: "http_alert_origin_error",
+        },
+    ],
+};
+
 const answer = (body: unknown, status = 200): Response => Response.json(body, { status });
 
 const client = (fetch: typeof globalThis.fetch, timeoutMs?: number) =>
@@ -65,6 +91,30 @@ describe("the Cloudflare Notifications client", () => {
         expect((init?.headers as Record<string, string>).authorization).toBe(`Bearer ${TOKEN}`);
         // Every call is bounded.
         expect(init?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it("reads Cloudflare's documented filter_options shape: PascalCase keys, AvailableValues null or a list", () => {
+        // The documented example under the alert type this flow reads.
+        const asBilling = {
+            Billing: OPENAPI_EXAMPLE["Origin Monitoring"].map((alert) => {
+                return {
+                    ...alert,
+                    filter_options: alert.filter_options.map((option) => (option.Key === "slo" ? { ...option, Key: "Product" } : option)),
+                    type: "billing_usage_alert",
+                };
+            }),
+        };
+
+        expect(billingProductsOf(OPENAPI_EXAMPLE)).toBeNull();
+        expect(billingProductsOf(asBilling)).toStrictEqual([
+            { description: "Service-Level Objective of 99.7", id: "99.7" },
+            { description: "Service-Level Objective of 99.8", id: "99.8" },
+        ]);
+        expect(
+            billingProductsOf({
+                Billing: [{ ...asBilling.Billing[0], filter_options: [{ AvailableValues: null, ComparisonOperator: "==", Key: "product", Range: "1-n" }] }],
+            }),
+        ).toStrictEqual([]);
     });
 
     it("tells an alert type that names no products from one that is not offered", () => {
@@ -104,30 +154,57 @@ describe("the Cloudflare Notifications client", () => {
         expect(fetch.mock.calls[0]?.[1]?.method).toBe("PUT");
     });
 
-    it("lists policies across pages and keeps only the fields it reads", async () => {
-        const fetch = vi.fn<typeof globalThis.fetch>((input) => {
-            const url = typeof input === "string" ? input : "";
-
-            return Promise.resolve(
-                url.endsWith("page=2")
-                    ? answer({
-                          result: [{ alert_type: "billing_usage_alert", filters: { product: ["d1_rows_read"] }, id: "p2", name: "two" }],
-                          result_info: { page: 2, total_pages: 2 },
-                          success: true,
-                      })
-                    : answer({
-                          result: [{ alert_type: "incident_alert", enabled: false, id: "p1", name: "one" }, { name: "no id" }],
-                          result_info: { page: 1, total_pages: 2 },
-                          success: true,
-                      }),
-            );
-        });
+    it("lists policies in one call and keeps only the fields it reads, mechanisms and interval included", async () => {
+        const fetch = vi.fn<typeof globalThis.fetch>(() =>
+            Promise.resolve(
+                answer({
+                    result: [
+                        { alert_type: "incident_alert", enabled: false, id: "p1", name: "one" },
+                        {
+                            alert_interval: "1h",
+                            alert_type: "billing_usage_alert",
+                            filters: { product: ["worker_requests"] },
+                            id: "p2",
+                            mechanisms: { email: [{ id: "a@example.com" }], webhooks: [{ id: "wh" }, { name: "no id" }] },
+                            name: "two",
+                        },
+                        { name: "no id" },
+                    ],
+                    success: true,
+                }),
+            ),
+        );
 
         await expect(client(fetch).listPolicies()).resolves.toStrictEqual([
-            { alertType: "incident_alert", enabled: false, filters: {}, id: "p1", name: "one" },
-            { alertType: "billing_usage_alert", enabled: true, filters: { product: ["d1_rows_read"] }, id: "p2", name: "two" },
+            { alertType: "incident_alert", enabled: false, filters: {}, id: "p1", mechanisms: {}, name: "one" },
+            {
+                alertInterval: "1h",
+                alertType: "billing_usage_alert",
+                enabled: true,
+                filters: { product: ["worker_requests"] },
+                id: "p2",
+                mechanisms: { email: [{ id: "a@example.com" }], webhooks: [{ id: "wh" }] },
+                name: "two",
+            },
         ]);
-        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch.mock.calls[0]?.[0]).toBe(`${ROOT}/policies`);
+    });
+
+    it("refuses to read a paged policy list as complete", async () => {
+        const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(answer({ result: [], result_info: { total_pages: 2 }, success: true })));
+        const failure = await failureOf(client(fetch).listPolicies());
+
+        expect(failure.message).toMatch(/refusing to treat it as complete/u);
+    });
+
+    it("deletes a policy by id", async () => {
+        const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(answer({ success: true })));
+
+        await client(fetch).deletePolicy("pol_1");
+
+        expect(fetch.mock.calls[0]?.[0]).toBe(`${ROOT}/policies/pol_1`);
+        expect(fetch.mock.calls[0]?.[1]?.method).toBe("DELETE");
     });
 
     it("classifies a refused token, an ineligible plan, a rejected body and a transient failure", async () => {

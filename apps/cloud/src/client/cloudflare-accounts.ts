@@ -16,9 +16,20 @@ export const TOKEN_PERMISSIONS: ReadonlyArray<{ id: CloudflarePermission; label:
     })
     .toSorted((a, b) => Number(b.required) - Number(a.required) || a.label.localeCompare(b.label, "en"));
 
-/** The token editor's name for a permission id the connect route recorded, or the id itself for one this build does not know. */
-export const permissionLabel = (id: string): string =>
-    Object.hasOwn(CLOUDFLARE_TOKEN_PERMISSIONS, id) ? CLOUDFLARE_TOKEN_PERMISSIONS[id as CloudflarePermission].label : id;
+/**
+ * How a permission id the connect route recorded reads on a connection: the
+ * token editor's name, or what was actually proven where that is less (see
+ * `grantedLabel`), or the id itself for one this build does not know.
+ */
+export const permissionLabel = (id: string): string => {
+    if (!Object.hasOwn(CLOUDFLARE_TOKEN_PERMISSIONS, id)) {
+        return id;
+    }
+
+    const permission: { grantedLabel?: string; label: string } = CLOUDFLARE_TOKEN_PERMISSIONS[id as CloudflarePermission];
+
+    return permission.grantedLabel ?? permission.label;
+};
 
 /** The permissions a connection's token was NOT seen to hold — what an app binding that type would fail on. */
 export const missingPermissions = (granted: ReadonlyArray<string>): string[] => {

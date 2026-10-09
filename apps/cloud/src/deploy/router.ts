@@ -812,7 +812,8 @@ export const createDeployRouter = (): HttpRouterLike => {
         { handler: handleCloudflareAccountConnectRoute, method: "POST", path: "/v1/cloudflare-accounts", spec: { auth: "session" } },
         // session — the default recipients of its Cloudflare usage alerts; the query asserts owner/admin.
         {
-            handler: handleCloudflareAlertRecipientsRoute,
+            // Wrapped: the table passes route parameters third, which would land in the lookup slot.
+            handler: async (request, environment) => handleCloudflareAlertRecipientsRoute(request, environment),
             method: "POST",
             path: "/v1/cloudflare-accounts/alert-recipients",
             spec: { auth: "session" },

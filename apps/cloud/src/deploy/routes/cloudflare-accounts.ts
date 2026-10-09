@@ -10,11 +10,16 @@
  * sealed with `SECRET_ENCRYPTION_KEY` — the plaintext never reaches the
  * database, a log line or a response.
  */
+import type { D1DatabaseLike } from "@lunora/d1";
+
 import { internal } from "../../../lunora/_generated/api.js";
+import type { AuthEnv } from "../../auth";
+import { authUserEmails } from "../../auth";
 import { CloudflareTokenError } from "../../cloudflare/fetch";
-import { recipientsFor } from "../../cloudflare-accounts/recipients";
+import { controlPlaneDatabase } from "../../d1-store";
 import { encryptSecret } from "../../secrets/crypto";
 import { inspectAccount, isCloudflareAccountId } from "../../targets/cloudflare-workers/api";
+import { orgAdminEmails } from "../../telemetry/recipients";
 import type { RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext } from "./shared";
 
@@ -104,15 +109,28 @@ export const handleCloudflareAccountConnectRoute = async (request: Request, envi
     }
 };
 
+/** How the recipients route resolves the owners' and admins' addresses; real by default, faked in tests. */
+export type AdminEmails = (environment: RouterEnv, organizationId: string) => Promise<string[]>;
+
+/** The shared lookup `POST /v1/alerts/test` and the alert drain use: members of the control-plane database, addresses from the auth plane. */
+const defaultAdminEmails: AdminEmails = async (environment, organizationId) => {
+    const { DB } = environment;
+
+    return DB ? orgAdminEmails(controlPlaneDatabase(DB as D1DatabaseLike), organizationId, authUserEmails(environment as AuthEnv)) : [];
+};
+
 /**
  * `POST /v1/cloudflare-accounts/alert-recipients` — the addresses of an
  * organization's owners and admins, the default recipients of Cloudflare usage
- * alerts (`session`; the internal `cloudflareAlerts.alertManagers` query
- * asserts owner/admin). At the edge because the addresses live in better-auth's
- * `user` table, read through the auth instance this Worker's `fetch`
- * bootstrapped.
+ * alerts (`session`; the internal `cloudflareAlerts.assertAlertsManager`
+ * query asserts owner/admin first). At the edge because the addresses live in
+ * the auth plane, which a Lunora action cannot reach.
  */
-export const handleCloudflareAlertRecipientsRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+export const handleCloudflareAlertRecipientsRoute = async (
+    request: Request,
+    environment: RouterEnv,
+    adminEmails: AdminEmails = defaultAdminEmails,
+): Promise<Response> => {
     const context = requireContext(environment);
     const body = (await request.json().catch(() => null)) as { organizationId?: unknown } | null;
 
@@ -121,10 +139,10 @@ export const handleCloudflareAlertRecipientsRoute = async (request: Request, env
     }
 
     try {
-        const userIds = await context.runQuery<string[]>(internal.cloudflare_alerts.alertManagers, { organizationId: body.organizationId });
-
-        return Response.json({ recipients: await recipientsFor(userIds) });
+        await context.runQuery<null>(internal.cloudflare_alerts.assertAlertsManager, { organizationId: body.organizationId });
     } catch (error) {
-        return rejected(error, "alert recipients lookup failed");
+        return rejected(error, "alert recipients lookup refused");
     }
+
+    return Response.json({ recipients: await adminEmails(environment, body.organizationId) });
 };

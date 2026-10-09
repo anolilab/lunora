@@ -127,24 +127,35 @@ down.
 
 On the **Cloudflare accounts** tab, an owner or admin selects **Set up Cloudflare
 usage alerts** on an account. Lunora Cloud reads which products Cloudflare's
-**Usage Based Billing** notifications can watch on that account, and proposes a
-threshold for each one: three times what your Lunora Cloud projects there used
-last month, rounded up, and never below what the Workers Paid plan includes.
-Without last month's usage, it proposes the included amount. Recipients default
-to your organization's owners and admins. You can change every value before
-anything is saved. Running the setup again updates the alerts it created, and
-never duplicates them. Alerts you made yourself are listed, and left alone.
+**Usage Based Billing** notifications can watch on that account. Cloudflare
+offers them for Workers requests and for Durable Objects. It has none for D1 or
+for Workers CPU time: only the budget alert below covers those.
+
+For Workers requests, Lunora Cloud proposes three times what your Lunora Cloud
+projects there used last month, rounded up, and never below what the Workers
+Paid plan includes. If it has no full month of usage for the account, it
+suggests the included amount and leaves the product unticked. For the other
+products, you enter the threshold yourself. Cloudflare does not document the
+unit of these thresholds, so after saving, the studio shows what Cloudflare
+stored. Check one in the Cloudflare dashboard before you rely on it.
+
+Recipients default to your organization's owners and admins. You can change
+every value before anything is saved. Running the setup again updates the alerts
+it created, and never duplicates them. It keeps what you changed on them in
+Cloudflare: an alert you switched off stays off, and extra addresses, webhooks
+and PagerDuty destinations stay. Alerts you made yourself are listed, and left
+alone.
 
 - The token needs **Notifications: Edit**. You can add it to the token in
   Cloudflare. The connection keeps working without being rotated.
 - Usage Based Billing notifications are for **Pay-as-you-go** accounts. Most
   Enterprise contracts are not supported. The studio shows Cloudflare's own
   message when it refuses.
-- If Cloudflare does not list the products for your account, Lunora Cloud creates
-  nothing, and does not guess. Add them in your Cloudflare dashboard, under
-  **Notifications**.
 - Cloudflare counts the whole account. If other Workers run there, raise the
   thresholds.
+- The alerts live in your account. Disconnecting it does not delete them. To
+  stop them, select **Remove Lunora-managed alerts** on the account first, or
+  delete them under **Notifications** in Cloudflare.
 
 An account-wide **budget alert**, which emails you when your total usage-based
 spend passes an amount in US dollars, exists only in Cloudflare's dashboard. Add

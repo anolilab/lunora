@@ -19,9 +19,6 @@ export const BILLING_USAGE_ALERT = "billing_usage_alert";
 /** Deadline for one Notifications API call. */
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-/** Policy-list pages read at most; an account with more is not one this flow was built for. */
-const MAX_POLICY_PAGES = 20;
-
 /**
  * Why a call failed, for whoever has to act on it:
  * - `missing-scope` — the token lacks the Notifications permission (401/403);
@@ -90,20 +87,25 @@ export interface BillingProduct {
 
 /** A notification policy, as much of it as this flow reads. */
 export interface NotificationPolicy {
+    /** How often Cloudflare re-alerts, when the policy sets it. */
+    alertInterval?: string;
     alertType: string;
     enabled: boolean;
     filters: Record<string, string[]>;
     id: string;
+    /** Where it notifies, by kind (`email`, `webhooks`, `pagerduty`); an email entry's `id` is the address. */
+    mechanisms: Record<string, { id: string }[]>;
     name: string;
 }
 
 /** The body of a policy this flow writes. */
 export interface PolicyBody {
+    alert_interval?: string;
     alert_type: string;
     description?: string;
     enabled: boolean;
     filters?: Record<string, string[]>;
-    mechanisms: { email?: { id: string }[]; webhooks?: { id: string }[] };
+    mechanisms: Record<string, { id: string }[]>;
     name: string;
 }
 
@@ -122,6 +124,14 @@ export interface NotificationsClient {
     /** `GET available_alerts`: the products a Usage Based Billing notification may filter on, or `null` when the account is not offered that alert at all. */
     billingProducts: () => Promise<BillingProduct[] | null>;
     createPolicy: (body: PolicyBody) => Promise<string>;
+    deletePolicy: (id: string) => Promise<void>;
+
+    /**
+     * Every policy on the account. One call: the API takes no paging parameter
+     * and answers no `result_info` (Cloudflare's OpenAPI schema), so the
+     * listing is complete as answered; `result_info.total_pages` above 1 would
+     * contradict that and is refused rather than read as complete.
+     */
     listPolicies: () => Promise<NotificationPolicy[]>;
     updatePolicy: (id: string, body: PolicyBody) => Promise<void>;
 }
@@ -187,11 +197,25 @@ const toPolicy = (raw: Record<string, unknown>): NotificationPolicy | null => {
         }
     }
 
+    const mechanisms: Record<string, { id: string }[]> = {};
+
+    for (const [kind, value] of Object.entries((raw["mechanisms"] ?? {}) as Record<string, unknown>)) {
+        if (Array.isArray(value)) {
+            mechanisms[kind] = (value as { id?: unknown }[])
+                .filter((entry): entry is { id: string } => typeof entry.id === "string" && entry.id !== "")
+                .map((entry) => {
+                    return { id: entry.id };
+                });
+        }
+    }
+
     return {
         alertType: typeof raw["alert_type"] === "string" ? raw["alert_type"] : "",
+        ...(typeof raw["alert_interval"] === "string" ? { alertInterval: raw["alert_interval"] } : {}),
         enabled: raw["enabled"] !== false,
         filters,
         id: raw["id"],
+        mechanisms,
         name: raw["name"],
     };
 };
@@ -227,7 +251,7 @@ export const notificationsClient = (access: NotificationsAccess): NotificationsC
     const fetchImpl = access.fetch ?? globalThis.fetch;
     const timeoutMs = access.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-    const call = async (method: "GET" | "POST" | "PUT", path: string, body?: unknown): Promise<Envelope> => {
+    const call = async (method: "DELETE" | "GET" | "POST" | "PUT", path: string, body?: unknown): Promise<Envelope> => {
         const init = {
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
             headers: { authorization: `Bearer ${access.apiToken}`, "content-type": "application/json" },
@@ -259,22 +283,23 @@ export const notificationsClient = (access: NotificationsAccess): NotificationsC
 
             return id;
         },
+        deletePolicy: async (id) => {
+            await call("DELETE", `/policies/${encodeURIComponent(id)}`);
+        },
         listPolicies: async () => {
-            const policies: NotificationPolicy[] = [];
+            const envelope = await call("GET", "/policies");
 
-            for (let page = 1; page <= MAX_POLICY_PAGES; page += 1) {
-                // eslint-disable-next-line no-await-in-loop -- pages are read in order until the last one
-                const envelope = await call("GET", page === 1 ? "/policies" : `/policies?page=${String(page)}`);
-                const rows = Array.isArray(envelope.result) ? (envelope.result as Record<string, unknown>[]) : [];
-
-                policies.push(...rows.map((row) => toPolicy(row)).filter((policy): policy is NotificationPolicy => policy !== null));
-
-                if ((envelope.result_info?.total_pages ?? 1) <= page) {
-                    break;
-                }
+            if ((envelope.result_info?.total_pages ?? 1) > 1) {
+                throw new CloudflareNotificationsError(
+                    "transient",
+                    "Cloudflare answered the policy list in pages, which this client does not read; refusing to treat it as complete",
+                    null,
+                );
             }
 
-            return policies;
+            const rows = Array.isArray(envelope.result) ? (envelope.result as Record<string, unknown>[]) : [];
+
+            return rows.map((row) => toPolicy(row)).filter((policy): policy is NotificationPolicy => policy !== null);
         },
         updatePolicy: async (id, body) => {
             await call("PUT", `/policies/${encodeURIComponent(id)}`, body);

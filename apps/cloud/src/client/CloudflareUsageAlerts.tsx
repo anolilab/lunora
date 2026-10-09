@@ -13,13 +13,20 @@ import type { OrgId } from "./types";
 import type { UsageAlertProduct, UsageAlertsOverview, UsageAlertsResult } from "./usage-alerts";
 import {
     applyRequest,
+    COVERAGE_GAP_NOTE,
     coveredByOwnPolicy,
+    describeChanges,
     describeProposal,
+    describeStored,
     FAILURE_COPY,
     initialLimits,
     initialSelection,
+    limitWarning,
+    managedDisabled,
+    PUBLISHED_NOTE,
     STATE_COPY,
     summarizeResults,
+    UNIT_NOTE,
 } from "./usage-alerts";
 
 /** What the setup form hands its owner to write. */
@@ -64,6 +71,7 @@ const ProductRow = ({
     product: UsageAlertProduct;
 }): ReactElement => {
     const inputId = `usage-alert-${product.id}`;
+    const warning = checked ? limitWarning(product, limit) : null;
 
     return (
         <li className="grid gap-1 border-b py-2 last:border-b-0">
@@ -94,8 +102,10 @@ const ProductRow = ({
             </div>
             <span className="text-xs text-muted-foreground">
                 {describeProposal(product)}
-                {coveredByOwnPolicy(product) ? " · already covered by a policy of yours, so unticked" : ""}
+                {coveredByOwnPolicy(product) ? " · already covered by an enabled policy of yours, so unticked" : ""}
+                {managedDisabled(product) ? " · you switched its Lunora-managed alert off in Cloudflare, so unticked; saving keeps it off" : ""}
             </span>
+            {warning === null ? null : <span className="text-xs text-destructive">{warning}</span>}
         </li>
     );
 };
@@ -157,8 +167,8 @@ const UsageAlertsForm = ({
             }}
         >
             <p className="m-0 text-xs text-muted-foreground">
-                Thresholds are a billing period&apos;s usage of each product, proposed from what your Lunora Cloud projects in this account used last month.
-                Cloudflare counts the whole account, so raise them if other Workers run there.
+                {UNIT_NOTE} Proposals come from what your Lunora Cloud projects in this account used last month; Cloudflare counts the whole account, so raise
+                them if other Workers run there.
             </p>
             <ul className="m-0 grid list-none p-0">
                 {products.map((product) => (
@@ -183,7 +193,9 @@ const UsageAlertsForm = ({
                     value={recipients}
                 />
                 <span className="text-xs text-muted-foreground">
-                    Your organization&apos;s owners and admins by default. Cloudflare has no test send for these emails.
+                    Your organization&apos;s owners and admins by default; one per line, &quot;Name &lt;address&gt;&quot; accepted. Saving adds these to a
+                    Lunora-managed alert&apos;s addresses and keeps its other destinations — remove one in Cloudflare. Cloudflare has no test send for these
+                    emails.
                 </span>
             </label>
             {error === null ? null : <FormError message={error} />}
@@ -207,17 +219,31 @@ const BudgetAlertNote = ({ href }: { href: string }): ReactElement => (
     </p>
 );
 
-/** The outcome of the last setup, per failed product. */
+/** One product's outcome: the failure, or what changed and what Cloudflare stored. */
+const ResultLine = ({ result }: { result: UsageAlertsResult }): ReactElement => {
+    if (result.action === "failed") {
+        return (
+            <span className="text-xs text-destructive">
+                {result.productId}: {result.kind === null ? "" : FAILURE_COPY[result.kind]} {result.message}
+            </span>
+        );
+    }
+
+    return (
+        <span className="text-xs text-muted-foreground">
+            {result.productId} ({result.action}):{" "}
+            {[...describeChanges(result), ...describeStored(result)].join("; ") || "Cloudflare's read-back did not answer"}
+        </span>
+    );
+};
+
+/** The outcome of the last setup, per product. */
 const Outcome = ({ results }: { results: ReadonlyArray<UsageAlertsResult> }): ReactElement => (
     <div className="grid gap-1 text-sm">
         <span>{summarizeResults(results)}</span>
-        {results
-            .filter((result) => result.action === "failed")
-            .map((result) => (
-                <span className="text-xs text-destructive" key={result.productId}>
-                    {result.productId}: {result.kind === null ? "" : FAILURE_COPY[result.kind]} {result.message}
-                </span>
-            ))}
+        {results.map((result) => (
+            <ResultLine key={result.productId} result={result} />
+        ))}
     </div>
 );
 
@@ -234,7 +260,11 @@ export const UsageAlertsView = ({
 }): ReactElement => (
     <div className="grid gap-3">
         {overview.state === "ready" ? (
-            <UsageAlertsForm onApply={onApply} products={overview.products} recipients={recipients} />
+            <>
+                {overview.productSource === "published" ? <p className="m-0 text-xs text-muted-foreground">{PUBLISHED_NOTE}</p> : null}
+                <p className="m-0 text-xs text-muted-foreground">{COVERAGE_GAP_NOTE}</p>
+                <UsageAlertsForm onApply={onApply} products={overview.products} recipients={recipients} />
+            </>
         ) : (
             <p className="m-0 text-sm text-muted-foreground">
                 {STATE_COPY[overview.state]}
@@ -244,6 +274,14 @@ export const UsageAlertsView = ({
         <BudgetAlertNote href={overview.dashboard.budgetAlert} />
     </div>
 );
+
+/** Whether any product carries a Lunora-managed policy. */
+const hasManaged = (overview: UsageAlertsOverview): boolean => overview.products.some((product) => product.covered.some((policy) => policy.managed));
+
+const removalSummary = (removed: number, failed: number): string =>
+    failed > 0
+        ? `Removed ${String(removed)} Lunora-managed alert(s); ${String(failed)} could not be removed.`
+        : `Removed ${String(removed)} Lunora-managed alert(s).`;
 
 type Loaded = { overview: UsageAlertsOverview; recipients: string[]; status: "loaded" } | { status: "error" } | { status: "idle" } | { status: "loading" };
 
@@ -292,6 +330,7 @@ export const CloudflareUsageAlerts = ({ account, organizationId }: { account: Cl
     const client = useLunora();
     const [loaded, setLoaded] = useState<Loaded>({ status: "idle" });
     const [outcome, setOutcome] = useState<UsageAlertsResult[] | null>(null);
+    const [removal, setRemoval] = useState<null | string>(null);
 
     const load = async (): Promise<void> => {
         setLoaded({ status: "loading" });
@@ -315,6 +354,18 @@ export const CloudflareUsageAlerts = ({ account, organizationId }: { account: Cl
         await load();
 
         return results;
+    };
+
+    const removeManaged = async (): Promise<void> => {
+        try {
+            const { failed, removed } = await client.action(api.cloudflare_alerts.remove, { id: account._id, organizationId });
+
+            setRemoval(removalSummary(removed.length, failed.length));
+        } catch (error_) {
+            setRemoval(error_ instanceof Error ? error_.message : "Removing the alerts failed.");
+        }
+
+        await load();
     };
 
     let body: ReactElement | null;
@@ -360,7 +411,23 @@ export const CloudflareUsageAlerts = ({ account, organizationId }: { account: Cl
                 notifications email you when a product passes a threshold well above normal.
             </p>
             {outcome === null ? null : <Outcome results={outcome} />}
+            {removal === null ? null : <span className="text-xs text-muted-foreground">{removal}</span>}
             {body}
+            {loaded.status === "loaded" && hasManaged(loaded.overview) ? (
+                <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                        onClick={() => {
+                            void removeManaged();
+                        }}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                    >
+                        Remove Lunora-managed alerts
+                    </Button>
+                    <span className="text-xs text-muted-foreground">They live in your account and stay after a disconnect unless removed here.</span>
+                </div>
+            ) : null}
         </section>
     );
 };
