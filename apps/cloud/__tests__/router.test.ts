@@ -216,6 +216,35 @@ describe("pOST /v1/logs/tail", () => {
         await expect(response.json()).resolves.toStrictEqual({ failed: 1, ingested: 1, scripts: 2 });
         expect(runMutation).toHaveBeenCalledTimes(2);
     });
+
+    it("ingests every other batch when resolving one script's organization throws", async () => {
+        const router = createDeployRouter();
+        const runQuery = vi.fn<ActionPort>().mockImplementation(async (_reference, args) => {
+            if ((args as { scriptName: string }).scriptName === "broken") {
+                throw new Error("store unavailable");
+            }
+
+            return { organizationId: "org_b" };
+        });
+        const runMutation = vi.fn<ActionPort>().mockImplementation(async (_reference, args) => {
+            return { ingested: (args as { lines: unknown[] }).lines.length };
+        });
+        const response = await router.fetch(
+            tailPost(
+                {
+                    batches: [
+                        { lines: [{ level: "log", message: "x" }], scriptName: "broken" },
+                        { lines: [{ level: "info", message: "kept" }], scriptName: "quiet" },
+                    ],
+                },
+                "tail-secret",
+            ),
+            env(makeCtx({ runMutation, runQuery })),
+        );
+
+        await expect(response.json()).resolves.toStrictEqual({ failed: 1, ingested: 1, scripts: 1 });
+        expect(runMutation).toHaveBeenCalledTimes(1);
+    });
 });
 
 /** POST to the platform cell-register route, optionally presenting a bearer admin token. */

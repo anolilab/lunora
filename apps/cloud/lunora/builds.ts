@@ -501,9 +501,11 @@ export const complete = internalMutation
         const { now } = context;
 
         if (build.trigger === "push") {
-            const project = (await context.db.get(build.projectId)) as null | { workspacePackages?: { builtAt: number } | null };
+            const project = (await context.db.get(build.projectId)) as null | { runtime?: "worker" | null; workspacePackages?: { builtAt: number } | null };
 
-            if (project && (project.workspacePackages?.builtAt ?? -1) <= build.createdAt) {
+            // A build of the runtime the project has since left describes a
+            // workspace the next push will not build, so it records nothing.
+            if (project && storedRuntime(project.runtime) === storedRuntime(build.runtime) && (project.workspacePackages?.builtAt ?? -1) <= build.createdAt) {
                 const recorded = workspacePackages !== undefined && workspacePackages.length <= MAX_WORKSPACE_PACKAGES;
 
                 // A newer build that could not record its set (no walk, or past the cap) clears
