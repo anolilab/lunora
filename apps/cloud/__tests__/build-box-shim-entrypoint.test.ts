@@ -88,4 +88,87 @@ describe("plain-Worker entry shim, WorkerEntrypoint default export", () => {
         expect(refused.status).toBe(403);
         expect(ordinary.status).toBe(501);
     });
+
+    it("routes a class whose handlers are fields, which shadow any subclass method", async () => {
+        expect.assertions(5);
+
+        class Tenant extends Entrypoint {
+            public seen: unknown[] = [];
+
+            // A field: an own property of each instance, set after the base constructor ran.
+            public fetch = async (_request: Request): Promise<Response> => Response.json({ env: this.env === ENV });
+
+            public queue = async (batch: { messages: { retry: () => void }[]; queue: string }): Promise<void> => {
+                this.seen.push(batch.queue);
+                batch.messages[1]?.retry();
+            };
+
+            public scheduled = async (controller: { cron: string }): Promise<void> => {
+                this.seen.push(controller.cron);
+            };
+        }
+
+        const Wrapped = wrapEntry(Tenant, { "--jobs": "jobs" }) as new (context: unknown, env: unknown) => Tenant;
+        const instance = new Wrapped(CONTEXT, ENV);
+        const anonymous = await instance.fetch(post("/_lunora/scheduled", { cron: "* * * * *" }, "wrong"));
+        const scheduled = await instance.fetch(post("/_lunora/scheduled", { cron: "0 0 * * *" }));
+        const queued = await instance.fetch(
+            post("/_lunora/queue", {
+                messages: [
+                    { body: 1, id: "a" },
+                    { body: 2, id: "b" },
+                ],
+                queue: "acme--jobs",
+            }),
+        );
+
+        expect(anonymous.status).toBe(403);
+        await expect(scheduled.json()).resolves.toStrictEqual({ cron: "0 0 * * *", ok: true });
+        await expect(queued.json()).resolves.toStrictEqual({ retry: ["b"] });
+        expect(instance.seen).toStrictEqual(["0 0 * * *", "jobs"]);
+
+        // Everything else still reaches the Worker's own field.
+        const ordinary = await instance.fetch(new Request("https://app.example/"));
+
+        await expect(ordinary.json()).resolves.toStrictEqual({ env: true });
+    });
+
+    it("hands a native queue batch to the class under its own queue name, acknowledging on the real batch", async () => {
+        expect.assertions(3);
+
+        const acked: string[] = [];
+
+        class Tenant extends Entrypoint {
+            public name = "";
+
+            public async queue(batch: { ackAll: () => void; messages: { ack: () => void }[]; queue: string }): Promise<void> {
+                this.name = batch.queue;
+                batch.messages[0]?.ack();
+                batch.ackAll();
+            }
+        }
+
+        const Wrapped = wrapEntry(Tenant, { "--job-queue": "jobs" }) as new (context: unknown, env: unknown) => Tenant;
+        const native = {
+            ackAll: () => {
+                acked.push("all");
+            },
+            messages: [
+                {
+                    ack: () => {
+                        acked.push("m1");
+                    },
+                },
+            ],
+            queue: "acme--job-queue",
+        };
+
+        const instance = new Wrapped(CONTEXT, ENV);
+
+        await instance.queue(native);
+
+        expect(instance.name).toBe("jobs");
+        expect(acked).toStrictEqual(["m1", "all"]);
+        expect(native.queue).toBe("acme--job-queue");
+    });
 });

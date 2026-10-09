@@ -224,7 +224,11 @@ const runBatch = async (forwarded, invoke) => {
 
     try {
         await invoke(batch);
-    } catch {
+    } catch (error) {
+        // The Worker's failure, logged where its own logs are read, as a throwing scheduled() is.
+        // eslint-disable-next-line no-console -- the Worker's log is the only place this failure can be read
+        console.error(`[lunora-cloud] queue() failed on ${forwarded.queue || "a forwarded batch"}; retrying every message it did not acknowledge:`, error);
+
         return forwarded.messages.filter((message) => explicit.get(message.id) !== "ack").map((message) => message.id);
     }
 
@@ -341,10 +345,108 @@ const platformRoute = async (request, env, handlers) => {
 const noFetchHandler = () => new Response("This Worker exports no fetch() handler", { status: 501 });
 
 /**
+ * A native queue batch with the Worker's own queue name. Where a Worker is its
+ * own consumer (`cloudflare-workers`, `celld-vps`), its queue is still the
+ * per-project `{alias}--{producer binding}` the platform created, so the batch
+ * Cloudflare hands it names that; everything else — the messages and their
+ * `ack()` / `retry()`, `ackAll()`, `retryAll()` — is the real batch's, so the
+ * consumer's acknowledgements reach Cloudflare unchanged.
+ * @param {unknown} batch The batch Cloudflare delivered.
+ * @param {Readonly<Record<string, string>>} queueNames `--<binding>` → the Worker's queue name.
+ * @returns {unknown} The batch to hand the Worker.
+ */
+const ownQueueBatch = (batch, queueNames) => {
+    if (typeof batch !== "object" || batch === null || typeof (/** @type {{ queue?: unknown }} */ (batch).queue) !== "string") {
+        return batch;
+    }
+
+    const name = tenantQueueName(/** @type {{ queue: string }} */ (batch).queue, queueNames);
+
+    if (name === /** @type {{ queue: string }} */ (batch).queue) {
+        return batch;
+    }
+
+    return new Proxy(batch, {
+        get: (target, property) => {
+            if (property === "queue") {
+                return name;
+            }
+
+            const value = Reflect.get(target, property, target);
+
+            return typeof value === "function" ? value.bind(target) : value;
+        },
+    });
+};
+
+/**
+ * The routing `fetch` both shapes share: the two platform routes first, the
+ * Worker's own `fetch` for everything else.
+ * @param {{ env: unknown, fetch: ((request: Request) => unknown) | undefined, queue: ((batch: unknown) => unknown) | undefined, queueNames: Readonly<Record<string, string>>, scheduled: ((controller: unknown) => unknown) | undefined }} handlers The Worker's handlers, bound to their receiver.
+ * @returns {(request: Request) => Promise<unknown>} The `fetch` to deploy.
+ */
+const routingFetch = (handlers) => async (request) => {
+    const answered = await platformRoute(request, handlers.env(), {
+        queueNames: handlers.queueNames,
+        ...(handlers.queue === undefined ? {} : { queue: async (batch) => handlers.queue(batch) }),
+        ...(handlers.scheduled === undefined ? {} : { scheduled: async (controller) => handlers.scheduled(controller) }),
+    });
+
+    if (answered !== undefined) {
+        return answered;
+    }
+
+    return handlers.fetch === undefined ? noFetchHandler() : handlers.fetch(request);
+};
+
+/**
+ * Route a `WorkerEntrypoint` instance, once its own constructor has run.
+ *
+ * Per instance, not as subclass methods: a handler the Worker declares as a
+ * class FIELD (`fetch = async () => …`) is an own property of the instance and
+ * shadows any method of a subclass, so routing on the prototype would let the
+ * platform's routes reach the Worker's code unauthenticated and answer a queue
+ * batch with whatever it returns. Each handler — field or method — is captured
+ * here and replaced by an own property, so the routes are always answered first.
+ * @param {Record<string, unknown>} instance The constructed entrypoint.
+ * @param {{ prototype: Record<string, unknown> }} Base The Worker's class.
+ * @param {Readonly<Record<string, string>>} queueNames `--<binding>` → the Worker's queue name.
+ * @returns {void}
+ */
+const routeInstance = (instance, Base, queueNames) => {
+    const own = (name) => {
+        const handler = Object.hasOwn(instance, name) ? instance[name] : Base.prototype[name];
+
+        return typeof handler === "function" ? (...args) => handler.apply(instance, args) : undefined;
+    };
+    const queue = own("queue");
+    const define = (name, value) => {
+        Object.defineProperty(instance, name, { configurable: true, value, writable: true });
+    };
+
+    define(
+        "fetch",
+        routingFetch({
+            env: () => instance.env,
+            fetch: own("fetch"),
+            queue,
+            queueNames,
+            scheduled: own("scheduled"),
+        }),
+    );
+
+    if (queue !== undefined) {
+        define("queue", (batch) => queue(ownQueueBatch(batch, queueNames)));
+    }
+};
+
+/**
  * A module Worker's default export, wrapped. An object handler becomes an
  * object with the same handlers — each called on the ORIGINAL object, so `this`
  * and prototype methods (a Hono app, say) behave as before — and a
- * `WorkerEntrypoint` class becomes a subclass overriding `fetch`.
+ * `WorkerEntrypoint` class becomes a subclass that routes each instance
+ * ({@link routeInstance}). On both, a native queue batch reaches the Worker
+ * under its own queue name ({@link ownQueueBatch}).
  * @param {unknown} handler The Worker's default export.
  * @param {Readonly<Record<string, string>>} queueNames `--<binding>` → the Worker's queue name.
  * @returns {unknown} The default export to deploy.
@@ -354,18 +456,9 @@ const wrapEntry = (handler, queueNames) => {
         const Base = /** @type {new (...args: unknown[]) => Record<string, unknown>} */ (handler);
 
         return class LunoraCloudEntry extends Base {
-            async fetch(request) {
-                const answered = await platformRoute(request, this.env, {
-                    queueNames,
-                    ...(typeof this.queue === "function" ? { queue: (batch) => this.queue(batch) } : {}),
-                    ...(typeof this.scheduled === "function" ? { scheduled: (controller) => this.scheduled(controller) } : {}),
-                });
-
-                if (answered !== undefined) {
-                    return answered;
-                }
-
-                return typeof super.fetch === "function" ? super.fetch(request) : noFetchHandler();
+            constructor(...args) {
+                super(...args);
+                routeInstance(this, Base, queueNames);
             }
         };
     }
@@ -381,27 +474,27 @@ const wrapEntry = (handler, queueNames) => {
 
     const target = /** @type {Record<string, unknown>} */ (handler);
     const call = (name, ...args) => /** @type {(...args: unknown[]) => unknown} */ (target[name]).apply(target, args);
+    const has = (name) => typeof target[name] === "function";
     const wrapped = {};
 
     for (const name of DELEGATED_HANDLERS) {
-        if (typeof target[name] === "function") {
+        if (has(name)) {
             wrapped[name] = (...args) => call(name, ...args);
         }
     }
 
-    wrapped.fetch = async (request, env, context) => {
-        const answered = await platformRoute(request, env, {
+    if (has("queue")) {
+        wrapped.queue = (batch, ...rest) => call("queue", ownQueueBatch(batch, queueNames), ...rest);
+    }
+
+    wrapped.fetch = (request, env, context) =>
+        routingFetch({
+            env: () => env,
+            fetch: has("fetch") ? (forwarded) => call("fetch", forwarded, env, context) : undefined,
+            queue: has("queue") ? (batch) => call("queue", batch, env, context) : undefined,
             queueNames,
-            ...(typeof target.queue === "function" ? { queue: async (batch) => call("queue", batch, env, context) } : {}),
-            ...(typeof target.scheduled === "function" ? { scheduled: async (controller) => call("scheduled", controller, env, context) } : {}),
-        });
-
-        if (answered !== undefined) {
-            return answered;
-        }
-
-        return typeof target.fetch === "function" ? call("fetch", request, env, context) : noFetchHandler();
-    };
+            scheduled: has("scheduled") ? (controller) => call("scheduled", controller, env, context) : undefined,
+        })(request);
 
     return wrapped;
 };

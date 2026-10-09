@@ -256,6 +256,68 @@ describe("plain-Worker entry shim", () => {
             expect(Object.isFrozen(queue.mock.calls[0]?.[0])).toBe(true);
         });
 
+        it("logs a queue() that throws, like a throwing scheduled()", async () => {
+            expect.assertions(2);
+
+            const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+            const { handler } = queueWorker(() => {
+                throw new Error("handler failed");
+            });
+
+            await call(wrapEntry(handler, {}), forward(["a"]));
+
+            const logged = errors.mock.calls.map((args) => String(args[0]));
+
+            errors.mockRestore();
+
+            expect(logged).toHaveLength(1);
+            expect(logged[0]).toMatch(/^\[lunora-cloud\] queue\(\) failed on acme--job-queue/u);
+        });
+
+        it("hands a native queue batch to the Worker under its own queue name, acknowledging on the real batch", async () => {
+            expect.assertions(4);
+
+            const acked: string[] = [];
+            const seen: unknown[] = [];
+            const handler = {
+                fetch: () => new Response(""),
+                queue(batch: { messages: { ack: () => void; id: string }[]; queue: string; retryAll: () => void }, env: unknown) {
+                    seen.push(
+                        batch.queue,
+                        env,
+                        batch.messages.map((message) => message.id),
+                    );
+                    batch.messages[0]?.ack();
+                    batch.retryAll();
+                },
+            };
+            const native = {
+                messages: [
+                    {
+                        ack: () => {
+                            acked.push("m1");
+                        },
+                        id: "m1",
+                    },
+                ],
+                queue: "acme-pr-x--job-queue",
+                retryAll: () => {
+                    acked.push("retry-all");
+                },
+            };
+
+            await (wrapEntry(handler, { "--job-queue": "jobs" }) as Wrapped).queue?.(native, ENV, CONTEXT);
+
+            expect(seen).toStrictEqual(["jobs", ENV, ["m1"]]);
+            expect(acked).toStrictEqual(["m1", "retry-all"]);
+
+            // A queue the map does not know reaches the Worker unchanged.
+            await (wrapEntry(handler, {}) as Wrapped).queue?.(native, ENV, CONTEXT);
+
+            expect(seen.at(-3)).toBe("acme-pr-x--job-queue");
+            expect(native.queue).toBe("acme-pr-x--job-queue");
+        });
+
         it("drops forwarded entries without a string id, as the runtime does", async () => {
             expect.assertions(1);
 
