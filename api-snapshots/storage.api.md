@@ -259,6 +259,7 @@ const DEFAULT_MAX_UPLOAD_BYTES: number;
 ```ts
 type R2BindingUploadStorageOptions = Omit<DeclaredKeys<BaseStorageOptions>, "metaStorage"> & {
     statePrefix?: string;
+    stateScope?: () => string;
 };
 ```
 

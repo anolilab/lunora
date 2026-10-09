@@ -621,6 +621,45 @@ describe(createR2BindingUploadStorage, () => {
         expect(sameBytes(storedObject(bucket, location)?.bytes, pattern(bytes.byteLength + 1))).toBe(true);
     });
 
+    it("keeps each scope's upload state apart: another scope cannot read the upload (#1053)", async () => {
+        expect.assertions(3);
+
+        const bucket = createFakeR2UploadBucket();
+        let scope = "alice/";
+        const storage = createR2BindingUploadStorage(bucket, { stateScope: () => scope });
+        const file = await storage.create({ metadata: { name: "a.bin" }, size: 4 });
+
+        expect([...bucket.objects.keys()].some((key) => key.startsWith(`${STATE_PREFIX}alice/`))).toBe(true);
+
+        scope = "bob/";
+
+        await expect(storage.update({ id: file.id }, { metadata: { label: "x" } })).rejects.toThrow(/Not found/u);
+
+        scope = "alice/";
+        const owned = await storage.update({ id: file.id }, { metadata: { label: "owner" } });
+
+        expect(owned.id).toBe(file.id);
+    });
+
+    it("lists the uploads under the unscoped root only, so a scoped upload is not listed (#1053)", async () => {
+        expect.assertions(1);
+
+        const bucket = createFakeR2UploadBucket();
+        const storage = createR2BindingUploadStorage(bucket, { stateScope: () => "alice/" });
+
+        await storage.create({ metadata: { name: "a.bin" }, size: 4 });
+
+        await expect(storage.list()).resolves.toStrictEqual([]);
+    });
+
+    it("refuses a scope that does not end in a slash, since two scopes could then share one key", async () => {
+        expect.assertions(1);
+
+        const storage = createR2BindingUploadStorage(createFakeR2UploadBucket(), { stateScope: () => "alice" });
+
+        await expect(storage.create({ metadata: { name: "a.bin" }, size: 4 })).rejects.toThrow(/must end in "\/"/u);
+    });
+
     it("refuses an object name under the upload state prefix", async () => {
         expect.hasAssertions();
 

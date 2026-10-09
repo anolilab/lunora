@@ -85,6 +85,15 @@ type R2BindingUploadStorageOptions = Omit<DeclaredKeys<BaseStorageOptions>, "met
      * any upload you expect to take.
      */
     statePrefix?: string;
+
+    /**
+     * The scope a request's upload state is kept under, appended to `statePrefix`: the state of an upload
+     * is then readable only by requests in the same scope. Read it from the request's grant, e.g.
+     * `() => \`${caller.get().userId}/\``. Must return a string ending in `/`, or `""` for the unscoped root.
+     *
+     * `list()` reads only the unscoped root, so an upload kept under a scope is not listed.
+     */
+    stateScope?: () => string;
 };
 
 const DEFAULT_STATE_PREFIX = "_lunora/uploads/";
@@ -129,7 +138,7 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
         super(options);
 
         this.bucket = bucket;
-        this.meta = new R2UploadStateStore(bucket, options.statePrefix ?? DEFAULT_STATE_PREFIX);
+        this.meta = new R2UploadStateStore(bucket, options.statePrefix ?? DEFAULT_STATE_PREFIX, options.stateScope);
     }
 
     public override get tusExtension(): string[] {
@@ -338,6 +347,7 @@ class R2BindingUploadStorage extends AbstractBaseStorage {
     /** The uploads with state in the bucket. Segment keys sit one level down and are rolled up by the delimiter, never read. */
     public override async list(): Promise<File[]> {
         return this.instrumentOperation("list", async () => {
+            // The unscoped root only: a scope is a request's, and listing runs outside any request.
             const { prefix, suffix } = this.meta;
             const files: File[] = [];
             let cursor: string | undefined;

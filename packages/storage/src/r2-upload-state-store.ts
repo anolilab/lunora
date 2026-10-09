@@ -30,15 +30,37 @@ interface StoredState {
 class R2UploadStateStore extends MetaStorage {
     private readonly bucket: R2UploadBucket;
 
-    public constructor(bucket: R2UploadBucket, statePrefix: string) {
+    /** The scope a request reads its uploads under. Resolved per operation, so it follows the request's grant. */
+    private readonly scope: () => string;
+
+    public constructor(bucket: R2UploadBucket, statePrefix: string, scope: () => string = () => "") {
         super({ prefix: statePrefix, suffix: ".json" });
 
         this.bucket = bucket;
+        this.scope = scope;
+    }
+
+    /**
+     * The prefix this request's upload state lives under: the reserved root, then the caller's scope. A scope
+     * must end in `/` (or be empty) so two scopes can never produce the same key.
+     */
+    public currentPrefix(): string {
+        const scope = this.scope();
+
+        if (scope !== "" && !scope.endsWith("/")) {
+            throw new TypeError(`@lunora/storage: stateScope must end in "/" (got "${scope}")`);
+        }
+
+        return `${this.prefix}${scope}`;
+    }
+
+    public override getMetaName(id: string): string {
+        return `${this.currentPrefix()}${id}${this.suffix}`;
     }
 
     /** Prefix of an upload's buffered segments. Never a prefix of another upload's keys. */
     public segmentPrefix(id: string): string {
-        return `${this.prefix}${id}/`;
+        return `${this.currentPrefix()}${id}/`;
     }
 
     public async read(id: string): Promise<StoredState | undefined> {
