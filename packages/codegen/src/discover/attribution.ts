@@ -15,7 +15,7 @@ import { Node, SyntaxKind, ts, VariableDeclarationKind } from "ts-morph";
 
 import type { CallSiteScope, FunctionIR } from "../ir";
 import { isBindingName } from "../reserved-words";
-import { isWriteTarget } from "./ast";
+import { isWriteTarget, unwrapExpression } from "./ast";
 
 type TopLevelDeclaration = FunctionDeclaration | VariableDeclaration;
 
@@ -171,12 +171,21 @@ const exportNamesOf = (declarations: ReadonlyArray<TopLevelDeclaration>): Map<ts
         }),
     );
 
+/** A function literal, through parentheses and casts. Only such a binding is a helper; any other initializer runs code at module load. */
+const isFunctionValued = (initializer: TsNode | undefined): boolean => {
+    const expression = unwrapExpression(initializer);
+
+    return expression !== undefined && (Node.isArrowFunction(expression) || Node.isFunctionExpression(expression));
+};
+
 /**
  * The ONE mapping from where code sits to who owns it. Walks to the top-level
  * container: an `export default <expression>` is the `default` export; a
- * top-level `function` / identifier-named `const` is its export or a helper;
- * anything else — module scope, a class, a destructured declaration — is
- * untracked.
+ * top-level `function` or identifier-named `const` is its export, or a helper
+ * when it is a function. Anything else is untracked: module scope, a class, a
+ * destructured declaration, and a top-level `const` whose initializer runs code
+ * (`const x = http.route({...})`), because that code runs at module load, not
+ * when a caller reaches it.
  */
 const ownerOf = (node: TsNode, exportNames: ReadonlyMap<ts.Node, ReadonlyArray<string>>): Owner => {
     for (const ancestor of node.getAncestors()) {
@@ -193,7 +202,13 @@ const ownerOf = (node: TsNode, exportNames: ReadonlyMap<ts.Node, ReadonlyArray<s
         if (isTopLevel && (Node.isFunctionDeclaration(ancestor) || Node.isVariableDeclaration(ancestor))) {
             const name = exportNames.get(ancestor.compilerNode)?.[0];
 
-            return name === undefined ? { declaration: ancestor, kind: "helper" } : { kind: "export", name };
+            if (name !== undefined) {
+                return { kind: "export", name };
+            }
+
+            return Node.isFunctionDeclaration(ancestor) || isFunctionValued(ancestor.getInitializer())
+                ? { declaration: ancestor, kind: "helper" }
+                : { kind: "untracked" };
         }
     }
 
@@ -464,21 +479,35 @@ const callSiteScopeOf = (node: TsNode): CallSiteScope => {
 type Visibility = FunctionIR["visibility"];
 
 /**
+ * The exported names reaching a scope, when they are ALL of its callers. `undefined`
+ * when untracked code also reaches it (its named callers are not the whole story),
+ * or when nothing does. Every "only admins / only internal callers" rule reads this,
+ * so a helper that module-scope code also calls is never judged by its named callers alone.
+ */
+const completeCallersOf = (scope: CallSiteScope): ReadonlyArray<string> | undefined => {
+    if (scope.kind === "helper" && scope.untracked === true) {
+        return undefined;
+    }
+
+    const callers = callSiteCallers(scope);
+
+    return callers.length === 0 ? undefined : callers;
+};
+
+/**
  * The visibility a site is reachable at through its callers, failing toward
  * reporting: `public` when any caller is public; `undefined` — report as if
  * public — when any caller is not a registered function, when untracked code
  * reaches the helper, or when nothing does; else `internal`.
  */
 const callerVisibilityOf = (scope: CallSiteScope, visibilityOf: (exportName: string) => Visibility | undefined): Visibility | undefined => {
-    const visibilities = callSiteCallers(scope).map((exportName) => visibilityOf(exportName));
+    const visibilities = new Set(callSiteCallers(scope).map((exportName) => visibilityOf(exportName)));
 
-    if (visibilities.includes("public")) {
+    if (visibilities.has("public")) {
         return "public";
     }
 
-    const incomplete = visibilities.length === 0 || visibilities.includes(undefined) || (scope.kind === "helper" && scope.untracked === true);
-
-    return incomplete ? undefined : "internal";
+    return completeCallersOf(scope) === undefined || visibilities.has(undefined) ? undefined : "internal";
 };
 
 /** Stamp each row with its {@link callerVisibilityOf} visibility, read off the registered functions of its file. */
@@ -577,6 +606,7 @@ const byExportPreference = (left: string, right: string): number =>
 export {
     addressableExportNameOf,
     callSiteScopeOf,
+    completeCallersOf,
     declarationOf,
     exportedNameOf,
     exportedVariableDeclarationsOf,

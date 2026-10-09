@@ -6,6 +6,10 @@ import { createOwnerFieldFixture, rowAt } from "./owner-field-writes-fixture";
 const DECLARED_GUARD = `import { defineIdentityGuard } from "@lunora/server";
 export const assertOwnOrganizationId = defineIdentityGuard((user: unknown, organizationId: unknown): void => undefined);`;
 
+/** The same guard returning a Promise: it may still be running when the next statement starts, so it must be awaited. */
+const ASYNC_GUARD = `import { defineIdentityGuard } from "@lunora/server";
+export const assertOwnOrganizationId = defineIdentityGuard(async (user: unknown, organizationId: unknown): Promise<void> => undefined);`;
+
 /**
  * A plain public mutation (no `defineMutator`) whose body is `body`, writing an
  * owner column on line 2 (the first body line is line 2 of the file).
@@ -15,7 +19,7 @@ ${body}
 });`;
 
 describe("owner-field writes: guards and admin builders", () => {
-    const { discover, setUp, tearDown } = createOwnerFieldFixture();
+    const { discover, setUp, tearDown } = createOwnerFieldFixture({ serverTypes: true });
 
     beforeEach(setUp);
     afterEach(tearDown);
@@ -45,9 +49,32 @@ ${DECLARED_GUARD}`,
         expect(rowAt(found, 3)).toMatchObject({ guarded: true });
     });
 
-    // A function that merely has an `assert` name proves nothing: only a declared guard counts.
-    // A declared guard that is not awaited may still be running when the write happens.
-    it("does not mark a write guarded by a declared guard that is not awaited", () => {
+    it("marks a write guarded by an async declared guard that is awaited", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `${handler(`  await assertOwnOrganizationId(ctx.user, args.organizationId);
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`)}
+${ASYNC_GUARD}`,
+        );
+
+        expect(rowAt(found, 3)).toMatchObject({ guarded: true });
+    });
+
+    it("does not mark a write guarded by an async declared guard that is not awaited", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `${handler(`  assertOwnOrganizationId(ctx.user, args.organizationId);
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`)}
+${ASYNC_GUARD}`,
+        );
+
+        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
+    });
+
+    // A void guard has nothing left running when it returns, so an unawaited call still counts.
+    it("marks a write guarded by a void declared guard called without await", () => {
         expect.assertions(1);
 
         const found = discover(
@@ -56,7 +83,7 @@ ${DECLARED_GUARD}`,
 ${DECLARED_GUARD}`,
         );
 
-        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
+        expect(rowAt(found, 3)).toMatchObject({ guarded: true });
     });
 
     // A `defineIdentityGuard` defined in this file, not imported from the server, is not a declaration.
@@ -73,6 +100,7 @@ export const assertOwnOrganizationId = defineIdentityGuard((user: unknown, organ
         expect(rowAt(found, 3)).not.toHaveProperty("guarded");
     });
 
+    // A function that merely has an `assert` name proves nothing: only a declared guard counts.
     it("does not mark a write guarded by an undeclared assert-named helper", () => {
         expect.assertions(1);
 
@@ -225,5 +253,55 @@ export const assertOwnOrganizationId = defineIdentityGuard((user: unknown, organ
         ]);
 
         expect(rowAt(found, 2)).not.toHaveProperty("adminOnly");
+    });
+
+    // A helper that untracked code also reaches (here, a module-scope call) is not fully
+    // attributed: its admin callers are not the whole story, so the write is not admin-only.
+    it("does not stamp adminOnly on a helper that untracked module-scope code also reaches", () => {
+        expect.assertions(2);
+
+        const found = discover(
+            `async function persist(ctx, args) { await ctx.db.insert("posts", { userId: args.userId }); }
+const keep = persist(null as never, { userId: "boot" });
+export const createPost = adminMutation.mutation(async ({ args, ctx }) => { await persist(ctx, { userId: args.userId }); });`,
+            "mutators.ts",
+            undefined,
+            [{ args: {}, exportName: "createPost", filePath: "mutators", kind: "mutation", returnType: "unknown", visibility: "public", adminOnly: true }],
+        );
+
+        expect(rowAt(found, 1)).toMatchObject({ scope: { kind: "helper", untracked: true } });
+        expect(rowAt(found, 1)).not.toHaveProperty("adminOnly");
+    });
+
+    // The gap this pins: a route handler assigned to a top-level const runs at module load, so the helper it calls is reached by untracked code.
+    it("does not stamp adminOnly on a helper that an http.route handler assigned to a const also calls", () => {
+        expect.assertions(2);
+
+        const found = discover(
+            `async function persist(ctx, args) { await ctx.db.insert("posts", { userId: args.userId }); }
+const registered = http.route({ path: "/posts", method: "POST", handler: async (ctx, request) => { await persist(ctx, await request.json()); } });
+export const createPost = adminMutation.mutation(async ({ args, ctx }) => { await persist(ctx, { userId: args.userId }); });`,
+            "mutators.ts",
+            undefined,
+            [{ args: {}, exportName: "createPost", filePath: "mutators", kind: "mutation", returnType: "unknown", visibility: "public", adminOnly: true }],
+        );
+
+        expect(rowAt(found, 1)).toMatchObject({ scope: { kind: "helper", untracked: true } });
+        expect(rowAt(found, 1)).not.toHaveProperty("adminOnly");
+    });
+
+    // The control: the same helper reached only from the admin procedure is admin-only.
+    it("stamps adminOnly on a helper reached only from platform-admin procedures", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `async function persist(ctx, args) { await ctx.db.insert("posts", { userId: args.userId }); }
+export const createPost = adminMutation.mutation(async ({ args, ctx }) => { await persist(ctx, { userId: args.userId }); });`,
+            "mutators.ts",
+            undefined,
+            [{ args: {}, exportName: "createPost", filePath: "mutators", kind: "mutation", returnType: "unknown", visibility: "public", adminOnly: true }],
+        );
+
+        expect(rowAt(found, 1)).toMatchObject({ adminOnly: true });
     });
 });

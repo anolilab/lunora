@@ -246,6 +246,15 @@ const runsUnconditionally = (node: TsNode, handler: TsNode): boolean => {
     return false;
 };
 
+/**
+ * Whether a guard call has finished by the time the next statement runs. Awaited,
+ * or typed `void`: a `void` guard has nothing left running when it returns. A
+ * Promise-returning guard that is not awaited may still be running, or reject after
+ * the write, so it does not count. A return type the checker cannot read is not
+ * `void`, so it is not trusted either.
+ */
+const completesBeforeNextStatement = (call: TsNode): boolean => Node.isAwaitExpression(call.getParent()) || call.getType().isVoid();
+
 /** Fields the handler has proven equal to the identity by `position`: unconditional guards and asserts that finish before it. */
 const provenBefore = (handler: TsNode, position: number): Set<string> => {
     const proven = new Set<string>();
@@ -259,10 +268,7 @@ const provenBefore = (handler: TsNode, position: number): Set<string> => {
     }
 
     for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        // A guard counts only when awaited: an unawaited guard may still be running, or may
-        // reject after the write has happened. Sync guards that are not awaited are reported
-        // rather than trusted, which is the safe direction.
-        if (call.getEnd() <= position && Node.isAwaitExpression(call.getParent()) && runsUnconditionally(call, handler)) {
+        if (call.getEnd() <= position && completesBeforeNextStatement(call) && runsUnconditionally(call, handler)) {
             for (const field of assertedFields(call)) {
                 proven.add(field);
             }

@@ -6,11 +6,14 @@
  * - {@link calleeName} — how is it spelled? Makes no claim about origin.
  * - {@link resolvesToImportedName} — does it name X, allowing an import alias?
  * - {@link resolveCalleeKind} — which surface export is it, by import?
+ * - {@link isServerImport} — is it that export, by import, with no fallback?
  *
  * They are not interchangeable (the signatures differ), so the question picks
- * the function. The one asymmetry worth knowing: both of the latter two accept
- * a plain matching name outright, and gate only the parts that need the type
- * checker or the import table. Neither is a guarantee of origin.
+ * the function. The asymmetry worth knowing: `resolvesToImportedName` and
+ * `resolveCalleeKind` accept a plain matching name, or the raw text, when there
+ * is no type information. `isServerImport` never does. It is the only one that
+ * proves origin, and the security markers (`platformAdmin`, `defineIdentityGuard`)
+ * use it for that reason.
  */
 import type { Identifier, Node, SourceFile } from "ts-morph";
 import { Node as TsNode } from "ts-morph";
@@ -104,6 +107,23 @@ const resolvesToImportedName = (callee: Node, expectedName: string): boolean => 
 };
 
 /**
+ * The exported name a Lunora-surface import binds `identifier` to, read off its
+ * symbol: `query` for `import { query as q }`. `undefined` when no declaration is
+ * such an import — a local binding, or an import from somewhere else. Trusts only
+ * the public package and the generated `_generated/server` re-export.
+ */
+const surfaceImportNameOf = (identifier: Identifier): string | undefined => {
+    for (const declaration of identifier.getSymbol()?.getDeclarations() ?? []) {
+        // The NAME node, not the alias: the kind we care about is the exported name.
+        if (TsNode.isImportSpecifier(declaration) && isServerSurfaceModule(declaration.getImportDeclaration().getModuleSpecifierValue())) {
+            return declaration.getNameNode().getText();
+        }
+    }
+
+    return undefined;
+};
+
+/**
  * Resolve a callee identifier through its import declaration, returning the
  * name as EXPORTED from the Lunora surface — so `import { query as q }` used as
  * `q(...)` answers `"query"`.
@@ -120,49 +140,24 @@ const resolvesToImportedName = (callee: Node, expectedName: string): boolean => 
  * because the alternative is dropping every function in the project.
  */
 const resolveCalleeKind = (identifier: Identifier): string | undefined => {
-    const symbol = identifier.getSymbol();
-
-    if (!symbol) {
+    // No symbol: nothing to resolve, so fall back to the text (see above).
+    if (!identifier.getSymbol()) {
         return identifier.getText();
     }
 
-    for (const declaration of symbol.getDeclarations()) {
-        if (!TsNode.isImportSpecifier(declaration)) {
-            continue;
-        }
-
-        // Only trust identifiers imported from the Lunora surface (the public
-        // package or the generated `_generated/server` re-export).
-        if (!isServerSurfaceModule(declaration.getImportDeclaration().getModuleSpecifierValue())) {
-            return undefined;
-        }
-
-        // `import { query as q }` → `getNameNode()` is `query`, `getAliasNode()`
-        // is `q`. The kind we care about is the exported name, not the alias.
-        return declaration.getNameNode().getText();
-    }
-
-    // A symbol with no surface import specifier among its declarations — a local
-    // binding, or imported from somewhere else. Reject rather than pick it up.
-    return undefined;
+    return surfaceImportNameOf(identifier);
 };
 
 /**
- * Whether `callee` is the export `exportName` of a Lunora server module, by its import: an
- * identifier bound by `import { exportName } from "@lunora/server"` (or an alias of it). A local
- * function with the same name is not one, so it proves nothing about the procedure it guards.
+ * Whether `callee` is the surface export `exportName`, by import, with no
+ * fallback to the text: an identifier whose symbol is a named import of that
+ * export (an alias of it counts). A local function with the same name is not
+ * one, so it cannot downgrade a finding.
+ *
+ * Deliberately narrow. A namespace call (`server.platformAdmin(...)`) or a
+ * re-export through the project's own barrel does not match, so the procedure
+ * is reported rather than trusted. That is the safe direction.
  */
-const isServerImport = (callee: Node, exportName: string): boolean => {
-    if (!TsNode.isIdentifier(callee)) {
-        return false;
-    }
-
-    return (callee.getSymbol()?.getDeclarations() ?? []).some(
-        (declaration) =>
-            TsNode.isImportSpecifier(declaration) &&
-            declaration.getName() === exportName &&
-            isServerSurfaceModule(declaration.getImportDeclaration().getModuleSpecifierValue()),
-    );
-};
+const isServerImport = (callee: Node, exportName: string): boolean => TsNode.isIdentifier(callee) && surfaceImportNameOf(callee) === exportName;
 
 export { calleeName, isServerImport, resolveCalleeKind, resolvesToImportedName };

@@ -1,11 +1,10 @@
-import { callSiteCallers } from "@lunora/advisor";
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, ParameterDeclaration, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import { isArgumentDerived } from "../../argument-taint";
 import type { CallSiteScope, FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../../ir";
 import { bindingKeyName, collectCallRows, isConstDeclaration, memberAccessOf, propertyKeyName, unwrapExpression } from "../ast";
-import { callSiteScopeOf, declarationOf, withCallerVisibility } from "../attribution";
+import { callSiteScopeOf, completeCallersOf, declarationOf, withCallerVisibility } from "../attribution";
 import { denotesContextDatabase, isContextRooted } from "../context-root";
 import type { MutatorImplScope } from "./args-pristine";
 import { mutatorImplScopeOf } from "./args-pristine";
@@ -270,11 +269,9 @@ const discoverOwnerFieldWrites = (
     const adminByKey = new Map(functions.map((entry) => [`${entry.filePath}:${entry.exportName}`, entry.adminOnly === true]));
 
     return withCallerVisibility(writes, functions).map((row) => {
-        const callers = callSiteCallers(row.scope);
-        // A helper that untracked code also reaches is not fully attributed: its named callers
-        // are not the whole story, so it cannot be treated as admin-only.
-        const fullyAttributed = !(row.scope.kind === "helper" && row.scope.untracked === true);
-        const adminOnly = fullyAttributed && callers.length > 0 && callers.every((exportName) => adminByKey.get(`${row.file}:${exportName}`) === true);
+        // Admin-only only when every named caller is a platform-admin procedure AND no untracked code reaches it.
+        const callers = completeCallersOf(row.scope);
+        const adminOnly = callers?.every((exportName) => adminByKey.get(`${row.file}:${exportName}`) === true) === true;
 
         return adminOnly ? { ...row, adminOnly: true as const } : row;
     });

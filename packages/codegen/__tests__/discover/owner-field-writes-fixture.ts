@@ -18,7 +18,16 @@ type FunctionList = Parameters<typeof discoverOwnerFieldWrites>[2];
  * writes together with the mutators it declares. Wire `setUp` / `tearDown` into
  * `beforeEach` / `afterEach` of the `describe` that uses it.
  */
-const createOwnerFieldFixture = (): {
+const createOwnerFieldFixture = (
+    options: {
+        /**
+         * Write a `@lunora/server` declaration beside the fixture, so the checker reads a guard's
+         * real return type (`void` or a Promise). Without it the import is unresolved, the call types
+         * as `any`, and a return-type rule fails closed.
+         */
+        serverTypes?: boolean;
+    } = {},
+): {
     discover: (source: string, file?: string, project?: Project, functions?: FunctionList) => Row[];
     setUp: () => void;
     tearDown: () => void;
@@ -42,6 +51,18 @@ const createOwnerFieldFixture = (): {
         setUp: (): void => {
             workdir = mkdtempSync(join(tmpdir(), "lunora-owner-"));
             mkdirSync(join(workdir, "lunora"), { recursive: true });
+
+            if (options.serverTypes === true) {
+                // The same signature `defineIdentityGuard` declares in `@lunora/server`.
+                const directory = join(workdir, "node_modules", "@lunora", "server");
+
+                mkdirSync(directory, { recursive: true });
+                writeFileSync(
+                    join(directory, "index.d.ts"),
+                    "export declare const defineIdentityGuard: <Guard extends (...args: never[]) => void>(guard: Guard) => Guard;\n",
+                    "utf8",
+                );
+            }
         },
         tearDown: (): void => {
             rmSync(workdir, { force: true, recursive: true });

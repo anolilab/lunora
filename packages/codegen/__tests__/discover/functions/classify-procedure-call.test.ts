@@ -200,6 +200,29 @@ describe("classifyProcedureCall", () => {
         ).not.toHaveProperty("adminOnly");
     });
 
+    // The common shape: the admin builder is a local const, and procedures are built on it.
+    it("marks admin-only a procedure built on a local const carrying the platformAdmin step", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `const adminMutation = mutation.use(platformAdmin(() => true));\nexport const setCredits = adminMutation.mutation(async () => null);`,
+                `import { mutation, platformAdmin } from "@lunora/server";`,
+            ),
+        ).toMatchObject({ adminOnly: true });
+    });
+
+    it("does not mark admin-only a procedure built on a local const without the platformAdmin step", () => {
+        expect.assertions(1);
+
+        expect(
+            classify(
+                `const plainMutation = mutation.use(logger());\nexport const setCredits = plainMutation.mutation(async () => null);`,
+                `import { mutation } from "@lunora/server";`,
+            ),
+        ).not.toHaveProperty("adminOnly");
+    });
+
     it("does not mark admin-only from a variable named adminMutation without the platformAdmin step", () => {
         expect.assertions(1);
 

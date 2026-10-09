@@ -2,7 +2,7 @@ import type { CallExpression, Identifier, PropertyAccessExpression } from "ts-mo
 import { Node } from "ts-morph";
 
 import { unwrapExpression } from "../ast";
-import { builderChainSteps, walkBuilderChain } from "../builder-chain";
+import { walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
 import { isServerImport, resolveCalleeKind } from "../callee";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
@@ -109,19 +109,32 @@ const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "interna
 };
 
 /**
+ * Whether a chain carries a `.use(platformAdmin(...))` step. Follows a local
+ * `const` ONE hop, as {@link resolveBuilderRootKind} does, so the common shape
+ * `const adminMutation = mutation.use(platformAdmin(...))` marks every procedure
+ * built on it. Bounded to one hop so a `const a = b; const b = a;` cycle ends.
+ */
+const usesPlatformAdmin = (receiver: Node, followedLocal = false): boolean => {
+    if (wrappedCallsWhere(receiver, "use", (callee) => isServerImport(callee, "platformAdmin")).length > 0) {
+        return true;
+    }
+
+    if (followedLocal) {
+        return false;
+    }
+
+    const declaration = builderChainRoot(receiver)?.getSymbol()?.getValueDeclaration();
+    const initializer = declaration && Node.isVariableDeclaration(declaration) ? declaration.getInitializer() : undefined;
+
+    return initializer !== undefined && usesPlatformAdmin(initializer, true);
+};
+
+/**
  * The `adminOnly` flag for a builder chain, or nothing. The marker is the
  * `platformAdmin` import from `@lunora/server` used as a `.use(...)` step, matched
  * by its import origin and not by the name of the variable that holds the chain.
  */
-const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> => {
-    const usesPlatformAdmin = builderChainSteps(receiver).some((step) => {
-        const argument = step.name === "use" ? step.call.getArguments()[0] : undefined;
-
-        return argument !== undefined && Node.isCallExpression(argument) && isServerImport(argument.getExpression(), "platformAdmin");
-    });
-
-    return usesPlatformAdmin ? { adminOnly: true } : {};
-};
+const adminMarkerOf = (receiver: Node): { adminOnly: true } | Record<string, never> => (usesPlatformAdmin(receiver) ? { adminOnly: true } : {});
 
 /** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
 interface ProcedureClassification {

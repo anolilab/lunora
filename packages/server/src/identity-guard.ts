@@ -11,8 +11,9 @@
  * });
  * ```
  *
- * The function is returned unchanged, so the declaration costs nothing at runtime. An
- * asynchronous guard must be awaited at its call site, or the advisor does not count it.
+ * The function is returned unchanged, so the declaration costs nothing at runtime. A
+ * guard that returns a Promise must be awaited at its call site, or the advisor does
+ * not count the call. A guard that returns `void` counts as soon as it is called.
  * The guarantee is the function's own: it must throw whenever the value is not
  * the caller's identity. The advisor trusts the declaration, not the body.
  */
