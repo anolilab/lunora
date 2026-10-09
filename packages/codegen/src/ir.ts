@@ -897,6 +897,17 @@ export interface HandlerSiteIR {
  * `publish`); `reason` says why the target could not be read statically.
  */
 export interface CallEdgeIR {
+    /**
+     * `true` when the call sits behind something that may not run — a guard, a
+     * loop, a `try`, an optional chain, a ternary/logical right operand, or a
+     * statement an earlier early-exit shadows. Set only (never `false`), so a
+     * straight-line row stays byte-identical to a pre-`conditional` one.
+     *
+     * The `dispatch_cycle` lint reads it as its false-positive gate: a cycle
+     * containing ANY conditional edge is not an infinite loop — some guard
+     * breaks it — so only a cycle whose every edge is unconditional is flagged.
+     */
+    conditional?: true;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
@@ -906,6 +917,25 @@ export interface CallEdgeIR {
     /** Who the call runs on behalf of. */
     scope: CallSiteScope;
     target?: string;
+}
+
+/**
+ * A literal-infinite loop in `lunora/` source — `while (true)`, `for (;;)` /
+ * `for (; true;)`, `do { … } while (true)` — with no statically reachable way
+ * out: no `break` bound to this loop, no `return`/`throw` outside a nested
+ * function, no labeled `break` escaping it. One record per offending loop; a
+ * loop that can exit records nothing, so the `unbounded_loop` lint has no
+ * bounded loop to sift through.
+ */
+export interface UnboundedLoopIR {
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The loop form that never falls out. */
+    kind: "do" | "for" | "while";
+    /** 1-based line of the `loop` keyword. */
+    line: number;
+    /** Who the loop runs on behalf of. */
+    scope: CallSiteScope;
 }
 
 /**

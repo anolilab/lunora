@@ -83,6 +83,7 @@ import discoverStorageKeyAccesses from "./discover/storage-key-accesses";
 import discoverStorageUploads from "./discover/storage-uploads";
 import { buildStudioFeatures } from "./discover/studio-features";
 import discoverTableWrites from "./discover/table-writes";
+import discoverUnboundedLoops from "./discover/unbounded-loops";
 import discoverUnreadableArguments from "./discover/unreadable-arguments";
 import discoverUnregisteredProcedures from "./discover/unregistered-procedures";
 import discoverUnrestrictedWhereBranches from "./discover/unrestricted-where-branches";
@@ -806,6 +807,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   authApiCalls: discoverAuthApiCalls(project, lunoraDirectory),
                   authConfigs: discoverAuthConfig(project, lunoraDirectory),
                   browserUrlAccesses: discoverBrowserUrlAccesses(project, lunoraDirectory),
+                  callEdges: discoverCallEdges(project, lunoraDirectory),
                   configCalls: discoverConfigCalls(project, lunoraDirectory),
                   containerKeyAccesses: discoverContainerKeyAccesses(project, lunoraDirectory),
                   containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
@@ -853,6 +855,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   storageKeyAccesses: discoverStorageKeyAccesses(project, lunoraDirectory, functions),
                   storageUploads: discoverStorageUploads(project, lunoraDirectory),
                   tableWrites: callSites.tableWrites,
+                  unboundedLoops: discoverUnboundedLoops(project, lunoraDirectory),
                   vectorNamespaceAccesses: discoverVectorNamespaceAccesses(project, lunoraDirectory),
                   workflowCalls: callSites.workflowCalls,
                   workflows,
@@ -1157,7 +1160,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         wantsArchitecture && callSites !== undefined
             ? buildArchitecture({
                   ...callSites,
-                  callEdges: discoverCallEdges(project, lunoraDirectory),
+                  // The advisor's `dispatch_cycle` already walked them when linting is on.
+                  callEdges: advisorContext?.callEdges ?? discoverCallEdges(project, lunoraDirectory),
                   crons,
                   functions,
                   httpRoutes,

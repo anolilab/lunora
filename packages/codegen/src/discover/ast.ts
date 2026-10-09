@@ -677,6 +677,20 @@ const walkChain = (value: Node | undefined, settle?: (call: CallExpression) => b
 /** The leftmost operand of `value`'s member / call chain (see {@link walkChain}). */
 const chainRootOf = (value: Node | undefined): Node | undefined => walkChain(value).root;
 
+/**
+ * A declaration whose `return` leaves it and whose `break` cannot be crossed:
+ * a `break` bound to an outer loop is a syntax error past one of these, and a
+ * `return` inside one only leaves the declaration, not an enclosing loop.
+ */
+const isFunctionLike = (node: Node): boolean =>
+    Node.isArrowFunction(node) ||
+    Node.isConstructorDeclaration(node) ||
+    Node.isFunctionDeclaration(node) ||
+    Node.isFunctionExpression(node) ||
+    Node.isGetAccessorDeclaration(node) ||
+    Node.isMethodDeclaration(node) ||
+    Node.isSetAccessorDeclaration(node);
+
 /** Whether `node` is `other`: the same compiler node. */
 const isSameNode = (node: Node | undefined, other: Node): boolean => node?.compilerNode === other.compilerNode;
 
@@ -869,6 +883,7 @@ export {
     functionReferenceSegments,
     handlerOf,
     isConstDeclaration,
+    isFunctionLike,
     isSameNode,
     isTestPath,
     isWriteTarget,

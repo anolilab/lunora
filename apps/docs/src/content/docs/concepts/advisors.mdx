@@ -81,6 +81,8 @@ studio.
 
 | Lint                           | Level | Detects                                                                                                |
 | ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------ |
+| `unbounded_loop`               | error | A `while (true)` / `for (;;)` with no `break`, `return` or `throw`: it never ends, billing every turn. |
+| `dispatch_cycle`               | error | Functions schedule or call each other (or themselves) with no guard on any hop: an endless chain.      |
 | `table_without_insert`         | info  | No function inserts into the table: dead schema, or seeded out-of-band.                                |
 | `workflow_unused`              | info  | A declared workflow is never started: dead code (still billed), or external.                           |
 | `queue_without_dlq`            | warn  | A `defineQueue` with no `deadLetterQueue`: exhausted messages are dropped, not captured or replayable. |

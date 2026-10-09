@@ -11,6 +11,11 @@ interface CallSiteRow {
     scope: AdvisorCallSiteScope;
 }
 
+/** A trailing `/index`, which codegen collapses into the folder's namespace. */
+const INDEX_SUFFIX = /\/index$/u;
+/** Any character that isn't valid in a JS identifier. */
+const NON_IDENTIFIER = /[^\dA-Za-z]/gu;
+
 /**
  * Personally-identifiable-information column names. Kept deliberately tight to
  * unambiguous PII field names — not broad "sounds personal" guesses — to hold
@@ -229,6 +234,9 @@ export const callSiteWhere = (row: CallSiteRow): string => {
         }
     }
 };
+
+/** A `lunora/`-relative file as its dispatch namespace (`ratelimit/index` → `ratelimit`, `my-module/x` → `my_module_x`), as codegen's `sanitizeNamespace` builds it. */
+export const dispatchNamespace = (file: string): string => file.replace(INDEX_SUFFIX, "").replaceAll(NON_IDENTIFIER, "_");
 
 /** A call-site finding's location metadata: its {@link callSiteMetadata} plus `file` and `line`. */
 export const callSiteFields = (row: CallSiteRow): CallSiteMetadata & { file: string; line: number } => {

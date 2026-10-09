@@ -6,6 +6,7 @@ import type { AdvisorArgumentValidator } from "./argument-validators";
 import type { AdvisorAuthConfig } from "./auth-config";
 import type { AdvisorAuthApiCall } from "./authapi-calls";
 import type { AdvisorBrowserUrlAccess } from "./browser-url-accesses";
+import type { AdvisorCallEdge } from "./call-edges";
 import type { AdvisorConfigCall } from "./config-calls";
 import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 import type { AdvisorContainerOverride } from "./container-overrides";
@@ -51,6 +52,7 @@ import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorStorageUpload } from "./storage-uploads";
+import type { AdvisorUnboundedLoop } from "./unbounded-loops";
 import type { AdvisorUnrestrictedWhereBranch } from "./unrestricted-where-branches";
 import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
@@ -218,6 +220,15 @@ export interface LintContext {
      * finds nothing.
      */
     browserUrlAccesses?: ReadonlyArray<AdvisorBrowserUrlAccess>;
+
+    /**
+     * Call-site edges of the architecture graph — `ctx.run*` calls, scheduler
+     * dispatches, enqueues, publishes and service uses, each with the site's
+     * scope and whether it sits behind a guard (`conditional`) — the
+     * `dispatch_cycle` input. Supplied by the codegen feeder; absent for runtime
+     * callers, where the lint finds nothing.
+     */
+    callEdges?: ReadonlyArray<AdvisorCallEdge>;
 
     /**
      * Factory/constructor calls in `lunora/` whose config object literal a
@@ -696,6 +707,13 @@ export interface LintContext {
      * absent for runtime callers.
      */
     tableWrites?: ReadonlyArray<AdvisorTableWrite>;
+
+    /**
+     * Literal-infinite loops (`while (true)`, `for (;;)`, `do … while (true)`)
+     * with no statically reachable exit — the `unbounded_loop` input. Supplied
+     * by the codegen feeder only.
+     */
+    unboundedLoops?: ReadonlyArray<AdvisorUnboundedLoop>;
 
     /**
      * Branching shape/policy predicate arms returning an unrestricted filter (`{}` /
