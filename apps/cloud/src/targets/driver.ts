@@ -188,8 +188,9 @@ export interface TargetFleet {
      * Worker, and restore it on recovery (plan 365 W8): converge the edge to the
      * suspensions in the store, idempotently. `cloudflare-wfp` only, and only
      * where this deployment holds the SaaS zone or the suspended-hostnames list.
-     * Absent elsewhere: a box serves its own traffic, a connected account is the
-     * customer's, and the suspension still holds through the plan lookup.
+     * Absent elsewhere: a box withholds a suspended organization's routes itself,
+     * and a connected account's Worker is the customer's, served without the
+     * platform's dispatcher — suspension does not stop it at runtime.
      */
     edgeBlock?: (database: ControlPlaneStore, options: { log: (line: string) => void; now: number }) => Promise<EdgeBlockResult>;
 
