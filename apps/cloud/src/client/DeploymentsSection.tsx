@@ -438,6 +438,23 @@ const DeploymentsTable = ({
  * apart from rollback.
  */
 
+/** The running build's log and the shown deployment's bundle-scan findings — each only when there is a build for it. */
+const BuildCards = ({
+    findingsBuildId,
+    logsBuildId,
+    organizationId,
+}: {
+    findingsBuildId: BuildId | undefined;
+    logsBuildId: BuildId | undefined;
+    organizationId: OrgId;
+}): ReactElement => (
+    <>
+        {logsBuildId === undefined ? null : <BuildLogsCard buildId={logsBuildId} organizationId={organizationId} />}
+        {/* Renders nothing for a build the scan found nothing in. */}
+        {findingsBuildId === undefined ? null : <BuildAdvisoriesCard buildId={findingsBuildId} organizationId={organizationId} />}
+    </>
+);
+
 /**
  * Which deployment the detail panes describe, and what belongs with it.
  *
@@ -446,25 +463,26 @@ const DeploymentsTable = ({
  * when nothing is clicked or the click is stale), whether that IS the newest, the
  * build to show, and the branch to label.
  *
- * The build match is the load-bearing one. The design session's `builds` table
- * carried a `deploymentId` linking a build to the deployment it produced; this
- * branch's schema has no such column, so a build can only be matched to the
- * NEWEST deployment. Viewing an older deployment therefore shows NO build rather
- * than the latest build mislabelled as its own — a wrong build here would be read
- * as the log of how that deployment was made.
+ * Two builds, for two questions. The LOG shown is the newest build's, and only
+ * beside the newest deployment: during a deploy that is the build running now,
+ * the one worth watching. The bundle-scan FINDINGS shown are those of the build
+ * that produced the shown deployment (`deploymentId`), so a newer failed build
+ * never puts its findings on the release that is live — and an older deployment
+ * shows its own.
  */
 const resolveActive = (
     deployments: Deployment[] | undefined,
     builds: Build[] | undefined,
     activeId: Deployment["_id"] | null,
-): { active?: Deployment; activeBuild?: Build; branch?: string; isLatest: boolean } => {
+): { active?: Deployment; activeBuild?: Build; branch?: string; deployedBuild?: Build; isLatest: boolean } => {
     const clicked = activeId === null ? undefined : deployments?.find((deployment) => deployment._id === activeId);
     const active = clicked ?? deployments?.[0];
     const isLatest = active !== undefined && active._id === deployments?.[0]?._id;
     // A `skipped` push never produced anything, so it is not what is deployed.
     const activeBuild = isLatest ? builds?.find((build) => build.status !== "skipped") : undefined;
+    const deployedBuild = active === undefined ? undefined : builds?.find((build) => build.deploymentId === active._id);
 
-    return { active, activeBuild, branch: active?.branch ?? activeBuild?.branch, isLatest };
+    return { active, activeBuild, branch: active?.branch ?? activeBuild?.branch, deployedBuild, isLatest };
 };
 
 /**
@@ -549,7 +567,7 @@ export const DeploymentsSection = ({
     // The deployment whose detail is shown — a clicked one, else the newest.
     const [activeId, setActiveId] = useState<Deployment["_id"] | null>(null);
 
-    const { active, activeBuild, branch } = resolveActive(deployments, builds, activeId);
+    const { active, activeBuild, branch, deployedBuild } = resolveActive(deployments, builds, activeId);
 
     // Before the first deploy too: a monorepo project needs its root directory
     // set before the first push can build at all.
@@ -621,13 +639,7 @@ export const DeploymentsSection = ({
                     </CardContent>
                 </Card>
             ) : null}
-            {activeBuild ? (
-                <>
-                    <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} />
-                    {/* Renders nothing for a build the scan found nothing in. */}
-                    <BuildAdvisoriesCard buildId={activeBuild._id} organizationId={organizationId} />
-                </>
-            ) : null}
+            <BuildCards findingsBuildId={deployedBuild?._id} logsBuildId={activeBuild?._id} organizationId={organizationId} />
             {buildSettings}
             {targetSettings}
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />
