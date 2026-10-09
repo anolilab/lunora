@@ -6,7 +6,7 @@ import { TARGET_OPTION } from "../../util/deploy-target";
 import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 /** The `lunora cloudflare` tools. */
-type CloudflareToolName = "ai-gateway" | "alerts" | "analyze" | "containers" | "deployments";
+type CloudflareToolName = "ai-gateway" | "alerts" | "containers" | "deployments";
 
 /** One tool of the `lunora cloudflare` group: its name, its own arguments, and what it does. */
 interface CloudflareTool {
@@ -23,7 +23,6 @@ interface CloudflareTool {
 const CLOUDFLARE_TOOLS: ReadonlyArray<CloudflareTool> = [
     { name: "alerts", summary: "usage alerts that catch a runaway bill", usage: "[status | setup | test]" },
     { name: "ai-gateway", summary: "create or reuse an AI Gateway for ctx.ai and write its id into wrangler vars", usage: "" },
-    { name: "analyze", summary: "wrangler dry-run: bundle size, heaviest modules, _generated files", usage: "" },
     {
         name: "containers",
         summary: "build and push container images, manage instances (wraps wrangler containers)",
@@ -46,7 +45,7 @@ const CLOUDFLARE_TOOLS: ReadonlyArray<CloudflareTool> = [
  */
 const cloudflareCommand: Command = {
     argument: { description: `${CLOUDFLARE_TOOLS.map((tool) => tool.name).join(" | ")}, then the tool's own arguments`, name: "tool", type: String },
-    description: "Cloudflare-only tools: usage alerts, AI Gateway, bundle analysis, containers, deployments",
+    description: "Cloudflare-only tools: usage alerts, AI Gateway, containers, deployments",
     examples: [
         ["lunora cloudflare", "List the tools"],
         ["lunora cloudflare alerts", "Show last month's usage and which products have an alert"],
@@ -60,7 +59,6 @@ const cloudflareCommand: Command = {
         ["lunora cloudflare ai-gateway", "Create (or reuse) a gateway named after the worker and wire it into wrangler vars"],
         ["lunora cloudflare ai-gateway --id my-gateway --no-logs", "Use an explicit gateway id, with prompt/response log collection off"],
         ["lunora cloudflare ai-gateway --dry-run", "Print what would be created and written, without calling Cloudflare"],
-        ["lunora cloudflare analyze", "Report the worker bundle size + heaviest modules"],
         ["lunora cloudflare containers build ./containers/transcoder --tag transcoder:v1 --push", "Build an image and push it to the Cloudflare Registry"],
         ["lunora cloudflare containers images list", "List images in your Cloudflare Registry"],
         ["lunora cloudflare containers list --format json", "List container instances as JSON (also `info`, `images list`)"],

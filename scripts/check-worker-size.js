@@ -191,7 +191,7 @@ if (bundle.gzipBytes > ceiling) {
             `  now:      ${kib(bundle.gzipBytes)} gzipped (${kib(bundle.rawBytes)} raw)\n` +
             `  baseline: ${kib(baseline.gzipBytes)} gzipped, + ${kib(baseline.allowanceBytes)} allowance = ${kib(ceiling)}\n` +
             `  delta:    +${kib(bundle.gzipBytes - baseline.gzipBytes)} against the baseline\n` +
-            `Every Lunora app carries this. Find what arrived (\`lunora cloudflare analyze\` prints the heaviest modules),\n` +
+            `Every Lunora app carries this. Find what arrived (\`lunora analyze\` prints the heaviest modules),\n` +
             `and if the growth is intended, accept it with \`pnpm run worker-size:update\` so the increase is\n` +
             `visible in review rather than buried.`,
     );

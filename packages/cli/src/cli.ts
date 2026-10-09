@@ -6,6 +6,7 @@ import versionCommand from "@visulima/cerebro/command/version";
 
 import { addCommand } from "./commands/add";
 import { advisorCommand } from "./commands/advisor";
+import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { buildCommand } from "./commands/build";
 import { cloudflareCommand } from "./commands/cloudflare";
@@ -71,6 +72,7 @@ const COMMANDS = [
     "info",
     "doctor",
     "env",
+    "analyze",
     "view",
     "docs",
     "registry",
@@ -110,6 +112,7 @@ const CLI_COMMANDS = [
     infoCommand,
     doctorCommand,
     envCommand,
+    analyzeCommand,
     viewCommand,
     documentationCommand,
     registryCommand,
@@ -254,7 +257,6 @@ const UNKNOWN_COMMAND = /Command "(?<name>[^"]+)" not found/u;
 const MOVED_COMMANDS: Readonly<Record<string, { absorbs?: string; to: string }>> = {
     ai: { absorbs: "gateway", to: "cloudflare ai-gateway" },
     alerts: { to: "cloudflare alerts" },
-    analyze: { to: "cloudflare analyze" },
     containers: { to: "cloudflare containers" },
     deployments: { to: "cloudflare deployments" },
 };

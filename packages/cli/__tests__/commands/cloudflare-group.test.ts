@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/cli";
+import { execute as analyzeExecute } from "../../src/commands/analyze/handler";
+import type { AnalyzeOptions } from "../../src/commands/analyze/index";
 import { execute } from "../../src/commands/cloudflare/handler";
 import type { CloudflareOptions } from "../../src/commands/cloudflare/index";
 import { CLOUDFLARE_TOOLS } from "../../src/commands/cloudflare/index";
@@ -90,7 +92,7 @@ describe("lunora cloudflare", () => {
             const { code, output } = await cli(["cloudflare", "budget"]);
 
             expect(code).toBe(EXIT_CODE.USAGE);
-            expect(output).toContain('cloudflare: unknown tool "budget" — expected alerts | ai-gateway | analyze | containers | deployments');
+            expect(output).toContain('cloudflare: unknown tool "budget" — expected alerts | ai-gateway | containers | deployments');
             expect(spawned).toHaveLength(0);
         });
     });
@@ -129,21 +131,6 @@ describe("lunora cloudflare", () => {
             expect(stdout).toBe("");
         });
 
-        it("hands analyze's report to the --format json envelope", async () => {
-            expect.assertions(2);
-
-            const { code, document } = await runExecute<CloudflareOptions, { totalFiles: number }>(execute, {
-                argument: ["analyze"],
-                commandName: "cloudflare",
-                cwd,
-                options: { format: "json" },
-            });
-
-            expect(code).toBe(0);
-            // The mocked dry-run writes nothing, so the report covers an empty outdir.
-            expect(document?.data?.totalFiles).toBe(0);
-        });
-
         it("refuses an unknown deployments subcommand without spawning", async () => {
             expect.assertions(3);
 
@@ -152,15 +139,6 @@ describe("lunora cloudflare", () => {
             expect(code).toBe(EXIT_CODE.USAGE);
             expect(output).toContain('cloudflare deployments: unknown subcommand "nuke"');
             expect(spawned).toHaveLength(0);
-        });
-
-        it("runs analyze through a wrangler dry-run", async () => {
-            expect.assertions(2);
-
-            const { code } = await cli(["cloudflare", "analyze"]);
-
-            expect(code).toBe(0);
-            expect(wranglerCalls()[0]).toMatch(/^wrangler deploy --dry-run --outdir /u);
         });
 
         it("runs ai-gateway with its flags", async () => {
@@ -176,7 +154,7 @@ describe("lunora cloudflare", () => {
     });
 
     describe("on a project that does not deploy to Cloudflare", () => {
-        const invocations = ["alerts", "ai-gateway --dry-run", "analyze", "containers list", "deployments list"];
+        const invocations = ["alerts", "ai-gateway --dry-run", "containers list", "deployments list"];
         const hosts = [
             ["celld", "celld"],
             ["node", "Node"],
@@ -232,7 +210,6 @@ describe("lunora cloudflare", () => {
             ["containers list --format json", "containers", "cloudflare containers", "lunora cloudflare containers list --format json"],
             ["deployments rollback --yes", "deployments", "cloudflare deployments", "lunora cloudflare deployments rollback --yes"],
             ["ai gateway --dry-run", "ai gateway", "cloudflare ai-gateway", "lunora cloudflare ai-gateway --dry-run"],
-            ["analyze", "analyze", "cloudflare analyze", "lunora cloudflare analyze"],
             ["alerts setup --email ops@example.com", "alerts", "cloudflare alerts", "lunora cloudflare alerts setup --email ops@example.com"],
         ])("`lunora %s` fails, says where it moved, and runs nothing", async (line, old, moved, suggested) => {
             expect.assertions(4);
@@ -242,6 +219,43 @@ describe("lunora cloudflare", () => {
             expect(code).toBe(EXIT_CODE.USAGE);
             expect(output).toContain(`\`lunora ${old}\` moved to \`lunora ${moved}\`. Run: ${suggested}`);
             expect(output).not.toContain("Did you mean");
+            expect(spawned).toHaveLength(0);
+        });
+    });
+
+    describe("analyze stays top-level", () => {
+        it("runs `lunora analyze` on a celld project — a wrangler bundle is not Cloudflare-only", async () => {
+            expect.assertions(2);
+
+            setTarget("celld");
+
+            const { code } = await cli(["analyze"]);
+
+            expect(code).toBe(0);
+            expect(wranglerCalls()[0]).toMatch(/^wrangler deploy --dry-run --outdir /u);
+        });
+
+        it("hands its report to the --format json envelope", async () => {
+            expect.assertions(2);
+
+            const { code, document } = await runExecute<AnalyzeOptions, { totalFiles: number }>(analyzeExecute, {
+                commandName: "analyze",
+                cwd,
+                options: { format: "json" },
+            });
+
+            expect(code).toBe(0);
+            // The mocked dry-run writes nothing, so the report covers an empty outdir.
+            expect(document?.data?.totalFiles).toBe(0);
+        });
+
+        it("is not a `lunora cloudflare` tool", async () => {
+            expect.assertions(3);
+
+            const { code, output } = await cli(["cloudflare", "analyze"]);
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(output).toContain('cloudflare: unknown tool "analyze"');
             expect(spawned).toHaveLength(0);
         });
     });

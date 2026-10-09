@@ -35,12 +35,12 @@ It exits non-zero on any hard failure, so it also works as a CI gate.
 Two commands fail loudly at build time rather than in production:
 
 ```bash
-lunora verify              # codegen dry-run + tsc --noEmit; writes nothing
-lunora cloudflare analyze  # wrangler dry-deploy: bundle size, heaviest modules, _generated state
+lunora verify    # codegen dry-run + tsc --noEmit; writes nothing
+lunora analyze   # wrangler dry-deploy: bundle size, heaviest modules, _generated state
 ```
 
-`verify` catches codegen drift and type errors. `cloudflare analyze` is how you
-find out a dependency doubled your bundle; see [Runtime & bundling](/docs/concepts/runtime).
+`verify` catches codegen drift and type errors. `analyze` is how you find out a
+dependency doubled your bundle; see [Runtime & bundling](/docs/concepts/runtime).
 
 ## The error overlay
 

@@ -60,13 +60,13 @@ lunora deploy [--env <name>]            # codegen, validate wrangler, then wrang
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
 lunora verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
               [--no-typecheck]
+lunora analyze [--format json]          # wrangler dry-run: bundle size + top modules
 
 # Cloudflare only (refused on a celld or Node project)
 lunora cloudflare                       # list the tools
 lunora cloudflare alerts [status|setup|test]   # usage alerts that catch a runaway bill
 lunora cloudflare deployments <list|inspect|rollback|promote>   # history + traffic control
              [--env <name>] [--yes] [--format json]  # json: `list` only
-lunora cloudflare analyze [--format json]      # wrangler dry-run: bundle size + top modules
 lunora cloudflare containers <build|push|images|list|info|delete> [args…]
             [--tag <name:tag>] [--push] [--env <n>]
             [--format json]             #   json: list | info | images list
@@ -127,10 +127,10 @@ failed before producing one, and `error` is absent on success. Read `code` (or
 the process exit status, which is the same number — see
 [CLI exit codes](/docs/exit-codes)) before reaching for either.
 
-Commands with the flag: `add`, `advisor`, `backup`, `build`, `cloudflare`
-(every tool), `codegen`, `deploy`, `doctor`, `env`, `eval`, `export`, `import`,
-`info`, `insights`, `introspect`, `logs`, `migrate`, `registry`, `run`, `seed`,
-`verify`.
+Commands with the flag: `add`, `advisor`, `analyze`, `backup`, `build`,
+`cloudflare` (every tool), `codegen`, `deploy`, `doctor`, `env`, `eval`,
+`export`, `import`, `info`, `insights`, `introspect`, `logs`, `migrate`,
+`registry`, `run`, `seed`, `verify`.
 
 Three carry a documented restriction, because the payload already owns stdout or
 the underlying tool has no JSON rendering: `export --format json` requires
@@ -771,8 +771,8 @@ cloudflare` on its own lists the tools; `lunora cloudflare --help` shows every
 tool's arguments and options.
 
 These commands used to be top-level (`lunora containers`, `lunora deployments`,
-`lunora ai gateway`, `lunora analyze`). The old names now exit `2` and print the
-new command to run.
+`lunora ai gateway`). The old names now exit `2` and print the new command to
+run.
 
 #### `lunora cloudflare alerts`
 
@@ -876,12 +876,6 @@ The gateway does not pay for third-party models on its own. Before the first
 - **A key stored on the gateway** for other OpenAI-compatible providers (Mistral,
   Perplexity, OpenRouter, …)
   ([docs](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/)).
-
-#### `lunora cloudflare analyze`
-
-Runs a `wrangler` dry-deploy and reports bundle size, the heaviest modules,
-and the state of `_generated/` files. Pass `--format json` to pipe the output to
-a CI artifact.
 
 #### `lunora cloudflare containers`
 
@@ -1415,6 +1409,12 @@ by hand. It takes no required configuration: the dev server's URL comes from
 call, so starting `lunora dev` after your editor is already open just works. It
 exposes the documentation tools, `lunora_dev_status` / `lunora_dev_logs`, and the
 read-only deployment tools; `--allow-writes` adds the mutation and action tools.
+
+### `lunora analyze`
+
+Runs a `wrangler` dry-deploy and reports bundle size, the heaviest modules,
+and the state of `_generated/` files. Pass `--format json` to pipe the output to
+a CI artifact.
 
 ### `lunora logs`
 

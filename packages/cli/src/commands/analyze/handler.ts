@@ -2,12 +2,15 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
-import { detectPackageManager, execArgsFor } from "../../../util/detect-package-manager";
-import { EXIT_CODE } from "../../../util/exit-code";
-import type { Logger } from "../../../util/logger";
-import type { OutputFormat } from "../../../util/output-format";
-import type { SpawnDescriptor, Spawner } from "../../../util/spawn";
-import { defaultSpawner } from "../../../util/spawn";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
+import type { Logger } from "../../util/logger";
+import type { OutputFormat } from "../../util/output-format";
+import type { SpawnDescriptor, Spawner } from "../../util/spawn";
+import { defaultSpawner } from "../../util/spawn";
+import type { AnalyzeOptions } from "./index";
 
 interface AnalyzeCommandOptions {
     cwd?: string;
@@ -191,5 +194,13 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
     }
 };
 
+/** `lunora analyze` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<AnalyzeOptions> = defineHandler<AnalyzeOptions, AnalyzeReport>(async ({ cwd, format, logger }) => {
+    const result = await runAnalyzeCommand({ cwd, format, logger });
+
+    return { code: result.code, data: result.report, error: result.error };
+});
+
+export { execute };
 export type { AnalyzeCommandOptions, AnalyzeCommandResult, AnalyzeFileEntry, AnalyzeReport };
 export { runAnalyzeCommand };

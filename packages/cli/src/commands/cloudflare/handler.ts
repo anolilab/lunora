@@ -13,7 +13,6 @@ import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { runAiGatewayCommand } from "./ai-gateway/handler";
 import type { AlertsSubcommand } from "./alerts/handler";
 import { runAlertsCommand } from "./alerts/handler";
-import { runAnalyzeCommand } from "./analyze/handler";
 import { runContainersCommand } from "./containers/handler";
 import { isDeploymentsSubcommand, runDeploymentsCommand } from "./deployments/handler";
 import type { CloudflareOptions, CloudflareToolName } from "./index";
@@ -116,18 +115,6 @@ const runAlerts = async ({ cwd, format, logger, options, rest }: ToolRun): Promi
     });
 };
 
-const runAnalyze = async (run: ToolRun): Promise<CommandResult<unknown>> => {
-    const stray = strayArguments("analyze", run);
-
-    if (stray !== undefined) {
-        return stray;
-    }
-
-    const result = await runAnalyzeCommand({ cwd: run.cwd, format: run.format, logger: run.logger });
-
-    return { code: result.code, data: result.report, error: result.error };
-};
-
 const runContainers = async ({ cwd, format, logger, options, rest }: ToolRun): Promise<CommandResult<unknown>> => {
     const result = await runContainersCommand({ argument: rest, cwd, env: options.env, format, logger, push: options.push === true, tag: options.tag });
 
@@ -164,7 +151,6 @@ const runDeployments = async ({ cwd, format, logger, options, rest }: ToolRun): 
 const RUNNERS: Readonly<Record<CloudflareToolName, (run: ToolRun) => Promise<CommandResult<unknown>>>> = {
     "ai-gateway": runAiGateway,
     alerts: runAlerts,
-    analyze: runAnalyze,
     containers: runContainers,
     deployments: runDeployments,
 };

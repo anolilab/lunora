@@ -72,6 +72,7 @@ const COMMANDS: readonly [
     "info",
     "doctor",
     "env",
+    "analyze",
     "view",
     "docs",
     "registry",

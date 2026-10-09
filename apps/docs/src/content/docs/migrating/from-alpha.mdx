@@ -154,8 +154,8 @@ lunora migrate create backfill_read_by --table messages
 
 ### `@lunora/cli`: Cloudflare-only commands moved under `lunora cloudflare`
 
-Lunora deploys to Cloudflare, celld and Node, and four commands only ever drove
-Cloudflare. They now live in the `lunora cloudflare` group, keep their
+Lunora deploys to Cloudflare, celld and Node, and three commands only ever
+drove Cloudflare. They now live in the `lunora cloudflare` group, keep their
 subcommands and flags, and refuse on a celld or Node project (the target comes
 from `--target`, then `target` in `lunora.config.*`, then Cloudflare):
 
@@ -164,7 +164,6 @@ from `--target`, then `target` in `lunora.config.*`, then Cloudflare):
 | `lunora containers <subcommand> …`     | `lunora cloudflare containers <subcommand> …`     |
 | `lunora deployments <subcommand> …`    | `lunora cloudflare deployments <subcommand> …`    |
 | `lunora ai gateway [--id] [--no-logs]` | `lunora cloudflare ai-gateway [--id] [--no-logs]` |
-| `lunora analyze [--format json]`       | `lunora cloudflare analyze [--format json]`       |
 
 The old names are not aliases. They exit `2` without running anything and print
 the command to use instead, with the rest of your arguments carried over:

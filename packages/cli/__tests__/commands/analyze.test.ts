@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runAnalyzeCommand } from "../../src/commands/cloudflare/analyze/handler";
+import { runAnalyzeCommand } from "../../src/commands/analyze/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -32,7 +32,7 @@ const recordingLogger = (): { logger: Logger; recorded: Recorded } => {
 let workdir: string;
 let buildOut: string;
 
-describe("lunora cloudflare analyze", () => {
+describe("lunora analyze", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-cli-analyze-"));
         buildOut = mkdtempSync(join(tmpdir(), "lunora-cli-analyze-out-"));
@@ -48,7 +48,7 @@ describe("lunora cloudflare analyze", () => {
         rmSync(buildOut, { force: true, recursive: true });
     });
 
-    describe("lunora cloudflare analyze", () => {
+    describe("lunora analyze", () => {
         it("walks the supplied outdir and reports sizes + _generated files", async () => {
             expect.hasAssertions();
 
