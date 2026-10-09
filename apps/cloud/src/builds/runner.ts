@@ -17,7 +17,12 @@ export interface ClaimedBuild {
     projectId: string; // secret-scanner:allow -- domain field name
     /** Repo-relative directory the build runs in; absent means the repository root. */
     rootDirectory?: string;
+    /** How the box builds it (`src/project-runtime.ts`); absent is a Lunora app. */
+    runtime?: "worker";
 }
+
+/** Where in the source a build runs, and what it builds there — the build's half of {@link ClaimedBuild} the box reads. */
+export type BuildPlace = Pick<ClaimedBuild, "rootDirectory" | "runtime">;
 
 /**
  * What a build produced: everything the deploy path needs to release it, as the
@@ -93,10 +98,10 @@ export interface BuildRunnerPorts {
     appendLog: (buildId: string, level: "error" | "info", line: string) => Promise<void>;
     /** Mark the build successful with its bundle hash, linking the deployment it fed and recording its workspace packages when there are some. */
     complete: (buildId: string, bundleHash: string, deploymentId?: string, workspacePackages?: string[]) => Promise<void>;
-    /** Run the build over the fetched source in `rootDirectory`, streaming output via `onLine` and scan findings via `onAdvisory`. 🌐 in production. */
+    /** Run the build over the fetched source in its root directory, as its runtime builds, streaming output via `onLine` and scan findings via `onAdvisory`. 🌐 in production. */
     execute: (
         source: ArrayBuffer,
-        rootDirectory: string | undefined,
+        place: BuildPlace,
         onLine: (line: string) => Promise<void>,
         onAdvisory: (advisory: BuildAdvisory) => Promise<void>,
     ) => Promise<BuildExecution>;
@@ -312,7 +317,10 @@ export const executeBuild = async (build: ClaimedBuild, ports: BuildRunnerPorts)
         return {
             execution: await ports.execute(
                 source,
-                build.rootDirectory,
+                {
+                    ...(build.rootDirectory === undefined ? {} : { rootDirectory: build.rootDirectory }),
+                    ...(build.runtime === undefined ? {} : { runtime: build.runtime }),
+                },
                 (line) => ports.appendLog(build.buildId, "info", line),
                 (advisory) => recordAdvisory(ports, build, advisory),
             ),

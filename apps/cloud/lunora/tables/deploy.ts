@@ -6,7 +6,7 @@
  */
 import { defineTable, v } from "@lunora/server";
 
-import { deployTarget, placementHost } from "./shared";
+import { deployTarget, placementHost, storedProjectRuntime } from "./shared";
 
 const deploymentKind = v.union(v.literal("production"), v.literal("preview"), v.literal("dev"));
 
@@ -67,6 +67,12 @@ export const deployTables = {
         // by (the dispatch script on `cloudflare-wfp`). Absent on rows that
         // predate it, where `scriptName` serves.
         resourceRef: v.optional(v.string()),
+        // What the release's code is (`src/project-runtime.ts`), from the build or
+        // the deploy request — absent is a Lunora app. Read by every step that
+        // reaches into the tenant (rollback's script tags, backups, eject, the
+        // admin proxy), so a later change of the project's setting never
+        // re-aims them at a release built the other way.
+        runtime: v.optional(storedProjectRuntime),
         // `cloudflare-wfp` encoding: the dispatch-namespace script this
         // deployment was provisioned onto — the alias. One script per alias,
         // not per release: a Durable Object namespace belongs to the script
@@ -231,6 +237,10 @@ export const deployTables = {
         // change mid-queue cannot build a commit from a directory it was not
         // pushed for, and dedup never reuses a bundle built from another root.
         rootDirectory: v.optional(v.string()),
+        // The project's runtime when the push was recorded, for the same two
+        // reasons: the box builds the commit the way it was pushed, and dedup
+        // never reuses a bundle built for the other runtime. Absent is Lunora.
+        runtime: v.optional(storedProjectRuntime),
         // Why a push was not built — set only on `skipped` rows (path filter).
         /** The skip is the path filter's: the commit has no other status, so a redelivery may repost one. */
         pathFiltered: v.optional(v.boolean()),

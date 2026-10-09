@@ -8,8 +8,6 @@ import { promisify } from "node:util";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { READ_CONFIG_PROGRAM, releaseFromConfig, shimSource } from "../containers/build/worker.mjs";
-
 /**
  * The `runtime: "worker"` steps against the REAL wrangler this repo pins —
  * no network, no registry: the project's `node_modules/wrangler` is a link to
@@ -18,6 +16,20 @@ import { READ_CONFIG_PROGRAM, releaseFromConfig, shimSource } from "../container
  * wrangler's esbuild bundle with the Worker's classes still exported and the
  * fan-out routes answering from its own handlers.
  */
+
+interface WorkerModule {
+    READ_CONFIG_PROGRAM: string;
+    releaseFromConfig: (input: {
+        config: Record<string, unknown>;
+        configPath: string;
+        log: (line: string) => void;
+        repo: string;
+    }) => Promise<{ body: Record<string, unknown>; main: string; queueNames: Record<string, string> }>;
+    shimSource: (input: { main: string; queueNames: Record<string, string> }) => string;
+}
+
+// Loaded by URL: plain `.mjs` shipped into the image, with no declaration file.
+const { READ_CONFIG_PROGRAM, releaseFromConfig, shimSource } = (await import(new URL("../containers/build/worker.mjs", import.meta.url).href)) as WorkerModule;
 
 const run = promisify(execFile);
 const WRANGLER = dirname(createRequire(import.meta.url).resolve("wrangler/package.json"));

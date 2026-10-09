@@ -7,6 +7,7 @@
  */
 import { isReleaseAlias } from "@lunora/config/celld";
 
+import type { ProjectRuntime } from "../project-runtime";
 import type { AssetFile, AssetsUpload, BindingRequirement, BindingType, DeployManifest, TargetId } from "../provision-contract";
 import { BINDING_SUPPORT, tenantResourceName, unsupportedReason } from "../provision-contract";
 
@@ -14,7 +15,9 @@ import { BINDING_SUPPORT, tenantResourceName, unsupportedReason } from "../provi
  * Every Lunora tenant worker exports `ShardDO` (binding `SHARD`); without its
  * binding and the matching `new_sqlite_classes` migration tag the uploaded
  * dispatch script cannot boot. The floor is added whenever the manifest does
- * not already bind the class, so an under-declaring caller still comes up.
+ * not already bind the class, so an under-declaring caller still comes up —
+ * for a Lunora app only. A plain Cloudflare Worker exports no `ShardDO`, and a
+ * binding to a class the bundle does not export fails its upload.
  */
 const SHARD_DO_BINDING: BindingRequirement = { binding: "SHARD", className: "ShardDO", sqlite: true, type: "durable_object" };
 
@@ -22,6 +25,13 @@ const SHARD_DO_BINDING: BindingRequirement = { binding: "SHARD", className: "Sha
 const MAX_BINDINGS = 64;
 const MAX_DURABLE_OBJECTS = 25;
 const MAX_COMPATIBILITY_FLAGS = 32;
+const MAX_VARS = 64;
+
+/** Cloudflare's own limit on one environment variable's value. */
+const MAX_VAR_BYTES = 5 * 1024;
+
+/** Var names the platform sets itself (`LUNORA_ADMIN_TOKEN`, `LUNORA_OTLP_*`); a tenant var may not shadow one. */
+const RESERVED_VAR_PREFIX = "LUNORA_";
 const MAX_ASSET_FILES = 20_000;
 const MAX_ASSET_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_ASSETS_BYTES = 50 * 1024 * 1024;
@@ -135,7 +145,7 @@ const bindingSetError = (bindings: BindingRequirement[]): string | undefined => 
     const assets = bindings.find((entry) => entry.type === "assets");
 
     if (assets && assets.binding !== "ASSETS") {
-        return `the assets binding must be named ASSETS on Lunora Cloud, not ${assets.binding}`;
+        return `the assets binding must be named ASSETS on Lunora Cloud, not ${assets.binding}: the platform binds uploaded static assets under that one name, so rename it in the wrangler config and in the Worker`;
     }
 
     return undefined;
@@ -163,8 +173,59 @@ const parseCompatibility = (date: unknown, flags: unknown): Parsed<Pick<DeployMa
 };
 
 /**
- * Validate the request's binding manifest against the project's target and
- * floor it to ShardDO.
+ * `manifest.vars`: plain-text bindings, each named like a binding and not
+ * colliding with one, none in the platform's own `LUNORA_` namespace, each
+ * value within Cloudflare's per-var limit.
+ */
+const parseVariables = (raw: unknown, bindings: ReadonlyArray<BindingRequirement>): Parsed<Record<string, string> | undefined> => {
+    if (raw === undefined) {
+        return { value: undefined };
+    }
+
+    if (!isRecord(raw)) {
+        return { error: "manifest.vars must be an object of name → string" };
+    }
+
+    const entries = Object.entries(raw);
+
+    if (entries.length > MAX_VARS) {
+        return { error: `manifest declares ${String(entries.length)} vars; the limit is ${String(MAX_VARS)}` };
+    }
+
+    const taken = new Set(bindings.map((entry) => entry.binding.toLowerCase()));
+    // Null prototype: a `__proto__` var stays an ordinary own key.
+    const variables = Object.create(null) as Record<string, string>;
+
+    for (const [name, value] of entries) {
+        if (!IDENTIFIER.test(name)) {
+            return { error: `var name "${name}" must match ${IDENTIFIER.source} (it becomes an env key)` };
+        }
+
+        if (name.startsWith(RESERVED_VAR_PREFIX)) {
+            return { error: `var ${name} is in the ${RESERVED_VAR_PREFIX} namespace Lunora Cloud sets itself; rename it` };
+        }
+
+        if (typeof value !== "string") {
+            return { error: `var ${name} must be a string; Lunora Cloud binds vars as plain text` };
+        }
+
+        if (new TextEncoder().encode(value).byteLength > MAX_VAR_BYTES) {
+            return { error: `var ${name} exceeds Cloudflare's ${String(MAX_VAR_BYTES)}-byte limit for one variable` };
+        }
+
+        if (taken.has(name.toLowerCase())) {
+            return { error: `var ${name} has the name of a binding; a Worker's env holds one value per name` };
+        }
+
+        variables[name] = value;
+    }
+
+    return { value: variables };
+};
+
+/**
+ * Validate the request's binding manifest against the project's target and,
+ * for a Lunora app, floor it to ShardDO.
  *
  * Every refusal happens here, before a deployment row is recorded or anything
  * is provisioned. A binding the target marks `unsupported` is refused rather
@@ -172,14 +233,14 @@ const parseCompatibility = (date: unknown, flags: unknown): Parsed<Pick<DeployMa
  * long after a green deploy. All unsupported entries are reported at once, with
  * the target's own reason, so one retry fixes them.
  */
-const parseManifest = (raw: unknown, target: TargetId): Parsed<DeployManifest> => {
+const parseManifest = (raw: unknown, target: TargetId, runtime: ProjectRuntime): Parsed<DeployManifest> => {
     const input = raw ?? { bindings: [] };
 
     if (!isRecord(input) || !Array.isArray(input["bindings"])) {
         return { error: "manifest must be an object with a `bindings` array" };
     }
 
-    const { bindings: entries, compatibilityDate, compatibilityFlags } = input;
+    const { bindings: entries, compatibilityDate, compatibilityFlags, vars: rawVariables } = input;
 
     if (entries.length > MAX_BINDINGS) {
         return { error: `manifest declares ${String(entries.length)} bindings; the limit is ${String(MAX_BINDINGS)}` };
@@ -208,7 +269,7 @@ const parseManifest = (raw: unknown, target: TargetId): Parsed<DeployManifest> =
         return { error: `Lunora Cloud cannot provide these bindings on the ${target} target — ${unsupported.join("; ")}` };
     }
 
-    if (!bindings.some((entry) => entry.type === "durable_object" && entry.className === SHARD_DO_BINDING.className)) {
+    if (runtime === "lunora" && !bindings.some((entry) => entry.type === "durable_object" && entry.className === SHARD_DO_BINDING.className)) {
         bindings.unshift({ ...SHARD_DO_BINDING });
     }
 
@@ -218,9 +279,23 @@ const parseManifest = (raw: unknown, target: TargetId): Parsed<DeployManifest> =
         return { error: setError };
     }
 
+    const variables = parseVariables(rawVariables, bindings);
+
+    if ("error" in variables) {
+        return variables;
+    }
+
     const compatibility = parseCompatibility(compatibilityDate, compatibilityFlags);
 
-    return "error" in compatibility ? compatibility : { value: { bindings, ...compatibility.value } };
+    return "error" in compatibility
+        ? compatibility
+        : {
+              value: {
+                  bindings,
+                  ...compatibility.value,
+                  ...(variables.value === undefined || Object.keys(variables.value).length === 0 ? {} : { vars: { ...variables.value } }),
+              },
+          };
 };
 
 /** Decoded byte length of a base64 string, without decoding it. */
@@ -414,6 +489,7 @@ export const parsePayload = (
     body: { assets?: unknown; manifest?: unknown },
     alias: string,
     target: TargetId,
+    runtime: ProjectRuntime = "lunora",
 ): Parsed<{ assets: AssetsUpload | undefined; manifest: DeployManifest }> => {
     // The script name is the project alias: it becomes the public subdomain and
     // keys every per-project resource, so it must be a shape that cannot collide.
@@ -421,7 +497,7 @@ export const parsePayload = (
         return { error: "scriptName must be lowercase letters and digits in dash-separated runs, at most 63 characters" };
     }
 
-    const manifest = parseManifest(body.manifest, target);
+    const manifest = parseManifest(body.manifest, target, runtime);
 
     if ("error" in manifest) {
         return manifest;

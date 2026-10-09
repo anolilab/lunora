@@ -31,6 +31,13 @@ export interface DeployManifest {
     compatibilityDate?: string;
     /** `compatibility_flags`; the platform default (`["nodejs_compat"]`) applies when absent. */
     compatibilityFlags?: string[];
+
+    /**
+     * Wrangler `vars`, bound as plain text. Carried by a plain Worker's build
+     * (`containers/build/worker.mjs`); kept in the manifest rather than beside
+     * it so the stored release — what a rollback re-converges — keeps them too.
+     */
+    vars?: Record<string, string>;
 }
 
 /** One static file, keyed by its URL path (`/index.html`), content base64-encoded. */

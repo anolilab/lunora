@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { MAX_QUEUE_BODY_BYTES, wrapEntry } from "../containers/build/shim-runtime.mjs";
-
 /**
  * The plain-Worker entry shim's runtime (`containers/build/shim-runtime.mjs`),
  * which the build box bundles into every `runtime: "worker"` build so the
@@ -11,6 +9,14 @@ import { MAX_QUEUE_BODY_BYTES, wrapEntry } from "../containers/build/shim-runtim
  * the auth gate, both routes, Cloudflare's ack/retry semantics and the
  * passthrough, for both shapes a module Worker's default export takes.
  */
+
+interface ShimModule {
+    MAX_QUEUE_BODY_BYTES: number;
+    wrapEntry: (handler: unknown, queueNames: Readonly<Record<string, string>>) => unknown;
+}
+
+// Loaded by URL: plain `.mjs` bundled into each plain Worker, with no declaration file.
+const { MAX_QUEUE_BODY_BYTES, wrapEntry } = (await import(new URL("../containers/build/shim-runtime.mjs", import.meta.url).href)) as ShimModule;
 
 const TOKEN = "admin-token-for-tests";
 const ENV = { LUNORA_ADMIN_TOKEN: TOKEN };

@@ -5,6 +5,7 @@ import { highestPlan } from "../src/billing/plans";
 import type { AdmissionRow } from "../src/billing/spend";
 import { organizationServing } from "../src/billing/spend";
 import { previewExpiry } from "../src/deploy/preview";
+import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
 import type { TargetId } from "../src/provision-contract";
 import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
 import { isCellPlaced, resourceRefOf } from "../src/targets/placement";
@@ -16,6 +17,7 @@ import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
+import { storedProjectRuntime } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
 
 type DeploymentStatus = "building" | "destroyed" | "failed" | "live" | "provisioning" | "queued" | "superseded" | "verifying";
@@ -36,6 +38,8 @@ interface DeploymentRow {
     kind: "dev" | "preview" | "production";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
+    /** `.global()` rows answer SQL NULL for an unset column; absent is a Lunora app. */
+    runtime?: "worker" | null;
     scriptName: string;
     status: DeploymentStatus;
     target?: string;
@@ -221,6 +225,12 @@ export const adminTarget = internalQuery
             // release on it holds the admin token that Worker accepts.
             if (deployment?.organizationId !== organizationId || deployment.status !== "live" || !hasToken || !deployment.url) {
                 return null;
+            }
+
+            // Said, not forwarded: a plain Worker would answer `/_lunora/admin/*`
+            // with whatever its own routes do, which the studio would misread.
+            if (deployment.runtime === "worker") {
+                throw new LunoraError("CONFLICT", PLAIN_WORKER_NO_ADMIN);
             }
 
             return {
@@ -470,6 +480,8 @@ export const create = mutation
         kind: v.union(v.literal("production"), v.literal("preview"), v.literal("dev")),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
+        // What the release is (`src/project-runtime.ts`); absent is a Lunora app.
+        runtime: v.optional(storedProjectRuntime),
         // @lunora/runtime version bundled into this release (fleet-upgrade planner input, GAPS.md E4).
         runtimeVersion: v.optional(boundedString(LIMITS.id)),
         scriptName: boundedString(LIMITS.name),
@@ -535,6 +547,7 @@ export const create = mutation
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
             queuedAt: now,
             ...(arguments_.bindings === undefined ? {} : { bindings: arguments_.bindings }),
+            ...(arguments_.runtime === undefined ? {} : { runtime: arguments_.runtime }),
             ...(arguments_.runtimeVersion === undefined ? {} : { runtimeVersion: arguments_.runtimeVersion }),
             scriptName: arguments_.scriptName,
             status: "queued",
@@ -682,6 +695,7 @@ export const releaseTarget = internalQuery
             kind: DeploymentRow["kind"];
             liveDeploymentId?: Id<"deployments">;
             projectId: Id<"projects">;
+            runtime?: "worker";
             target?: string;
         }> => {
             const target = (await context.db.get(id)) as DeploymentRow | null;
@@ -710,6 +724,7 @@ export const releaseTarget = internalQuery
                 kind: target.kind,
                 ...(live ? { liveDeploymentId: live._id } : {}),
                 projectId: target.projectId, // secret-scanner:allow -- domain field name
+                ...(target.runtime === "worker" ? { runtime: "worker" as const } : {}),
                 ...(target.target == null ? {} : { target: target.target }),
             };
         },
@@ -901,6 +916,11 @@ export const ejectTarget = internalQuery.input({ deployKey: boundedString(LIMITS
         // admin token of the release it is running.
         if (deployment.status !== "live" || !hasToken || !deployment.url) {
             return null;
+        }
+
+        // Eject packages the data a Lunora app exports; a plain Worker has neither.
+        if (deployment.runtime === "worker") {
+            throw new LunoraError("CONFLICT", PLAIN_WORKER_NO_ADMIN);
         }
 
         const project = (await context.db.get(deployment.projectId)) as { slug?: string } | null;

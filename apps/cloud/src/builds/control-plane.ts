@@ -90,12 +90,8 @@ const runnerPortsFor = (input: BuildWiring, runnerId: string): BuildRunnerPorts 
         // would just pay for the same install twice.
         // Bounded so the build half fits the alarm it runs in
         // (`ALARM_INVOCATION_LIMIT_MS`); the box's own timeouts are longer.
-        execute: async (source, rootDirectory, onLine, onAdvisory) =>
-            await withinBudget(
-                executeInContainer(buildBoxFrom(environment).any(), source, rootDirectory, onLine, onAdvisory),
-                BUILD_EXECUTE_BUDGET_MS,
-                "the build",
-            ),
+        execute: async (source, place, onLine, onAdvisory) =>
+            await withinBudget(executeInContainer(buildBoxFrom(environment).any(), source, place, onLine, onAdvisory), BUILD_EXECUTE_BUDGET_MS, "the build"),
         fail: async (buildId, error) => {
             await context.runMutation(internal.builds.fail, { buildId, error, runnerId });
         },

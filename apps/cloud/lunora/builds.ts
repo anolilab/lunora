@@ -5,6 +5,8 @@ import { decideBuild, MAX_CHANGED_FILES } from "../src/builds/paths";
 import type { BuildReleaseTarget } from "../src/builds/release";
 import type { BuildAdvisory } from "../src/builds/runner";
 import { isUnconfiguredInfrastructure, MAX_BUILD_ADVISORIES } from "../src/builds/runner";
+import type { ProjectRuntime } from "../src/project-runtime";
+import { runtimeColumn, storedRuntime } from "../src/project-runtime";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
@@ -41,6 +43,8 @@ interface BuildRow {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    /** `.global()` rows answer SQL NULL for an unset column; absent is a Lunora app. */
+    runtime?: "worker" | null;
     skipReason?: string;
     status: BuildStatus;
     trigger?: BuildTrigger;
@@ -98,7 +102,7 @@ export const DELIVERY_TTL_MS = 4 * 24 * 60 * 60 * 1000;
 /** Expired delivery ids deleted per recorded push, so the table stays bounded without a sweep of its own. */
 const DELIVERY_PRUNE_BATCH = 20;
 
-type ClaimResult = null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string };
+type ClaimResult = null | { buildId: Id<"builds">; commitSha: string; projectId: Id<"projects">; rootDirectory?: string; runtime?: "worker" };
 
 /**
  * Why a production push of an already-built commit must NOT re-release it, or
@@ -158,14 +162,14 @@ const planBuild = (push: {
 
 /**
  * The newest successful build of a push's dedup key — (commit, root
- * directory, trigger, fork-ness) — and the deployment it fed, if it recorded
+ * directory, runtime, trigger, fork-ness) — and the deployment it fed, if it recorded
  * one. Newest first: once a commit was re-released, its newest build names the
  * newest deployment.
  */
 const priorBuild = async (
     context: MutationContext,
     projectId: Id<"projects">,
-    key: { commitSha: string; fromFork: boolean | undefined; rootDirectory: string | undefined; trigger: BuildTrigger },
+    key: { commitSha: string; fromFork: boolean | undefined; rootDirectory: string | undefined; runtime: ProjectRuntime; trigger: BuildTrigger },
 ): Promise<undefined | { build: BuildRow; deployment: null | { status: string } }> => {
     const { page } = await context.db.builds.findMany({ where: { commitSha: key.commitSha, projectId } }); // secret-scanner:allow -- domain field name
     const build = page
@@ -175,6 +179,8 @@ const priorBuild = async (
                 candidate.status === "successful" &&
                 candidate.bundleHash &&
                 candidate.rootDirectory === key.rootDirectory &&
+                // A Lunora bundle and a plain Worker's bundle of one commit are different releases.
+                storedRuntime(candidate.runtime) === key.runtime &&
                 candidate.trigger === key.trigger &&
                 (candidate.fromFork === true) === (key.fromFork === true),
         );
@@ -296,7 +302,8 @@ export const recordPush = internalMutation
             }
 
             const { rootDirectory, watchPaths } = project;
-            const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, trigger });
+            const runtime = storedRuntime(project.runtime);
+            const prior = await priorBuild(context, project._id, { commitSha, fromFork, rootDirectory, runtime, trigger });
 
             if (prior && (prior.build.fromFork === true || (prior.deployment !== null && SERVING_STATUSES.has(prior.deployment.status)))) {
                 return { buildId: prior.build._id, reused: true };
@@ -326,6 +333,7 @@ export const recordPush = internalMutation
                 ...(pullRequest === undefined ? {} : { pullRequest }),
                 ...(reusesBuildId === undefined ? {} : { reusesBuildId }),
                 ...(rootDirectory === undefined ? {} : { rootDirectory }),
+                ...runtimeColumn(runtime),
                 trigger,
                 updatedAt: now,
             };
@@ -410,6 +418,7 @@ export const claimNext = internalMutation.input({ runnerId: v.string() }).mutati
         commitSha: next.commitSha,
         projectId: next.projectId, // secret-scanner:allow -- domain field name
         ...(next.rootDirectory === undefined ? {} : { rootDirectory: next.rootDirectory }),
+        ...runtimeColumn(storedRuntime(next.runtime)),
     };
 });
 
@@ -635,6 +644,7 @@ export const releaseTarget = internalQuery
             projectId: build.projectId, // secret-scanner:allow -- domain field name
             projectSlug: project.slug,
             ...(build.pullRequest === undefined ? {} : { pullRequest: build.pullRequest }),
+            ...runtimeColumn(storedRuntime(build.runtime)),
             ...(build.trigger === undefined ? {} : { trigger: build.trigger }),
         };
     });

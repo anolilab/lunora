@@ -2970,6 +2970,10 @@
                         "type": "string",
                         "x-lunora-table": "projects"
                       },
+                      "runtime": {
+                        "const": "worker",
+                        "type": "string"
+                      },
                       "runtimeVersion": {},
                       "scriptName": {}
                     },
@@ -6090,6 +6094,18 @@
                         "type": "string",
                         "x-lunora-table": "organizations"
                       },
+                      "runtime": {
+                        "anyOf": [
+                          {
+                            "const": "lunora",
+                            "type": "string"
+                          },
+                          {
+                            "const": "worker",
+                            "type": "string"
+                          }
+                        ]
+                      },
                       "slug": {}
                     },
                     "required": [
@@ -6539,6 +6555,18 @@
                         "x-lunora-table": "organizations"
                       },
                       "rootDirectory": {},
+                      "runtime": {
+                        "anyOf": [
+                          {
+                            "const": "lunora",
+                            "type": "string"
+                          },
+                          {
+                            "const": "worker",
+                            "type": "string"
+                          }
+                        ]
+                      },
                       "watchPaths": {
                         "items": {},
                         "type": "array"

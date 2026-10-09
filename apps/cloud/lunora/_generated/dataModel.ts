@@ -79,6 +79,7 @@ export interface Doc_projects {
     previewPasswordSalt?: string;
     productionAlias?: string;
     rootDirectory?: string;
+    runtime?: "worker";
     slug: string;
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
@@ -147,6 +148,7 @@ export interface Doc_deployments {
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     resourceRef?: string;
+    runtime?: "worker";
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
@@ -214,6 +216,7 @@ export interface Doc_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    runtime?: "worker";
     pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";
@@ -1006,6 +1009,7 @@ export interface Insert_projects {
     previewPasswordSalt?: string;
     productionAlias?: string;
     rootDirectory?: string;
+    runtime?: "worker";
     slug: string;
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
@@ -1074,6 +1078,7 @@ export interface Insert_deployments {
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
     resourceRef?: string;
+    runtime?: "worker";
     scriptName: string;
     status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed";
     target?: "celld-vps" | "cloudflare-wfp" | "cloudflare-workers";
@@ -1141,6 +1146,7 @@ export interface Insert_builds {
     pullRequest?: number;
     reusesBuildId?: Id<"builds">;
     rootDirectory?: string;
+    runtime?: "worker";
     pathFiltered?: boolean;
     skipReason?: string;
     status: "pending" | "building" | "successful" | "failed" | "skipped";

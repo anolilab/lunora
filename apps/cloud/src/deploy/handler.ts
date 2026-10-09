@@ -4,6 +4,7 @@
  * requested kind to the key's ceiling, then stream the release's frames as
  * NDJSON (one JSON object per line).
  */
+import { DEFAULT_RUNTIME, isProjectRuntime, PROJECT_RUNTIMES } from "../project-runtime";
 import type { DeployKind } from "../provision-contract";
 import type { DeployHandlerDeps } from "./release-core";
 import { startRelease } from "./release-core";
@@ -29,6 +30,12 @@ interface DeployBody {
     /** The Worker's binding manifest. `unknown` because it is untrusted wire data; `parsePayload` validates it. */
     manifest?: unknown;
     projectId?: string;
+
+    /**
+     * What the bundle is: `lunora` (absent) or `worker`, a plain Cloudflare
+     * Worker (`src/project-runtime.ts`). `unknown`, like `kind`, until checked.
+     */
+    runtime?: unknown;
     scriptName?: string;
 }
 
@@ -157,6 +164,13 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
         });
     }
 
+    // A plain Worker's release says so; `lunora cloud deploy` sends nothing and is a Lunora app.
+    const runtime = body.runtime ?? DEFAULT_RUNTIME;
+
+    if (!isProjectRuntime(runtime)) {
+        return json(400, { error: `unknown runtime ${JSON.stringify(runtime).slice(0, 40)} — expected ${PROJECT_RUNTIMES.join(" or ")}` });
+    }
+
     const started = await startRelease(
         {
             assets: body.assets,
@@ -166,6 +180,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             kind,
             manifest: body.manifest,
             projectId: body.projectId,
+            runtime,
             scriptName: body.scriptName,
         },
         { key, organizationId: target.organizationId },

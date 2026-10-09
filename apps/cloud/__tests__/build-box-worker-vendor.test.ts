@@ -40,7 +40,8 @@ describe("build box vendored release manifest", () => {
     it("exports exactly the two functions the box imports", async () => {
         expect.assertions(1);
 
-        const vendored = (await import("../containers/build/vendor/release-manifest.mjs")) as Record<string, unknown>;
+        // By URL, like the box's other modules: no declaration file, and not this repo's code to type-check.
+        const vendored = (await import(new URL("release-manifest.mjs", VENDOR).href)) as Record<string, unknown>;
 
         expect(Object.keys(vendored).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["buildBindingManifest", "collectAssets"]);
     });

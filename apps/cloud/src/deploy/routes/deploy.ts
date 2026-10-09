@@ -16,6 +16,7 @@ import { api, internal } from "../../../lunora/_generated/api.js";
 import { captureServerEvent } from "../../analytics/capture";
 import { dispatchBuilds, runBuildStage } from "../../builds/control-plane";
 import type { BuildJob, BuildStage } from "../../builds/runner-job";
+import { runtimeColumn, storedRuntime } from "../../project-runtime";
 import type { DeployKind } from "../../provision-contract";
 import { decryptSecret } from "../../secrets/crypto";
 import type { Placement, StoredPlacement } from "../../targets/placement";
@@ -98,7 +99,15 @@ const releaseDeps = (context: LunoraActionContext, environment: RouterEnv, pacer
             placement: ({ organizationId, projectId }) => placementFor(context, environment, organizationId, projectId),
             releaseTarget: async ({ deploymentId, key, organizationId }) => {
                 const row = await context.runQuery<
-                    StoredAdminToken & { alias: string; cronSpecs?: string[]; kind: DeployKind; liveDeploymentId?: string; projectId: string; target?: string }
+                    StoredAdminToken & {
+                        alias: string;
+                        cronSpecs?: string[];
+                        kind: DeployKind;
+                        liveDeploymentId?: string;
+                        projectId: string;
+                        runtime?: null | string;
+                        target?: string;
+                    }
                 >(internal.deployments.releaseTarget, { deployKey: key, id: deploymentId, organizationId });
                 // Unsealed here, at the edge, exactly as the studio proxy does.
                 const adminToken = await resolveAdminToken(row, environment.SECRET_ENCRYPTION_KEY);
@@ -115,6 +124,7 @@ const releaseDeps = (context: LunoraActionContext, environment: RouterEnv, pacer
                     ...(row.liveDeploymentId === undefined ? {} : { liveDeploymentId: row.liveDeploymentId }),
                     organizationId,
                     projectId: row.projectId,
+                    runtime: storedRuntime(row.runtime),
                     target: targetOf(row.target),
                 };
             },
@@ -181,7 +191,7 @@ export const deployDeps = (context: LunoraActionContext, environment: RouterEnv,
         activateDeployment: async ({ deploymentId, key }) => {
             await context.runMutation(api.deployments.activate, { deployKey: key, id: deploymentId });
         },
-        createDeployment: async ({ adminToken, branch, cronSpecs, key, kind, organizationId, projectId, scriptName }) => {
+        createDeployment: async ({ adminToken, branch, cronSpecs, key, kind, organizationId, projectId, runtime, scriptName }) => {
             // Seal the admin token at the edge — the control-plane D1 stores
             // ciphertext + IV (plaintext only in dev without a master key).
             const sealed = await sealAdminToken(adminToken, environment.SECRET_ENCRYPTION_KEY);
@@ -194,6 +204,7 @@ export const deployDeps = (context: LunoraActionContext, environment: RouterEnv,
                 kind,
                 organizationId,
                 projectId,
+                ...runtimeColumn(runtime),
                 scriptName,
             });
         },

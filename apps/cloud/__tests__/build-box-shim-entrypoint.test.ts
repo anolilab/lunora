@@ -1,8 +1,6 @@
 /* eslint-disable max-classes-per-file -- the shim subclasses a WorkerEntrypoint-shaped class, so each case is a class of its own */
 import { describe, expect, it } from "vitest";
 
-import { wrapEntry } from "../containers/build/shim-runtime.mjs";
-
 /**
  * The plain-Worker entry shim for a Worker whose default export is a
  * `WorkerEntrypoint` class rather than a handler object: the shim answers with
@@ -10,6 +8,13 @@ import { wrapEntry } from "../containers/build/shim-runtime.mjs";
  * `queue()` through `this`, and hands everything else to `super.fetch()`.
  * The object shape is `build-box-shim.test.ts`.
  */
+
+interface ShimModule {
+    wrapEntry: (handler: unknown, queueNames: Readonly<Record<string, string>>) => unknown;
+}
+
+// Loaded by URL: plain `.mjs` bundled into each plain Worker, with no declaration file.
+const { wrapEntry } = (await import(new URL("../containers/build/shim-runtime.mjs", import.meta.url).href)) as ShimModule;
 
 const TOKEN = "admin-token-for-tests";
 const ENV = { LUNORA_ADMIN_TOKEN: TOKEN };
