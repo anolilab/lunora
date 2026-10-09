@@ -1,3 +1,10 @@
+## @lunora/storage [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.123...@lunora/storage@1.0.0-alpha.124) (2026-10-09)
+
+
+### Dependencies
+
+* **@visulima/storage:** 2.0.33 → 2.0.37
+
 ## @lunora/storage [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.122...@lunora/storage@1.0.0-alpha.123) (2026-10-09)
 
 ### Features
