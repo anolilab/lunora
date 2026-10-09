@@ -83,6 +83,12 @@ export const BuildSettingsCard = ({
             <CardContent>
                 <form action={save} className="flex flex-col gap-3">
                     <RuntimeField id="build-runtime" onChange={setKind} value={kind} />
+                    {kind === runtime ? null : (
+                        <p className="text-warning text-xs" role="status">
+                            A release of the other runtime is refused while one of this runtime is live: it would drop that Worker&apos;s Durable Object data.
+                            Switch before the first deploy, or deploy the other runtime as a new project.
+                        </p>
+                    )}
                     <Field htmlFor="build-root-directory" label="Root directory">
                         <Input
                             aria-describedby="build-settings-problem"

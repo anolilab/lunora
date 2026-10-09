@@ -98,9 +98,11 @@ A project whose `runtime` setting is `worker` is a plain Cloudflare Worker: a
    `manifest.vars`. Refused, by name: a non-string var (Cloudflare would bind
    it as JSON; Lunora Cloud deploys vars as plain text), an assets binding not
    named `ASSETS` (the provision box always binds assets as `ASSETS`; a config
-   that names no binding gets `ASSETS` added), an assets directory — or any
-   symlink under it — that leads outside the repository, no `main`, and
-   `no_bundle`.
+   that names no binding gets `ASSETS` added), no `main`, and `no_bundle`.
+   The static files themselves are collected after step 6 — the dry run runs
+   the config's `build.command`, whose output they may be — and an assets
+   directory that is missing then, or that leads (or holds a symlink that
+   leads) outside the repository, is refused.
 6. **Bundle behind the entry shim.** `wrangler deploy <shim> --config <config>
 --dry-run --outdir <dir>`, with `WRANGLER_SEND_METRICS=false`,
    `WRANGLER_HIDE_BANNER=true` (the banner is what runs the update check),

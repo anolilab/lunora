@@ -119,8 +119,26 @@ const parseBinding = (entry: unknown, index: number, target: TargetId): Parsed<B
     };
 };
 
-/** Checks across the (floored) binding list: unique names and per-type caps. */
-const bindingSetError = (bindings: BindingRequirement[]): string | undefined => {
+/**
+ * The targets the provision box converges, whose program creates a queue
+ * through its producer binding and attaches the consumer to that queue only
+ * (`containers/provision/plan.mjs`).
+ */
+const PRODUCER_FED_QUEUE_TARGETS: ReadonlySet<TargetId> = new Set(["cloudflare-wfp", "cloudflare-workers"]);
+
+/** The queues a manifest consumes without a producer binding for them, on a target where that consumer would never be attached. */
+const unfedQueues = (bindings: ReadonlyArray<BindingRequirement>, target: TargetId): string[] => {
+    if (!PRODUCER_FED_QUEUE_TARGETS.has(target)) {
+        return [];
+    }
+
+    const produced = new Set(bindings.filter((entry) => entry.type === "queue_producer").map((entry) => entry.resource));
+
+    return bindings.filter((entry) => entry.type === "queue_consumer" && !produced.has(entry.resource)).map((entry) => entry.resource ?? entry.binding);
+};
+
+/** Checks across the (floored) binding list: unique names, per-type caps, and queues a consumer could actually receive from. */
+const bindingSetError = (bindings: BindingRequirement[], target: TargetId): string | undefined => {
     const names = new Set<string>();
 
     for (const { binding } of bindings) {
@@ -143,6 +161,12 @@ const bindingSetError = (bindings: BindingRequirement[]): string | undefined => 
 
     // Alchemy (and so the provision box) always binds uploaded assets as `ASSETS`.
     const assets = bindings.find((entry) => entry.type === "assets");
+
+    const unfed = unfedQueues(bindings, target);
+
+    if (unfed.length > 0) {
+        return `this Worker consumes ${unfed.join(", ")} but binds no producer for ${unfed.length === 1 ? "it" : "them"}: Lunora Cloud creates a queue through its producer binding and attaches the consumer to that queue, so a consumer alone would deploy and never receive a message — add a producer binding for the same queue`;
+    }
 
     if (assets && assets.binding !== "ASSETS") {
         return `the assets binding must be named ASSETS on Lunora Cloud, not ${assets.binding}: the platform binds uploaded static assets under that one name, so rename it in the wrangler config and in the Worker`;
@@ -273,7 +297,7 @@ const parseManifest = (raw: unknown, target: TargetId, runtime: ProjectRuntime):
         bindings.unshift({ ...SHARD_DO_BINDING });
     }
 
-    const setError = bindingSetError(bindings);
+    const setError = bindingSetError(bindings, target);
 
     if (setError !== undefined) {
         return { error: setError };

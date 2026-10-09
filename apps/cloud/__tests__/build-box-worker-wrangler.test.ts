@@ -19,12 +19,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 interface WorkerModule {
     READ_CONFIG_PROGRAM: string;
-    releaseFromConfig: (input: {
-        config: Record<string, unknown>;
-        configPath: string;
-        log: (line: string) => void;
-        repo: string;
-    }) => Promise<{ body: Record<string, unknown>; main: string; queueNames: Record<string, string> }>;
+    releaseFromConfig: (input: { config: Record<string, unknown>; configPath: string; log: (line: string) => void }) => {
+        assets?: Record<string, unknown>;
+        body: Record<string, unknown>;
+        main: string;
+        queueNames: Record<string, string>;
+    };
     shimSource: (input: { main: string; queueNames: Record<string, string> }) => string;
 }
 
@@ -135,7 +135,7 @@ describe("build box worker runtime against the pinned wrangler", () => {
     it("translates it into the release a Lunora deploy would carry, plus its vars", async () => {
         expect.assertions(1);
 
-        const { body, queueNames } = await releaseFromConfig({ config, configPath: join(project, "wrangler.toml"), log: () => {}, repo: project });
+        const { body, queueNames } = releaseFromConfig({ config, configPath: join(project, "wrangler.toml"), log: () => {} });
 
         expect({ body, queueNames }).toStrictEqual({
             body: {
@@ -158,7 +158,7 @@ describe("build box worker runtime against the pinned wrangler", () => {
     it("bundles the shim with wrangler into one module that keeps the Worker's classes and answers the fan-out routes", async () => {
         expect.assertions(6);
 
-        const { main, queueNames } = await releaseFromConfig({ config, configPath: join(project, "wrangler.toml"), log: () => {}, repo: project });
+        const { main, queueNames } = releaseFromConfig({ config, configPath: join(project, "wrangler.toml"), log: () => {} });
         const entry = join(sandbox, "scratch", "entry");
         const outdir = join(sandbox, "scratch", "out");
 

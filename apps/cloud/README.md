@@ -1079,7 +1079,9 @@ it with the same `buildBindingManifest` / `collectAssets` code a Lunora deploy
 uses, and bundles the Worker with `wrangler deploy --dry-run` behind an entry
 shim; the bundle is scanned like any other. Details, and every refusal, are in
 `containers/build/README.md`, _The Cloudflare Worker runtime_. Custom build steps
-belong in wrangler's `build.command`, which `wrangler deploy` runs; a
+belong in wrangler's `build.command`, which `wrangler deploy --dry-run` runs
+(verified with the pinned wrangler 4.147) — static assets are collected after
+it, so its output can be the assets directory; a
 `@cloudflare/vite-plugin` project is refused (its output comes from
 `vite build`). A project still set to Lunora whose build finds a wrangler config
 but no Lunora CLI fails with a message saying to switch the runtime.
@@ -1092,6 +1094,18 @@ named like a binding, a secret of the project or `LUNORA_*`, each under
 Cloudflare's 5 KiB), and keeps them in the stored release so a rollback re-binds
 them. Static assets are bound as `ASSETS`, the one name the provision box binds:
 a config with no assets binding gets it, one naming another binding is refused.
+A queue consumed with no producer binding for it in the same Worker is refused
+on both Cloudflare targets: the provision box creates a queue through its
+producer binding and attaches the consumer to that, so the consumer would
+deploy green and never receive a message.
+
+**Switching an existing project.** A release whose runtime differs from the live
+release of its alias is refused (`deployments.create`, `CONFLICT`): a Lunora
+app always binds `ShardDO`, a plain Worker never does, and on a target that
+drops unbound classes the switch would delete that class's data on the first
+push. A project can switch freely before its first release; after that, deploy
+the other runtime as a new project. The Build settings card says so when the
+runtime is changed.
 
 **Crons and queues on `cloudflare-wfp`.** A dispatch-namespace Worker gets no
 `triggers.crons` and cannot consume a queue, so the control plane fans both out

@@ -216,7 +216,7 @@ const collectContainedAssets = async (assets, configPath, repo) => {
         directory = await realpath(resolve(dirname(configPath), assets.directory));
     } catch {
         throw new BuildError(
-            `the assets directory "${assets.directory}" does not exist — build it first (wrangler's \`build.command\` runs before the bundle)`,
+            `the assets directory "${assets.directory}" does not exist after the build — point assets.directory at your build output, or produce it in wrangler's \`build.command\``,
         );
     }
 
@@ -264,26 +264,21 @@ const plainTextVariables = (variables) => {
 };
 
 /**
- * The static assets and, when the config names no binding, the `ASSETS` one
- * the platform binds them as. The provision box binds uploaded assets as
- * ASSETS, always: a Worker that names no binding reads none, so ASSETS is
- * added for it; one that reads another name would find it undefined at
- * runtime, so that is refused.
+ * The `ASSETS` binding to add for a config's `assets` section, when it names
+ * none. The provision box binds uploaded assets as ASSETS, always: a Worker
+ * that names no binding reads none, so ASSETS is added for it; one that reads
+ * another name would find it undefined at runtime, so that is refused.
  * @param {Record<string, unknown>} section The config's `assets` section.
- * @param {string} configPath Absolute path of the wrangler config.
- * @param {string} repo Real path of the extracted repo.
- * @returns {Promise<{ assets: unknown, binding?: { binding: string, type: "assets" } }>} The upload, and the binding to add.
+ * @returns {{ binding: string, type: "assets" } | undefined} The binding to add.
  */
-const assetsRelease = async (section, configPath, repo) => {
+const assetsBinding = (section) => {
     if (section.binding !== undefined && section.binding !== "ASSETS") {
         throw new BuildError(
             `the assets binding is named ${String(section.binding)}, but Lunora Cloud binds static assets as ASSETS — rename it in the wrangler config and in the Worker`,
         );
     }
 
-    const assets = await collectContainedAssets(section, configPath, repo);
-
-    return section.binding === undefined ? { assets, binding: { binding: "ASSETS", type: "assets" } } : { assets };
+    return section.binding === undefined ? { binding: "ASSETS", type: "assets" } : undefined;
 };
 
 /**
@@ -308,11 +303,14 @@ const forwardedQueueNames = (bindings) => {
  * Translate a resolved wrangler config into the release a deploy needs —
  * exactly the body `lunora cloud deploy --out` writes, plus `vars` — and the
  * queue-name map the shim embeds. Refuses, by name, anything that would deploy
- * a Worker missing part of what its config says.
- * @param {{ config: Record<string, unknown>, configPath: string, log: (line: string) => void, repo: string }} input The config, where it was read from, a log line writer and the repo's real path.
- * @returns {Promise<{ body: Record<string, unknown>, main: string, queueNames: Record<string, string> }>} The release body, the Worker's entry and the map.
+ * a Worker missing part of what its config says. Everything but the static
+ * files themselves: those may be what wrangler's `build.command` produces, so
+ * they are collected after the dry run ({@link collectContainedAssets}), from
+ * the `assets` section returned here.
+ * @param {{ config: Record<string, unknown>, configPath: string, log: (line: string) => void }} input The config, where it was read from, and a log line writer.
+ * @returns {{ assets?: Record<string, unknown>, body: Record<string, unknown>, main: string, queueNames: Record<string, string> }} The release body without its files, the `assets` section to collect them from, the Worker's entry and the map.
  */
-const releaseFromConfig = async ({ config, configPath, log, repo }) => {
+const releaseFromConfig = ({ config, configPath, log }) => {
     if (typeof config.main !== "string" || config.main === "") {
         throw new BuildError(`${basename(configPath)} has no \`main\` — a Worker needs an entry module`);
     }
@@ -330,15 +328,16 @@ const releaseFromConfig = async ({ config, configPath, log, repo }) => {
         );
     }
 
-    const { assets, binding } = isRecord(config.assets) ? await assetsRelease(config.assets, configPath, repo) : {};
+    const assets = isRecord(config.assets) ? config.assets : undefined;
+    const binding = assets === undefined ? undefined : assetsBinding(assets);
     const bindings = binding === undefined ? [...manifest.bindings] : [...manifest.bindings, binding];
 
     // In the manifest's own order (type, then binding), so the release stays diff-stable.
     bindings.sort((a, b) => a.type.localeCompare(b.type) || a.binding.localeCompare(b.binding));
 
     return {
+        ...(assets === undefined ? {} : { assets }),
         body: {
-            ...(assets === undefined ? {} : { assets }),
             ...(manifest.crons.length > 0 ? { cronSpecs: [...manifest.crons] } : {}),
             manifest: {
                 bindings,
@@ -509,7 +508,7 @@ const buildWorker = async ({ onLine, project, repo, run, scratch, timeoutMs, wor
         throw new BuildError("the project's wrangler reported a config that is not an object");
     }
 
-    const { body, main, queueNames } = await releaseFromConfig({ config: parsed.config, configPath, log: onLine, repo });
+    const { assets, body, main, queueNames } = releaseFromConfig({ config: parsed.config, configPath, log: onLine });
 
     const shim = await writeShim(project, shimSource({ main, queueNames }));
 
@@ -528,7 +527,8 @@ const buildWorker = async ({ onLine, project, repo, run, scratch, timeoutMs, wor
         throw new BuildError(`wrangler deploy --dry-run failed with exit code ${String(buildCode)}`);
     }
 
-    return { body, outDirectory };
+    // After the dry run, which ran the config's `build.command`: the files may be its output.
+    return { body: assets === undefined ? body : { assets: await collectContainedAssets(assets, configPath, repo), ...body }, outDirectory };
 };
 
 /**

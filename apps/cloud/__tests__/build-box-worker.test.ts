@@ -65,6 +65,12 @@ if (process.env.FAKE_EXTRA_MODULE === "1" || fs.existsSync("fixture/extra")) {
     fs.writeFileSync(path.join(outdir, "chunk.js"), "export {};");
 }
 
+// What a config's \`build.command\` would do: \`wrangler deploy\` runs it before it bundles.
+if (fs.existsSync("fixture/build-assets")) {
+    fs.mkdirSync("built", { recursive: true });
+    fs.writeFileSync("built/index.html", "built by the build command");
+}
+
 fs.writeFileSync(path.join(outdir, "README.md"), "dry run");
 `;
 
@@ -238,6 +244,18 @@ describe("build box worker runtime", () => {
         // The forwarded `{alias}--job-queue` maps back to the Worker's own queue name.
         expect(shim).toContain('wrapEntry(worker.default, {"--job-queue":"jobs"})');
         expect(tagged(records, "RUNTIME")).toBe(true);
+    }, 30_000);
+
+    it("collects static assets the build produced, after the dry run that ran its build command", async () => {
+        expect.assertions(2);
+
+        const records = await build(
+            await tarball("built-assets", { files: { "fixture/build-assets": "" }, wrangler: { ...WORKER_CONFIG, assets: { directory: "./built" } } }),
+        );
+        const release = records.at(-1) ?? {};
+
+        expect(release).not.toHaveProperty("error");
+        expect(release["assets"]).toStrictEqual({ files: [{ content: Buffer.from("built by the build command").toString("base64"), path: "/index.html" }] });
     }, 30_000);
 
     it("re-exports the Worker's module from its resolved, absolute main", async () => {

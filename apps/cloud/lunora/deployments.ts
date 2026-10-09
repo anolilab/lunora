@@ -5,7 +5,7 @@ import { highestPlan } from "../src/billing/plans";
 import type { AdmissionRow } from "../src/billing/spend";
 import { organizationServing } from "../src/billing/spend";
 import { previewExpiry } from "../src/deploy/preview";
-import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
+import { PLAIN_WORKER_NO_ADMIN, RUNTIME_LABELS, storedRuntime } from "../src/project-runtime";
 import type { TargetId } from "../src/provision-contract";
 import { DEFAULT_TARGET, storedTarget } from "../src/provision-contract";
 import { isCellPlaced, resourceRefOf } from "../src/targets/placement";
@@ -47,6 +47,32 @@ interface DeploymentRow {
     url?: string;
     version?: number;
 }
+
+/**
+ * Refuse a release whose runtime differs from the live release of its alias.
+ *
+ * Every release converges the alias's one Worker in place, and on a target
+ * that drops unbound classes (`TARGETS[target].dropsUnboundClasses`) a release
+ * that stops binding a Durable Object class deletes that class's data. A Lunora
+ * app always binds `ShardDO` — its whole database — and a plain Worker never
+ * does, so switching a live alias between the two is exactly that deletion, on
+ * the first push after the setting changed. Refused on every target, which is
+ * simpler to state than the targets where it would be safe. A project with no
+ * live release yet may switch freely.
+ * @throws {LunoraError} `CONFLICT` naming both runtimes and the way forward.
+ */
+const assertSameRuntime = (previous: Pick<DeploymentRow, "runtime" | "scriptName"> | undefined, runtime: "worker" | undefined): void => {
+    if (previous === undefined || storedRuntime(previous.runtime) === storedRuntime(runtime)) {
+        return;
+    }
+
+    const live = RUNTIME_LABELS[storedRuntime(previous.runtime)];
+
+    throw new LunoraError(
+        "CONFLICT",
+        `${previous.scriptName} is running a ${live}; releasing a ${RUNTIME_LABELS[storedRuntime(runtime)]} onto the same Worker would drop its Durable Object classes and their data. Deploy it as a new project, or switch this project's runtime back to ${live}.`,
+    );
+};
 
 /** The live deployment of one alias + kind — the release currently on that alias's Worker. */
 const liveRelease = async (context: QueryContext, row: Pick<DeploymentRow, "alias" | "kind" | "projectId">): Promise<DeploymentRow | undefined> => {
@@ -525,6 +551,8 @@ export const create = mutation
         const { page: existing } = await context.db.deployments.findMany({ where: { projectId: arguments_.projectId } }); // secret-scanner:allow -- domain field name
         const version = 1 + Math.max(0, ...existing.filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
         const previous = await liveRelease(context, { alias: arguments_.scriptName, kind: arguments_.kind, projectId: arguments_.projectId }); // secret-scanner:allow -- domain field name
+
+        assertSameRuntime(previous, arguments_.runtime);
 
         const { now } = context;
         // A row predating targets answers NULL, which is the default target.

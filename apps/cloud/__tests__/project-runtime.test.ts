@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { claimNext, recordPush, releaseTarget } from "../lunora/builds";
+import { create as createDeployment } from "../lunora/deployments";
 import { create, toProjectView, updateBuildSettings } from "../lunora/projects";
 import { executeInContainer } from "../src/builds/container-exec";
 import type { BuildPlace, BuildRunnerPorts } from "../src/builds/runner";
@@ -198,6 +199,66 @@ describe("builds", () => {
         });
         // The build's runtime, not the project's current one.
         await expect(releaseTarget.handler(target.ctx, { buildId: "bld_1" as never })).resolves.toMatchObject({ runtime: "worker" });
+    });
+});
+
+describe("deployments", () => {
+    const live = (runtime?: string): Row => {
+        return {
+            _id: "dep_live",
+            alias: "web",
+            createdAt: 1,
+            kind: "production",
+            organizationId: ORG,
+            projectId: "prj_1",
+            scriptName: "web",
+            status: "live",
+            ...(runtime === undefined ? {} : { runtime }),
+        };
+    };
+    const release = async (deployments: Row[], runtime?: "worker") => {
+        const { ctx, ops } = makeCtx({
+            aliasOwnership: [],
+            deployments,
+            members: [owner(ORG)],
+            projects: [{ _id: "prj_1", organizationId: ORG, slug: "web" }],
+        });
+
+        await createDeployment.handler(ctx, {
+            kind: "production",
+            organizationId: ORG as never,
+            projectId: "prj_1" as never,
+            ...(runtime === undefined ? {} : { runtime }),
+            scriptName: "web",
+        });
+
+        return ops.find((op) => op.kind === "insert" && op.table === "deployments");
+    };
+
+    it("records the runtime a release is, and nothing for a Lunora app", async () => {
+        expect.assertions(2);
+
+        await expect(release([], "worker")).resolves.toMatchObject({ document: { runtime: "worker" } });
+        await expect(release([])).resolves.not.toHaveProperty("document.runtime");
+    });
+
+    it("refuses to switch a live alias between runtimes, which would drop its Durable Object data", async () => {
+        expect.assertions(2);
+
+        await expect(release([live()], "worker")).rejects.toMatchObject({
+            code: "CONFLICT",
+            message:
+                "web is running a Lunora app; releasing a Cloudflare Worker onto the same Worker would drop its Durable Object classes and their data. Deploy it as a new project, or switch this project's runtime back to Lunora app.",
+        });
+        await expect(release([live("worker")])).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("releases the same runtime again, and either runtime onto an alias with no live release", async () => {
+        expect.assertions(3);
+
+        await expect(release([live("worker")], "worker")).resolves.toMatchObject({ document: { runtime: "worker" } });
+        await expect(release([live()])).resolves.toMatchObject({ document: { scriptName: "web" } });
+        await expect(release([{ ...live(), status: "superseded" }], "worker")).resolves.toMatchObject({ document: { runtime: "worker" } });
     });
 });
 

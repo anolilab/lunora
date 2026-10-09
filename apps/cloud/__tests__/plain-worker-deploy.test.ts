@@ -105,6 +105,19 @@ describe("manifest validation by runtime", () => {
         expect(parsePayload({ manifest: { bindings: [DO_COUNTER], vars } }, "app", "cloudflare-wfp", "worker")).toStrictEqual({ error });
     });
 
+    it("refuses a queue consumed but never produced, which would deploy and never receive a message", () => {
+        expect.assertions(3);
+
+        const consumerOnly = { bindings: [{ binding: "jobs", resource: "jobs", type: "queue_consumer" }] };
+        const both = { bindings: [...consumerOnly.bindings, { binding: "JOB_QUEUE", resource: "jobs", type: "queue_producer" }] };
+
+        expect(parsePayload({ manifest: consumerOnly }, "app", "cloudflare-wfp", "worker")).toMatchObject({
+            error: expect.stringMatching(/^this Worker consumes jobs but binds no producer for it/u) as string,
+        });
+        expect(parsePayload({ manifest: consumerOnly }, "app", "cloudflare-workers", "worker")).toHaveProperty("error");
+        expect(parsePayload({ manifest: both }, "app", "cloudflare-wfp", "worker")).toHaveProperty("value");
+    });
+
     it("says why an assets binding must be ASSETS", () => {
         expect.assertions(1);
 
