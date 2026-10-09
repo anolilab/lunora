@@ -310,10 +310,12 @@ export const planPolicyWrites = (
         const wanted = new Set(recipients);
         let keptDestinations = 0;
         const writes = managed.map((policy): PolicyWrite => {
-            const existing = (policy.mechanisms["email"] ?? []).map((entry) => entry.id.toLowerCase());
-            const emails = [...new Set([...existing, ...recipients])];
+            // The customer's spelling is kept as is; case matters only for matching.
+            const existing = (policy.mechanisms["email"] ?? []).map((entry) => entry.id);
+            const present = new Set(existing.map((entry) => entry.toLowerCase()));
+            const emails = [...existing, ...recipients.filter((address) => !present.has(address))];
 
-            for (const address of existing.filter((entry) => !wanted.has(entry))) {
+            for (const address of existing.filter((entry) => !wanted.has(entry.toLowerCase()))) {
                 kept.add(address);
             }
 

@@ -149,19 +149,19 @@ describe("policy writes", () => {
             enabled: false,
             filters: { product: ["worker_requests"] },
             id: "managed",
-            mechanisms: { email: [{ id: "Finance@example.com" }, { id: "owner@example.com" }], pagerduty: [{ id: "pd" }], webhooks: [{ id: "wh" }] },
+            mechanisms: { email: [{ id: "Finance@example.com" }, { id: "Owner@Example.com" }], pagerduty: [{ id: "pd" }], webhooks: [{ id: "wh" }] },
             name: managedPolicyName("worker_requests"),
         });
         const [plan] = planPolicyWrites([{ limit: 7, product: WORKERS }], [managed], ["owner@example.com", "admin@example.com"]);
 
-        expect(plan).toMatchObject({ duplicates: 0, keptDestinations: 2, keptRecipients: ["finance@example.com"] });
+        expect(plan).toMatchObject({ duplicates: 0, keptDestinations: 2, keptRecipients: ["Finance@example.com"] });
         expect(plan?.writes[0]).toMatchObject({
             body: {
                 alert_interval: "1h",
                 enabled: false,
                 filters: { limit: ["7"] },
                 mechanisms: {
-                    email: [{ id: "finance@example.com" }, { id: "owner@example.com" }, { id: "admin@example.com" }],
+                    email: [{ id: "Finance@example.com" }, { id: "Owner@Example.com" }, { id: "admin@example.com" }],
                     pagerduty: [{ id: "pd" }],
                     webhooks: [{ id: "wh" }],
                 },
