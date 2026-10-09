@@ -13,8 +13,9 @@
  * fanned out to it (`fanout: "native"`).
  *
  * Metering reads each connected account's GraphQL Analytics API back
- * (`metering: "readback"`), one usage scope per account: request counts, and
- * D1 and Durable Object rows (`src/cloudflare/storage-usage.ts`). They are for
+ * (`metering: "readback"`), one usage scope per account: request counts,
+ * D1 and Durable Object rows (`src/cloudflare/storage-usage.ts`), and Workers
+ * CPU time and Durable Object requests and duration (`src/cloudflare/compute-usage.ts`). They are for
  * display and anomaly detection only. The usage is on the customer's
  * Cloudflare bill, so the rows are never billed (`isBillableUsage`).
  *
@@ -27,6 +28,7 @@ import { LunoraError } from "@lunora/server";
 
 import { tenantSender } from "../../backup/tenant-transport";
 import type { PeriodUsage } from "../../billing/spend";
+import { readDurableObjectDurationByScript, readDurableObjectRequestsByScript, readWorkersCpuByScript } from "../../cloudflare/compute-usage";
 import { readD1UsageByAlias, readDurableObjectUsageByScript, unavailableOnRefusal } from "../../cloudflare/storage-usage";
 import type { CloudflareAccountStore } from "../../cloudflare-accounts/store";
 import { accountTableIn, cloudflareAccountStore } from "../../cloudflare-accounts/store";
@@ -120,8 +122,14 @@ export interface CloudflareWorkersFleetPorts {
     accounts: () => Promise<string[]>;
     credentials: AccountCredentials;
     read: AccountUsageReader;
-    /** D1 and Durable Object rows; absent → this control plane reads only request counts. */
-    storage?: { d1: AccountStorageReader; durableObjects: AccountStorageReader };
+    /** D1 and Durable Object rows, and the compute meters; absent → this control plane reads only request counts. */
+    storage?: {
+        d1: AccountStorageReader;
+        durableObjectDuration?: AccountStorageReader;
+        durableObjectRequests?: AccountStorageReader;
+        durableObjects: AccountStorageReader;
+        workersCpu?: AccountStorageReader;
+    };
 }
 
 export const createCloudflareWorkersFleet = (ports: CloudflareWorkersFleetPorts): TargetFleet => {
@@ -135,6 +143,7 @@ export const createCloudflareWorkersFleet = (ports: CloudflareWorkersFleetPorts)
 
         return metered.includes(scope) ? ports.credentials(scope) : undefined;
     };
+    const readers = ports.storage;
     const storage = (read: AccountStorageReader): UsageSource => {
         return {
             cadence: "hourly",
@@ -169,7 +178,15 @@ export const createCloudflareWorkersFleet = (ports: CloudflareWorkersFleetPorts)
                         });
                     },
                 },
-                ...(ports.storage === undefined ? {} : { d1: storage(ports.storage.d1), durableObjects: storage(ports.storage.durableObjects) }),
+                ...(readers === undefined
+                    ? {}
+                    : {
+                          d1: storage(readers.d1),
+                          durableObjects: storage(readers.durableObjects),
+                          ...(readers.workersCpu === undefined ? {} : { workersCpu: storage(readers.workersCpu) }),
+                          ...(readers.durableObjectRequests === undefined ? {} : { durableObjectRequests: storage(readers.durableObjectRequests) }),
+                          ...(readers.durableObjectDuration === undefined ? {} : { durableObjectDuration: storage(readers.durableObjectDuration) }),
+                      }),
             },
         },
     };
@@ -275,5 +292,9 @@ export const cloudflareWorkersFleetFromEnv = (environment: CloudflareWorkersEnvi
         storage: {
             d1: async (access, window) => unavailableOnRefusal(async () => readD1UsageByAlias(access, window)),
             durableObjects: async (access, window) => unavailableOnRefusal(async () => readDurableObjectUsageByScript(access, window)),
+            durableObjectDuration: async (access, window) => unavailableOnRefusal(async () => readDurableObjectDurationByScript(access, window)),
+            durableObjectRequests: async (access, window) => unavailableOnRefusal(async () => readDurableObjectRequestsByScript(access, window)),
+            // Its own probe and query: a field added to `readScriptRequests` would also break the token's analytics probe.
+            workersCpu: async (access, window) => unavailableOnRefusal(async () => readWorkersCpuByScript(access, window)),
         },
     });

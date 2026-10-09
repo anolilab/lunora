@@ -173,6 +173,42 @@
                         ]
                       },
                       "destination": {},
+                      "meter": {
+                        "anyOf": [
+                          {
+                            "const": "requests",
+                            "type": "string"
+                          },
+                          {
+                            "const": "cpuMs",
+                            "type": "string"
+                          },
+                          {
+                            "const": "d1RowsRead",
+                            "type": "string"
+                          },
+                          {
+                            "const": "d1RowsWritten",
+                            "type": "string"
+                          },
+                          {
+                            "const": "doRequests",
+                            "type": "string"
+                          },
+                          {
+                            "const": "doDurationGbS",
+                            "type": "string"
+                          },
+                          {
+                            "const": "doRowsRead",
+                            "type": "string"
+                          },
+                          {
+                            "const": "doRowsWritten",
+                            "type": "string"
+                          }
+                        ]
+                      },
                       "functionPath": {},
                       "mode": {
                         "anyOf": [
@@ -191,6 +227,11 @@
                         "description": "Id<\"organizations\">",
                         "type": "string",
                         "x-lunora-table": "organizations"
+                      },
+                      "projectId": {
+                        "description": "Id<\"projects\">",
+                        "type": "string",
+                        "x-lunora-table": "projects"
                       },
                       "target": {
                         "anyOf": [
@@ -236,6 +277,10 @@
                           },
                           {
                             "const": "storage_anomaly",
+                            "type": "string"
+                          },
+                          {
+                            "const": "usage_threshold",
                             "type": "string"
                           }
                         ]
@@ -919,6 +964,169 @@
           }
         },
         "summary": "query: alerts:silences",
+        "tags": [
+          "alerts"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#alerts:suggestUsageThreshold": {
+      "post": {
+        "description": "Invoke the `query` `alerts:suggestUsageThreshold` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "alerts:suggestUsageThreshold",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "meter": {
+                        "anyOf": [
+                          {
+                            "const": "requests",
+                            "type": "string"
+                          },
+                          {
+                            "const": "cpuMs",
+                            "type": "string"
+                          },
+                          {
+                            "const": "d1RowsRead",
+                            "type": "string"
+                          },
+                          {
+                            "const": "d1RowsWritten",
+                            "type": "string"
+                          },
+                          {
+                            "const": "doRequests",
+                            "type": "string"
+                          },
+                          {
+                            "const": "doDurationGbS",
+                            "type": "string"
+                          },
+                          {
+                            "const": "doRowsRead",
+                            "type": "string"
+                          },
+                          {
+                            "const": "doRowsWritten",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "meter",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "alerts:suggestUsageThreshold",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: alerts:suggestUsageThreshold",
+        "tags": [
+          "alerts"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#alerts:usageProgress": {
+      "post": {
+        "description": "Invoke the `query` `alerts:usageProgress` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "alerts:usageProgress",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "alerts:usageProgress",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: alerts:usageProgress",
         "tags": [
           "alerts"
         ],
