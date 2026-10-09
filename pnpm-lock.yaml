@@ -116,11 +116,11 @@ catalogs:
       specifier: 1.0.2
       version: 1.0.2
     '@visulima/fs':
-      specifier: 6.0.28
-      version: 6.0.28
+      specifier: 6.0.29
+      version: 6.0.29
     '@visulima/package':
-      specifier: 5.0.41
-      version: 5.0.41
+      specifier: 5.0.42
+      version: 5.0.42
     '@visulima/pail':
       specifier: 5.0.0
       version: 5.0.0
@@ -131,11 +131,11 @@ catalogs:
       specifier: 1.0.1
       version: 1.0.1
     '@visulima/tui':
-      specifier: 4.0.28
-      version: 4.0.28
+      specifier: 4.0.29
+      version: 4.0.29
     '@visulima/tui-kit':
-      specifier: 1.0.31
-      version: 1.0.31
+      specifier: 1.0.32
+      version: 1.0.32
     giget:
       specifier: 3.3.1
       version: 3.3.1
@@ -201,11 +201,11 @@ catalogs:
       version: 1.63.0
   email:
     '@visulima/disposable-email-domains':
-      specifier: 1.1.14
-      version: 1.1.14
+      specifier: 1.1.19
+      version: 1.1.19
     '@visulima/email-verifier':
-      specifier: 1.0.30
-      version: 1.0.30
+      specifier: 1.0.36
+      version: 1.0.36
     '@visulima/free-email-domains':
       specifier: 1.0.1
       version: 1.0.1
@@ -569,11 +569,11 @@ catalogs:
       version: 0.1.9
   storage:
     '@visulima/storage':
-      specifier: 2.0.33
-      version: 2.0.33
+      specifier: 2.0.37
+      version: 2.0.37
     '@visulima/storage-client':
-      specifier: 1.0.8
-      version: 1.0.8
+      specifier: 1.0.9
+      version: 1.0.9
     aws4fetch:
       specifier: 1.0.20
       version: 1.0.20
@@ -2542,7 +2542,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
+        version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
     devDependencies:
       '@angular/core':
         specifier: catalog:angular
@@ -2640,10 +2640,10 @@ importers:
         version: link:../values
       '@visulima/disposable-email-domains':
         specifier: catalog:email
-        version: 1.1.14
+        version: 1.1.19
       '@visulima/email-verifier':
         specifier: catalog:email
-        version: 1.0.30
+        version: 1.0.36
       '@visulima/free-email-domains':
         specifier: catalog:email
         version: 1.0.1
@@ -2950,7 +2950,7 @@ importers:
         version: 6.1.0(ai@7.0.127(zod@4.6.5))
       '@visulima/fs':
         specifier: catalog:cli
-        version: 6.0.28(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
+        version: 6.0.29(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
       '@visulima/pail':
         specifier: catalog:cli
         version: 5.0.0(@opentelemetry/api@1.9.1)(express@5.2.1(supports-color@10.2.2))(hono@4.13.13)
@@ -2962,10 +2962,10 @@ importers:
         version: 1.0.1
       '@visulima/tui':
         specifier: catalog:cli
-        version: 4.0.28(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0)
+        version: 4.0.29(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0)
       '@visulima/tui-kit':
         specifier: catalog:cli
-        version: 1.0.31(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.28(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.3.0)(shiki@4.5.0)
+        version: 1.0.32(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.29(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.3.0)(shiki@4.5.0)
       adm-zip:
         specifier: '>=0.6.1'
         version: 0.6.1
@@ -3044,7 +3044,7 @@ importers:
         version: link:../errors
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
+        version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
@@ -3163,7 +3163,7 @@ importers:
         version: link:../workflow
       '@visulima/fs':
         specifier: catalog:cli
-        version: 6.0.28(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
+        version: 6.0.29(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
       jiti:
         specifier: catalog:tooling
         version: 2.7.0
@@ -3239,10 +3239,10 @@ importers:
         version: 1.0.2
       '@visulima/fs':
         specifier: catalog:cli
-        version: 6.0.28(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
+        version: 6.0.29(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
       '@visulima/package':
         specifier: catalog:cli
-        version: 5.0.41(@visulima/yaml@1.0.0)(ini@7.0.0)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
+        version: 5.0.42(ini@7.0.0)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
       dockerode:
         specifier: catalog:tooling
         version: 5.0.1(supports-color@10.2.2)
@@ -4306,7 +4306,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.8(@tanstack/react-query@5.101.4(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
+        version: 1.0.9(@tanstack/react-query@5.101.4(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
     devDependencies:
       '@babel/core':
         specifier: catalog:build
@@ -4817,7 +4817,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@1.9.15)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
+        version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@1.9.15)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
     devDependencies:
       '@babel/core':
         specifier: catalog:build
@@ -4924,7 +4924,7 @@ importers:
         version: link:../platform
       '@visulima/storage':
         specifier: catalog:storage
-        version: 2.0.33(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.4.2)(magicast@0.5.4)(oxc-parser@0.148.0)(rolldown@1.2.12)(unplugin@3.4.0(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.63.1)(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.6.5))(aws4fetch@1.0.20)(hono@4.13.13)(sharp@0.35.5(@types/node@26.6.4))(supports-color@10.2.2)(zod@4.6.5)
+        version: 2.0.37(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.4.2)(magicast@0.5.4)(oxc-parser@0.148.0)(rolldown@1.2.12)(unplugin@3.4.0(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.63.1)(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.6.5))(aws4fetch@1.0.20)(hono@4.13.13)(sharp@0.35.5(@types/node@26.6.4))(supports-color@10.2.2)(zod@4.6.5)
       aws4fetch:
         specifier: catalog:storage
         version: 1.0.20
@@ -4946,7 +4946,7 @@ importers:
         version: 2.1.0(28f6a3ec7cce81770de3c6c66ec5ddac)
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
+        version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.10(vitest@4.1.11)
@@ -5127,7 +5127,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
+        version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -5320,7 +5320,7 @@ importers:
         version: link:../ratelimit
       '@visulima/storage-client':
         specifier: catalog:storage
-        version: 1.0.8(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
+        version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -13856,16 +13856,16 @@ packages:
     resolution: {integrity: sha512-1GbjS5hit7JA90RKVfN6u0qlqmhoem8ui2kyB8qBnR243V1tT9KDqPnYKyoqSKkgDnzIu9aRb9r07xrflXzVGQ==}
     engines: {node: ^22.22.2 || >= 24.10.0}
 
-  '@visulima/disposable-email-domains@1.1.14':
-    resolution: {integrity: sha512-+iMTdJildFproPPg/3YZ8cUxg8Pvo6Z00EJxM1IXvQwslivxs2Qqe8C2aAJUrtROG2U6nn8QKi/PxJCwYnR2Iw==}
+  '@visulima/disposable-email-domains@1.1.19':
+    resolution: {integrity: sha512-KqgUPUBYh5hSlGIuLLj9E1WSI0lE5RtNW/Mh3WmyoGrvxOpHzXeJAhMt9OZ17XhZ+vF71zTZ2P19Eh+vJJQyqQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
   '@visulima/email-provider-mx@1.0.1':
     resolution: {integrity: sha512-qqArntkNfG4xADVxNIjSoIwqzS5/BMX8Vz9Yfb/LRI3ERFz5mk1uQY6g2cLeeXpwUWVfErs8SaBzHfPH8hpJ3Q==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/email-verifier@1.0.30':
-    resolution: {integrity: sha512-d0HJHlc6aCRXtqGB/XXfRULe/RUDZOmG0VpR4iCd57xyct1Z6GQ/GMHIB/pn+auAeYdS0v4Dg70xYP7yGULBQQ==}
+  '@visulima/email-verifier@1.0.36':
+    resolution: {integrity: sha512-fcM5YiRH5Tx4q+9rRaMCX9LXNDXXLqH/25pX2Mee5biMu8wNV8nvld+WFkepSF7Ib/AiddHae+29NTCN1KzU0Q==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
   '@visulima/email@3.0.28':
@@ -13990,8 +13990,8 @@ packages:
       smol-toml:
         optional: true
 
-  '@visulima/fs@6.0.28':
-    resolution: {integrity: sha512-+D7r6+WQZLNJvA8njGJ3+pRtkt7d3Qdjok6LNqgBJ84ruTkB9hLKW51CAP8/UpvUTsMstBWlSUIIGpQ8rSre2A==}
+  '@visulima/fs@6.0.29':
+    resolution: {integrity: sha512-Jdez4KqUX2vkN8BPeKrMRuUW+nW13EtnODLA2CnZbBKg4mODIDVIMWQDK+2RSIRnhFYqoTQpbGgJyo1MdGGS2A==}
     engines: {node: ^22.14.0 || >=24.10.0}
     os: [darwin, linux, win32]
     peerDependencies:
@@ -13999,7 +13999,7 @@ packages:
       ini: ^7.0.0
       json5: ^2.2.3
       jsonc-parser: ^3.3.1
-      smol-toml: ^1.7.1
+      smol-toml: ^1.8.1
     peerDependenciesMeta:
       '@visulima/yaml':
         optional: true
@@ -14100,8 +14100,8 @@ packages:
     engines: {node: ^22.14.0 || >=24.10.0}
     os: [darwin, linux, win32]
 
-  '@visulima/package@5.0.41':
-    resolution: {integrity: sha512-SY9mV0yLybKaEAq4UFvcHhi2HuCPmtSbVIys8O6xdB0874ByJrwFqwIds09hmCch5zLrxzVUzpkLe+ZEBVdGcw==}
+  '@visulima/package@5.0.42':
+    resolution: {integrity: sha512-nVNePiWwNkCC7qZv1DWuQuHAAcpasaIHdsW1HGmdWSrSyDDdxpTO9qzbhT27PgC4clAoMo/8831tmz7DAqab5A==}
     engines: {node: ^22.14.0 || >=24.10.0}
     os: [darwin, linux, win32]
 
@@ -14498,8 +14498,8 @@ packages:
     resolution: {integrity: sha512-/rVVuYA2Y0vQl7orDBLd5VBKHPxp3K/G5MU9MPI4s6QkH6EFJ0CorluQPplIRk6onr9nfXmeE08ZR6C3O2zNkQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/storage-client@1.0.8':
-    resolution: {integrity: sha512-oFyeqCaBEzXhfOrOy4pUl07yY+BplhGMsKGLjvg+vC7fBlGboLWS3MZuw4WlzbKzpFXKzd3seoyCC8MbcL6sYQ==}
+  '@visulima/storage-client@1.0.9':
+    resolution: {integrity: sha512-BNdJvnLujMx7+YltfnI3KXYe0T1hW7Ug6ohT3jrNvCzFu483XAmDQXGfnlrw4L0J36T1ybPCo+8P/6G1BdXkzA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@tanstack/react-query': '>=5.100.9'
@@ -14511,8 +14511,8 @@ packages:
       svelte: '>=3.0.0'
       vue: '>=3.5.34'
 
-  '@visulima/storage@2.0.33':
-    resolution: {integrity: sha512-q+GCcKICO41p6sBh7bpTf4WwqFEiZIuNNz8Xw6FBNBeuKsPZT6nkcuCWG4SK4EqCX39HoSWKzIR2s3bSBw10SQ==}
+  '@visulima/storage@2.0.37':
+    resolution: {integrity: sha512-akFeu5Jq0qau4jGVvF0+CALM+KYlo4lw4+eE8qbSRMzl944ft5tGQ7UfRD50545VitklLJH+/JJENKyngc/TWA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       '@anthropic-ai/claude-agent-sdk': '>=0.2.0'
@@ -14631,10 +14631,6 @@ packages:
       zod:
         optional: true
 
-  '@visulima/string@3.1.0':
-    resolution: {integrity: sha512-0FuFRpmludwFn7kwAmRZKd3JI29PFwwUtHC5XMw+G2FrGBjTM80AVlQuQAw8RhWZEkPb8kuglsq1FJ7bZ1sjIA==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-
   '@visulima/string@3.1.1':
     resolution: {integrity: sha512-gISoNcNSyh0y7MFSGZv2Umq/h9XAAuBREKoqqai3lVJaI8M1OcYVjrj2IhuXs6M7XDEPZNGKfsu5Ly7/uQpUng==}
     engines: {node: ^22.14.0 || >=24.10.0}
@@ -14715,22 +14711,10 @@ packages:
     resolution: {integrity: sha512-hHNaj9/dh3/If5O+0V8ebxR9xTy6uy/j80bAxGvGqWyBP8I1OelKSIRgujBFSUmcd4boejHlQMr4Tn8Q3LI+EQ==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/tui-binding-darwin-arm64@4.0.28':
-    resolution: {integrity: sha512-/c0lIWDd2j019FUpdJBnsvkwegX8x2CFYqYGXKxUtR4DHFs4VLjOAFP9zGK1Yt07ccqjDshj1dDZEin51nimeA==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    cpu: [arm64]
-    os: [darwin]
-
   '@visulima/tui-binding-darwin-arm64@4.0.29':
     resolution: {integrity: sha512-nLDUY/dAQa+6hFx+oo06gZHlmrKs2+f7t8rwAEZEDvmdfi7SqTGKHYAjzfhNvGfOHGPDZVi2Lpjd3ucAqueL/g==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
-    os: [darwin]
-
-  '@visulima/tui-binding-darwin-x64@4.0.28':
-    resolution: {integrity: sha512-hc14Kcjgiz8tbQ5zSkfBEJD/5CO1Y3cReMJa5cYmZ9xSeJmJX74dUNnX5Yy+y8nsnEjggkLpiSU0UgGeIHo4Nw==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    cpu: [x64]
     os: [darwin]
 
   '@visulima/tui-binding-darwin-x64@4.0.29':
@@ -14739,26 +14723,12 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@visulima/tui-binding-linux-arm64-gnu@4.0.28':
-    resolution: {integrity: sha512-mxb1GKj8o7u7znxvR74FXTXeSbyXJp+Eux1TURCv+lX8OB/8a2DA1mN/2Fu0mvUrl7umKO2CWHD1m9C/mB1GUA==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
-
   '@visulima/tui-binding-linux-arm64-gnu@4.0.29':
     resolution: {integrity: sha512-k+UsZTedj06CxIzCyMjOEFTTtchoC/ds9VLtFU6FbM+lHh+7m7XLQbC1V78yeH7HSUfLI2blAu/8sOVwp1f4ag==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
-
-  '@visulima/tui-binding-linux-arm64-musl@4.0.28':
-    resolution: {integrity: sha512-bqX422FiujQDthUHeDBxFPIRfT7yiYTezaMse+lGftTWgKFTuBeAzvlRxU6c8yyiBlYprPtXAO2zjh8RiubdUw==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    cpu: [arm64]
-    os: [linux]
-    libc: [musl]
 
   '@visulima/tui-binding-linux-arm64-musl@4.0.29':
     resolution: {integrity: sha512-0VrVlebvfF09EKpwKpRo4Yjq2Rh4BuFrlgzU5/X+lPaELO2TAwuiqAiA3G/4I2mU5g54mAcNyNnmmNhITtFfXw==}
@@ -14767,26 +14737,12 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@visulima/tui-binding-linux-x64-gnu@4.0.28':
-    resolution: {integrity: sha512-/cJvixbBLQRWUzBUG34jET+NWhT8IWQtaHuzL7pgY73r/FcQU06/drLC/XoutlaRbqfUfvJzYfkKjWYO5dh7RA==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
-
   '@visulima/tui-binding-linux-x64-gnu@4.0.29':
     resolution: {integrity: sha512-DUko40jLgmnbBbpawyzAsftEcQqLqF0uFvEc65tAIEqRXkQxJwLfgne33DdROJ3YQBtMaFH7UJyloMmwk8jEtA==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
-
-  '@visulima/tui-binding-linux-x64-musl@4.0.28':
-    resolution: {integrity: sha512-ixaFhjZ1WW19WqSgMtRTozHwVPkLHaeJynwULRRsluGlf87dY1rbDYCjbxPawcuC/PMshUPiKApMY8DITKGOZw==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    cpu: [x64]
-    os: [linux]
-    libc: [musl]
 
   '@visulima/tui-binding-linux-x64-musl@4.0.29':
     resolution: {integrity: sha512-AsizcdSZRxvYP2Z4BjywftSCKUjSwa5qoyBtNepisoIjyFj1XXIBnGAQ7k4hDMKRMrrUZtiY9mUGC9Ld3gC1QA==}
@@ -14795,22 +14751,10 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@visulima/tui-binding-win32-arm64-msvc@4.0.28':
-    resolution: {integrity: sha512-6XufJ7gpnjcn5u61NWeUT6sAuOwILf7iPUlGSeLAx5AfaiWpqcmtDGNeOHvhYToh8RvRJcD9+OecEyeLbvOs9Q==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    cpu: [arm64]
-    os: [win32]
-
   '@visulima/tui-binding-win32-arm64-msvc@4.0.29':
     resolution: {integrity: sha512-0NN2q9HyuxMiBy16l9ND20Lz7GwXoY5407I+iOtzh8MtH/MECW2lVT981kYQXbfjB90aQ0JQYHJ0kb6Ed6w4ig==}
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [arm64]
-    os: [win32]
-
-  '@visulima/tui-binding-win32-x64-msvc@4.0.28':
-    resolution: {integrity: sha512-fCcTWgBX14/UYjA3XNASdo6f2uagp1wiPmeujALHJDjd5AJlBmt9sxRKKf6XWpakZKu+i4oQWeS5QpTkoeYIfA==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    cpu: [x64]
     os: [win32]
 
   '@visulima/tui-binding-win32-x64-msvc@4.0.29':
@@ -14818,38 +14762,6 @@ packages:
     engines: {node: ^22.14.0 || >=24.10.0}
     cpu: [x64]
     os: [win32]
-
-  '@visulima/tui-kit@1.0.31':
-    resolution: {integrity: sha512-aaAng0iymCjl4mC85JU4QG5OR2jGEqqpU6Qc0qLK1xeRAz8cURza00449+cSfu1kq0PMNzP0qCk1FAHUsKx9SA==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    peerDependencies:
-      '@shikijs/langs': ^4.4.3
-      '@shikijs/themes': ^4.4.3
-      '@visulima/tabular': 4.1.0
-      '@visulima/tui': 4.0.28
-      cfonts: ^3.3.1
-      diff: ^9.0.0
-      marked: ^18.0.9
-      qrcode: ^1.5.4
-      react: 19.3.0
-      shiki: ^4.4.3
-    peerDependenciesMeta:
-      '@shikijs/langs':
-        optional: true
-      '@shikijs/themes':
-        optional: true
-      '@visulima/tabular':
-        optional: true
-      cfonts:
-        optional: true
-      diff:
-        optional: true
-      marked:
-        optional: true
-      qrcode:
-        optional: true
-      shiki:
-        optional: true
 
   '@visulima/tui-kit@1.0.32':
     resolution: {integrity: sha512-GQMxNOuPOQsL6xpA6hyTMSBiCVzFYvtK56aot/MWv4vgXplYSpPpwTUuSStNTDmLuajsHVxu6tsyMx0zt2dFEg==}
@@ -14879,26 +14791,6 @@ packages:
       marked:
         optional: true
       qrcode:
-        optional: true
-      shiki:
-        optional: true
-
-  '@visulima/tui@4.0.28':
-    resolution: {integrity: sha512-mpoVNkIK1r9Xg+EPD9jGm+JQ67aOFLibxyVihSb0jUEQ/XNxK/KqYA0VzX+QoxWr6wWAhiMI7tK391AEUWKC+A==}
-    engines: {node: ^22.14.0 || >=24.10.0}
-    peerDependencies:
-      '@shikijs/langs': ^4.4.3
-      '@shikijs/themes': ^4.4.3
-      react: 19.3.0
-      react-devtools-core: ^7.0.1
-      react-reconciler: ^0.33.0
-      shiki: ^4.4.3
-    peerDependenciesMeta:
-      '@shikijs/langs':
-        optional: true
-      '@shikijs/themes':
-        optional: true
-      react-devtools-core:
         optional: true
       shiki:
         optional: true
@@ -20470,10 +20362,6 @@ packages:
 
   lru-cache@10.4.3:
     resolution: {integrity: sha512-JNAzZcXrCt42VGLuYz0zfAzDfAvJWW6AfYlDBQyDV5DClI2m5sAmK+OIO7s59XfsRsWHp02jAJrRadPRGTt6SQ==}
-
-  lru-cache@11.5.2:
-    resolution: {integrity: sha512-4pfM1Ff0x50o0tQwb5ucw/RzNyD0/YJME6IVcStalZuMWxdt3sR3huStTtxz4PUmvZfRguvDejasvQ2kifR11g==}
-    engines: {node: 20 || >=22}
 
   lru-cache@11.5.3:
     resolution: {integrity: sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg==}
@@ -35249,16 +35137,16 @@ snapshots:
 
   '@visulima/css-style-inject@1.0.1': {}
 
-  '@visulima/disposable-email-domains@1.1.14': {}
+  '@visulima/disposable-email-domains@1.1.19': {}
 
   '@visulima/email-provider-mx@1.0.1': {}
 
-  '@visulima/email-verifier@1.0.30':
+  '@visulima/email-verifier@1.0.36':
     dependencies:
-      '@visulima/disposable-email-domains': 1.1.14
+      '@visulima/disposable-email-domains': 1.1.19
       '@visulima/email-provider-mx': 1.0.1
       '@visulima/free-email-domains': 1.0.1
-      lru-cache: 11.5.2
+      lru-cache: 11.5.3
 
   '@visulima/email@3.0.28(@opentelemetry/api@1.9.1)(@react-email/render@2.1.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@types/node@26.6.4)(asn1js@3.0.10)(dayjs@1.11.21)(fast-xml-parser@5.10.1)(handlebars@4.7.9)(luxon@3.7.2)(moment@2.31.0)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.8)(better-sqlite3@13.0.3)(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.24.5(@types/node@26.6.4)))(ioredis@5.11.1(supports-color@10.2.2)))':
     dependencies:
@@ -35323,7 +35211,7 @@ snapshots:
       jsonc-parser: 3.3.1
       smol-toml: 1.9.0
 
-  '@visulima/fs@6.0.28(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)':
+  '@visulima/fs@6.0.29(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)':
     dependencies:
       '@visulima/path': 4.0.0
     optionalDependencies:
@@ -35398,16 +35286,15 @@ snapshots:
       - jsonc-parser
       - smol-toml
 
-  '@visulima/package@5.0.41(@visulima/yaml@1.0.0)(ini@7.0.0)(jsonc-parser@3.3.1)(smol-toml@1.9.0)':
+  '@visulima/package@5.0.42(ini@7.0.0)(jsonc-parser@3.3.1)(smol-toml@1.9.0)':
     dependencies:
       '@antfu/install-pkg': 2.0.1
-      '@visulima/fs': 6.0.28(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
+      '@visulima/fs': 6.0.29(@visulima/yaml@1.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.9.0)
       '@visulima/path': 4.0.0
+      '@visulima/yaml': 1.0.0
       json5: 2.2.3
       normalize-package-data: 9.0.0
-      yaml: 2.9.0
     transitivePeerDependencies:
-      - '@visulima/yaml'
       - ini
       - jsonc-parser
       - smol-toml
@@ -36070,7 +35957,7 @@ snapshots:
     dependencies:
       '@visulima/interactive-manager': 1.0.1
 
-  '@visulima/storage-client@1.0.8(@tanstack/react-query@5.101.4(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))':
+  '@visulima/storage-client@1.0.9(@tanstack/react-query@5.101.4(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))':
     dependencies:
       '@tanstack/react-query': 5.101.4(react@19.3.0)
       '@tanstack/solid-query': 5.101.3(solid-js@2.0.0-rc.13)
@@ -36081,7 +35968,7 @@ snapshots:
       svelte: 5.57.1(@typescript-eslint/types@8.71.0)
       vue: 3.5.43(typescript@6.0.3)
 
-  '@visulima/storage-client@1.0.8(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@1.9.15)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))':
+  '@visulima/storage-client@1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@1.9.15)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))':
     dependencies:
       '@tanstack/react-query': 5.102.8(react@19.3.0)
       '@tanstack/solid-query': 5.101.3(solid-js@1.9.15)
@@ -36092,7 +35979,7 @@ snapshots:
       svelte: 5.57.1(@typescript-eslint/types@8.71.0)
       vue: 3.5.43(typescript@6.0.3)
 
-  '@visulima/storage-client@1.0.8(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))':
+  '@visulima/storage-client@1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))':
     dependencies:
       '@tanstack/react-query': 5.102.8(react@19.3.0)
       '@tanstack/solid-query': 5.101.3(solid-js@2.0.0-rc.13)
@@ -36103,7 +35990,7 @@ snapshots:
       svelte: 5.57.1(@typescript-eslint/types@8.71.0)
       vue: 3.5.43(typescript@6.0.3)
 
-  '@visulima/storage@2.0.33(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.4.2)(magicast@0.5.4)(oxc-parser@0.148.0)(rolldown@1.2.12)(unplugin@3.4.0(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.63.1)(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.6.5))(aws4fetch@1.0.20)(hono@4.13.13)(sharp@0.35.5(@types/node@26.6.4))(supports-color@10.2.2)(zod@4.6.5)':
+  '@visulima/storage@2.0.37(@netlify/blobs@11.0.3(supports-color@10.2.2))(@nuxt/kit@4.5.2(magic-string@1.4.2)(magicast@0.5.4)(oxc-parser@0.148.0)(rolldown@1.2.12)(unplugin@3.4.0(@rsbuild/core@2.2.11(core-js@3.49.0))(@rspack/core@2.2.8(@swc/helpers@0.5.23))(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.63.1)(vite@7.3.5(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(webpack@5.105.0(clean-css@5.3.3)(cssnano@8.0.2(postcss@8.5.28))(csso@5.0.5)(esbuild@0.28.2)(lightningcss@1.33.0)(postcss@8.5.28)(uglify-js@3.19.3))))(@opentelemetry/api@1.9.1)(ai@7.0.127(zod@4.6.5))(aws4fetch@1.0.20)(hono@4.13.13)(sharp@0.35.5(@types/node@26.6.4))(supports-color@10.2.2)(zod@4.6.5)':
     dependencies:
       '@remix-run/multipart-parser': 1.0.0
       '@visulima/pagination': 7.0.2(openapi-types@12.1.3)
@@ -36124,8 +36011,6 @@ snapshots:
       zod: 4.6.5
     transitivePeerDependencies:
       - supports-color
-
-  '@visulima/string@3.1.0': {}
 
   '@visulima/string@3.1.1': {}
 
@@ -36194,70 +36079,29 @@ snapshots:
       - json5
       - smol-toml
 
-  '@visulima/tui-binding-darwin-arm64@4.0.28':
-    optional: true
-
   '@visulima/tui-binding-darwin-arm64@4.0.29':
-    optional: true
-
-  '@visulima/tui-binding-darwin-x64@4.0.28':
     optional: true
 
   '@visulima/tui-binding-darwin-x64@4.0.29':
     optional: true
 
-  '@visulima/tui-binding-linux-arm64-gnu@4.0.28':
-    optional: true
-
   '@visulima/tui-binding-linux-arm64-gnu@4.0.29':
-    optional: true
-
-  '@visulima/tui-binding-linux-arm64-musl@4.0.28':
     optional: true
 
   '@visulima/tui-binding-linux-arm64-musl@4.0.29':
     optional: true
 
-  '@visulima/tui-binding-linux-x64-gnu@4.0.28':
-    optional: true
-
   '@visulima/tui-binding-linux-x64-gnu@4.0.29':
-    optional: true
-
-  '@visulima/tui-binding-linux-x64-musl@4.0.28':
     optional: true
 
   '@visulima/tui-binding-linux-x64-musl@4.0.29':
     optional: true
 
-  '@visulima/tui-binding-win32-arm64-msvc@4.0.28':
-    optional: true
-
   '@visulima/tui-binding-win32-arm64-msvc@4.0.29':
-    optional: true
-
-  '@visulima/tui-binding-win32-x64-msvc@4.0.28':
     optional: true
 
   '@visulima/tui-binding-win32-x64-msvc@4.0.29':
     optional: true
-
-  '@visulima/tui-kit@1.0.31(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.28(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.3.0)(shiki@4.5.0)':
-    dependencies:
-      '@visulima/ansi': 4.2.0
-      '@visulima/colorize': 2.1.1
-      '@visulima/spinner': 1.0.1
-      '@visulima/tui': 4.0.28(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0)
-      react: 19.3.0
-      type-fest: 5.8.0
-    optionalDependencies:
-      '@shikijs/langs': 4.5.0
-      '@shikijs/themes': 4.5.0
-      '@visulima/tabular': 4.1.0
-      cfonts: 3.3.1
-      diff: 9.0.0
-      marked: 15.0.12
-      shiki: 4.5.0
 
   '@visulima/tui-kit@1.0.32(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(@visulima/tabular@4.1.0)(@visulima/tui@4.0.29(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0))(cfonts@3.3.1)(diff@9.0.0)(marked@15.0.12)(react@19.3.0)(shiki@4.5.0)':
     dependencies:
@@ -36275,31 +36119,6 @@ snapshots:
       diff: 9.0.0
       marked: 15.0.12
       shiki: 4.5.0
-
-  '@visulima/tui@4.0.28(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0)':
-    dependencies:
-      '@visulima/ansi': 4.2.0
-      '@visulima/colorize': 2.1.1
-      '@visulima/error': 6.1.0(ai@7.0.127(zod@4.6.5))
-      '@visulima/string': 3.1.0
-      react: 19.3.0
-      react-reconciler: 0.33.0(react@19.3.0)
-      scheduler: 0.27.0
-      yoga-layout: 3.2.1
-    optionalDependencies:
-      '@shikijs/langs': 4.5.0
-      '@shikijs/themes': 4.5.0
-      '@visulima/tui-binding-darwin-arm64': 4.0.28
-      '@visulima/tui-binding-darwin-x64': 4.0.28
-      '@visulima/tui-binding-linux-arm64-gnu': 4.0.28
-      '@visulima/tui-binding-linux-arm64-musl': 4.0.28
-      '@visulima/tui-binding-linux-x64-gnu': 4.0.28
-      '@visulima/tui-binding-linux-x64-musl': 4.0.28
-      '@visulima/tui-binding-win32-arm64-msvc': 4.0.28
-      '@visulima/tui-binding-win32-x64-msvc': 4.0.28
-      shiki: 4.5.0
-    transitivePeerDependencies:
-      - ai
 
   '@visulima/tui@4.0.29(@shikijs/langs@4.5.0)(@shikijs/themes@4.5.0)(ai@7.0.127(zod@4.6.5))(react-reconciler@0.33.0(react@19.3.0))(react@19.3.0)(shiki@4.5.0)':
     dependencies:
@@ -42474,8 +42293,6 @@ snapshots:
       highlight.js: 11.11.1
 
   lru-cache@10.4.3: {}
-
-  lru-cache@11.5.2: {}
 
   lru-cache@11.5.3: {}
 
