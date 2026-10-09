@@ -36,6 +36,9 @@ export default createConfig(
             // Standalone spike harnesses — deployed independently with their own
             // wrangler/tsc, not part of the control-plane build (see spikes/*/README).
             "**/spikes/**",
+            // The build box's vendored parser — a byte-for-byte copy of the
+            // catalog-pinned `acorn/dist/acorn.mjs` (`build-scan-vendor.test.ts`).
+            "**/containers/build/vendor/**",
             "**/*.md",
             "**/*.md/**",
             "**/vitest.config.ts",

@@ -10,11 +10,11 @@ the release into the deploy core — is code in `src/builds/`; see **Wiring**.
 
 ## The contract
 
-| Route                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                      |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /__lunora/build` | Body **is** the gzipped repo tarball; optional `?rootDirectory=apps/web` for a monorepo project. Responds NDJSON: `{"line"}` per output line as it happens, then the release `{"bundle","bundleHash","manifest","assets"?,"cronSpecs"?,"scriptName"?,"workspacePackages"?}` (`workspacePackages`: the repo-relative workspace packages the app imports, for the path filter) or `{"error"}`. |
-| `POST /__lunora/exec`  | The `@lunora/container` exec contract, verbatim — `{command,args,cwd,env,timeoutMs}` → `{code,stdout,stderr}`.                                                                                                                                                                                                                                                                               |
-| `GET /__lunora/health` | Readiness probe.                                                                                                                                                                                                                                                                                                                                                                             |
+| Route                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /__lunora/build` | Body **is** the gzipped repo tarball; optional `?rootDirectory=apps/web` for a monorepo project. Responds NDJSON: `{"line"}` per output line as it happens; one `{"advisory":{"name","level":"WARN","title","detail","file","line","location","cacheKey","remediation"}}` per bundle-scan finding (each also logged as a `warning: …` line), before the release; then the release `{"bundle","bundleHash","manifest","assets"?,"cronSpecs"?,"scriptName"?,"workspacePackages"?}` (`workspacePackages`: the repo-relative workspace packages the app imports, for the path filter) or `{"error"}`. Advisories never ride on the release. |
+| `POST /__lunora/exec`  | The `@lunora/container` exec contract, verbatim — `{command,args,cwd,env,timeoutMs}` → `{code,stdout,stderr}`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `GET /__lunora/health` | Readiness probe.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 **Why a build route and not just exec.** `BuildRunnerPorts.execute` receives the
 source as an `ArrayBuffer` in the Worker, and exec has nowhere to put it — it
@@ -68,6 +68,40 @@ lets the dashboard tail a build live, which is what `buildLogs` is for.
    so and naming the upgrade — a build that can never be released never reads
    green.
 
+7. **Scan the bundle** (`scan.mjs`), over the exact bytes hashed in step 5 and
+   with the release's manifest in hand. It looks for code that can run without
+   end and bill storage operations on every pass — `unbounded_loop`,
+   `alarm_always_rearms`, `queue_self_resend` (the rules are in the apps/cloud
+   README, _Build scan_) — and drops every finding the sourcemap places under
+   `node_modules`, in generated output or outside the repository. It only
+   warns: each finding is an `{"advisory"}` record plus a `warning: …` line, and
+   a scan that cannot run — an unparsable bundle, over 32 MiB, a sourcemap over
+   64 MiB, more than the free heap can hold, past its 10-second budget — is a
+   single `warning: build scan skipped: <reason>` and the build carries on. The
+   parse is synchronous, so its time is bounded by the size cap; every walk after
+   it checks the deadline. Memory is checked before the parse, never discovered:
+   a real 4 MiB bundle with its 7.5 MiB map peaked between 128 and 160 MiB of
+   heap, so the scan budgets 48 heap bytes per bundle byte and skips when that
+   is more than the heap has left — running this process out of heap would end
+   the stream with no release, which fails the build.
+
+### The parser, and why it is vendored
+
+The scan needs a JavaScript parser, and this image installs nothing. So
+`vendor/acorn.mjs` is the catalog-pinned `acorn` release's own prebuilt ESM
+file (zero dependencies, MIT; the licence is beside it), copied verbatim and
+`COPY`'d like the rest — no build step and no registry access at image build,
+consistent with how the box already ships plain `.mjs` files. Its version lives
+in the `node` catalog (`acorn`, exact-pinned) as an apps/cloud devDependency;
+`__tests__/build-scan-vendor.test.ts` fails until the vendored bytes match the
+installed release, so a bump is: change the catalog, `pnpm install`, copy
+`node_modules/acorn/dist/acorn.mjs` and `LICENSE` over. The same test checks
+that every module `server.mjs` imports is one the Dockerfile copies.
+
+`server.mjs` imports the scanner statically, at start-up: `/srv` is writable by
+the `node` user builds run as, so a module first loaded after a build ran could
+be one that build replaced.
+
 ## Security posture
 
 It runs **untrusted tenant code**: a `postinstall` and a build script are both
@@ -79,7 +113,10 @@ arbitrary code execution by design. The container is the boundary.
 - `spawn(..., { shell: false })` everywhere: arguments never become a shell
   string, so a branch or commit value cannot inject a command.
 - Caps on everything tenant-controlled: source size, log line length, exec
-  output, and a wall-clock kill on both install and build.
+  output, and a wall-clock kill on both install and build. The bundle scan
+  caps the bundle, the sourcemap and its own time, reads only `<module>.map`
+  (or a `sourceMappingURL` that resolves beside the module), never reads a file
+  a sourcemap names, and reports only repo-relative paths.
 - Start it with egress restricted to the package registry —
   `enableInternet: false` plus `allowedHosts` on the `defineContainer` side.
 
@@ -98,7 +135,9 @@ git archive --format=tar.gz --prefix=repo/ HEAD > /tmp/src.tgz
 curl -sN -X POST localhost:8080/__lunora/build --data-binary @/tmp/src.tgz
 ```
 
-Expect NDJSON log lines, then a final `{"bundle":"…","bundleHash":"…"}`.
+Expect NDJSON log lines (any `{"advisory"}` records among them), then a final
+`{"bundle":"…","bundleHash":"…"}`. `__tests__/build-container-scan.test.ts`
+drives the whole route, scan included, against a stand-in CLI with no registry.
 
 ## Wiring
 

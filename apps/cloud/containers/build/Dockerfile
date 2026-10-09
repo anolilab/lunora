@@ -27,11 +27,15 @@ RUN apt-get update \
 # instead of whatever this image happens to ship.
 RUN corepack enable
 
-# The build server is the only thing in the image. It has no dependencies —
+# The build server is the only thing in the image. It installs nothing —
 # `node:http`, `node:child_process`, `node:crypto` — so there is no install
-# step here and nothing in this layer to keep patched.
+# step here. The one third-party file is the bundle scan's parser, vendored as
+# the catalog-pinned release's own prebuilt `acorn.mjs` (zero dependencies,
+# MIT, licence beside it) and copied like the rest: no registry access at image
+# build, and the bytes are pinned by `__tests__/build-scan-vendor.test.ts`.
 WORKDIR /srv
-COPY server.mjs workspace.mjs release.mjs ./
+COPY server.mjs workspace.mjs release.mjs scan.mjs ./
+COPY vendor/acorn.mjs vendor/acorn.LICENSE ./vendor/
 
 # Builds land under here, one directory per build, owned by the unprivileged
 # user. Created in the image so the server never has to mkdir as root.

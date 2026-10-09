@@ -23,6 +23,7 @@ import { api } from "../../lunora/_generated/api.js";
 import type { RecordedWorkspacePackages } from "../builds/paths";
 import type { TargetId } from "../provision-contract";
 import { BackupsSection } from "./BackupsSection";
+import { BuildAdvisoriesCard } from "./BuildAdvisoriesCard";
 import { BuildSettingsCard } from "./BuildSettingsCard";
 import { DeleteProjectCard } from "./DeleteProjectCard";
 import { formatDateTime, formatTime } from "./format";
@@ -585,6 +586,7 @@ export const DeploymentsSection = ({
                 </Card>
             ) : null}
             {activeBuild ? <BuildLogsCard buildId={activeBuild._id} organizationId={organizationId} /> : null}
+            <BuildAdvisoriesCard advisories={activeBuild?.advisories} />
             {buildSettings}
             {targetSettings}
             <PreviewProtectionCard organizationId={organizationId} projectId={projectId} protectedNow={previewProtected} />

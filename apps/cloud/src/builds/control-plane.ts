@@ -90,8 +90,12 @@ const runnerPortsFor = (input: BuildWiring, runnerId: string): BuildRunnerPorts 
         // would just pay for the same install twice.
         // Bounded so the build half fits the alarm it runs in
         // (`ALARM_INVOCATION_LIMIT_MS`); the box's own timeouts are longer.
-        execute: async (source, rootDirectory, onLine) =>
-            await withinBudget(executeInContainer(buildBoxFrom(environment).any(), source, rootDirectory, onLine), BUILD_EXECUTE_BUDGET_MS, "the build"),
+        execute: async (source, rootDirectory, onLine, onAdvisory) =>
+            await withinBudget(
+                executeInContainer(buildBoxFrom(environment).any(), source, rootDirectory, onLine, onAdvisory),
+                BUILD_EXECUTE_BUDGET_MS,
+                "the build",
+            ),
         fail: async (buildId, error) => {
             await context.runMutation(internal.builds.fail, { buildId, error, runnerId });
         },
@@ -115,6 +119,9 @@ const runnerPortsFor = (input: BuildWiring, runnerId: string): BuildRunnerPorts 
 
                       return await app.downloadTarball(target);
                   },
+        recordAdvisory: async (buildId, advisory) => {
+            await context.runMutation(internal.builds.recordAdvisory, { advisory, buildId, runnerId });
+        },
         release:
             deploy === undefined
                 ? unconfigured("release", "the control plane has no RELEASES bucket; a release that is not stored could never be rolled back.")
@@ -156,6 +163,7 @@ const runnerPortsFor = (input: BuildWiring, runnerId: string): BuildRunnerPorts 
                       const stored = await deploy.releases.get(reusable.deploymentId);
 
                       return {
+                          ...(reusable.advisories === undefined ? {} : { advisories: reusable.advisories }),
                           deploymentId: reusable.deploymentId,
                           execution:
                               stored === null

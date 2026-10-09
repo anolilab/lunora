@@ -128,6 +128,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "builds:fail": lunora_builds_4.fail as unknown as RegisteredLunoraFunction,
     "builds:listByProject": lunora_builds_4.listByProject as unknown as RegisteredLunoraFunction,
     "builds:logs": lunora_builds_4.logs as unknown as RegisteredLunoraFunction,
+    "builds:recordAdvisory": lunora_builds_4.recordAdvisory as unknown as RegisteredLunoraFunction,
     "builds:recordPush": lunora_builds_4.recordPush as unknown as RegisteredLunoraFunction,
     "builds:releaseTarget": lunora_builds_4.releaseTarget as unknown as RegisteredLunoraFunction,
     "builds:reportTarget": lunora_builds_4.reportTarget as unknown as RegisteredLunoraFunction,
@@ -1029,12 +1030,13 @@ export interface Caller {
         complete: (args: { buildId: Id<"builds">; bundleHash: string; deploymentId?: string; runnerId: string; workspacePackages?: Array<unknown> }) => Promise<void>;
         expireStale: (args?: {}) => Promise<{ expired: number; }>;
         fail: (args: { buildId: Id<"builds">; error: string; runnerId: string }) => Promise<void>;
-        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; branch: string; bundleHash?: string; commitSha: string; createdAt: number; deploymentId?: string; fromFork?: false | true; organizationId: Id<"organizations">; pathFiltered?: false | true; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
+        listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"builds">; advisories?: import("../../src/builds/runner.js").BuildAdvisory[]; branch: string; bundleHash?: string; commitSha: string; createdAt: number; deploymentId?: string; fromFork?: false | true; organizationId: Id<"organizations">; pathFiltered?: false | true; processingBy?: string; processingStartedAt?: number; projectId: Id<"projects">; pullRequest?: number; reusesBuildId?: Id<"builds">; rootDirectory?: string; skipReason?: string; status: "pending" | "building" | "failed" | "successful" | "skipped"; trigger?: "push" | "pull_request" }[]>;
         logs: (args: { afterCreatedAt?: number; buildId: Id<"builds">; organizationId: Id<"organizations"> }) => Promise<{ createdAt: number; level: "error" | "info"; line: string; }[]>;
+        recordAdvisory: (args: { advisory: { cacheKey: unknown; detail: unknown; file: unknown; level: "WARN"; line: number; location?: "bundle" | "source"; name: unknown; remediation: unknown; title: unknown }; buildId: Id<"builds">; runnerId: string }) => Promise<void>;
         recordPush: (args: { before?: unknown; branch: unknown; changes: { files: Array<string> } | { unknown: string }; commitSha: unknown; deliveryId?: unknown; fromFork?: boolean; installationId: number; pullRequest?: number; repository: unknown; trigger: "push" | "pull_request" }) => Promise<null | { buildId: Id<"builds">; pathFiltered?: true; reused: boolean; skipped?: string; } | { duplicate: true; pathFiltered?: true; skipped?: string; }>;
         releaseTarget: (args: { buildId: Id<"builds"> }) => Promise<null | import("../../src/builds/release.js").BuildReleaseTarget>;
         reportTarget: (args: { buildId: Id<"builds"> }) => Promise<{ commitSha: string; installationId: number; repository: string; } | null>;
-        reusableRelease: (args: { buildId: Id<"builds"> }) => Promise<null | { bundleHash: string; cronSpecs?: string[]; deploymentId: string }>;
+        reusableRelease: (args: { buildId: Id<"builds"> }) => Promise<null | { advisories?: import("../../src/builds/runner.js").BuildAdvisory[]; bundleHash: string; cronSpecs?: string[]; deploymentId: string }>;
     };
     cells: {
         list: (args?: {}) => Promise<{ _id: Id<"cells">; jurisdiction?: string; name: string; status: "active" | "draining" | "suspended" }[]>;
@@ -1313,6 +1315,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         fail: (args) => callRegistered(context, "builds:fail", args),
         listByProject: (args) => callRegistered(context, "builds:listByProject", args),
         logs: (args) => callRegistered(context, "builds:logs", args),
+        recordAdvisory: (args) => callRegistered(context, "builds:recordAdvisory", args),
         recordPush: (args) => callRegistered(context, "builds:recordPush", args),
         releaseTarget: (args) => callRegistered(context, "builds:releaseTarget", args),
         reportTarget: (args) => callRegistered(context, "builds:reportTarget", args),

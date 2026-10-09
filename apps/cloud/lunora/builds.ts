@@ -3,7 +3,8 @@ import { LunoraError } from "@lunora/server";
 import type { BuildDecision, PushChanges } from "../src/builds/paths";
 import { decideBuild, MAX_CHANGED_FILES } from "../src/builds/paths";
 import type { BuildReleaseTarget } from "../src/builds/release";
-import { isUnconfiguredInfrastructure } from "../src/builds/runner";
+import type { BuildAdvisory } from "../src/builds/runner";
+import { isUnconfiguredInfrastructure, MAX_BUILD_ADVISORIES } from "../src/builds/runner";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
@@ -25,6 +26,7 @@ type BuildStatus = "building" | "failed" | "pending" | "skipped" | "successful";
 
 interface BuildRow {
     _id: Id<"builds">;
+    advisories?: BuildAdvisory[];
     branch: string;
     bundleHash?: string;
     commitSha: string;
@@ -432,6 +434,39 @@ export const appendLog = internalMutation
         await context.db.insert("buildLogs", { buildId, createdAt: context.now, level, line, organizationId: build.organizationId });
     });
 
+/**
+ * Store one bundle-scan finding on a claimed build (runner-only, lease-checked,
+ * like {@link appendLog}). Idempotent by `cacheKey`, and capped at
+ * {@link MAX_BUILD_ADVISORIES}: past it a finding is dropped, never an error —
+ * it is a warning, and the build it warns about must go on. SYSTEM only.
+ */
+export const recordAdvisory = internalMutation
+    .input({
+        advisory: v.object({
+            cacheKey: boundedString(600),
+            detail: boundedString(2000),
+            file: boundedString(512),
+            level: v.literal("WARN"),
+            line: v.number(),
+            location: v.optional(v.union(v.literal("bundle"), v.literal("source"))),
+            name: boundedString(LIMITS.id),
+            remediation: boundedString(1000),
+            title: boundedString(200),
+        }),
+        buildId: v.id("builds"),
+        runnerId: v.string(),
+    })
+    .mutation(async ({ ctx: context, args: { advisory, buildId, runnerId } }): Promise<void> => {
+        const build = assertLease(await context.db.get(buildId), runnerId);
+        const recorded = build.advisories ?? [];
+
+        if (recorded.length >= MAX_BUILD_ADVISORIES || recorded.some((entry) => entry.cacheKey === advisory.cacheKey)) {
+            return;
+        }
+
+        await context.db.patch(buildId, { advisories: [...recorded, advisory] });
+    });
+
 /** Beyond this many workspace packages the set is not stored, and pushes build without the path check. */
 const MAX_WORKSPACE_PACKAGES = 200;
 
@@ -604,8 +639,9 @@ export const releaseTarget = internalQuery
         };
     });
 
-/** The stored release a build re-releases: the earlier build's deployment, its bundle hash and its crons. */
+/** The stored release a build re-releases: the earlier build's deployment, its bundle hash, its crons and its scan findings. */
 export interface ReusableRelease {
+    advisories?: BuildAdvisory[];
     bundleHash: string;
     cronSpecs?: string[];
     deploymentId: string;
@@ -615,7 +651,8 @@ export interface ReusableRelease {
  * What a build that re-releases an earlier one (`reusesBuildId`, set by
  * {@link recordPush}) re-releases: that build's deployment — whose payload the
  * runner reads from `RELEASES` — its bundle hash, and the crons the deployment
- * ran with. `null` for a build that reuses nothing, or whose earlier build is
+ * ran with, and the earlier build's scan findings — the same bundle, the same
+ * warnings. `null` for a build that reuses nothing, or whose earlier build is
  * gone or not this project's; the runner then builds from source. SYSTEM only.
  */
 export const reusableRelease = internalQuery
@@ -640,6 +677,7 @@ export const reusableRelease = internalQuery
         }
 
         return {
+            ...(earlier.advisories === undefined || earlier.advisories.length === 0 ? {} : { advisories: earlier.advisories }),
             bundleHash: earlier.bundleHash,
             ...(deployment.cronSpecs == null ? {} : { cronSpecs: deployment.cronSpecs }),
             deploymentId: earlier.deploymentId,
