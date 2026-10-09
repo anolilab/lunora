@@ -209,6 +209,21 @@ export const renderSpendAlert = (rule: { name: string }, source: SpendAlertSourc
           };
 };
 
+/**
+ * Render a test notification for a rule: what an owner/admin sends to check
+ * that its channel reaches them, before it matters. Says plainly that nothing
+ * fired, so a test that lands in a shared inbox or on-call pager is not
+ * mistaken for an incident.
+ */
+export const renderTestAlert = (rule: { name: string; target: AlertTarget }): { body: string; subject: string } => {
+    return {
+        body:
+            `This is a test of the "${rule.name}" alert rule (${rule.target}) on Lunora Cloud. Nothing has fired: ` +
+            "an owner or admin sent it to check that this channel reaches you. When the rule really trips, its notification arrives here.",
+        subject: `[Lunora] Test: ${rule.name}`,
+    };
+};
+
 /** An enabled event-target (`deploy` / `spend`) rule, as either store returns it. */
 export interface EventRule {
     channel: AlertChannel;

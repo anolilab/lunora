@@ -1,8 +1,9 @@
 import { LunoraError } from "@lunora/server";
 
-import type { AlertFamily, AlertTarget, DeployAlertSource, EventRule, SpendAlertSource } from "../src/telemetry/alerts";
-import { alertFamily, fireDeployRules, fireSpendRules, isSafeWebhookUrl } from "../src/telemetry/alerts";
+import type { AlertChannel, AlertFamily, AlertTarget, DeployAlertSource, EventRule, SpendAlertSource } from "../src/telemetry/alerts";
+import { alertFamily, fireDeployRules, fireSpendRules, isSafeWebhookUrl, renderTestAlert } from "../src/telemetry/alerts";
 import { MIN_ANOMALY_SAMPLES } from "../src/telemetry/anomaly";
+import { ORG_ADMINS_DESTINATION } from "../src/telemetry/recipients";
 import type { Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
@@ -148,6 +149,9 @@ const assertRuleShape = (
     }
 };
 
+/** One address, loosely: something@domain.tld with no whitespace — the mailer validates the rest. */
+const EMAIL_ADDRESS = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/u;
+
 /** Create an alert rule (owners/admins). New rules start enabled. */
 export const createRule = mutation
     .use(rateLimit("api"))
@@ -192,6 +196,13 @@ export const createRule = mutation
             throw new LunoraError("BAD_REQUEST", "pagerduty destination must be an integration (routing) key");
         }
 
+        if (args.channel === "email" && args.destination !== ORG_ADMINS_DESTINATION && !EMAIL_ADDRESS.test(args.destination)) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `email destination must be an email address, or "${ORG_ADMINS_DESTINATION}" for the organization's owners and admins`,
+            );
+        }
+
         const { now } = context;
 
         return context.db.insert("alertRules", {
@@ -221,6 +232,52 @@ export const createRule = mutation
             // An anomaly rule's comparator says which way the score must move.
             ...(family === "anomaly" ? { comparator: args.comparator ?? "gt" } : {}),
         });
+    });
+
+/** How soon one rule may be tested again: enough to retry a typo, too little to make it a spam relay. */
+export const TEST_ALERT_COOLDOWN_MS = 30_000;
+
+/** What `POST /v1/alerts/test` delivers: the rule's own channel and destination, and a test notification. */
+export interface TestAlert {
+    body: string;
+    channel: AlertChannel;
+    destination: string;
+    organizationId: string;
+    subject: string;
+}
+
+/**
+ * Prepare a test notification for one rule (owners/admins): checks the caller
+ * may, throttles it per rule, records it, and returns what the edge sends.
+ * The send itself happens on the edge (`POST /v1/alerts/test`) — a mutation
+ * has no `fetch` — so the caller sees the real outcome (a bounced webhook, a
+ * mailer error) instead of "queued".
+ */
+export const prepareTestAlert = mutation
+    .use(rateLimit("api"))
+    .input({ organizationId: v.id("organizations"), ruleId: v.id("alertRules") })
+    .mutation(async ({ ctx: context, args }): Promise<TestAlert> => {
+        const member = await assertMember(context, args.organizationId, ["owner", "admin"]);
+        const rule = await context.db.alertRules.get(args.ruleId);
+
+        if (rule?.organizationId !== member.organizationId) {
+            throw new LunoraError("NOT_FOUND", "alert rule not found in this organization");
+        }
+
+        if (rule.lastTestedAt != null && context.now - rule.lastTestedAt < TEST_ALERT_COOLDOWN_MS) {
+            throw new LunoraError("TOO_MANY_REQUESTS", "this rule was tested a moment ago; try again in a few seconds");
+        }
+
+        await context.db.alertRules.patch(rule._id, { lastTestedAt: context.now });
+        await context.db.insert("auditLog", {
+            action: "alert_rule.test",
+            actorUserId: member.userId,
+            createdAt: context.now,
+            organizationId: member.organizationId,
+            target: rule.name,
+        });
+
+        return { channel: rule.channel, destination: rule.destination, organizationId: member.organizationId, ...renderTestAlert(rule) };
     });
 
 /** Enable or disable a rule (owners/admins). */
@@ -483,6 +540,51 @@ export const fireDeployAlerts = async (
  * sweep, like `deploy`. `hash` names the period and level, so a re-fire for the
  * same period is identifiable in the alert list.
  */
+/** The name of the `spend` rule an organization gets when it never made one. */
+export const DEFAULT_SPEND_RULE_NAME = "Spend warnings (default)";
+
+/**
+ * The organization's enabled `spend` rules — and, for an organization with no
+ * `spend` rule at all, the default one, created on the spot: email its owners
+ * and admins. Without it the soft-cap warning — and the suspension notice —
+ * went to nobody, and an organization that never opened the Alerts tab learned
+ * it was over its cap from a 503. A rule that exists but is disabled is an
+ * explicit choice and is left alone.
+ */
+const spendRulesFor = async (context: MutationContext, organizationId: Id<"organizations">): Promise<EventRule[]> => {
+    const { page } = await context.db.alertRules.findMany({ where: { organizationId, target: "spend" } });
+
+    if (page.length > 0) {
+        return page
+            .filter((rule) => rule.enabled)
+            .map((rule) => {
+                return { channel: rule.channel, destination: rule.destination, name: rule.name, ruleId: rule._id };
+            });
+    }
+
+    const ruleId = await context.db.insert("alertRules", {
+        channel: "email",
+        createdAt: context.now,
+        destination: ORG_ADMINS_DESTINATION,
+        enabled: true,
+        name: DEFAULT_SPEND_RULE_NAME,
+        organizationId,
+        target: "spend",
+        threshold: 0,
+        updatedAt: context.now,
+    });
+
+    await context.db.insert("auditLog", {
+        action: "alert_rule.default_created",
+        actorUserId: "system:spend-cap",
+        createdAt: context.now,
+        organizationId,
+        target: DEFAULT_SPEND_RULE_NAME,
+    });
+
+    return [{ channel: "email", destination: ORG_ADMINS_DESTINATION, name: DEFAULT_SPEND_RULE_NAME, ruleId }];
+};
+
 export const fireSpendAlerts = async (
     context: MutationContext,
     organizationId: Id<"organizations">,
@@ -490,7 +592,7 @@ export const fireSpendAlerts = async (
     source: SpendAlertSource,
 ): Promise<number> =>
     fireSpendRules(
-        await enabledEventRules(context, organizationId, "spend"),
+        await spendRulesFor(context, organizationId),
         source,
         { hash: `spend:${source.level}:${String(periodStart)}`, now: context.now, organizationId },
         async (row) => context.db.insert("alerts", row),

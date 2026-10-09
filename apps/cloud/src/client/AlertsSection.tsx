@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { api } from "../../lunora/_generated/api.js";
 import type { AlertTarget } from "../telemetry/alerts";
 import { ANOMALY_TARGETS, EVENT_TARGETS, METRIC_TARGETS } from "../telemetry/alerts";
+import { ORG_ADMINS_DESTINATION } from "../telemetry/recipients";
 import { AsyncList } from "./AsyncList";
 import { ColumnHeader } from "./ColumnHeader";
 import { formatDateTime } from "./format";
@@ -29,7 +30,7 @@ type Channel = "email" | "pagerduty" | "slack" | "webhook";
 
 /** Placeholder hint for a channel's destination field. */
 const DESTINATION_HINT: Record<Channel, string> = {
-    email: "alerts@example.com",
+    email: `alerts@example.com — or ${ORG_ADMINS_DESTINATION} for the organization's owners & admins`,
     pagerduty: "PagerDuty integration (routing) key",
     slack: "https://hooks.slack.com/services/…",
     webhook: "https://hooks.example.com/…",
@@ -90,6 +91,64 @@ type AlertRule = ReturnOf<typeof api.alerts.rules>[number];
 type FiredAlert = ReturnOf<typeof api.alerts.list>[number];
 
 /** The configured rules, with the per-row enable/disable and remove actions. */
+/** How a rule's destination reads: "owners & admins" for the org-wide address, the destination itself otherwise. */
+const destinationLabel = (destination: string): string => (destination === ORG_ADMINS_DESTINATION ? "owners & admins" : destination);
+
+/** The outcome of one test send, as the row shows it. */
+type TestOutcome = { message: string; ok: boolean } | undefined;
+
+/** Ask the edge to send a rule a test notification; resolves to what happened, in words. */
+const sendTestAlert = async (organizationId: OrgId, ruleId: string): Promise<{ message: string; ok: boolean }> => {
+    // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check -- the body carries the outcome either way; `ok` is read from it
+    const response = await fetch("/v1/alerts/test", {
+        body: JSON.stringify({ organizationId, ruleId }),
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        method: "POST",
+    });
+    const payload = (await response.json().catch(() => null)) as null | { error?: string; ok?: boolean; recipients?: string[] };
+
+    if (response.ok && payload?.ok === true) {
+        return { message: payload.recipients ? `Sent to ${payload.recipients.join(", ")}` : "Sent", ok: true };
+    }
+
+    return { message: payload?.error ?? `Test failed (${String(response.status)})`, ok: false };
+};
+
+/** The "Send test" button for one rule, with the result beside it — a wrong destination is found now, not during the incident. */
+const TestRuleButton = ({ organizationId, ruleId }: { organizationId: OrgId; ruleId: string }): ReactElement => {
+    const [pending, setPending] = useState(false);
+    const [outcome, setOutcome] = useState<TestOutcome>(undefined);
+
+    const runTest = async (): Promise<void> => {
+        setPending(true);
+
+        const result = await sendTestAlert(organizationId, ruleId).catch(() => {
+            return { message: "Test failed: the request did not complete", ok: false };
+        });
+
+        setOutcome(result);
+        setPending(false);
+    };
+
+    return (
+        <span className="flex items-center gap-2">
+            {outcome ? <span className={cn("text-xs", outcome.ok ? "text-muted-foreground" : "text-destructive")}>{outcome.message}</span> : null}
+            <Button
+                disabled={pending}
+                onClick={() => {
+                    void runTest();
+                }}
+                size="sm"
+                type="button"
+                variant="ghost"
+            >
+                {pending ? "Sending…" : "Send test"}
+            </Button>
+        </span>
+    );
+};
+
 const AlertRulesCard = ({ organizationId, rules }: { organizationId: OrgId; rules: AlertRule[] | undefined }): ReactElement => {
     const setRuleEnabled = useMutation(api.alerts.setRuleEnabled);
     const deleteRule = useMutation(api.alerts.deleteRule);
@@ -110,7 +169,7 @@ const AlertRulesCard = ({ organizationId, rules }: { organizationId: OrgId; rule
                                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                                         <span className="truncate font-medium">{rule.name}</span>
                                         <span className={cn(COLUMN_LABEL, "text-muted-foreground truncate")}>
-                                            {rule.channel} {rule.destination}
+                                            {rule.channel} {destinationLabel(rule.destination)}
                                             {rule.functionPath ? ` @ ${rule.functionPath}` : ""}
                                         </span>
                                     </span>
@@ -130,6 +189,7 @@ const AlertRulesCard = ({ organizationId, rules }: { organizationId: OrgId; rule
                                     </span>
                                     <StatusBadge tone={rule.enabled ? "success" : "neutral"}>{rule.enabled ? "on" : "off"}</StatusBadge>
                                     <RowActions>
+                                        <TestRuleButton organizationId={organizationId} ruleId={rule._id} />
                                         <Button
                                             onClick={() => {
                                                 void setRuleEnabled.mutate({ enabled: !rule.enabled, id: rule._id, organizationId });
@@ -350,6 +410,18 @@ const NewRuleForm = ({ organizationId }: { organizationId: OrgId }): ReactElemen
                                 value={destination}
                             />
                         </Field>
+                        {channel === "email" ? (
+                            <Button
+                                className="mt-1 h-auto px-0 text-xs"
+                                onClick={() => {
+                                    setDestination(ORG_ADMINS_DESTINATION);
+                                }}
+                                type="button"
+                                variant="link"
+                            >
+                                Send to the organization&apos;s owners &amp; admins
+                            </Button>
+                        ) : null}
                     </div>
                     <div className="grid gap-2 sm:col-span-2">
                         <Button className="justify-self-start" type="submit">
@@ -558,7 +630,7 @@ const RecentAlertsCard = ({ alerts }: { alerts: FiredAlert[] | undefined }): Rea
                                     </TableCell>
                                     <TableCell className="font-medium">{alert.subject}</TableCell>
                                     <TableCell className="text-muted-foreground max-w-[18rem] truncate font-mono text-xs">
-                                        {alert.channel} {alert.destination}
+                                        {alert.channel} {destinationLabel(alert.destination)}
                                     </TableCell>
                                     <TableCell>
                                         <StatusBadge tone={ALERT_TONE[alert.status]}>{alert.status}</StatusBadge>

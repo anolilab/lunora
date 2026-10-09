@@ -8,6 +8,7 @@ import type { D1DatabaseLike } from "@lunora/d1";
 import type { ExecutionContextLike, LunoraWorker, ScheduledControllerLike } from "@lunora/runtime";
 import { Creem } from "creem";
 
+import { authUserEmails } from "../auth";
 import { controlPlaneExport } from "../backup/control-plane-export";
 import { offsiteBucket } from "../backup/offsite";
 import { runBackupSweep } from "../backup/sweep";
@@ -47,8 +48,10 @@ import { registeredFleet, registeredFleets, registeredTargets, resolveTargetDriv
 import { runAlertDrain } from "../telemetry/alert-drain";
 import type { AlertDelivery } from "../telemetry/alerts";
 import { runAnomalySweep } from "../telemetry/anomaly-sweep";
+import { deliverAlertRows } from "../telemetry/deliver-rows";
 import { resolveBoxTelemetryConfig } from "../telemetry/ingest-key";
 import { readQueueDepth, recordQueueDepth } from "../telemetry/platform-metrics";
+import { orgAdminEmails } from "../telemetry/recipients";
 import { runAlertSweep } from "../telemetry/sweep";
 import { runUptimeSweep } from "../uptime/sweep";
 
@@ -176,31 +179,14 @@ const sweepOverageReconciliation = async (env: ControlPlaneEnv): Promise<void> =
  * SSRF re-rejection) marks the row `failed`. `deliveredAt` is stamped only on
  * success (an undelivered alert has no delivery time), unlike the deploy-key
  * `markDelivered` path which only ever records `delivered`; a sweep runs in a
- * trusted system context, so it patches directly.
+ * trusted system context, so it patches directly. An "owners & admins" email
+ * row is resolved from the members and the auth plane (`deliverAlertRows`).
  */
-const deliverFiredAlerts = async (
-    env: ControlPlaneEnv,
-    database: ControlPlaneDatabase,
-    deliveries: ReadonlyArray<AlertDelivery>,
-    now: number,
-): Promise<void> => {
-    if (deliveries.length === 0) {
-        return;
-    }
-
-    await Promise.all(
-        deliveries.map(async (delivery) => {
-            const delivered = await deliverAlert(env, delivery).then(
-                () => true,
-                () => false,
-            );
-
-            await database
-                .patch(delivery.id, { ...(delivered ? { deliveredAt: now } : {}), status: delivered ? "delivered" : "failed", updatedAt: now }, "alerts")
-                .catch(() => undefined);
-        }),
-    );
-};
+const deliverFiredAlerts = async (env: ControlPlaneEnv, database: ControlPlaneDatabase, deliveries: ReadonlyArray<AlertDelivery>, now: number): Promise<void> =>
+    deliverAlertRows(database, deliveries, now, {
+        adminEmails: async (organizationId) => orgAdminEmails(database, organizationId, authUserEmails(env)),
+        deliver: async (delivery, recipients) => deliverAlert(env, delivery, recipients),
+    });
 
 /**
  * Synthetic uptime sweep (§ Observability): probe each live deployment's URL from

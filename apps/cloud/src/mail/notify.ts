@@ -2,6 +2,7 @@ import { createMailerFromEnv } from "@lunora/mail";
 
 import type { AlertChannel } from "../telemetry/alerts";
 import { isSafeWebhookUrl, webhookRequestFor } from "../telemetry/alerts";
+import { ORG_ADMINS_DESTINATION } from "../telemetry/recipients";
 
 /**
  * Transactional email for the control plane. Built on
@@ -69,9 +70,18 @@ const WEBHOOK_TIMEOUT_MS = 10_000;
  * on transport failure so the caller can mark the alert failed (best-effort — a
  * failed send never blocks ingest).
  */
-export const deliverAlert = async (env: Record<string, unknown>, alert: AlertNotification): Promise<void> => {
+export const deliverAlert = async (env: Record<string, unknown>, alert: AlertNotification, recipients?: ReadonlyArray<string>): Promise<void> => {
     if (alert.channel === "email") {
-        await createMailerFromEnv(env).send({ subject: alert.subject, text: alert.body, to: alert.destination });
+        // "Owners & admins" is resolved by the caller, which can read the members
+        // and the auth plane; without addresses there is nobody to send to, and a
+        // failed delivery is what keeps the alert visible.
+        if (alert.destination === ORG_ADMINS_DESTINATION && (recipients === undefined || recipients.length === 0)) {
+            throw new Error("no owner or admin email address to deliver to");
+        }
+
+        const to = alert.destination === ORG_ADMINS_DESTINATION ? [...(recipients ?? [])] : alert.destination;
+
+        await createMailerFromEnv(env).send({ subject: alert.subject, text: alert.body, to });
 
         return;
     }
