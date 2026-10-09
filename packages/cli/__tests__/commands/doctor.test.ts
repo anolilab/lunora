@@ -166,7 +166,7 @@ describe("runDoctor", () => {
 
         // A custom domain can sit outside the wrangler file, so the advice must
         // never tell the author to drop internal auth.
-        const fixes = result.findings.filter((finding) => finding.code === "service-workers-dev").map((finding) => finding.fix);
+        const fixes = result.findings.filter((finding) => finding.code === "service-workers-dev").map((finding) => finding.fix ?? "");
 
         expect(fixes.every((fix) => !fix.includes("internal auth (HMAC) can go"))).toBe(true);
         expect(fixes.every((fix) => fix.includes("Keep its internal auth"))).toBe(true);
