@@ -152,6 +152,15 @@ interface FakeSchedulerControls {
 }
 ```
 
+### `FakeTopicControls` (interface)
+
+```ts
+interface FakeTopicControls {
+    clear: () => void;
+    published: (topic?: string) => PublishedTopicMessage[];
+}
+```
+
 ### `FunctionRegistry` (type)
 
 ```ts
@@ -208,6 +217,7 @@ interface LunoraTestOptions {
     now?: number;
     queues?: ReadonlyArray<string>;
     services?: Record<string, object>;
+    topics?: ReadonlyArray<string>;
 }
 ```
 
@@ -223,6 +233,17 @@ type NotifyChannel = Extract<ChannelType, "chat" | "inapp" | "push" | "webhook">
 interface ProducedOutput {
     metadata?: Record<string, unknown>;
     output: string;
+}
+```
+
+### `PublishedTopicMessage` (interface)
+
+```ts
+interface PublishedTopicMessage {
+    body: unknown;
+    contentType?: QueueContentType;
+    delaySeconds?: number;
+    topic: string;
 }
 ```
 
@@ -342,6 +363,7 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): TestSubscription<R>;
         <R>(inline: InlineQueryFunction<R>): TestSubscription<R>;
     };
+    topics: FakeTopicControls;
     wideEvent: () => RecordedWideEvent;
     withIdentity: (identity: TestIdentity) => TestHarness;
 }

@@ -23,6 +23,8 @@ import { createFakeNotify } from "./fake-notify";
 import type { FakeQueueControls, QueueSurface } from "./fake-queues";
 import { createFakeQueues } from "./fake-queues";
 import { createFakeScheduler } from "./fake-scheduler";
+import type { FakeTopicControls, TopicSurface } from "./fake-topics";
+import { createFakeTopics } from "./fake-topics";
 import { createSqlExec } from "./node-sqlite";
 
 /** The schema value produced by `@lunora/server`'s `defineSchema`. */
@@ -217,6 +219,25 @@ interface LunoraTestOptions {
      * ```
      */
     services?: Record<string, object>;
+
+    /**
+     * The export names of the topics in `lunora/queues.ts` (the keys of
+     * `ctx.topics`). Each gets a recording publisher on mutation and action
+     * contexts, built by `@lunora/queue`'s own `createTopicContext` — so the
+     * batch cap, delay ceiling and reserved-key check reject as in production,
+     * and a name not listed rejects on use. Bodies are recorded and size-checked
+     * as `queues` records them, once per message however many subscriptions the
+     * app declares; no subscription handler runs. Assert with
+     * `harness.topics.published(name)`. Left unset, touching `ctx.topics` — or
+     * calling `harness.topics.published()` — throws, naming this option.
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, { topics: ["signups"] });
+     * await t.mutation(signUp, { email: "a@example.test" });
+     * expect(t.topics.published("signups")).toHaveLength(1);
+     * ```
+     */
+    topics?: ReadonlyArray<string>;
 }
 
 /**
@@ -316,6 +337,14 @@ interface TestHarness {
     };
 
     /**
+     * What handlers published through `ctx.topics` (declared by `options.topics`):
+     * `published(name?)` in publish order, `clear()` to reset. Like queue sends,
+     * publishes are not transactional. Both throw when the option was not passed.
+     * Shared with any `withIdentity` view.
+     */
+    topics: FakeTopicControls;
+
+    /**
      * What handlers attached to `ctx.span` — the **wide event** — during this
      * harness's runs, so a test can assert the instrumentation itself:
      *
@@ -336,7 +365,7 @@ interface TestHarness {
 type RunRegisteredFunction = typeof runRegisteredFunction;
 
 /** The app-specific surfaces codegen adds to a mutation context (and an action's) on top of `MutationCtx`. */
-type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface;
+type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface & TopicSurface;
 
 /**
  * Build the `subscribe` method for a harness view. Extracted to keep
@@ -584,6 +613,8 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
  * that then throws never becomes pending.
  * - `ctx.queues` (mutations + actions): recording producers for `options.queues`;
  * inspect via `harness.queues.sent(name)`.
+ * - `ctx.topics` (mutations + actions): recording publishers for `options.topics`;
+ * inspect via `harness.topics.published(name)`.
  * - `ctx.notify` / `ctx.push` (all contexts): built from `options.notify` with
  * recorded deliveries and in-memory subscriptions; inspect via `harness.notify.sent()`.
  * - `harness.subscribe(query, args)`: async iterable that re-emits after mutations.
@@ -653,6 +684,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     // Recorders shared by every view, like the scheduler: what one identity's
     // handler sends is visible from any `withIdentity` scope.
     const { controls: queueControls, surfaces: queueSurfaces } = createFakeQueues(options?.queues);
+    const { controls: topicControls, surfaces: topicSurfaces } = createFakeTopics(options?.topics);
     const { controls: notifyControls, surfaces: notifySurfaces } = createFakeNotify(options?.notify, options?.env ?? {});
 
     /** Guard for the lazily-wired scheduler references: fail loudly if a sweep runs before harness construction completed. */
@@ -723,6 +755,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         const mutationContext: HarnessMutationContext = {
             ...notifySurfaces,
             ...queueSurfaces,
+            ...topicSurfaces,
             auth,
             db: database,
             env: options?.env,
@@ -763,9 +796,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
         // `services` is not on the base ActionCtx: codegen adds it to the app's own
         // action context when `lunora.config` declares services.
-        const actionContext: ActionCtx & NotifySurfaces & QueueSurface & { services: Record<string, object> } = {
+        const actionContext: ActionCtx & NotifySurfaces & QueueSurface & TopicSurface & { services: Record<string, object> } = {
             ...notifySurfaces,
             ...queueSurfaces,
+            ...topicSurfaces,
             auth,
             db: database,
             env: options?.env,
@@ -884,6 +918,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             run: (function_) => runInTransaction(() => function_(rawMutationContext)).then(notifyAfter),
             scheduler: schedulerControls,
             subscribe,
+            topics: topicControls,
             wideEvent: () => dispatchSpan.recorded,
             // A scoped view shares the SAME sql/db handle (created once above), so
             // writes performed under an identity persist for every accessor.
@@ -902,4 +937,5 @@ export type { RecordedWideEvent } from "./context-fakes";
 export type { FakeNotifyControls, NotifyChannel, SentNotification } from "./fake-notify";
 export type { FakeQueueControls, SentQueueMessage } from "./fake-queues";
 export type { FakeScheduledJob, FakeSchedulerControls, ScheduledJobFailure, SweepOptions } from "./fake-scheduler";
+export type { FakeTopicControls, PublishedTopicMessage } from "./fake-topics";
 export type { FunctionRegistry, LunoraTestOptions, TestHarness, TestIdentity, TestSubscription };
