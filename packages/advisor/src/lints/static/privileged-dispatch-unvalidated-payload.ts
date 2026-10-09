@@ -1,15 +1,8 @@
+import { sanitizeNamespace } from "../../../../../shared/dispatch-namespace";
 import { callSiteMetadata } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
 import { callSiteWhere } from "../helpers";
-
-/** A trailing `/index`, which codegen collapses into the folder's namespace. */
-const INDEX_SUFFIX = /\/index$/u;
-/** Any character that isn't valid in a JS identifier. */
-const NON_IDENTIFIER = /[^\dA-Za-z]/gu;
-
-/** A `lunora/`-relative file as its dispatch namespace (`ratelimit/index` → `ratelimit`, `my-module/x` → `my_module_x`), as codegen's `sanitizeNamespace` builds it. */
-const dispatchNamespace = (file: string): string => file.replace(INDEX_SUFFIX, "").replaceAll(NON_IDENTIFIER, "_");
 
 /**
  * Flags a `ctx.run`/`context.run` back into a Lunora function from inside a
@@ -66,7 +59,7 @@ const privilegedDispatchUnvalidatedPayload: Lint = {
         const targetUsesRls = (targetFile: string, targetExport: string): boolean =>
             rlsProcedures.some(
                 (procedure) =>
-                    procedure.usesRls && dispatchNamespace(procedure.file) === dispatchNamespace(targetFile) && procedure.exportName === targetExport,
+                    procedure.usesRls && sanitizeNamespace(procedure.file) === sanitizeNamespace(targetFile) && procedure.exportName === targetExport,
             );
 
         return context.privilegedDispatches

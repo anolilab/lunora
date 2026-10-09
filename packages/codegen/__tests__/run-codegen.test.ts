@@ -2419,6 +2419,47 @@ export const others = query.input({ id: v.string() }).query(async ({ ctx, args }
             expect(findings[0]?.detail).toContain("reads:");
         });
 
+        it("reports an always-rescheduling function and an exitless loop, and not their guarded forms", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "lunora", "sweep.ts"),
+                `import { internal } from "./_generated/api.js";
+import { internalMutation } from "./_generated/server.js";
+
+export const tick = internalMutation.mutation(async ({ ctx }) => {
+    await ctx.db.query("messages").first();
+    await ctx.scheduler.runAfter(1000, internal.sweep.tick, {});
+});
+
+export const guarded = internalMutation.mutation(async ({ ctx }) => {
+    const next = await ctx.db.query("messages").first();
+    if (next === null) return;
+    await ctx.scheduler.runAfter(1000, internal.sweep.guarded, {});
+});
+
+export const spin = internalMutation.mutation(async ({ ctx }) => {
+    while (true) {
+        await ctx.db.query("messages").first();
+    }
+});
+
+export const drain = internalMutation.mutation(async ({ ctx }) => {
+    while (true) {
+        if ((await ctx.db.query("messages").first()) === null) break;
+    }
+});
+`,
+            );
+
+            const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+                (advisory) => advisory.name === "dispatch_cycle" || advisory.name === "unbounded_loop",
+            );
+
+            expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["unbounded_loop:sweep:spin:while", "dispatch_cycle:sweep:tick"]);
+            expect(findings.every((finding) => finding.level === "ERROR")).toBe(true);
+        });
+
         it("resolves a hoisted .output() validator to the same type as the inline form (#59)", () => {
             expect.assertions(2);
 

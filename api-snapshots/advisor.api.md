@@ -113,6 +113,20 @@ interface AdvisorBrowserUrlAccess {
 }
 ```
 
+### `AdvisorCallEdge` (interface)
+
+```ts
+interface AdvisorCallEdge {
+    conditional?: true;
+    file: string;
+    kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
+    line: number;
+    reason?: string;
+    scope: AdvisorCallSiteScope;
+    target?: string;
+}
+```
+
 ### `AdvisorCallSiteScope` (type)
 
 ```ts
@@ -805,6 +819,17 @@ interface AdvisorTableWrite extends AdvisorInsertWrite {
 }
 ```
 
+### `AdvisorUnboundedLoop` (interface)
+
+```ts
+interface AdvisorUnboundedLoop {
+    file: string;
+    kind: "do" | "for" | "while";
+    line: number;
+    scope: AdvisorCallSiteScope;
+}
+```
+
 ### `AdvisorVectorNamespaceAccess` (interface)
 
 ```ts
@@ -997,6 +1022,7 @@ interface LintContext {
     authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
     authConfigs?: ReadonlyArray<AdvisorAuthConfig>;
     browserUrlAccesses?: ReadonlyArray<AdvisorBrowserUrlAccess>;
+    callEdges?: ReadonlyArray<AdvisorCallEdge>;
     configCalls?: ReadonlyArray<AdvisorConfigCall>;
     containerKeyAccesses?: ReadonlyArray<AdvisorContainerKeyAccess>;
     containerOverrides?: ReadonlyArray<AdvisorContainerOverride>;
@@ -1046,6 +1072,7 @@ interface LintContext {
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
     tableWrites?: ReadonlyArray<AdvisorTableWrite>;
+    unboundedLoops?: ReadonlyArray<AdvisorUnboundedLoop>;
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
     workflowCalls?: ReadonlyArray<AdvisorWorkflowCall>;
@@ -1357,6 +1384,12 @@ const crossModuleTableWrite: Lint;
 
 ```ts
 const dedupeCacheKeys: (findings: ReadonlyArray<Finding>) => Finding[];
+```
+
+### `dispatchCycle` (const)
+
+```ts
+const dispatchCycle: Lint;
 ```
 
 ### `duplicateIndex` (const)
@@ -1827,6 +1860,12 @@ const topicTooManySubscriptions: Lint;
 
 ```ts
 const ttlFieldNotTimestamp: Lint;
+```
+
+### `unboundedLoop` (const)
+
+```ts
+const unboundedLoop: Lint;
 ```
 
 ### `unboundedStringArgument` (const)
