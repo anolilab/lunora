@@ -1485,6 +1485,12 @@ interface Permission {
 }
 ```
 
+### `PlatformAdminCheck` (type)
+
+```ts
+type PlatformAdminCheck<Context> = (context: Context) => boolean | Promise<boolean>;
+```
+
 ### `Plugin` (interface)
 
 ```ts
@@ -3233,6 +3239,12 @@ const defineIdentity: <A extends ValidatorMap>(claims: InferValidatorMap<A> exte
 }>;
 ```
 
+### `defineIdentityGuard` (const)
+
+```ts
+const defineIdentityGuard: <Guard extends (...args: never[]) => void>(guard: Guard) => Guard;
+```
+
 ### `defineListArgs` (const)
 
 ```ts
@@ -3462,6 +3474,12 @@ const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook;
 
 ```ts
 const onWhisper: (handler: WhisperAuthorizeHandler) => RegisteredWhisperAuthorizer;
+```
+
+### `platformAdmin` (const)
+
+```ts
+const platformAdmin: <Context extends object>(check: PlatformAdminCheck<Context>) => Middleware<Context, Context>;
 ```
 
 ### `presenceExtension` (const)

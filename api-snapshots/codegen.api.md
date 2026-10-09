@@ -344,6 +344,7 @@ interface FlagsIR {
 
 ```ts
 interface FunctionIR {
+    adminOnly?: true;
     args: Record<string, ValidatorIR>;
     exportName: string;
     expose?: {
@@ -2705,6 +2706,7 @@ interface NormalizeIdAuthorizationIR {
 
 ```ts
 interface OwnerFieldWriteIR {
+    adminOnly?: true;
     field: string;
     file: string;
     guarded?: true;
