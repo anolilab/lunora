@@ -233,6 +233,10 @@
                           {
                             "const": "error_anomaly",
                             "type": "string"
+                          },
+                          {
+                            "const": "storage_anomaly",
+                            "type": "string"
                           }
                         ]
                       },
@@ -323,6 +327,10 @@
                           },
                           {
                             "const": "error_anomaly",
+                            "type": "string"
+                          },
+                          {
+                            "const": "storage_anomaly",
                             "type": "string"
                           }
                         ]
@@ -8266,6 +8274,69 @@
           "usage"
         ],
         "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#usage:meteringStatus": {
+      "post": {
+        "description": "Invoke the `query` `usage:meteringStatus` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "usage:meteringStatus",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "usage:meteringStatus",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: usage:meteringStatus",
+        "tags": [
+          "usage"
+        ],
+        "x-lunora-function-kind": "query"
       }
     },
     "/_lunora/rpc#usage:series": {

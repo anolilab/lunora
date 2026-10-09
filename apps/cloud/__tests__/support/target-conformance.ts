@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import { runUsageRollback } from "../../src/metering/rollback";
 import type { TenantDeploymentSpec } from "../../src/provision-contract";
-import type { TargetDriver, TargetFleet } from "../../src/targets/driver";
+import type { TargetDriver, TargetFleet, UsageSource } from "../../src/targets/driver";
 
 interface ConformanceFixture {
     driver: TargetDriver;
@@ -108,11 +108,23 @@ const describeTargetConformance = (name: string, makeFixture: () => ConformanceF
     });
 };
 
+/** The fixture's request-count source, which every readback target has. */
+const requestsSource = (usage: UsageFixture): UsageSource => {
+    const source = usage.read.sources.requests;
+
+    if (source === undefined) {
+        throw new Error("a readback target reads request counts");
+    }
+
+    return source;
+};
+
 const describeUsageReadbackConformance = (name: string, makeFixture: () => UsageFixture): void => {
     describe(`${name} — usage readback conformance`, () => {
         it("never double-counts usage it reads back across a checkpoint, in any scope", async () => {
             const usage = makeFixture();
             const scopes = await usage.read.scopes();
+            const requests = requestsSource(usage);
 
             expect(scopes.length).toBeGreaterThan(0);
 
@@ -123,9 +135,10 @@ const describeUsageReadbackConformance = (name: string, makeFixture: () => Usage
                 for (const scope of await usage.read.scopes()) {
                     // eslint-disable-next-line no-await-in-loop -- one scope at a time, as a deterministic sweep
                     await runUsageRollback({
+                        cadence: "continuous",
                         getCheckpoint: () => Promise.resolve(checkpoints.get(scope)),
                         now,
-                        read: (sinceMs) => usage.read.read(scope, sinceMs),
+                        read: (window) => requests.read(scope, window),
                         record: ({ quantity }) => {
                             recorded += quantity;
 
@@ -164,13 +177,30 @@ const describeUsageReadbackConformance = (name: string, makeFixture: () => Usage
         it("reads each scope's usage only from that scope", async () => {
             const usage = makeFixture();
             const [scope] = await usage.read.scopes();
+            const requests = requestsSource(usage);
 
             usage.serve(scope, "app", 7, 1000);
 
-            const rows = await usage.read.read(scope, 0);
+            const rows = await requests.read(scope, { sinceMs: 0, untilMs: 2000 });
 
-            expect(rows.reduce((sum, row) => sum + row.requests, 0)).toBe(7);
-            await expect(usage.read.read("not-a-scope", 0)).resolves.toStrictEqual([]);
+            expect(rows.reduce((sum, row) => sum + (row.meters.requests ?? 0), 0)).toBe(7);
+            await expect(requests.read("not-a-scope", { sinceMs: 0, untilMs: 2000 })).resolves.toStrictEqual([]);
+        });
+
+        it("reads a continuous source up to the window's upper bound, and no further", async () => {
+            const usage = makeFixture();
+            const [scope] = await usage.read.scopes();
+            const requests = requestsSource(usage);
+
+            usage.serve(scope, "app", 2, 1000);
+            usage.serve(scope, "app", 9, 3000);
+
+            // `(0, 2000]` then `(2000, 4000]`: each request lands in exactly one window.
+            const first = await requests.read(scope, { sinceMs: 0, untilMs: 2000 });
+            const second = await requests.read(scope, { sinceMs: 2000, untilMs: 4000 });
+
+            expect(first.reduce((sum, row) => sum + (row.meters.requests ?? 0), 0)).toBe(2);
+            expect(second.reduce((sum, row) => sum + (row.meters.requests ?? 0), 0)).toBe(9);
         });
     });
 };

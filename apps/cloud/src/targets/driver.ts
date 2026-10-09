@@ -26,6 +26,7 @@
  * `__tests__/support/memory-driver.ts`.
  */
 import type { TenantSend } from "../backup/tenant-transport";
+import type { PeriodUsage } from "../billing/spend";
 import type { ControlPlaneStore } from "../d1-store";
 import type { EdgeProtection } from "../edge/protection";
 import type { TargetId, TenantDeploymentSpec } from "../provision-contract";
@@ -52,10 +53,68 @@ export interface ConvergeResult {
     url: string;
 }
 
-/** Requests one resource served in a metering window. */
+/**
+ * What one resource consumed in a metering window, by meter. A source sets only
+ * the meters it reads; an absent or non-positive meter records nothing.
+ */
 export interface UsageRow {
-    requests: number;
+    meters: PeriodUsage;
     resourceRef: string;
+}
+
+/**
+ * The independent metering sources of a readback target. Each keeps its own
+ * checkpoint per scope, so a failing storage read neither blocks nor skips the
+ * request-count window, and the other way round.
+ *
+ * - `requests` — request counts (`requests`).
+ * - `d1` — D1 row reads and writes (`d1RowsRead`, `d1RowsWritten`).
+ * - `durableObjects` — Durable Object row reads and writes (`doRowsRead`, `doRowsWritten`).
+ */
+export type UsageFamily = "d1" | "durableObjects" | "requests";
+
+/** Every family, in the order a sweep reads them. */
+export const USAGE_FAMILIES: ReadonlyArray<UsageFamily> = ["requests", "d1", "durableObjects"];
+
+/**
+ * A read window.
+ *
+ * - `continuous` sources answer what happened in `(sinceMs, untilMs]`.
+ * - `hourly` sources answer the hour buckets that START in `[sinceMs, untilMs)`;
+ *   both bounds are hour-aligned, and `untilMs` is never an hour that has not
+ *   closed yet.
+ *
+ * Either way, consecutive windows partition time, so nothing is counted twice.
+ * A window never spans two calendar months (UTC): the rollback splits it, and
+ * bills each part to its own month.
+ */
+export interface UsageWindow {
+    sinceMs: number;
+    untilMs: number;
+}
+
+/**
+ * One metering source.
+ *
+ * `cadence: "hourly"` marks a dataset that buckets by the hour and lags
+ * (Cloudflare's adaptive GraphQL datasets). The rollback then reads only closed
+ * hours, so a bucket that is still filling is never read half-full and then
+ * skipped.
+ *
+ * A source that cannot read at all — its dataset is missing, or the token lacks
+ * the permission — throws `UsageUnavailableError` (`src/metering/unavailable.ts`)
+ * or a `CloudflareTokenError`. The sweep then records the reason where the
+ * studio shows it, instead of reporting zero.
+ */
+export interface UsageSource {
+    cadence: "continuous" | "hourly";
+
+    /**
+     * What each resource in `scope` consumed in `window`. A row's `resourceRef`
+     * must be one only `scope`'s deployments carry, so a source can never
+     * attribute usage to a tenant it does not hold.
+     */
+    read: (scope: string, window: UsageWindow) => Promise<UsageRow[]>;
 }
 
 /** One tenant deployment as the control plane addresses it. */
@@ -212,22 +271,18 @@ export interface TargetFleet {
 }
 
 /**
- * A readback target's request-count source, split into SCOPES: one per
- * independent metering source, each with its own checkpoint
- * (`usageCheckpoints`, keyed by target and scope). `cloudflare-wfp` has one —
- * this control plane's cell, whose Analytics Engine dataset counts every
- * tenant. `cloudflare-workers` has one per connected Cloudflare account, each
- * read with that account's own token. Two sources sharing one checkpoint would
- * advance one boundary and each skip the other's window.
+ * A readback target's usage, split into SCOPES (one per account it reads) and,
+ * within a scope, into {@link UsageFamily | families} (one per dataset). Every
+ * (scope, family) pair has its own checkpoint (`usageCheckpoints`, keyed by
+ * target and scope key). `cloudflare-wfp` has one scope: this control plane's
+ * cell, whose account holds every tenant. `cloudflare-workers` has one per
+ * connected Cloudflare account, each read with that account's own token. Two
+ * sources sharing one checkpoint would advance one boundary and each skip the
+ * other's window.
  */
 export interface UsageReadback {
-    /**
-     * Requests per resource in `scope` with a timestamp strictly after
-     * `sinceMs`. A row's `resourceRef` must be one only `scope`'s deployments
-     * carry, so a source can never attribute requests to a tenant it does not
-     * hold.
-     */
-    read: (scope: string, sinceMs: number) => Promise<UsageRow[]>;
     /** Every scope this deployment reads right now. */
     scopes: () => Promise<string[]>;
+    /** The families this deployment reads. Absent ones are not metered here. */
+    sources: Partial<Record<UsageFamily, UsageSource>>;
 }

@@ -107,13 +107,14 @@ const currentPeriodStart = (): number => {
 };
 
 /**
- * Fold tenant request counts into the `platformUsage` ledger (§4) so spend caps,
- * the usage summary, and the usage chart have data to read — for every
+ * Fold tenant usage into the `platformUsage` ledger (§4) so spend caps, the
+ * usage summary, and the usage chart have data to read — for every
  * `metering: "readback"` target whose fleet reads usage here, and every scope
- * of it (`cloudflare-wfp`: this cell's Analytics Engine dataset, and only with
- * account credentials configured; `cloudflare-workers`: each connected account).
+ * of it (`cloudflare-wfp`: this cell's account, and only with account
+ * credentials configured; `cloudflare-workers`: each connected account). Each
+ * scope is read per family: request counts, and D1 and Durable Object rows.
  * `runReadbackUsageSweep` drains the deployments once, reads a bounded number
- * of scopes at a time, and isolates each scope's failure.
+ * of scopes at a time, and isolates each (scope, family)'s failure.
  */
 const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
     if (!env.DB) {
@@ -126,7 +127,14 @@ const sweepUsageRollback = async (env: ControlPlaneEnv): Promise<void> => {
             // eslint-disable-next-line no-console -- a failed scope keeps its checkpoint; this is its only record
             console.error(`[usage] ${target} readback failed for scope ${scope}`, reason);
         },
-        periodStart: currentPeriodStart(),
+        onNote: (target, scopeKey, message) => {
+            // eslint-disable-next-line no-console -- also kept in `usageSourceStatus`; this is the operator's copy
+            console.warn(`[usage] ${target} ${scopeKey}: ${message}`);
+        },
+        onUnavailable: (target, scope, message) => {
+            // eslint-disable-next-line no-console -- also kept in `usageSourceStatus` (`usage.meteringStatus`); this is the operator's copy
+            console.warn(`[usage] ${target} scope ${scope}: ${message}`);
+        },
     });
 };
 
@@ -229,7 +237,8 @@ const sweepAlerts = async (env: ControlPlaneEnv): Promise<void> => {
 /**
  * Anomaly sweep (plan 365 W4): score each organization's last completed hour
  * against its rolling baseline and fire/clear its `usage_anomaly` /
- * `error_anomaly` rules. Hourly, on the bucket the readback ledger is filled at.
+ * `error_anomaly` / `storage_anomaly` rules. Hourly, on the bucket the readback
+ * ledger is filled at.
  */
 const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
     if (!env.DB) {
@@ -238,7 +247,7 @@ const sweepAnomalies = async (env: ControlPlaneEnv): Promise<void> => {
 
     const database = controlPlaneDatabase(env.DB as D1DatabaseLike);
     const now = Date.now();
-    const { deliveries, transitions } = await runAnomalySweep(database, { now });
+    const { deliveries, transitions } = await runAnomalySweep(database, { cell: env.LUNORA_CELL ?? "default", now });
 
     await deliverFiredAlerts(env, database, deliveries, now);
     // The anomaly → rate-limit action (plan 365 W7): intent only; `sweepEdgeRules` applies it.
