@@ -188,17 +188,16 @@ describe("createMailerFromEnv", () => {
         expect(() => createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" })).toThrow(/transport is required/);
     });
 
-    it("ignores cloudflareSend when no SEND_EMAIL binding is present", async () => {
+    it("honours an explicitly passed cloudflareSend whatever the Email binding is named", async () => {
         expect.assertions(2);
 
         const cloudflareSend = vi.fn<(from: string, to: string, raw: string) => Promise<void>>(async () => undefined);
-        const mailer = createMailerFromEnv(
-            { MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" },
-            { cloudflareSend, queue: { send: async () => undefined } },
-        );
+        const mailer = createMailerFromEnv({ EMAIL: {}, MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" }, { cloudflareSend });
 
-        await expect(mailer.send({ subject: "Hi", text: "x", to: "a@x.test" })).rejects.toThrow(/no transport/);
-        expect(cloudflareSend).not.toHaveBeenCalled();
+        await mailer.send({ subject: "Hi", text: "x", to: "a@x.test" });
+
+        expect(cloudflareSend).toHaveBeenCalledTimes(1);
+        expect(cloudflareSend.mock.calls[0]?.slice(0, 2)).toStrictEqual(["noreply@x.test", "a@x.test"]);
     });
 
     it("lets a producer-only worker queue() without a delivery transport", async () => {
