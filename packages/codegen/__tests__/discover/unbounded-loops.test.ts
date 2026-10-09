@@ -330,6 +330,8 @@ describe("discoverUnboundedLoops", () => {
         ["a continue to the loop itself", `while (true) { continue; }`],
         ["a break out of a nested switch", `while (true) { switch (ids.length) { case 0: break; } }`],
         ["a break out of a nested loop", `while (true) { for (const id of ids) { if (id) break; } }`],
+        ["a labeled continue to the loop's own label", `spin: while (true) { if (ids.length) continue spin; }`],
+        ["a continue through stacked labels to the loop", `a: b: while (true) { continue a; }`],
     ])("records the loop when the only jump is %s", (_label, body) => {
         expect.assertions(1);
 
