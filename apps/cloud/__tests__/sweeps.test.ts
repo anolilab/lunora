@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { overageCreditsOwed } from "../src/billing/overage";
+import { buildOverageReconcileData } from "../src/billing/reconcile";
 import { accrualBreached, RATE_CARD } from "../src/billing/spend";
 import type { ReadbackFleet } from "../src/deploy/sweeps";
 import { runReadbackUsageSweep, teardownPorts, USAGE_SCOPE_CONCURRENCY, usageAttributionOf, usageRollbackPorts } from "../src/deploy/sweeps";
@@ -695,6 +697,110 @@ describe(runReadbackUsageSweep, () => {
                     message: expect.stringContaining("Durable Object rows read and written are not counted") as string,
                     source: "Lunora Cloud",
                 },
+            ]);
+        });
+
+        it("meters CPU time and Durable Object requests and duration as their own families, alert-only on the platform cell", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, organizations: [{ _id: "org_a", plan: "free" }], usageCheckpoints: [] });
+
+            await runReadbackUsageSweep(
+                database,
+                [
+                    wfpFleet({
+                        durableObjectDuration: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doDurationGbS: 400 }, resourceRef: "shop" }]) },
+                        durableObjectRequests: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doRequests: 1_000_000 }, resourceRef: "shop" }]) },
+                        // Far past the free plan's included 3M CPU-ms: billed, this would be overage.
+                        workersCpu: { cadence: "hourly", read: () => Promise.resolve([{ meters: { cpuMs: 900_000_000 }, resourceRef: "shop" }]) },
+                    }),
+                ],
+                { now, onScopeFailed: () => undefined },
+            );
+
+            const closed = Date.UTC(2026, 5, 15, 10);
+
+            expect(database.tables["usageCheckpoints"]?.map(({ readAtMs, scopeKey }) => [scopeKey, readAtMs])).toStrictEqual([
+                ["default#workersCpu", closed],
+                ["default#durableObjectRequests", closed],
+                ["default#durableObjectDuration", closed],
+            ]);
+            // `UNVERIFIED_METERS`: written display-only on the cell, which bills every verified meter.
+            expect(database.tables["platformUsage"]).toStrictEqual(
+                [
+                    ["cpuMs", 900_000_000],
+                    ["doRequests", 1_000_000],
+                    ["doDurationGbS", 400],
+                ].map(([kind, quantity]): unknown =>
+                    expect.objectContaining({
+                        billable: false,
+                        deploymentId: "dep_shop",
+                        kind,
+                        periodStart: june,
+                        quantity,
+                        windowEnd: closed,
+                        windowStart: closed - 60 * 60 * 1000,
+                    }),
+                ),
+            );
+            // No admission accrual…
+            expect(database.tables["organizations"]).toStrictEqual([{ _id: "org_a", plan: "free" }]);
+
+            // …and no overage: the reconcile sees no CPU at all.
+            const { inputs } = await buildOverageReconcileData(database, june);
+
+            expect(inputs).toStrictEqual([expect.objectContaining({ organizationId: "org_a", usage: { cpuMs: 0, requests: 0 } })]);
+            expect(overageCreditsOwed("free", inputs[0]?.usage ?? {})).toBe(0);
+        });
+
+        it("still bills a verified meter on the cell beside the alert-only ones", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, organizations: [{ _id: "org_a", plan: "pro" }], usageCheckpoints: [] });
+
+            await runReadbackUsageSweep(
+                database,
+                [
+                    wfpFleet({
+                        durableObjects: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doRowsWritten: 7 }, resourceRef: "shop" }]) },
+                        workersCpu: { cadence: "hourly", read: () => Promise.resolve([{ meters: { cpuMs: 5 }, resourceRef: "shop" }]) },
+                    }),
+                ],
+                { now, onScopeFailed: () => undefined },
+            );
+
+            expect(database.tables["platformUsage"]?.map((row) => [row["kind"], row["billable"]])).toStrictEqual([
+                ["doRowsWritten", undefined],
+                ["cpuMs", false],
+            ]);
+            expect(database.tables["organizations"]).toStrictEqual([
+                { _id: "org_a", plan: "pro", spendNanoCents: 7 * RATE_CARD.doRowsWritten.nanoCentsPerUnit, spendPeriod: june },
+            ]);
+        });
+
+        it("shows a compute family that cannot read under its own label, while the row family beside it still advances", async () => {
+            const database = memoryStore({ deployments: wfpDeployments, usageCheckpoints: [] });
+
+            await runReadbackUsageSweep(
+                database,
+                [
+                    wfpFleet({
+                        durableObjects: { cadence: "hourly", read: () => Promise.resolve([{ meters: { doRowsRead: 9 }, resourceRef: "shop" }]) },
+                        workersCpu: {
+                            cadence: "hourly",
+                            read: () => Promise.reject(new UsageUnavailableError("workersInvocationsAdaptive has no dispatch-namespace dimension")),
+                        },
+                    }),
+                ],
+                { now, onScopeFailed: () => undefined },
+            );
+
+            expect(database.tables["usageSourceStatus"]).toStrictEqual([
+                expect.objectContaining({ scopeKey: "default#durableObjects", unattributedQuantity: 0 }),
+                expect.objectContaining({
+                    scopeKey: "default#workersCpu",
+                    unavailableReason: "CPU metering unavailable: workersInvocationsAdaptive has no dispatch-namespace dimension",
+                }),
+            ]);
+            expect(database.tables["usageCheckpoints"]?.map(({ scopeKey }) => scopeKey)).toStrictEqual(["default#durableObjects"]);
+            expect(meteringNotices(database.tables["usageSourceStatus"] as unknown as SourceStatusRow[], [], "default", now)).toStrictEqual([
+                { family: "workersCpu", message: expect.stringContaining("Workers CPU time is not counted") as string, source: "Lunora Cloud" },
             ]);
         });
 

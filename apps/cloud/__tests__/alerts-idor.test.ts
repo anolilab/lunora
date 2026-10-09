@@ -48,6 +48,34 @@ describe("alert rule and silence ids are pinned to their table and org", () => {
         expect(writes(ops)).toStrictEqual([]);
     });
 
+    it.each([
+        ["another org's project", "prj_org2"],
+        ["a rule id of the same org", "rule_org1"],
+    ])("refuses a usage rule scoped to %s and writes nothing", async (_label, projectId) => {
+        const { ctx, ops } = makeCtx(
+            {
+                ...tables(),
+                projects: [
+                    { _id: "prj_org1", organizationId: "org1" },
+                    { _id: "prj_org2", organizationId: "org2" },
+                ],
+            },
+            { now: NOW },
+        );
+        const rule = {
+            channel: "email",
+            destination: "ops@example.com",
+            meter: "requests",
+            name: "r",
+            organizationId: "org1",
+            target: "usage_threshold",
+            threshold: 10,
+        };
+
+        await expect(createRule.handler(ctx, { ...rule, projectId } as never)).rejects.toMatchObject({ code: "NOT_FOUND" });
+        expect(writes(ops)).toStrictEqual([]);
+    });
+
     it("touches the named row of its own table", async () => {
         const { ctx, ops } = makeCtx(tables(), { now: NOW });
 

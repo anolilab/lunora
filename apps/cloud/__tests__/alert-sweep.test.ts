@@ -79,6 +79,27 @@ describe(runAlertSweep, () => {
         expect(insert).not.toHaveBeenCalledWith("alerts", expect.anything());
     });
 
+    it("finds the latch past the first page of states, which other rules' latches fill", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const others = Array.from({ length: 5 }, (_, index) => {
+            return { _id: `state_other_${String(index)}`, firedPeriod: 0, firing: true, ruleId: `rule_usage_${String(index)}` };
+        });
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [...others, { _id: "state1", firing: true, ruleId: "rule1" }],
+                alertRules: [errorRateRule],
+                observations: window(2, 2), // still 100% error
+            },
+            { insert },
+            { pageSize: 2 },
+        );
+
+        const result = await runAlertSweep(database, { now });
+
+        expect(result.deliveries).toStrictEqual([]);
+        expect(insert).not.toHaveBeenCalled();
+    });
+
     it("does not re-fire while the rule stays firing (latched, still breaching)", async () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));

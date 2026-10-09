@@ -77,4 +77,25 @@ describe(drainTable, () => {
         expect(drained.length).toBeGreaterThan(0);
         expect(findMany.mock.calls.length).toBeLessThanOrEqual(100);
     });
+
+    it("says when it stopped at the cap, and only then", async () => {
+        const endless = vi.fn<ControlPlaneDatabase["findMany"]>(() => Promise.resolve({ continueCursor: "always", isDone: false, page: [{ _id: "a" }] }));
+        const truncated = vi.fn<() => void>();
+
+        await drainTable(fakeControlPlaneDb({}, { findMany: endless }), "cells", {}, truncated);
+
+        expect(truncated).toHaveBeenCalledTimes(1);
+
+        // Exactly the cap's worth of pages, the last one done: complete.
+        let page = 0;
+        const exact = vi.fn<ControlPlaneDatabase["findMany"]>(() => {
+            page += 1;
+
+            return Promise.resolve({ continueCursor: page === 100 ? null : String(page), isDone: page === 100, page: [{ _id: String(page) }] });
+        });
+        const complete = vi.fn<() => void>();
+
+        await expect(drainTable(fakeControlPlaneDb({}, { findMany: exact }), "cells", {}, complete)).resolves.toHaveLength(100);
+        expect(complete).not.toHaveBeenCalled();
+    });
 });

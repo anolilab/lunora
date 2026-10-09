@@ -12,6 +12,7 @@
  */
 import { tenantSender } from "../../backup/tenant-transport";
 import { createHttpCloudflareApi } from "../../cloudflare/api";
+import { readDurableObjectDurationByScript, readDurableObjectRequestsByScript, readWorkersCpuByScript } from "../../cloudflare/compute-usage";
 import type { HostList } from "../../cloudflare/host-list";
 import { createHttpHostList } from "../../cloudflare/host-list";
 import { readD1UsageByAlias, readDurableObjectUsageByScript, unavailableOnRefusal } from "../../cloudflare/storage-usage";
@@ -124,7 +125,8 @@ export interface CloudflareWfpFleetPorts {
 /**
  * The cell's usage readback: one scope, the cell, whose account holds every
  * tenant. Request counts come from the dispatcher's Analytics Engine dataset;
- * D1 and Durable Object rows from the account's GraphQL datasets.
+ * D1 and Durable Object rows, Workers CPU time, and Durable Object requests and
+ * duration from the account's GraphQL datasets.
  */
 const cellUsage = (cell: string, usage: AnalyticsUsageReader | undefined, storage: StorageReaders | undefined): UsageReadback => {
     // This cell's account is the only source; another cell's scope is another control plane's.
@@ -295,6 +297,20 @@ export const cloudflareWfpFleetFromEnv = (environment: CloudflareWfpEnvironment)
                       durableObjects: async (window) =>
                           unavailableOnRefusal(async () =>
                               readDurableObjectUsageByScript({ accountId, apiToken }, window, { dispatchNamespace: dispatchNamespaceOf(environment) }),
+                          ),
+                      durableObjectDuration: async (window) =>
+                          unavailableOnRefusal(async () =>
+                              readDurableObjectDurationByScript({ accountId, apiToken }, window, { dispatchNamespace: dispatchNamespaceOf(environment) }),
+                          ),
+                      durableObjectRequests: async (window) =>
+                          unavailableOnRefusal(async () =>
+                              readDurableObjectRequestsByScript({ accountId, apiToken }, window, { dispatchNamespace: dispatchNamespaceOf(environment) }),
+                          ),
+                      // The cell account's GraphQL, not the dispatcher's Analytics Engine
+                      // dataset: a Worker cannot measure another's CPU time, so AE has none.
+                      workersCpu: async (window) =>
+                          unavailableOnRefusal(async () =>
+                              readWorkersCpuByScript({ accountId, apiToken }, window, { dispatchNamespace: dispatchNamespaceOf(environment) }),
                           ),
                   },
                   usage: createHttpAnalyticsReader({ accountId, apiToken, dataset: environment.USAGE_ANALYTICS_DATASET ?? "lunora_tenant_usage" }),

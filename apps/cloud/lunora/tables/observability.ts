@@ -6,7 +6,7 @@
  */
 import { defineTable, v } from "@lunora/server";
 
-import { alertTarget, anomalyTarget } from "./shared";
+import { alertTarget, anomalyTarget, usageAlertMeter } from "./shared";
 
 export const observabilityTables = {
     // Exact metric measurements (the precise tier behind the Metrics UI). Every
@@ -238,6 +238,9 @@ export const observabilityTables = {
         functionPath: v.optional(v.string()),
         // When an owner/admin last sent this rule a test notification (`alerts.prepareTestAlert`).
         lastTestedAt: v.optional(v.number()),
+        // `usage_threshold` only: the meter whose month-to-date usage is compared
+        // to `threshold` (a quantity in the meter's unit).
+        meter: v.optional(usageAlertMeter),
         // How a metric rule decides it is breaching. `threshold` (absent ⇒ this)
         // compares the window value to `threshold` directly — right when the
         // number has an absolute meaning (an SLO, a spend cap). `deviation`
@@ -248,6 +251,9 @@ export const observabilityTables = {
         mode: v.optional(v.union(v.literal("threshold"), v.literal("deviation"))),
         name: v.string(),
         organizationId: v.id("organizations"),
+        // `usage_threshold` only: count the usage of this project's deployments
+        // alone. Absent ⇒ the whole organization.
+        projectId: v.optional(v.id("projects")),
         // What the rule watches. Count-crossing: `issue`/`incident` (a fingerprint
         // group's event count), `uptime` (a deployment's consecutive failed
         // synthetic checks, see lunora/uptime.ts). Metric-window: `error_rate`
@@ -259,11 +265,13 @@ export const observabilityTables = {
         // was reached, or its hard cap suspended it) — its threshold is the org's
         // `spendWarnMinor` / cap, not the rule's. Anomaly: `usage_anomaly` /
         // `error_anomaly` / `storage_anomaly` threshold the hourly anomaly score
-        // (`anomalyBaselines`).
+        // (`anomalyBaselines`). Usage: `usage_threshold` compares the month-to-date
+        // usage of `meter` (optionally of `projectId`) to `threshold`, once a month.
         target: alertTarget,
         // Count-crossing: fire when the source's count first reaches this value.
         // Metric-window: the value the window metric is compared against.
         // Anomaly: the score, in standard deviations from the rolling baseline.
+        // Usage: the month-to-date quantity of `meter` that fires the rule.
         threshold: v.number(),
         updatedAt: v.number(),
         // Rolling window length for a metric target, in minutes. Required for
@@ -282,8 +290,13 @@ export const observabilityTables = {
     // a window that goes quiet still clears (and can fire again later). One row per
     // rule; count-crossing/uptime rules don't use it. Anomaly rules latch here too,
     // advanced by the hourly anomaly sweep, with `lastValue` holding the score.
+    // Usage rules latch per month: `firedPeriod` is the month they fired in, and
+    // `lastValue` the month-to-date usage they fired at.
     alertRuleState: defineTable({
         createdAt: v.number(),
+        // `usage_threshold` only: the UTC month (its first instant) the rule fired
+        // in. A rule fires at most once per month; a later month re-arms it.
+        firedPeriod: v.optional(v.number()),
         // `true` while the rule's window is over threshold (already alerted).
         firing: v.boolean(),
         // When the sweep/ingest last evaluated this rule (freshness/debugging).

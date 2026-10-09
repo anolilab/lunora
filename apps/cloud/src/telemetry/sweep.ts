@@ -117,10 +117,11 @@ export const runAlertSweep = async (database: ControlPlaneDatabase, options: Ale
         return { cleared: 0, deliveries: [], evaluatedOrgs: 0 };
     }
 
-    // Prior firing latches, read once and keyed by ruleId (across all orgs — the
-    // table is small, one row per metric rule).
-    const { page: statePage } = await database.findMany("alertRuleState", {});
-    const stateByRule = new Map((statePage as AlertRuleStateRow[]).map((row) => [row.ruleId, row]));
+    // Prior firing latches, read once and keyed by ruleId (across all orgs). Drained:
+    // anomaly and usage rules latch in the same table, so a metric rule's state past
+    // the first page read as "never fired" and re-fired every minute.
+    const states = await drainTable<AlertRuleStateRow>(database, "alertRuleState");
+    const stateByRule = new Map(states.map((row) => [row.ruleId, row]));
 
     const deliveries: AlertDelivery[] = [];
     let cleared = 0;

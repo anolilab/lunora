@@ -70,11 +70,18 @@ export interface UsageRow {
  * - `requests` — request counts (`requests`).
  * - `d1` — D1 row reads and writes (`d1RowsRead`, `d1RowsWritten`).
  * - `durableObjects` — Durable Object row reads and writes (`doRowsRead`, `doRowsWritten`).
+ * - `workersCpu` — Workers CPU time (`cpuMs`).
+ * - `durableObjectRequests` — Durable Object requests (`doRequests`).
+ * - `durableObjectDuration` — Durable Object duration (`doDurationGbS`).
+ *
+ * The compute families are separate from the row families on purpose: each is
+ * discovered in the schema on its own, so one that cannot read neither blocks
+ * nor skips the meters that can.
  */
-export type UsageFamily = "d1" | "durableObjects" | "requests";
+export type UsageFamily = "d1" | "durableObjectDuration" | "durableObjectRequests" | "durableObjects" | "requests" | "workersCpu";
 
 /** Every family, in the order a sweep reads them. */
-export const USAGE_FAMILIES: ReadonlyArray<UsageFamily> = ["requests", "d1", "durableObjects"];
+export const USAGE_FAMILIES: ReadonlyArray<UsageFamily> = ["requests", "d1", "durableObjects", "workersCpu", "durableObjectRequests", "durableObjectDuration"];
 
 /**
  * A read window.

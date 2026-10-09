@@ -72,6 +72,15 @@ describe(collectAll, () => {
         expect(rows).toHaveLength(100);
     });
 
+    it("says when it stopped at the cap, and not when the last page was the cap's", async () => {
+        const truncated: string[] = [];
+
+        await collectAll(pagedTable(101, 1).fetchPage, () => truncated.push("101 rows"));
+        await collectAll(pagedTable(100, 1).fetchPage, () => truncated.push("100 rows"));
+
+        expect(truncated).toStrictEqual(["101 rows"]);
+    });
+
     it("returns an empty list for an empty table", async () => {
         const table = pagedTable(0, 10);
 

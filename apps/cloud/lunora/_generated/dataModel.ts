@@ -514,10 +514,12 @@ export interface Doc_alertRules {
     enabled: boolean;
     functionPath?: string;
     lastTestedAt?: number;
+    meter?: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten";
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly";
+    projectId?: Id<"projects">;
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly" | "usage_threshold";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -527,6 +529,7 @@ export interface Doc_alertRuleState {
     _id: Id<"alertRuleState">;
     _creationTime: number;
     createdAt: number;
+    firedPeriod?: number;
     firing: boolean;
     lastEvaluatedAt: number;
     lastValue: number;
@@ -548,7 +551,7 @@ export interface Doc_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly" | "usage_threshold";
     updatedAt: number;
 }
 
@@ -838,7 +841,7 @@ export interface IndexNamesByTable {
     uptimeState: "by_org" | "by_deployment";
     dashboards: "by_org";
     overageDebits: "by_org_period";
-    platformUsage: "by_placement_window" | "by_org";
+    platformUsage: "by_placement_window" | "by_org_period_kind" | "by_org";
     usageCheckpoints: "by_target_scope";
     usageSourceStatus: "by_source";
     customers: "by_reference" | "by_provider_customer";
@@ -1501,10 +1504,12 @@ export interface Insert_alertRules {
     enabled: boolean;
     functionPath?: string;
     lastTestedAt?: number;
+    meter?: "requests" | "cpuMs" | "d1RowsRead" | "d1RowsWritten" | "doRequests" | "doDurationGbS" | "doRowsRead" | "doRowsWritten";
     mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly";
+    projectId?: Id<"projects">;
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly" | "usage_threshold";
     threshold: number;
     updatedAt: number;
     windowMinutes?: number;
@@ -1514,6 +1519,7 @@ export interface Insert_alertRuleState {
     _id?: Id<"alertRuleState">;
     _creationTime?: number;
     createdAt: number;
+    firedPeriod?: number;
     firing: boolean;
     lastEvaluatedAt: number;
     lastValue: number;
@@ -1535,7 +1541,7 @@ export interface Insert_alerts {
     ruleId: Id<"alertRules">;
     status: "firing" | "delivered" | "failed";
     subject: string;
-    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly";
+    target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly" | "usage_threshold";
     updatedAt: number;
 }
 

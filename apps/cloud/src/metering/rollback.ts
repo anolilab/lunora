@@ -240,6 +240,8 @@ const recordRow = async (ports: UsageRollbackPorts, row: UsageRow, part: UsageWi
  *   checkpoint can always advance (under-count, never double-bill).
  * - A failed read re-throws. The checkpoint then stays at the last part that
  *   succeeded, and the next run retries from there.
+ * - The checkpoint of a part is written before its rows, so a failed checkpoint
+ *   write records nothing and its retry cannot record the part twice.
  */
 export const runUsageRollback = async (ports: UsageRollbackPorts): Promise<UsageRollbackResult> => {
     const { gap, window } = windowOf(ports, await ports.getCheckpoint());
@@ -253,11 +255,16 @@ export const runUsageRollback = async (ports: UsageRollbackPorts): Promise<Usage
     for (const part of splitByMonth(window)) {
         const rows = await ports.read(part);
 
+        // The checkpoint BEFORE the ledger rows. Recorded first, a checkpoint write
+        // that then failed left the rows in the ledger and the window unread, so
+        // the next run recorded it again — a double count. This way a failed
+        // checkpoint records nothing, and a run that dies between the two loses
+        // that part: the under-count direction, like a dropped ledger write.
+        await ports.setCheckpoint(part.untilMs);
+
         for (const row of rows) {
             result = addResults(result, await recordRow(ports, row, part));
         }
-
-        await ports.setCheckpoint(part.untilMs);
     }
     /* eslint-enable no-await-in-loop */
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { MutationCtx } from "../lunora/_generated/server";
 import { enforceSpendCaps, ingest, rollup, setSpendWarning } from "../lunora/usage";
 import { RATE_CARD } from "../src/billing/spend";
+import { UNVERIFIED_METERS } from "../src/billing/usage";
 import { hashDeployKey } from "../src/deploy/keys";
 
 /**
@@ -195,6 +196,21 @@ describe("usage.enforceSpendCaps", () => {
 
         expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedReason: "spend-cap" } });
         expect(ops.find((op) => op.kind === "insert")).toMatchObject({ document: { action: "organization.suspend" }, table: "auditLog" });
+    });
+
+    it("never suspends for the alert-only meters the readback writes display-only", async () => {
+        const { ctx, ops } = makeCtx({
+            // $1.00: one billed request-hour of these quantities would pass it many times over.
+            organizations: [organization({ spendCapMinor: 100 })],
+            platformUsage: [...UNVERIFIED_METERS].map((kind, index) =>
+                usageRow(`u${String(index)}`, 1e15, { billable: false, kind, periodStart: Number.MAX_SAFE_INTEGER - 1 }),
+            ),
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.filter((op) => isTransition(op))).toStrictEqual([]);
+        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ patch: { spendNanoCents: 0 } });
     });
 
     it("does not re-suspend an org that is already suspended", async () => {

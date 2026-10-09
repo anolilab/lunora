@@ -81,6 +81,23 @@ export const alertTarget = v.union(
     v.literal("usage_anomaly"),
     v.literal("error_anomaly"),
     v.literal("storage_anomaly"),
+    v.literal("usage_threshold"),
+);
+
+/**
+ * A meter a `usage_threshold` rule may watch — `USAGE_ALERT_METERS` in
+ * `src/telemetry/usage-alerts.ts`, as a validator: the meters the readback
+ * writes. `__tests__/usage-alerts.test.ts` fails the type check when the two drift.
+ */
+export const usageAlertMeter = v.union(
+    v.literal("requests"),
+    v.literal("cpuMs"),
+    v.literal("d1RowsRead"),
+    v.literal("d1RowsWritten"),
+    v.literal("doRequests"),
+    v.literal("doDurationGbS"),
+    v.literal("doRowsRead"),
+    v.literal("doRowsWritten"),
 );
 
 /** An anomaly target — the subset of {@link alertTarget} a silence can name. */

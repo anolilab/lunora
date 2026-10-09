@@ -52,6 +52,8 @@ export const drainTable = async <TRow>(
     database: ControlPlaneDatabase,
     table: string,
     args: { limit?: number; orderBy?: Record<string, "asc" | "desc">[]; where?: Record<string, unknown> } = {},
+    /** Called when the read stopped at the page cap with rows left, for a reader that must not take a truncated read for the whole. */
+    onTruncated?: () => void,
 ): Promise<TRow[]> => {
     const rows: TRow[] = [];
     let cursor: null | string = null;
@@ -67,6 +69,10 @@ export const drainTable = async <TRow>(
         }
 
         cursor = result.continueCursor;
+
+        if (index === MAX_DRAIN_PAGES - 1) {
+            onTruncated?.();
+        }
     }
 
     return rows;

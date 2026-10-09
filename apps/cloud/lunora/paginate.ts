@@ -27,7 +27,11 @@ const MAX_PAGES = 100;
  * page. `fetchPage` receives the cursor to resume from (`null` for the first
  * page) and should pass it straight through as `findMany`'s `cursor`.
  */
-export const collectAll = async <TRow>(fetchPage: (cursor: null | string) => Promise<Page>): Promise<TRow[]> => {
+export const collectAll = async <TRow>(
+    fetchPage: (cursor: null | string) => Promise<Page>,
+    /** Called when the read stopped at the page cap with rows left, for a reader that must not show a truncated read as the whole. */
+    onTruncated?: () => void,
+): Promise<TRow[]> => {
     const rows: TRow[] = [];
     let cursor: null | string = null;
 
@@ -42,6 +46,10 @@ export const collectAll = async <TRow>(fetchPage: (cursor: null | string) => Pro
         }
 
         cursor = result.continueCursor;
+
+        if (index === MAX_PAGES - 1) {
+            onTruncated?.();
+        }
     }
 
     return rows;
