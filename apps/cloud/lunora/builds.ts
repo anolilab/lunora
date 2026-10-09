@@ -446,7 +446,7 @@ export const recordAdvisory = internalMutation
             cacheKey: boundedString(600),
             detail: boundedString(2000),
             file: boundedString(512),
-            level: v.literal("WARN"),
+            level: v.union(v.literal("WARN"), v.literal("INFO")),
             line: v.number(),
             location: v.optional(v.union(v.literal("bundle"), v.literal("source"))),
             name: boundedString(LIMITS.id),
@@ -684,15 +684,41 @@ export const reusableRelease = internalQuery
         };
     });
 
+/** A build as the list shows it: its scan findings counted, not carried — `advisories` loads them per build. */
+export type BuildListRow = Omit<BuildRow, "advisories"> & { advisoryNotes: number; advisoryWarnings: number };
+
 /** A project's builds, newest first (members). */
 export const listByProject = query
     .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
-    .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<BuildRow[]> => {
+    .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<BuildListRow[]> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.builds.findMany({ where: { organizationId, projectId } }); // secret-scanner:allow -- domain field name
 
-        return page.toSorted((a, b) => b.createdAt - a.createdAt);
+        return (page as BuildRow[])
+            .toSorted((a, b) => b.createdAt - a.createdAt)
+            .map(({ advisories = [], ...build }) => {
+                return {
+                    ...build,
+                    advisoryNotes: advisories.filter((advisory) => advisory.level === "INFO").length,
+                    advisoryWarnings: advisories.filter((advisory) => advisory.level !== "INFO").length,
+                };
+            });
+    });
+
+/** One build's bundle-scan findings, warnings first (members). */
+export const advisories = query
+    .input({ buildId: v.id("builds"), organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { buildId, organizationId } }): Promise<BuildAdvisory[]> => {
+        await assertMember(context, organizationId);
+
+        const build = (await context.db.get(buildId)) as BuildRow | null;
+
+        if (build?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "build not found in this organization");
+        }
+
+        return (build.advisories ?? []).toSorted((a, b) => Number(a.level === "INFO") - Number(b.level === "INFO"));
     });
 
 /**

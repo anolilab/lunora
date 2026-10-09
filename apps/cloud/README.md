@@ -1040,32 +1040,21 @@ A connected repository deploys without the CLI. The flow, end to end:
 
 The build box statically scans the one module `lunora build` produced
 (`containers/build/scan.mjs`) for code that, once started, can run without end
-and bill storage operations on every pass. It only ever **warns**: findings never
-fail a build, never ride on the release, and a scan that cannot run (unparsable
-bundle, over 32 MiB, more than the free heap holds, past its 10 s budget) is one
-`warning: build scan skipped: …` line.
+and bill storage operations on every pass: exitless loops, alarms that always
+re-arm, queue consumers feeding their own queue. Findings never fail a build and
+never ride on the release; each is `WARN` (a runaway) or `INFO` (a periodic job
+that runs forever by design), logged as a `warning: …` or `note: …` line — so
+the Warnings tab shows only the former. A scan that cannot run is one
+`warning: build scan skipped: …` line. The detectors, their levels, the noise
+filter and what they do not cover are in `containers/build/README.md`, _The
+bundle scan_.
 
-| Advisory              | Reported when                                                                                                                                                                                                                                                                                                        |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `unbounded_loop`      | `while (true)`, `for (;;)`, `for (; true;)` or `do … while (true)` has no statically reachable exit: no `break` bound to it, no jump to a label outside it, no `return`/`throw`/`yield` in its own function, no `signal.throwIfAborted()`. An `await` is not an exit.                                                |
-| `alarm_always_rearms` | A class's `alarm()` calls `<x>.storage.setAlarm(…)` at a position that runs on every call — not in a branch, loop body, `case`, `catch`, ternary arm, the far side of `&&`/`\|\|`/`??`, an optional chain, a nested callback, or after an earlier statement that may leave; not kept, and not followed by a `throw`. |
-| `queue_self_resend`   | A `queue(batch, env)` handler unconditionally `send`s/`sendBatch`es to a producer binding that the release manifest maps to a queue the same Worker consumes.                                                                                                                                                        |
-
-Every candidate is attributed through the bundle's sourcemap (wrangler writes
-`index.js.map` beside the module) and **dropped when its source is under
-`node_modules`, in generated output (`.wrangler`, `.lunora`) or outside the
-repository** — third-party code is not the tenant's to fix. The boundary is the
-repository rather than the root directory, so a monorepo's own workspace
-packages are still scanned. Without a sourcemap, esbuild's `// <path>` region
-comments name each statement's input (the line reported is then the bundle's);
-without either, a finding is kept against the bundle itself, at most 10. At most
-50 findings are reported per build.
-
-The control plane stores them on the build row (`builds.advisories`, written
+The control plane stores findings on the build row (`builds.advisories`, written
 through the lease-checked `builds.recordAdvisory`, one per `cacheKey`, best-effort
-so a failed write never changes the build), carries them over when a push
-re-releases an earlier build's stored release, and the Studio shows the count on
-the Builds tab and the list under the deployment's build logs.
+so a failed write never changes the build) and carries them over when a push
+re-releases an earlier build's stored release. `builds.listByProject` carries
+only the counts (`advisoryWarnings`, `advisoryNotes`), shown on the Builds tab;
+the list itself loads per build (`builds.advisories`) under the build logs.
 
 What still needs credentials (🌐): `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`
 for the source fetch and commit statuses, `LUNORA_ADMIN_TOKEN` for the drain, a

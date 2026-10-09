@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -40,7 +41,7 @@ interface ScanModule {
         now?: () => number;
         project: string;
         repo: string;
-    }) => Promise<{ advisories: Advisory[]; omitted: number }>;
+    }) => Promise<{ advisories: Advisory[]; notes: string[]; omitted: number }>;
     scanFailure: (error: unknown) => string;
 }
 
@@ -101,7 +102,7 @@ const scan = async (
     bundlePath: string,
     code: string,
     options: { heapAvailable?: () => number; limits?: Record<string, number>; now?: () => number; project?: string } = {},
-): Promise<{ advisories: Advisory[]; omitted: number }> =>
+): Promise<{ advisories: Advisory[]; notes: string[]; omitted: number }> =>
     scanBundle({
         bundle: Buffer.from(code),
         bundlePath: join(sandbox, bundlePath),
@@ -140,7 +141,7 @@ describe("scanBundle attribution", () => {
                     location: "source",
                     name: "alarm_always_rearms",
                     remediation: expect.stringContaining("deleteAlarm"),
-                    title: "Alarm always re-arms itself",
+                    title: "Alarm re-arms itself almost immediately",
                 },
             ],
             omitted: 0,
@@ -163,16 +164,18 @@ describe("scanBundle attribution", () => {
     });
 
     it("keeps a finding with no attribution at all against the bundle, under the tighter cap", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const code = Array.from({ length: 4 }, (_, index) => `export function spin${String(index)}() { while (true) {} }`).join("\n");
 
         await write(".lunora/build/index.js", code);
 
-        const { advisories, omitted } = await scan(".lunora/build/index.js", code, { limits: { maxBundleFindings: 3 } });
+        const { advisories, notes, omitted } = await scan(".lunora/build/index.js", code, { limits: { maxBundleFindings: 3 } });
 
         expect(advisories.map(({ file, location }) => `${location}:${file}`)).toStrictEqual(Array.from({ length: 3 }).fill("bundle:.lunora/build/index.js"));
         expect(omitted).toBe(1);
+        // The note names the cap that applied, not the overall one.
+        expect(notes).toStrictEqual(["1 more findings placed only by bundle line not shown (at most 3 of those are reported per build)"]);
     });
 
     it("keeps the repo's own workspace packages and drops dependencies, generated code and anything outside the repo", async () => {
@@ -246,7 +249,7 @@ describe("scanBundle attribution", () => {
     });
 
     it("caps the findings it reports and says how many it held back", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const code = Array.from({ length: 5 }, (_, index) => `export function spin${String(index)}() { while (true) {} }`).join("\n");
 
@@ -266,10 +269,11 @@ describe("scanBundle attribution", () => {
             }),
         );
 
-        const { advisories, omitted } = await scan("out/index.js", code, { limits: { maxFindings: 2 } });
+        const { advisories, notes, omitted } = await scan("out/index.js", code, { limits: { maxFindings: 2 } });
 
         expect(advisories.map((advisory) => advisory.line)).toStrictEqual([1, 2]);
         expect(omitted).toBe(3);
+        expect(notes).toStrictEqual(["3 more findings not shown (at most 2 are reported per build)"]);
     });
 
     it("gives two findings on one line distinct cache keys", async () => {
@@ -312,20 +316,129 @@ describe("scanBundle limits and failures", () => {
 
         await write("out/index.js", code);
 
-        // 42 bytes at 48 heap bytes each is 2016 bytes; 2000 are free.
-        await expect(scan("out/index.js", code, { heapAvailable: () => 2000 })).rejects.toThrow(
-            /^scanning a 0\.0 MiB bundle needs about 1 MiB of memory and 0 MiB is free$/u,
+        // 42 bytes at 48 heap bytes each, on top of the 256 MiB reserve; 200 MiB are free.
+        await expect(scan("out/index.js", code, { heapAvailable: () => 200 * 2 ** 20 })).rejects.toThrow(
+            /^scanning a 0\.0 MiB bundle needs about 1 MiB of memory on top of a 256 MiB reserve, and 200 MiB is free$/u,
         );
     });
 
-    it("refuses a sourcemap over its cap", async () => {
+    it("stops the parse, rather than run out of heap, once free memory falls to the reserve", async () => {
         expect.assertions(1);
 
-        await write("out/index.js", "export const a = 1;");
-        await write("out/index.js.map", JSON.stringify({ mappings: "AAAA", padding: "x".repeat(500), sources: ["../a.ts"], version: 3 }));
+        // Enough heap for the up-front check, then none: what dense code that
+        // costs far more than the estimate looks like from inside the scan.
+        const code = Array.from({ length: 20_000 }, (_, index) => `var v${String(index)} = ${String(index)};`).join("\n");
+        let readings = 0;
 
-        await expect(scan("out/index.js", "export const a = 1;", { limits: { maxMapBytes: 100 } })).rejects.toThrow(/sourcemap is .* over the/u);
+        await write("out/index.js", code);
+
+        await expect(
+            scan("out/index.js", code, {
+                heapAvailable: () => {
+                    readings += 1;
+
+                    return readings === 1 ? 2 ** 40 : 0;
+                },
+            }),
+        ).rejects.toThrow(/^the scan ran low on memory and stopped before it could exhaust it$/u);
     });
+
+    it.each([
+        [
+            "over its size cap",
+            { maxMapBytes: 100 },
+            () => 2 ** 40,
+            /^the sourcemap is 0\.0 MiB, over the .* MiB the scan reads; findings are placed by bundle line only$/u,
+        ],
+        // 300 MiB free leaves ~44 MiB once the bundle's share and the 256 MiB reserve are set aside; at 1 MiB of heap per map byte the ~600-byte map needs far more.
+        [
+            "more than the free heap holds",
+            { heapBytesPerMapByte: 2 ** 20 },
+            () => 300 * 2 ** 20,
+            /^the sourcemap \(0\.0 MiB\) does not fit in the memory left for the scan; findings are placed by bundle line only$/u,
+        ],
+    ])("scans without a sourcemap %s, and says so", async (_label, limits, heapAvailable, note) => {
+        expect.assertions(2);
+
+        const code = "export function spin() { while (true) {} }";
+
+        await write("out/index.js", code);
+        await write("out/index.js.map", JSON.stringify({ mappings: encodeMappings([[0, 1]]), padding: "x".repeat(500), sources: ["../src/a.ts"], version: 3 }));
+
+        const { advisories, notes } = await scan("out/index.js", code, { heapAvailable, limits });
+
+        expect(notes).toStrictEqual([expect.stringMatching(note)]);
+        expect(advisories.map(({ file, location }) => `${location}:${file}`)).toStrictEqual(["bundle:out/index.js"]);
+    });
+
+    it("never reads a sourcemap that is not a regular file — a FIFO would block forever", async () => {
+        expect.assertions(1);
+
+        const code = "export function spin() { while (true) {} }";
+
+        await write("out/index.js", code);
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- the system `mkfifo`
+        execFileSync("mkfifo", [join(sandbox, "out", "index.js.map")]);
+
+        const { advisories } = await scan("out/index.js", code);
+
+        expect(advisories.map(({ file, location }) => `${location}:${file}`)).toStrictEqual(["bundle:out/index.js"]);
+    });
+
+    it("tries the next sourcemap when a sourceMappingURL is not a valid escape", async () => {
+        expect.assertions(1);
+
+        const code = `export function spin() { while (true) {} }\n${MAP_COMMENT}%E0%A4%A\n`;
+
+        await write("out/index.js", code);
+        await write("out/index.js.map", JSON.stringify({ mappings: encodeMappings([[0, 7]]), sources: ["../src/a.ts"], version: 3 }));
+
+        const { advisories } = await scan("out/index.js", code);
+
+        expect(advisories.map(({ file, line, location }) => `${location}:${file}:${String(line)}`)).toStrictEqual(["source:src/a.ts:7"]);
+    });
+
+    it("bounds a long source path, and keeps distinct long paths distinct", async () => {
+        expect.assertions(3);
+
+        const code = "export function a() { while (true) {} }\nexport function b() { while (true) {} }";
+        const long = (suffix: string): string => `../src/${"d/".repeat(200_000)}${suffix}.ts`;
+
+        await write("out/index.js", code);
+        await write(
+            "out/index.js.map",
+            JSON.stringify({
+                mappings: encodeMappings([
+                    [0, 1],
+                    [1, 1],
+                ]),
+                sources: [long("one"), long("two")],
+                version: 3,
+            }),
+        );
+
+        const { advisories } = await scan("out/index.js", code);
+
+        expect(Math.max(...advisories.map((advisory) => advisory.file.length))).toBeLessThanOrEqual(512);
+        expect(Math.max(...advisories.map((advisory) => advisory.cacheKey.length))).toBeLessThanOrEqual(300);
+        expect(new Set(advisories.map((advisory) => advisory.cacheKey)).size).toBe(2);
+    });
+
+    it("aborts promptly on input built to make jump resolution quadratic", async () => {
+        expect.assertions(2);
+
+        // 900 nested `for (;;)` around 300,000 `break;`: every loop resolves
+        // every break against its ancestors. Unchecked, that ran ~6.8 s past a
+        // 0.5 s budget; checked inside the ancestor walk it stops at the budget.
+        const code = `export function f(){${"for(;;){".repeat(900)}${"break;".repeat(300_000)}${"}".repeat(900)}}`;
+
+        await write("out/index.js", code);
+
+        const started = performance.now();
+
+        await expect(scan("out/index.js", code, { limits: { timeoutMs: 500 } })).rejects.toThrow(/^the scan ran past 0\.5 s$/u);
+        expect(performance.now() - started).toBeLessThan(3000);
+    }, 30_000);
 
     it("stops mid-walk once the time budget runs out", async () => {
         expect.assertions(2);

@@ -122,11 +122,45 @@ describe("build box bundle scan", () => {
         // Only the tenant's alarm: the dependency's loop is dropped.
         expect(advisories).toMatchObject([{ file: "src/index.ts", level: "WARN", line: 7, location: "source", name: "alarm_always_rearms" }]);
         // What the Studio's Warnings tab matches on.
-        expect(warnings.map((record) => record["line"])).toStrictEqual([expect.stringMatching(/^warning: Alarm always re-arms itself — .*src\/index\.ts:7/u)]);
+        expect(warnings.map((record) => record["line"])).toStrictEqual([
+            expect.stringMatching(/^warning: Alarm re-arms itself almost immediately — .*src\/index\.ts:7/u),
+        ]);
         expect(typeof release["bundleHash"]).toBe("string");
         expect(Object.keys(release).filter((key) => key.startsWith("advisor"))).toStrictEqual([]);
         // Before the terminal record, so the control plane stores them while the lease is held.
         expect(records.findIndex((record) => "advisory" in record)).toBeLessThan(records.length - 1);
+    }, 30_000);
+
+    it("logs a periodic alarm as a note, which the Warnings tab does not pick up", async () => {
+        expect.assertions(3);
+
+        // No sourcemap: attributed by region comment. One hourly job, one tight re-arm.
+        const bundle = [
+            "// src/index.ts",
+            "var Hourly = class {",
+            "  async alarm() {",
+            "    await this.ctx.storage.setAlarm(Date.now() + 36e5);",
+            "  }",
+            "};",
+            "var Tight = class {",
+            "  async alarm() {",
+            "    await this.ctx.storage.setAlarm(Date.now());",
+            "  }",
+            "};",
+            "export { Hourly, Tight };",
+        ].join("\n");
+        const records = await build(await tarball("levels", bundle));
+        const lines = records.filter((record) => typeof record["line"] === "string").map((record) => record["line"] as string);
+
+        expect(records.filter((record) => "advisory" in record).map((record) => (record["advisory"] as { level: string }).level)).toStrictEqual([
+            "WARN",
+            "INFO",
+        ]);
+        expect(lines.filter((line) => line.startsWith("note:"))).toStrictEqual([
+            expect.stringMatching(/^note: Periodic alarm with no way to stop — .*every 1 h/u),
+        ]);
+        // What `BuildLogsCard` counts as a warning: the tight re-arm only.
+        expect(lines.filter((line) => /\bwarn/iu.test(line))).toStrictEqual([expect.stringMatching(/^warning: Alarm re-arms itself almost immediately/u)]);
     }, 30_000);
 
     it("skips a scan it cannot run with one warning, and still releases the build", async () => {

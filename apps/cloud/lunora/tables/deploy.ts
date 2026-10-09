@@ -186,15 +186,16 @@ export const deployTables = {
     // (project, commitSha) is reused instead of rebuilt.
     builds: defineTable({
         // The build box's bundle-scan findings (`containers/build/scan.mjs`):
-        // code in the built Worker that can run without end. Warnings only, at
+        // code in the built Worker that can run without end. WARN or INFO, at
         // most 50, one per `cacheKey`; a re-release carries the earlier build's.
+        // Read per build (`builds.advisories`); the list carries only counts.
         advisories: v.optional(
             v.array(
                 v.object({
                     cacheKey: v.string(),
                     detail: v.string(),
                     file: v.string(),
-                    level: v.literal("WARN"),
+                    level: v.union(v.literal("WARN"), v.literal("INFO")),
                     line: v.number(),
                     location: v.optional(v.union(v.literal("bundle"), v.literal("source"))),
                     name: v.string(),

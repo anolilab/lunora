@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { recordAdvisory, reusableRelease } from "../lunora/builds";
+import { advisories as buildAdvisories, listByProject, recordAdvisory, reusableRelease } from "../lunora/builds";
 import { executeInContainer } from "../src/builds/container-exec";
 import { runBuildStage } from "../src/builds/control-plane";
 import type { BuildAdvisory, BuildRunnerPorts } from "../src/builds/runner";
@@ -9,7 +9,7 @@ import type { BuildJob } from "../src/builds/runner-job";
 import type { DeployHandlerDeps } from "../src/deploy/release-core";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 import type { Row } from "./_helpers/fake-ctx";
-import { makeCtx } from "./_helpers/fake-ctx";
+import { makeCtx, owner } from "./_helpers/fake-ctx";
 import runBuild from "./support/run-build";
 
 /**
@@ -28,7 +28,7 @@ const advisory = (over: Partial<BuildAdvisory> = {}): BuildAdvisory => {
         location: "source",
         name: "alarm_always_rearms",
         remediation: "Re-arm only while work remains.",
-        title: "Alarm always re-arms itself",
+        title: "Alarm re-arms itself almost immediately",
         ...over,
     };
 };
@@ -48,7 +48,7 @@ describe("executeInContainer advisory records", () => {
         const onAdvisory = vi.fn<(advisory: BuildAdvisory) => Promise<void>>().mockResolvedValue();
 
         const execution = await executeInContainer(
-            replying([{ advisory: advisory() }, { line: "warning: Alarm always re-arms itself" }, RELEASE]),
+            replying([{ advisory: advisory() }, { line: "warning: Alarm re-arms itself almost immediately" }, RELEASE]),
             new ArrayBuffer(1),
             undefined,
             onLine,
@@ -56,7 +56,7 @@ describe("executeInContainer advisory records", () => {
         );
 
         expect(onAdvisory.mock.calls).toStrictEqual([[advisory()]]);
-        expect(onLine.mock.calls).toStrictEqual([["warning: Alarm always re-arms itself"]]);
+        expect(onLine.mock.calls).toStrictEqual([["warning: Alarm re-arms itself almost immediately"]]);
         expect(execution).toStrictEqual(RELEASE);
     });
 
@@ -93,6 +93,32 @@ describe("executeInContainer advisory records", () => {
         const withoutLocation = Object.fromEntries(Object.entries(advisory()).filter(([key]) => key !== "location"));
 
         expect(onAdvisory.mock.calls[0]?.[0]).toStrictEqual({ ...withoutLocation, detail: "d".repeat(2000) });
+    });
+
+    it("keeps an INFO finding's level", async () => {
+        expect.assertions(1);
+
+        const onAdvisory = vi.fn<(advisory: BuildAdvisory) => Promise<void>>().mockResolvedValue();
+
+        await executeInContainer(
+            replying([{ advisory: advisory({ level: "INFO" }) }, RELEASE]),
+            new ArrayBuffer(1),
+            undefined,
+            vi.fn().mockResolvedValue(undefined),
+            onAdvisory,
+        );
+
+        expect(onAdvisory.mock.calls[0]?.[0]?.level).toBe("INFO");
+    });
+
+    it("caps a log line before it reaches buildLogs", async () => {
+        expect.assertions(1);
+
+        const onLine = vi.fn<(line: string) => Promise<void>>().mockResolvedValue();
+
+        await executeInContainer(replying([{ line: "x".repeat(400_000) }, RELEASE]), new ArrayBuffer(1), undefined, onLine);
+
+        expect(onLine.mock.calls[0]?.[0]).toHaveLength(8000);
     });
 
     it(`forwards at most ${String(MAX_BUILD_ADVISORIES)} advisories however many the box sends`, async () => {
@@ -289,5 +315,59 @@ describe("builds.reusableRelease advisories", () => {
         const { ctx } = makeCtx(rows({}));
 
         await expect(reusableRelease.handler(ctx, { buildId: "bld_new" as never })).resolves.toStrictEqual({ bundleHash: "h1", deploymentId: "dep_old" });
+    });
+});
+
+describe("reading advisories in the studio", () => {
+    const rows = (): Record<string, Row[]> => {
+        return {
+            builds: [
+                {
+                    _id: "bld_1",
+                    advisories: [advisory({ cacheKey: "note", level: "INFO" }), advisory(), advisory({ cacheKey: "loop", name: "unbounded_loop" })],
+                    createdAt: 2,
+                    organizationId: "org_1",
+                    projectId: "prj_1",
+                },
+                { _id: "bld_2", createdAt: 1, organizationId: "org_1", projectId: "prj_1" },
+                { _id: "bld_other", advisories: [advisory()], createdAt: 3, organizationId: "org_2", projectId: "prj_9" },
+            ],
+            members: [owner("org_1")],
+        };
+    };
+
+    it("lists builds with counts, not the findings themselves", async () => {
+        expect.assertions(2);
+
+        const { ctx } = makeCtx(rows());
+        const listed = await listByProject.handler(ctx, { organizationId: "org_1" as never, projectId: "prj_1" as never });
+
+        expect(listed.map(({ _id, advisoryNotes, advisoryWarnings }) => [_id, advisoryWarnings, advisoryNotes])).toStrictEqual([
+            ["bld_1", 2, 1],
+            ["bld_2", 0, 0],
+        ]);
+        expect(listed.some((row) => "advisories" in row)).toBe(false);
+    });
+
+    it("loads one build's findings, warnings first", async () => {
+        expect.assertions(1);
+
+        const { ctx } = makeCtx(rows());
+
+        await expect(buildAdvisories.handler(ctx, { buildId: "bld_1" as never, organizationId: "org_1" as never })).resolves.toMatchObject([
+            { level: "WARN" },
+            { level: "WARN" },
+            { level: "INFO" },
+        ]);
+    });
+
+    it("refuses another organization's build", async () => {
+        expect.assertions(1);
+
+        const { ctx } = makeCtx(rows());
+
+        await expect(buildAdvisories.handler(ctx, { buildId: "bld_other" as never, organizationId: "org_1" as never })).rejects.toThrow(
+            /not found in this organization/u,
+        );
     });
 });
