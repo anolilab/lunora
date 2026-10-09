@@ -115,6 +115,22 @@ interface EvaluationSpanHandle {
 }
 ```
 
+### `FakeNotifyControls` (interface)
+
+```ts
+interface FakeNotifyControls {
+    sent: (channel?: ChannelType) => RecordedNotification[];
+}
+```
+
+### `FakeQueueControls` (interface)
+
+```ts
+interface FakeQueueControls {
+    sent: (name: string) => RecordedQueueMessage[];
+}
+```
+
 ### `FakeScheduledJob` (interface)
 
 ```ts
@@ -131,6 +147,14 @@ interface FakeSchedulerControls {
     failures: () => ScheduledJobFailure[];
     list: () => FakeScheduledJob[];
     runPending: (options?: SweepOptions) => Promise<number>;
+}
+```
+
+### `FakeTopicControls` (interface)
+
+```ts
+interface FakeTopicControls {
+    published: (name: string) => RecordedQueueMessage[];
 }
 ```
 
@@ -186,6 +210,7 @@ interface LunoraTestOptions {
     env?: Record<string, unknown>;
     fetch?: typeof globalThis.fetch;
     functions?: FunctionRegistry;
+    notify?: NotifyDefinition;
     now?: number;
     services?: Record<string, object>;
 }
@@ -210,6 +235,21 @@ interface RecordEvaluationInput {
     score: number;
     span?: EvaluationSpanHandle;
 }
+```
+
+### `RecordedNotification` (interface)
+
+```ts
+interface RecordedNotification {
+    channel: ChannelType;
+    payload: unknown;
+}
+```
+
+### `RecordedQueueMessage` (type)
+
+```ts
+type RecordedQueueMessage = MessageSendRequestLike;
 ```
 
 ### `RetrievalScorerOptions` (interface)
@@ -282,16 +322,19 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineMutationFunction<R>): Promise<R>;
     };
+    notify: FakeNotifyControls;
     query: {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineQueryFunction<R>): Promise<R>;
     };
+    queues: FakeQueueControls;
     run: <R>(function_: InlineMutationFunction<R>) => Promise<R>;
     scheduler: FakeSchedulerControls;
     subscribe: {
         <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>): TestSubscription<R>;
         <R>(inline: InlineQueryFunction<R>): TestSubscription<R>;
     };
+    topics: FakeTopicControls;
     wideEvent: () => RecordedWideEvent;
     withIdentity: (identity: TestIdentity) => TestHarness;
 }

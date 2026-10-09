@@ -205,6 +205,47 @@ test("subscription re-emits after mutation", async () => {
 Subscriptions are **table-agnostic** — any mutation triggers a re-evaluation.
 Multiple independent subscriptions each maintain their own snapshot stream.
 
+#### Recorded `ctx.queues`, `ctx.topics`, `ctx.notify` and `ctx.push`
+
+`ctx.queues.<name>` / `ctx.topics.<name>` (mutations and actions) are the real
+`@lunora/queue` producers over a recording binding, so the 12-hour delay ceiling
+and the 100-message batch cap still reject, but nothing is delivered. Any name
+is accepted. Read the sends back with `t.queues.sent(name)` /
+`t.topics.published(name)`:
+
+```ts
+const enqueue = mutation.input({ id: v.string() }).mutation(({ args, ctx }) => ctx.queues.jobs.send({ id: args.id }, { delaySeconds: 30 }));
+
+test("enqueues a job", async () => {
+    const t = lunoraTest(schema);
+
+    await t.mutation(enqueue, { id: "a" });
+
+    expect(t.queues.sent("jobs")).toStrictEqual([{ body: { id: "a" }, delaySeconds: 30 }]);
+});
+```
+
+`ctx.notify` / `ctx.push` (every context) are the real `@lunora/notify` facade
+over an in-memory subscription store, with every provider replaced by a recorder:
+`register`, `send` and `broadcast` behave as in production, and no request leaves
+the process. `t.notify.sent(channel?)` lists the deliveries (a push payload
+carries the target it resolved to as `to`). Push is always wired; pass your
+`lunora/notify.ts` export as `notify` to also get the chat / in-app / webhook
+channels it configures. Its `store` is ignored.
+
+```ts
+import notifyConfig from "../lunora/notify";
+
+const t = lunoraTest(schema, { notify: notifyConfig });
+
+await t.action(remindUser, { userId: "u1" });
+
+expect(t.notify.sent("push")).toHaveLength(1);
+```
+
+Queue consumers (`defineQueue` handlers) are not run: test a handler by calling
+the mutation or action it dispatches to directly.
+
 > **v1 stubs (still throwing).** `ctx.storage`, `ctx.vectors`, and `ctx.workflows`
 > are clearly-throwing stubs — a handler that touches one fails with a
 > "not available in the in-memory @lunora/testing harness (v1)" error.

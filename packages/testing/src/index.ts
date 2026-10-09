@@ -5,10 +5,15 @@ export { evaluationAttributes, recordEvaluation } from "./evaluation-telemetry";
 export type { ArtifactsFake } from "./fake-artifacts";
 export { createArtifactsFake } from "./fake-artifacts";
 export type {
+    FakeNotifyControls,
+    FakeQueueControls,
     FakeScheduledJob,
     FakeSchedulerControls,
+    FakeTopicControls,
     FunctionRegistry,
     LunoraTestOptions,
+    RecordedNotification,
+    RecordedQueueMessage,
     ScheduledJobFailure,
     SweepOptions,
     TestHarness,
