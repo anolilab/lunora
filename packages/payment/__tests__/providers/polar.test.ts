@@ -466,8 +466,12 @@ describe("polar adapter", () => {
         const client = makeClient();
 
         (client as { subscriptions: unknown }).subscriptions = {
-            get: async () => {return { id: "sub_1", metadata: { referenceId: "user_1" }, seats: 1, status: "active" }},
-            update: async () => {return { id: "sub_1", metadata: { referenceId: "user_1" }, seats: null, status: "active" }},
+            get: async () => {
+                return { id: "sub_1", metadata: { referenceId: "user_1" }, seats: 1, status: "active" };
+            },
+            update: async () => {
+                return { id: "sub_1", metadata: { referenceId: "user_1" }, seats: null, status: "active" };
+            },
         };
         const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
 
